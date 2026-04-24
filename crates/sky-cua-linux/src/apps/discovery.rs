@@ -1,0 +1,213 @@
+use std::fs;
+use std::path::PathBuf;
+
+use atspi::AccessibilityConnection;
+use atspi::State;
+use atspi::proxy::accessible::ObjectRefExt;
+use atspi::proxy::proxy_ext::ProxyExt;
+use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::model::AppInfo;
+use tracing::debug;
+use zbus::fdo::DBusProxy;
+
+#[derive(Debug, Clone)]
+pub struct DiscoveredApp {
+    pub info: AppInfo,
+    pub object_ref: atspi::ObjectRefOwned,
+}
+
+pub async fn discover_apps(
+    connection: &AccessibilityConnection,
+) -> Result<Vec<DiscoveredApp>, BackendError> {
+    debug!("discovering AT-SPI applications");
+    let root = connection
+        .root_accessible_on_registry()
+        .await
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::AccessibilityUnavailable,
+                format!("failed to read AT-SPI registry root: {error}"),
+            )
+        })?;
+    let app_refs = root.get_children().await.map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::AccessibilityUnavailable,
+            format!("failed to enumerate AT-SPI applications: {error}"),
+        )
+    })?;
+    debug!(
+        count = app_refs.len(),
+        "enumerated AT-SPI application roots"
+    );
+
+    let dbus_proxy = DBusProxy::new(connection.connection())
+        .await
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::AccessibilityUnavailable,
+                format!("failed to open D-Bus proxy on accessibility bus: {error}"),
+            )
+        })?;
+
+    let mut apps = Vec::new();
+    for object_ref in app_refs {
+        let accessible = match object_ref
+            .as_accessible_proxy(connection.connection())
+            .await
+        {
+            Ok(proxy) => proxy,
+            Err(_) => continue,
+        };
+
+        let name = accessible
+            .name()
+            .await
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "Unnamed App".to_string());
+        let proxies = accessible.proxies().await.ok();
+        let toolkit_guess = if let Some(proxies) = proxies.as_ref() {
+            if let Ok(proxy) = proxies.application().await {
+                proxy
+                    .toolkit_name()
+                    .await
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let destination = accessible.inner().destination().clone();
+        let pid = dbus_proxy
+            .get_connection_unix_process_id(destination.clone())
+            .await
+            .ok();
+        let executable = pid.and_then(read_executable);
+        let desktop_file_id = executable
+            .as_deref()
+            .map(guess_desktop_file_id)
+            .or_else(|| {
+                Some(format!(
+                    "{}.desktop",
+                    normalize_name(&name).replace(' ', "-")
+                ))
+            });
+        let window_title = best_window_like_title(&accessible, connection.connection()).await;
+
+        let app_id = format!(
+            "{}:{}",
+            accessible.inner().destination(),
+            accessible.inner().path()
+        );
+        apps.push(DiscoveredApp {
+            info: AppInfo {
+                app_id,
+                name,
+                pid,
+                executable,
+                desktop_file_id,
+                toolkit_guess,
+                window_title,
+                is_focused_candidate: false,
+            },
+            object_ref,
+        });
+    }
+
+    debug!(count = apps.len(), "finished AT-SPI app discovery");
+    Ok(apps)
+}
+
+async fn best_window_like_title(
+    accessible: &atspi::proxy::accessible::AccessibleProxy<'_>,
+    connection: &zbus::Connection,
+) -> Option<String> {
+    let mut best: Option<(i32, String)> = None;
+    let mut stack = accessible
+        .get_children()
+        .await
+        .ok()?
+        .into_iter()
+        .map(|child| (child, 1usize))
+        .collect::<Vec<_>>();
+
+    while let Some((child_ref, depth)) = stack.pop() {
+        if depth > 4 {
+            continue;
+        }
+        let child = match child_ref.as_accessible_proxy(connection).await {
+            Ok(child) => child,
+            Err(_) => continue,
+        };
+        let child_name = child.name().await.ok().unwrap_or_default();
+        let role_name = child
+            .get_role_name()
+            .await
+            .ok()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let states = child.get_state().await.ok();
+
+        if !child_name.trim().is_empty() {
+            let mut score = 0i32;
+            if role_name.contains("frame")
+                || role_name.contains("window")
+                || role_name.contains("dialog")
+                || role_name.contains("alert")
+            {
+                score += 20;
+            }
+            if let Some(states) = states.as_ref() {
+                if states.contains(State::Focused) {
+                    score += 50;
+                }
+                if states.contains(State::Active) {
+                    score += 15;
+                }
+            }
+            score += 5;
+            score -= i32::try_from(depth).unwrap_or(0);
+
+            match best.as_ref() {
+                Some((best_score, _)) if *best_score >= score => {}
+                _ => best = Some((score, child_name.clone())),
+            }
+        }
+
+        let children = child.get_children().await.unwrap_or_default();
+        for grandchild in children.into_iter().rev() {
+            stack.push((grandchild, depth + 1));
+        }
+    }
+
+    best.map(|(_, title)| title)
+}
+
+fn read_executable(pid: u32) -> Option<String> {
+    let path = PathBuf::from(format!("/proc/{pid}/exe"));
+    fs::read_link(path).ok().and_then(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_string())
+    })
+}
+
+fn guess_desktop_file_id(executable: &str) -> String {
+    format!("{}.desktop", executable.to_lowercase())
+}
+
+fn normalize_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
