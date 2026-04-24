@@ -100,15 +100,10 @@ impl ServiceDaemon {
         mut request: ActionRequest,
     ) -> Result<ActionRequest, (&'static str, String)> {
         let Some(snapshot_id) = request.snapshot_id.as_deref() else {
-            if request.environment.is_none() {
-                request.environment = Some(
-                    self.backend
-                        .probe_environment()
-                        .await
-                        .map_err(|error| (error.code, error.message))?,
-                );
-            }
-            return Ok(request);
+            return Err((
+                "ComputerUseInactive",
+                "Computer Use is not active for this action. Call get_app_state first and pass the current snapshot_id with the action.".to_string(),
+            ));
         };
         let snapshot = self.snapshots.get(snapshot_id).ok_or_else(|| {
             (
@@ -116,6 +111,14 @@ impl ServiceDaemon {
                 format!("snapshot {snapshot_id} is not present in the service cache"),
             )
         })?;
+        if !self.snapshots.is_latest(snapshot_id) {
+            return Err((
+                "SnapshotStale",
+                format!(
+                    "snapshot {snapshot_id} is no longer the latest app state. Re-run get_app_state and retry with the current snapshot_id."
+                ),
+            ));
+        }
 
         request.environment = Some(snapshot.environment.clone());
         request.resolved_capture = snapshot.capture.clone();

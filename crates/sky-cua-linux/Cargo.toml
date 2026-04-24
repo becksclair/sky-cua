@@ -19,6 +19,7 @@ serde_json.workspace = true
 sky-cua-platform = { path = "../sky-cua-platform" }
 tokio.workspace = true
 tracing.workspace = true
+webp.workspace = true
 zbus.workspace = true
 url.workspace = true
 

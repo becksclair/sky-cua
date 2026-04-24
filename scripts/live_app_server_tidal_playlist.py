@@ -4,19 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 
-from _app_server_harness import (
-    require_computer_use_item,
-    run_rich_app_server_turn,
-    with_plugin_mention,
-)
-from _codex_exec import make_artifact_dir
 from _tidal_workflow import (
-    TIDAL_APP_SERVER_TIMEOUT_SECONDS,
-    TIDAL_RESULT_SCHEMA,
     TIDAL_WORKFLOW_MODEL,
-    TIDAL_WORKFLOW_REASONING_EFFORT,
-    tidal_playlist_prompt,
-    validate_tidal_result,
+    TidalAppServerWorkflowFailure,
+    run_tidal_app_server_workflow,
 )
 
 
@@ -29,24 +20,33 @@ def main() -> int:
         default=TIDAL_WORKFLOW_MODEL,
         help=f"Codex model to use (default: {TIDAL_WORKFLOW_MODEL}).",
     )
+    parser.add_argument(
+        "--image-format",
+        choices=["jpeg", "webp"],
+        help="Override SKY_CUA_MODEL_SCREENSHOT_FORMAT for this run.",
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        help="Override SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY for this run.",
+    )
+    parser.add_argument(
+        "--webp-quality",
+        type=int,
+        help="Override SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY for this run.",
+    )
     args = parser.parse_args()
 
-    artifact_dir = make_artifact_dir("tidal-playlist-app-server")
-    prompt = with_plugin_mention(tidal_playlist_prompt(app_server=True))
     try:
-        result = run_rich_app_server_turn(
-            prompt=prompt,
-            artifact_dir=artifact_dir,
-            output_schema=TIDAL_RESULT_SCHEMA,
+        result, message = run_tidal_app_server_workflow(
             model=args.model,
-            reasoning_effort=TIDAL_WORKFLOW_REASONING_EFFORT,
-            max_turn_seconds=TIDAL_APP_SERVER_TIMEOUT_SECONDS,
+            image_format=args.image_format,
+            jpeg_quality=args.jpeg_quality,
+            webp_quality=args.webp_quality,
         )
-    except TimeoutError as exc:
+    except TidalAppServerWorkflowFailure as exc:
         raise SystemExit(str(exc)) from exc
-    require_computer_use_item(result.transcript_path)
-    message = json.loads(result.last_message_path.read_text())
-    validate_tidal_result(message, artifact_dir=artifact_dir, require_screenshot=True)
+    artifact_dir = result.artifact_dir
     print(f"tidal app-server workflow passed: {artifact_dir}")
     if result.timing_summary_path.exists():
         timing_summary = json.loads(result.timing_summary_path.read_text())

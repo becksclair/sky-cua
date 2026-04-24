@@ -2,16 +2,19 @@
 
 ## Decision
 
-The default model-facing screenshot cap is `1440x900`.
+The default model-facing screenshot cap is `1440x900`, encoded as JPEG quality `85`.
 
 On a `2560x1440` desktop this produces an aspect-preserved `1440x810` JPEG for model inspection while keeping the raw `2560x1440` PNG beside it. Action coordinates remain in the model-facing screenshot coordinate space and are mapped back to the underlying desktop or stream coordinates by the backend.
 
 The raw capture contract is unchanged:
 
-- `capture.screenshot_path` points to the bounded JPEG sent to the model.
-- `capture.pixel_size` describes that bounded JPEG.
+- `capture.screenshot_path` points to the bounded model image.
+- `capture.pixel_size` describes that bounded model image.
 - `capture.original_screenshot_path` points to the raw capture.
 - `capture.original_pixel_size` describes the raw capture.
+- `capture.model_image_format`, `capture.model_image_quality`,
+  `capture.model_image_bytes`, and `capture.model_image_encode_ms` describe the
+  model-image encoding used for the snapshot.
 
 ## Why 1440x900
 
@@ -28,7 +31,7 @@ The smaller cap was `40.27s` faster, used `1.44M` fewer total tokens, and still 
 
 The plugin backend was not the bottleneck in either run. MCP tool time stayed under 9 seconds in both cases. The win came from reducing model/image-loop cost.
 
-## Override
+## Format and Size Overrides
 
 For an A/B run or an app that needs more visual detail, override the cap through the plugin MCP environment:
 
@@ -40,12 +43,50 @@ python3 scripts/live_app_server_tidal_playlist.py
 
 The installed plugin receives these variables because `.mcp.json` includes them in `env_vars`. Invalid values and values outside the safe range fall back to the compiled default.
 
+JPEG remains the default because it is the safest cross-host screenshot format
+and produced the proven TIDAL win above. WebP is available for profiling:
+
+```bash
+SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp \
+SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY=85 \
+python3 scripts/live_app_server_tidal_playlist.py
+```
+
+JPEG quality can also be varied:
+
+```bash
+SKY_CUA_MODEL_SCREENSHOT_FORMAT=jpeg \
+SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY=75 \
+python3 scripts/live_app_server_tidal_playlist.py
+```
+
+The WebP path uses lossy WebP encoding so quality-level A/B runs are meaningful.
+The model still receives a real image input once the screenshot path is inspected;
+the file format only changes local encoding, transport size, and decode/ingest
+behavior.
+
+Use the bundled A/B runner when a multi-run comparison is desired. By default it
+runs the cheaper `jpeg-q85` and `webp-q85` pair, and gives each variant an
+isolated playlist name so sequential runs do not reuse or mutate the same
+playlist state:
+
+```bash
+python3 scripts/live_app_server_tidal_image_ab.py
+```
+
+Use `--all-variants` for the full `jpeg-q85`, `webp-q80`, `webp-q85`, and
+`webp-q95` sweep. The runner writes
+`artifacts/codex-e2e/tidal-image-ab-summary.json` with elapsed time, MCP calls,
+uncached input-token metrics, final screenshot file size, status, playlist name,
+and artifact paths.
+
 ## Validation
 
 Relevant checks:
 
 ```bash
 cargo test -p sky-cua-linux portal::screenshot
+python3 scripts/live_app_server_tidal_image_ab.py --variants jpeg-q85 webp-q85
 python3 scripts/build_plugin.py
 ```
 

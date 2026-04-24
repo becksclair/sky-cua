@@ -210,6 +210,12 @@ fn handle_action_call(
         .get("snapshot_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    if snapshot_id.is_none() {
+        return tool_error(
+            "ComputerUseInactive",
+            "Computer Use is not active for this action. Call get_app_state first and pass the current snapshot_id with the action.",
+        );
+    }
     let element_index = arguments
         .get("element_index")
         .and_then(Value::as_u64)
@@ -394,56 +400,107 @@ fn tool_definitions() -> Value {
         },
         action_tool(
             "click",
-            "Click an element by index or x/y coordinates in screenshot pixel coordinates.",
+            "Click an element by index or x/y coordinates in screenshot pixel coordinates from the current snapshot.",
+            json!({
+                "element_index": { "type": "integer", "minimum": 0 },
+                "x": coordinate_schema("X coordinate in screenshot pixel coordinates from the snapshot image."),
+                "y": coordinate_schema("Y coordinate in screenshot pixel coordinates from the snapshot image.")
+            }),
+            json!(["snapshot_id"]),
         ),
-        action_tool("perform_secondary_action", "Perform a secondary click or context action."),
-        action_tool("scroll", "Scroll within the current UI."),
+        action_tool(
+            "perform_secondary_action",
+            "Perform a secondary click or context action on an element from the current snapshot.",
+            json!({
+                "element_index": { "type": "integer", "minimum": 0 },
+                "action": { "type": "string" }
+            }),
+            json!(["snapshot_id", "element_index", "action"]),
+        ),
+        action_tool(
+            "scroll",
+            "Scroll within an element or focused area from the current snapshot.",
+            json!({
+                "element_index": { "type": "integer", "minimum": 0 },
+                "direction": {
+                    "type": "string",
+                    "enum": ["up", "down", "left", "right"]
+                },
+                "pages": { "type": "integer", "minimum": 1 }
+            }),
+            json!(["snapshot_id", "direction"]),
+        ),
         action_tool(
             "drag",
-            "Drag from one screenshot-pixel point or element to another.",
+            "Drag from one screenshot-pixel point or element to another in the current snapshot.",
+            json!({
+                "element_index": { "type": "integer", "minimum": 0 },
+                "x": coordinate_schema("Drag start X coordinate in screenshot pixel coordinates."),
+                "y": coordinate_schema("Drag start Y coordinate in screenshot pixel coordinates."),
+                "from_x": coordinate_schema("Drag start X coordinate in screenshot pixel coordinates."),
+                "from_y": coordinate_schema("Drag start Y coordinate in screenshot pixel coordinates."),
+                "to_x": coordinate_schema("Drag end X coordinate in screenshot pixel coordinates."),
+                "to_y": coordinate_schema("Drag end Y coordinate in screenshot pixel coordinates."),
+                "to_element_index": { "type": "integer", "minimum": 0 }
+            }),
+            json!(["snapshot_id"]),
         ),
-        action_tool("type_text", "Type text into the focused control."),
-        action_tool("press_key", "Press a keyboard key or key chord."),
-        action_tool("set_value", "Set an editable value semantically where supported.")
+        action_tool(
+            "type_text",
+            "Type literal text into the focused control in the current snapshot.",
+            json!({
+                "text": { "type": "string" }
+            }),
+            json!(["snapshot_id", "text"]),
+        ),
+        action_tool(
+            "press_key",
+            "Press a keyboard key or key chord in the current snapshot.",
+            json!({
+                "key": { "type": "string" }
+            }),
+            json!(["snapshot_id", "key"]),
+        ),
+        action_tool(
+            "set_value",
+            "Set an editable element value semantically where supported in the current snapshot.",
+            json!({
+                "element_index": { "type": "integer", "minimum": 0 },
+                "value": { "type": "string" }
+            }),
+            json!(["snapshot_id", "element_index", "value"]),
+        )
     ])
 }
 
-fn action_tool(name: &str, description: &str) -> Value {
+fn coordinate_schema(description: &str) -> Value {
+    json!({
+        "type": "number",
+        "description": description
+    })
+}
+
+fn action_tool(name: &str, description: &str, mut properties: Value, required: Value) -> Value {
+    let property_map = properties
+        .as_object_mut()
+        .expect("properties must be an object");
+    property_map.insert(
+        "snapshot_id".to_string(),
+        json!({
+            "type": "string",
+            "description": "Current snapshot_id returned by the latest get_app_state call."
+        }),
+    );
+    let input_schema = json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": false
+    });
     json!({
         "name": name,
         "description": description,
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "snapshot_id": { "type": "string" },
-                "element_index": { "type": "integer", "minimum": 0 },
-                "x": {
-                    "type": "number",
-                    "description": "X coordinate in screenshot pixel coordinates from the snapshot image."
-                },
-                "y": {
-                    "type": "number",
-                    "description": "Y coordinate in screenshot pixel coordinates from the snapshot image."
-                },
-                "from_x": {
-                    "type": "number",
-                    "description": "Drag start X coordinate in screenshot pixel coordinates."
-                },
-                "from_y": {
-                    "type": "number",
-                    "description": "Drag start Y coordinate in screenshot pixel coordinates."
-                },
-                "to_x": {
-                    "type": "number",
-                    "description": "Drag end X coordinate in screenshot pixel coordinates."
-                },
-                "to_y": {
-                    "type": "number",
-                    "description": "Drag end Y coordinate in screenshot pixel coordinates."
-                }
-            },
-            "additionalProperties": true
-        }
+        "inputSchema": input_schema
     })
 }
 
@@ -602,7 +659,7 @@ mod tests {
 
     use super::{
         MessageFraming, action_summary, compact_element, parse_app_state_detail, read_message,
-        snapshot_summary, write_message,
+        snapshot_summary, tool_definitions, write_message,
     };
     use sky_cua_platform::model::{
         ActionOutcome, AppStateSnapshot, CaptureBackendKind, CoordinateSpace, DiagnosticEntry,
@@ -652,6 +709,34 @@ mod tests {
         assert!(compact.get("description").is_none());
         assert!(compact.get("backend_ref").is_none());
         assert_eq!(compact["semantic_actions"][0], "click");
+    }
+
+    #[test]
+    fn action_tool_schemas_are_strict_and_snapshot_scoped() {
+        let tools = tool_definitions();
+        let click = tools
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["name"] == "click")
+            .expect("click tool");
+        let schema = &click["inputSchema"];
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["required"][0], "snapshot_id");
+        assert!(schema["properties"].get("snapshot_id").is_some());
+        assert!(schema.get("anyOf").is_none());
+
+        let type_text = tools
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["name"] == "type_text")
+            .expect("type_text tool");
+        assert_eq!(type_text["inputSchema"]["additionalProperties"], false);
+        assert_eq!(
+            type_text["inputSchema"]["required"],
+            json!(["snapshot_id", "text"])
+        );
     }
 
     #[test]

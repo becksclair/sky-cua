@@ -4,7 +4,8 @@ use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBu
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind,
     CaptureInfo, CoordinateSpace, DiagnosticEntry, ElementNode, EnvironmentInfo, FocusedApp,
-    InputBackendKind, PixelSize, RectF, SemanticBackendKind, ToolAvailability, ToolCapabilities,
+    InputBackendKind, ModelImageFormat, PixelSize, RectF, SemanticBackendKind, ToolAvailability,
+    ToolCapabilities,
 };
 use sky_cua_platform::{AppInfo, SetValueFallbackMode, SetValueRouting, new_snapshot_id};
 
@@ -217,6 +218,10 @@ impl DesktopBackend for LinuxDesktopBackend {
                 logical_to_pixel_scale: None,
                 screenshot_path: None,
                 original_screenshot_path: None,
+                model_image_format: None,
+                model_image_quality: None,
+                model_image_bytes: None,
+                model_image_encode_ms: None,
             },
         );
 
@@ -1214,6 +1219,13 @@ fn apply_model_capture(
         .original_path
         .map(|path| path.display().to_string());
     capture_info.original_pixel_size = model_capture.original_pixel_size.or(raw_pixel_size);
+    capture_info.model_image_format = Some(match model_capture.format {
+        screenshot::ModelScreenshotFormat::Jpeg => ModelImageFormat::Jpeg,
+        screenshot::ModelScreenshotFormat::Webp => ModelImageFormat::Webp,
+    });
+    capture_info.model_image_quality = Some(model_capture.quality);
+    capture_info.model_image_bytes = model_capture.bytes;
+    capture_info.model_image_encode_ms = Some(model_capture.encode_ms);
     update_model_capture_scale(capture_info);
     Ok(())
 }
@@ -2495,7 +2507,7 @@ mod tests {
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::{
         ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace,
-        EnvironmentInfo, InputBackendKind, PixelSize, PortalCapabilities, RectF,
+        EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
         SemanticBackendKind, SessionKind,
     };
 
@@ -2606,6 +2618,10 @@ mod tests {
             logical_to_pixel_scale: Some(0.75),
             screenshot_path: Some("/tmp/capture.jpg".to_string()),
             original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
         };
 
         assert_eq!(
@@ -2639,6 +2655,10 @@ mod tests {
             logical_to_pixel_scale: None,
             screenshot_path: Some("/tmp/capture.jpg".to_string()),
             original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
         };
 
         assert_eq!(
@@ -2901,6 +2921,10 @@ mod tests {
             logical_to_pixel_scale: None,
             screenshot_path: Some("/tmp/fallback.png".to_string()),
             original_screenshot_path: None,
+            model_image_format: None,
+            model_image_quality: None,
+            model_image_bytes: None,
+            model_image_encode_ms: None,
         };
         let error = BackendError::new(
             BackendErrorCode::PipeWireStreamFailed,
@@ -2949,6 +2973,10 @@ mod tests {
             logical_to_pixel_scale: None,
             screenshot_path: None,
             original_screenshot_path: None,
+            model_image_format: None,
+            model_image_quality: None,
+            model_image_bytes: None,
+            model_image_encode_ms: None,
         };
         let error = BackendError::new(
             BackendErrorCode::PipeWireStreamFailed,

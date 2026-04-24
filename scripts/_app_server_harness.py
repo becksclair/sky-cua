@@ -56,6 +56,7 @@ class AppServerTurnResult:
     transcript_path: Path
     stderr_path: Path
     init_path: Path
+    mcp_status_path: Path
     thread_start_path: Path
     turn_start_path: Path
     turn_completed_path: Path
@@ -228,6 +229,25 @@ def require_computer_use_item(transcript_path: Path) -> None:
     items = transcript_computer_use_items(transcript_path)
     if not items:
         raise RuntimeError("rich app-server turn never emitted a computer-use mcpToolCall item")
+
+
+def response_contains_computer_use_server(response: dict[str, Any]) -> bool:
+    result = response.get("result")
+    candidates: list[Any] = []
+    if isinstance(result, list):
+        candidates.extend(result)
+    elif isinstance(result, dict):
+        for key in ("data", "servers", "mcpServers", "items"):
+            value = result.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        name = candidate.get("name") or candidate.get("server") or candidate.get("id")
+        if name == "computer-use":
+            return True
+    return False
 
 
 def describe_inbound_message(message: dict[str, Any]) -> dict[str, Any]:
@@ -432,6 +452,7 @@ def run_rich_app_server_turn(
     transcript_path = artifact_dir / "app-server-output.jsonl"
     stderr_path = artifact_dir / "app-server-stderr.txt"
     init_path = artifact_dir / "init.json"
+    mcp_status_path = artifact_dir / "mcp-server-status.json"
     thread_start_path = artifact_dir / "thread_start.json"
     turn_start_path = artifact_dir / "turn_start.json"
     turn_completed_path = artifact_dir / "turn_completed.json"
@@ -651,6 +672,14 @@ def run_rich_app_server_turn(
         init_path.write_text(json.dumps(init_response, indent=2))
         send_notification("initialized", {})
 
+        mcp_status_id = send_request("mcpServerStatus/list", {"detail": "full", "limit": 100})
+        mcp_status_response = read_until_response(mcp_status_id)
+        mcp_status_path.write_text(json.dumps(mcp_status_response, indent=2))
+        if not response_contains_computer_use_server(mcp_status_response):
+            raise RuntimeError(
+                f"computer-use MCP server was not visible before thread/start; inspect {mcp_status_path}"
+            )
+
         thread_start_id = send_request(
             "thread/start",
             {
@@ -704,6 +733,7 @@ def run_rich_app_server_turn(
         transcript_path=transcript_path,
         stderr_path=stderr_path,
         init_path=init_path,
+        mcp_status_path=mcp_status_path,
         thread_start_path=thread_start_path,
         turn_start_path=turn_start_path,
         turn_completed_path=turn_completed_path,

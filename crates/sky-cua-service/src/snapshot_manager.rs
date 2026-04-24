@@ -36,6 +36,14 @@ impl SnapshotManager {
     pub fn get(&self, snapshot_id: &str) -> Option<&AppStateSnapshot> {
         self.snapshots.get(snapshot_id)
     }
+
+    pub fn latest_snapshot_id(&self) -> Option<&str> {
+        self.order.last().map(String::as_str)
+    }
+
+    pub fn is_latest(&self, snapshot_id: &str) -> bool {
+        self.latest_snapshot_id() == Some(snapshot_id)
+    }
 }
 
 #[cfg(test)]
@@ -55,6 +63,9 @@ mod tests {
         manager.store(snapshot("two"));
         assert!(manager.get("one").is_none());
         assert!(manager.get("two").is_some());
+        assert_eq!(manager.latest_snapshot_id(), Some("two"));
+        assert!(manager.is_latest("two"));
+        assert!(!manager.is_latest("one"));
     }
 
     fn snapshot(id: &str) -> AppStateSnapshot {

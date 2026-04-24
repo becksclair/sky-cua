@@ -41,6 +41,13 @@ pub enum CoordinateSpace {
     StreamPixels,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelImageFormat {
+    Jpeg,
+    Webp,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RectF {
     pub x: f64,
@@ -152,6 +159,14 @@ pub struct CaptureInfo {
     pub screenshot_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_screenshot_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_image_format: Option<ModelImageFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_image_quality: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_image_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_image_encode_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -295,9 +310,9 @@ pub enum ServiceResponse {
 mod tests {
     use super::{
         ActionName, ActionRequest, AppStateSnapshot, CaptureBackendKind, CaptureInfo,
-        CoordinateSpace, EnvironmentInfo, InputBackendKind, PixelSize, PortalCapabilities, RectF,
-        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, ToolAvailability,
-        ToolCapabilities,
+        CoordinateSpace, EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize,
+        PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
+        SessionKind, ToolAvailability, ToolCapabilities,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -387,6 +402,10 @@ mod tests {
                         space: CoordinateSpace::DesktopLogical,
                     }),
                     logical_to_pixel_scale: Some(0.5),
+                    model_image_format: Some(ModelImageFormat::Jpeg),
+                    model_image_quality: Some(85),
+                    model_image_bytes: Some(1234),
+                    model_image_encode_ms: Some(7),
                 }),
                 app_guidance: None,
             }),
