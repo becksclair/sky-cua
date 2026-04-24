@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export SKY_CUA_REPO_ROOT="$ROOT"
+export SKY_CUA_SERVICE_PATH="${SKY_CUA_SERVICE_PATH:-$ROOT/bin/sky-cua-service}"
+cd "$ROOT"
+exec cargo run --quiet --package sky-cua-client -- "$@"
+

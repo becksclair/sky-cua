@@ -1,0 +1,9 @@
+/target
+/.venv
+/.idea
+/.vscode
+*.log
+__pycache__/
+*.py[cod]
+/dist
+/artifacts

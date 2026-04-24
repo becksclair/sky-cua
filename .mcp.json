@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "computer-use": {
+      "command": "/bin/sh",
+      "args": ["-c", "exec ./bin/sky-cua-client mcp"],
+      "env_vars": [
+        "DBUS_SESSION_BUS_ADDRESS",
+        "DESKTOP_SESSION",
+        "DISPLAY",
+        "SKY_CUA_SERVICE_SOCKET_PATH",
+        "WAYLAND_DISPLAY",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_RUNTIME_DIR",
+        "XDG_SESSION_TYPE"
+      ],
+      "cwd": "."
+    }
+  }
+}

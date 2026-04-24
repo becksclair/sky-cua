@@ -1,0 +1,24 @@
+{
+  "name": "sky-cua",
+  "version": "0.1.0",
+  "description": "Linux-first Computer Use plugin for Codex with a split client/service architecture.",
+  "author": {
+    "name": "Bex Clair"
+  },
+  "license": "MIT",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Linux Computer Use",
+    "shortDescription": "Control Linux desktop apps from Codex",
+    "longDescription": "Linux Computer Use gives Codex a Linux-native Computer Use surface built around accessibility, portal-mediated capture and input, and structured diagnostics.",
+    "developerName": "Bex Clair",
+    "category": "Productivity",
+    "defaultPrompt": [
+      "Inspect the open Linux app and tell me what is focused",
+      "List the desktop apps you can currently see"
+    ],
+    "brandColor": "#1F2937",
+    "screenshots": []
+  },
+  "skills": "./skills"
+}
