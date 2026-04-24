@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "blocked", "failed"]
+    },
+    "dialog_title": { "type": "string" },
+    "dialog_text": { "type": "string" },
+    "screenshot_path": {
+      "type": ["string", "null"]
+    },
+    "proof_notes": { "type": "string" }
+  },
+  "required": [
+    "status",
+    "dialog_title",
+    "dialog_text",
+    "screenshot_path",
+    "proof_notes"
+  ]
+}

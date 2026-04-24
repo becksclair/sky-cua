@@ -1,0 +1,71 @@
+[project]
+name = "sky-cua-python-harnesses"
+version = "0.1.0"
+description = "Python harnesses and operator smoke tests for sky-cua."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.31.4",
+    "pillow>=12.0.0",
+    "pytest>=8.4.2",
+    "ruff>=0.14.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["scripts"]
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "C4",
+    "E",
+    "F",
+    "I",
+    "RUF",
+    "SIM",
+    "UP",
+    "W",
+]
+ignore = [
+    "E501",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "_app_server_harness",
+    "_codex_exec",
+    "_plugin_bundle",
+    "_tidal_workflow",
+    "live_desktop_smoke",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["scripts"]
+python_files = ["test_*.py", "*_test.py"]
+
+[tool.basedpyright]
+include = ["scripts"]
+exclude = [
+    "**/__pycache__",
+    ".venv",
+    "artifacts",
+    "dist",
+    "target",
+]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportAny = false
+reportExplicitAny = false
+reportMissingImports = false
+reportMissingTypeStubs = false
+reportUnknownArgumentType = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownParameterType = false
+reportUnknownLambdaType = false
+reportUnannotatedClassAttribute = false
