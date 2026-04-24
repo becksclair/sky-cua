@@ -190,10 +190,29 @@ Build a Linux-first Codex Computer Use plugin with a split Rust client/service a
     - `capture.pixel_size` describes that model-facing screenshot, while `capture.original_pixel_size` / `capture.original_screenshot_path` preserve the raw capture truth
     - explicit `click` / `drag` coordinates are interpreted as screenshot pixel coordinates and converted back to RemoteDesktop stream coordinates or original X11 pixels before physical input
     - the installed rich app-server smoke at `artifacts/codex-e2e/app-server-smoke/20260424T015420Z/` passed and returned `/run/user/1000/sky-cua/captures/7e02835d-732f-4d2f-a3ed-97379aa9f199.jpg`, verified as `1920 x 1080` JPEG
+  - the tightened TIDAL workflow now passes with the macOS-style screenshot coordinate contract:
+    - `scripts/live_app_server_tidal_playlist.py` passed at `artifacts/codex-e2e/tidal-playlist-app-server/20260424T035836Z/`
+    - final result created `Codex Favorites`, added five tracks, and verified `/run/user/1000/sky-cua/captures/0041ffb4-a136-45dc-9265-9f049c8140b8.jpg`
+    - the model-facing screenshot is `1920 x 1080` JPEG and the preserved original is `2560 x 1440` PNG
+    - `timing-summary.json` reports `elapsed_ms=251863`, `completed_mcp_tool_calls=35`, and `mcp_tool_duration_total_ms=7700`
+    - tool counts were 18 `get_app_state`, 14 `click`, 2 `type_text`, and 1 `list_apps`; all repeated state snapshots used `detail: "compact"` after the first full snapshot
+    - performance is dominated by non-MCP/model and image-loop overhead, not plugin backend calls: the summary estimates `non_mcp_elapsed_estimate_ms=244163` and final token usage reached roughly 3.87M total / 3.45M cached
+  - first optimization follow-up is landed locally:
+    - `scripts/_app_server_harness.py` timing summaries now include completed item counts, recent token deltas, and uncached input token estimates
+    - `crates/sky-cua-linux/src/portal/screenshot.rs` now allows bounded model screenshot caps through `SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH` and `SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT`; after the full-flow A/B, the compiled default is `1440x900`
+    - `.mcp.json` propagates those cap variables into the installed plugin MCP server; without that allowlist, the Rust knob does not reach the plugin process
+    - a reused-playlist TIDAL verification run with `SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH=1440 SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT=900` passed at `artifacts/codex-e2e/tidal-playlist-app-server/20260424T040837Z/`
+    - that run produced a `1440x810` model-facing JPEG plus preserved `2560x1440` PNG, reused `Codex Favorites`, and finished in 36.48s with 6 MCP calls; it proves the knob and coordinate path, but it is not a full creation/add-flow comparison because the playlist already existed
+    - a true full-flow A/B after deleting `Codex Favorites` shows the smaller cap is materially better:
+      - baseline `1920x1080`: `artifacts/codex-e2e/tidal-playlist-app-server/20260424T041253Z/`, completed in 287.24s, 42 MCP calls, 21 image views, 5.17M total tokens, avg/max uncached input 8.6k/60.6k
+      - `1440x810`: `artifacts/codex-e2e/tidal-playlist-app-server/20260424T042117Z/`, completed in 246.97s, 37 MCP calls, 19 image views, 3.72M total tokens, avg/max uncached input 5.0k/26.9k
+      - delta: 40.27s faster, 5 fewer MCP calls, 2 fewer image views, and 1.44M fewer total tokens while still creating the playlist and verifying five tracks
+    - `docs/image-size-performance.md` documents the default, raw-capture contract, A/B evidence, override path, and validation commands
+    - narrow validation passed: `cargo test -p sky-cua-linux portal::screenshot`, `uv run ruff format --check scripts/_app_server_harness.py`, `uv run ruff check scripts/_app_server_harness.py`, `uv run basedpyright scripts/_app_server_harness.py`, and `uv run pytest scripts/test_python_harness_helpers.py`
 
 ## Next Step
 
-Use the new rich-client harness as the installed-plugin acceptance path: `scripts/live_app_server_smoke.py` is live-proven, and `scripts/live_app_server_tidal_playlist.py` has one passing proof with `gpt-5.5` plus medium reasoning but one later timeout that exposed workflow-policy drift around stale text fields and missing-playlist recovery. The next real seam is no longer TIDAL visibility, “one useless fallback box”, missing image support, generic fallback-only interaction being hopeless, fast-tier setup, compact state, or screenshot-pixel coordinate mapping. The next meaningful move is to re-run the tightened TIDAL workflow on low reasoning with compact repeated state and bounded screenshots, then inspect `timing-summary.json` to decide whether the remaining latency is dominated by model turns, image/tool round-trips, approval/elicitation, or plugin backend calls. The full investigation write-up lives in `docs/codex-plugin-e2e-expedition.md`.
+Use the new rich-client harness as the installed-plugin acceptance path: `scripts/live_app_server_smoke.py` is live-proven, and `scripts/live_app_server_tidal_playlist.py` now has passing full-flow proofs at both `1920x1080` and `1440x810`. The next real seam is no longer TIDAL visibility, “one useless fallback box”, missing image support, generic fallback-only interaction being hopeless, fast-tier setup, compact state, screenshot-pixel coordinate mapping, whether the workflow can complete, whether smaller model-facing screenshots help, or whether `1440x900` should be the default. The next meaningful move is optional floor-finding, likely `1280x720`, before pushing the image cap lower than `1440x900`. The full investigation write-up lives in `docs/codex-plugin-e2e-expedition.md`, and the image-size decision is documented in `docs/image-size-performance.md`.
 
 The plugin/runtime facts are now separated cleanly:
 - installed plugin discovery works

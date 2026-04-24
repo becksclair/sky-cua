@@ -278,8 +278,11 @@ def summarize_timing(events: list[dict[str, Any]], transcript_lines: list[str]) 
     mcp_tool_duration_ms: dict[str, int] = {}
     completed_mcp_calls = 0
     token_updates: list[dict[str, Any]] = []
+    token_update_deltas: list[dict[str, int]] = []
     item_starts: dict[str, dict[str, Any]] = {}
     item_wall_time_ms: dict[str, int] = {}
+    item_completed_counts: dict[str, int] = {}
+    previous_total_tokens: int | None = None
     for event in events:
         item_id = event.get("item_id")
         item_type = event.get("item_type")
@@ -296,6 +299,7 @@ def summarize_timing(events: list[dict[str, Any]], transcript_lines: list[str]) 
             and isinstance(item_id, str)
             and isinstance(item_type, str)
         ):
+            item_completed_counts[item_type] = item_completed_counts.get(item_type, 0) + 1
             start = item_starts.get(item_id)
             start_ms = start.get("elapsed_ms") if start else None
             end_ms = event.get("elapsed_ms")
@@ -307,6 +311,25 @@ def summarize_timing(events: list[dict[str, Any]], transcript_lines: list[str]) 
             token_usage = event.get("token_usage")
             if isinstance(token_usage, dict):
                 token_updates.append(token_usage)
+                total = token_usage.get("total") or {}
+                total_tokens = total.get("totalTokens")
+                if isinstance(total_tokens, int):
+                    delta: dict[str, int] = {"totalTokens": total_tokens}
+                    if previous_total_tokens is not None:
+                        delta["deltaTotalTokens"] = total_tokens - previous_total_tokens
+                    previous_total_tokens = total_tokens
+                    last = token_usage.get("last") or {}
+                    for key in (
+                        "totalTokens",
+                        "inputTokens",
+                        "cachedInputTokens",
+                        "outputTokens",
+                        "reasoningOutputTokens",
+                    ):
+                        value = last.get(key)
+                        if isinstance(value, int):
+                            delta[f"last{key[0].upper()}{key[1:]}"] = value
+                    token_update_deltas.append(delta)
         if (
             event.get("event") == "inbound"
             and event.get("method") == "item/completed"
@@ -322,6 +345,7 @@ def summarize_timing(events: list[dict[str, Any]], transcript_lines: list[str]) 
     summary["mcp_tool_counts"] = dict(sorted(mcp_tool_counts.items()))
     summary["mcp_tool_duration_ms"] = dict(sorted(mcp_tool_duration_ms.items()))
     summary["mcp_tool_duration_total_ms"] = sum(mcp_tool_duration_ms.values())
+    summary["item_completed_counts"] = dict(sorted(item_completed_counts.items()))
     summary["item_wall_time_ms"] = dict(sorted(item_wall_time_ms.items()))
     summary["non_mcp_elapsed_estimate_ms"] = max(
         0, int(summary["elapsed_ms"]) - summary["mcp_tool_duration_total_ms"]
@@ -360,6 +384,17 @@ def summarize_timing(events: list[dict[str, Any]], transcript_lines: list[str]) 
     if token_updates:
         summary["token_usage_update_count"] = len(token_updates)
         summary["last_token_usage"] = token_updates[-1]
+    if token_update_deltas:
+        summary["last_token_usage_deltas"] = token_update_deltas[-10:]
+        uncached_inputs = [
+            delta["lastInputTokens"] - delta["lastCachedInputTokens"]
+            for delta in token_update_deltas
+            if "lastInputTokens" in delta and "lastCachedInputTokens" in delta
+        ]
+        if uncached_inputs:
+            summary["last_uncached_input_tokens"] = uncached_inputs[-1]
+            summary["max_uncached_input_tokens"] = max(uncached_inputs)
+            summary["avg_uncached_input_tokens"] = int(sum(uncached_inputs) / len(uncached_inputs))
     outbound_latencies = [
         event
         for event in events

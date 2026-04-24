@@ -7,9 +7,13 @@ use sky_cua_platform::model::PixelSize;
 
 use crate::portal::session::portal_u32_property;
 
-const MODEL_SCREENSHOT_MAX_WIDTH: u32 = 1920;
-const MODEL_SCREENSHOT_MAX_HEIGHT: u32 = 1080;
+const MODEL_SCREENSHOT_MAX_WIDTH: u32 = 1440;
+const MODEL_SCREENSHOT_MAX_HEIGHT: u32 = 900;
 const MODEL_SCREENSHOT_JPEG_QUALITY: u8 = 85;
+const MODEL_SCREENSHOT_MIN_BOUND: u32 = 64;
+const MODEL_SCREENSHOT_MAX_BOUND: u32 = 4096;
+const MODEL_SCREENSHOT_MAX_WIDTH_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH";
+const MODEL_SCREENSHOT_MAX_HEIGHT_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelCaptureImage {
@@ -123,11 +127,8 @@ pub fn prepare_model_capture(
             )
         })?;
 
-    let resized = image.resize(
-        MODEL_SCREENSHOT_MAX_WIDTH,
-        MODEL_SCREENSHOT_MAX_HEIGHT,
-        image::imageops::FilterType::Lanczos3,
-    );
+    let bounds = model_screenshot_bounds();
+    let resized = image.resize(bounds.0, bounds.1, image::imageops::FilterType::Lanczos3);
     let rgb = resized.to_rgb8();
     let file = std::fs::File::create(&target_path).map_err(|error| {
         BackendError::new(
@@ -168,6 +169,27 @@ pub fn prepare_model_capture(
     })
 }
 
+fn model_screenshot_bounds() -> (u32, u32) {
+    (
+        model_screenshot_bound_from_env(MODEL_SCREENSHOT_MAX_WIDTH_ENV, MODEL_SCREENSHOT_MAX_WIDTH),
+        model_screenshot_bound_from_env(
+            MODEL_SCREENSHOT_MAX_HEIGHT_ENV,
+            MODEL_SCREENSHOT_MAX_HEIGHT,
+        ),
+    )
+}
+
+fn model_screenshot_bound_from_env(name: &str, default: u32) -> u32 {
+    model_screenshot_bound_from_value(std::env::var(name).ok().as_deref(), default)
+}
+
+fn model_screenshot_bound_from_value(value: Option<&str>, default: u32) -> u32 {
+    value
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| (MODEL_SCREENSHOT_MIN_BOUND..=MODEL_SCREENSHOT_MAX_BOUND).contains(value))
+        .unwrap_or(default)
+}
+
 fn runtime_root() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -197,7 +219,10 @@ pub fn pixel_size_from_path(path: &Path) -> Option<PixelSize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_path_from_uri, prepare_model_capture};
+    use super::{
+        MODEL_SCREENSHOT_MAX_HEIGHT, MODEL_SCREENSHOT_MAX_WIDTH, file_path_from_uri,
+        model_screenshot_bound_from_env, model_screenshot_bound_from_value, prepare_model_capture,
+    };
 
     #[test]
     fn parses_file_uri_to_path() {
@@ -219,8 +244,8 @@ mod tests {
         let prepared =
             prepare_model_capture("bounded-jpeg-test", &source_path).expect("capture should scale");
         let pixel_size = prepared.pixel_size.expect("pixel size should be known");
-        assert_eq!(pixel_size.width, 1920);
-        assert_eq!(pixel_size.height, 1080);
+        assert_eq!(pixel_size.width, 1440);
+        assert_eq!(pixel_size.height, 810);
         assert_eq!(
             prepared.original_pixel_size.expect("source size").width,
             2560
@@ -233,5 +258,25 @@ mod tests {
         let _ = std::fs::remove_file(prepared.path);
         let _ = std::fs::remove_file(source_path);
         let _ = std::fs::remove_dir(temp_dir);
+    }
+
+    #[test]
+    fn model_screenshot_bound_env_parser_rejects_unsafe_values() {
+        assert_eq!(
+            model_screenshot_bound_from_env("__SKY_CUA_UNSET__", 1440),
+            1440
+        );
+        assert_eq!(model_screenshot_bound_from_value(Some("1280"), 1440), 1280);
+        assert_eq!(model_screenshot_bound_from_value(Some("63"), 1440), 1440);
+        assert_eq!(model_screenshot_bound_from_value(Some("4097"), 1440), 1440);
+        assert_eq!(model_screenshot_bound_from_value(Some("nope"), 1440), 1440);
+        assert_eq!(
+            model_screenshot_bound_from_env("__SKY_CUA_UNSET__", MODEL_SCREENSHOT_MAX_WIDTH),
+            MODEL_SCREENSHOT_MAX_WIDTH
+        );
+        assert_eq!(
+            model_screenshot_bound_from_env("__SKY_CUA_UNSET__", MODEL_SCREENSHOT_MAX_HEIGHT),
+            MODEL_SCREENSHOT_MAX_HEIGHT
+        );
     }
 }
