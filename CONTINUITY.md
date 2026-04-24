@@ -1,0 +1,216 @@
+# CONTINUITY
+
+## Goal
+
+Build a Linux-first Codex Computer Use plugin with a split Rust client/service architecture and Wayland-first backend seams.
+
+## Current State
+
+- Workspace, plugin packaging, wrapper scripts, and shared platform model are in place.
+- `list_apps` and targeted `get_app_state` work end to end through MCP and the internal Unix-socket daemon.
+- Live KDE 6 Wayland probing works on Asgard, including portal capability detection and AT-SPI discovery.
+- `get_app_state` now carries live ScreenCast stream metadata plus a real screenshot reference from an in-process PipeWire decode under `/run/user/1000/sky-cua/captures/*.png`, with Screenshot-portal capture only as fallback.
+- Snapshot capture metadata now distinguishes the configured capture lane from the actual image-producing lane:
+  - `capture.backend` is the primary lane (`portal_pipe_wire`, `x11`, etc.)
+  - `capture.image_backend` is the backend that actually produced the image file
+  That means PipeWire-to-Screenshot fallback is now explicit in structured content instead of being implied by a vague diagnostic.
+- Repeated `list_apps` and `get_app_state` calls are stable after caching the AT-SPI connection and reusing the PipeWire remote across captures.
+- X11/XWayland discovery now merges `xprop` window metadata into `list_apps`, falls back to `xwininfo -root -tree` when `_NET_CLIENT_LIST` is missing, and can return a focused-window fallback snapshot with a synthetic root element and real window bounds when no AT-SPI tree matches.
+- X11/XWayland fallback snapshots now recover child X11 regions from `xwininfo -id -tree`, so windows like `xmessage` expose a small pseudo-element tree with real descendant bounds instead of a single dumb root box.
+- That richer fallback tree is now proven actionable too: both the pure-X11 and XWayland smokes dismiss `xmessage` by clicking a recovered descendant `element_index`, not by killing the process out of band.
+- The recovered X11/XWayland pseudo-elements now carry conservative structural roles and state flags instead of one flat `x11_region` bucket:
+  - `x11_container`
+  - `x11_leaf_region`
+  - `x11_action_region`
+  These remain honest physical-targeting hints, not fake AT-SPI semantics.
+- X11/XWayland correlation is now stricter than the first score-based pass: title alignment can improve ranking, but it no longer creates a match on its own. Correlation now requires a real identity signal beyond title unless PID or app-id already settles it.
+- Portal session startup now times out cleanly, and Wayland PipeWire capture resets and retries the cached RemoteDesktop session once when the cached session goes stale.
+- If the portal prompt is not approved promptly on Wayland, the backend now surfaces `PortalApprovalPending` instead of hanging until the client socket gives up and vomits a useless internal error.
+- The MCP client text layer is now more explicit about that approval-wait state too: `get_app_state` summaries and action failures tell the operator to approve the KDE portal dialog and retry instead of making her infer that from a bare code.
+- Portal/session lifecycle polish is now surfaced deliberately rather than silently: successful Wayland snapshots and portal-routed actions can carry `PortalSessionStarted` and `PortalSessionRebuilt` diagnostics, and the MCP text summary appends those lifecycle messages for the operator.
+- Capture downgrade state is now explicit too: when PipeWire cannot produce the snapshot image but Screenshot fallback does, diagnostics now separate the underlying PipeWire failure from the actual downgrade with `CaptureBackendDowngraded`.
+- There is now a dedicated operator-run downgrade proof at `scripts/live_portal_downgrade_smoke.py`. It starts a fresh isolated service via `SKY_CUA_SERVICE_SOCKET_PATH`, forces PipeWire image failure via `SKY_CUA_FORCE_PIPEWIRE_CAPTURE_FAILURE`, and proves `capture.image_backend=portal_screenshot` plus `CaptureBackendDowngraded` end to end through MCP.
+- The first real heuristics-driven action routing slice is now in: app-instruction metadata can explicitly bless a physical `set_value` fallback mode, and the Linux backend now uses that policy for Kate-style editor replacement flows (`focus click -> Ctrl+A -> type`) when semantic `set_value` is unavailable.
+- That Kate seam is now live-proven too, but it needed two extra bits of honesty:
+  - Kate launched from this remote project context only becomes a reliable proof target when forced onto XWayland with `QT_QPA_PLATFORM=xcb`.
+  - On that XWayland Kate window, portal keyboard injection reported success while doing bugger-all, so keyboard-driven actions now prefer the X11/XTest lane whenever the focused app has a matched X11 window.
+- The X11-targeted keyboard override now covers `type_text`, `press_key`, and the heuristics-backed `set_value` physical fallback. The XTest text path is newline-aware too, so multi-line editor replacement now survives `\\n` instead of collapsing lines together.
+- Action routing is live:
+  - semantic AT-SPI: `click`, `perform_secondary_action`, `set_value`, focus
+  - physical portal input: `click`, `perform_secondary_action`, `scroll`, `drag`, `type_text`, `press_key`
+- The repo now has a dedicated pure-X11 smoke harness at `scripts/live_x11_smoke.py` that passes under nested `Xvfb`, proving:
+  - X11 capture via `ximagesrc -> pngenc -> appsink`
+  - X11 fallback discovery for `xmessage`
+  - explicit-coordinate `click`, `perform_secondary_action`, `drag`, `scroll`, `type_text`, and `press_key` through `xdotool`
+- Explicit-coordinate actions now probe the environment on the service side even without a `snapshot_id`, so physical actions no longer lose their backend selection outside snapshot-scoped flows.
+- Both `scripts/live_x11_smoke.py` and `scripts/live_desktop_smoke.py` now pass again on Asgard after tightening the XWayland matcher so KDE service apps cannot win a focused-window correlation on title alone.
+- Both live smokes now also prove the new structured capture truth:
+  - KDE Wayland snapshots keep `image_backend=portal_pipe_wire` on the normal path
+  - pure X11 snapshots report `image_backend=x11`
+- Both live smokes now include a two-window `xmessage` selector probe, proving that `get_app_state` with `desktop_file_id + window_title` picks the exact intended X11/XWayland window instead of the first matching app bucket.
+- Both live smokes now also assert that the `xmessage` fallback snapshot contains recovered child X11 regions plus at least one `x11_action_region`. On Asgard, that probe currently returns 5 elements instead of just 1.
+- Both live smokes now also click the lowest recovered `x11_action_region` or `x11_leaf_region` on `xmessage` and verify that the dialog exits, proving descendant-element targeting end to end.
+- `scripts/live_desktop_smoke.py` remains operator-facing: with approval it passes, and without approval it now fails fast and truthfully with `PortalApprovalPending`.
+- A fresh MCP `get_app_state` against a fresh service now proves the new lifecycle summary end to end too: the returned text includes `Started a new combined RemoteDesktop and ScreenCast portal session.` when the portal session is first established, and the same cold-start snapshot now reports `capture.image_backend=portal_pipe_wire` in structured content.
+- The forced-downgrade smoke now proves the opposite branch too: its snapshot text includes the downgrade summary, its diagnostics include both `PipeWireStreamFailed` and `CaptureBackendDowngraded`, and its structured capture reports `backend=portal_pipe_wire` with `image_backend=portal_screenshot`.
+- Rust tests now also prove the new heuristics-policy seam: Kate resolves a `set_value` fallback policy while Firefox does not.
+- A fresh live Kate proof now passes end to end on Asgard through an isolated service socket:
+  - launch: `QT_QPA_PLATFORM=xcb kate --new --block <temp file>`
+  - target app: `kate.desktop`, window title `proof.txt  — Kate`
+  - editor element: `element_index=156`, role `text`, bounds `1137x710 @ 790,480`
+  - `set_value` result: heuristics-backed physical fallback with `routing=prefer_physical_fallback`
+  - `press_key` result: X11 input fallback for `Ctrl+S`
+  - file proof: the temp file was saved on disk as `hello from sky-cua kate proof\\nsecond line\\n`
+- That proof is now codified as a reusable operator smoke at `scripts/live_kate_smoke.py`, and it passes on Asgard.
+- There is now a native-Wayland graphical workflow proof at `scripts/live_krita_smoke.py`, and it passes on Asgard end to end:
+  - launch: `krita --nosplash`
+  - target app: `krita.desktop`, Qt, non-`x11:` app id
+  - hybrid control model: use AT-SPI to find the app/window surfaces and the live document frame, but use physical screenshot-guided actions for the `New Image` / `Create` / save-name-field steps
+  - save proof: the smoke writes `~/Pictures/sky-cua-krita-smoke-<id>.kra` and verifies `mergedimage.png` inside the archive contains non-white pixels
+- That Krita proof also exposed a native-Wayland control-truth worth keeping: semantic `click` on the initial `New Image` button wedges even though the button is visible in the tree, so the reliable path there is physical click plus screenshot-guided dialog targeting.
+- CodeRabbit review follow-up landed too:
+  - the Unix-socket IPC server no longer dies on one bad `accept()` or one bad client request; it logs and keeps serving
+  - repo-root lookup for heuristics/policy loading no longer falls back to a compile-time build path when `SKY_CUA_REPO_ROOT` is unset
+  - the PipeWire forced-failure env-var test is now serialized to avoid cross-test env races
+  - the zenity smoke launcher no longer passes a stray empty argument
+  - wrapper scripts were re-checked and are already executable (`0755`), so the `.mcp.json` launch seam is fine as-is
+  - the approval/token store no longer falls back to `/tmp`; it now requires a real per-user state root and tightens the `sky-cua` state directory to owner-only permissions
+- A simplify pass landed on the new seams too:
+  - app-instruction repo-root resolution, key normalization, and focused-app key derivation now live in `sky-cua-platform` so the backend policy lane and client guidance lane stop drifting independently
+  - service/client socket-path resolution now shares one helper in `sky-cua-platform` instead of duplicating the IPC socket contract
+  - approval-store startup is now explicit (`ApprovalStore::initialize()`) instead of keeping dead daemon state around purely for constructor side effects
+  - X11 keyboard injection now routes through shared `Option<&str>` target helpers plus one backend window-activation helper instead of repeating the same branchy XTest plumbing in three places
+  - `scripts/live_kate_smoke.py` no longer burns a blind five-second sleep before it even starts talking to MCP
+- A second `review-work` pass caught and fixed one more IPC hygiene seam:
+  - the shared service socket path no longer falls back to a generic `/tmp/sky-cua/service.sock` when `XDG_RUNTIME_DIR` is missing
+  - the fallback order is now `XDG_RUNTIME_DIR`, then `HOME/.cache/sky-cua`, then a UID-scoped temp directory
+  - the service now tightens the socket parent directory to owner-only permissions before binding
+- A third `review-work` pass tightened the same fallback contract again:
+  - the shared service socket path now respects `XDG_CACHE_HOME` before falling back to `HOME/.cache`
+  - the non-runtime fallback order is now `XDG_CACHE_HOME`, then `HOME/.cache`, then a UID-scoped temp directory
+- A fourth `review-work` pass fixed an override-path permissions bug:
+  - the service still creates the socket parent directory for `SKY_CUA_SERVICE_SOCKET_PATH` overrides if needed
+  - but it no longer forcibly chmods the parent directory when the socket path came from an explicit override
+  - owner-only permission tightening is now reserved for the plugin-managed default socket directories
+- The installed plugin startup seam is now fixed under explicit `codex app-server` too:
+  - `.mcp.json` now uses `/bin/sh -c`, not `/bin/sh -lc`, so login-shell startup scripts cannot spew stray stdout into the MCP stream
+  - `sky-cua-client mcp` now accepts both `Content-Length` framing and newline-delimited JSON-RPC, and mirrors the incoming framing in its responses
+  - the decisive proof is `artifacts/app-server-probe/direct-desktop-v13/summary.json`, where `computer-use` transitions from `starting` to `ready` under `/opt/codex-desktop/resources/codex app-server`
+- That means the old “plugin startup timeout” story is dead. The remaining Codex integration blocker is higher up:
+  - even with `computer-use` marked `ready`, a live turn started through explicit app-server on this machine still sees the host agent tool world instead of the local plugin tools
+  - the current proof is `artifacts/app-server-probe/direct-desktop-v15/summary.json`, whose final tool list still contains `web.run`, `functions.exec_command`, `tool_search.tool_search_tool`, and friends, but no `computer-use` tool namespace
+- The local plugin/tool assembly path is now re-proven independently of that live host-tool contamination:
+  - do **not** use a `CODEX_HOME` rooted under `/tmp` for plugin-loading probes; helper/bin setup refuses there and `codex mcp list --json` will not surface the local `computer-use` server even though the bundle files exist
+  - use a normal repo/home path instead (for example `artifacts/codex-home-probe-*`) with an explicit `config.toml` `openai_base_url` override, not just `OPENAI_BASE_URL` in the environment
+  - with that setup, both `codex app-server` and `codex exec` send `mcp__computer_use__` in the outbound `/responses` request body, and that namespace contains the expected Computer Use functions (`list_apps`, `get_app_state`, `click`, `drag`, `scroll`, `type_text`, `press_key`, `set_value`, `perform_secondary_action`)
+  - the concrete proofs are:
+    - `artifacts/app-server-probe/direct-desktop-v24-home-probe-plugin-mention/responses-request.json`
+    - `artifacts/codex-exec-probe/without_plugin_mention/responses-request.json`
+    - `artifacts/codex-exec-probe/with_plugin_mention/responses-request.json`
+  - both `codex-exec` mock probes included the `mcp__computer_use__` namespace, so the plugin is model-visible in the local request payload even without an explicit plugin mention once the plugin actually loads
+- The live detached-home probes show the remaining integration seam is higher up than local plugin loading or request assembly:
+  - both `~/.codex/auth.json` and `artifacts/codex-home-live/auth.json` currently have `auth_mode = "chatgpt"`
+  - a fully scrubbed `env -i` run with repo-local `CODEX_HOME=artifacts/codex-home-live` still loads `computer-use` successfully (`starting -> ready`) but returns the host harness tool world in the actual live turn; the current proofs are:
+    - `artifacts/app-server-probe/live-detached-home-v1.txt`
+    - `artifacts/codex-exec-probe/live-detached-home-v1.json`
+  - strace on that same detached live run shows outbound HTTPS connects to `104.18.32.47` and `172.64.155.209`, which matches the ChatGPT-backed Codex path rather than a plain OpenAI API run; the local source that explains this is `../sky/codex/codex-rs/core/src/model_provider_info.rs`, where ChatGPT auth selects `https://chatgpt.com/backend-api/codex`
+  - practical implication: from this hosted session, local plugin E2E is trustworthy through direct MCP stdio and the existing live desktop smokes, but **not** through live ChatGPT-auth Codex turns if the goal is proving the local plugin tool surface
+- Official Codex docs now sharpen the “do it properly” part too:
+  - plugins are documented as marketplace-installed bundles, not as files you write directly into `~/.codex/plugins/cache/...`
+  - the recommended local authoring/test path is a repo or personal marketplace (`$REPO_ROOT/.agents/plugins/marketplace.json` or `~/.agents/plugins/marketplace.json`), then browsing/installing the plugin through Codex’s plugin directory
+  - `~/.codex/plugins/cache/$MARKETPLACE/$PLUGIN/$VERSION/` is the install cache Codex manages **after** marketplace install, not the documented authoring interface
+- The live ChatGPT-auth plugin E2E seam is now much sharper too:
+  - with `features.apps = true`, detached ChatGPT-auth turns from this machine still report only the host harness tool world (`web.run`, `functions.exec_command`, etc.) and omit the actual `mcp__computer_use__...` tools
+  - with a dedicated ChatGPT-auth `CODEX_HOME` that keeps `plugins = true` but forces `features.apps = false`, the same live turn exposes the real plugin tool namespace again:
+    - `mcp__computer_use__.list_apps`
+    - `mcp__computer_use__.get_app_state`
+    - `mcp__computer_use__.click`
+    - `mcp__computer_use__.scroll`
+    - `mcp__computer_use__.type_text`
+    - etc.
+  - the proving artifact is `artifacts/codex-exec-probe/live-chatgpt-noapps.last.json`
+  - the first full smoke under that no-apps ChatGPT home now reaches real plugin calls too; see `artifacts/codex-e2e/plugin-smoke/20260423T155634Z/codex-output.jsonl`
+  - that smoke still blocked, but for a much more honest reason: every `computer-use` tool call came back `user cancelled MCP tool call` instead of the old “plugin/tool surface never appeared” failure class
+  - source review in `../sky/codex/codex-rs` now explains why: `computer-use` is a generic plugin MCP server, not a `codex_apps` connector, so app-level `default_tools_approval_mode` does nothing for it; `codex exec` also cannot satisfy `request_user_input` or MCP elicitation prompts, so approval-gated tool calls get cancelled in exec mode
+  - the practical workaround is now proven: run the desktop E2E harnesses with `--dangerously-bypass-approvals-and-sandbox` inside the dedicated ChatGPT-auth no-apps home. That sets `AskForApproval::Never` plus `DangerFullAccess`, which makes the generic MCP approval path stop prompting and lets real `computer-use` calls run
+  - live proof: `artifacts/codex-e2e/plugin-smoke-bypass-probe/20260423T161318Z/last-message.json` completed successfully and dismissed the zenity dialog through real `computer-use` calls after adding the bypass flag
+- There is now a proper rich-client acceptance harness too:
+  - `scripts/_app_server_harness.py` implements a minimal JSON-RPC client for `codex app-server` (`initialize`, `initialized`, `thread/start`, `turn/start`) plus handlers for `mcpServer/elicitation/request` and `item/tool/requestUserInput`
+  - `scripts/live_app_server_smoke.py` uses that harness to drive a zenity dialog through the installed plugin with real `computer-use` tool calls and approval round-trips, without relying on the exec bypass path
+  - live proof: `artifacts/codex-e2e/app-server-smoke/20260423T163318Z/last-message.json` plus `app-server-output.jsonl` show `computer-use` startup (`starting -> ready`), explicit MCP elicitation approvals, `list_apps`, `get_app_state`, `click`, and final dismissal confirmation
+  - the first version of that harness also found a cleanup trap worth preserving: reading the child `stderr` pipe before terminating `codex app-server` deadlocked the harness forever waiting for EOF, so cleanup now closes the child first and only then drains stderr
+- The first consumer-app workflow has been moved onto that same rich-client lane too:
+  - `scripts/live_app_server_tidal_playlist.py` now drives the Tidal playlist workflow through `codex app-server` instead of `codex exec`
+  - the original failure class was real app invisibility, and that seam is now fixed:
+    - `.mcp.json` now uses `env_vars` to preserve the desktop-session env on Codex-launched plugin MCP servers (`DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`)
+    - this keeps `sky-cua-service` on the real session bus and on `/run/user/1000/sky-cua/service.sock` instead of silently spawning a blind daemon under `~/.cache/sky-cua/service.sock`
+    - the KWin fallback now enumerates background native Wayland windows through `org.kde.KWin /WindowsRunner` + `getWindowInfo`, so `list_apps` can surface `tidal-hifi.desktop` even when Ghostty has focus
+    - the active-window `qdbus queryWindowInfo` hint is intentionally disabled for now because it proved flaky/hanging under Codex-launched service environments and could wedge the whole backend call before KWin enumeration ran
+  - the current live proof is `artifacts/codex-e2e/tidal-playlist-app-server/20260423T170741Z/last-message.json`
+    - `list_apps` includes `kwin:{71afaa3f-26ba-47a3-a07b-abc3ce9a4296}` / `tidal-hifi.desktop` / `TIDAL Hi-Fi`
+    - `get_app_state` can focus that window and reports `PortalSessionRestored` plus `PortalSessionTokenRotated`
+    - the remaining blocker is now `AccessibilityCoverageLimited`: once focused, TIDAL still exposes only a single Wayland fallback window node and no useful AT-SPI subtree, so playlist creation/search/song targeting is not yet safe
+  - that native-Wayland fallback is now richer and screenshot-oriented:
+    - KWin fallback snapshots emit structural anchors (`wayland_header_band`, `wayland_search_candidate`, `wayland_sidebar_region`, `wayland_main_region`, `wayland_list_candidate`) with `vision_anchor` and other blunt state flags instead of one useless root box
+    - the richer TIDAL run at `artifacts/codex-e2e/tidal-playlist-app-server/20260423T171816Z/` proved the model can now focus TIDAL, click the search candidate, type a query, and navigate via coordinate/fallback actions
+    - the next blocker was no longer “no anchors”; it was model-side image support in the rich harness
+  - the rich harness then cleared the image-support seam:
+    - `gpt-5.3-codex-spark` rejected `view_image` in the app-server turn with `view_image is not allowed because you do not support image inputs`
+    - the Codex E2E harness default is now `gpt-5.4`, and the richer TIDAL run at `artifacts/codex-e2e/tidal-playlist-app-server/20260423T172238Z/` proves `view_image` now succeeds inside the app-server turn
+    - that run also proves the model can use the screenshot-backed fallback lane for real actions: it highlighted the `Chill / Work` playlist in the sidebar, opened the playlist context menu, clicked `Add to playlist`, then right-clicked a main-content item
+    - it still ended `blocked_app_state`, but for a much narrower reason than before: clicks and context-menu navigation on TIDAL’s fallback-only Wayland surface are still inconsistent enough that the turn could not honestly verify creating or finding `Codex Picks` and adding exactly 3 songs
+  - the first full TIDAL rich-client workflow now passes live with the stronger workflow settings:
+    - `scripts/live_app_server_tidal_playlist.py` defaults to `gpt-5.5`, `reasoning_effort="medium"`, and a 420-second turn budget
+    - live proof: `artifacts/codex-e2e/tidal-playlist-app-server/20260423T190545Z/last-message.json`
+    - transcript proof: `artifacts/codex-e2e/tidal-playlist-app-server/20260423T190545Z/app-server-output.jsonl`
+    - final result reused `Codex Favorites`, returned five songs, and verified a fresh screenshot at `/run/user/1000/sky-cua/captures/6442c038-9041-4fc2-a959-d835fa9c993d.png`
+  - a simplify pass centralized the TIDAL workflow constants, schema path, and result validation in `scripts/_tidal_workflow.py` so the app-server and exec harnesses do not drift on model, reasoning, playlist name, song count, or validation behavior
+  - the Codex harness setup now opts into Fast service tier explicitly:
+    - generated test homes get top-level `service_tier = "fast"` plus `[features].fast_mode = true`, and strip profile-local `service_tier` overrides so no profile can silently select the slow `flex` lane
+    - `codex exec` harness calls also pass `-c features.fast_mode=true` and `-c service_tier="fast"`
+    - rich app-server turns send `serviceTier: "fast"` on both `thread/start` and `turn/start`
+    - live proof: `artifacts/codex-e2e/app-server-smoke/20260423T191543Z/thread_start.json` reports `"serviceTier": "fast"` and the smoke completed successfully
+  - the follow-up TIDAL run with fast tier proved the transport/model config stayed correct but exposed workflow hygiene issues rather than backend issues:
+    - `artifacts/codex-e2e/tidal-playlist-app-server/20260423T191817Z/thread_start.json` reports `model=gpt-5.5` and `serviceTier=fast`
+    - the turn used real `computer-use` calls and screenshots, but timed out after polluting TIDAL search/title state with stale text and delaying playlist recreation after the playlist had been deleted
+    - the shared computer-use guidance and both TIDAL harness prompts now require checking a field's visible contents before typing, clearing stale text before replacement, one-action-one-screenshot loops in fallback-only UIs, and immediate create/recreate flow once a required playlist is confirmed missing
+    - target-window screenshot cropping is intentionally not enabled yet: replacing the full `screenshot_path` with a crop would break coordinate expectations unless the payload also carries crop origin/coordinate-space metadata and action mapping
+  - TIDAL latency tuning is now instrumented instead of anecdotal:
+    - the shared TIDAL workflow reasoning effort is back to `low`
+    - `scripts/_app_server_harness.py` now writes `timing.jsonl` and `timing-summary.json` beside the normal transcript
+    - the timing sidecars capture client request latency, server approval/elicitation latency, inbound event timestamps, completed MCP tool counts/durations, token usage updates, item wall time by type, non-MCP elapsed estimate, and largest inbound gaps
+    - the app-server smoke at `artifacts/codex-e2e/app-server-smoke/20260424T010117Z/` proved the first timing sidecar shape; that run spent roughly 1.7s in MCP tools out of roughly 23.6s elapsed, so model-side/tool-roundtrip overhead is now measurable
+  - the plugin/MCP state contract now has a product-level compact loop mode:
+    - `get_app_state` still defaults to full structured state for compatibility and debugging
+    - callers can pass `detail: "compact"` to keep screenshot metadata, focused app, diagnostics, app guidance, element indices, bounds, roles, names, values, flags, and semantic actions while dropping verbose element descriptions plus static environment/capability blocks
+    - the bundled computer-use workflow guidance now recommends full state for initial orientation and compact state for repeated screenshot/action verification loops
+  - on the rich app-server smoke's zenity snapshot, the compact structured state would reduce that `get_app_state` payload by about 30%; the separate stale high-res image retention remains a Codex context-management issue rather than an MCP payload-size issue
+  - the screenshot/action coordinate contract now mirrors the bundled macOS plugin more closely:
+    - model-facing `screenshot_path` images are bounded JPEGs, currently capped at 1920x1080
+    - `capture.pixel_size` describes that model-facing screenshot, while `capture.original_pixel_size` / `capture.original_screenshot_path` preserve the raw capture truth
+    - explicit `click` / `drag` coordinates are interpreted as screenshot pixel coordinates and converted back to RemoteDesktop stream coordinates or original X11 pixels before physical input
+    - the installed rich app-server smoke at `artifacts/codex-e2e/app-server-smoke/20260424T015420Z/` passed and returned `/run/user/1000/sky-cua/captures/7e02835d-732f-4d2f-a3ed-97379aa9f199.jpg`, verified as `1920 x 1080` JPEG
+
+## Next Step
+
+Use the new rich-client harness as the installed-plugin acceptance path: `scripts/live_app_server_smoke.py` is live-proven, and `scripts/live_app_server_tidal_playlist.py` has one passing proof with `gpt-5.5` plus medium reasoning but one later timeout that exposed workflow-policy drift around stale text fields and missing-playlist recovery. The next real seam is no longer TIDAL visibility, “one useless fallback box”, missing image support, generic fallback-only interaction being hopeless, fast-tier setup, compact state, or screenshot-pixel coordinate mapping. The next meaningful move is to re-run the tightened TIDAL workflow on low reasoning with compact repeated state and bounded screenshots, then inspect `timing-summary.json` to decide whether the remaining latency is dominated by model turns, image/tool round-trips, approval/elicitation, or plugin backend calls. The full investigation write-up lives in `docs/codex-plugin-e2e-expedition.md`.
+
+The plugin/runtime facts are now separated cleanly:
+- installed plugin discovery works
+- the installed `computer-use` stdio server is healthy over direct probe
+- explicit `codex app-server` now starts that server successfully
+- local `codex exec` and `codex app-server` request bodies both include the `mcp__computer_use__` namespace under a controlled mock backend
+- live ChatGPT-auth Codex turns from this session still expose host tools instead of the local plugin surface
+
+So the next seam is no longer plugin startup, local tool assembly, or whether a richer installed-plugin workflow can work. It is turning the proven workflow into a maintainable regression target without letting the fallback-anchor vocabulary drift into fake semantics.
+
+## Open Questions
+
+- Whether KWin/EIS support is worth adding early for broader pointer/scroll parity once the current RemoteDesktop `Notify*` path is stable enough.
+- How much more X11/XWayland metadata we want to harvest beyond `xprop` plus `xwininfo` before the maintenance cost gets silly.
+- How to improve semantic richness for visible X11/XWayland windows that can now be identified but still expose no useful AT-SPI tree, without drifting from conservative physical-targeting hints into fiction.
+- Whether the current 60-second client-side socket read timeout is still worth keeping this wide now that the service returns `PortalApprovalPending` much earlier.
+- Whether the ordinary KDE smoke should grow an opt-in isolated-service mode too, so portal approval checks and cold-start checks stop reusing the default long-lived socket by accident during manual debugging.
+- Whether the X11-targeted keyboard override should stay scoped to keyboard-driven actions only, or whether some XWayland pointer actions would also benefit from preferring XTest over portal injection when a matched X11 window exists.
+- Whether native-Wayland AT-SPI bounds on apps like Ghostty need a correction layer before we trust them for physical targeting, because some extents currently behave like window-local coordinates even when tagged as screen-space.
+- Whether an API-key-auth Codex run from a truly external runtime boundary will expose the local plugin tool surface correctly, or whether the ChatGPT-backed Codex service path simply does not mirror local plugin tools the way the mock/local assembly path does.
