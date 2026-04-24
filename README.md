@@ -1,14 +1,16 @@
 # sky-cua
 
-Linux-first Computer Use plugin for Codex.
+Linux-first MCP Computer Use runtime, with Codex plugin packaging.
 
 `sky-cua` is a Rust workspace plus Python harnesses for driving Linux desktop
-apps through Codex. It exposes a Codex plugin MCP server, keeps a long-lived
-service behind a Unix socket, and routes app discovery, screenshots, and input
-through Linux-native backends.
+apps from agent hosts that can talk to MCP. It exposes `sky-cua-client mcp`,
+keeps a long-lived service behind a Unix socket, and routes app discovery,
+screenshots, and input through Linux-native backends. The Codex plugin is a
+packaged adapter around that runtime, not the runtime boundary itself.
 
 ## What Works
 
+- portable MCP server entrypoint through `sky-cua-client mcp`
 - Codex plugin packaging through `.codex-plugin/plugin.json` and `.mcp.json`
 - split Rust client/service runtime with isolated socket support via
   `SKY_CUA_SERVICE_SOCKET_PATH`
@@ -29,7 +31,7 @@ through Linux-native backends.
   descendant bounds
 - app-action policy in `resources/app-instructions/index.json`, including the
   Kate-scoped `set_value` fallback
-- bundled workflow skill in `skills/computer-use-workflows/`
+- host-portable workflow guidance in `skills/computer-use-workflows/`
 
 ## Development
 
@@ -45,14 +47,14 @@ uv run basedpyright
 uv run pytest
 ```
 
-Run the plugin pieces directly:
+Run the runtime pieces directly:
 
 ```bash
-./bin/sky-cua-client
+./bin/sky-cua-client mcp
 ./bin/sky-cua-service daemon
 ```
 
-Build and install a debug bundle:
+Build and install a Codex debug bundle:
 
 ```bash
 python3 scripts/build_plugin.py
@@ -90,6 +92,9 @@ python3 scripts/live_kdialog_smoke.py
 
 For the full installed-plugin ChatGPT-auth E2E investigation, see
 `docs/codex-plugin-e2e-expedition.md`.
+
+For the portable runtime boundary and host-adapter expectations, see
+`docs/mcp-runtime.md`.
 
 ## Current Limitations
 

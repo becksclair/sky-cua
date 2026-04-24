@@ -1,7 +1,7 @@
 {
   "name": "sky-cua",
   "version": "0.1.0",
-  "description": "Linux-first Computer Use plugin for Codex with a split client/service architecture.",
+  "description": "Codex adapter for the Linux-first sky-cua MCP Computer Use runtime.",
   "author": {
     "name": "Bex Clair"
   },
@@ -9,8 +9,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Linux Computer Use",
-    "shortDescription": "Control Linux desktop apps from Codex",
-    "longDescription": "Linux Computer Use gives Codex a Linux-native Computer Use surface built around accessibility, portal-mediated capture and input, and structured diagnostics.",
+    "shortDescription": "Control Linux desktop apps through MCP",
+    "longDescription": "Linux Computer Use gives Codex access to the sky-cua MCP desktop-control runtime, built around accessibility, portal-mediated capture and input, and structured diagnostics.",
     "developerName": "Bex Clair",
     "category": "Productivity",
     "defaultPrompt": [

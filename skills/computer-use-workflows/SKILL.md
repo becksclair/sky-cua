@@ -1,11 +1,11 @@
 ---
 name: computer-use-workflows
-description: Use when Codex should operate desktop applications through the sky-cua computer-use plugin. This skill teaches a hybrid workflow that combines control-tree reads, screenshots or other visual confirmation, and physical desktop actions across Linux, macOS, and Windows. Prefer it for app automation, graphical workflows, drag and drop, sliders, canvases, right-click flows, double-click flows, and any UI where semantic APIs are incomplete or misleading.
+description: Use when an agent should operate desktop applications through the sky-cua MCP computer-use runtime. This skill teaches a hybrid workflow that combines control-tree reads, screenshots or other visual confirmation, and physical desktop actions across Linux, macOS, and Windows. Prefer it for app automation, graphical workflows, drag and drop, sliders, canvases, right-click flows, double-click flows, and any UI where semantic APIs are incomplete or misleading.
 ---
 
 # Computer Use Workflows
 
-Use this skill when the installed computer-use plugin is the right tool for the job.
+Use this skill when the installed sky-cua computer-use runtime is the right tool for the job.
 
 ## Core stance
 
@@ -24,7 +24,7 @@ Treat the accessibility tree as structure, not gospel.
 - Before typing into a visible field, inspect the current screenshot and decide whether the field is empty, selected, or already contains text. If stale or unrelated text is present, clear or select it before typing; do not append blindly.
 - If the required object is confirmed missing or deleted, create or recreate it directly instead of wandering through unrelated search results first.
 - When you know the target app or window inside a full desktop screenshot, visually focus on that window while keeping all coordinate actions in the current screenshot's pixel coordinate space.
-- For `click`/`drag` x/y coordinates, use the pixels of the screenshot returned by the current snapshot. The plugin maps those screenshot pixels back to the desktop or stream before moving the pointer.
+- For `click`/`drag` x/y coordinates, use the pixels of the screenshot returned by the current snapshot. The runtime maps those screenshot pixels back to the desktop or stream before moving the pointer.
 
 ## Interaction ladder
 
@@ -109,5 +109,5 @@ Write shortcuts in paired cross-platform form when possible:
 
 ## Read next when needed
 
-- For practical interaction patterns adapted from the bundled macOS plugin plus Linux-specific examples, read `references/hybrid-patterns.md`.
-- For app-specific advice, inspect the plugin's packaged `resources/app-instructions/*.md` guidance or the snapshot's `app_guidance` field.
+- For practical interaction patterns adapted from existing computer-use workflows plus Linux-specific examples, read `references/hybrid-patterns.md`.
+- For app-specific advice, inspect the packaged `resources/app-instructions/*.md` guidance or the snapshot's `app_guidance` field.

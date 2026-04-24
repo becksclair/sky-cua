@@ -14,7 +14,8 @@ python3 scripts/build_plugin.py
 
 ## Patterns & Conventions
 
-- Use `docs/` for durable writeups like `docs/codex-plugin-e2e-expedition.md`.
+- Use `docs/` for durable writeups like `docs/mcp-runtime.md` and
+  `docs/codex-plugin-e2e-expedition.md`.
 - Use `plans/` for focused design/implementation notes like `plans/wayland_fallback_vision_anchors.md`.
 - Keep artifact references path-specific and summarize only the proof that matters.
 - Update docs only when behavior, commands, or operational truth changed.
@@ -26,6 +27,7 @@ python3 scripts/build_plugin.py
 ## Touch Points / Key Files
 
 - Full installed-plugin E2E investigation: `docs/codex-plugin-e2e-expedition.md`
+- Portable runtime boundary: `docs/mcp-runtime.md`
 - Linux implementation plan: `docs/computer-use-linux-plan.md`
 - Wayland fallback anchors plan: `plans/wayland_fallback_vision_anchors.md`
 - Live state snapshot: `../CONTINUITY.md`

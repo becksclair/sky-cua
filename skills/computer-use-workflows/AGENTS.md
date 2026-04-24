@@ -2,7 +2,7 @@
 
 ## Package Identity
 
-This directory is the bundled Codex skill shipped with the plugin.
+This directory is the host-portable workflow skill shipped with the runtime and bundled by the Codex plugin adapter.
 It teaches agents how to combine control trees, screenshots, and physical actions when operating desktop apps.
 
 ## Setup & Run

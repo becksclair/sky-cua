@@ -3,7 +3,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    ActionName, ActionRequest, AppSelector, AppStateSnapshot, ElementNode, ServiceRequest,
+    ActionName, ActionRequest, AppInfo, AppSelector, AppStateSnapshot, ElementNode, ServiceRequest,
     ServiceResponse,
 };
 
@@ -98,10 +98,7 @@ fn handle_message(
             Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": {
-                    "tools": tool_definitions(),
-                    "nextCursor": null
-                }
+                "result": tools_list_result()
             })))
         }
         "tools/call" => {
@@ -148,11 +145,11 @@ fn handle_tool_call(
                 apps,
                 diagnostics,
             } => {
-                let app_count = apps.len();
+                let summary = list_apps_summary(&apps);
                 Ok(json!({
                     "content": [{
                         "type": "text",
-                        "text": format!("Discovered {app_count} accessible Linux apps.")
+                        "text": summary
                     }],
                     "structuredContent": {
                         "environment": environment,
@@ -276,6 +273,48 @@ fn snapshot_summary(snapshot: &AppStateSnapshot) -> String {
         summary.push_str(&summary_suffix);
     }
     summary
+}
+
+fn list_apps_summary(apps: &[AppInfo]) -> String {
+    let app_count = apps.len();
+    let preview = apps
+        .iter()
+        .map(|app| {
+            let mut label = app.name.clone();
+            label.push_str(" (app_id=");
+            label.push_str(&app.app_id);
+            if let Some(desktop_file_id) = app
+                .desktop_file_id
+                .as_deref()
+                .filter(|desktop_file_id| !desktop_file_id.is_empty())
+            {
+                label.push_str(", desktop_file_id=");
+                label.push_str(desktop_file_id);
+            }
+            label.push(')');
+            if let Some(window_title) = app
+                .window_title
+                .as_deref()
+                .filter(|title| !title.is_empty())
+            {
+                label.push_str(", window_title=");
+                label.push_str(window_title);
+            }
+            if app.is_focused_candidate {
+                label.push_str(" [focused candidate]");
+            }
+            label
+        })
+        .collect::<Vec<_>>();
+
+    if preview.is_empty() {
+        format!("Discovered {app_count} accessible Linux apps.")
+    } else {
+        format!(
+            "Discovered {app_count} accessible Linux apps. Apps: {}.",
+            preview.join("; ")
+        )
+    }
 }
 
 fn action_summary(outcome: &sky_cua_platform::model::ActionOutcome) -> String {
@@ -473,6 +512,12 @@ fn tool_definitions() -> Value {
     ])
 }
 
+fn tools_list_result() -> Value {
+    json!({
+        "tools": tool_definitions()
+    })
+}
+
 fn coordinate_schema(description: &str) -> Value {
     json!({
         "type": "number",
@@ -658,13 +703,14 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        MessageFraming, action_summary, compact_element, parse_app_state_detail, read_message,
-        snapshot_summary, tool_definitions, write_message,
+        MessageFraming, action_summary, compact_element, list_apps_summary, parse_app_state_detail,
+        read_message, snapshot_summary, tool_definitions, tools_list_result, write_message,
     };
     use sky_cua_platform::model::{
-        ActionOutcome, AppStateSnapshot, CaptureBackendKind, CoordinateSpace, DiagnosticEntry,
-        ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities, RectF,
-        SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
+        ActionOutcome, AppInfo, AppStateSnapshot, CaptureBackendKind, CoordinateSpace,
+        DiagnosticEntry, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind,
+        PortalCapabilities, RectF, SemanticBackendKind, SessionKind, ToolAvailability,
+        ToolCapabilities,
     };
 
     #[test]
@@ -737,6 +783,47 @@ mod tests {
             type_text["inputSchema"]["required"],
             json!(["snapshot_id", "text"])
         );
+    }
+
+    #[test]
+    fn tools_list_result_omits_empty_next_cursor() {
+        let result = tools_list_result();
+
+        assert!(result.get("tools").is_some());
+        assert!(result.get("nextCursor").is_none());
+    }
+
+    #[test]
+    fn list_apps_summary_includes_selectors_for_plain_text_clients() {
+        let summary = list_apps_summary(&[
+            AppInfo {
+                app_id: "kwin:{abc}".to_string(),
+                name: "org.kde.kate".to_string(),
+                pid: None,
+                executable: Some("org.kde.kate".to_string()),
+                desktop_file_id: Some("org.kde.kate.desktop".to_string()),
+                toolkit_guess: Some("Wayland".to_string()),
+                window_title: Some("Untitled — Kate".to_string()),
+                is_focused_candidate: false,
+            },
+            AppInfo {
+                app_id: "x11:0x1".to_string(),
+                name: "xfreerdp".to_string(),
+                pid: None,
+                executable: Some("xfreerdp".to_string()),
+                desktop_file_id: Some("xfreerdp3.desktop".to_string()),
+                toolkit_guess: Some("XWayland".to_string()),
+                window_title: None,
+                is_focused_candidate: true,
+            },
+        ]);
+
+        assert!(summary.contains("Discovered 2 accessible Linux apps."));
+        assert!(summary.contains("org.kde.kate (app_id=kwin:{abc}"));
+        assert!(summary.contains("desktop_file_id=org.kde.kate.desktop"));
+        assert!(summary.contains("window_title=Untitled — Kate"));
+        assert!(summary.contains("xfreerdp"));
+        assert!(summary.contains("[focused candidate]"));
     }
 
     #[test]
