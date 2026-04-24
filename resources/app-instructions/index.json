@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "key": "org.kde.kate.desktop",
+      "path": "Kate.md",
+      "aliases": ["kate"],
+      "set_value_fallback": "focus_click_select_all_type",
+      "set_value_routing": "prefer_physical_fallback"
+    },
+    {
+      "key": "kwrite.desktop",
+      "path": "KWrite.md",
+      "aliases": ["kwrite"],
+      "set_value_fallback": "focus_click_select_all_type",
+      "set_value_routing": "prefer_physical_fallback"
+    },
+    {
+      "key": "org.kde.dolphin.desktop",
+      "path": "Dolphin.md",
+      "aliases": ["dolphin"]
+    },
+    {
+      "key": "firefox.desktop",
+      "path": "Firefox.md",
+      "aliases": ["firefox", "mozilla firefox"]
+    }
+  ]
+}
