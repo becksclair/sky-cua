@@ -17,7 +17,7 @@ pub use backend::{
 pub use diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 pub use model::*;
 pub use paths::{
-    SERVICE_SOCKET_PATH_ENV, approvals_path, portal_tokens_path, service_socket_path,
-    sky_cua_state_dir,
+    SERVICE_SOCKET_PATH_ENV, SERVICE_TCP_ADDR_ENV, approvals_path, portal_tokens_path,
+    service_socket_path, service_tcp_addr, sky_cua_state_dir,
 };
 pub use snapshot::new_snapshot_id;

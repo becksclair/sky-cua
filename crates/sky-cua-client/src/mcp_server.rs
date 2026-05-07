@@ -308,10 +308,10 @@ fn list_apps_summary(apps: &[AppInfo]) -> String {
         .collect::<Vec<_>>();
 
     if preview.is_empty() {
-        format!("Discovered {app_count} accessible Linux apps.")
+        format!("Discovered {app_count} accessible desktop apps.")
     } else {
         format!(
-            "Discovered {app_count} accessible Linux apps. Apps: {}.",
+            "Discovered {app_count} accessible desktop apps. Apps: {}.",
             preview.join("; ")
         )
     }
@@ -449,12 +449,14 @@ fn tool_definitions() -> Value {
         ),
         action_tool(
             "perform_secondary_action",
-            "Perform a secondary click or context action on an element from the current snapshot.",
+            "Perform a secondary click or context action by element index or x/y coordinates in screenshot pixel coordinates from the current snapshot.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
+                "x": coordinate_schema("X coordinate in screenshot pixel coordinates from the snapshot image."),
+                "y": coordinate_schema("Y coordinate in screenshot pixel coordinates from the snapshot image."),
                 "action": { "type": "string" }
             }),
-            json!(["snapshot_id", "element_index", "action"]),
+            json!(["snapshot_id"]),
         ),
         action_tool(
             "scroll",
@@ -772,6 +774,16 @@ mod tests {
         assert!(schema["properties"].get("snapshot_id").is_some());
         assert!(schema.get("anyOf").is_none());
 
+        let secondary = tools
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["name"] == "perform_secondary_action")
+            .expect("perform_secondary_action tool");
+        assert_eq!(secondary["inputSchema"]["required"], json!(["snapshot_id"]));
+        assert!(secondary["inputSchema"]["properties"].get("x").is_some());
+        assert!(secondary["inputSchema"]["properties"].get("y").is_some());
+
         let type_text = tools
             .as_array()
             .expect("tools")
@@ -802,6 +814,8 @@ mod tests {
                 pid: None,
                 executable: Some("org.kde.kate".to_string()),
                 desktop_file_id: Some("org.kde.kate.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("Wayland".to_string()),
                 window_title: Some("Untitled — Kate".to_string()),
                 is_focused_candidate: false,
@@ -812,13 +826,15 @@ mod tests {
                 pid: None,
                 executable: Some("xfreerdp".to_string()),
                 desktop_file_id: Some("xfreerdp3.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: None,
                 is_focused_candidate: true,
             },
         ]);
 
-        assert!(summary.contains("Discovered 2 accessible Linux apps."));
+        assert!(summary.contains("Discovered 2 accessible desktop apps."));
         assert!(summary.contains("org.kde.kate (app_id=kwin:{abc}"));
         assert!(summary.contains("desktop_file_id=org.kde.kate.desktop"));
         assert!(summary.contains("window_title=Untitled — Kate"));
@@ -893,6 +909,8 @@ mod tests {
                 name: "zenity".to_string(),
                 pid: Some(123),
                 desktop_file_id: Some("zenity.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("GTK".to_string()),
                 window_title: Some("sky-cua zenity smoke".to_string()),
             }),
@@ -997,6 +1015,8 @@ mod tests {
                 name: "xmessage".to_string(),
                 pid: Some(456),
                 desktop_file_id: Some("xmessage.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("portal lifecycle probe".to_string()),
             }),
@@ -1177,6 +1197,8 @@ mod tests {
                 name: "krita".to_string(),
                 pid: Some(42),
                 desktop_file_id: Some("krita.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("Qt".to_string()),
                 window_title: Some("Krita".to_string()),
             }),
@@ -1270,6 +1292,8 @@ mod tests {
                 name: "discord".to_string(),
                 pid: Some(999),
                 desktop_file_id: Some("discord.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("Electron".to_string()),
                 window_title: Some("@Sky - Discord".to_string()),
             }),

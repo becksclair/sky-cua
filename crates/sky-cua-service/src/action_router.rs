@@ -1,7 +1,10 @@
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{ActionOutcome, ActionRequest};
 
-pub async fn route_action(backend: &impl DesktopBackend, request: ActionRequest) -> ActionOutcome {
+pub async fn route_action(
+    backend: &(impl DesktopBackend + ?Sized),
+    request: ActionRequest,
+) -> ActionOutcome {
     backend
         .execute_action(request)
         .await

@@ -12,7 +12,8 @@ The stable host-facing entrypoint is:
 ```
 
 That process speaks MCP over stdio and delegates desktop work to the
-long-lived service process over a Unix socket. Hosts may launch the client
+long-lived service process over platform IPC: a Unix socket on Linux and a
+loopback TCP endpoint on Windows. Hosts may launch the client
 directly, use a generated MCP config, or wrap it in their own package format.
 
 The service can also be run directly for debugging:
@@ -27,9 +28,11 @@ A host adapter should provide:
 
 - an MCP server registration that launches `sky-cua-client mcp`
 - a working directory or absolute binary path that resolves `bin/sky-cua-client`
-- the desktop/session environment needed by the backend, including
+- the desktop/session environment needed by the Linux backend, including
   `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`,
   `XDG_CURRENT_DESKTOP`, `XDG_RUNTIME_DIR`, and `XDG_SESSION_TYPE` when present
+- on Windows, a direct `.exe` launch is preferred; `SKY_CUA_SERVICE_TCP_ADDR`
+  may be set to isolate the service loopback endpoint for tests
 - access to the workflow guidance in `skills/computer-use-workflows/`
 - access to app-specific guidance packaged from `resources/app-instructions/`
 

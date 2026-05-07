@@ -2,18 +2,21 @@
 
 Linux-first MCP Computer Use runtime, with Codex plugin packaging.
 
-`sky-cua` is a Rust workspace plus Python harnesses for driving Linux desktop
+`sky-cua` is a Rust workspace plus Python harnesses for driving desktop
 apps from agent hosts that can talk to MCP. It exposes `sky-cua-client mcp`,
-keeps a long-lived service behind a Unix socket, and routes app discovery,
-screenshots, and input through Linux-native backends. The Codex plugin is a
+keeps a long-lived service behind platform IPC, and routes app discovery,
+screenshots, and input through native backends. Linux remains the most proven
+backend; Windows now has a native v1 using Win32 window discovery, GDI capture,
+and SendInput physical actions. The Codex plugin is a
 packaged adapter around that runtime, not the runtime boundary itself.
 
 ## What Works
 
 - portable MCP server entrypoint through `sky-cua-client mcp`
 - Codex plugin packaging through `.codex-plugin/plugin.json` and `.mcp.json`
-- split Rust client/service runtime with isolated socket support via
-  `SKY_CUA_SERVICE_SOCKET_PATH`
+- split Rust client/service runtime with isolated Linux socket support via
+  `SKY_CUA_SERVICE_SOCKET_PATH` and Windows loopback endpoint support via
+  `SKY_CUA_SERVICE_TCP_ADDR`
 - Wayland/X11 environment probing, AT-SPI app discovery, and targeted
   `get_app_state` selection by app identity or window title
 - Wayland portal session reuse for ScreenCast metadata and RemoteDesktop input,
@@ -32,6 +35,8 @@ packaged adapter around that runtime, not the runtime boundary itself.
 - app-action policy in `resources/app-instructions/index.json`, including the
   Kate-scoped `set_value` fallback
 - host-portable workflow guidance in `skills/computer-use-workflows/`
+- Windows compile/runtime foundation through `sky-cua-windows`, including
+  top-level window fallback snapshots, GDI screenshots, and SendInput actions
 
 ## Development
 
@@ -52,6 +57,13 @@ Run the runtime pieces directly:
 ```bash
 ./bin/sky-cua-client mcp
 ./bin/sky-cua-service daemon
+```
+
+On Windows, use the `.exe` binaries:
+
+```powershell
+.\bin\sky-cua-client.exe mcp
+.\bin\sky-cua-service.exe daemon
 ```
 
 Build and install a Codex debug bundle:
@@ -120,3 +132,6 @@ For the portable runtime boundary and host-adapter expectations, see
 - Installed-plugin harnesses are opt-in acceptance tools, not default regression
   tests. The rich-client path uses `codex app-server`; `codex exec` remains a
   diagnostic probe.
+- Windows v1 is intentionally conservative: it exposes real top-level window
+  bounds and physical actions, but does not yet provide rich UI Automation
+  child trees or semantic invoke/value routing.

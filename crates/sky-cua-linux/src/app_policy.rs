@@ -85,6 +85,8 @@ mod tests {
                 name: "Kate".to_string(),
                 pid: None,
                 desktop_file_id: Some("org.kde.kate.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("Qt".to_string()),
                 window_title: None,
             }))
@@ -104,6 +106,8 @@ mod tests {
                 name: "KWrite".to_string(),
                 pid: None,
                 desktop_file_id: Some("kwrite.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("Qt".to_string()),
                 window_title: None,
             }))
@@ -122,6 +126,8 @@ mod tests {
             name: "Firefox".to_string(),
             pid: None,
             desktop_file_id: Some("firefox.desktop".to_string()),
+            app_user_model_id: None,
+            window_handle: None,
             toolkit_guess: Some("GTK".to_string()),
             window_title: None,
         }));

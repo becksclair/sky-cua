@@ -7,6 +7,14 @@ Build a Linux-first Codex Computer Use plugin with a split Rust client/service a
 ## Current State
 
 - Workspace, plugin packaging, wrapper scripts, and shared platform model are in place.
+- Windows support has a first native foundation:
+  - the default workspace build no longer pulls the Linux/GStreamer backend on Windows
+  - `sky-cua-service` selects Linux or Windows through a backend factory
+  - Windows client/service IPC uses loopback TCP via `SKY_CUA_SERVICE_TCP_ADDR`
+  - `sky-cua-windows` provides Win32 top-level app discovery, GDI screenshot capture, fallback window elements, and SendInput physical actions
+  - the Windows bundle stages `sky-cua-client.exe` / `sky-cua-service.exe` and uses `.mcp.windows.json` as the bundled `.mcp.json`
+  - Windows v1 is intentionally fallback-oriented; rich UI Automation child trees and semantic invoke/value routing are not implemented yet
+  - Windows capture/action coordinates now use the same observe-act contract as the rest of the plugin: model-visible action coordinates are screenshot/stream pixels, and the backend translates them through `capture.logical_rect` to desktop pixels only at the native input boundary. Top-level Win32 fallback elements now expose screenshot-local bounds.
 - `list_apps` and targeted `get_app_state` work end to end through MCP and the internal Unix-socket daemon.
 - Live KDE 6 Wayland probing works on Asgard, including portal capability detection and AT-SPI discovery.
 - `get_app_state` now carries live ScreenCast stream metadata plus a real screenshot reference from an in-process PipeWire decode under `/run/user/1000/sky-cua/captures/*.png`, with Screenshot-portal capture only as fallback.

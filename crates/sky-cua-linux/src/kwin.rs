@@ -326,6 +326,8 @@ fn parse_window_info(output: &str, focused: bool) -> Option<KWinWindowInfo> {
             pid: None,
             executable: desktop_file_stem.clone(),
             desktop_file_id,
+            app_user_model_id: None,
+            window_handle: None,
             toolkit_guess: Some("Wayland".to_string()),
             window_title: caption,
             is_focused_candidate: focused,

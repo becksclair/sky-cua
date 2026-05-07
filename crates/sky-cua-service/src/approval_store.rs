@@ -35,13 +35,15 @@ impl ApprovalStore {
     }
 }
 
+#[cfg(unix)]
 fn set_owner_only_permissions(path: &std::path::Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::PermissionsExt;
 
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
 
+#[cfg(not(unix))]
+fn set_owner_only_permissions(_path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub enum SessionKind {
     Wayland,
     X11,
+    Windows,
     Unsupported,
 }
 
@@ -15,6 +16,7 @@ pub enum CaptureBackendKind {
     PortalPipeWire,
     PortalScreenshot,
     X11,
+    WindowsGdi,
     None,
 }
 
@@ -23,6 +25,8 @@ pub enum CaptureBackendKind {
 pub enum InputBackendKind {
     PortalRemoteDesktop,
     XTest,
+    SendInput,
+    WindowsMessages,
     None,
 }
 
@@ -30,6 +34,7 @@ pub enum InputBackendKind {
 #[serde(rename_all = "snake_case")]
 pub enum SemanticBackendKind {
     Atspi,
+    Uia,
     None,
 }
 
@@ -114,6 +119,10 @@ pub struct AppInfo {
     pub pid: Option<u32>,
     pub executable: Option<String>,
     pub desktop_file_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_user_model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_handle: Option<String>,
     pub toolkit_guess: Option<String>,
     pub window_title: Option<String>,
     pub is_focused_candidate: bool,
@@ -125,6 +134,10 @@ pub struct FocusedApp {
     pub name: String,
     pub pid: Option<u32>,
     pub desktop_file_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_user_model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_handle: Option<String>,
     pub toolkit_guess: Option<String>,
     pub window_title: Option<String>,
 }
@@ -248,6 +261,13 @@ pub struct ActionOutcome {
     pub message: String,
     pub code: String,
     pub diagnostics: Vec<DiagnosticEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PortalTokenResetOutcome {
+    pub token_path: String,
+    pub cleared: bool,
+    pub dropped_cached_session: bool,
 }
 
 impl ActionOutcome {

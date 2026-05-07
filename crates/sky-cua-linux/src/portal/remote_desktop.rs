@@ -12,7 +12,7 @@ use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, S
 use chrono::Utc;
 use enumflags2::BitFlags;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
-use sky_cua_platform::model::{CoordinateSpace, RectF};
+use sky_cua_platform::model::{CoordinateSpace, PortalTokenResetOutcome, RectF};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
@@ -77,13 +77,6 @@ const PORTAL_SESSION_RESTORED: &str = "PortalSessionRestored";
 const PORTAL_SESSION_RESTORE_MISS: &str = "PortalSessionRestoreMiss";
 const PORTAL_SESSION_REBUILT: &str = "PortalSessionRebuilt";
 const PORTAL_SESSION_TOKEN_ROTATED: &str = "PortalSessionTokenRotated";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PortalTokenResetOutcome {
-    pub token_path: String,
-    pub cleared: bool,
-    pub dropped_cached_session: bool,
-}
 
 pub async fn version() -> Result<u32, BackendError> {
     portal_u32_property("org.freedesktop.portal.RemoteDesktop", "version").await

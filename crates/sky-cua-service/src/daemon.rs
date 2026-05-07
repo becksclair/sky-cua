@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use sky_cua_linux::LinuxDesktopBackend;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{
     ActionRequest, AppStateSnapshot, ElementNode, ServiceRequest, ServiceResponse,
@@ -8,13 +7,14 @@ use sky_cua_platform::model::{
 
 use crate::action_router::route_action;
 use crate::approval_store::ApprovalStore;
+use crate::backend_factory::create_backend;
 use crate::diagnostics::error_response;
 use crate::session_store::SessionStore;
 use crate::snapshot_manager::SnapshotManager;
 use tracing::debug;
 
 pub struct ServiceDaemon {
-    backend: LinuxDesktopBackend,
+    backend: Box<dyn DesktopBackend>,
     sessions: SessionStore,
     snapshots: SnapshotManager,
     socket_path: PathBuf,
@@ -24,7 +24,7 @@ impl ServiceDaemon {
     pub fn new(socket_path: PathBuf) -> std::io::Result<Self> {
         ApprovalStore::initialize()?;
         Ok(Self {
-            backend: LinuxDesktopBackend::new(),
+            backend: create_backend(),
             sessions: SessionStore::new(),
             snapshots: SnapshotManager::new(8),
             socket_path,
@@ -85,7 +85,7 @@ impl ServiceDaemon {
                     Ok(request) => request,
                     Err((code, message)) => return error_response(code, message),
                 };
-                let outcome = route_action(&self.backend, request).await;
+                let outcome = route_action(self.backend.as_ref(), request).await;
                 ServiceResponse::ExecuteAction { outcome }
             }
         }

@@ -13,6 +13,7 @@ from _plugin_bundle import (
     ensure_executable,
     installed_plugin_root,
     remove_path,
+    runtime_binary_names,
     update_codex_config,
 )
 
@@ -25,8 +26,8 @@ def install_bundle(bundle_root: Path, destination: Path, symlink: bool) -> None:
     else:
         shutil.copytree(bundle_root, destination)
     ensure_bundle_structure(destination)
-    ensure_executable(destination / "bin" / "sky-cua-client")
-    ensure_executable(destination / "bin" / "sky-cua-service")
+    for binary_name in runtime_binary_names():
+        ensure_executable(destination / "bin" / binary_name)
 
 
 def main() -> int:

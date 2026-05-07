@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "computer-use": {
+      "command": ".\\bin\\sky-cua-client.exe",
+      "args": ["mcp"],
+      "env_vars": [
+        "SKY_CUA_MODEL_SCREENSHOT_FORMAT",
+        "SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY",
+        "SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT",
+        "SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH",
+        "SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY",
+        "SKY_CUA_SERVICE_TCP_ADDR"
+      ],
+      "cwd": "."
+    }
+  }
+}

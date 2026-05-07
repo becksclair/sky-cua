@@ -11,7 +11,9 @@ from _plugin_bundle import (
     REPO_ROOT,
     ensure_bundle_structure,
     ensure_executable,
+    mcp_config_source,
     remove_path,
+    runtime_binary_names,
 )
 
 
@@ -38,12 +40,12 @@ def stage_bundle(bundle_root: Path) -> None:
 
     for directory in [".codex-plugin", "resources", "skills", "docs"]:
         shutil.copytree(REPO_ROOT / directory, temp_root / directory)
-    for file_name in [".mcp.json", "README.md"]:
-        shutil.copy2(REPO_ROOT / file_name, temp_root / file_name)
+    shutil.copy2(mcp_config_source(), temp_root / ".mcp.json")
+    shutil.copy2(REPO_ROOT / "README.md", temp_root / "README.md")
 
     bin_dir = temp_root / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    for binary_name in ["sky-cua-client", "sky-cua-service"]:
+    for binary_name in runtime_binary_names():
         source = REPO_ROOT / "target" / "release" / binary_name
         destination = bin_dir / binary_name
         shutil.copy2(source, destination)

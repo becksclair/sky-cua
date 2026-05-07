@@ -108,6 +108,8 @@ pub async fn discover_apps(
                 pid,
                 executable,
                 desktop_file_id,
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess,
                 window_title,
                 is_focused_candidate: false,

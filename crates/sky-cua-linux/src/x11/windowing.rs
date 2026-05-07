@@ -266,6 +266,8 @@ fn parse_window_info(
             pid,
             executable,
             desktop_file_id,
+            app_user_model_id: None,
+            window_handle: None,
             toolkit_guess: Some(toolkit_guess.to_string()),
             window_title,
             is_focused_candidate,

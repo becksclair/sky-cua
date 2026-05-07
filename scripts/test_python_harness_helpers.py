@@ -6,6 +6,8 @@ from _plugin_bundle import (
     ensure_fast_service_tier,
     ensure_plugin_enabled,
     ensure_plugins_feature_enabled,
+    executable_name,
+    runtime_binary_names,
 )
 from _tidal_workflow import tidal_playlist_prompt
 from live_app_server_tidal_image_ab import DEFAULT_VARIANTS, playlist_name_for_variant
@@ -40,6 +42,15 @@ def test_codex_config_helpers_update_existing_sections() -> None:
     assert "enabled = true" in config
     assert "[profiles.default]\n" in config
     assert 'profiles.default]\nservice_tier = "flex"' not in config
+
+
+def test_runtime_binary_names_match_host_platform() -> None:
+    suffix = ".exe" if executable_name("tool").endswith(".exe") else ""
+
+    assert runtime_binary_names() == [
+        f"sky-cua-client{suffix}",
+        f"sky-cua-service{suffix}",
+    ]
 
 
 def test_build_schema_accept_value_prefers_required_fields_and_enums() -> None:

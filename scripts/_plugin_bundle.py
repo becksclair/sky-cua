@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 import stat
+import sys
 from pathlib import Path
 
 PLUGIN_NAME = "sky-cua"
@@ -16,7 +17,25 @@ INSTALLED_PLUGIN_ROOT = (
 )
 
 
+def executable_name(name: str) -> str:
+    if sys.platform == "win32":
+        return f"{name}.exe"
+    return name
+
+
+def runtime_binary_names() -> list[str]:
+    return [executable_name("sky-cua-client"), executable_name("sky-cua-service")]
+
+
+def mcp_config_source() -> Path:
+    if sys.platform == "win32":
+        return REPO_ROOT / ".mcp.windows.json"
+    return REPO_ROOT / ".mcp.json"
+
+
 def ensure_executable(path: Path) -> None:
+    if sys.platform == "win32":
+        return
     mode = path.stat().st_mode
     path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
@@ -39,16 +58,15 @@ def ensure_bundle_structure(root: Path) -> None:
     required = [
         root / ".codex-plugin" / "plugin.json",
         root / ".mcp.json",
-        root / "bin" / "sky-cua-client",
-        root / "bin" / "sky-cua-service",
         root / "skills" / "computer-use-workflows" / "SKILL.md",
         root / "resources" / "app-instructions" / "index.json",
     ]
+    required.extend(root / "bin" / binary_name for binary_name in runtime_binary_names())
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise FileNotFoundError(f"plugin bundle is missing required paths: {missing}")
-    ensure_executable(root / "bin" / "sky-cua-client")
-    ensure_executable(root / "bin" / "sky-cua-service")
+    for binary_name in runtime_binary_names():
+        ensure_executable(root / "bin" / binary_name)
 
 
 def installed_plugin_root(codex_home: Path) -> Path:

@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use crate::diagnostics::BackendError;
 use crate::model::{
     ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot, EnvironmentInfo,
-    HeuristicMatch,
+    HeuristicMatch, PortalTokenResetOutcome,
 };
 
 #[async_trait]
@@ -15,6 +15,12 @@ pub trait DesktopBackend: Send + Sync {
         selector: Option<AppSelector>,
     ) -> Result<AppStateSnapshot, BackendError>;
     async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError>;
+    async fn reset_portal_tokens(&self) -> Result<PortalTokenResetOutcome, BackendError> {
+        Err(BackendError::new(
+            crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "portal token reset is only available on portal-backed Linux sessions",
+        ))
+    }
 }
 
 #[async_trait]

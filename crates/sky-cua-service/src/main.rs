@@ -1,5 +1,6 @@
 mod action_router;
 mod approval_store;
+mod backend_factory;
 mod daemon;
 mod diagnostics;
 mod ipc_server;

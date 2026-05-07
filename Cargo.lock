@@ -1593,9 +1593,24 @@ dependencies = [
  "serde_json",
  "sky-cua-linux",
  "sky-cua-platform",
+ "sky-cua-windows",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "sky-cua-windows"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "image",
+ "serde_json",
+ "sky-cua-platform",
+ "tokio",
+ "tracing",
+ "windows-sys",
 ]
 
 [[package]]

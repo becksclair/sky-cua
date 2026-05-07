@@ -17,7 +17,7 @@ use crate::env_probe::probe_environment;
 use crate::focus::pick_focused_app;
 use crate::kwin::{self, KWinWindowInfo};
 use crate::portal::remote_desktop::{
-    MouseButton, PortalLifecycleEvent, PortalTokenResetOutcome, RemoteDesktopSessionManager,
+    MouseButton, PortalLifecycleEvent, RemoteDesktopSessionManager,
 };
 use crate::portal::screenshot;
 use crate::x11::capture as x11_capture;
@@ -150,13 +150,11 @@ impl LinuxDesktopBackend {
             name: app.name.clone(),
             pid: app.pid,
             desktop_file_id: app.desktop_file_id.clone(),
+            app_user_model_id: app.app_user_model_id.clone(),
+            window_handle: app.window_handle.clone(),
             toolkit_guess: app.toolkit_guess.clone(),
             window_title: app.window_title.clone(),
         }
-    }
-
-    pub async fn reset_portal_tokens(&self) -> Result<PortalTokenResetOutcome, BackendError> {
-        self.portal.reset_persisted_tokens().await
     }
 }
 
@@ -648,6 +646,12 @@ impl DesktopBackend for LinuxDesktopBackend {
             ActionName::SetValue => self.set_value(request).await,
         }
     }
+
+    async fn reset_portal_tokens(
+        &self,
+    ) -> Result<sky_cua_platform::model::PortalTokenResetOutcome, BackendError> {
+        self.portal.reset_persisted_tokens().await
+    }
 }
 
 fn is_retryable_accessibility_error(error: &BackendError) -> bool {
@@ -1103,6 +1107,8 @@ fn matched_x11_window_for_request(request: &ActionRequest) -> Option<X11WindowIn
         pid: app.pid,
         executable: None,
         desktop_file_id: app.desktop_file_id.clone(),
+        app_user_model_id: None,
+        window_handle: None,
         toolkit_guess: app.toolkit_guess.clone(),
         window_title: app.window_title.clone(),
         is_focused_candidate: true,
@@ -2549,6 +2555,8 @@ mod tests {
             pid: Some(123),
             executable: Some("zenity".to_string()),
             desktop_file_id: Some("zenity.desktop".to_string()),
+            app_user_model_id: None,
+            window_handle: None,
             toolkit_guess: Some("GTK".to_string()),
             window_title: Some("sky-cua zenity smoke".to_string()),
             is_focused_candidate: false,
@@ -2675,6 +2683,8 @@ mod tests {
             pid: Some(123),
             executable: Some("zenity".to_string()),
             desktop_file_id: Some("zenity.desktop".to_string()),
+            app_user_model_id: None,
+            window_handle: None,
             toolkit_guess: Some("GTK".to_string()),
             window_title: Some("Sky-CUA Pointer Smoke".to_string()),
             is_focused_candidate: false,
@@ -2710,6 +2720,8 @@ mod tests {
             pid: Some(1234),
             executable: Some("discord".to_string()),
             desktop_file_id: Some("discord.desktop".to_string()),
+            app_user_model_id: None,
+            window_handle: None,
             toolkit_guess: Some("Electron".to_string()),
             window_title: Some("@Sky - Discord".to_string()),
             is_focused_candidate: false,
@@ -2724,6 +2736,8 @@ mod tests {
                 pid: Some(1234),
                 executable: Some("discord".to_string()),
                 desktop_file_id: Some("discord.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("@Sky - Discord".to_string()),
                 is_focused_candidate: true,
@@ -2746,6 +2760,8 @@ mod tests {
                 pid: None,
                 executable: None,
                 desktop_file_id: Some("xmessage.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("sky-cua xmessage probe".to_string()),
                 is_focused_candidate: true,
@@ -2824,6 +2840,8 @@ mod tests {
                 pid: Some(4242),
                 executable: Some("TIDAL".to_string()),
                 desktop_file_id: Some("tidal-hifi.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("Qt".to_string()),
                 window_title: Some("TIDAL Hi-Fi".to_string()),
                 is_focused_candidate: true,
@@ -3013,6 +3031,8 @@ mod tests {
             pid: None,
             executable: Some("code".to_string()),
             desktop_file_id: Some("code.desktop".to_string()),
+            app_user_model_id: None,
+            window_handle: None,
             toolkit_guess: Some("Electron".to_string()),
             window_title: Some("workspace-a".to_string()),
             is_focused_candidate: false,
@@ -3027,6 +3047,8 @@ mod tests {
                 pid: None,
                 executable: None,
                 desktop_file_id: None,
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("totally different title".to_string()),
                 is_focused_candidate: false,
@@ -3046,6 +3068,8 @@ mod tests {
             pid: None,
             executable: Some("kaccess".to_string()),
             desktop_file_id: Some("kaccess.desktop".to_string()),
+            app_user_model_id: None,
+            window_handle: None,
             toolkit_guess: Some("Qt".to_string()),
             window_title: Some("sky-cua xmessage probe".to_string()),
             is_focused_candidate: false,
@@ -3060,6 +3084,8 @@ mod tests {
                 pid: None,
                 executable: Some("xmessage".to_string()),
                 desktop_file_id: Some("xmessage.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("sky-cua xmessage probe".to_string()),
                 is_focused_candidate: true,
@@ -3089,6 +3115,8 @@ mod tests {
                 pid: None,
                 executable: Some("xmessage".to_string()),
                 desktop_file_id: Some("xmessage.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("sky-cua selector alpha".to_string()),
                 is_focused_candidate: true,
@@ -3106,6 +3134,8 @@ mod tests {
                 pid: None,
                 executable: Some("xmessage".to_string()),
                 desktop_file_id: Some("xmessage.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("sky-cua selector beta".to_string()),
                 is_focused_candidate: false,
@@ -3137,6 +3167,8 @@ mod tests {
                 pid: None,
                 executable: Some("discord".to_string()),
                 desktop_file_id: Some("discord.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("Friends - Discord".to_string()),
                 is_focused_candidate: false,
@@ -3154,6 +3186,8 @@ mod tests {
                 pid: None,
                 executable: Some("discord".to_string()),
                 desktop_file_id: Some("discord.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("Project Foxglove - Discord".to_string()),
                 is_focused_candidate: true,
@@ -3175,6 +3209,8 @@ mod tests {
             pid: Some(4321),
             executable: Some("discord".to_string()),
             desktop_file_id: Some("discord.desktop".to_string()),
+            app_user_model_id: None,
+            window_handle: None,
             toolkit_guess: Some("Electron".to_string()),
             window_title: Some("Project Foxglove - Discord".to_string()),
             is_focused_candidate: false,
@@ -3189,6 +3225,8 @@ mod tests {
                 pid: Some(4321),
                 executable: Some("discord".to_string()),
                 desktop_file_id: Some("discord.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("Friends - Discord".to_string()),
                 is_focused_candidate: false,
@@ -3206,6 +3244,8 @@ mod tests {
                 pid: Some(4321),
                 executable: Some("discord".to_string()),
                 desktop_file_id: Some("discord.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("Project Foxglove - Discord".to_string()),
                 is_focused_candidate: true,
