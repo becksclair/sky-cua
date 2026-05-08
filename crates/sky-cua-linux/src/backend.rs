@@ -33,6 +33,15 @@ pub struct LinuxDesktopBackend {
     app_policies: AppActionPolicies,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SemanticAtspiAction {
+    Activate,
+    Select,
+    Expand,
+    Collapse,
+    Toggle,
+}
+
 impl Default for LinuxDesktopBackend {
     fn default() -> Self {
         Self::new()
@@ -730,7 +739,7 @@ impl LinuxDesktopBackend {
             &request,
             "activate_element",
             "Activated the element semantically through AT-SPI.",
-            atspi_actions::activate,
+            SemanticAtspiAction::Activate,
         )
         .await
     }
@@ -740,7 +749,7 @@ impl LinuxDesktopBackend {
             &request,
             "select_element",
             "Selected the element semantically through AT-SPI.",
-            atspi_actions::select,
+            SemanticAtspiAction::Select,
         )
         .await
     }
@@ -750,7 +759,7 @@ impl LinuxDesktopBackend {
             &request,
             "expand_element",
             "Expanded the element semantically through AT-SPI.",
-            atspi_actions::expand,
+            SemanticAtspiAction::Expand,
         )
         .await
     }
@@ -763,7 +772,7 @@ impl LinuxDesktopBackend {
             &request,
             "collapse_element",
             "Collapsed the element semantically through AT-SPI.",
-            atspi_actions::collapse,
+            SemanticAtspiAction::Collapse,
         )
         .await
     }
@@ -773,25 +782,32 @@ impl LinuxDesktopBackend {
             &request,
             "toggle_element",
             "Toggled the element semantically through AT-SPI.",
-            atspi_actions::toggle,
+            SemanticAtspiAction::Toggle,
         )
         .await
     }
 
-    async fn semantic_atspi_action<F, Fut>(
+    async fn semantic_atspi_action(
         &self,
         request: &ActionRequest,
         tool_name: &str,
         success_message: &str,
-        action: F,
-    ) -> Result<ActionOutcome, BackendError>
-    where
-        F: FnOnce(&atspi::AccessibilityConnection, &str) -> Fut,
-        Fut: std::future::Future<Output = Result<bool, BackendError>>,
-    {
+        action: SemanticAtspiAction,
+    ) -> Result<ActionOutcome, BackendError> {
         let backend_ref = semantic_backend_ref(request, tool_name)?;
         let connection = self.accessibility_connection().await?;
-        if action(&connection, backend_ref).await? {
+        let performed = match action {
+            SemanticAtspiAction::Activate => {
+                atspi_actions::activate(&connection, backend_ref).await
+            }
+            SemanticAtspiAction::Select => atspi_actions::select(&connection, backend_ref).await,
+            SemanticAtspiAction::Expand => atspi_actions::expand(&connection, backend_ref).await,
+            SemanticAtspiAction::Collapse => {
+                atspi_actions::collapse(&connection, backend_ref).await
+            }
+            SemanticAtspiAction::Toggle => atspi_actions::toggle(&connection, backend_ref).await,
+        }?;
+        if performed {
             return Ok(success(success_message));
         }
         Err(BackendError::new(
@@ -829,6 +845,9 @@ impl LinuxDesktopBackend {
                 Ok(success(
                     "Clicked the target through the X11 input fallback.",
                 ))
+            }
+            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                Err(windows_input_backend_error("click fallback"))
             }
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
@@ -869,6 +888,9 @@ impl LinuxDesktopBackend {
                     "Performed the secondary click through the X11 input fallback.",
                 ))
             }
+            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                Err(windows_input_backend_error("secondary click fallback"))
+            }
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for secondary click fallback",
@@ -883,6 +905,7 @@ impl LinuxDesktopBackend {
                     self.portal.pointer_move_absolute(x, y).await?
                 }
                 InputBackendKind::XTest => input_xtest::pointer_move_absolute(x, y)?,
+                InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {}
                 InputBackendKind::None => {}
             }
         }
@@ -913,6 +936,9 @@ impl LinuxDesktopBackend {
             InputBackendKind::XTest => {
                 input_xtest::scroll_vertical(delta_y, Some(steps))?;
                 Ok(success("Scrolled through the X11 input fallback."))
+            }
+            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                Err(windows_input_backend_error("scroll"))
             }
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
@@ -956,6 +982,9 @@ impl LinuxDesktopBackend {
                 input_xtest::pointer_button(X11MouseButton::Left, false)?;
                 Ok(success("Dragged through the X11 input fallback."))
             }
+            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                Err(windows_input_backend_error("drag"))
+            }
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for drag",
@@ -998,6 +1027,9 @@ impl LinuxDesktopBackend {
                 )?;
                 Ok(success("Typed text through the X11 input fallback."))
             }
+            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                Err(windows_input_backend_error("type_text"))
+            }
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for type_text",
@@ -1037,6 +1069,9 @@ impl LinuxDesktopBackend {
                 Ok(success(
                     "Pressed the key sequence through the X11 input fallback.",
                 ))
+            }
+            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                Err(windows_input_backend_error("press_key"))
             }
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
@@ -1174,6 +1209,9 @@ impl LinuxDesktopBackend {
                             diagnostics,
                         ))
                     }
+                    InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                        Err(windows_input_backend_error("set_value fallback"))
+                    }
                     InputBackendKind::None => Err(BackendError::new(
                         BackendErrorCode::ActionUnsupportedForEnvironment,
                         "heuristics allowed a physical set_value fallback, but no physical input backend is available",
@@ -1203,6 +1241,13 @@ fn success_with_diagnostics(
         code: "Ok".to_string(),
         diagnostics,
     }
+}
+
+fn windows_input_backend_error(action: &str) -> BackendError {
+    BackendError::new(
+        BackendErrorCode::ActionUnsupportedForEnvironment,
+        format!("Windows input backends are unavailable in the Linux backend for {action}"),
+    )
 }
 
 fn input_backend_for(request: &ActionRequest) -> InputBackendKind {
@@ -1276,7 +1321,10 @@ fn action_point_for_backend(
 
     let capture = match backend {
         InputBackendKind::PortalRemoteDesktop => request.resolved_capture.as_ref(),
-        InputBackendKind::XTest | InputBackendKind::None => None,
+        InputBackendKind::XTest
+        | InputBackendKind::SendInput
+        | InputBackendKind::WindowsMessages
+        | InputBackendKind::None => None,
     };
     point_for_element(element, capture)
 }
@@ -1425,6 +1473,7 @@ fn point_from_screenshot_pixels(
             }
             point
         }
+        InputBackendKind::SendInput | InputBackendKind::WindowsMessages => point,
         InputBackendKind::None => point,
     }
 }

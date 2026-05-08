@@ -152,6 +152,8 @@ impl ServiceEndpoint {
     }
 
     fn configure_service_command(&self, command: &mut Command) {
+        #[cfg(unix)]
+        let _ = command;
         match self {
             #[cfg(unix)]
             Self::Unix(_) => {}

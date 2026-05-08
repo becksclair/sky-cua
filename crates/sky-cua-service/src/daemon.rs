@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{
-    ActionRequest, AppStateSnapshot, ElementNode, ServiceRequest, ServiceResponse,
+    ActionName, ActionRequest, AppStateSnapshot, ElementNode, ServiceRequest, ServiceResponse,
 };
 
 use crate::action_router::route_action;
@@ -100,10 +100,20 @@ impl ServiceDaemon {
         mut request: ActionRequest,
     ) -> Result<ActionRequest, (&'static str, String)> {
         let Some(snapshot_id) = request.snapshot_id.as_deref() else {
-            return Err((
-                "ComputerUseInactive",
-                "Computer Use is not active for this action. Call get_app_state first and pass the current snapshot_id with the action.".to_string(),
-            ));
+            if action_requires_snapshot_context(&request) {
+                return Err((
+                    "ComputerUseInactive",
+                    "Element-targeted actions require a current snapshot_id from get_app_state."
+                        .to_string(),
+                ));
+            }
+            request.environment = Some(
+                self.backend
+                    .probe_environment()
+                    .await
+                    .map_err(|error| (error.code, error.message))?,
+            );
+            return Ok(request);
         };
         let snapshot = self.snapshots.get(snapshot_id).ok_or_else(|| {
             (
@@ -154,4 +164,75 @@ fn resolve_element(
             ),
         )
     })
+}
+
+fn action_requires_snapshot_context(request: &ActionRequest) -> bool {
+    matches!(
+        request.action,
+        ActionName::FocusElement
+            | ActionName::ActivateElement
+            | ActionName::SelectElement
+            | ActionName::ExpandElement
+            | ActionName::CollapseElement
+            | ActionName::ToggleElement
+            | ActionName::SetValue
+    ) || request.element_index.is_some()
+        || request.arguments.get("to_element_index").is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::action_requires_snapshot_context;
+    use serde_json::json;
+    use sky_cua_platform::model::{ActionName, ActionRequest};
+
+    fn request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
+        ActionRequest {
+            action,
+            snapshot_id: None,
+            element_index: None,
+            arguments,
+            resolved_element: None,
+            resolved_target_element: None,
+            resolved_capture: None,
+            resolved_focused_app: None,
+            environment: None,
+        }
+    }
+
+    #[test]
+    fn snapshotless_physical_actions_do_not_require_cached_snapshot_context() {
+        assert!(!action_requires_snapshot_context(&request(
+            ActionName::Click,
+            json!({"x": 10.0, "y": 20.0}),
+        )));
+        assert!(!action_requires_snapshot_context(&request(
+            ActionName::TypeText,
+            json!({"text": "hello"}),
+        )));
+        assert!(!action_requires_snapshot_context(&request(
+            ActionName::PressKey,
+            json!({"key": "Enter"}),
+        )));
+    }
+
+    #[test]
+    fn element_and_semantic_actions_require_cached_snapshot_context() {
+        let mut click = request(ActionName::Click, json!({}));
+        click.element_index = Some(3);
+        assert!(action_requires_snapshot_context(&click));
+
+        assert!(action_requires_snapshot_context(&request(
+            ActionName::Drag,
+            json!({"to_element_index": 4}),
+        )));
+        assert!(action_requires_snapshot_context(&request(
+            ActionName::SetValue,
+            json!({"value": "hello"}),
+        )));
+        assert!(action_requires_snapshot_context(&request(
+            ActionName::ActivateElement,
+            json!({}),
+        )));
+    }
 }

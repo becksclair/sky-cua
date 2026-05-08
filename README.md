@@ -30,6 +30,9 @@ packaged adapter around that runtime, not the runtime boundary itself.
   and focus
 - physical Wayland and X11 routing for `click`, `perform_secondary_action`,
   `scroll`, `drag`, `type_text`, and `press_key`
+- snapshotless physical actions for current-screen targeting, while
+  element-index and semantic actions remain scoped to the snapshot that
+  supplied their accessibility context
 - X11/XWayland fallback discovery through window metadata and `xwininfo`
   descendant bounds
 - app-action policy in `resources/app-instructions/index.json`, including the
@@ -135,6 +138,9 @@ For the portable runtime boundary and host-adapter expectations, see
   screenshot-guided physical actions.
 - X11/XWayland fallback trees are practical physical-targeting hints, not rich
   semantic accessibility trees.
+- Coordinate actions with a `snapshot_id` use screenshot pixel coordinates;
+  coordinate actions without a `snapshot_id` use the current screen coordinate
+  space exposed by the active input backend.
 - Pure X11 without a window manager may lack `_NET_CLIENT_LIST`; the backend
   falls back to `xwininfo -root -tree`.
 - Kate replacement is proven only through the XWayland harness

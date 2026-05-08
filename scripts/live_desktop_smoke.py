@@ -618,9 +618,15 @@ def xwayland_visibility_probe(client: McpClient) -> None:
                 }
                 for app in apps
             ]
-            seen = next(
-                (app for app in apps if lowered in ((app.get("window_title") or "").lower())),
-                None,
+            matching = [app for app in apps if lowered in ((app.get("window_title") or "").lower())]
+            seen = max(
+                matching,
+                key=lambda app: (
+                    bool(app.get("is_focused_candidate")),
+                    str(app.get("app_id") or "").startswith("x11:"),
+                    app.get("desktop_file_id") == "xmessage.desktop",
+                ),
+                default=None,
             )
             if seen is not None:
                 break
@@ -656,6 +662,7 @@ def xwayland_visibility_probe(client: McpClient) -> None:
                 f"selected={json.dumps(seen, indent=2, sort_keys=True)}\n"
                 f"default_focused={json.dumps(default_focused_app, indent=2, sort_keys=True)}"
             )
+        snapshot = focused_snapshot
         descendant_region = pick_lowest_leaf_x11_region(snapshot)
         require_ok(
             client.tools_call(

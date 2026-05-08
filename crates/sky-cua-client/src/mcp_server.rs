@@ -213,12 +213,6 @@ fn handle_action_call(
         .get("snapshot_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    if snapshot_id.is_none() {
-        return tool_error(
-            "ComputerUseInactive",
-            "Computer Use is not active for this action. Call get_app_state first and pass the current snapshot_id with the action.",
-        );
-    }
     let element_index = arguments
         .get("element_index")
         .and_then(Value::as_u64)
@@ -473,28 +467,28 @@ fn tool_definitions() -> Value {
         ),
         action_tool(
             "click",
-            "Click an element by index or x/y coordinates in screenshot pixel coordinates from the current snapshot.",
+            "Click an element by index from the current snapshot, or explicit x/y screen coordinates without a snapshot.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
-                "x": coordinate_schema("X coordinate in screenshot pixel coordinates from the snapshot image."),
-                "y": coordinate_schema("Y coordinate in screenshot pixel coordinates from the snapshot image.")
+                "x": coordinate_schema("X coordinate. With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend."),
+                "y": coordinate_schema("Y coordinate. With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend.")
             }),
-            json!(["snapshot_id"]),
+            json!([]),
         ),
         action_tool(
             "perform_secondary_action",
-            "Perform a secondary click or context action by element index or x/y coordinates in screenshot pixel coordinates from the current snapshot.",
+            "Perform a secondary click or context action by element index from the current snapshot, or explicit x/y screen coordinates without a snapshot.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
-                "x": coordinate_schema("X coordinate in screenshot pixel coordinates from the snapshot image."),
-                "y": coordinate_schema("Y coordinate in screenshot pixel coordinates from the snapshot image."),
+                "x": coordinate_schema("X coordinate. With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend."),
+                "y": coordinate_schema("Y coordinate. With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend."),
                 "action": { "type": "string" }
             }),
-            json!(["snapshot_id"]),
+            json!([]),
         ),
         action_tool(
             "scroll",
-            "Scroll within an element or focused area from the current snapshot.",
+            "Scroll within an element from the current snapshot, or the focused area without a snapshot.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
                 "direction": {
@@ -503,38 +497,38 @@ fn tool_definitions() -> Value {
                 },
                 "pages": { "type": "integer", "minimum": 1 }
             }),
-            json!(["snapshot_id", "direction"]),
+            json!(["direction"]),
         ),
         action_tool(
             "drag",
-            "Drag from one screenshot-pixel point or element to another in the current snapshot.",
+            "Drag from one point or element to another; explicit coordinates can run without a snapshot.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
-                "x": coordinate_schema("Drag start X coordinate in screenshot pixel coordinates."),
-                "y": coordinate_schema("Drag start Y coordinate in screenshot pixel coordinates."),
-                "from_x": coordinate_schema("Drag start X coordinate in screenshot pixel coordinates."),
-                "from_y": coordinate_schema("Drag start Y coordinate in screenshot pixel coordinates."),
-                "to_x": coordinate_schema("Drag end X coordinate in screenshot pixel coordinates."),
-                "to_y": coordinate_schema("Drag end Y coordinate in screenshot pixel coordinates."),
+                "x": coordinate_schema("Drag start X coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
+                "y": coordinate_schema("Drag start Y coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
+                "from_x": coordinate_schema("Drag start X coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
+                "from_y": coordinate_schema("Drag start Y coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
+                "to_x": coordinate_schema("Drag end X coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
+                "to_y": coordinate_schema("Drag end Y coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
                 "to_element_index": { "type": "integer", "minimum": 0 }
             }),
-            json!(["snapshot_id"]),
+            json!([]),
         ),
         action_tool(
             "type_text",
-            "Type literal text into the focused control in the current snapshot.",
+            "Type literal text into the focused control; may use snapshot context when provided.",
             json!({
                 "text": { "type": "string" }
             }),
-            json!(["snapshot_id", "text"]),
+            json!(["text"]),
         ),
         action_tool(
             "press_key",
-            "Press a keyboard key or key chord in the current snapshot.",
+            "Press a keyboard key or key chord in the focused control; may use snapshot context when provided.",
             json!({
                 "key": { "type": "string" }
             }),
-            json!(["snapshot_id", "key"]),
+            json!(["key"]),
         ),
         action_tool(
             "set_value",
@@ -809,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn action_tool_schemas_are_strict_and_snapshot_scoped() {
+    fn action_tool_schemas_are_strict_and_snapshot_scoped_where_needed() {
         let tools = tool_definitions();
         let click = tools
             .as_array()
@@ -819,7 +813,7 @@ mod tests {
             .expect("click tool");
         let schema = &click["inputSchema"];
         assert_eq!(schema["additionalProperties"], false);
-        assert_eq!(schema["required"][0], "snapshot_id");
+        assert_eq!(schema["required"], json!([]));
         assert!(schema["properties"].get("snapshot_id").is_some());
         assert!(schema.get("anyOf").is_none());
 
@@ -841,7 +835,7 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "perform_secondary_action")
             .expect("perform_secondary_action tool");
-        assert_eq!(secondary["inputSchema"]["required"], json!(["snapshot_id"]));
+        assert_eq!(secondary["inputSchema"]["required"], json!([]));
         assert!(secondary["inputSchema"]["properties"].get("x").is_some());
         assert!(secondary["inputSchema"]["properties"].get("y").is_some());
 
@@ -852,10 +846,7 @@ mod tests {
             .find(|tool| tool["name"] == "type_text")
             .expect("type_text tool");
         assert_eq!(type_text["inputSchema"]["additionalProperties"], false);
-        assert_eq!(
-            type_text["inputSchema"]["required"],
-            json!(["snapshot_id", "text"])
-        );
+        assert_eq!(type_text["inputSchema"]["required"], json!(["text"]));
     }
 
     #[test]

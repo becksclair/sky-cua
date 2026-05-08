@@ -124,7 +124,7 @@ fn select_capture_backend(
                 CaptureBackendKind::None
             }
         }
-        SessionKind::Unsupported => CaptureBackendKind::None,
+        SessionKind::Windows | SessionKind::Unsupported => CaptureBackendKind::None,
     }
 }
 
@@ -148,7 +148,7 @@ fn select_input_backend(
                 InputBackendKind::None
             }
         }
-        SessionKind::Unsupported => InputBackendKind::None,
+        SessionKind::Windows | SessionKind::Unsupported => InputBackendKind::None,
     }
 }
 
