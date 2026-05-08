@@ -7,3 +7,4 @@ __pycache__/
 *.py[cod]
 /dist
 /artifacts
+/docs/computer-use-1.0.750
