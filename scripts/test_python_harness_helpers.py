@@ -105,6 +105,13 @@ def test_build_bundle_inputs_are_selected_from_git_index(
 
 
 def write_minimal_bundle(root: Path, *, binaries: list[str]) -> None:
+    write_minimal_bundle_sources(root)
+    (root / "bin").mkdir(parents=True)
+    for binary_name in binaries:
+        (root / "bin" / binary_name).write_text(binary_name, encoding="utf-8")
+
+
+def write_minimal_bundle_sources(root: Path) -> None:
     (root / ".codex-plugin").mkdir(parents=True)
     (root / ".codex-plugin" / "plugin.json").write_text(
         json.dumps({"version": "0.1.0"}),
@@ -121,9 +128,14 @@ def write_minimal_bundle(root: Path, *, binaries: list[str]) -> None:
         "{}",
         encoding="utf-8",
     )
-    (root / "bin").mkdir(parents=True)
-    for binary_name in binaries:
-        (root / "bin" / binary_name).write_text(binary_name, encoding="utf-8")
+
+
+def tracked_minimal_bundle_files() -> list[Path]:
+    return [
+        Path(".codex-plugin/plugin.json"),
+        Path("skills/computer-use-workflows/SKILL.md"),
+        Path("resources/app-instructions/index.json"),
+    ]
 
 
 def test_stage_bundle_preserves_existing_other_platform_binaries(
@@ -134,22 +146,7 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
     current_binaries = runtime_binary_names()
     other_binaries = [name for name in all_runtime_binary_names() if name not in current_binaries]
     write_minimal_bundle(bundle_root, binaries=other_binaries)
-    (tmp_path / ".mcp.json").write_text("{}", encoding="utf-8")
-    (tmp_path / ".codex-plugin").mkdir()
-    (tmp_path / ".codex-plugin" / "plugin.json").write_text(
-        json.dumps({"version": "0.1.0"}),
-        encoding="utf-8",
-    )
-    (tmp_path / "skills" / "computer-use-workflows").mkdir(parents=True)
-    (tmp_path / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
-        "skill",
-        encoding="utf-8",
-    )
-    (tmp_path / "resources" / "app-instructions").mkdir(parents=True)
-    (tmp_path / "resources" / "app-instructions" / "index.json").write_text(
-        "{}",
-        encoding="utf-8",
-    )
+    write_minimal_bundle_sources(tmp_path)
     target_release = tmp_path / "target" / "release"
     target_release.mkdir(parents=True)
     for binary_name in current_binaries:
@@ -159,11 +156,7 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
     monkeypatch.setattr(
         build_plugin,
         "tracked_bundle_files",
-        lambda: [
-            Path(".codex-plugin/plugin.json"),
-            Path("skills/computer-use-workflows/SKILL.md"),
-            Path("resources/app-instructions/index.json"),
-        ],
+        tracked_minimal_bundle_files,
     )
 
     build_plugin.stage_bundle(bundle_root)
@@ -184,22 +177,7 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
     current_binaries = runtime_binary_names()
     other_binaries = [name for name in all_runtime_binary_names() if name not in current_binaries]
     write_minimal_bundle(bundle_root, binaries=[])
-    (tmp_path / ".mcp.json").write_text("{}", encoding="utf-8")
-    (tmp_path / ".codex-plugin").mkdir()
-    (tmp_path / ".codex-plugin" / "plugin.json").write_text(
-        json.dumps({"version": "0.1.0"}),
-        encoding="utf-8",
-    )
-    (tmp_path / "skills" / "computer-use-workflows").mkdir(parents=True)
-    (tmp_path / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
-        "skill",
-        encoding="utf-8",
-    )
-    (tmp_path / "resources" / "app-instructions").mkdir(parents=True)
-    (tmp_path / "resources" / "app-instructions" / "index.json").write_text(
-        "{}",
-        encoding="utf-8",
-    )
+    write_minimal_bundle_sources(tmp_path)
     (tmp_path / "target" / "release").mkdir(parents=True)
     for binary_name in current_binaries:
         (tmp_path / "target" / "release" / binary_name).write_text(
@@ -214,11 +192,7 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
     monkeypatch.setattr(
         build_plugin,
         "tracked_bundle_files",
-        lambda: [
-            Path(".codex-plugin/plugin.json"),
-            Path("skills/computer-use-workflows/SKILL.md"),
-            Path("resources/app-instructions/index.json"),
-        ],
+        tracked_minimal_bundle_files,
     )
 
     build_plugin.stage_bundle(bundle_root)
