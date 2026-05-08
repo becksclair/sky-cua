@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from _plugin_bundle import (
@@ -24,21 +26,74 @@ BUNDLE_SOURCE_PATHS = [
     Path("README.md"),
 ]
 
+CARGO_BUILD_COMMAND = [
+    "cargo",
+    "build",
+    "--release",
+    "--package",
+    "sky-cua-client",
+    "--package",
+    "sky-cua-service",
+]
+
+
+def run_cargo_build(env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        CARGO_BUILD_COMMAND,
+        cwd=REPO_ROOT,
+        check=False,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def emit_cargo_output(result: subprocess.CompletedProcess[str]) -> None:
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+
+
+def is_windows_sccache_shim_failure(result: subprocess.CompletedProcess[str]) -> bool:
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    return (
+        sys.platform == "win32"
+        and result.returncode != 0
+        and "sccache" in output
+        and "could not create process" in output
+    )
+
+
+def cargo_env_without_rustc_wrappers() -> dict[str, str]:
+    env = os.environ.copy()
+    env["RUSTC_WRAPPER"] = ""
+    env["RUSTC_WORKSPACE_WRAPPER"] = ""
+    return env
+
 
 def build_release_binaries() -> None:
-    subprocess.run(
-        [
-            "cargo",
-            "build",
-            "--release",
-            "--package",
-            "sky-cua-client",
-            "--package",
-            "sky-cua-service",
-        ],
-        cwd=REPO_ROOT,
-        check=True,
-    )
+    result = run_cargo_build()
+    if result.returncode == 0:
+        emit_cargo_output(result)
+        return
+
+    if is_windows_sccache_shim_failure(result):
+        print(
+            "cargo build failed through the Windows sccache shim; retrying without RUSTC_WRAPPER.",
+            file=sys.stderr,
+        )
+        retry = run_cargo_build(env=cargo_env_without_rustc_wrappers())
+        if retry.returncode == 0:
+            emit_cargo_output(retry)
+            return
+        emit_cargo_output(result)
+        emit_cargo_output(retry)
+        retry.check_returncode()
+
+    emit_cargo_output(result)
+    result.check_returncode()
 
 
 def tracked_bundle_files(source_paths: list[Path] | None = None) -> list[Path]:

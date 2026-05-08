@@ -94,6 +94,78 @@ def test_build_bundle_inputs_are_selected_from_git_index(
     ]
 
 
+def test_build_release_binaries_retries_windows_sccache_shim_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, str] | None] = []
+
+    def fake_run(
+        _command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+        env: dict[str, str] | None = None,
+        text: bool,
+        stdout: int,
+        stderr: int,
+    ) -> subprocess.CompletedProcess[str]:
+        assert _command == build_plugin.CARGO_BUILD_COMMAND
+        assert cwd == build_plugin.REPO_ROOT
+        assert check is False
+        assert text is True
+        assert stdout == subprocess.PIPE
+        assert stderr == subprocess.PIPE
+        calls.append(env)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                _command,
+                1,
+                stdout="",
+                stderr="Shim: Could not create process with command 'sccache rustc'.",
+            )
+        return subprocess.CompletedProcess(_command, 0, stdout="built\n", stderr="")
+
+    monkeypatch.setattr(build_plugin.sys, "platform", "win32")
+    monkeypatch.setenv("RUSTC_WRAPPER", "sccache")
+    monkeypatch.setattr(build_plugin.subprocess, "run", fake_run)
+
+    build_plugin.build_release_binaries()
+
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1] is not None
+    assert calls[1]["RUSTC_WRAPPER"] == ""
+    assert calls[1]["RUSTC_WORKSPACE_WRAPPER"] == ""
+
+
+def test_build_release_binaries_does_not_retry_unrelated_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+        env: dict[str, str] | None = None,
+        text: bool,
+        stdout: int,
+        stderr: int,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(command, 101, stdout="", stderr="ordinary cargo error")
+
+    monkeypatch.setattr(build_plugin.sys, "platform", "win32")
+    monkeypatch.setattr(build_plugin.subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        build_plugin.build_release_binaries()
+
+    assert calls == 1
+
+
 def test_release_marketplace_helpers_use_local_marketplace_shape(tmp_path: Path) -> None:
     marketplace_root = tmp_path / "marketplace"
     config_path = tmp_path / "codex-home" / "config.toml"
