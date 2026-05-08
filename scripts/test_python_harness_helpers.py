@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
 import pytest
 
+import build_plugin
 import deploy_release_plugin as release_deploy
 from _app_server_harness import build_schema_accept_value, response_contains_computer_use_server
 from _plugin_bundle import (
@@ -65,6 +67,30 @@ def test_runtime_binary_names_match_host_platform() -> None:
     assert runtime_binary_names() == [
         f"sky-cua-client{suffix}",
         f"sky-cua-service{suffix}",
+    ]
+
+
+def test_build_bundle_inputs_are_selected_from_git_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.DEVNULL)
+    (tmp_path / "README.md").write_text("tracked readme\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "kept.md").write_text("tracked doc\n", encoding="utf-8")
+    (tmp_path / "docs" / "local-only.md").write_text("untracked doc\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md", "docs/kept.md"],
+        cwd=tmp_path,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
+
+    assert build_plugin.tracked_bundle_files([Path("README.md"), Path("docs")]) == [
+        Path("README.md"),
+        Path("docs/kept.md"),
     ]
 
 
