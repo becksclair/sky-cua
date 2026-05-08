@@ -73,6 +73,20 @@ python3 scripts/build_plugin.py
 python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
 ```
 
+Deploy local Codex plugin builds:
+
+```bash
+python3 scripts/deploy_debug_plugin.py
+python3 scripts/deploy_release_plugin.py
+```
+
+`deploy_debug_plugin.py` keeps the direct debug-cache install as
+`sky-cua@debug`. `deploy_release_plugin.py` stages a release bundle through a
+local marketplace under `~/.agents/sky-cua-marketplace`, installs it through
+Codex, and enables `sky-cua@sky-cua-local` in `~/.codex/config.toml`. The deploy
+scripts switch those two plugin ids mutually so Codex does not see duplicate
+`computer-use` MCP servers.
+
 Reset persisted portal restore tokens:
 
 ```bash

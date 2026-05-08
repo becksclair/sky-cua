@@ -78,6 +78,7 @@ pub async fn flatten_accessible_tree(
                         .map(|action| action.name)
                         .filter(|name| !name.trim().is_empty()),
                 );
+                add_canonical_action_aliases(&mut actions);
             }
             if proxies.component().await.is_ok() && !actions.iter().any(|name| name == "focus") {
                 actions.push("focus".to_string());
@@ -125,4 +126,76 @@ pub async fn flatten_accessible_tree(
     }
 
     nodes
+}
+
+fn add_canonical_action_aliases(actions: &mut Vec<String>) {
+    let normalized = actions
+        .iter()
+        .map(|action| normalize_action(action))
+        .collect::<Vec<_>>();
+    let mut maybe_push = |action: &str, aliases: &[&str]| {
+        if normalized
+            .iter()
+            .any(|candidate| aliases.iter().any(|alias| candidate == alias))
+            && !actions.iter().any(|existing| existing == action)
+        {
+            actions.push(action.to_string());
+        }
+    };
+
+    maybe_push(
+        "activate",
+        &["activate", "press", "click", "open", "jump", "invoke"],
+    );
+    maybe_push("select", &["select", "choose"]);
+    maybe_push("expand", &["expand", "open"]);
+    maybe_push("collapse", &["collapse", "close"]);
+    maybe_push("toggle", &["toggle", "check", "uncheck"]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::add_canonical_action_aliases;
+
+    #[test]
+    fn canonical_aliases_match_semantic_action_fallbacks() {
+        let mut actions = vec![
+            "Press".to_string(),
+            "Open".to_string(),
+            "Close".to_string(),
+            "Toggle".to_string(),
+            "Choose".to_string(),
+        ];
+
+        add_canonical_action_aliases(&mut actions);
+
+        for expected in ["activate", "expand", "collapse", "toggle", "select"] {
+            assert!(
+                actions.iter().any(|action| action == expected),
+                "missing canonical action {expected} in {actions:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_aliases_do_not_duplicate_existing_actions() {
+        let mut actions = vec!["activate".to_string(), "press".to_string()];
+
+        add_canonical_action_aliases(&mut actions);
+
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| action.as_str() == "activate")
+                .count(),
+            1
+        );
+    }
+}
+
+fn normalize_action(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '-', '_'], "")
 }

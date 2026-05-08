@@ -185,6 +185,12 @@ fn handle_tool_call(
                 other => Err(anyhow!("unexpected response for get_app_state: {other:?}")),
             }
         }
+        "focus_element" => handle_action_call(service, ActionName::FocusElement, arguments),
+        "activate_element" => handle_action_call(service, ActionName::ActivateElement, arguments),
+        "select_element" => handle_action_call(service, ActionName::SelectElement, arguments),
+        "expand_element" => handle_action_call(service, ActionName::ExpandElement, arguments),
+        "collapse_element" => handle_action_call(service, ActionName::CollapseElement, arguments),
+        "toggle_element" => handle_action_call(service, ActionName::ToggleElement, arguments),
         "click" => handle_action_call(service, ActionName::Click, arguments),
         "perform_secondary_action" => {
             handle_action_call(service, ActionName::PerformSecondaryAction, arguments)
@@ -385,6 +391,10 @@ fn informational_runtime_summary(
                 Some(details) => format!("{} Details: {}", diagnostic.message, details),
                 None => diagnostic.message.clone(),
             }),
+            "CaptureFrameBlank" => parts.push(match diagnostic.details.as_ref() {
+                Some(details) => format!("{} Details: {}", diagnostic.message, details),
+                None => diagnostic.message.clone(),
+            }),
             _ => {}
         }
     }
@@ -411,7 +421,7 @@ fn tool_definitions() -> Value {
     json!([
         {
             "name": "list_apps",
-            "description": "List currently exposed desktop applications from the Linux accessibility tree.",
+            "description": "List currently exposed desktop applications from the active platform window and accessibility backends.",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -437,6 +447,30 @@ fn tool_definitions() -> Value {
                 "additionalProperties": false
             }
         },
+        semantic_element_tool(
+            "focus_element",
+            "Move semantic focus to an accessibility element from the current snapshot.",
+        ),
+        semantic_element_tool(
+            "activate_element",
+            "Perform the element's semantic default action, such as pressing an app-chrome button or opening a menu.",
+        ),
+        semantic_element_tool(
+            "select_element",
+            "Select an accessibility element such as a tab, list item, radio item, or selectable row.",
+        ),
+        semantic_element_tool(
+            "expand_element",
+            "Expand an accessibility element such as a collapsed menu, combo box, disclosure, or tree item.",
+        ),
+        semantic_element_tool(
+            "collapse_element",
+            "Collapse an accessibility element such as an expanded menu, combo box, disclosure, or tree item.",
+        ),
+        semantic_element_tool(
+            "toggle_element",
+            "Toggle an accessibility element such as a checkbox, switch, or toggle button.",
+        ),
         action_tool(
             "click",
             "Click an element by index or x/y coordinates in screenshot pixel coordinates from the current snapshot.",
@@ -525,6 +559,21 @@ fn coordinate_schema(description: &str) -> Value {
         "type": "number",
         "description": description
     })
+}
+
+fn semantic_element_tool(name: &str, description: &str) -> Value {
+    action_tool(
+        name,
+        description,
+        json!({
+            "element_index": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Element index from the current get_app_state snapshot."
+            }
+        }),
+        json!(["snapshot_id", "element_index"]),
+    )
 }
 
 fn action_tool(name: &str, description: &str, mut properties: Value, required: Value) -> Value {
@@ -774,6 +823,18 @@ mod tests {
         assert!(schema["properties"].get("snapshot_id").is_some());
         assert!(schema.get("anyOf").is_none());
 
+        let activate = tools
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["name"] == "activate_element")
+            .expect("activate_element tool");
+        assert_eq!(
+            activate["inputSchema"]["required"],
+            json!(["snapshot_id", "element_index"])
+        );
+        assert_eq!(activate["inputSchema"]["additionalProperties"], false);
+
         let secondary = tools
             .as_array()
             .expect("tools")
@@ -866,44 +927,7 @@ mod tests {
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
             },
-            capabilities: ToolCapabilities {
-                list_apps: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                get_app_state: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                click: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                perform_secondary_action: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                scroll: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                drag: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                type_text: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                press_key: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                set_value: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-            },
+            capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
                 app_id: "app-1".to_string(),
                 name: "zenity".to_string(),
@@ -972,44 +996,7 @@ mod tests {
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
             },
-            capabilities: ToolCapabilities {
-                list_apps: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                get_app_state: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                click: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                perform_secondary_action: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                scroll: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                drag: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                type_text: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                press_key: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                set_value: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-            },
+            capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
                 app_id: "app-2".to_string(),
                 name: "xmessage".to_string(),
@@ -1154,44 +1141,7 @@ mod tests {
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
             },
-            capabilities: ToolCapabilities {
-                list_apps: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                get_app_state: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                click: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                perform_secondary_action: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                scroll: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                drag: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                type_text: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                press_key: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                set_value: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-            },
+            capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
                 app_id: "app-restore".to_string(),
                 name: "krita".to_string(),
@@ -1249,44 +1199,7 @@ mod tests {
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
             },
-            capabilities: ToolCapabilities {
-                list_apps: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                get_app_state: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                click: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                perform_secondary_action: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                scroll: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                drag: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                type_text: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                press_key: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-                set_value: ToolAvailability {
-                    available: true,
-                    reason: None,
-                },
-            },
+            capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
                 app_id: "app-3".to_string(),
                 name: "discord".to_string(),
@@ -1316,5 +1229,32 @@ mod tests {
             "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback"
         ));
         assert!(summary.contains("image_backend=portal_screenshot"));
+    }
+
+    fn available_capabilities() -> ToolCapabilities {
+        fn available() -> ToolAvailability {
+            ToolAvailability {
+                available: true,
+                reason: None,
+            }
+        }
+
+        ToolCapabilities {
+            list_apps: available(),
+            get_app_state: available(),
+            focus_element: available(),
+            activate_element: available(),
+            select_element: available(),
+            expand_element: available(),
+            collapse_element: available(),
+            toggle_element: available(),
+            click: available(),
+            perform_secondary_action: available(),
+            scroll: available(),
+            drag: available(),
+            type_text: available(),
+            press_key: available(),
+            set_value: available(),
+        }
     }
 }

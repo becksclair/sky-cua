@@ -11,7 +11,7 @@ Use this skill when the installed sky-cua computer-use runtime is the right tool
 
 Treat the accessibility tree as structure, not gospel.
 
-- Use `list_apps` and `get_app_state` to discover the focused app, candidate controls, diagnostics, and the latest screenshot path.
+- Use `list_apps` and `get_app_state` to discover the focused app, candidate controls, diagnostics, semantic actions, and the latest screenshot path.
 - If `get_app_state` gives you a `screenshot_path`, inspect it with `view_image` before you commit to a target in a murky UI.
 - Start from the screenshot. The tree is optional structure, not a prerequisite for action.
 - Use full `get_app_state` for discovery and debugging. Once the target app/window is known, prefer `get_app_state` with `detail: "compact"` for repeated screenshot-first action loops so old verbose state does not bloat later model steps.
@@ -46,7 +46,9 @@ Treat the accessibility tree as structure, not gospel.
    - verify the outcome after actions that are visually obvious but semantically thin
 
 4. **Choose the action lane that fits the widget**
-    - prefer semantic actions for straightforward buttons, toggles, and editable values only when the app guidance or the current state says that path is reliable
+    - when an element advertises a matching `semantic_actions` entry, prefer the narrow semantic primitive: `focus_element`, `activate_element`, `select_element`, `expand_element`, `collapse_element`, `toggle_element`, or `set_value`
+    - use `activate_element` for default app-chrome actions such as toolbar buttons, menu buttons, and dialog buttons; use `select_element` for tabs, list items, radio options, and selectable rows
+    - use `click` when the desired action is inherently pointer-shaped, when the tree only gives a rough visual anchor, or when no narrower semantic primitive is exposed
     - prefer physical actions for sliders, drag and drop, canvases, splitters, media rows, custom-painted widgets, right-click menus, double-click actions, and “obvious on screen, murky in the tree” affordances
     - when the tree exposes only fallback regions, use them as rough anchors for visual search instead of pretending they are real widgets
     - if you can identify the target on the screenshot but not in the tree, use coordinate-based physical actions rather than giving up

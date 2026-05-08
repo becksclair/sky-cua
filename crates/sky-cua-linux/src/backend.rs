@@ -106,6 +106,30 @@ impl LinuxDesktopBackend {
                 reason: (!(semantic_ready || x11_listing_ready || kwin_listing_ready))
                     .then(|| "Neither AT-SPI nor a window-query fallback is available".to_string()),
             },
+            focus_element: ToolAvailability {
+                available: semantic_ready,
+                reason: (!semantic_ready).then(|| "AT-SPI is unavailable".to_string()),
+            },
+            activate_element: ToolAvailability {
+                available: semantic_ready,
+                reason: (!semantic_ready).then(|| "AT-SPI is unavailable".to_string()),
+            },
+            select_element: ToolAvailability {
+                available: semantic_ready,
+                reason: (!semantic_ready).then(|| "AT-SPI is unavailable".to_string()),
+            },
+            expand_element: ToolAvailability {
+                available: semantic_ready,
+                reason: (!semantic_ready).then(|| "AT-SPI is unavailable".to_string()),
+            },
+            collapse_element: ToolAvailability {
+                available: semantic_ready,
+                reason: (!semantic_ready).then(|| "AT-SPI is unavailable".to_string()),
+            },
+            toggle_element: ToolAvailability {
+                available: semantic_ready,
+                reason: (!semantic_ready).then(|| "AT-SPI is unavailable".to_string()),
+            },
             click: ToolAvailability {
                 available: semantic_ready || physical_ready,
                 reason: (!(semantic_ready || physical_ready))
@@ -637,6 +661,12 @@ impl DesktopBackend for LinuxDesktopBackend {
     async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
         let _ = self.portal.take_lifecycle_events().await;
         match request.action {
+            ActionName::FocusElement => self.focus_element(request).await,
+            ActionName::ActivateElement => self.activate_element(request).await,
+            ActionName::SelectElement => self.select_element(request).await,
+            ActionName::ExpandElement => self.expand_element(request).await,
+            ActionName::CollapseElement => self.collapse_element(request).await,
+            ActionName::ToggleElement => self.toggle_element(request).await,
             ActionName::Click => self.click(request).await,
             ActionName::PerformSecondaryAction => self.secondary_click(request).await,
             ActionName::Scroll => self.scroll(request).await,
@@ -654,12 +684,122 @@ impl DesktopBackend for LinuxDesktopBackend {
     }
 }
 
+fn semantic_backend_ref<'a>(
+    request: &'a ActionRequest,
+    tool_name: &str,
+) -> Result<&'a str, BackendError> {
+    let element = request.resolved_element.as_ref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!(
+                "{tool_name} requires element_index so the service can resolve a semantic target"
+            ),
+        )
+    })?;
+    element.backend_ref.as_deref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("{tool_name} target did not include a backend_ref"),
+        )
+    })
+}
+
 fn is_retryable_accessibility_error(error: &BackendError) -> bool {
     error.code == BackendErrorCode::AccessibilityUnavailable.as_str()
         && error.message.contains("Resource temporarily unavailable")
 }
 
 impl LinuxDesktopBackend {
+    async fn focus_element(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        let backend_ref = semantic_backend_ref(&request, "focus_element")?;
+        let connection = self.accessibility_connection().await?;
+        if atspi_actions::grab_focus(&connection, backend_ref).await? {
+            return Ok(success("Focused the element semantically through AT-SPI."));
+        }
+        Err(BackendError::new(
+            BackendErrorCode::ActionRequiresPhysicalInput,
+            format!("AT-SPI focus was unavailable for element {backend_ref}"),
+        ))
+    }
+
+    async fn activate_element(
+        &self,
+        request: ActionRequest,
+    ) -> Result<ActionOutcome, BackendError> {
+        self.semantic_atspi_action(
+            &request,
+            "activate_element",
+            "Activated the element semantically through AT-SPI.",
+            atspi_actions::activate,
+        )
+        .await
+    }
+
+    async fn select_element(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        self.semantic_atspi_action(
+            &request,
+            "select_element",
+            "Selected the element semantically through AT-SPI.",
+            atspi_actions::select,
+        )
+        .await
+    }
+
+    async fn expand_element(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        self.semantic_atspi_action(
+            &request,
+            "expand_element",
+            "Expanded the element semantically through AT-SPI.",
+            atspi_actions::expand,
+        )
+        .await
+    }
+
+    async fn collapse_element(
+        &self,
+        request: ActionRequest,
+    ) -> Result<ActionOutcome, BackendError> {
+        self.semantic_atspi_action(
+            &request,
+            "collapse_element",
+            "Collapsed the element semantically through AT-SPI.",
+            atspi_actions::collapse,
+        )
+        .await
+    }
+
+    async fn toggle_element(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        self.semantic_atspi_action(
+            &request,
+            "toggle_element",
+            "Toggled the element semantically through AT-SPI.",
+            atspi_actions::toggle,
+        )
+        .await
+    }
+
+    async fn semantic_atspi_action<F, Fut>(
+        &self,
+        request: &ActionRequest,
+        tool_name: &str,
+        success_message: &str,
+        action: F,
+    ) -> Result<ActionOutcome, BackendError>
+    where
+        F: FnOnce(&atspi::AccessibilityConnection, &str) -> Fut,
+        Fut: std::future::Future<Output = Result<bool, BackendError>>,
+    {
+        let backend_ref = semantic_backend_ref(request, tool_name)?;
+        let connection = self.accessibility_connection().await?;
+        if action(&connection, backend_ref).await? {
+            return Ok(success(success_message));
+        }
+        Err(BackendError::new(
+            BackendErrorCode::ActionRequiresPhysicalInput,
+            format!("AT-SPI {tool_name} was unavailable for element {backend_ref}"),
+        ))
+    }
+
     async fn click(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
         if let Some(element) = request.resolved_element.as_ref()
             && let Some(backend_ref) = element.backend_ref.as_deref()

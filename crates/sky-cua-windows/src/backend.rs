@@ -39,6 +39,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_CHAR, WM_KEYDOWN, WM_KEYUP,
 };
 
+use crate::uia;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouseButton {
     Left,
@@ -50,6 +52,12 @@ enum WindowsInputBackend {
     SendInput,
     WindowMessages,
     None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureBlankFrame {
+    Black,
+    White,
 }
 
 impl WindowsInputBackend {
@@ -86,6 +94,7 @@ impl WindowsDesktopBackend {
             environment.input_backend,
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages
         );
+        let semantic_ready = environment.semantic_backend == SemanticBackendKind::Uia;
         let listing_ready = environment.session_kind == SessionKind::Windows;
         let input_reason = if is_rdp_session() {
             "Windows RDP message input is unavailable"
@@ -102,15 +111,21 @@ impl WindowsDesktopBackend {
                 listing_ready,
                 "Windows top-level window enumeration is unavailable",
             ),
-            click: availability(physical_ready, input_reason),
+            focus_element: availability(semantic_ready, "UI Automation is unavailable"),
+            activate_element: availability(semantic_ready, "UI Automation is unavailable"),
+            select_element: availability(semantic_ready, "UI Automation is unavailable"),
+            expand_element: availability(semantic_ready, "UI Automation is unavailable"),
+            collapse_element: availability(semantic_ready, "UI Automation is unavailable"),
+            toggle_element: availability(semantic_ready, "UI Automation is unavailable"),
+            click: availability(semantic_ready || physical_ready, input_reason),
             perform_secondary_action: availability(physical_ready, input_reason),
             scroll: availability(physical_ready, input_reason),
             drag: availability(physical_ready, input_reason),
             type_text: availability(physical_ready, input_reason),
             press_key: availability(physical_ready, input_reason),
             set_value: availability(
-                physical_ready,
-                "UI Automation set_value is not implemented yet; physical fallback requires focused targets",
+                semantic_ready || physical_ready,
+                "UI Automation and physical input are unavailable for set_value in this session",
             ),
         }
     }
@@ -158,13 +173,18 @@ impl WindowsDesktopBackend {
 impl DesktopBackend for WindowsDesktopBackend {
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
         let input_backend = select_input_backend().model_kind();
+        let semantic_backend = if uia::is_available() {
+            SemanticBackendKind::Uia
+        } else {
+            SemanticBackendKind::None
+        };
         Ok(EnvironmentInfo {
             session_kind: SessionKind::Windows,
             compositor: Some("windows-desktop".to_string()),
             desktop_environment: std::env::var("SESSIONNAME").ok(),
             capture_backend: CaptureBackendKind::WindowsGdi,
             input_backend,
-            semantic_backend: SemanticBackendKind::None,
+            semantic_backend,
             portal_capabilities: PortalCapabilities {
                 screencast_version: None,
                 remote_desktop_version: None,
@@ -215,27 +235,80 @@ impl DesktopBackend for WindowsDesktopBackend {
             .or_else(|| windows.iter().find(|window| window.is_foreground).cloned())
             .or_else(|| windows.first().cloned());
 
-        let capture = match capture_desktop(&snapshot_id, selected.as_ref()).await {
-            Ok(capture) => Some(capture),
+        let capture_result = match capture_desktop(&snapshot_id, selected.as_ref()).await {
+            Ok(result) => Some(result),
             Err(error) => {
                 diagnostics.push(
                     BackendErrorCode::Internal,
                     "Windows GDI screenshot capture failed",
                     Some(error.message),
                 );
-                Some(empty_capture())
+                Some(CaptureResult {
+                    capture: empty_capture(),
+                    blank_frame: None,
+                })
             }
         };
 
-        let (focused_app, elements) = if let Some(window) = selected.as_ref() {
+        if let Some(blank_frame) = capture_result
+            .as_ref()
+            .and_then(|result| result.blank_frame)
+        {
+            let details = capture_result
+                .as_ref()
+                .and_then(|result| result.capture.screenshot_path.clone())
+                .map(|path| format!("kind={} path={path}", blank_frame.as_str()))
+                .unwrap_or_else(|| format!("kind={}", blank_frame.as_str()));
             diagnostics.push(
-                BackendErrorCode::AccessibilityCoverageLimited,
-                "Windows v1 returned a Win32 window fallback tree; UI Automation semantic children are not implemented yet",
-                Some(window.title.clone()),
+                BackendErrorCode::CaptureFrameBlank,
+                "Windows GDI screenshot appears blank; browser GPU or protected surfaces may not be capturable through GDI",
+                Some(details),
             );
+        }
+
+        let (focused_app, elements) = if let Some(window) = selected.as_ref() {
             let app = Self::window_to_app(window);
-            let element = window_element(window, 0);
-            (Some(Self::focused_from_app(&app)), vec![element])
+            let focused_app = Some(Self::focused_from_app(&app));
+            let uia_elements = if environment.semantic_backend == SemanticBackendKind::Uia {
+                uia::collect_elements_for_hwnd(
+                    window.hwnd,
+                    &window.title,
+                    &window.bounds,
+                    capture_result.as_ref().map(|result| &result.capture),
+                )
+            } else {
+                Err(BackendError::new(
+                    BackendErrorCode::AccessibilityUnavailable,
+                    "Windows UI Automation is unavailable in this session",
+                ))
+            };
+
+            match uia_elements {
+                Ok(elements)
+                    if elements.len() > 1
+                        || elements
+                            .iter()
+                            .any(|element| !element.semantic_actions.is_empty()) =>
+                {
+                    (focused_app, elements)
+                }
+                Ok(_) => {
+                    diagnostics.push(
+                        BackendErrorCode::AccessibilityCoverageLimited,
+                        "Windows UI Automation returned no useful child elements; using Win32 window fallback tree",
+                        Some(window.title.clone()),
+                    );
+                    (focused_app, vec![window_element(window, 0)])
+                }
+                Err(error) => {
+                    diagnostics.push(
+                        BackendErrorCode::AccessibilityCoverageLimited,
+                        "Windows UI Automation tree collection failed; using Win32 window fallback tree",
+                        Some(error.message),
+                    );
+                    (focused_app, vec![window_element(window, 0)])
+                }
+            }
         } else {
             diagnostics.push(
                 BackendErrorCode::AccessibilityCoverageLimited,
@@ -251,7 +324,7 @@ impl DesktopBackend for WindowsDesktopBackend {
             environment,
             capabilities,
             focused_app,
-            capture,
+            capture: capture_result.map(|result| result.capture),
             elements,
             diagnostics: diagnostics.finish(),
             app_guidance: None,
@@ -259,24 +332,66 @@ impl DesktopBackend for WindowsDesktopBackend {
     }
 
     async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        let uia_target = uia_backend_ref_for_fallback(&request)
+            .filter(|_| {
+                matches!(
+                    request.action,
+                    ActionName::Click
+                        | ActionName::FocusElement
+                        | ActionName::ActivateElement
+                        | ActionName::SelectElement
+                        | ActionName::ExpandElement
+                        | ActionName::CollapseElement
+                        | ActionName::ToggleElement
+                        | ActionName::SetValue
+                )
+            })
+            .map(ToOwned::to_owned);
+        if let Some(outcome) = uia::try_execute_semantic_action(&request)? {
+            return Ok(outcome);
+        }
+
         let input_backend = request
             .environment
             .as_ref()
             .map(|environment| environment.input_backend.clone())
             .unwrap_or_else(|| select_input_backend().model_kind());
-        match input_backend {
+        let mut outcome = match input_backend {
             InputBackendKind::SendInput => execute_send_input_action(&request),
             InputBackendKind::WindowsMessages => execute_window_message_action(&request),
             _ => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "Windows physical input is unavailable in this session",
             )),
+        }?;
+        if let Some(reference) = uia_target {
+            outcome.diagnostics.push(
+                sky_cua_platform::model::DiagnosticEntry {
+                    code: BackendErrorCode::AccessibilityCoverageLimited
+                        .as_str()
+                        .to_string(),
+                    message:
+                        "UI Automation semantic action was unavailable; physical input fallback was used"
+                            .to_string(),
+                    details: Some(reference),
+                },
+            );
         }
+        Ok(outcome)
     }
 }
 
 fn execute_send_input_action(request: &ActionRequest) -> Result<ActionOutcome, BackendError> {
     match request.action {
+        ActionName::FocusElement
+        | ActionName::ActivateElement
+        | ActionName::SelectElement
+        | ActionName::ExpandElement
+        | ActionName::CollapseElement
+        | ActionName::ToggleElement => Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            "this semantic automation primitive requires Windows UI Automation",
+        )),
         ActionName::Click => {
             focus_request_window(request);
             let (x, y) = desktop_action_point(request)?;
@@ -332,7 +447,7 @@ fn execute_send_input_action(request: &ActionRequest) -> Result<ActionOutcome, B
                         .as_str()
                         .to_string(),
                     message:
-                        "UI Automation set_value is not implemented yet; physical fallback was used"
+                        "UI Automation ValuePattern was unavailable; physical fallback was used"
                             .to_string(),
                     details: None,
                 }],
@@ -343,6 +458,15 @@ fn execute_send_input_action(request: &ActionRequest) -> Result<ActionOutcome, B
 
 fn execute_window_message_action(request: &ActionRequest) -> Result<ActionOutcome, BackendError> {
     match request.action {
+        ActionName::FocusElement
+        | ActionName::ActivateElement
+        | ActionName::SelectElement
+        | ActionName::ExpandElement
+        | ActionName::CollapseElement
+        | ActionName::ToggleElement => Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            "this semantic automation primitive requires Windows UI Automation",
+        )),
         ActionName::Click => {
             let hwnd = request_hwnd(request)?;
             let (x, y) = desktop_action_point(request)?;
@@ -392,13 +516,25 @@ fn execute_window_message_action(request: &ActionRequest) -> Result<ActionOutcom
                     .to_string(),
                 code: "Completed".to_string(),
                 diagnostics: vec![sky_cua_platform::model::DiagnosticEntry {
-                    code: BackendErrorCode::AccessibilityCoverageLimited.as_str().to_string(),
-                    message: "UI Automation set_value is not implemented yet; RDP message fallback was used".to_string(),
+                    code: BackendErrorCode::AccessibilityCoverageLimited
+                        .as_str()
+                        .to_string(),
+                    message:
+                        "UI Automation ValuePattern was unavailable; RDP message fallback was used"
+                            .to_string(),
                     details: None,
                 }],
             })
         }
     }
+}
+
+fn uia_backend_ref_for_fallback(request: &ActionRequest) -> Option<&str> {
+    request
+        .resolved_element
+        .as_ref()
+        .and_then(|element| element.backend_ref.as_deref())
+        .filter(|backend_ref| backend_ref.starts_with("uia:"))
 }
 
 fn required_text_arg<'a>(
@@ -426,6 +562,15 @@ fn success(message: &str) -> ActionOutcome {
         message: message.to_string(),
         code: "Completed".to_string(),
         diagnostics: Vec::new(),
+    }
+}
+
+impl CaptureBlankFrame {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Black => "black",
+            Self::White => "white",
+        }
     }
 }
 
@@ -509,10 +654,22 @@ struct CaptureSource {
     logical_rect: Option<RectF>,
 }
 
+#[derive(Debug, Clone)]
+struct CaptureResult {
+    capture: CaptureInfo,
+    blank_frame: Option<CaptureBlankFrame>,
+}
+
+#[derive(Debug, Clone)]
+struct CaptureImageResult {
+    pixel_size: PixelSize,
+    blank_frame: Option<CaptureBlankFrame>,
+}
+
 async fn capture_desktop(
     snapshot_id: &str,
     window: Option<&WindowInfo>,
-) -> Result<CaptureInfo, BackendError> {
+) -> Result<CaptureResult, BackendError> {
     let output_path = capture_output_path(snapshot_id)?;
     if let Some(parent) = output_path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -528,7 +685,7 @@ async fn capture_desktop(
     let path = output_path.clone();
     let source = capture_source(window)?;
     let logical_rect = source.logical_rect.clone();
-    let pixel_size = tokio::task::spawn_blocking(move || capture_desktop_blocking(&path, source))
+    let image_result = tokio::task::spawn_blocking(move || capture_desktop_blocking(&path, source))
         .await
         .map_err(|error| {
             BackendError::new(
@@ -537,7 +694,7 @@ async fn capture_desktop(
             )
         })??;
 
-    Ok(CaptureInfo {
+    let capture = CaptureInfo {
         backend: CaptureBackendKind::WindowsGdi,
         image_backend: Some(CaptureBackendKind::WindowsGdi),
         coordinate_space: Some(CoordinateSpace::StreamPixels),
@@ -545,8 +702,8 @@ async fn capture_desktop(
         source_type: None,
         mapping_id: None,
         logical_rect,
-        pixel_size: Some(pixel_size.clone()),
-        original_pixel_size: Some(pixel_size),
+        pixel_size: Some(image_result.pixel_size.clone()),
+        original_pixel_size: Some(image_result.pixel_size),
         logical_to_pixel_scale: Some(1.0),
         screenshot_path: Some(output_path.display().to_string()),
         original_screenshot_path: None,
@@ -554,6 +711,10 @@ async fn capture_desktop(
         model_image_quality: Some(85),
         model_image_bytes: std::fs::metadata(&output_path).ok().map(|meta| meta.len()),
         model_image_encode_ms: None,
+    };
+    Ok(CaptureResult {
+        capture,
+        blank_frame: image_result.blank_frame,
     })
 }
 
@@ -635,7 +796,7 @@ fn capture_output_path(snapshot_id: &str) -> Result<PathBuf, BackendError> {
 fn capture_desktop_blocking(
     path: &PathBuf,
     source: CaptureSource,
-) -> Result<PixelSize, BackendError> {
+) -> Result<CaptureImageResult, BackendError> {
     unsafe {
         let capture_window = if let Some(hwnd) = source.hwnd {
             hwnd as HWND
@@ -717,6 +878,7 @@ fn capture_desktop_blocking(
         for pixel in pixels.chunks_exact(4) {
             rgb_pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
         }
+        let blank_frame = detect_blank_rgb_frame(&rgb_pixels);
         let image =
             ImageBuffer::<Rgb<u8>, Vec<u8>>::from_raw(width as u32, height as u32, rgb_pixels)
                 .ok_or_else(|| {
@@ -736,10 +898,45 @@ fn capture_desktop_blocking(
                     ),
                 )
             })?;
-        Ok(PixelSize {
-            width: width as u32,
-            height: height as u32,
+        Ok(CaptureImageResult {
+            pixel_size: PixelSize {
+                width: width as u32,
+                height: height as u32,
+            },
+            blank_frame,
         })
+    }
+}
+
+fn detect_blank_rgb_frame(rgb_pixels: &[u8]) -> Option<CaptureBlankFrame> {
+    let mut chunks = rgb_pixels.chunks_exact(3);
+    if !chunks.remainder().is_empty() {
+        return None;
+    }
+    let pixel_count = chunks.len();
+    if pixel_count == 0 {
+        return None;
+    }
+
+    let mut dark = 0usize;
+    let mut light = 0usize;
+    for pixel in chunks.by_ref() {
+        let [red, green, blue]: [u8; 3] = [pixel[0], pixel[1], pixel[2]];
+        if red <= 8 && green <= 8 && blue <= 8 {
+            dark += 1;
+        }
+        if red >= 247 && green >= 247 && blue >= 247 {
+            light += 1;
+        }
+    }
+
+    let threshold = ((pixel_count as f64) * 0.995).ceil() as usize;
+    if dark >= threshold {
+        Some(CaptureBlankFrame::Black)
+    } else if light >= threshold {
+        Some(CaptureBlankFrame::White)
+    } else {
+        None
     }
 }
 
@@ -805,7 +1002,7 @@ unsafe fn window_info(hwnd: HWND) -> Option<WindowInfo> {
             y: f64::from(rect.top),
             width: f64::from(width),
             height: f64::from(height),
-            space: CoordinateSpace::StreamPixels,
+            space: CoordinateSpace::DesktopLogical,
         },
         is_foreground: std::ptr::eq(hwnd, unsafe { GetForegroundWindow() }),
     })
@@ -1419,9 +1616,10 @@ fn win32_error(message: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::{
-        WindowInfo, WindowsInputBackend, absolute_pointer_coord, absolute_pointer_coords,
-        desktop_action_point, desktop_drag_from_point, parse_hwnd, scroll_delta_y, virtual_key,
-        window_element,
+        CaptureBlankFrame, WindowInfo, WindowsInputBackend, absolute_pointer_coord,
+        absolute_pointer_coords, desktop_action_point, desktop_drag_from_point,
+        detect_blank_rgb_frame, parse_hwnd, scroll_delta_y, uia_backend_ref_for_fallback,
+        virtual_key, window_element,
     };
     use sky_cua_platform::model::{
         ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace, ElementNode,
@@ -1488,6 +1686,31 @@ mod tests {
     }
 
     #[test]
+    fn identifies_uia_backend_refs_for_fallback_diagnostics() {
+        let request = action_request(
+            serde_json::json!({}),
+            None,
+            Some(ElementNode {
+                element_index: 0,
+                parent_index: None,
+                role: "button".to_string(),
+                name: Some("Open".to_string()),
+                description: None,
+                value: None,
+                state_flags: Vec::new(),
+                semantic_actions: vec!["click".to_string()],
+                bounds: None,
+                backend_ref: Some("uia:hwnd=0x10;path=0".to_string()),
+            }),
+        );
+
+        assert_eq!(
+            uia_backend_ref_for_fallback(&request),
+            Some("uia:hwnd=0x10;path=0")
+        );
+    }
+
+    #[test]
     fn maps_drag_from_coordinates_from_stream_pixels_to_desktop_coordinates() {
         let request = action_request(
             serde_json::json!({ "from_x": 21.0, "from_y": 305.0 }),
@@ -1510,7 +1733,7 @@ mod tests {
                 y: 184.0,
                 width: 1732.0,
                 height: 1070.0,
-                space: CoordinateSpace::StreamPixels,
+                space: CoordinateSpace::DesktopLogical,
             },
             is_foreground: true,
         };
@@ -1560,6 +1783,31 @@ mod tests {
         );
 
         assert_eq!(scroll_delta_y(&request), -360.0);
+    }
+
+    #[test]
+    fn detects_black_and_white_blank_capture_frames() {
+        let black = vec![0u8; 300];
+        let white = vec![255u8; 300];
+
+        assert_eq!(
+            detect_blank_rgb_frame(&black),
+            Some(CaptureBlankFrame::Black)
+        );
+        assert_eq!(
+            detect_blank_rgb_frame(&white),
+            Some(CaptureBlankFrame::White)
+        );
+    }
+
+    #[test]
+    fn does_not_mark_varied_capture_frames_as_blank() {
+        let mut pixels = vec![0u8; 300];
+        for (index, value) in pixels.iter_mut().enumerate() {
+            *value = (index % 251) as u8;
+        }
+
+        assert_eq!(detect_blank_rgb_frame(&pixels), None);
     }
 
     fn action_request(

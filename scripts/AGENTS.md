@@ -15,6 +15,8 @@ uv run basedpyright
 uv run pytest
 python3 scripts/build_plugin.py
 python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
+python3 scripts/deploy_debug_plugin.py
+python3 scripts/deploy_release_plugin.py
 ```
 
 ## Patterns & Conventions
@@ -37,6 +39,7 @@ python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
 
 - Plugin bundle build: `build_plugin.py`
 - Plugin install/config: `install_plugin.py`
+- Debug/release deploy: `deploy_debug_plugin.py`, `deploy_release_plugin.py`
 - Bundle/config helpers: `_plugin_bundle.py`
 - Rich app-server harness: `_app_server_harness.py`
 - Codex exec harness: `_codex_exec.py`

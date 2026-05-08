@@ -79,6 +79,12 @@ pub struct ToolAvailability {
 pub struct ToolCapabilities {
     pub list_apps: ToolAvailability,
     pub get_app_state: ToolAvailability,
+    pub focus_element: ToolAvailability,
+    pub activate_element: ToolAvailability,
+    pub select_element: ToolAvailability,
+    pub expand_element: ToolAvailability,
+    pub collapse_element: ToolAvailability,
+    pub toggle_element: ToolAvailability,
     pub click: ToolAvailability,
     pub perform_secondary_action: ToolAvailability,
     pub scroll: ToolAvailability,
@@ -227,6 +233,12 @@ pub struct AppStateSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionName {
+    FocusElement,
+    ActivateElement,
+    SelectElement,
+    ExpandElement,
+    CollapseElement,
+    ToggleElement,
     Click,
     PerformSecondaryAction,
     Scroll,
@@ -449,6 +461,12 @@ mod tests {
         ToolCapabilities {
             list_apps: available(),
             get_app_state: available(),
+            focus_element: available(),
+            activate_element: available(),
+            select_element: available(),
+            expand_element: available(),
+            collapse_element: available(),
+            toggle_element: available(),
             click: available(),
             perform_secondary_action: available(),
             scroll: available(),

@@ -57,6 +57,54 @@ pub async fn invoke_default_action(
         &[
             "click", "press", "activate", "open", "toggle", "jump", "invoke",
         ],
+        true,
+    )
+    .await
+}
+
+pub async fn activate(
+    connection: &AccessibilityConnection,
+    backend_ref: &str,
+) -> Result<bool, BackendError> {
+    invoke_preferred_action(
+        connection,
+        backend_ref,
+        &["activate", "press", "click", "open", "jump", "invoke"],
+        false,
+    )
+    .await
+}
+
+pub async fn select(
+    connection: &AccessibilityConnection,
+    backend_ref: &str,
+) -> Result<bool, BackendError> {
+    invoke_preferred_action(connection, backend_ref, &["select", "choose"], false).await
+}
+
+pub async fn expand(
+    connection: &AccessibilityConnection,
+    backend_ref: &str,
+) -> Result<bool, BackendError> {
+    invoke_preferred_action(connection, backend_ref, &["expand", "open"], false).await
+}
+
+pub async fn collapse(
+    connection: &AccessibilityConnection,
+    backend_ref: &str,
+) -> Result<bool, BackendError> {
+    invoke_preferred_action(connection, backend_ref, &["collapse", "close"], false).await
+}
+
+pub async fn toggle(
+    connection: &AccessibilityConnection,
+    backend_ref: &str,
+) -> Result<bool, BackendError> {
+    invoke_preferred_action(
+        connection,
+        backend_ref,
+        &["toggle", "check", "uncheck"],
+        false,
     )
     .await
 }
@@ -69,6 +117,7 @@ pub async fn invoke_secondary_action(
         connection,
         backend_ref,
         &["showmenu", "popup", "menu", "contextmenu", "openmenu"],
+        false,
     )
     .await
 }
@@ -181,6 +230,7 @@ async fn invoke_preferred_action(
     connection: &AccessibilityConnection,
     backend_ref: &str,
     preferred_names: &[&str],
+    fallback_to_first: bool,
 ) -> Result<bool, BackendError> {
     let object_ref = parse_backend_ref(backend_ref)?;
     let accessible = object_ref
@@ -214,19 +264,13 @@ async fn invoke_preferred_action(
         )
     })?;
 
-    let preferred_index = actions
-        .iter()
-        .position(|candidate| {
-            let normalized = candidate
-                .name
-                .trim()
-                .to_ascii_lowercase()
-                .replace([' ', '-'], "");
-            preferred_names
-                .iter()
-                .any(|preferred| normalized == preferred.to_ascii_lowercase())
-        })
-        .unwrap_or(0);
+    let Some(preferred_index) = preferred_action_index(
+        actions.iter().map(|candidate| candidate.name.as_str()),
+        preferred_names,
+        fallback_to_first,
+    ) else {
+        return Ok(false);
+    };
 
     action
         .do_action(i32::try_from(preferred_index).unwrap_or(0))
@@ -237,6 +281,32 @@ async fn invoke_preferred_action(
                 format!("failed to invoke AT-SPI action on {backend_ref}: {error}"),
             )
         })
+}
+
+fn preferred_action_index<'a>(
+    action_names: impl IntoIterator<Item = &'a str>,
+    preferred_names: &[&str],
+    fallback_to_first: bool,
+) -> Option<usize> {
+    let mut found_any = false;
+    for (index, action_name) in action_names.into_iter().enumerate() {
+        found_any = true;
+        let normalized = normalize_action(action_name);
+        if preferred_names
+            .iter()
+            .any(|preferred| normalized == normalize_action(preferred))
+        {
+            return Some(index);
+        }
+    }
+    (fallback_to_first && found_any).then_some(0)
+}
+
+fn normalize_action(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '-', '_'], "")
 }
 
 fn parse_backend_ref(backend_ref: &str) -> Result<atspi::ObjectRefOwned, BackendError> {
@@ -265,7 +335,7 @@ fn parse_backend_ref(backend_ref: &str) -> Result<atspi::ObjectRefOwned, Backend
 
 #[cfg(test)]
 mod tests {
-    use super::parse_backend_ref;
+    use super::{parse_backend_ref, preferred_action_index};
 
     #[test]
     fn parses_backend_ref_format() {
@@ -273,5 +343,33 @@ mod tests {
             parse_backend_ref(":1.7:/org/a11y/example/path").expect("backend ref should parse");
         assert_eq!(parsed.name().map(|name| name.as_str()), Some(":1.7"));
         assert_eq!(parsed.path().as_str(), "/org/a11y/example/path");
+    }
+
+    #[test]
+    fn strict_preferred_action_index_does_not_fall_back_to_first_action() {
+        assert_eq!(
+            preferred_action_index(["press", "open"], &["select", "choose"], false),
+            None
+        );
+    }
+
+    #[test]
+    fn default_action_index_can_fall_back_to_first_action() {
+        assert_eq!(
+            preferred_action_index(["custom"], &["click", "press"], true),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn preferred_action_index_normalizes_names() {
+        assert_eq!(
+            preferred_action_index(["Show Menu"], &["showmenu"], false),
+            Some(0)
+        );
+        assert_eq!(
+            preferred_action_index(["context_menu"], &["contextmenu"], false),
+            Some(0)
+        );
     }
 }

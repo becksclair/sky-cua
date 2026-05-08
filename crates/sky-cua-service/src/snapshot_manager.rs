@@ -94,6 +94,12 @@ mod tests {
             capabilities: ToolCapabilities {
                 list_apps: unavailable(),
                 get_app_state: unavailable(),
+                focus_element: unavailable(),
+                activate_element: unavailable(),
+                select_element: unavailable(),
+                expand_element: unavailable(),
+                collapse_element: unavailable(),
+                toggle_element: unavailable(),
                 click: unavailable(),
                 perform_secondary_action: unavailable(),
                 scroll: unavailable(),
