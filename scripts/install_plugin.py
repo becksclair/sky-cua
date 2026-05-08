@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 from pathlib import Path
 
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DIST_PLUGIN_ROOT,
+    copytree_replace_preserving_platform_binaries,
     ensure_bundle_structure,
     ensure_executable,
     installed_plugin_root,
@@ -20,11 +20,11 @@ from _plugin_bundle import (
 
 def install_bundle(bundle_root: Path, destination: Path, symlink: bool) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    remove_path(destination)
     if symlink:
+        remove_path(destination)
         os.symlink(bundle_root, destination, target_is_directory=True)
     else:
-        shutil.copytree(bundle_root, destination)
+        copytree_replace_preserving_platform_binaries(bundle_root, destination)
     ensure_bundle_structure(destination)
     for binary_name in runtime_binary_names():
         ensure_executable(destination / "bin" / binary_name)

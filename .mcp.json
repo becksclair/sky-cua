@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "computer-use": {
-      "command": "/bin/sh",
-      "args": ["-c", "exec ./bin/sky-cua-client mcp"],
+      "command": "./bin/sky-cua-client",
+      "args": ["mcp"],
       "env_vars": [
         "DBUS_SESSION_BUS_ADDRESS",
         "DESKTOP_SESSION",
@@ -12,6 +12,7 @@
         "SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT",
         "SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH",
         "SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY",
+        "SKY_CUA_SERVICE_TCP_ADDR",
         "SKY_CUA_SERVICE_SOCKET_PATH",
         "WAYLAND_DISPLAY",
         "XDG_CURRENT_DESKTOP",

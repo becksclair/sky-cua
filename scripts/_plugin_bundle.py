@@ -29,8 +29,20 @@ def executable_name(name: str) -> str:
     return name
 
 
+def platform_runtime_binary_names(*, windows: bool) -> list[str]:
+    suffix = ".exe" if windows else ""
+    return [f"sky-cua-client{suffix}", f"sky-cua-service{suffix}"]
+
+
+def all_runtime_binary_names() -> list[str]:
+    return [
+        *platform_runtime_binary_names(windows=False),
+        *platform_runtime_binary_names(windows=True),
+    ]
+
+
 def runtime_binary_names() -> list[str]:
-    return [executable_name("sky-cua-client"), executable_name("sky-cua-service")]
+    return platform_runtime_binary_names(windows=sys.platform == "win32")
 
 
 def build_bundle() -> None:
@@ -38,8 +50,6 @@ def build_bundle() -> None:
 
 
 def mcp_config_source() -> Path:
-    if sys.platform == "win32":
-        return REPO_ROOT / ".mcp.windows.json"
     return REPO_ROOT / ".mcp.json"
 
 
@@ -62,6 +72,34 @@ def remove_path(path: Path) -> None:
 def copytree_replace(src: Path, dst: Path) -> None:
     remove_path(dst)
     shutil.copytree(src, dst)
+
+
+def copytree_replace_preserving_platform_binaries(src: Path, dst: Path) -> None:
+    preserved_root = dst.parent / f".{dst.name}.preserved-bin"
+    remove_path(preserved_root)
+    preserved: list[tuple[str, Path]] = []
+    for binary_name in all_runtime_binary_names():
+        source_binary = src / "bin" / binary_name
+        destination_binary = dst / "bin" / binary_name
+        if source_binary.exists() or not destination_binary.exists():
+            continue
+        preserved_binary = preserved_root / binary_name
+        preserved_binary.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(destination_binary, preserved_binary)
+        preserved.append((binary_name, preserved_binary))
+
+    try:
+        copytree_replace(src, dst)
+        for binary_name, preserved_binary in preserved:
+            restored_binary = dst / "bin" / binary_name
+            if restored_binary.exists():
+                continue
+            restored_binary.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(preserved_binary, restored_binary)
+            if not binary_name.endswith(".exe"):
+                ensure_executable(restored_binary)
+    finally:
+        remove_path(preserved_root)
 
 
 def stop_windows_cache_processes(cache_root: Path) -> None:
@@ -99,8 +137,10 @@ def ensure_bundle_structure(root: Path) -> None:
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise FileNotFoundError(f"plugin bundle is missing required paths: {missing}")
-    for binary_name in runtime_binary_names():
-        ensure_executable(root / "bin" / binary_name)
+    for binary_name in all_runtime_binary_names():
+        binary_path = root / "bin" / binary_name
+        if binary_path.exists() and not binary_name.endswith(".exe"):
+            ensure_executable(binary_path)
 
 
 def installed_plugin_root(codex_home: Path) -> Path:

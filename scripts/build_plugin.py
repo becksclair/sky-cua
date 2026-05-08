@@ -11,6 +11,7 @@ from pathlib import Path
 from _plugin_bundle import (
     DIST_PLUGIN_ROOT,
     REPO_ROOT,
+    all_runtime_binary_names,
     ensure_bundle_structure,
     ensure_executable,
     mcp_config_source,
@@ -44,8 +45,7 @@ def run_cargo_build(env: dict[str, str] | None = None) -> subprocess.CompletedPr
         check=False,
         env=env,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
 
 
@@ -130,6 +130,26 @@ def stage_bundle(bundle_root: Path) -> None:
         destination = bin_dir / binary_name
         shutil.copy2(source, destination)
         ensure_executable(destination)
+    for binary_name in all_runtime_binary_names():
+        destination = bin_dir / binary_name
+        if destination.exists():
+            continue
+        source = next(
+            (
+                candidate
+                for candidate in [
+                    bundle_root / "bin" / binary_name,
+                    REPO_ROOT / "bin" / binary_name,
+                ]
+                if candidate.exists()
+            ),
+            None,
+        )
+        if source is None:
+            continue
+        shutil.copy2(source, destination)
+        if not binary_name.endswith(".exe"):
+            ensure_executable(destination)
 
     ensure_bundle_structure(temp_root)
     remove_path(bundle_root)

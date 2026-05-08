@@ -23,6 +23,7 @@ from _plugin_bundle import (
     RELEASE_PLUGIN_ID,
     build_bundle,
     copytree_replace,
+    copytree_replace_preserving_platform_binaries,
     ensure_bundle_structure,
     marketplace_manifest_path,
     release_plugin_root,
@@ -195,7 +196,7 @@ def install_release_bundle(bundle_root: Path, marketplace_root: Path) -> Path:
     ensure_bundle_structure(source)
     destination = release_plugin_root(marketplace_root)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    copytree_replace(source, destination)
+    copytree_replace_preserving_platform_binaries(source, destination)
     ensure_bundle_structure(destination)
     return destination
 

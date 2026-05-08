@@ -14,6 +14,7 @@ import deploy_release_plugin as release_deploy
 from _app_server_harness import build_schema_accept_value, response_contains_computer_use_server
 from _plugin_bundle import (
     RELEASE_PLUGIN_ID,
+    all_runtime_binary_names,
     codex_config_path,
     ensure_apps_feature_disabled,
     ensure_fast_service_tier,
@@ -70,6 +71,15 @@ def test_runtime_binary_names_match_host_platform() -> None:
     ]
 
 
+def test_all_runtime_binary_names_include_linux_and_windows_binaries() -> None:
+    assert all_runtime_binary_names() == [
+        "sky-cua-client",
+        "sky-cua-service",
+        "sky-cua-client.exe",
+        "sky-cua-service.exe",
+    ]
+
+
 def test_build_bundle_inputs_are_selected_from_git_index(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -94,6 +104,153 @@ def test_build_bundle_inputs_are_selected_from_git_index(
     ]
 
 
+def write_minimal_bundle(root: Path, *, binaries: list[str]) -> None:
+    (root / ".codex-plugin").mkdir(parents=True)
+    (root / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"version": "0.1.0"}),
+        encoding="utf-8",
+    )
+    (root / ".mcp.json").write_text("{}", encoding="utf-8")
+    (root / "skills" / "computer-use-workflows").mkdir(parents=True)
+    (root / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
+        "skill",
+        encoding="utf-8",
+    )
+    (root / "resources" / "app-instructions").mkdir(parents=True)
+    (root / "resources" / "app-instructions" / "index.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    (root / "bin").mkdir(parents=True)
+    for binary_name in binaries:
+        (root / "bin" / binary_name).write_text(binary_name, encoding="utf-8")
+
+
+def test_stage_bundle_preserves_existing_other_platform_binaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle_root = tmp_path / "dist" / "plugin" / "sky-cua"
+    current_binaries = runtime_binary_names()
+    other_binaries = [name for name in all_runtime_binary_names() if name not in current_binaries]
+    write_minimal_bundle(bundle_root, binaries=other_binaries)
+    (tmp_path / ".mcp.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".codex-plugin").mkdir()
+    (tmp_path / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"version": "0.1.0"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "skills" / "computer-use-workflows").mkdir(parents=True)
+    (tmp_path / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
+        "skill",
+        encoding="utf-8",
+    )
+    (tmp_path / "resources" / "app-instructions").mkdir(parents=True)
+    (tmp_path / "resources" / "app-instructions" / "index.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    target_release = tmp_path / "target" / "release"
+    target_release.mkdir(parents=True)
+    for binary_name in current_binaries:
+        (target_release / binary_name).write_text(f"fresh {binary_name}", encoding="utf-8")
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        build_plugin,
+        "tracked_bundle_files",
+        lambda: [
+            Path(".codex-plugin/plugin.json"),
+            Path("skills/computer-use-workflows/SKILL.md"),
+            Path("resources/app-instructions/index.json"),
+        ],
+    )
+
+    build_plugin.stage_bundle(bundle_root)
+
+    for binary_name in current_binaries:
+        assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == (
+            f"fresh {binary_name}"
+        )
+    for binary_name in other_binaries:
+        assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == binary_name
+
+
+def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle_root = tmp_path / "dist" / "plugin" / "sky-cua"
+    current_binaries = runtime_binary_names()
+    other_binaries = [name for name in all_runtime_binary_names() if name not in current_binaries]
+    write_minimal_bundle(bundle_root, binaries=[])
+    (tmp_path / ".mcp.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".codex-plugin").mkdir()
+    (tmp_path / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"version": "0.1.0"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "skills" / "computer-use-workflows").mkdir(parents=True)
+    (tmp_path / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
+        "skill",
+        encoding="utf-8",
+    )
+    (tmp_path / "resources" / "app-instructions").mkdir(parents=True)
+    (tmp_path / "resources" / "app-instructions" / "index.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    (tmp_path / "target" / "release").mkdir(parents=True)
+    for binary_name in current_binaries:
+        (tmp_path / "target" / "release" / binary_name).write_text(
+            f"fresh {binary_name}",
+            encoding="utf-8",
+        )
+    (tmp_path / "bin").mkdir()
+    for binary_name in other_binaries:
+        (tmp_path / "bin" / binary_name).write_text(f"repo {binary_name}", encoding="utf-8")
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        build_plugin,
+        "tracked_bundle_files",
+        lambda: [
+            Path(".codex-plugin/plugin.json"),
+            Path("skills/computer-use-workflows/SKILL.md"),
+            Path("resources/app-instructions/index.json"),
+        ],
+    )
+
+    build_plugin.stage_bundle(bundle_root)
+
+    for binary_name in current_binaries:
+        assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == (
+            f"fresh {binary_name}"
+        )
+    for binary_name in other_binaries:
+        assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == (
+            f"repo {binary_name}"
+        )
+
+
+def test_release_install_preserves_existing_other_platform_binaries(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "marketplace"
+    source = tmp_path / "bundle"
+    destination = release_plugin_root(marketplace_root)
+    current_binaries = runtime_binary_names()
+    other_binaries = [name for name in all_runtime_binary_names() if name not in current_binaries]
+    write_minimal_bundle(source, binaries=current_binaries)
+    write_minimal_bundle(destination, binaries=other_binaries)
+
+    installed = release_deploy.install_release_bundle(source, marketplace_root)
+
+    assert installed == destination
+    for binary_name in current_binaries:
+        assert (destination / "bin" / binary_name).read_text(encoding="utf-8") == binary_name
+    for binary_name in other_binaries:
+        assert (destination / "bin" / binary_name).read_text(encoding="utf-8") == binary_name
+
+
 def test_build_release_binaries_retries_windows_sccache_shim_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -106,15 +263,13 @@ def test_build_release_binaries_retries_windows_sccache_shim_failure(
         check: bool,
         env: dict[str, str] | None = None,
         text: bool,
-        stdout: int,
-        stderr: int,
+        capture_output: bool,
     ) -> subprocess.CompletedProcess[str]:
         assert _command == build_plugin.CARGO_BUILD_COMMAND
         assert cwd == build_plugin.REPO_ROOT
         assert check is False
         assert text is True
-        assert stdout == subprocess.PIPE
-        assert stderr == subprocess.PIPE
+        assert capture_output is True
         calls.append(env)
         if len(calls) == 1:
             return subprocess.CompletedProcess(
@@ -150,10 +305,10 @@ def test_build_release_binaries_does_not_retry_unrelated_failure(
         check: bool,
         env: dict[str, str] | None = None,
         text: bool,
-        stdout: int,
-        stderr: int,
+        capture_output: bool,
     ) -> subprocess.CompletedProcess[str]:
         nonlocal calls
+        assert capture_output is True
         calls += 1
         return subprocess.CompletedProcess(command, 101, stdout="", stderr="ordinary cargo error")
 

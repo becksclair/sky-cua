@@ -13,7 +13,8 @@ packaged adapter around that runtime, not the runtime boundary itself.
 ## What Works
 
 - portable MCP server entrypoint through `sky-cua-client mcp`
-- Codex plugin packaging through `.codex-plugin/plugin.json` and `.mcp.json`
+- Codex plugin packaging through `.codex-plugin/plugin.json` and one
+  cross-platform `.mcp.json`
 - split Rust client/service runtime with isolated Linux socket support via
   `SKY_CUA_SERVICE_SOCKET_PATH` and Windows loopback endpoint support via
   `SKY_CUA_SERVICE_TCP_ADDR`
@@ -88,7 +89,9 @@ python3 scripts/deploy_release_plugin.py
 local marketplace under `~/.agents/sky-cua-marketplace`, installs it through
 Codex, and enables `sky-cua@sky-cua-local` in `~/.codex/config.toml`. The deploy
 scripts switch those two plugin ids mutually so Codex does not see duplicate
-`computer-use` MCP servers.
+`computer-use` MCP servers. Deploys preserve already-staged binaries for other
+platforms, so rebuilding on Linux does not delete Windows `.exe` binaries from
+the local marketplace and vice versa.
 
 Reset persisted portal restore tokens:
 

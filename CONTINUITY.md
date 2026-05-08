@@ -12,7 +12,7 @@ Build a Linux-first Codex Computer Use plugin with a split Rust client/service a
   - `sky-cua-service` selects Linux or Windows through a backend factory
   - Windows client/service IPC uses loopback TCP via `SKY_CUA_SERVICE_TCP_ADDR`
   - `sky-cua-windows` provides Win32 top-level app discovery, GDI screenshot capture, fallback window elements, and SendInput physical actions
-  - the Windows bundle stages `sky-cua-client.exe` / `sky-cua-service.exe` and uses `.mcp.windows.json` as the bundled `.mcp.json`
+  - the plugin uses one cross-platform `.mcp.json` that launches `./bin/sky-cua-client`; Windows resolves the sibling `.exe`, and release/debug deploys preserve other-platform binaries already staged in the bundle or marketplace
   - Windows v1 is intentionally fallback-oriented; rich UI Automation child trees and semantic invoke/value routing are not implemented yet
   - Windows capture/action coordinates now use the same observe-act contract as the rest of the plugin: model-visible action coordinates are screenshot/stream pixels, and the backend translates them through `capture.logical_rect` to desktop pixels only at the native input boundary. Top-level Win32 fallback elements now expose screenshot-local bounds.
 - `list_apps` and targeted `get_app_state` work end to end through MCP and the internal Unix-socket daemon.
