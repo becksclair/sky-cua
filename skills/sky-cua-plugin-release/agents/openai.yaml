@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sky CUA Plugin Release"
+  short_description: "Debug and publish sky-cua plugin builds"
+  default_prompt: "Use $sky-cua-plugin-release to switch between local debug work and publishing the Heliasar release plugin."
