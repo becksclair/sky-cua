@@ -1,20 +1,20 @@
 {
   "name": "sky-cua",
   "version": "0.1.0",
-  "description": "Codex adapter for the Linux-first sky-cua MCP Computer Use runtime.",
+  "description": "Codex adapter for the cross-platform sky-cua MCP Computer Use runtime.",
   "author": {
-    "name": "Bex Clair"
+    "name": "Rebecca Clair"
   },
   "license": "MIT",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "Linux Computer Use",
-    "shortDescription": "Control Linux desktop apps through MCP",
-    "longDescription": "Linux Computer Use gives Codex access to the sky-cua MCP desktop-control runtime, built around accessibility, portal-mediated capture and input, and structured diagnostics.",
-    "developerName": "Bex Clair",
+    "displayName": "Computer Use",
+    "shortDescription": "Control desktop apps through MCP",
+    "longDescription": "Computer Use gives Codex access to the sky-cua MCP desktop-control runtime, built around native app discovery, screenshots, input, and structured diagnostics across supported platforms.",
+    "developerName": "Rebecca Clair",
     "category": "Productivity",
     "defaultPrompt": [
-      "Inspect the open Linux app and tell me what is focused",
+      "Inspect the open desktop app and tell me what is focused",
       "List the desktop apps you can currently see"
     ],
     "brandColor": "#1F2937",

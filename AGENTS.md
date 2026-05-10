@@ -2,8 +2,8 @@
 
 ## Project Snapshot
 
-`sky-cua` is a Linux-first Codex Computer Use plugin built as a Rust workspace plus Python harnesses.
-The core runtime is Rust 2024: `sky-cua-client`, `sky-cua-service`, `sky-cua-linux`, and `sky-cua-platform`.
+`sky-cua` is a cross-platform Codex Computer Use plugin built as a Rust workspace plus Python harnesses.
+The core runtime is Rust 2024: `sky-cua-client`, `sky-cua-service`, `sky-cua-platform`, and platform backends such as `sky-cua-linux` and `sky-cua-windows`.
 Python under `scripts/` builds, installs, and live-smokes the plugin through `uv`, Ruff, basedpyright, and pytest.
 Subdirectories have their own `AGENTS.md`; read the nearest one before editing files there.
 

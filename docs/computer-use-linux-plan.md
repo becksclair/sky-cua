@@ -1,4 +1,4 @@
-# Linux-first Computer Use plugin execution plan
+# Initial Linux Backend Execution Plan
 
 This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
@@ -6,7 +6,7 @@ This repository follows `/home/bex/.codex/PLANS.md`; this document must be maint
 
 ## Purpose / Big Picture
 
-This change creates the first working Linux Computer Use slice for Codex in `/home/bex/projects/sky-cua`. After this work, Codex can load a local plugin package, start a split client/service backend, probe the live Linux desktop, list currently exposed accessible applications, and fetch a structured app-state snapshot with capability diagnostics and heuristic guidance.
+This change created the first working Linux backend slice for Codex in `/home/bex/projects/sky-cua`. After this work, Codex could load a local plugin package, start a split client/service backend, probe the live Linux desktop, list currently exposed accessible applications, and fetch a structured app-state snapshot with capability diagnostics and heuristic guidance.
 
 The goal is not to pretend Linux parity is magically finished. The goal is to stand up the hard architectural seams honestly: plugin packaging, MCP transport, service lifecycle, Linux environment probing, AT-SPI discovery, and a snapshot model that action routing can build on later.
 

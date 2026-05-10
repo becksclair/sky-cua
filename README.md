@@ -1,6 +1,6 @@
 # sky-cua
 
-Linux-first MCP Computer Use runtime, with Codex plugin packaging.
+Cross-platform MCP Computer Use runtime, with Codex plugin packaging.
 
 `sky-cua` is a Rust workspace plus Python harnesses for driving desktop
 apps from agent hosts that can talk to MCP. It exposes `sky-cua-client mcp`,
@@ -136,7 +136,7 @@ For the portable runtime boundary and host-adapter expectations, see
 - Portal approval is operator-visible. If approval is not granted promptly,
   `get_app_state` reports `PortalApprovalPending` instead of hiding the wait
   behind a generic internal error.
-- AT-SPI coverage varies sharply across Linux apps and toolkits. `zenity` is a
+- AT-SPI coverage varies sharply across Linux accessibility stacks and toolkits. `zenity` is a
   reliable semantic smoke fixture; several real apps need hybrid tree plus
   screenshot-guided physical actions.
 - X11/XWayland fallback trees are practical physical-targeting hints, not rich
