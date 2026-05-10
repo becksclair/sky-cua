@@ -3,22 +3,44 @@
   "version": "0.1.0",
   "description": "Codex adapter for the cross-platform sky-cua MCP Computer Use runtime.",
   "author": {
-    "name": "Rebecca Clair"
+    "name": "Rebecca Clair",
+    "url": "https://github.com/becksclair"
   },
+  "homepage": "https://github.com/becksclair/sky-cua",
+  "repository": "https://github.com/becksclair/sky-cua",
   "license": "MIT",
+  "keywords": [
+    "codex",
+    "computer-use",
+    "desktop-control",
+    "mcp",
+    "linux",
+    "windows",
+    "wayland"
+  ],
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Computer Use",
     "shortDescription": "Control desktop apps through MCP",
     "longDescription": "Computer Use gives Codex access to the sky-cua MCP desktop-control runtime, built around native app discovery, screenshots, input, and structured diagnostics across supported platforms.",
     "developerName": "Rebecca Clair",
-    "category": "Productivity",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/becksclair/sky-cua",
+    "privacyPolicyURL": "https://openai.com/policies/row-privacy-policy/",
+    "termsOfServiceURL": "https://openai.com/policies/row-terms-of-use/",
     "defaultPrompt": [
       "Inspect the open desktop app and tell me what is focused",
       "List the desktop apps you can currently see"
     ],
     "brandColor": "#1F2937",
+    "composerIcon": "./assets/app-icon.png",
+    "logo": "./assets/app-icon.png",
     "screenshots": []
   },
-  "skills": "./skills"
+  "skills": "./skills/"
 }

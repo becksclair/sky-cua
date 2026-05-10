@@ -263,7 +263,7 @@ def main() -> int:
         "--marketplace-root",
         type=Path,
         default=DEFAULT_MARKETPLACE_ROOT,
-        help="Local marketplace root (default: ~/.agents/sky-cua-marketplace).",
+        help="Local marketplace root (default: ~/projects/heliasar-marketplace).",
     )
     parser.add_argument(
         "--bundle-root",
@@ -316,7 +316,6 @@ def main() -> int:
                 config_path,
                 plugin_id=RELEASE_PLUGIN_ID,
                 plugin_enabled=False,
-                marketplace_root=args.marketplace_root,
             )
             stop_windows_cache_processes(cache_root)
             try:
@@ -331,7 +330,6 @@ def main() -> int:
                 config_path,
                 plugin_id=RELEASE_PLUGIN_ID,
                 disabled_plugin_ids=[PLUGIN_ID],
-                marketplace_root=args.marketplace_root,
             )
             reload_mcp_servers(codex_bin, args.codex_home)
             deploy_complete = True
@@ -342,7 +340,6 @@ def main() -> int:
                 config_path,
                 plugin_id=RELEASE_PLUGIN_ID,
                 disabled_plugin_ids=[PLUGIN_ID],
-                marketplace_root=args.marketplace_root,
             )
             deploy_complete = True
     except Exception:

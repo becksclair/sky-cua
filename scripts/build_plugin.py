@@ -21,6 +21,9 @@ from _plugin_bundle import (
 
 BUNDLE_SOURCE_PATHS = [
     Path(".codex-plugin"),
+    Path(".app.json"),
+    Path("assets"),
+    Path("hooks"),
     Path("resources"),
     Path("skills"),
     Path("docs"),

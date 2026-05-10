@@ -15,13 +15,14 @@ from signal import SIGKILL, SIGTERM
 
 PLUGIN_NAME = "sky-cua"
 PLUGIN_CHANNEL = "debug"
-RELEASE_MARKETPLACE_NAME = "sky-cua-local"
+RELEASE_MARKETPLACE_NAME = "Heliasar"
 RELEASE_PLUGIN_ID = f"{PLUGIN_NAME}@{RELEASE_MARKETPLACE_NAME}"
 PLUGIN_ID = f"{PLUGIN_NAME}@{PLUGIN_CHANNEL}"
+PLUGIN_CATEGORY = "Coding"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DIST_PLUGIN_ROOT = REPO_ROOT / "dist" / "plugin" / PLUGIN_NAME
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
-DEFAULT_MARKETPLACE_ROOT = Path.home() / ".agents" / "sky-cua-marketplace"
+DEFAULT_MARKETPLACE_ROOT = Path.home() / "projects" / "heliasar-marketplace"
 INSTALLED_PLUGIN_ROOT = (
     DEFAULT_CODEX_HOME / "plugins" / "cache" / PLUGIN_CHANNEL / PLUGIN_NAME / "local"
 )
@@ -242,7 +243,7 @@ def write_release_marketplace(marketplace_root: Path) -> Path:
     manifest = {
         "name": RELEASE_MARKETPLACE_NAME,
         "interface": {
-            "displayName": "Sky CUA Local",
+            "displayName": RELEASE_MARKETPLACE_NAME,
         },
         "plugins": [
             {
@@ -251,6 +252,11 @@ def write_release_marketplace(marketplace_root: Path) -> Path:
                     "source": "local",
                     "path": f"./plugins/{PLUGIN_NAME}",
                 },
+                "policy": {
+                    "installation": "AVAILABLE",
+                    "authentication": "ON_INSTALL",
+                },
+                "category": PLUGIN_CATEGORY,
             }
         ],
     }

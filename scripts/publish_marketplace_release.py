@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import subprocess
+from pathlib import Path
+
+from _plugin_bundle import (
+    DEFAULT_CODEX_HOME,
+    DEFAULT_MARKETPLACE_ROOT,
+    DIST_PLUGIN_ROOT,
+    PLUGIN_ID,
+    PLUGIN_NAME,
+    RELEASE_MARKETPLACE_NAME,
+    RELEASE_PLUGIN_ID,
+    build_bundle,
+    update_codex_config,
+    write_release_marketplace,
+)
+from deploy_release_plugin import (
+    install_release_bundle,
+    install_with_codex,
+    plugin_version,
+    reload_mcp_servers,
+    resolve_codex_bin,
+)
+
+DEFAULT_MARKETPLACE_SOURCE = "becksclair/heliasar-marketplace"
+
+
+def run(
+    command: list[str], *, cwd: Path | None = None, check: bool = True
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, cwd=cwd, check=check, text=True)
+
+
+def git_has_head(repo_root: Path) -> bool:
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=repo_root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def git_has_changes(repo_root: Path) -> bool:
+    result = subprocess.run(
+        ["git", "status", "--porcelain", "--", ".agents", "plugins"],
+        cwd=repo_root,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    return bool(result.stdout.strip())
+
+
+def commit_marketplace(repo_root: Path, version: str) -> bool:
+    run(["git", "add", ".agents/plugins/marketplace.json", f"plugins/{PLUGIN_NAME}"], cwd=repo_root)
+    if not git_has_changes(repo_root):
+        return False
+    message = f"Update {PLUGIN_NAME} plugin to {version}"
+    run(["git", "commit", "-m", message], cwd=repo_root)
+    return True
+
+
+def configure_marketplace(codex_bin: Path, marketplace_source: str) -> None:
+    upgrade = run(
+        [str(codex_bin), "plugin", "marketplace", "upgrade", RELEASE_MARKETPLACE_NAME],
+        check=False,
+    )
+    if upgrade.returncode == 0:
+        return
+    run([str(codex_bin), "plugin", "marketplace", "add", marketplace_source])
+    run([str(codex_bin), "plugin", "marketplace", "upgrade", RELEASE_MARKETPLACE_NAME])
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Build, publish, and install the sky-cua release plugin through Heliasar."
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=DEFAULT_CODEX_HOME,
+        help="Codex home directory whose config.toml should enable the release plugin.",
+    )
+    parser.add_argument(
+        "--marketplace-root",
+        type=Path,
+        default=DEFAULT_MARKETPLACE_ROOT,
+        help="Local Heliasar marketplace checkout (default: ~/projects/heliasar-marketplace).",
+    )
+    parser.add_argument(
+        "--marketplace-source",
+        default=DEFAULT_MARKETPLACE_SOURCE,
+        help="Codex marketplace source for first-time setup (default: becksclair/heliasar-marketplace).",
+    )
+    parser.add_argument(
+        "--bundle-root",
+        type=Path,
+        default=DIST_PLUGIN_ROOT,
+        help="Built bundle to publish (default: dist/plugin/sky-cua).",
+    )
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="Publish the existing bundle without rebuilding first.",
+    )
+    parser.add_argument(
+        "--no-push",
+        action="store_true",
+        help="Commit the marketplace but do not push it.",
+    )
+    parser.add_argument(
+        "--skip-codex-install",
+        action="store_true",
+        help="Only stage/commit/push the marketplace; do not configure or install in Codex.",
+    )
+    parser.add_argument(
+        "--codex-bin",
+        type=Path,
+        default=None,
+        help="Codex executable used for marketplace upgrade and plugin install.",
+    )
+    args = parser.parse_args()
+
+    if not args.no_build:
+        build_bundle()
+
+    marketplace_root = args.marketplace_root.expanduser().resolve()
+    if not (marketplace_root / ".git").exists() or not git_has_head(marketplace_root):
+        raise RuntimeError(
+            f"{marketplace_root} must be a published git repository before running this script"
+        )
+
+    bundle_root = args.bundle_root.resolve()
+    installed_path = install_release_bundle(bundle_root, marketplace_root)
+    manifest_path = write_release_marketplace(marketplace_root)
+    version = plugin_version(bundle_root)
+
+    committed = commit_marketplace(marketplace_root, version)
+    if not args.no_push:
+        run(["git", "push", "origin", "main"], cwd=marketplace_root)
+
+    if not args.skip_codex_install:
+        codex_bin = resolve_codex_bin(args.codex_bin)
+        configure_marketplace(codex_bin, args.marketplace_source)
+        install_with_codex(codex_bin, args.codex_home, manifest_path)
+        update_codex_config(
+            args.codex_home / "config.toml",
+            plugin_id=RELEASE_PLUGIN_ID,
+            disabled_plugin_ids=[PLUGIN_ID],
+        )
+        reload_mcp_servers(codex_bin, args.codex_home)
+
+    print(f"marketplace_root={marketplace_root}")
+    print(f"marketplace_manifest={manifest_path}")
+    print(f"installed_path={installed_path}")
+    print(f"plugin_id={RELEASE_PLUGIN_ID}")
+    print(f"committed={str(committed).lower()}")
+    print(f"pushed={str(not args.no_push).lower()}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

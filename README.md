@@ -85,13 +85,15 @@ python3 scripts/deploy_release_plugin.py
 ```
 
 `deploy_debug_plugin.py` keeps the direct debug-cache install as
-`sky-cua@debug`. `deploy_release_plugin.py` stages a release bundle through a
-local marketplace under `~/.agents/sky-cua-marketplace`, installs it through
-Codex, and enables `sky-cua@sky-cua-local` in `~/.codex/config.toml`. The deploy
-scripts switch those two plugin ids mutually so Codex does not see duplicate
-`computer-use` MCP servers. Deploys preserve already-staged binaries for other
-platforms, so rebuilding on Linux does not delete Windows `.exe` binaries from
-the local marketplace and vice versa.
+`sky-cua@debug`. `deploy_release_plugin.py` stages a release bundle through the
+local Heliasar marketplace checkout under `~/projects/heliasar-marketplace`,
+installs it through Codex, and enables `sky-cua@Heliasar` without changing the
+configured marketplace source. `publish_marketplace_release.py` commits and
+pushes that marketplace checkout before upgrading the Codex Git marketplace.
+The deploy scripts switch debug and release plugin ids mutually so Codex does
+not see duplicate `computer-use` MCP servers. Deploys preserve already-staged
+binaries for other platforms, so rebuilding on Linux does not delete Windows
+`.exe` binaries from the local marketplace and vice versa.
 
 Reset persisted portal restore tokens:
 

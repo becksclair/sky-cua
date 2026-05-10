@@ -12,8 +12,11 @@ import pytest
 import _plugin_bundle as plugin_bundle
 import build_plugin
 import deploy_release_plugin as release_deploy
+import publish_marketplace_release
+import setup_heliasar_marketplace
 from _app_server_harness import build_schema_accept_value, response_contains_computer_use_server
 from _plugin_bundle import (
+    PLUGIN_CATEGORY,
     RELEASE_PLUGIN_ID,
     all_runtime_binary_names,
     codex_config_path,
@@ -88,7 +91,7 @@ def test_stop_unix_runtime_processes_targets_deleted_cache_process(
     if sys.platform == "win32":
         pytest.skip("Unix process cleanup is not used on Windows")
 
-    cache_root = tmp_path / "codex" / "plugins" / "cache" / "sky-cua-local"
+    cache_root = tmp_path / "codex" / "plugins" / "cache" / "Heliasar"
     deleted_exe = cache_root / "plugin-backup-old" / "sky-cua" / "0.1.0" / "bin" / "sky-cua-client"
     deleted_exe.parent.mkdir(parents=True)
 
@@ -145,6 +148,14 @@ def test_build_bundle_inputs_are_selected_from_git_index(
         Path("README.md"),
         Path("docs/kept.md"),
     ]
+
+
+def test_bundle_source_paths_include_standard_optional_plugin_roots() -> None:
+    assert Path(".codex-plugin") in build_plugin.BUNDLE_SOURCE_PATHS
+    assert Path(".app.json") in build_plugin.BUNDLE_SOURCE_PATHS
+    assert Path("assets") in build_plugin.BUNDLE_SOURCE_PATHS
+    assert Path("hooks") in build_plugin.BUNDLE_SOURCE_PATHS
+    assert Path("skills") in build_plugin.BUNDLE_SOURCE_PATHS
 
 
 def write_minimal_bundle(root: Path, *, binaries: list[str]) -> None:
@@ -358,8 +369,13 @@ def test_release_marketplace_helpers_use_local_marketplace_shape(tmp_path: Path)
         "source": "local",
         "path": "./plugins/sky-cua",
     }
+    assert manifest["plugins"][0]["policy"] == {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+    }
+    assert manifest["plugins"][0]["category"] == PLUGIN_CATEGORY
     assert release_plugin_root(marketplace_root) == marketplace_root / "plugins" / "sky-cua"
-    assert "[marketplaces.sky-cua-local]" in config
+    assert "[marketplaces.Heliasar]" in config
     assert str(marketplace_root.resolve()).replace("\\", "\\\\") in config
     assert f'[plugins."{RELEASE_PLUGIN_ID}"]' in config
     assert "enabled = true" in config
@@ -372,14 +388,14 @@ def test_codex_config_upsert_preserves_windows_backslashes(tmp_path: Path) -> No
     config_path.write_text(
         "\n".join(
             [
-                "[marketplaces.sky-cua-local]",
+                "[marketplaces.Heliasar]",
                 'source = "old"',
                 'source_type = "local"',
                 "",
             ]
         )
     )
-    marketplace_root = Path(r"C:\Users\bex\.agents\sky-cua-marketplace")
+    marketplace_root = Path(r"C:\Users\bex\projects\heliasar-marketplace")
 
     update_codex_config(
         config_path,
@@ -389,7 +405,7 @@ def test_codex_config_upsert_preserves_windows_backslashes(tmp_path: Path) -> No
     config = config_path.read_text()
 
     parsed = tomllib.loads(config)
-    assert parsed["marketplaces"]["sky-cua-local"]["source"] == codex_config_path(marketplace_root)
+    assert parsed["marketplaces"]["Heliasar"]["source"] == codex_config_path(marketplace_root)
     assert "C:\\\\Users\\\\bex" in config
 
 
@@ -408,6 +424,58 @@ def test_update_codex_config_can_stage_disabled_plugin_before_install(tmp_path: 
     assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is False
     assert parsed["plugins"]["sky-cua@debug"]["enabled"] is False
     assert parsed["features"]["plugins"] is True
+
+
+def test_release_deploy_preserves_existing_git_marketplace_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    marketplace_root = tmp_path / "marketplace"
+    bundle_root = tmp_path / "bundle"
+    config_path = codex_home / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            [
+                "[marketplaces.Heliasar]",
+                'source_type = "git"',
+                'source = "https://github.com/becksclair/heliasar-marketplace.git"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+
+    monkeypatch.setattr(release_deploy, "install_with_codex", lambda *_args: None)
+    monkeypatch.setattr(release_deploy, "reload_mcp_servers", lambda *_args: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "deploy_release_plugin.py",
+            "--no-build",
+            "--codex-home",
+            str(codex_home),
+            "--marketplace-root",
+            str(marketplace_root),
+            "--bundle-root",
+            str(bundle_root),
+            "--codex-bin",
+            "codex",
+        ],
+    )
+
+    assert release_deploy.main() == 0
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["marketplaces"]["Heliasar"]["source_type"] == "git"
+    assert parsed["marketplaces"]["Heliasar"]["source"] == (
+        "https://github.com/becksclair/heliasar-marketplace.git"
+    )
+    assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is True
+    assert parsed["plugins"]["sky-cua@debug"]["enabled"] is False
 
 
 def test_codex_config_upsert_updates_crlf_sections_without_duplicate_tables(tmp_path: Path) -> None:
@@ -544,3 +612,120 @@ def test_tidal_ab_playlist_names_are_variant_scoped() -> None:
 
     assert len(names) == len(set(names))
     assert all(name.startswith("Codex Favorites AB 20260424T120000Z ") for name in names)
+
+
+def test_plugin_manifest_tracks_scaffold_metadata_contract() -> None:
+    manifest_path = plugin_bundle.REPO_ROOT / ".codex-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    interface = manifest["interface"]
+
+    assert manifest["name"] == plugin_bundle.PLUGIN_NAME
+    assert manifest["mcpServers"] == "./.mcp.json"
+    assert manifest["skills"] == "./skills/"
+    assert manifest["homepage"].startswith("https://")
+    assert manifest["repository"].startswith("https://")
+    assert "computer-use" in manifest["keywords"]
+    assert interface["category"] == PLUGIN_CATEGORY
+    assert interface["capabilities"] == ["Interactive", "Read", "Write"]
+    assert interface["websiteURL"].startswith("https://")
+    assert interface["privacyPolicyURL"].startswith("https://")
+    assert interface["termsOfServiceURL"].startswith("https://")
+    assert (plugin_bundle.REPO_ROOT / interface["composerIcon"]).exists()
+    assert (plugin_bundle.REPO_ROOT / interface["logo"]).exists()
+
+
+def test_publish_marketplace_detects_staged_plugin_changes(tmp_path: Path) -> None:
+    repo_root = tmp_path / "marketplace"
+    plugin_root = repo_root / "plugins" / plugin_bundle.PLUGIN_NAME
+    plugin_root.mkdir(parents=True)
+    (repo_root / ".agents" / "plugins").mkdir(parents=True)
+    (repo_root / ".agents" / "plugins" / "marketplace.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    (plugin_root / "README.md").write_text("initial\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "add", "."],
+        cwd=repo_root,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "initial",
+        ],
+        cwd=repo_root,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+    (plugin_root / "README.md").write_text("updated\n", encoding="utf-8")
+
+    assert publish_marketplace_release.git_has_head(repo_root)
+    assert publish_marketplace_release.git_has_changes(repo_root)
+
+
+def test_publish_marketplace_preflights_git_repo_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marketplace_root = tmp_path / "marketplace"
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "publish_marketplace_release.py",
+            "--no-build",
+            "--skip-codex-install",
+            "--no-push",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--bundle-root",
+            str(bundle_root),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="published git repository"):
+        publish_marketplace_release.main()
+
+    assert not marketplace_root.exists()
+
+
+def test_setup_marketplace_checkout_expands_github_short_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str], *, cwd: Path | None = None, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, check
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(setup_heliasar_marketplace, "run", fake_run)
+
+    setup_heliasar_marketplace.ensure_marketplace_checkout(
+        tmp_path / "heliasar-marketplace",
+        "becksclair/heliasar-marketplace",
+    )
+
+    assert commands == [
+        [
+            "git",
+            "clone",
+            "https://github.com/becksclair/heliasar-marketplace.git",
+            str(tmp_path / "heliasar-marketplace"),
+        ]
+    ]

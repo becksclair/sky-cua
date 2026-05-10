@@ -106,6 +106,9 @@
   - `$REPO_ROOT/.claude-plugin/marketplace.json`
   - `~/.agents/plugins/marketplace.json`
   Codex then installs the plugin into `~/.codex/plugins/cache/$MARKETPLACE/$PLUGIN/$VERSION/` itself. Treat the cache as an install artifact, not the primary authoring surface.
+- Marketplace plugin entries should keep the full scaffold contract: `source`, `policy.installation`, `policy.authentication`, and `category`. For the Heliasar `sky-cua` release marketplace, default to `AVAILABLE`, `ON_INSTALL`, and `Coding`.
+- The release marketplace checkout is `~/projects/heliasar-marketplace`; `~/.agents/sky-cua-marketplace` is legacy state and should not receive new release publishes.
+- `scripts/build_plugin.py` should include standard optional plugin roots in its tracked source list, even when they are not currently present. That keeps future `.app.json`, `hooks/`, and `assets/` additions from being silently omitted from the distributable bundle.
 - The practical ChatGPT-auth workaround for local-plugin E2E is now proven: use a dedicated test `CODEX_HOME` with `plugins = true` **and** `features.apps = false`. With `apps = true`, live ChatGPT-auth turns from this machine report only the host harness tool world; with `apps = false`, they expose the real `mcp__computer_use__...` namespace again.
 - The direct proving artifacts for that are:
   - `artifacts/codex-exec-probe/live-chatgpt-noapps.last.json` for tool visibility
