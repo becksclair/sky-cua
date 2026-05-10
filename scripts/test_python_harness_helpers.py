@@ -18,18 +18,27 @@ from _app_server_harness import build_schema_accept_value, response_contains_com
 from _plugin_bundle import (
     PLUGIN_CATEGORY,
     RELEASE_PLUGIN_ID,
+    REQUIRED_RUNTIME_PLATFORMS,
     all_runtime_binary_names,
+    all_runtime_binary_paths,
+    bundle_entrypoint_paths,
     codex_config_path,
+    current_runtime_platform,
     ensure_apps_feature_disabled,
     ensure_fast_service_tier,
     ensure_plugin_enabled,
     ensure_plugins_feature_enabled,
     executable_name,
     marketplace_manifest_path,
+    merge_runtime_artifacts,
     release_plugin_root,
     runtime_binary_names,
+    runtime_binary_path,
+    runtime_binary_source_name,
     stop_unix_runtime_processes,
     update_codex_config,
+    update_plugin_manifest_version,
+    version_from_tag,
     write_release_marketplace,
 )
 from _tidal_workflow import tidal_playlist_prompt
@@ -78,11 +87,34 @@ def test_runtime_binary_names_match_host_platform() -> None:
 
 def test_all_runtime_binary_names_include_linux_and_windows_binaries() -> None:
     assert all_runtime_binary_names() == [
-        "sky-cua-client",
-        "sky-cua-service",
+        "runtimes/linux-x64/sky-cua-client",
+        "runtimes/linux-x64/sky-cua-service",
+        "runtimes/linux-arm64/sky-cua-client",
+        "runtimes/linux-arm64/sky-cua-service",
         "sky-cua-client.exe",
         "sky-cua-service.exe",
     ]
+
+
+def test_runtime_binary_paths_map_platform_variants() -> None:
+    assert runtime_binary_path("linux-x64", "sky-cua-client") == Path(
+        "bin/runtimes/linux-x64/sky-cua-client"
+    )
+    assert runtime_binary_path("linux-arm64", "sky-cua-service") == Path(
+        "bin/runtimes/linux-arm64/sky-cua-service"
+    )
+    assert runtime_binary_path("windows-x64", "sky-cua-client") == Path("bin/sky-cua-client.exe")
+
+
+def test_bundle_entrypoint_paths_always_include_unix_launchers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert Path("bin/sky-cua-client") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-service") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-client.exe") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-service.exe") in bundle_entrypoint_paths()
 
 
 def test_stop_unix_runtime_processes_targets_deleted_cache_process(
@@ -160,9 +192,18 @@ def test_bundle_source_paths_include_standard_optional_plugin_roots() -> None:
 
 def write_minimal_bundle(root: Path, *, binaries: list[str]) -> None:
     write_minimal_bundle_sources(root)
-    (root / "bin").mkdir(parents=True)
+    (root / "bin").mkdir(parents=True, exist_ok=True)
     for binary_name in binaries:
-        (root / "bin" / binary_name).write_text(binary_name, encoding="utf-8")
+        relative_name = binary_name
+        if binary_name in runtime_binary_names():
+            relative_name = (
+                runtime_binary_path(current_runtime_platform(), binary_name.removesuffix(".exe"))
+                .as_posix()
+                .removeprefix("bin/")
+            )
+        binary_path = root / "bin" / relative_name
+        binary_path.parent.mkdir(parents=True, exist_ok=True)
+        binary_path.write_text(binary_name, encoding="utf-8")
 
 
 def write_minimal_bundle_sources(root: Path) -> None:
@@ -172,6 +213,9 @@ def write_minimal_bundle_sources(root: Path) -> None:
         encoding="utf-8",
     )
     (root / ".mcp.json").write_text("{}", encoding="utf-8")
+    (root / "bin").mkdir(parents=True, exist_ok=True)
+    (root / "bin" / "sky-cua-client").write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / "bin" / "sky-cua-service").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "skills" / "computer-use-workflows").mkdir(parents=True)
     (root / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
         "skill",
@@ -187,6 +231,8 @@ def write_minimal_bundle_sources(root: Path) -> None:
 def tracked_minimal_bundle_files() -> list[Path]:
     return [
         Path(".codex-plugin/plugin.json"),
+        Path("bin/sky-cua-client"),
+        Path("bin/sky-cua-service"),
         Path("skills/computer-use-workflows/SKILL.md"),
         Path("resources/app-instructions/index.json"),
     ]
@@ -198,7 +244,15 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
 ) -> None:
     bundle_root = tmp_path / "dist" / "plugin" / "sky-cua"
     current_binaries = runtime_binary_names()
-    other_binaries = [name for name in all_runtime_binary_names() if name not in current_binaries]
+    current_runtime_paths = [
+        runtime_binary_path(current_runtime_platform(), name.removesuffix(".exe"))
+        for name in current_binaries
+    ]
+    other_binaries = [
+        name
+        for name in all_runtime_binary_names()
+        if Path("bin") / name not in current_runtime_paths
+    ]
     write_minimal_bundle(bundle_root, binaries=other_binaries)
     write_minimal_bundle_sources(tmp_path)
     target_release = tmp_path / "target" / "release"
@@ -215,10 +269,8 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
 
     build_plugin.stage_bundle(bundle_root)
 
-    for binary_name in current_binaries:
-        assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == (
-            f"fresh {binary_name}"
-        )
+    for binary_name, runtime_path in zip(current_binaries, current_runtime_paths, strict=True):
+        assert (bundle_root / runtime_path).read_text(encoding="utf-8") == (f"fresh {binary_name}")
     for binary_name in other_binaries:
         assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == binary_name
 
@@ -229,7 +281,15 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
 ) -> None:
     bundle_root = tmp_path / "dist" / "plugin" / "sky-cua"
     current_binaries = runtime_binary_names()
-    other_binaries = [name for name in all_runtime_binary_names() if name not in current_binaries]
+    current_runtime_paths = [
+        runtime_binary_path(current_runtime_platform(), name.removesuffix(".exe"))
+        for name in current_binaries
+    ]
+    other_binaries = [
+        name
+        for name in all_runtime_binary_names()
+        if Path("bin") / name not in current_runtime_paths
+    ]
     write_minimal_bundle(bundle_root, binaries=[])
     write_minimal_bundle_sources(tmp_path)
     (tmp_path / "target" / "release").mkdir(parents=True)
@@ -238,9 +298,11 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
             f"fresh {binary_name}",
             encoding="utf-8",
         )
-    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin").mkdir(exist_ok=True)
     for binary_name in other_binaries:
-        (tmp_path / "bin" / binary_name).write_text(f"repo {binary_name}", encoding="utf-8")
+        binary_path = tmp_path / "bin" / binary_name
+        binary_path.parent.mkdir(parents=True, exist_ok=True)
+        binary_path.write_text(f"repo {binary_name}", encoding="utf-8")
 
     monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
@@ -251,10 +313,8 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
 
     build_plugin.stage_bundle(bundle_root)
 
-    for binary_name in current_binaries:
-        assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == (
-            f"fresh {binary_name}"
-        )
+    for binary_name, runtime_path in zip(current_binaries, current_runtime_paths, strict=True):
+        assert (bundle_root / runtime_path).read_text(encoding="utf-8") == (f"fresh {binary_name}")
     for binary_name in other_binaries:
         assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == (
             f"repo {binary_name}"
@@ -266,17 +326,90 @@ def test_release_install_preserves_existing_other_platform_binaries(tmp_path: Pa
     source = tmp_path / "bundle"
     destination = release_plugin_root(marketplace_root)
     current_binaries = runtime_binary_names()
-    other_binaries = [name for name in all_runtime_binary_names() if name not in current_binaries]
-    write_minimal_bundle(source, binaries=current_binaries)
+    current_runtime_paths = [
+        runtime_binary_path(current_runtime_platform(), name.removesuffix(".exe"))
+        for name in current_binaries
+    ]
+    other_binaries = [
+        name
+        for name in all_runtime_binary_names()
+        if Path("bin") / name not in current_runtime_paths
+    ]
+    write_minimal_bundle(
+        source,
+        binaries=[path.as_posix().removeprefix("bin/") for path in current_runtime_paths],
+    )
     write_minimal_bundle(destination, binaries=other_binaries)
 
     installed = release_deploy.install_release_bundle(source, marketplace_root)
 
     assert installed == destination
-    for binary_name in current_binaries:
-        assert (destination / "bin" / binary_name).read_text(encoding="utf-8") == binary_name
+    for _binary_name, runtime_path in zip(current_binaries, current_runtime_paths, strict=True):
+        assert (destination / runtime_path).read_text(
+            encoding="utf-8"
+        ) == runtime_path.as_posix().removeprefix("bin/")
     for binary_name in other_binaries:
         assert (destination / "bin" / binary_name).read_text(encoding="utf-8") == binary_name
+
+
+def test_merge_runtime_artifacts_requires_all_platforms(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    artifacts_root = tmp_path / "artifacts"
+    write_minimal_bundle_sources(bundle_root)
+    for platform_id in REQUIRED_RUNTIME_PLATFORMS:
+        platform_root = artifacts_root / platform_id
+        platform_root.mkdir(parents=True)
+        for binary_name in ["sky-cua-client", "sky-cua-service"]:
+            source_name = runtime_binary_source_name(platform_id, binary_name)
+            (platform_root / source_name).write_text(
+                f"{platform_id}/{source_name}",
+                encoding="utf-8",
+            )
+
+    merge_runtime_artifacts(bundle_root, artifacts_root)
+
+    for relative_path in all_runtime_binary_paths():
+        assert (bundle_root / relative_path).exists()
+
+
+def test_merge_runtime_artifacts_fails_when_variant_is_missing(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    artifacts_root = tmp_path / "artifacts"
+    write_minimal_bundle_sources(bundle_root)
+    for platform_id in REQUIRED_RUNTIME_PLATFORMS:
+        platform_root = artifacts_root / platform_id
+        platform_root.mkdir(parents=True)
+        for binary_name in ["sky-cua-client", "sky-cua-service"]:
+            if platform_id == "linux-arm64" and binary_name == "sky-cua-service":
+                continue
+            (platform_root / runtime_binary_source_name(platform_id, binary_name)).write_text(
+                "binary",
+                encoding="utf-8",
+            )
+
+    with pytest.raises(FileNotFoundError, match="linux-arm64"):
+        merge_runtime_artifacts(bundle_root, artifacts_root)
+
+
+def test_version_from_tag_updates_plugin_manifest(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle_sources(bundle_root)
+
+    version = version_from_tag("v1.2.3")
+    update_plugin_manifest_version(bundle_root, version)
+
+    manifest = json.loads((bundle_root / ".codex-plugin" / "plugin.json").read_text())
+    assert manifest["version"] == "1.2.3"
+    with pytest.raises(ValueError, match=r"vX\.Y\.Z"):
+        version_from_tag("release-1.2.3")
+    with pytest.raises(ValueError, match=r"vX\.Y\.Z"):
+        version_from_tag("v1.2.3-rc.1")
+
+
+def test_current_tag_normalizes_full_tag_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_REF_NAME", "refs/tags/v1.2.3")
+
+    assert publish_marketplace_release.current_tag() == "v1.2.3"
 
 
 def test_build_release_binaries_retries_windows_sccache_shim_failure(
@@ -506,25 +639,7 @@ def test_release_deploy_restores_cache_when_reload_fails(
     cache_version.mkdir(parents=True)
     (cache_version / "old-marker.txt").write_text("old", encoding="utf-8")
 
-    (bundle_root / ".codex-plugin").mkdir(parents=True)
-    (bundle_root / ".codex-plugin" / "plugin.json").write_text(
-        json.dumps({"version": "0.1.0"}),
-        encoding="utf-8",
-    )
-    (bundle_root / ".mcp.json").write_text("{}", encoding="utf-8")
-    (bundle_root / "skills" / "computer-use-workflows").mkdir(parents=True)
-    (bundle_root / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
-        "skill",
-        encoding="utf-8",
-    )
-    (bundle_root / "resources" / "app-instructions").mkdir(parents=True)
-    (bundle_root / "resources" / "app-instructions" / "index.json").write_text(
-        "{}",
-        encoding="utf-8",
-    )
-    (bundle_root / "bin").mkdir(parents=True)
-    for binary_name in runtime_binary_names():
-        (bundle_root / "bin" / binary_name).write_text("binary", encoding="utf-8")
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
 
     def fake_install_with_codex(
         _codex_bin: Path, codex_home_arg: Path, _manifest_path: Path

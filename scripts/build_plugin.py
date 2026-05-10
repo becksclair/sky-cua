@@ -11,12 +11,16 @@ from pathlib import Path
 from _plugin_bundle import (
     DIST_PLUGIN_ROOT,
     REPO_ROOT,
-    all_runtime_binary_names,
+    RUNTIME_BINARY_BASE_NAMES,
+    all_runtime_binary_paths,
+    bundle_entrypoint_paths,
+    current_runtime_platform,
     ensure_bundle_structure,
     ensure_executable,
     mcp_config_source,
     remove_path,
-    runtime_binary_names,
+    runtime_binary_path,
+    runtime_binary_source_name,
 )
 
 BUNDLE_SOURCE_PATHS = [
@@ -128,21 +132,33 @@ def stage_bundle(bundle_root: Path) -> None:
 
     bin_dir = temp_root / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    for binary_name in runtime_binary_names():
-        source = REPO_ROOT / "target" / "release" / binary_name
-        destination = bin_dir / binary_name
+    for entrypoint_path in bundle_entrypoint_paths():
+        source = REPO_ROOT / entrypoint_path
+        if source.exists():
+            destination = temp_root / entrypoint_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            ensure_executable(destination)
+
+    platform_id = current_runtime_platform()
+    for binary_name in RUNTIME_BINARY_BASE_NAMES:
+        source = (
+            REPO_ROOT / "target" / "release" / runtime_binary_source_name(platform_id, binary_name)
+        )
+        destination = temp_root / runtime_binary_path(platform_id, binary_name)
+        destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         ensure_executable(destination)
-    for binary_name in all_runtime_binary_names():
-        destination = bin_dir / binary_name
+    for relative_path in all_runtime_binary_paths():
+        destination = temp_root / relative_path
         if destination.exists():
             continue
         source = next(
             (
                 candidate
                 for candidate in [
-                    bundle_root / "bin" / binary_name,
-                    REPO_ROOT / "bin" / binary_name,
+                    bundle_root / relative_path,
+                    REPO_ROOT / relative_path,
                 ]
                 if candidate.exists()
             ),
@@ -150,8 +166,9 @@ def stage_bundle(bundle_root: Path) -> None:
         )
         if source is None:
             continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
-        if not binary_name.endswith(".exe"):
+        if not relative_path.name.endswith(".exe"):
             ensure_executable(destination)
 
     ensure_bundle_structure(temp_root)

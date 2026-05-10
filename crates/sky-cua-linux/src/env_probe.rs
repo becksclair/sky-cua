@@ -228,20 +228,30 @@ async fn probe_portals() -> PortalCapabilities {
 }
 
 pub fn require_supported_environment(environment: &EnvironmentInfo) -> Result<(), BackendError> {
-    match environment.session_kind {
-        SessionKind::Unsupported => Err(BackendError::new(
+    let missing_display = match environment.session_kind {
+        SessionKind::Unsupported => true,
+        SessionKind::X11 => environment.display.is_none(),
+        SessionKind::Wayland => environment.wayland_display.is_none(),
+        SessionKind::Windows => false,
+    };
+    if missing_display {
+        return Err(BackendError::new(
             BackendErrorCode::UnsupportedEnvironment,
-            "No supported Linux desktop session was detected",
-        )),
-        _ => Ok(()),
+            "No supported Linux display server was detected; set DISPLAY or WAYLAND_DISPLAY from a graphical session and retry",
+        ));
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{infer_session_kind, select_capture_backend, select_input_backend};
+    use super::{
+        infer_session_kind, require_supported_environment, select_capture_backend,
+        select_input_backend,
+    };
     use sky_cua_platform::model::{
-        CaptureBackendKind, InputBackendKind, PortalCapabilities, SessionKind,
+        CaptureBackendKind, EnvironmentInfo, InputBackendKind, PortalCapabilities,
+        SemanticBackendKind, SessionKind,
     };
 
     #[test]
@@ -255,6 +265,62 @@ mod tests {
     fn explicit_wayland_session_stays_wayland() {
         let session_kind = infer_session_kind(Some("wayland"), true, true, Some("x11-xorg"), true);
         assert_eq!(session_kind, SessionKind::Wayland);
+    }
+
+    #[test]
+    fn unsupported_environment_returns_no_display_error() {
+        let environment = EnvironmentInfo {
+            session_kind: SessionKind::Unsupported,
+            compositor: None,
+            desktop_environment: None,
+            capture_backend: CaptureBackendKind::None,
+            input_backend: InputBackendKind::None,
+            semantic_backend: SemanticBackendKind::None,
+            portal_capabilities: PortalCapabilities {
+                screencast_version: None,
+                remote_desktop_version: None,
+                screenshot_version: None,
+                available_source_types: None,
+                available_cursor_modes: None,
+                available_device_types: None,
+            },
+            xdg_session_type: None,
+            display: None,
+            wayland_display: None,
+        };
+
+        let error = require_supported_environment(&environment).expect_err("headless must error");
+
+        assert_eq!(error.code, "UnsupportedEnvironment");
+        assert!(error.message.contains("No supported Linux display server"));
+    }
+
+    #[test]
+    fn compositor_without_display_env_returns_no_display_error() {
+        let environment = EnvironmentInfo {
+            session_kind: SessionKind::Wayland,
+            compositor: Some("kde-kwin-wayland".to_string()),
+            desktop_environment: Some("KDE".to_string()),
+            capture_backend: CaptureBackendKind::PortalPipeWire,
+            input_backend: InputBackendKind::PortalRemoteDesktop,
+            semantic_backend: SemanticBackendKind::None,
+            portal_capabilities: PortalCapabilities {
+                screencast_version: Some(5),
+                remote_desktop_version: Some(2),
+                screenshot_version: Some(2),
+                available_source_types: None,
+                available_cursor_modes: None,
+                available_device_types: None,
+            },
+            xdg_session_type: None,
+            display: None,
+            wayland_display: None,
+        };
+
+        let error = require_supported_environment(&environment).expect_err("headless must error");
+
+        assert_eq!(error.code, "UnsupportedEnvironment");
+        assert!(error.message.contains("No supported Linux display server"));
     }
 
     #[test]

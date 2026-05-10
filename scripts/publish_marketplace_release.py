@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 from pathlib import Path
 
@@ -14,7 +15,10 @@ from _plugin_bundle import (
     RELEASE_MARKETPLACE_NAME,
     RELEASE_PLUGIN_ID,
     build_bundle,
+    merge_runtime_artifacts,
     update_codex_config,
+    update_plugin_manifest_version,
+    version_from_tag,
     write_release_marketplace,
 )
 from deploy_release_plugin import (
@@ -78,6 +82,20 @@ def configure_marketplace(codex_bin: Path, marketplace_source: str) -> None:
     run([str(codex_bin), "plugin", "marketplace", "upgrade", RELEASE_MARKETPLACE_NAME])
 
 
+def current_tag() -> str:
+    for name in ["GITHUB_REF_NAME", "GITEA_REF_NAME", "CI_COMMIT_TAG"]:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value.removeprefix("refs/tags/")
+    result = subprocess.run(
+        ["git", "describe", "--tags", "--exact-match"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Build, publish, and install the sky-cua release plugin through Heliasar."
@@ -111,6 +129,17 @@ def main() -> int:
         help="Publish the existing bundle without rebuilding first.",
     )
     parser.add_argument(
+        "--runtime-artifacts",
+        type=Path,
+        default=None,
+        help="Directory containing linux-x64, linux-arm64, and windows-x64 runtime artifacts.",
+    )
+    parser.add_argument(
+        "--version-from-tag",
+        action="store_true",
+        help="Set plugin.json version from the current vX.Y.Z tag before publishing.",
+    )
+    parser.add_argument(
         "--no-push",
         action="store_true",
         help="Commit the marketplace but do not push it.",
@@ -131,13 +160,18 @@ def main() -> int:
     if not args.no_build:
         build_bundle()
 
+    bundle_root = args.bundle_root.resolve()
+    if args.runtime_artifacts is not None:
+        merge_runtime_artifacts(bundle_root, args.runtime_artifacts.resolve())
+    if args.version_from_tag:
+        update_plugin_manifest_version(bundle_root, version_from_tag(current_tag()))
+
     marketplace_root = args.marketplace_root.expanduser().resolve()
     if not (marketplace_root / ".git").exists() or not git_has_head(marketplace_root):
         raise RuntimeError(
             f"{marketplace_root} must be a published git repository before running this script"
         )
 
-    bundle_root = args.bundle_root.resolve()
     installed_path = install_release_bundle(bundle_root, marketplace_root)
     manifest_path = write_release_marketplace(marketplace_root)
     version = plugin_version(bundle_root)

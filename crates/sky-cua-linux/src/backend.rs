@@ -13,7 +13,7 @@ use crate::app_policy::{AppActionPolicies, ResolvedSetValueFallbackPolicy};
 use crate::apps::discovery::{DiscoveredApp, discover_apps};
 use crate::atspi::{actions as atspi_actions, connect, snapshot::snapshot_for_app};
 use crate::coords::{center_of, desktop_to_stream};
-use crate::env_probe::probe_environment;
+use crate::env_probe::{probe_environment, require_supported_environment};
 use crate::focus::pick_focused_app;
 use crate::kwin::{self, KWinWindowInfo};
 use crate::portal::remote_desktop::{
@@ -195,7 +195,9 @@ impl LinuxDesktopBackend {
 impl DesktopBackend for LinuxDesktopBackend {
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
         let mut environment = probe_environment().await?;
-        environment.semantic_backend = if self.accessibility_connection().await.is_ok() {
+        environment.semantic_backend = if require_supported_environment(&environment).is_ok()
+            && self.accessibility_connection().await.is_ok()
+        {
             SemanticBackendKind::Atspi
         } else {
             SemanticBackendKind::None
@@ -205,6 +207,7 @@ impl DesktopBackend for LinuxDesktopBackend {
 
     async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
         let environment = self.probe_environment().await?;
+        require_supported_environment(&environment)?;
         let x11_windows = windowing::discover_windows().unwrap_or_default();
         let kwin_windows = kwin::discover_windows(&environment).unwrap_or_default();
         let mut atspi_apps = match self.discover_accessible_apps().await {
@@ -228,6 +231,7 @@ impl DesktopBackend for LinuxDesktopBackend {
         let _ = self.portal.take_lifecycle_events().await;
         let snapshot_id = new_snapshot_id();
         let environment = self.probe_environment().await?;
+        require_supported_environment(&environment)?;
         let capabilities = Self::capabilities(&environment);
         let mut diagnostics = DiagnosticBuilder::new();
         let mut portal_session_error: Option<BackendError> = None;
@@ -669,6 +673,8 @@ impl DesktopBackend for LinuxDesktopBackend {
 
     async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
         let _ = self.portal.take_lifecycle_events().await;
+        let environment = self.probe_environment().await?;
+        require_supported_environment(&environment)?;
         match request.action {
             ActionName::FocusElement => self.focus_element(request).await,
             ActionName::ActivateElement => self.activate_element(request).await,

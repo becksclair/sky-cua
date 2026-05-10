@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shutil
 import stat
@@ -26,6 +27,13 @@ DEFAULT_MARKETPLACE_ROOT = Path.home() / "projects" / "heliasar-marketplace"
 INSTALLED_PLUGIN_ROOT = (
     DEFAULT_CODEX_HOME / "plugins" / "cache" / PLUGIN_CHANNEL / PLUGIN_NAME / "local"
 )
+LINUX_X64 = "linux-x64"
+LINUX_ARM64 = "linux-arm64"
+WINDOWS_X64 = "windows-x64"
+REQUIRED_RUNTIME_PLATFORMS = (LINUX_X64, LINUX_ARM64, WINDOWS_X64)
+RUNTIME_BINARY_BASE_NAMES = ("sky-cua-client", "sky-cua-service")
+UNIX_RUNTIME_ENTRYPOINT_PATHS = tuple(Path("bin") / name for name in RUNTIME_BINARY_BASE_NAMES)
+TAG_VERSION_RE = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)$")
 
 
 def executable_name(name: str) -> str:
@@ -39,15 +47,93 @@ def platform_runtime_binary_names(*, windows: bool) -> list[str]:
     return [f"sky-cua-client{suffix}", f"sky-cua-service{suffix}"]
 
 
-def all_runtime_binary_names() -> list[str]:
+def current_runtime_platform() -> str:
+    if sys.platform == "win32":
+        return WINDOWS_X64
+    machine = platform.machine().lower()
+    if machine in {"x86_64", "amd64"}:
+        return LINUX_X64
+    if machine in {"aarch64", "arm64"}:
+        return LINUX_ARM64
+    raise RuntimeError(f"unsupported sky-cua runtime platform: {sys.platform}/{machine}")
+
+
+def runtime_binary_path(platform_id: str, binary_name: str) -> Path:
+    if binary_name not in RUNTIME_BINARY_BASE_NAMES:
+        raise ValueError(f"unknown runtime binary: {binary_name}")
+    if platform_id == WINDOWS_X64:
+        return Path("bin") / f"{binary_name}.exe"
+    if platform_id in {LINUX_X64, LINUX_ARM64}:
+        return Path("bin") / "runtimes" / platform_id / binary_name
+    raise ValueError(f"unknown runtime platform: {platform_id}")
+
+
+def runtime_binary_source_name(platform_id: str, binary_name: str) -> str:
+    runtime_binary_path(platform_id, binary_name)
+    return f"{binary_name}.exe" if platform_id == WINDOWS_X64 else binary_name
+
+
+def platform_runtime_binary_paths(platform_id: str) -> list[Path]:
+    return [runtime_binary_path(platform_id, name) for name in RUNTIME_BINARY_BASE_NAMES]
+
+
+def all_runtime_binary_paths() -> list[Path]:
     return [
-        *platform_runtime_binary_names(windows=False),
-        *platform_runtime_binary_names(windows=True),
+        path
+        for platform_id in REQUIRED_RUNTIME_PLATFORMS
+        for path in platform_runtime_binary_paths(platform_id)
     ]
+
+
+def all_runtime_binary_names() -> list[str]:
+    return [path.as_posix().removeprefix("bin/") for path in all_runtime_binary_paths()]
 
 
 def runtime_binary_names() -> list[str]:
     return platform_runtime_binary_names(windows=sys.platform == "win32")
+
+
+def runtime_entrypoint_paths() -> list[Path]:
+    return [Path("bin") / name for name in runtime_binary_names()]
+
+
+def bundle_entrypoint_paths() -> list[Path]:
+    return sorted(
+        {*UNIX_RUNTIME_ENTRYPOINT_PATHS, *runtime_entrypoint_paths()},
+        key=lambda path: path.as_posix(),
+    )
+
+
+def version_from_tag(tag: str) -> str:
+    match = TAG_VERSION_RE.match(tag)
+    if match is None:
+        raise ValueError(f"release tag must look like vX.Y.Z, got {tag!r}")
+    return match.group("version")
+
+
+def update_plugin_manifest_version(bundle_root: Path, version: str) -> None:
+    manifest_path = bundle_root / ".codex-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["version"] = version
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def merge_runtime_artifacts(bundle_root: Path, artifacts_root: Path) -> None:
+    missing: list[str] = []
+    for platform_id in REQUIRED_RUNTIME_PLATFORMS:
+        platform_root = artifacts_root / platform_id
+        for binary_name in RUNTIME_BINARY_BASE_NAMES:
+            source = platform_root / runtime_binary_source_name(platform_id, binary_name)
+            destination = bundle_root / runtime_binary_path(platform_id, binary_name)
+            if not source.exists():
+                missing.append(str(source))
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            if not destination.name.endswith(".exe"):
+                ensure_executable(destination)
+    if missing:
+        raise FileNotFoundError(f"runtime artifact set is missing required binaries: {missing}")
 
 
 def build_bundle() -> None:
@@ -83,25 +169,25 @@ def copytree_replace_preserving_platform_binaries(src: Path, dst: Path) -> None:
     preserved_root = dst.parent / f".{dst.name}.preserved-bin"
     remove_path(preserved_root)
     preserved: list[tuple[str, Path]] = []
-    for binary_name in all_runtime_binary_names():
-        source_binary = src / "bin" / binary_name
-        destination_binary = dst / "bin" / binary_name
+    for relative_binary_path in all_runtime_binary_paths():
+        source_binary = src / relative_binary_path
+        destination_binary = dst / relative_binary_path
         if source_binary.exists() or not destination_binary.exists():
             continue
-        preserved_binary = preserved_root / binary_name
+        preserved_binary = preserved_root / relative_binary_path
         preserved_binary.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(destination_binary, preserved_binary)
-        preserved.append((binary_name, preserved_binary))
+        preserved.append((relative_binary_path.as_posix(), preserved_binary))
 
     try:
         copytree_replace(src, dst)
-        for binary_name, preserved_binary in preserved:
-            restored_binary = dst / "bin" / binary_name
+        for relative_binary_path, preserved_binary in preserved:
+            restored_binary = dst / relative_binary_path
             if restored_binary.exists():
                 continue
             restored_binary.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(preserved_binary, restored_binary)
-            if not binary_name.endswith(".exe"):
+            if not relative_binary_path.endswith(".exe"):
                 ensure_executable(restored_binary)
     finally:
         remove_path(preserved_root)
@@ -215,13 +301,16 @@ def ensure_bundle_structure(root: Path) -> None:
         root / "skills" / "computer-use-workflows" / "SKILL.md",
         root / "resources" / "app-instructions" / "index.json",
     ]
-    required.extend(root / "bin" / binary_name for binary_name in runtime_binary_names())
+    required.extend(root / path for path in bundle_entrypoint_paths())
+    required.extend(
+        root / path for path in platform_runtime_binary_paths(current_runtime_platform())
+    )
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise FileNotFoundError(f"plugin bundle is missing required paths: {missing}")
-    for binary_name in all_runtime_binary_names():
-        binary_path = root / "bin" / binary_name
-        if binary_path.exists() and not binary_name.endswith(".exe"):
+    for relative_path in [*bundle_entrypoint_paths(), *all_runtime_binary_paths()]:
+        binary_path = root / relative_path
+        if binary_path.exists() and not relative_path.name.endswith(".exe"):
             ensure_executable(binary_path)
 
 
