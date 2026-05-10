@@ -28,6 +28,7 @@ from _plugin_bundle import (
     marketplace_manifest_path,
     release_plugin_root,
     remove_path,
+    stop_unix_runtime_processes,
     stop_windows_cache_processes,
     update_codex_config,
     write_release_marketplace,
@@ -306,6 +307,7 @@ def main() -> int:
     installed_path = release_root
     previous_config = config_path.read_text() if config_path.exists() else None
     try:
+        stop_unix_runtime_processes([cache_root.parent, release_root])
         if not args.skip_codex_install:
             assert codex_bin is not None
             installed_path = install_release_bundle(args.bundle_root, args.marketplace_root)

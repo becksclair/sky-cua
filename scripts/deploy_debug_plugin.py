@@ -11,6 +11,7 @@ from _plugin_bundle import (
     build_bundle,
     ensure_bundle_structure,
     installed_plugin_root,
+    stop_unix_runtime_processes,
     stop_windows_cache_processes,
     update_codex_config,
 )
@@ -45,6 +46,7 @@ def main() -> int:
     bundle_root = DIST_PLUGIN_ROOT.resolve()
     ensure_bundle_structure(bundle_root)
     destination = installed_plugin_root(args.codex_home)
+    stop_unix_runtime_processes([destination])
     stop_windows_cache_processes(destination)
     install_bundle(bundle_root, destination, args.symlink)
     config_path = args.codex_home / "config.toml"

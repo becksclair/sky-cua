@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from signal import SIGKILL, SIGTERM
 
 PLUGIN_NAME = "sky-cua"
 PLUGIN_CHANNEL = "debug"
@@ -124,6 +128,83 @@ def stop_windows_cache_processes(cache_root: Path) -> None:
         "$matches | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
     )
     subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True)
+
+
+def stop_unix_runtime_processes(search_roots: list[Path], proc_root: Path = Path("/proc")) -> None:
+    if sys.platform == "win32":
+        return
+    root_prefixes = [
+        _normalize_process_path(root.resolve()) + "/" for root in search_roots if root.exists()
+    ]
+    if not root_prefixes or not proc_root.exists():
+        return
+
+    current_pid = os.getpid()
+    matches: list[int] = []
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == current_pid:
+            continue
+        exe = _read_process_link(entry / "exe")
+        cwd = _read_process_link(entry / "cwd")
+        cmdline = _read_process_cmdline(entry / "cmdline")
+        if _is_sky_cua_runtime_process(exe, cwd, cmdline, root_prefixes):
+            matches.append(pid)
+
+    for pid in matches:
+        _terminate_process(pid)
+
+
+def _normalize_process_path(path: Path) -> str:
+    rendered = str(path)
+    if rendered.endswith(" (deleted)"):
+        rendered = rendered[: -len(" (deleted)")]
+    return os.path.abspath(rendered)
+
+
+def _read_process_link(path: Path) -> str | None:
+    try:
+        return _normalize_process_path(path.readlink())
+    except OSError:
+        return None
+
+
+def _read_process_cmdline(path: Path) -> str:
+    try:
+        return path.read_bytes().replace(b"\0", b" ").decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _is_sky_cua_runtime_process(
+    exe: str | None,
+    cwd: str | None,
+    cmdline: str,
+    root_prefixes: list[str],
+) -> bool:
+    process_name = Path(exe or "").name
+    if process_name not in {"sky-cua-client", "sky-cua-service"}:
+        return False
+    candidates = [candidate for candidate in [exe, cwd, cmdline] if candidate]
+    return any(prefix in candidate for prefix in root_prefixes for candidate in candidates)
+
+
+def _terminate_process(pid: int) -> None:
+    try:
+        os.kill(pid, SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = datetime.now(tz=UTC).timestamp() + 3
+    while datetime.now(tz=UTC).timestamp() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    with suppress(ProcessLookupError):
+        os.kill(pid, SIGKILL)
 
 
 def ensure_bundle_structure(root: Path) -> None:

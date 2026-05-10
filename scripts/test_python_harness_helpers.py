@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import _plugin_bundle as plugin_bundle
 import build_plugin
 import deploy_release_plugin as release_deploy
 from _app_server_harness import build_schema_accept_value, response_contains_computer_use_server
@@ -24,6 +25,7 @@ from _plugin_bundle import (
     marketplace_manifest_path,
     release_plugin_root,
     runtime_binary_names,
+    stop_unix_runtime_processes,
     update_codex_config,
     write_release_marketplace,
 )
@@ -78,6 +80,47 @@ def test_all_runtime_binary_names_include_linux_and_windows_binaries() -> None:
         "sky-cua-client.exe",
         "sky-cua-service.exe",
     ]
+
+
+def test_stop_unix_runtime_processes_targets_deleted_cache_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Unix process cleanup is not used on Windows")
+
+    cache_root = tmp_path / "codex" / "plugins" / "cache" / "sky-cua-local"
+    deleted_exe = cache_root / "plugin-backup-old" / "sky-cua" / "0.1.0" / "bin" / "sky-cua-client"
+    deleted_exe.parent.mkdir(parents=True)
+
+    proc_root = tmp_path / "proc"
+    match_proc = proc_root / "123"
+    match_proc.mkdir(parents=True)
+    (match_proc / "cmdline").write_bytes(str(deleted_exe).encode() + b"\0mcp")
+    (match_proc / "exe").symlink_to(f"{deleted_exe} (deleted)")
+    (match_proc / "cwd").symlink_to(f"{deleted_exe.parent.parent} (deleted)")
+
+    ignored_proc = proc_root / "456"
+    ignored_proc.mkdir()
+    (ignored_proc / "cmdline").write_bytes(b"/usr/bin/sky-cua-client\0mcp")
+    (ignored_proc / "exe").symlink_to("/usr/bin/sky-cua-client")
+    (ignored_proc / "cwd").symlink_to("/usr/bin")
+
+    terminated: set[int] = set()
+    calls: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, signal: int) -> None:
+        calls.append((pid, signal))
+        if signal == plugin_bundle.SIGTERM:
+            terminated.add(pid)
+        if signal == 0 and pid in terminated:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(plugin_bundle.os, "kill", fake_kill)
+
+    stop_unix_runtime_processes([cache_root], proc_root=proc_root)
+
+    assert (123, plugin_bundle.SIGTERM) in calls
+    assert all(pid != 456 for pid, _signal in calls)
 
 
 def test_build_bundle_inputs_are_selected_from_git_index(

@@ -4,7 +4,8 @@ use std::net::TcpStream;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -24,6 +25,7 @@ const STARTUP_HEALTH_ATTEMPTS: usize = 40;
 #[derive(Debug, Clone)]
 pub struct ServiceClient {
     endpoint: ServiceEndpoint,
+    child: Arc<Mutex<Option<Child>>>,
 }
 
 impl ServiceClient {
@@ -36,29 +38,9 @@ impl ServiceClient {
             return Ok(client);
         }
 
-        let service_path = service_path();
-        let mut command = Command::new(&service_path);
-        command
-            .arg("daemon")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        client.endpoint.configure_service_command(&mut command);
-        command
-            .spawn()
-            .with_context(|| format!("failed to spawn service at {}", service_path.display()))?;
-
-        for _ in 0..STARTUP_HEALTH_ATTEMPTS {
-            if client.startup_health().is_ok() {
-                return Ok(client);
-            }
-            thread::sleep(STARTUP_POLL_INTERVAL);
-        }
-
-        Err(anyhow!(
-            "sky-cua-service did not become healthy on {}",
-            client.endpoint
-        ))
+        client.spawn_service()?;
+        client.wait_for_startup_health()?;
+        Ok(client)
     }
 
     fn startup_health(&self) -> Result<ServiceResponse> {
@@ -74,7 +56,17 @@ impl ServiceClient {
     }
 
     pub fn call(&self, request: &ServiceRequest) -> Result<ServiceResponse> {
-        self.call_with_timeouts(request, SERVICE_READ_TIMEOUT, SERVICE_WRITE_TIMEOUT)
+        match self.call_with_timeouts(request, SERVICE_READ_TIMEOUT, SERVICE_WRITE_TIMEOUT) {
+            Ok(response) => Ok(response),
+            Err(first_error) => {
+                self.reap_exited_child()?;
+                self.spawn_service()?;
+                self.wait_for_startup_health()
+                    .with_context(|| format!("after service call failed: {first_error}"))?;
+                self.call_with_timeouts(request, SERVICE_READ_TIMEOUT, SERVICE_WRITE_TIMEOUT)
+                    .with_context(|| format!("after service call failed: {first_error}"))
+            }
+        }
     }
 
     fn call_with_timeouts(
@@ -107,7 +99,62 @@ impl ServiceClient {
     fn new() -> Result<Self> {
         Ok(Self {
             endpoint: ServiceEndpoint::new()?,
+            child: Arc::new(Mutex::new(None)),
         })
+    }
+
+    fn spawn_service(&self) -> Result<()> {
+        let mut child_guard = self
+            .child
+            .lock()
+            .map_err(|_| anyhow!("sky-cua-service child state mutex was poisoned"))?;
+        if let Some(child) = child_guard.as_mut()
+            && child.try_wait()?.is_none()
+        {
+            return Ok(());
+        }
+
+        let service_path = service_path();
+        let mut command = Command::new(&service_path);
+        command
+            .arg("daemon")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        self.endpoint.configure_service_command(&mut command);
+        let child = command
+            .spawn()
+            .with_context(|| format!("failed to spawn service at {}", service_path.display()))?;
+        *child_guard = Some(child);
+        Ok(())
+    }
+
+    fn wait_for_startup_health(&self) -> Result<()> {
+        for _ in 0..STARTUP_HEALTH_ATTEMPTS {
+            if self.startup_health().is_ok() {
+                return Ok(());
+            }
+            self.reap_exited_child()?;
+            thread::sleep(STARTUP_POLL_INTERVAL);
+        }
+
+        Err(anyhow!(
+            "sky-cua-service did not become healthy on {}",
+            self.endpoint
+        ))
+    }
+
+    fn reap_exited_child(&self) -> Result<()> {
+        let mut child_guard = self
+            .child
+            .lock()
+            .map_err(|_| anyhow!("sky-cua-service child state mutex was poisoned"))?;
+        if let Some(child) = child_guard.as_mut()
+            && child.try_wait()?.is_some()
+        {
+            *child_guard = None;
+        }
+        Ok(())
     }
 }
 
@@ -281,4 +328,147 @@ fn resolve_service_tcp_addr() -> Result<String> {
         .to_string();
     drop(listener);
     Ok(addr)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Mutex;
+
+    use sky_cua_platform::SERVICE_SOCKET_PATH_ENV;
+
+    use super::*;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn respawns_service_after_child_exits() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sky-cua-client-respawn-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        let service_script = temp_dir.join("fake-sky-cua-service");
+        let socket_path = temp_dir.join("service.sock");
+        fs::write(&service_script, FAKE_SERVICE).expect("write fake service script");
+        fs::set_permissions(&service_script, fs::Permissions::from_mode(0o755))
+            .expect("make fake service executable");
+
+        let old_service_path = std::env::var_os("SKY_CUA_SERVICE_PATH");
+        let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
+        unsafe {
+            std::env::set_var("SKY_CUA_SERVICE_PATH", &service_script);
+            std::env::set_var(SERVICE_SOCKET_PATH_ENV, &socket_path);
+        }
+
+        let result = run_respawn_test();
+
+        restore_env("SKY_CUA_SERVICE_PATH", old_service_path);
+        restore_env(SERVICE_SOCKET_PATH_ENV, old_socket_path);
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        result.expect("service client should respawn exited child");
+    }
+
+    fn run_respawn_test() -> Result<()> {
+        let client = ServiceClient::connect_or_spawn()?;
+        let first_child_id = child_id(&client)?;
+        anyhow::ensure!(
+            matches!(
+                client.call(&ServiceRequest::Health)?,
+                ServiceResponse::Health { ok: true, .. }
+            ),
+            "initial health call did not return ok"
+        );
+
+        terminate_child(&client)?;
+        anyhow::ensure!(
+            matches!(
+                client.call(&ServiceRequest::Health)?,
+                ServiceResponse::Health { ok: true, .. }
+            ),
+            "respawned health call did not return ok"
+        );
+        let second_child_id = child_id(&client)?;
+        anyhow::ensure!(
+            first_child_id != second_child_id,
+            "service child id did not change after respawn"
+        );
+        terminate_child(&client)?;
+        Ok(())
+    }
+
+    fn child_id(client: &ServiceClient) -> Result<u32> {
+        let child_guard = client
+            .child
+            .lock()
+            .map_err(|_| anyhow!("child state mutex was poisoned"))?;
+        child_guard
+            .as_ref()
+            .map(Child::id)
+            .ok_or_else(|| anyhow!("expected spawned service child"))
+    }
+
+    fn terminate_child(client: &ServiceClient) -> Result<()> {
+        let mut child_guard = client
+            .child
+            .lock()
+            .map_err(|_| anyhow!("child state mutex was poisoned"))?;
+        if let Some(child) = child_guard.as_mut() {
+            child.kill()?;
+            let _ = child.wait()?;
+        }
+        Ok(())
+    }
+
+    fn restore_env(key: &str, old_value: Option<std::ffi::OsString>) {
+        unsafe {
+            if let Some(value) = old_value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+    }
+
+    const FAKE_SERVICE: &str = r#"#!/usr/bin/env python3
+import json
+import os
+import socket
+import sys
+
+if len(sys.argv) < 2 or sys.argv[1] != "daemon":
+    raise SystemExit("expected daemon mode")
+
+path = os.environ["SKY_CUA_SERVICE_SOCKET_PATH"]
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(path)
+server.listen(8)
+
+while True:
+    conn, _ = server.accept()
+    with conn:
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        if not data:
+            continue
+        request = json.loads(data.decode("utf-8"))
+        if request.get("type") == "health":
+            response = {"type": "health", "ok": True, "service_socket": path}
+        else:
+            response = {"type": "error", "code": "UnexpectedRequest", "message": request.get("type", "<missing>")}
+        conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
+"#;
 }
