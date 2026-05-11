@@ -45,6 +45,8 @@ jobs:
         run: |
           $env:CARGO_HOME = "C:\Users\bex\.cargo"
           $env:RUSTUP_HOME = "C:\Users\bex\.rustup"
+          $env:RUSTC_WRAPPER = ""
+          $env:RUSTC_WORKSPACE_WRAPPER = ""
           $env:PATH = "C:\Users\bex\.cargo\bin;$env:PATH"
           cargo build --release --package sky-cua-client --package sky-cua-service
       - name: Package runtime artifact
