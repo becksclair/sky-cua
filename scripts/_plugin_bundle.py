@@ -5,6 +5,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -12,7 +13,6 @@ import time
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from signal import SIGKILL, SIGTERM
 
 PLUGIN_NAME = "sky-cua"
 PLUGIN_CHANNEL = "debug"
@@ -34,6 +34,8 @@ REQUIRED_RUNTIME_PLATFORMS = (LINUX_X64, LINUX_ARM64, WINDOWS_X64)
 RUNTIME_BINARY_BASE_NAMES = ("sky-cua-client", "sky-cua-service")
 UNIX_RUNTIME_ENTRYPOINT_PATHS = tuple(Path("bin") / name for name in RUNTIME_BINARY_BASE_NAMES)
 TAG_VERSION_RE = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)$")
+SIGTERM = signal.SIGTERM
+SIGKILL = getattr(signal, "SIGKILL", SIGTERM)
 
 
 def executable_name(name: str) -> str:
