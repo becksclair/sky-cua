@@ -41,20 +41,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build release runtime
-        shell: pwsh
+        shell: cmd
         run: |
-          $env:CARGO_HOME = "C:\Users\bex\.cargo"
-          $env:RUSTUP_HOME = "C:\Users\bex\.rustup"
-          $env:RUSTC_WRAPPER = ""
-          $env:RUSTC_WORKSPACE_WRAPPER = ""
-          $env:PATH = "C:\Users\bex\.cargo\bin;$env:PATH"
+          call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+          set CARGO_HOME=C:\Users\bex\.cargo
+          set RUSTUP_HOME=C:\Users\bex\.rustup
+          set RUSTC_WRAPPER=
+          set RUSTC_WORKSPACE_WRAPPER=
+          set PATH=C:\Users\bex\.cargo\bin;%PATH%
           cargo build --release --package sky-cua-client --package sky-cua-service
       - name: Package runtime artifact
-        shell: pwsh
+        shell: cmd
         run: |
-          $env:CARGO_HOME = "C:\Users\bex\.cargo"
-          $env:RUSTUP_HOME = "C:\Users\bex\.rustup"
-          $env:PATH = "C:\Users\bex\.cargo\bin;$env:PATH"
+          set CARGO_HOME=C:\Users\bex\.cargo
+          set RUSTUP_HOME=C:\Users\bex\.rustup
+          set PATH=C:\Users\bex\.cargo\bin;%PATH%
           python scripts/package_runtime_artifact.py --platform windows-x64 --output-root artifacts/runtime
       - uses: actions/upload-artifact@v3
         with:
