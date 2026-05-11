@@ -19,6 +19,21 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
 
     let compositor = detect_compositor();
     let desktop_environment = detect_desktop_environment();
+    if display_var.is_none() && wayland_display.is_none() {
+        return Ok(EnvironmentInfo {
+            session_kind: SessionKind::Unsupported,
+            compositor,
+            desktop_environment,
+            capture_backend: CaptureBackendKind::None,
+            input_backend: InputBackendKind::None,
+            semantic_backend: SemanticBackendKind::None,
+            portal_capabilities: empty_portal_capabilities(),
+            xdg_session_type,
+            display: display_var,
+            wayland_display,
+        });
+    }
+
     debug!("probing portal capabilities");
     let portal_capabilities = probe_portals().await;
     debug!(
@@ -152,6 +167,17 @@ fn select_input_backend(
     }
 }
 
+fn empty_portal_capabilities() -> PortalCapabilities {
+    PortalCapabilities {
+        screencast_version: None,
+        remote_desktop_version: None,
+        screenshot_version: None,
+        available_source_types: None,
+        available_cursor_modes: None,
+        available_device_types: None,
+    }
+}
+
 fn probe_process_names() -> Vec<String> {
     let Ok(entries) = fs::read_dir("/proc") else {
         return Vec::new();
@@ -246,13 +272,56 @@ pub fn require_supported_environment(environment: &EnvironmentInfo) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::{
-        infer_session_kind, require_supported_environment, select_capture_backend,
-        select_input_backend,
+        infer_session_kind, probe_environment, require_supported_environment,
+        select_capture_backend, select_input_backend,
     };
+    use serial_test::serial;
     use sky_cua_platform::model::{
         CaptureBackendKind, EnvironmentInfo, InputBackendKind, PortalCapabilities,
         SemanticBackendKind, SessionKind,
     };
+
+    #[tokio::test]
+    #[serial]
+    async fn probe_without_display_env_returns_unsupported_without_portal_probe() {
+        struct EnvRestore {
+            display: Option<std::ffi::OsString>,
+            wayland_display: Option<std::ffi::OsString>,
+        }
+
+        impl Drop for EnvRestore {
+            fn drop(&mut self) {
+                match self.display.take() {
+                    Some(value) => unsafe { std::env::set_var("DISPLAY", value) },
+                    None => unsafe { std::env::remove_var("DISPLAY") },
+                }
+                match self.wayland_display.take() {
+                    Some(value) => unsafe { std::env::set_var("WAYLAND_DISPLAY", value) },
+                    None => unsafe { std::env::remove_var("WAYLAND_DISPLAY") },
+                }
+            }
+        }
+
+        let _restore = EnvRestore {
+            display: std::env::var_os("DISPLAY"),
+            wayland_display: std::env::var_os("WAYLAND_DISPLAY"),
+        };
+        unsafe {
+            std::env::remove_var("DISPLAY");
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+
+        let environment = probe_environment()
+            .await
+            .expect("headless probe should produce an environment");
+
+        assert_eq!(environment.session_kind, SessionKind::Unsupported);
+        assert_eq!(environment.capture_backend, CaptureBackendKind::None);
+        assert_eq!(environment.input_backend, InputBackendKind::None);
+        assert_eq!(environment.portal_capabilities.screencast_version, None);
+        assert_eq!(environment.portal_capabilities.remote_desktop_version, None);
+        assert_eq!(environment.portal_capabilities.screenshot_version, None);
+    }
 
     #[test]
     fn explicit_x11_session_beats_host_wayland_compositor() {
