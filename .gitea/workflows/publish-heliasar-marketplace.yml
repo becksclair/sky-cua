@@ -43,11 +43,15 @@ jobs:
       - name: Build release runtime
         shell: pwsh
         run: |
+          $env:CARGO_HOME = "C:\Users\bex\.cargo"
+          $env:RUSTUP_HOME = "C:\Users\bex\.rustup"
           $env:PATH = "C:\Users\bex\.cargo\bin;$env:PATH"
           cargo build --release --package sky-cua-client --package sky-cua-service
       - name: Package runtime artifact
         shell: pwsh
         run: |
+          $env:CARGO_HOME = "C:\Users\bex\.cargo"
+          $env:RUSTUP_HOME = "C:\Users\bex\.rustup"
           $env:PATH = "C:\Users\bex\.cargo\bin;$env:PATH"
           python scripts/package_runtime_artifact.py --platform windows-x64 --output-root artifacts/runtime
       - uses: actions/upload-artifact@v3
