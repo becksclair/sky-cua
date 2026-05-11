@@ -48,14 +48,14 @@ jobs:
           set RUSTUP_HOME=C:\Users\bex\.rustup
           set RUSTC_WRAPPER=
           set RUSTC_WORKSPACE_WRAPPER=
-          set PATH=C:\Users\bex\scoop\shims;C:\Users\bex\.cargo\bin;%PATH%
+          set PATH=C:\Users\bex\scoop\apps\llvm\current\bin;C:\Users\bex\scoop\shims;C:\Users\bex\.cargo\bin;%PATH%
           cargo build --release --package sky-cua-client --package sky-cua-service
       - name: Package runtime artifact
         shell: cmd
         run: |
           set CARGO_HOME=C:\Users\bex\.cargo
           set RUSTUP_HOME=C:\Users\bex\.rustup
-          set PATH=C:\Users\bex\scoop\shims;C:\Users\bex\.cargo\bin;%PATH%
+          set PATH=C:\Users\bex\scoop\apps\llvm\current\bin;C:\Users\bex\scoop\shims;C:\Users\bex\.cargo\bin;%PATH%
           python scripts/package_runtime_artifact.py --platform windows-x64 --output-root artifacts/runtime
       - uses: actions/upload-artifact@v3
         with:
