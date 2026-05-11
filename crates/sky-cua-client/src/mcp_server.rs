@@ -145,7 +145,7 @@ fn handle_tool_call(
                 apps,
                 diagnostics,
             } => {
-                let runtime_error = list_apps_runtime_error(&diagnostics);
+                let runtime_error = list_apps_error_diagnostic(&diagnostics);
                 let is_error = runtime_error.is_some();
                 let summary = runtime_error
                     .map(|diagnostic| diagnostic.message.clone())
@@ -321,12 +321,10 @@ fn list_apps_summary(apps: &[AppInfo]) -> String {
     }
 }
 
-fn list_apps_runtime_error(
+fn list_apps_error_diagnostic(
     diagnostics: &[sky_cua_platform::model::DiagnosticEntry],
 ) -> Option<&sky_cua_platform::model::DiagnosticEntry> {
-    diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.code == "UnsupportedEnvironment")
+    diagnostics.first()
 }
 
 fn action_summary(outcome: &sky_cua_platform::model::ActionOutcome) -> String {
@@ -907,17 +905,17 @@ mod tests {
     }
 
     #[test]
-    fn list_apps_runtime_error_detects_no_display_diagnostic() {
+    fn list_apps_error_diagnostic_detects_failed_list_apps_response() {
         let diagnostics = vec![DiagnosticEntry {
-            code: "UnsupportedEnvironment".to_string(),
-            message: "No supported Linux display server was detected".to_string(),
+            code: "AccessibilityUnavailable".to_string(),
+            message: "AT-SPI is unavailable".to_string(),
             details: None,
         }];
 
-        let diagnostic = super::list_apps_runtime_error(&diagnostics)
-            .expect("no-display diagnostic should mark list_apps as an MCP error");
+        let diagnostic = super::list_apps_error_diagnostic(&diagnostics)
+            .expect("diagnostic from a failed list_apps response should mark it as an MCP error");
 
-        assert_eq!(diagnostic.code, "UnsupportedEnvironment");
+        assert_eq!(diagnostic.code, "AccessibilityUnavailable");
     }
 
     #[test]
