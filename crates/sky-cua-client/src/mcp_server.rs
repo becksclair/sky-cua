@@ -145,7 +145,11 @@ fn handle_tool_call(
                 apps,
                 diagnostics,
             } => {
-                let summary = list_apps_summary(&apps);
+                let runtime_error = list_apps_runtime_error(&diagnostics);
+                let is_error = runtime_error.is_some();
+                let summary = runtime_error
+                    .map(|diagnostic| diagnostic.message.clone())
+                    .unwrap_or_else(|| list_apps_summary(&apps));
                 Ok(json!({
                     "content": [{
                         "type": "text",
@@ -156,7 +160,7 @@ fn handle_tool_call(
                         "apps": apps,
                         "diagnostics": diagnostics
                     },
-                    "isError": false
+                    "isError": is_error
                 }))
             }
             ServiceResponse::Error { code, message } => tool_error(code, message),
@@ -315,6 +319,14 @@ fn list_apps_summary(apps: &[AppInfo]) -> String {
             preview.join("; ")
         )
     }
+}
+
+fn list_apps_runtime_error(
+    diagnostics: &[sky_cua_platform::model::DiagnosticEntry],
+) -> Option<&sky_cua_platform::model::DiagnosticEntry> {
+    diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "UnsupportedEnvironment")
 }
 
 fn action_summary(outcome: &sky_cua_platform::model::ActionOutcome) -> String {
@@ -892,6 +904,20 @@ mod tests {
         assert!(summary.contains("window_title=Untitled — Kate"));
         assert!(summary.contains("xfreerdp"));
         assert!(summary.contains("[focused candidate]"));
+    }
+
+    #[test]
+    fn list_apps_runtime_error_detects_no_display_diagnostic() {
+        let diagnostics = vec![DiagnosticEntry {
+            code: "UnsupportedEnvironment".to_string(),
+            message: "No supported Linux display server was detected".to_string(),
+            details: None,
+        }];
+
+        let diagnostic = super::list_apps_runtime_error(&diagnostics)
+            .expect("no-display diagnostic should mark list_apps as an MCP error");
+
+        assert_eq!(diagnostic.code, "UnsupportedEnvironment");
     }
 
     #[test]
