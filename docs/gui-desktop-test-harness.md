@@ -33,6 +33,18 @@ The new cross-desktop windowing code has compile/unit-test coverage, but the des
 
 The current runner is deliberately not a passing smoke: it records the selected profile under `artifacts/gui-desktop-smoke/<profile>/result.json` with `"implemented": false` and exits non-zero. Treat that artifact as a blocked-status marker only, not proof that the desktop profile works.
 
+Progress ledger:
+
+| Area | Status | Current proof | Remaining proof |
+| --- | --- | --- | --- |
+| Runner contract | Partial | `scripts/gui_desktop_smoke.py` accepts target profiles and writes blocked-status artifacts. | Start or attach to real nested sessions and run MCP actions inside them. |
+| KDE/KWin | Partial | Existing KDE host proofs cover earlier live flows; KWin parser/registry code exists. | Re-smoke through the unified registry path and record `artifacts/gui-desktop-smoke/kde/`. |
+| GNOME | Pending | GNOME Introspect and extension code paths exist. | Real GNOME Shell session proving Introspect, extension install/enable, DBus listing, and activation. |
+| COSMIC | Pending | `sky-cua-cosmic-helper` exists and is packaged for Linux. | Real COSMIC session proving listing, focused-window detection, and activation. |
+| Hyprland | Pending | `hyprctl` parser/focus code exists. | Real Hyprland session proving listing, focus dispatch, terminal enrichment, and portal behavior. |
+| i3 | Pending | `i3-msg` parser/focus code exists. | Real i3/X11 session proving listing, PID hydration, focus activation, terminal enrichment, and X11/XTest input. |
+| Browser companion | Partial | Codex Desktop Settings proof shows Browser Use and Chrome visible beside Computer Use. | Isolated Chrome/native-host protocol smoke outside Desktop Settings. |
+
 Separate from this matrix, Codex Desktop Settings proof for the bundled
 `computer-use`/`browser-use`/`chrome` compatibility lane exists under
 `artifacts/desktop-ui-proof/20260513T100515Z-browser-settings-patched-profile/`.

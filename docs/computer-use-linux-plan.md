@@ -49,6 +49,36 @@ The goal is not to pretend Linux parity is magically finished. The goal is to st
 - [x] (2026-05-13 12:00Z) Closed the KWin/X11 workspace metadata gap: KWin and X11 window structs now carry backend-native workspace values through the unified registry into public `WindowInfo.workspace`.
 - [ ] Pending live-smoke matrix: GNOME, COSMIC, Hyprland, i3, and a KDE re-smoke after the registry changes must still be proven inside real desktop sessions. Compile/unit tests cover the new registry and backend parsers, but they do not prove compositor-local listing, focus, portals, AT-SPI, extension behavior, or compositor focus side effects. The blocked matrix, intended commands, and artifact contract are tracked in `docs/gui-desktop-test-harness.md`; the current `scripts/gui_desktop_smoke.py` runner is only a scaffold that creates `artifacts/gui-desktop-smoke/<profile>/result.json` and exits non-zero until profile startup is implemented.
 
+## Current Status Ledger
+
+Complete:
+
+- Core architecture: Rust workspace, split MCP client/service, Unix-socket IPC, plugin wrappers, and installable bundle shape.
+- Linux app state: environment probing, AT-SPI app discovery, focused-app selection, flattened snapshots, screenshot capture, and structured diagnostics.
+- Action routing: semantic AT-SPI actions, snapshot-scoped target resolution, physical Wayland portal actions, X11/XTest fallback actions, and policy-gated `set_value` fallback.
+- Capture model: PipeWire primary image path, Screenshot fallback, explicit `capture.image_backend`, and downgrade diagnostics.
+- X11/XWayland fallback: window discovery, focused-window fallback snapshots, synthetic bounds, recovered child regions, structural region roles, and descendant-region targeting.
+- Portal lifecycle reporting: restore token storage, session recovery, token rotation, portal-pending diagnostics, and explicit lifecycle summaries.
+- Rich-client installed-plugin proof: app-server harness and TIDAL workflow proof artifacts remain the strongest end-to-end plugin acceptance proof.
+- Codex Desktop compatibility: `computer-use` presentation, Chrome/Browser Use companion staging, Linux native host placement, browser preflight, and Settings proof are implemented.
+- KWin/X11 workspace metadata: backend-native workspace values now reach public `WindowInfo.workspace`.
+- Documentation and plan state: current docs, OpenCode plans, and workflow skill guidance have been refreshed and committed.
+
+Partial:
+
+- Browser automation: Chrome extension resources, native host binary, native-host manifests, and Codex Desktop Browser Use visibility are implemented, but the host/extension protocol still lacks an isolated request/response smoke and first-class `browser_*` MCP tools remain deferred.
+- Cross-desktop support: GNOME, COSMIC, Hyprland, i3, KWin, and X11 adapters exist with parser/unit coverage where practical, but not all have live compositor proof.
+- Doctor/setup hardening: the tools exist and report actionable state, but more real launch environments are needed to refine blocker wording and recovery paths.
+- Regression harnessing: live KDE, X11, Krita, Kate, downgrade, app-server, and packaging smokes exist in various forms, but the new GUI desktop matrix runner is still a scaffold.
+
+Pending:
+
+- Implement `scripts/gui_desktop_smoke.py` profile startup/attach behavior for KDE, GNOME, COSMIC, Hyprland, and i3.
+- Record live compositor artifacts for every GUI profile under `artifacts/gui-desktop-smoke/<profile>/`.
+- Add an isolated Chrome/native-host protocol smoke before claiming browser automation outside Codex Desktop's existing Browser Use flow.
+- Re-run the Codex Desktop Settings proof after Desktop upstream refreshes or plugin descriptor changes.
+- Run a fresh release build/install inspection before broad release or marketplace publishing.
+
 ## Surprises & Discoveries
 
 - Observation: the remote shell environment reports `XDG_SESSION_TYPE=tty` even though the real desktop stack is a live KDE 6 Wayland session.
