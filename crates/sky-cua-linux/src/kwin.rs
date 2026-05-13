@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -14,6 +15,7 @@ pub struct KWinWindowInfo {
     pub resource_class: Option<String>,
     pub app: AppInfo,
     pub bounds: Option<RectF>,
+    pub workspace: Option<i32>,
 }
 
 pub fn kwin_window_query_available(environment: &EnvironmentInfo) -> bool {
@@ -22,7 +24,11 @@ pub fn kwin_window_query_available(environment: &EnvironmentInfo) -> bool {
             .compositor
             .as_deref()
             .is_some_and(|value| value.contains("kde-kwin-wayland"))
-        && (command_exists("gdbus") || command_exists("qdbus"))
+        && command_exists("gdbus")
+}
+
+pub fn kwin_exact_activation_available(environment: &EnvironmentInfo) -> bool {
+    kwin_window_query_available(environment) && qdbus_command().is_some()
 }
 
 pub fn discover_windows(
@@ -33,10 +39,6 @@ pub fn discover_windows(
     }
 
     let active_window = query_active_window(environment)?;
-    if !command_exists("gdbus") {
-        return Ok(active_window.into_iter().collect());
-    }
-
     let mut window_ids = query_window_runner_ids("")?;
     for query in candidate_window_queries() {
         window_ids.extend(query_window_runner_ids(&query)?);
@@ -82,6 +84,183 @@ pub fn query_active_window(
     // higher-value seam for native Wayland apps like TIDAL, so for now we
     // intentionally skip the active-window hint instead of risking a deadlock.
     Ok(None)
+}
+
+pub fn activate_window(window_id: &str) -> Result<(), BackendError> {
+    let uuid = kwin_uuid_from_window_id(window_id)?;
+    let Some(qdbus) = qdbus_command() else {
+        return Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            "KWin exact activation requires qdbus6 or qdbus on PATH",
+        ));
+    };
+
+    let script_path = write_activation_script(&uuid)?;
+    let script_path_string = script_path.display().to_string();
+    let load = run_qdbus(
+        &qdbus,
+        &[
+            "org.kde.KWin",
+            "/Scripting",
+            "org.kde.kwin.Scripting.loadScript",
+            &script_path_string,
+            "sky-cua-activate-window",
+        ],
+    );
+    let script_id = match load.and_then(|output| {
+        parse_script_id(&output).ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                format!(
+                    "KWin did not return a script id while loading activation script: {output}"
+                ),
+            )
+        })
+    }) {
+        Ok(script_id) => script_id,
+        Err(error) => {
+            let _ = fs::remove_file(&script_path);
+            return Err(error);
+        }
+    };
+
+    let script_object = format!("/Scripting/Script{script_id}");
+    let run_result = run_qdbus(
+        &qdbus,
+        &["org.kde.KWin", &script_object, "org.kde.kwin.Script.run"],
+    );
+    let _ = run_qdbus(
+        &qdbus,
+        &[
+            "org.kde.KWin",
+            "/Scripting",
+            "org.kde.kwin.Scripting.unloadScript",
+            &script_path_string,
+        ],
+    );
+    let _ = fs::remove_file(&script_path);
+    run_result.map(|_| ())
+}
+
+fn kwin_uuid_from_window_id(window_id: &str) -> Result<String, BackendError> {
+    let value = window_id
+        .trim()
+        .strip_prefix("kwin:")
+        .unwrap_or_else(|| window_id.trim())
+        .trim();
+    if is_uuid_token(value) {
+        return Ok(value.trim_matches(['{', '}']).to_ascii_lowercase());
+    }
+    Err(BackendError::new(
+        BackendErrorCode::InvalidRequest,
+        format!("KWin window id {window_id:?} is not a UUID-backed registry window id"),
+    ))
+}
+
+fn write_activation_script(uuid: &str) -> Result<PathBuf, BackendError> {
+    let mut path = env::temp_dir();
+    path.push(format!(
+        "sky-cua-kwin-activate-{}-{}.js",
+        std::process::id(),
+        uuid
+    ));
+    let mut file = fs::File::create(&path).map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            format!("failed to create KWin activation script: {error}"),
+        )
+    })?;
+    file.write_all(activation_script(uuid).as_bytes())
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                format!("failed to write KWin activation script: {error}"),
+            )
+        })?;
+    Ok(path)
+}
+
+fn activation_script(uuid: &str) -> String {
+    format!(
+        r#"const target = "{uuid}";
+function normalize(value) {{
+    return String(value || "").replace(/[{{}}]/g, "").toLowerCase();
+}}
+function candidates() {{
+    if (typeof workspace.windowList === "function") {{
+        return workspace.windowList();
+    }}
+    if (workspace.stackingOrder) {{
+        return workspace.stackingOrder;
+    }}
+    return [];
+}}
+let matched = null;
+const windows = candidates();
+for (let i = 0; i < windows.length; i++) {{
+    const window = windows[i];
+    if (normalize(window.internalId) === target || normalize(window.uuid) === target) {{
+        matched = window;
+        break;
+    }}
+}}
+if (matched === null) {{
+    print("sky-cua: no KWin window matched " + target);
+}} else {{
+    if (typeof workspace.activateWindow === "function") {{
+        workspace.activateWindow(matched);
+    }} else {{
+        workspace.activeWindow = matched;
+    }}
+    if (typeof workspace.raiseWindow === "function") {{
+        workspace.raiseWindow(matched);
+    }}
+    print("sky-cua: activated " + target);
+}}
+"#
+    )
+}
+
+fn qdbus_command() -> Option<String> {
+    ["qdbus6", "qdbus"]
+        .into_iter()
+        .find(|binary| command_exists(binary))
+        .map(str::to_string)
+}
+
+fn run_qdbus(binary: &str, args: &[&str]) -> Result<String, BackendError> {
+    let output = if command_exists("timeout") {
+        let mut timeout_args = vec!["2s", binary];
+        timeout_args.extend_from_slice(args);
+        Command::new("timeout").args(timeout_args).output()
+    } else {
+        Command::new(binary).args(args).output()
+    }
+    .map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            format!("failed to run KWin qdbus command: {error}"),
+        )
+    })?;
+    if !output.status.success() {
+        return Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            format!(
+                "KWin qdbus command failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn parse_script_id(output: &str) -> Option<String> {
+    let id = output
+        .chars()
+        .skip_while(|character| !character.is_ascii_digit())
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>();
+    (!id.is_empty()).then_some(id)
 }
 
 fn query_window_runner_ids(query: &str) -> Result<Vec<String>, BackendError> {
@@ -315,6 +494,7 @@ fn parse_window_info(output: &str, focused: bool) -> Option<KWinWindowInfo> {
         .map(|value| format!("kwin:{value}"))
         .unwrap_or_else(|| format!("kwin:{}", normalize_match_key(&name)));
     let bounds = parse_bounds(&values);
+    let workspace = parse_workspace(&values);
 
     Some(KWinWindowInfo {
         window_id: window_id.clone(),
@@ -333,6 +513,7 @@ fn parse_window_info(output: &str, focused: bool) -> Option<KWinWindowInfo> {
             is_focused_candidate: focused,
         },
         bounds,
+        workspace,
     })
 }
 
@@ -354,6 +535,9 @@ fn parse_gdbus_map(output: &str) -> HashMap<String, String> {
         "minimized",
         "resourceClass",
         "resourceName",
+        "desktop",
+        "desktops",
+        "workspace",
         "uuid",
         "width",
         "x",
@@ -391,6 +575,24 @@ fn parse_bool(value: Option<&String>) -> Option<bool> {
 
 fn parse_f64(value: Option<&String>) -> Option<f64> {
     value?.trim().parse::<f64>().ok()
+}
+
+fn parse_workspace_value(value: Option<&String>) -> Option<i32> {
+    let value = value?.trim();
+    if let Ok(parsed) = value.parse::<i32>() {
+        return Some(parsed);
+    }
+    value
+        .trim_matches(['[', ']'])
+        .split(',')
+        .map(|candidate| candidate.trim().trim_matches(['\'', '"']))
+        .find_map(|candidate| candidate.parse::<i32>().ok())
+}
+
+fn parse_workspace(values: &HashMap<String, String>) -> Option<i32> {
+    parse_workspace_value(values.get("workspace"))
+        .or_else(|| parse_workspace_value(values.get("desktop")))
+        .or_else(|| parse_workspace_value(values.get("desktops")))
 }
 
 fn parse_bounds(values: &HashMap<String, String>) -> Option<RectF> {
@@ -483,6 +685,7 @@ mod tests {
              minimized: false\n\
              resourceClass: tidal-hifi\n\
              resourceName: tidal-hifi\n\
+             workspace: 2\n\
              uuid: {71afaa3f-26ba-47a3-a07b-abc3ce9a4296}\n\
              width: 1383\n\
              x: 61\n\
@@ -501,6 +704,7 @@ mod tests {
         );
         assert_eq!(parsed.app.window_title.as_deref(), Some("TIDAL Hi-Fi"));
         assert_eq!(parsed.app.name, "tidal-hifi");
+        assert_eq!(parsed.workspace, Some(2));
         assert!(!parsed.app.is_focused_candidate);
         let bounds = parsed.bounds.expect("expected bounds");
         assert_eq!(bounds.width, 1383.0);
@@ -537,7 +741,7 @@ mod tests {
     #[test]
     fn parses_gdbus_window_info() {
         let parsed = parse_window_info(
-            "({'caption': <'TIDAL Hi-Fi'>, 'desktopFile': <'tidal-hifi'>, 'height': <999.0>, 'minimized': <false>, 'resourceClass': <'tidal-hifi'>, 'resourceName': <'tidal-hifi'>, 'uuid': <'{71afaa3f-26ba-47a3-a07b-abc3ce9a4296}'>, 'width': <1383.0>, 'x': <61.0>, 'y': <276.0>},)",
+            "({'caption': <'TIDAL Hi-Fi'>, 'desktopFile': <'tidal-hifi'>, 'height': <999.0>, 'minimized': <false>, 'resourceClass': <'tidal-hifi'>, 'resourceName': <'tidal-hifi'>, 'desktops': <['2']>, 'uuid': <'{71afaa3f-26ba-47a3-a07b-abc3ce9a4296}'>, 'width': <1383.0>, 'x': <61.0>, 'y': <276.0>},)",
             false,
         )
         .expect("expected a parsed gdbus window");
@@ -551,8 +755,30 @@ mod tests {
             Some("tidal-hifi.desktop")
         );
         assert_eq!(parsed.app.window_title.as_deref(), Some("TIDAL Hi-Fi"));
+        assert_eq!(parsed.workspace, Some(2));
         let bounds = parsed.bounds.expect("expected bounds");
         assert_eq!(bounds.width, 1383.0);
         assert_eq!(bounds.height, 999.0);
+    }
+
+    #[test]
+    fn ignores_non_numeric_kwin_workspace_values() {
+        let parsed = parse_window_info(
+            "caption: TIDAL Hi-Fi\n\
+             desktopFile: tidal-hifi\n\
+             minimized: false\n\
+             resourceClass: tidal-hifi\n\
+             resourceName: tidal-hifi\n\
+             desktops: [workspace-two]\n\
+             uuid: {71afaa3f-26ba-47a3-a07b-abc3ce9a4296}\n\
+             width: 1383\n\
+             height: 999\n\
+             x: 61\n\
+             y: 276\n",
+            false,
+        )
+        .expect("expected a parsed window");
+
+        assert_eq!(parsed.workspace, None);
     }
 }

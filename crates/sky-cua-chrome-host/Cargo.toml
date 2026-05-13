@@ -1,16 +1,15 @@
 [package]
-name = "sky-cua-client"
+name = "sky-cua-chrome-host"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "sky-cua-chrome-host"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sky-cua-platform = { path = "../sky-cua-platform" }
-tokio.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true

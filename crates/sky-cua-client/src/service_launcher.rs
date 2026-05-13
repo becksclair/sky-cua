@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use sky_cua_platform::model::{ServiceRequest, ServiceResponse};
 #[cfg(unix)]
-use sky_cua_platform::service_socket_path;
+use sky_cua_platform::{SERVICE_SOCKET_PATH_ENV, service_socket_path};
 #[cfg(windows)]
 use sky_cua_platform::{SERVICE_TCP_ADDR_ENV, service_tcp_addr};
 
@@ -22,10 +22,148 @@ const STARTUP_HEALTH_READ_TIMEOUT: Duration = Duration::from_millis(250);
 const STARTUP_HEALTH_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const STARTUP_HEALTH_ATTEMPTS: usize = 40;
+const DESKTOP_ENV_KEYS: &[&str] = &[
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DESKTOP_SESSION",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+];
 #[derive(Debug, Clone)]
 pub struct ServiceClient {
     endpoint: ServiceEndpoint,
     child: Arc<Mutex<Option<Child>>>,
+}
+
+/// Probe the active user session for missing desktop environment variables.
+/// When a host spawns the MCP server without forwarding the full desktop
+/// session (e.g., via systemd unit, remote SSH, or container entrypoint),
+/// the service backends cannot initialize. This function attempts to
+/// reconstruct the missing values from common well-known sources:
+///
+/// - `XDG_RUNTIME_DIR` from the running user's UID and /run/user
+/// - `DBUS_SESSION_BUS_ADDRESS` from the active session bus socket
+/// - `WAYLAND_DISPLAY` and `DISPLAY` from the active graphical session
+/// - `XDG_CURRENT_DESKTOP` and `XDG_SESSION_TYPE` from systemd-logind
+#[must_use]
+fn probe_desktop_env_vars() -> Vec<(String, String)> {
+    if !cfg!(target_os = "linux") {
+        return Vec::new();
+    }
+
+    let mut found = Vec::new();
+
+    // Helper: only fill if the key is currently unset or empty.
+    let needs = |key: &str| std::env::var_os(key).map(|v| v.is_empty()).unwrap_or(true);
+
+    if needs("XDG_RUNTIME_DIR") {
+        let uid = current_uid();
+        let candidate = PathBuf::from(format!("/run/user/{uid}"));
+        if candidate.is_dir() {
+            found.push((
+                "XDG_RUNTIME_DIR".to_string(),
+                candidate.to_string_lossy().to_string(),
+            ));
+        }
+    }
+
+    if needs("DBUS_SESSION_BUS_ADDRESS")
+        && let Some(runtime_dir) = found
+            .iter()
+            .find(|(k, _)| k == "XDG_RUNTIME_DIR")
+            .map(|(_, v)| PathBuf::from(v))
+            .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+    {
+        let socket = runtime_dir.join("bus");
+        if socket.exists() {
+            found.push((
+                "DBUS_SESSION_BUS_ADDRESS".to_string(),
+                format!("unix:path={}", socket.display()),
+            ));
+        }
+    }
+
+    if needs("WAYLAND_DISPLAY")
+        && let Some(runtime_dir) = found
+            .iter()
+            .find(|(k, _)| k == "XDG_RUNTIME_DIR")
+            .map(|(_, v)| PathBuf::from(v))
+            .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+    {
+        // Check for the most common Wayland socket names in order.
+        for name in &["wayland-0", "wayland-1", "wayland-2"] {
+            if runtime_dir.join(name).exists() {
+                found.push(("WAYLAND_DISPLAY".to_string(), (*name).to_string()));
+                break;
+            }
+        }
+    }
+
+    if needs("DISPLAY")
+        && let Some(display) = probe_x11_display()
+    {
+        found.push(("DISPLAY".to_string(), display));
+    }
+
+    if needs("XDG_CURRENT_DESKTOP") {
+        // Try to read from systemd-logind session or fall back to a sensible default.
+        if let Ok(output) = std::process::Command::new("loginctl")
+            .args([
+                "show-session",
+                "self",
+                "--property=DesktopEnvironment",
+                "--value",
+            ])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !stdout.is_empty() && stdout != "n/a" {
+                found.push(("XDG_CURRENT_DESKTOP".to_string(), stdout));
+            }
+        }
+    }
+
+    if needs("XDG_SESSION_TYPE") {
+        // Prefer wayland if WAYLAND_DISPLAY is present, otherwise x11 if DISPLAY is present.
+        let wayland_present = found.iter().any(|(k, _)| k == "WAYLAND_DISPLAY")
+            || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let display_present =
+            found.iter().any(|(k, _)| k == "DISPLAY") || std::env::var_os("DISPLAY").is_some();
+
+        if wayland_present {
+            found.push(("XDG_SESSION_TYPE".to_string(), "wayland".to_string()));
+        } else if display_present {
+            found.push(("XDG_SESSION_TYPE".to_string(), "x11".to_string()));
+        }
+    }
+
+    found
+}
+
+fn probe_x11_display() -> Option<String> {
+    x11_display_from_socket_root(Path::new("/tmp/.X11-unix"))
+}
+
+fn x11_display_from_socket_root(socket_root: &Path) -> Option<String> {
+    for display in 0..=2 {
+        if socket_root.join(format!("X{display}")).exists() {
+            return Some(format!(":{display}"));
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    // SAFETY: `geteuid` is a simple libc query with no preconditions.
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    0
 }
 
 impl ServiceClient {
@@ -44,11 +182,14 @@ impl ServiceClient {
     }
 
     fn startup_health(&self) -> Result<ServiceResponse> {
-        self.call_with_timeouts(
+        let desktop_vars = probe_desktop_env_vars();
+        let response = self.call_with_timeouts(
             &ServiceRequest::Health,
             STARTUP_HEALTH_READ_TIMEOUT,
             STARTUP_HEALTH_WRITE_TIMEOUT,
-        )
+        )?;
+        ensure_health_satisfies_desktop_env(&response, &desktop_vars)?;
+        Ok(response)
     }
 
     pub fn clear_portal_tokens(&self) -> Result<ServiceResponse> {
@@ -121,6 +262,15 @@ impl ServiceClient {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+
+        // Forward reconstructed desktop session env vars so the service can
+        // initialize its platform backends even when the MCP host did not pass
+        // them through.
+        let desktop_vars = probe_desktop_env_vars();
+        for (key, value) in &desktop_vars {
+            command.env(key, value);
+        }
+
         self.endpoint.configure_service_command(&mut command);
         let child = command
             .spawn()
@@ -156,6 +306,57 @@ impl ServiceClient {
         }
         Ok(())
     }
+}
+
+fn ensure_health_satisfies_desktop_env(
+    response: &ServiceResponse,
+    desktop_vars: &[(String, String)],
+) -> Result<()> {
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
+
+    let mut required = DESKTOP_ENV_KEYS
+        .iter()
+        .copied()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| (key, value))
+        })
+        .collect::<Vec<_>>();
+    for (key, value) in desktop_vars {
+        let key = key.as_str();
+        if DESKTOP_ENV_KEYS.contains(&key)
+            && !value.is_empty()
+            && !required
+                .iter()
+                .any(|(required_key, _)| *required_key == key)
+        {
+            required.push((key, value.clone()));
+        }
+    }
+    if required.is_empty() {
+        return Ok(());
+    }
+
+    let ServiceResponse::Health { desktop_env, .. } = response else {
+        return Ok(());
+    };
+    let missing = required
+        .into_iter()
+        .filter(|(key, value)| desktop_env.get(*key) != Some(value))
+        .map(|(key, _)| key)
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "existing sky-cua-service is missing repaired desktop environment keys: {}",
+        missing.join(", ")
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -199,11 +400,11 @@ impl ServiceEndpoint {
     }
 
     fn configure_service_command(&self, command: &mut Command) {
-        #[cfg(unix)]
-        let _ = command;
         match self {
             #[cfg(unix)]
-            Self::Unix(_) => {}
+            Self::Unix(path) => {
+                command.env(SERVICE_SOCKET_PATH_ENV, path);
+            }
             #[cfg(windows)]
             Self::Tcp(addr) => {
                 command.env(SERVICE_TCP_ADDR_ENV, addr);
@@ -332,6 +533,7 @@ fn resolve_service_tcp_addr() -> Result<String> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Mutex;
@@ -341,6 +543,105 @@ mod tests {
     use super::*;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn unix_service_command_uses_client_socket_endpoint() {
+        let socket_path = PathBuf::from("/tmp/sky-cua-test/service.sock");
+        let endpoint = ServiceEndpoint::Unix(socket_path.clone());
+        let mut command = Command::new("sky-cua-service");
+
+        endpoint.configure_service_command(&mut command);
+
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(key, _)| *key == SERVICE_SOCKET_PATH_ENV)
+                .and_then(|(_, value)| value),
+            Some(socket_path.as_os_str())
+        );
+    }
+
+    #[test]
+    fn startup_health_rejects_service_missing_repaired_desktop_env() {
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::from([("DISPLAY".to_string(), ":0".to_string())]),
+        };
+        let desktop_vars = vec![
+            ("DISPLAY".to_string(), ":0".to_string()),
+            ("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string()),
+        ];
+
+        let error = ensure_health_satisfies_desktop_env(&response, &desktop_vars)
+            .expect_err("stale service env should be rejected");
+
+        assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn startup_health_rejects_service_missing_client_desktop_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe {
+            std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        }
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::new(),
+        };
+
+        let result = ensure_health_satisfies_desktop_env(&response, &[]);
+
+        restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
+        let error = result.expect_err("stale service env should be rejected");
+        assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn startup_health_rejects_service_with_stale_desktop_env_value() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe {
+            std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        }
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::from([(
+                "XDG_RUNTIME_DIR".to_string(),
+                "/run/user/9999".to_string(),
+            )]),
+        };
+
+        let result = ensure_health_satisfies_desktop_env(&response, &[]);
+
+        restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
+        let error = result.expect_err("stale service env value should be rejected");
+        assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn x11_display_probe_requires_an_actual_socket() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sky-cua-client-x11-probe-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).expect("create test temp dir");
+
+        assert_eq!(x11_display_from_socket_root(&temp_dir), None);
+
+        fs::write(temp_dir.join("X1"), b"").expect("write x11 socket sentinel");
+
+        assert_eq!(
+            x11_display_from_socket_root(&temp_dir),
+            Some(":1".to_string())
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn respawns_service_after_child_exits() {
@@ -466,7 +767,23 @@ while True:
             continue
         request = json.loads(data.decode("utf-8"))
         if request.get("type") == "health":
-            response = {"type": "health", "ok": True, "service_socket": path}
+            response = {
+                "type": "health",
+                "ok": True,
+                "service_socket": path,
+                "desktop_env": {
+                    key: os.environ[key] for key in [
+                        "DBUS_SESSION_BUS_ADDRESS",
+                        "DESKTOP_SESSION",
+                        "DISPLAY",
+                        "WAYLAND_DISPLAY",
+                        "XDG_CURRENT_DESKTOP",
+                        "XDG_RUNTIME_DIR",
+                        "XDG_SESSION_TYPE",
+                    ]
+                    if os.environ.get(key)
+                },
+            }
         else:
             response = {"type": "error", "code": "UnexpectedRequest", "message": request.get("type", "<missing>")}
         conn.sendall(json.dumps(response).encode("utf-8") + b"\n")

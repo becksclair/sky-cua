@@ -1,14 +1,14 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use sky_cua_platform::backend::DesktopBackend;
-use sky_cua_platform::model::{
-    ActionName, ActionRequest, AppStateSnapshot, ElementNode, ServiceRequest, ServiceResponse,
-};
+use sky_cua_platform::model::{ActionName, ActionRequest, ServiceRequest, ServiceResponse};
 
 use crate::action_router::route_action;
 use crate::approval_store::ApprovalStore;
 use crate::backend_factory::create_backend;
 use crate::diagnostics::error_response;
+use crate::element_resolver::{resolve_action_element, resolve_target_element};
 use crate::session_store::SessionStore;
 use crate::snapshot_manager::SnapshotManager;
 use tracing::debug;
@@ -37,7 +37,28 @@ impl ServiceDaemon {
             ServiceRequest::Health => ServiceResponse::Health {
                 ok: true,
                 service_socket: self.socket_path.display().to_string(),
+                desktop_env: desktop_env_values_present(),
             },
+            ServiceRequest::Doctor => match self.backend.doctor().await {
+                Ok(report) => ServiceResponse::Doctor {
+                    report: Box::new(report),
+                },
+                Err(error) => error_response(error.code, error.message),
+            },
+            ServiceRequest::SetupAccessibility => match self.backend.setup_accessibility().await {
+                Ok(report) => ServiceResponse::SetupAccessibility {
+                    report: Box::new(report),
+                },
+                Err(error) => error_response(error.code, error.message),
+            },
+            ServiceRequest::SetupWindowTargeting => {
+                match self.backend.setup_window_targeting().await {
+                    Ok(report) => ServiceResponse::SetupWindowTargeting {
+                        report: Box::new(report),
+                    },
+                    Err(error) => error_response(error.code, error.message),
+                }
+            }
             ServiceRequest::ListApps => {
                 debug!("handling list_apps request");
                 let environment = match self.backend.probe_environment().await {
@@ -55,6 +76,61 @@ impl ServiceDaemon {
                         apps: Vec::new(),
                         diagnostics: vec![error.diagnostic()],
                     },
+                }
+            }
+            ServiceRequest::ListWindows => {
+                debug!("handling list_windows request");
+                let environment = match self.backend.probe_environment().await {
+                    Ok(environment) => environment,
+                    Err(error) => return error_response(error.code, error.message),
+                };
+                match self.backend.list_windows().await {
+                    Ok(windows) => ServiceResponse::ListWindows {
+                        environment,
+                        windows,
+                        diagnostics: Vec::new(),
+                    },
+                    Err(error) => ServiceResponse::ListWindows {
+                        environment,
+                        windows: Vec::new(),
+                        diagnostics: vec![error.diagnostic()],
+                    },
+                }
+            }
+            ServiceRequest::FocusedWindow => {
+                debug!("handling focused_window request");
+                let environment = match self.backend.probe_environment().await {
+                    Ok(environment) => environment,
+                    Err(error) => return error_response(error.code, error.message),
+                };
+                match self.backend.focused_window().await {
+                    Ok(window) => ServiceResponse::FocusedWindow {
+                        environment,
+                        window: window.map(Box::new),
+                        diagnostics: Vec::new(),
+                    },
+                    Err(error) => ServiceResponse::FocusedWindow {
+                        environment,
+                        window: None,
+                        diagnostics: vec![error.diagnostic()],
+                    },
+                }
+            }
+            ServiceRequest::ActivateWindow { target } => {
+                debug!(target = ?target, "handling activate_window request");
+                match self.backend.activate_window(target).await {
+                    Ok(outcome) => ServiceResponse::ActivateWindow { outcome },
+                    Err(error) => {
+                        let diagnostic = error.diagnostic();
+                        ServiceResponse::ActivateWindow {
+                            outcome: sky_cua_platform::model::ActionOutcome {
+                                success: false,
+                                message: error.message.clone(),
+                                code: error.code.to_string(),
+                                diagnostics: vec![diagnostic],
+                            },
+                        }
+                    }
                 }
             }
             ServiceRequest::GetAppState { selector } => {
@@ -115,58 +191,75 @@ impl ServiceDaemon {
             );
             return Ok(request);
         };
-        let snapshot = self.snapshots.get(snapshot_id).ok_or_else(|| {
-            (
-                "SnapshotStale",
-                format!("snapshot {snapshot_id} is not present in the service cache"),
-            )
+        let snapshot = self.snapshots.get_if_latest(snapshot_id).ok_or_else(|| {
+            if self.snapshots.get(snapshot_id).is_some() {
+                (
+                    "SnapshotStale",
+                    format!(
+                        "snapshot {snapshot_id} is no longer the latest app state. Re-run get_app_state and retry with the current snapshot_id."
+                    ),
+                )
+            } else {
+                (
+                    "SnapshotStale",
+                    format!("snapshot {snapshot_id} is not present in the service cache"),
+                )
+            }
         })?;
-        if !self.snapshots.is_latest(snapshot_id) {
-            return Err((
-                "SnapshotStale",
-                format!(
-                    "snapshot {snapshot_id} is no longer the latest app state. Re-run get_app_state and retry with the current snapshot_id."
-                ),
-            ));
-        }
 
         request.environment = Some(snapshot.environment.clone());
         request.resolved_capture = snapshot.capture.clone();
         request.resolved_focused_app = snapshot.focused_app.clone();
 
-        if let Some(index) = request.element_index {
-            request.resolved_element = Some(resolve_element(snapshot, index)?);
-        }
-
-        if let Some(target_index) = request
-            .arguments
-            .get("to_element_index")
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|value| usize::try_from(value).ok())
-        {
-            request.resolved_target_element = Some(resolve_element(snapshot, target_index)?);
-        }
+        request.resolved_element = resolve_action_element(
+            snapshot,
+            &request.action,
+            request.element_index,
+            &request.arguments,
+        )?;
+        request.resolved_target_element = resolve_target_element(snapshot, &request.arguments)?;
 
         Ok(request)
     }
 }
 
-fn resolve_element(
-    snapshot: &AppStateSnapshot,
-    index: usize,
-) -> Result<ElementNode, (&'static str, String)> {
-    snapshot.elements.get(index).cloned().ok_or_else(|| {
-        (
-            "InvalidRequest",
-            format!(
-                "element_index {index} is out of range for snapshot {}",
-                snapshot.snapshot_id
-            ),
-        )
+fn desktop_env_values_present() -> BTreeMap<String, String> {
+    [
+        "DBUS_SESSION_BUS_ADDRESS",
+        "DESKTOP_SESSION",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_RUNTIME_DIR",
+        "XDG_SESSION_TYPE",
+    ]
+    .into_iter()
+    .filter_map(|key| {
+        std::env::var(key)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(|value| (key.to_string(), value))
     })
+    .collect()
 }
 
 fn action_requires_snapshot_context(request: &ActionRequest) -> bool {
+    let has_snapshot_target = request.arguments.get("to_element_index").is_some();
+    let has_semantic_selector = request.arguments.get("role").is_some()
+        || request.arguments.get("name").is_some()
+        || (request.arguments.get("text").is_some() && request.action != ActionName::TypeText)
+        || request.arguments.get("states").is_some();
+
+    if request
+        .arguments
+        .get("element_identifier")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return has_snapshot_target;
+    }
+
     matches!(
         request.action,
         ActionName::FocusElement
@@ -175,9 +268,11 @@ fn action_requires_snapshot_context(request: &ActionRequest) -> bool {
             | ActionName::ExpandElement
             | ActionName::CollapseElement
             | ActionName::ToggleElement
+            | ActionName::PerformAction
             | ActionName::SetValue
     ) || request.element_index.is_some()
-        || request.arguments.get("to_element_index").is_some()
+        || has_snapshot_target
+        || has_semantic_selector
 }
 
 #[cfg(test)]
@@ -233,6 +328,18 @@ mod tests {
         assert!(action_requires_snapshot_context(&request(
             ActionName::ActivateElement,
             json!({}),
+        )));
+    }
+
+    #[test]
+    fn direct_backend_ref_only_bypasses_action_target_resolution() {
+        assert!(!action_requires_snapshot_context(&request(
+            ActionName::PerformAction,
+            json!({"element_identifier": ":1.2:/node/3", "action_name": "press"}),
+        )));
+        assert!(action_requires_snapshot_context(&request(
+            ActionName::Drag,
+            json!({"element_identifier": ":1.2:/node/3", "to_element_index": 4}),
         )));
     }
 }

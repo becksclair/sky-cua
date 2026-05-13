@@ -5,6 +5,7 @@ use atspi::proxy::proxy_ext::ProxyExt;
 use sky_cua_platform::model::{CoordinateSpace, ElementNode, RectF};
 
 use crate::apps::discovery::DiscoveredApp;
+use crate::atspi::normalize_action;
 
 pub async fn flatten_accessible_tree(
     connection: &AccessibilityConnection,
@@ -191,11 +192,4 @@ mod tests {
             1
         );
     }
-}
-
-fn normalize_action(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .replace([' ', '-', '_'], "")
 }

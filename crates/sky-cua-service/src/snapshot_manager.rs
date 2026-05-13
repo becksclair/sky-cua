@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use sky_cua_platform::model::AppStateSnapshot;
 
 #[derive(Debug, Default)]
 pub struct SnapshotManager {
     snapshots: HashMap<String, AppStateSnapshot>,
-    order: Vec<String>,
+    order: VecDeque<String>,
     max_snapshots: usize,
 }
 
@@ -14,7 +14,7 @@ impl SnapshotManager {
     pub fn new(max_snapshots: usize) -> Self {
         Self {
             snapshots: HashMap::new(),
-            order: Vec::new(),
+            order: VecDeque::new(),
             max_snapshots: max_snapshots.max(1),
         }
     }
@@ -23,11 +23,10 @@ impl SnapshotManager {
         let snapshot_id = snapshot.snapshot_id.clone();
         self.snapshots.insert(snapshot_id.clone(), snapshot);
         self.order.retain(|id| id != &snapshot_id);
-        self.order.push(snapshot_id);
+        self.order.push_back(snapshot_id);
 
         while self.order.len() > self.max_snapshots {
-            if let Some(oldest) = self.order.first().cloned() {
-                self.order.remove(0);
+            if let Some(oldest) = self.order.pop_front() {
                 self.snapshots.remove(&oldest);
             }
         }
@@ -38,11 +37,19 @@ impl SnapshotManager {
     }
 
     pub fn latest_snapshot_id(&self) -> Option<&str> {
-        self.order.last().map(String::as_str)
+        self.order.back().map(String::as_str)
     }
 
     pub fn is_latest(&self, snapshot_id: &str) -> bool {
         self.latest_snapshot_id() == Some(snapshot_id)
+    }
+
+    pub fn get_if_latest(&self, snapshot_id: &str) -> Option<&AppStateSnapshot> {
+        if self.is_latest(snapshot_id) {
+            self.snapshots.get(snapshot_id)
+        } else {
+            None
+        }
     }
 }
 
@@ -101,6 +108,7 @@ mod tests {
                 collapse_element: unavailable(),
                 toggle_element: unavailable(),
                 click: unavailable(),
+                perform_action: unavailable(),
                 perform_secondary_action: unavailable(),
                 scroll: unavailable(),
                 drag: unavailable(),
@@ -113,6 +121,7 @@ mod tests {
             elements: Vec::new(),
             diagnostics: Vec::new(),
             app_guidance: None,
+            doctor_report: None,
         }
     }
 

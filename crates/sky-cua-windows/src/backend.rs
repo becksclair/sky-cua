@@ -118,6 +118,7 @@ impl WindowsDesktopBackend {
             collapse_element: availability(semantic_ready, "UI Automation is unavailable"),
             toggle_element: availability(semantic_ready, "UI Automation is unavailable"),
             click: availability(semantic_ready || physical_ready, input_reason),
+            perform_action: availability(semantic_ready, "UI Automation is unavailable"),
             perform_secondary_action: availability(physical_ready, input_reason),
             scroll: availability(physical_ready, input_reason),
             drag: availability(physical_ready, input_reason),
@@ -328,6 +329,7 @@ impl DesktopBackend for WindowsDesktopBackend {
             elements,
             diagnostics: diagnostics.finish(),
             app_guidance: None,
+            doctor_report: None,
         })
     }
 

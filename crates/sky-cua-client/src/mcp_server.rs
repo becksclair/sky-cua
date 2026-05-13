@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppInfo, AppSelector, AppStateSnapshot, ElementNode, ServiceRequest,
-    ServiceResponse,
+    ServiceResponse, WindowInfo,
 };
 
 use crate::heuristics::HeuristicsRegistry;
@@ -34,12 +34,13 @@ pub fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Result<(
     let mut initialized = false;
 
     while let Some((message, framing)) = read_message(&mut reader)? {
+        let id = message.get("id").cloned().unwrap_or(Value::Null);
         let response = match handle_message(&service, &heuristics, &mut initialized, message) {
             Ok(Some(response)) => Some(response),
             Ok(None) => None,
             Err(error) => Some(json!({
                 "jsonrpc": "2.0",
-                "id": Value::Null,
+                "id": id,
                 "error": {
                     "code": -32603,
                     "message": error.to_string(),
@@ -139,6 +140,52 @@ fn handle_tool_call(
     arguments: Value,
 ) -> Result<Value> {
     match tool_name {
+        "doctor" => match service.call(&ServiceRequest::Doctor)? {
+            ServiceResponse::Doctor { report } => Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": report.readiness.recommended_next_step
+                }],
+                "structuredContent": report,
+                "isError": false
+            })),
+            ServiceResponse::Error { code, message } => tool_error(code, message),
+            other => Err(anyhow!("unexpected response for doctor: {other:?}")),
+        },
+        "setup_accessibility" => match service.call(&ServiceRequest::SetupAccessibility)? {
+            ServiceResponse::SetupAccessibility { report } => {
+                let is_error = setup_accessibility_is_error(&report);
+                Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": report.after.readiness.recommended_next_step
+                    }],
+                    "structuredContent": report,
+                    "isError": is_error
+                }))
+            }
+            ServiceResponse::Error { code, message } => tool_error(code, message),
+            other => Err(anyhow!(
+                "unexpected response for setup_accessibility: {other:?}"
+            )),
+        },
+        "setup_window_targeting" => match service.call(&ServiceRequest::SetupWindowTargeting)? {
+            ServiceResponse::SetupWindowTargeting { report } => {
+                let is_error = setup_window_targeting_is_error(&report);
+                Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": report.message
+                    }],
+                    "structuredContent": report,
+                    "isError": is_error
+                }))
+            }
+            ServiceResponse::Error { code, message } => tool_error(code, message),
+            other => Err(anyhow!(
+                "unexpected response for setup_window_targeting: {other:?}"
+            )),
+        },
         "list_apps" => match service.call(&ServiceRequest::ListApps)? {
             ServiceResponse::ListApps {
                 environment,
@@ -166,6 +213,80 @@ fn handle_tool_call(
             ServiceResponse::Error { code, message } => tool_error(code, message),
             other => Err(anyhow!("unexpected response for list_apps: {other:?}")),
         },
+        "list_windows" => match service.call(&ServiceRequest::ListWindows)? {
+            ServiceResponse::ListWindows {
+                environment,
+                windows,
+                diagnostics,
+            } => {
+                let runtime_error = diagnostics.first();
+                let is_error = runtime_error.is_some();
+                let summary = runtime_error
+                    .map(|diagnostic| diagnostic.message.clone())
+                    .unwrap_or_else(|| list_windows_summary(&windows));
+                Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": summary
+                    }],
+                    "structuredContent": {
+                        "environment": environment,
+                        "windows": windows,
+                        "diagnostics": diagnostics
+                    },
+                    "isError": is_error
+                }))
+            }
+            ServiceResponse::Error { code, message } => tool_error(code, message),
+            other => Err(anyhow!("unexpected response for list_windows: {other:?}")),
+        },
+        "focused_window" => match service.call(&ServiceRequest::FocusedWindow)? {
+            ServiceResponse::FocusedWindow {
+                environment,
+                window,
+                diagnostics,
+            } => {
+                let runtime_error = diagnostics.first();
+                let is_error = runtime_error.is_some();
+                let summary = runtime_error
+                    .map(|diagnostic| diagnostic.message.clone())
+                    .unwrap_or_else(|| focused_window_summary(window.as_deref()));
+                Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": summary
+                    }],
+                    "structuredContent": {
+                        "environment": environment,
+                        "window": window,
+                        "diagnostics": diagnostics
+                    },
+                    "isError": is_error
+                }))
+            }
+            ServiceResponse::Error { code, message } => tool_error(code, message),
+            other => Err(anyhow!("unexpected response for focused_window: {other:?}")),
+        },
+        "activate_window" => {
+            let target = match parse_window_target(arguments) {
+                Ok(target) => target,
+                Err(error) => return invalid_request_tool_error(error.to_string()),
+            };
+            match service.call(&ServiceRequest::ActivateWindow { target })? {
+                ServiceResponse::ActivateWindow { outcome } => Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": action_summary(&outcome)
+                    }],
+                    "structuredContent": outcome,
+                    "isError": !outcome.success
+                })),
+                ServiceResponse::Error { code, message } => tool_error(code, message),
+                other => Err(anyhow!(
+                    "unexpected response for activate_window: {other:?}"
+                )),
+            }
+        }
         "get_app_state" => {
             let selector = parse_app_selector(&arguments);
             let detail = parse_app_state_detail(&arguments);
@@ -196,6 +317,7 @@ fn handle_tool_call(
         "collapse_element" => handle_action_call(service, ActionName::CollapseElement, arguments),
         "toggle_element" => handle_action_call(service, ActionName::ToggleElement, arguments),
         "click" => handle_action_call(service, ActionName::Click, arguments),
+        "perform_action" => handle_action_call(service, ActionName::PerformAction, arguments),
         "perform_secondary_action" => {
             handle_action_call(service, ActionName::PerformSecondaryAction, arguments)
         }
@@ -321,6 +443,94 @@ fn list_apps_summary(apps: &[AppInfo]) -> String {
     }
 }
 
+fn list_windows_summary(windows: &[WindowInfo]) -> String {
+    if windows.is_empty() {
+        return "Discovered 0 desktop windows.".to_string();
+    }
+
+    let preview = windows
+        .iter()
+        .map(|window| {
+            let mut label = window
+                .title
+                .clone()
+                .or_else(|| window.app_id.clone())
+                .unwrap_or_else(|| window.window_id.clone());
+            label.push_str(" (window_id=");
+            label.push_str(&window.window_id);
+            label.push_str(", backend=");
+            label.push_str(&window.backend);
+            if let Some(app_id) = window.app_id.as_deref().filter(|value| !value.is_empty()) {
+                label.push_str(", app_id=");
+                label.push_str(app_id);
+            }
+            if let Some(pid) = window.pid {
+                label.push_str(", pid=");
+                label.push_str(&pid.to_string());
+            }
+            if let Some(terminal) = &window.terminal {
+                label.push_str(", tty=");
+                label.push_str(&terminal.tty);
+                if let Some(active) = &terminal.active_process {
+                    label.push_str(", active_process=");
+                    label.push_str(&active.command_name);
+                }
+            }
+            if window.focused {
+                label.push_str(" [focused]");
+            }
+            label.push(')');
+            label
+        })
+        .collect::<Vec<_>>();
+
+    format!(
+        "Discovered {} desktop windows. Windows: {}.",
+        windows.len(),
+        preview.join("; ")
+    )
+}
+
+fn focused_window_summary(window: Option<&WindowInfo>) -> String {
+    let Some(window) = window else {
+        return "No focused desktop window was reported by the active windowing backends."
+            .to_string();
+    };
+
+    let label = window
+        .title
+        .as_deref()
+        .or(window.app_id.as_deref())
+        .unwrap_or(&window.window_id);
+    format!(
+        "Focused desktop window: {label} (window_id={}, backend={}).",
+        window.window_id, window.backend
+    )
+}
+
+fn parse_window_target(arguments: Value) -> Result<sky_cua_platform::model::WindowTarget> {
+    let target: sky_cua_platform::model::WindowTarget =
+        serde_json::from_value(arguments).context("invalid activate_window target arguments")?;
+    if !target.has_target() {
+        return Err(anyhow!(
+            "activate_window requires one of window_id, pid, app_id, wm_class, title, tty, terminal_pid, terminal_command, or terminal_cwd"
+        ));
+    }
+    Ok(target)
+}
+
+fn setup_window_targeting_is_error(
+    report: &sky_cua_platform::model::WindowTargetingSetupReport,
+) -> bool {
+    report.windows_error.is_some()
+}
+
+fn setup_accessibility_is_error(
+    report: &sky_cua_platform::model::AccessibilitySetupReport,
+) -> bool {
+    !report.accessibility_command.ok || !report.after.readiness.can_build_accessibility_tree
+}
+
 fn list_apps_error_diagnostic(
     diagnostics: &[sky_cua_platform::model::DiagnosticEntry],
 ) -> Option<&sky_cua_platform::model::DiagnosticEntry> {
@@ -359,6 +569,10 @@ fn tool_error(code: impl Into<String>, message: impl Into<String>) -> Result<Val
     }))
 }
 
+fn invalid_request_tool_error(message: impl Into<String>) -> Result<Value> {
+    tool_error("InvalidRequest", message)
+}
+
 fn portal_approval_pending_diagnostic(
     diagnostics: &[sky_cua_platform::model::DiagnosticEntry],
 ) -> Option<&sky_cua_platform::model::DiagnosticEntry> {
@@ -377,28 +591,21 @@ fn informational_runtime_summary(
     let mut parts = Vec::new();
     for diagnostic in diagnostics {
         match diagnostic.code.as_str() {
-            "PortalSessionStarted" => parts.push(diagnostic.message.clone()),
-            "PortalSessionRestored" => parts.push(diagnostic.message.clone()),
-            "PortalSessionRestoreMiss" => parts.push(match diagnostic.details.as_ref() {
-                Some(details) => format!("{} Details: {}", diagnostic.message, details),
-                None => diagnostic.message.clone(),
-            }),
-            "PortalSessionRebuilt" => parts.push(match diagnostic.details.as_ref() {
-                Some(details) => format!("{} Details: {}", diagnostic.message, details),
-                None => diagnostic.message.clone(),
-            }),
-            "PortalSessionTokenRotated" => parts.push(match diagnostic.details.as_ref() {
-                Some(details) => format!("{} Details: {}", diagnostic.message, details),
-                None => diagnostic.message.clone(),
-            }),
-            "CaptureBackendDowngraded" => parts.push(match diagnostic.details.as_ref() {
-                Some(details) => format!("{} Details: {}", diagnostic.message, details),
-                None => diagnostic.message.clone(),
-            }),
-            "CaptureFrameBlank" => parts.push(match diagnostic.details.as_ref() {
-                Some(details) => format!("{} Details: {}", diagnostic.message, details),
-                None => diagnostic.message.clone(),
-            }),
+            "PortalSessionStarted" | "PortalSessionRestored" => {
+                parts.push(diagnostic.message.clone());
+            }
+            "PortalSessionRestoreMiss"
+            | "PortalSessionRebuilt"
+            | "PortalSessionTokenRotated"
+            | "CaptureBackendDowngraded"
+            | "CaptureFrameBlank" => {
+                parts.push(match diagnostic.details.as_ref() {
+                    Some(details) => {
+                        format!("{} Details: {}", diagnostic.message, details)
+                    }
+                    None => diagnostic.message.clone(),
+                });
+            }
             _ => {}
         }
     }
@@ -424,11 +631,65 @@ fn not_initialized(id: Value) -> Value {
 fn tool_definitions() -> Value {
     json!([
         {
+            "name": "doctor",
+            "description": "Report Computer Use desktop integration readiness, including environment, semantic, capture, and input backend checks.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "setup_accessibility",
+            "description": "Enable toolkit accessibility for AT-SPI-backed semantic app trees, then return a before/after doctor report. Target apps may need restart.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "setup_window_targeting",
+            "description": "Install and enable the bundled GNOME Shell window-control extension for exact GNOME window targeting, then report window backend status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "list_apps",
             "description": "List currently exposed desktop applications from the active platform window and accessibility backends.",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "list_windows",
+            "description": "List desktop windows from native windowing backends, including backend identity and terminal metadata when available.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "focused_window",
+            "description": "Return the focused desktop window reported by native windowing backends, if one is available.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "activate_window",
+            "description": "Activate a desktop window by window_id or selector metadata. Supports exact window activation when the matched backend can target windows; otherwise reports unsupported backends honestly.",
+            "inputSchema": {
+                "type": "object",
+                "properties": window_target_schema(),
                 "additionalProperties": false
             }
         },
@@ -486,6 +747,37 @@ fn tool_definitions() -> Value {
             json!([]),
         ),
         action_tool(
+            "perform_action",
+            "Invoke a specific AT-SPI action by name or index on an element. Prefer named tools such as click, activate_element, select_element, expand_element, collapse_element, and toggle_element for common operations; use this for custom AT-SPI actions exposed in get_app_state.semantic_actions.",
+            json!({
+                "element_index": { "type": "integer", "minimum": 0 },
+                "element_identifier": {
+                    "type": "string",
+                    "description": "Direct AT-SPI backend_ref/object identifier from get_app_state, bypassing element_index lookup."
+                },
+                "role": { "type": "string" },
+                "name": { "type": "string" },
+                "text": { "type": "string" },
+                "states": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "action_index": {
+                    "type": ["integer", "string"],
+                    "description": "Zero-based AT-SPI action index. Defaults to 0 when action_name/action are omitted."
+                },
+                "action_name": {
+                    "type": "string",
+                    "description": "AT-SPI action name to resolve against the target element's action list."
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Compatibility alias: either an action name or numeric action index string."
+                }
+            }),
+            json!([]),
+        ),
+        action_tool(
             "perform_secondary_action",
             "Perform a secondary click or context action by element index from the current snapshot, or explicit x/y screen coordinates without a snapshot.",
             json!({
@@ -526,28 +818,39 @@ fn tool_definitions() -> Value {
         ),
         action_tool(
             "type_text",
-            "Type literal text into the focused control; may use snapshot context when provided.",
-            json!({
+            "Type literal text into the focused control; may use snapshot context or a window target when provided.",
+            keyboard_target_properties(json!({
                 "text": { "type": "string" }
-            }),
+            })),
             json!(["text"]),
         ),
         action_tool(
             "press_key",
-            "Press a keyboard key or key chord in the focused control; may use snapshot context when provided.",
-            json!({
+            "Press a keyboard key or key chord in the focused control; may use snapshot context or a window target when provided.",
+            keyboard_target_properties(json!({
                 "key": { "type": "string" }
-            }),
+            })),
             json!(["key"]),
         ),
         action_tool(
             "set_value",
-            "Set an editable element value semantically where supported in the current snapshot.",
+            "Set an editable element value semantically where supported. Target by element_index, element_identifier, or a semantic selector from the latest get_app_state snapshot.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
+                "element_identifier": {
+                    "type": "string",
+                    "description": "Direct AT-SPI backend_ref/object identifier from get_app_state, bypassing element_index lookup."
+                },
+                "role": { "type": "string" },
+                "name": { "type": "string" },
+                "text": { "type": "string" },
+                "states": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
                 "value": { "type": "string" }
             }),
-            json!(["snapshot_id", "element_index", "value"]),
+            json!(["value"]),
         )
     ])
 }
@@ -565,6 +868,36 @@ fn coordinate_schema(description: &str) -> Value {
     })
 }
 
+fn window_target_schema() -> Value {
+    json!({
+        "window_id": {
+            "type": "string",
+            "description": "Exact window_id from list_windows."
+        },
+        "pid": { "type": "integer", "minimum": 0 },
+        "tty": {
+            "type": "string",
+            "description": "Terminal tty such as /dev/pts/7 or pts/7."
+        },
+        "terminal_pid": { "type": "integer", "minimum": 0 },
+        "terminal_command": { "type": "string" },
+        "terminal_cwd": { "type": "string" },
+        "app_id": { "type": "string" },
+        "wm_class": { "type": "string" },
+        "title": { "type": "string" }
+    })
+}
+
+fn keyboard_target_properties(mut properties: Value) -> Value {
+    let Value::Object(properties_map) = &mut properties else {
+        return properties;
+    };
+    if let Value::Object(target_map) = window_target_schema() {
+        properties_map.extend(target_map);
+    }
+    properties
+}
+
 fn semantic_element_tool(name: &str, description: &str) -> Value {
     action_tool(
         name,
@@ -574,16 +907,37 @@ fn semantic_element_tool(name: &str, description: &str) -> Value {
                 "type": "integer",
                 "minimum": 0,
                 "description": "Element index from the current get_app_state snapshot."
+            },
+            "element_identifier": {
+                "type": "string",
+                "description": "Direct AT-SPI backend_ref/object identifier from get_app_state, bypassing element_index lookup."
+            },
+            "role": {
+                "type": "string",
+                "description": "Optional semantic selector role matched against the latest snapshot."
+            },
+            "name": {
+                "type": "string",
+                "description": "Optional semantic selector name matched against the latest snapshot."
+            },
+            "text": {
+                "type": "string",
+                "description": "Optional semantic selector text matched against name, description, or value."
+            },
+            "states": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Optional semantic selector states; all listed states must match."
             }
         }),
-        json!(["snapshot_id", "element_index"]),
+        json!([]),
     )
 }
 
 fn action_tool(name: &str, description: &str, mut properties: Value, required: Value) -> Value {
-    let property_map = properties
-        .as_object_mut()
-        .expect("properties must be an object");
+    let Some(property_map) = properties.as_object_mut() else {
+        panic!("action_tool called with non-object properties for {name}")
+    };
     property_map.insert(
         "snapshot_id".to_string(),
         json!({
@@ -652,6 +1006,7 @@ fn compact_snapshot(snapshot: &AppStateSnapshot) -> Value {
         "capture": snapshot.capture,
         "diagnostics": snapshot.diagnostics,
         "app_guidance": snapshot.app_guidance,
+        "doctor_report": snapshot.doctor_report,
         "elements": elements,
         "element_count": snapshot.elements.len()
     })
@@ -666,7 +1021,8 @@ fn compact_element(element: &ElementNode) -> Value {
         "value": element.value,
         "state_flags": element.state_flags,
         "semantic_actions": element.semantic_actions,
-        "bounds": element.bounds
+        "bounds": element.bounds,
+        "backend_ref": element.backend_ref
     })
 }
 
@@ -758,14 +1114,17 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        MessageFraming, action_summary, compact_element, list_apps_summary, parse_app_state_detail,
-        read_message, snapshot_summary, tool_definitions, tools_list_result, write_message,
+        MessageFraming, action_summary, compact_element, compact_snapshot,
+        invalid_request_tool_error, list_apps_summary, parse_app_state_detail, parse_window_target,
+        read_message, setup_accessibility_is_error, setup_window_targeting_is_error,
+        snapshot_summary, tool_definitions, tools_list_result, write_message,
     };
     use sky_cua_platform::model::{
-        ActionOutcome, AppInfo, AppStateSnapshot, CaptureBackendKind, CoordinateSpace,
-        DiagnosticEntry, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind,
-        PortalCapabilities, RectF, SemanticBackendKind, SessionKind, ToolAvailability,
-        ToolCapabilities,
+        AccessibilitySetupReport, ActionOutcome, AppInfo, AppStateSnapshot, CaptureBackendKind,
+        CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorReadiness, DoctorReport, ElementNode,
+        EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities, RectF,
+        SemanticBackendKind, SessionKind, SetupCommandReport, ToolAvailability, ToolCapabilities,
+        WindowTargetingSetupReport,
     };
 
     #[test]
@@ -785,7 +1144,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_element_drops_verbose_description_and_backend_ref() {
+    fn compact_element_drops_verbose_description_but_keeps_backend_ref() {
         let compact = compact_element(&ElementNode {
             element_index: 7,
             parent_index: Some(1),
@@ -808,8 +1167,137 @@ mod tests {
         assert_eq!(compact["element_index"], 7);
         assert_eq!(compact["role"], "button");
         assert!(compact.get("description").is_none());
-        assert!(compact.get("backend_ref").is_none());
+        assert_eq!(compact["backend_ref"], "opaque-backend-ref");
         assert_eq!(compact["semantic_actions"][0], "click");
+    }
+
+    #[test]
+    fn compact_snapshot_includes_doctor_report() {
+        let report = DoctorReport {
+            environment: EnvironmentInfo {
+                session_kind: SessionKind::Wayland,
+                compositor: None,
+                desktop_environment: None,
+                capture_backend: CaptureBackendKind::None,
+                input_backend: InputBackendKind::None,
+                semantic_backend: SemanticBackendKind::None,
+                portal_capabilities: PortalCapabilities {
+                    screencast_version: None,
+                    remote_desktop_version: None,
+                    screenshot_version: None,
+                    available_source_types: None,
+                    available_cursor_modes: None,
+                    available_device_types: None,
+                },
+                xdg_session_type: None,
+                display: None,
+                wayland_display: None,
+            },
+            checks: vec![DoctorCheck {
+                name: "semantic_backend".to_string(),
+                ok: true,
+                detail: "Atspi".to_string(),
+            }],
+            readiness: DoctorReadiness {
+                can_register_mcp_tools: true,
+                can_build_accessibility_tree: true,
+                can_capture_screen: true,
+                can_send_input: true,
+                can_list_windows: false,
+                can_target_windows: false,
+                recommended_next_step: "Ready".to_string(),
+                blockers: Vec::new(),
+            },
+            platform: None,
+            portal: None,
+            accessibility: None,
+            windowing: None,
+            input: None,
+            browser_integration: None,
+        };
+        let snapshot = AppStateSnapshot {
+            snapshot_id: "snap-1".to_string(),
+            created_at: Utc::now(),
+            environment: report.environment.clone(),
+            capabilities: ToolCapabilities {
+                list_apps: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                get_app_state: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                focus_element: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                activate_element: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                select_element: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                expand_element: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                collapse_element: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                toggle_element: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                click: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                perform_action: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                perform_secondary_action: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                scroll: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                drag: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                type_text: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                press_key: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+                set_value: ToolAvailability {
+                    available: true,
+                    reason: None,
+                },
+            },
+            focused_app: None,
+            capture: None,
+            elements: Vec::new(),
+            diagnostics: Vec::new(),
+            app_guidance: None,
+            doctor_report: Some(report),
+        };
+        let compact = compact_snapshot(&snapshot);
+        assert!(compact.get("doctor_report").is_some());
+        assert_eq!(
+            compact["doctor_report"]["readiness"]["can_build_accessibility_tree"],
+            true
+        );
     }
 
     #[test]
@@ -833,11 +1321,13 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "activate_element")
             .expect("activate_element tool");
-        assert_eq!(
-            activate["inputSchema"]["required"],
-            json!(["snapshot_id", "element_index"])
-        );
+        assert_eq!(activate["inputSchema"]["required"], json!([]));
         assert_eq!(activate["inputSchema"]["additionalProperties"], false);
+        assert!(
+            activate["inputSchema"]["properties"]
+                .get("element_identifier")
+                .is_some()
+        );
 
         let secondary = tools
             .as_array()
@@ -857,6 +1347,84 @@ mod tests {
             .expect("type_text tool");
         assert_eq!(type_text["inputSchema"]["additionalProperties"], false);
         assert_eq!(type_text["inputSchema"]["required"], json!(["text"]));
+    }
+
+    #[test]
+    fn activate_window_parser_rejects_empty_target() {
+        let error = parse_window_target(json!({})).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("activate_window requires one of window_id")
+        );
+    }
+
+    #[test]
+    fn activate_window_validation_returns_tool_error() {
+        let result =
+            invalid_request_tool_error(parse_window_target(json!({})).unwrap_err().to_string())
+                .unwrap();
+
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["code"], "InvalidRequest");
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .expect("text")
+                .contains("activate_window requires one of window_id")
+        );
+    }
+
+    #[test]
+    fn setup_window_targeting_tool_error_tracks_extension_availability() {
+        let report = WindowTargetingSetupReport {
+            extension_dir: "/tmp/extension".to_string(),
+            wrote_files: false,
+            enable_command: SetupCommandReport {
+                ok: false,
+                detail: "extension file write failed".to_string(),
+            },
+            windows: Vec::new(),
+            windows_error: None,
+            requires_shell_reload: false,
+            message: "extension available".to_string(),
+            permissions_hint: None,
+        };
+
+        assert!(!setup_window_targeting_is_error(&report));
+    }
+
+    #[test]
+    fn setup_accessibility_error_uses_doctor_readiness_contract() {
+        let report = AccessibilitySetupReport {
+            before: Box::new(doctor_report(false)),
+            accessibility_command: SetupCommandReport {
+                ok: true,
+                detail: "AT-SPI already enabled".to_string(),
+            },
+            after: Box::new(doctor_report(true)),
+            changed: false,
+            requires_restart: false,
+        };
+
+        assert!(!setup_accessibility_is_error(&report));
+    }
+
+    #[test]
+    fn setup_accessibility_error_requires_successful_command() {
+        let report = AccessibilitySetupReport {
+            before: Box::new(doctor_report(false)),
+            accessibility_command: SetupCommandReport {
+                ok: false,
+                detail: "gsettings failed".to_string(),
+            },
+            after: Box::new(doctor_report(true)),
+            changed: false,
+            requires_restart: false,
+        };
+
+        assert!(setup_accessibility_is_error(&report));
     }
 
     #[test]
@@ -962,6 +1530,7 @@ mod tests {
                 details: None,
             }],
             app_guidance: None,
+            doctor_report: None,
         };
 
         let summary = snapshot_summary(&snapshot);
@@ -1039,6 +1608,7 @@ mod tests {
                 },
             ],
             app_guidance: None,
+            doctor_report: None,
         };
 
         let summary = snapshot_summary(&snapshot);
@@ -1182,6 +1752,7 @@ mod tests {
                 },
             ],
             app_guidance: None,
+            doctor_report: None,
         };
 
         let summary = snapshot_summary(&snapshot);
@@ -1237,6 +1808,7 @@ mod tests {
                 ),
             }],
             app_guidance: None,
+            doctor_report: None,
         };
 
         let summary = snapshot_summary(&snapshot);
@@ -1264,12 +1836,54 @@ mod tests {
             collapse_element: available(),
             toggle_element: available(),
             click: available(),
+            perform_action: available(),
             perform_secondary_action: available(),
             scroll: available(),
             drag: available(),
             type_text: available(),
             press_key: available(),
             set_value: available(),
+        }
+    }
+
+    fn doctor_report(can_build_accessibility_tree: bool) -> DoctorReport {
+        DoctorReport {
+            environment: EnvironmentInfo {
+                session_kind: SessionKind::Wayland,
+                compositor: None,
+                desktop_environment: None,
+                capture_backend: CaptureBackendKind::PortalPipeWire,
+                input_backend: InputBackendKind::PortalRemoteDesktop,
+                semantic_backend: SemanticBackendKind::Atspi,
+                portal_capabilities: PortalCapabilities {
+                    screencast_version: Some(5),
+                    remote_desktop_version: Some(2),
+                    screenshot_version: Some(1),
+                    available_source_types: None,
+                    available_cursor_modes: None,
+                    available_device_types: None,
+                },
+                xdg_session_type: Some("wayland".to_string()),
+                display: None,
+                wayland_display: Some("wayland-0".to_string()),
+            },
+            checks: Vec::new(),
+            readiness: DoctorReadiness {
+                can_register_mcp_tools: true,
+                can_build_accessibility_tree,
+                can_capture_screen: true,
+                can_send_input: true,
+                can_list_windows: true,
+                can_target_windows: true,
+                recommended_next_step: "ready".to_string(),
+                blockers: Vec::new(),
+            },
+            platform: None,
+            portal: None,
+            accessibility: None,
+            windowing: None,
+            input: None,
+            browser_integration: None,
         }
     }
 }

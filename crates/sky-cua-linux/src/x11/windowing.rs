@@ -15,6 +15,7 @@ pub struct X11WindowInfo {
     pub class_name: Option<String>,
     pub app: AppInfo,
     pub bounds: Option<RectF>,
+    pub workspace: Option<i32>,
     pub child_regions: Vec<X11WindowRegion>,
 }
 
@@ -106,6 +107,7 @@ pub fn discover_windows() -> Result<Vec<X11WindowInfo>, BackendError> {
             .arg("_NET_WM_NAME")
             .arg("WM_NAME")
             .arg("_NET_WM_PID")
+            .arg("_NET_WM_DESKTOP")
             .output()
             .map_err(|error| {
                 BackendError::new(
@@ -219,6 +221,7 @@ fn parse_window_info(
     let mut class_name = None;
     let mut window_title = None;
     let mut pid = None;
+    let mut workspace = None;
 
     for line in output.lines() {
         if line.starts_with("WM_CLASS(") {
@@ -233,6 +236,8 @@ fn parse_window_info(
             }
         } else if line.starts_with("_NET_WM_PID(") {
             pid = parse_u32_after_equals(line);
+        } else if line.starts_with("_NET_WM_DESKTOP(") {
+            workspace = parse_workspace_after_equals(line);
         }
     }
 
@@ -273,6 +278,7 @@ fn parse_window_info(
             is_focused_candidate,
         },
         bounds,
+        workspace,
         child_regions,
     })
 }
@@ -307,6 +313,20 @@ fn parse_u32_after_equals(line: &str) -> Option<u32> {
         .take_while(|character| character.is_ascii_digit())
         .collect::<String>();
     digits.parse().ok()
+}
+
+fn parse_workspace_after_equals(line: &str) -> Option<i32> {
+    let (_, value) = line.split_once('=')?;
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("0xFFFFFFFF") || value == "4294967295" {
+        return None;
+    }
+    value.parse::<i32>().ok().or_else(|| {
+        value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+            .and_then(|hex| i32::from_str_radix(hex, 16).ok())
+    })
 }
 
 fn query_window_bounds(window_id: &str) -> Result<Option<RectF>, BackendError> {
@@ -506,7 +526,7 @@ mod tests {
     use super::{
         parse_f64_after_colon, parse_quoted_strings, parse_root_window_list,
         parse_u32_after_equals, parse_window_ids_from_xwininfo_tree, parse_window_info,
-        parse_window_tree,
+        parse_window_tree, parse_workspace_after_equals,
     };
 
     #[test]
@@ -544,7 +564,8 @@ xwininfo: Window id: 0x50d (the root window) (has no name)\n\
 WM_CLASS(STRING) = \"xmessage\", \"Xmessage\"\n\
 _NET_WM_NAME:  not found.\n\
 WM_NAME(STRING) = \"sky-cua x11 inspect title\"\n\
-_NET_WM_PID:  not found.\n";
+_NET_WM_PID:  not found.\n\
+_NET_WM_DESKTOP(CARDINAL) = 3\n";
         let window = parse_window_info("0x3800030", output, true, "XWayland").unwrap();
         assert_eq!(window.app.app_id, "x11:0x3800030");
         assert_eq!(window.app.name, "Xmessage");
@@ -557,6 +578,7 @@ _NET_WM_PID:  not found.\n";
             Some("xmessage.desktop")
         );
         assert_eq!(window.app.toolkit_guess.as_deref(), Some("XWayland"));
+        assert_eq!(window.workspace, Some(3));
         assert!(window.app.is_focused_candidate);
         assert!(window.bounds.is_none());
         assert!(window.child_regions.is_empty());
@@ -575,6 +597,22 @@ _NET_WM_PID:  not found.\n";
         assert_eq!(
             parse_u32_after_equals("_NET_WM_PID(CARDINAL) = 2807974"),
             Some(2_807_974)
+        );
+    }
+
+    #[test]
+    fn parses_workspace_property_value() {
+        assert_eq!(
+            parse_workspace_after_equals("_NET_WM_DESKTOP(CARDINAL) = 3"),
+            Some(3)
+        );
+        assert_eq!(
+            parse_workspace_after_equals("_NET_WM_DESKTOP(CARDINAL) = 0x3"),
+            Some(3)
+        );
+        assert_eq!(
+            parse_workspace_after_equals("_NET_WM_DESKTOP(CARDINAL) = 0xFFFFFFFF"),
+            None
         );
     }
 

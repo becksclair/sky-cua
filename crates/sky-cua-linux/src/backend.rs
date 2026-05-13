@@ -3,23 +3,25 @@ use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind,
-    CaptureInfo, CoordinateSpace, DiagnosticEntry, ElementNode, EnvironmentInfo, FocusedApp,
-    InputBackendKind, ModelImageFormat, PixelSize, RectF, SemanticBackendKind, ToolAvailability,
-    ToolCapabilities,
+    CaptureInfo, CoordinateSpace, DiagnosticEntry, DoctorReport, ElementNode, EnvironmentInfo,
+    FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, RectF, SemanticBackendKind,
+    ToolAvailability, ToolCapabilities,
 };
 use sky_cua_platform::{AppInfo, SetValueFallbackMode, SetValueRouting, new_snapshot_id};
 
 use crate::app_policy::{AppActionPolicies, ResolvedSetValueFallbackPolicy};
 use crate::apps::discovery::{DiscoveredApp, discover_apps};
-use crate::atspi::{actions as atspi_actions, connect, snapshot::snapshot_for_app};
+use crate::atspi::{
+    actions as atspi_actions, connect, normalize_action, snapshot::snapshot_for_app,
+};
 use crate::coords::{center_of, desktop_to_stream};
 use crate::env_probe::{probe_environment, require_supported_environment};
 use crate::focus::pick_focused_app;
-use crate::kwin::{self, KWinWindowInfo};
 use crate::portal::remote_desktop::{
     MouseButton, PortalLifecycleEvent, RemoteDesktopSessionManager,
 };
 use crate::portal::screenshot;
+use crate::windowing as linux_windowing;
 use crate::x11::capture as x11_capture;
 use crate::x11::input_xtest::{self, X11MouseButton};
 use crate::x11::windowing::{self, X11WindowInfo};
@@ -80,6 +82,47 @@ impl LinuxDesktopBackend {
         *guard = None;
     }
 
+    async fn focus_window_target_for_keyboard(
+        &self,
+        request: &ActionRequest,
+    ) -> Result<Option<linux_windowing::LinuxWindowInfo>, BackendError> {
+        let Some(target) = window_target_from_arguments(&request.arguments)? else {
+            return Ok(None);
+        };
+        let environment = match request.environment.clone() {
+            Some(environment) => environment,
+            None => self.probe_environment().await?,
+        };
+        require_supported_environment(&environment)?;
+        let windows = linux_windowing::discover_activation_windows(&environment).await?;
+        let target_window = linux_windowing::resolve_window_target(&windows, &target.into())?;
+
+        if target_window.backend == "x11" {
+            if !input_xtest::xtest_is_available() {
+                return Err(BackendError::new(
+                    BackendErrorCode::ActionUnsupportedForEnvironment,
+                    "targeted X11 keyboard input requires XTest/xdotool window activation",
+                ));
+            }
+            input_xtest::window_activate(&target_window.window_id)?;
+            return Ok(Some(target_window.clone()));
+        }
+
+        if environment.input_backend == InputBackendKind::None {
+            return Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                format!(
+                    "matched {} window {}, but no session input backend is available after native activation",
+                    target_window.backend, target_window.window_id
+                ),
+            ));
+        }
+
+        linux_windowing::activate_window(target_window).await?;
+        let _ = linux_windowing::verify_window_focused(&environment, target_window).await?;
+        Ok(Some(target_window.clone()))
+    }
+
     async fn discover_accessible_apps(
         &self,
     ) -> Result<(AccessibilityConnection, Vec<DiscoveredApp>), BackendError> {
@@ -98,21 +141,20 @@ impl LinuxDesktopBackend {
 
     fn capabilities(environment: &EnvironmentInfo) -> ToolCapabilities {
         let semantic_ready = environment.semantic_backend == SemanticBackendKind::Atspi;
-        let x11_listing_ready = environment.session_kind
-            == sky_cua_platform::model::SessionKind::X11
-            && windowing::x11_window_query_available();
-        let kwin_listing_ready = kwin::kwin_window_query_available(environment);
+        let window_listing_ready = linux_windowing::probe_backends(environment)
+            .iter()
+            .any(|probe| probe.can_list_windows);
         let physical_ready = environment.input_backend != InputBackendKind::None;
 
         ToolCapabilities {
             list_apps: ToolAvailability {
-                available: semantic_ready || x11_listing_ready || kwin_listing_ready,
-                reason: (!(semantic_ready || x11_listing_ready || kwin_listing_ready))
+                available: semantic_ready || window_listing_ready,
+                reason: (!(semantic_ready || window_listing_ready))
                     .then(|| "Neither AT-SPI nor a window-query fallback is available".to_string()),
             },
             get_app_state: ToolAvailability {
-                available: semantic_ready || x11_listing_ready || kwin_listing_ready,
-                reason: (!(semantic_ready || x11_listing_ready || kwin_listing_ready))
+                available: semantic_ready || window_listing_ready,
+                reason: (!(semantic_ready || window_listing_ready))
                     .then(|| "Neither AT-SPI nor a window-query fallback is available".to_string()),
             },
             focus_element: ToolAvailability {
@@ -143,6 +185,10 @@ impl LinuxDesktopBackend {
                 available: semantic_ready || physical_ready,
                 reason: (!(semantic_ready || physical_ready))
                     .then(|| "No semantic or physical input backend is available".to_string()),
+            },
+            perform_action: ToolAvailability {
+                available: semantic_ready,
+                reason: (!semantic_ready).then(|| "AT-SPI is unavailable".to_string()),
             },
             perform_secondary_action: ToolAvailability {
                 available: physical_ready || semantic_ready,
@@ -205,23 +251,90 @@ impl DesktopBackend for LinuxDesktopBackend {
         Ok(environment)
     }
 
+    async fn doctor(&self) -> Result<sky_cua_platform::model::DoctorReport, BackendError> {
+        let environment = self.probe_environment().await?;
+        Ok(crate::doctor::build_doctor_report(environment))
+    }
+
+    async fn setup_accessibility(
+        &self,
+    ) -> Result<sky_cua_platform::model::AccessibilitySetupReport, BackendError> {
+        crate::setup::setup_accessibility_report(|| async { self.doctor().await }).await
+    }
+
+    async fn setup_window_targeting(
+        &self,
+    ) -> Result<sky_cua_platform::model::WindowTargetingSetupReport, BackendError> {
+        Ok(crate::setup::setup_window_targeting_report().await)
+    }
+
     async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
         let environment = self.probe_environment().await?;
         require_supported_environment(&environment)?;
-        let x11_windows = windowing::discover_windows().unwrap_or_default();
-        let kwin_windows = kwin::discover_windows(&environment).unwrap_or_default();
+        let registry_windows = linux_windowing::discover_app_windows(&environment)
+            .await
+            .unwrap_or_default();
         let mut atspi_apps = match self.discover_accessible_apps().await {
             Ok((_, apps)) => apps,
             Err(error) => {
-                if x11_windows.is_empty() && kwin_windows.is_empty() {
+                if registry_windows.is_empty() {
                     return Err(error);
                 }
                 Vec::new()
             }
         };
-        enrich_accessible_apps_from_x11(&mut atspi_apps, &x11_windows);
-        enrich_accessible_apps_from_kwin(&mut atspi_apps, &kwin_windows);
-        Ok(merge_app_lists(&atspi_apps, &x11_windows, &kwin_windows))
+        enrich_accessible_apps_from_windows(&mut atspi_apps, &registry_windows);
+        Ok(merge_app_lists(&atspi_apps, &registry_windows))
+    }
+
+    async fn list_windows(&self) -> Result<Vec<sky_cua_platform::model::WindowInfo>, BackendError> {
+        let environment = self.probe_environment().await?;
+        require_supported_environment(&environment)?;
+        linux_windowing::discover_windows(&environment)
+            .await
+            .map(|windows| windows.into_iter().map(Into::into).collect())
+    }
+
+    async fn focused_window(
+        &self,
+    ) -> Result<Option<sky_cua_platform::model::WindowInfo>, BackendError> {
+        if let Some(window) = linux_windowing::focused_window_override() {
+            return Ok(Some(window.into()));
+        }
+        Ok(self
+            .list_windows()
+            .await?
+            .into_iter()
+            .find(|window| window.focused))
+    }
+
+    async fn activate_window(
+        &self,
+        target: sky_cua_platform::model::WindowTarget,
+    ) -> Result<ActionOutcome, BackendError> {
+        if !target.has_target() {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                "activate_window requires one of window_id, pid, app_id, wm_class, title, tty, terminal_pid, terminal_command, or terminal_cwd",
+            ));
+        }
+        let environment = self.probe_environment().await?;
+        require_supported_environment(&environment)?;
+        let windows = linux_windowing::discover_activation_windows(&environment).await?;
+        let window = linux_windowing::resolve_window_target(&windows, &target.into())?;
+        linux_windowing::activate_window(window).await?;
+        let focused = linux_windowing::verify_window_focused(&environment, window).await?;
+        Ok(success_with_diagnostics(
+            format!("Activated {} window {}.", window.backend, window.window_id),
+            vec![DiagnosticEntry {
+                code: "WindowFocusVerified".to_string(),
+                message: format!(
+                    "Focus verification matched {} window {}.",
+                    focused.backend, focused.window_id
+                ),
+                details: None,
+            }],
+        ))
     }
 
     async fn get_app_state(
@@ -233,11 +346,20 @@ impl DesktopBackend for LinuxDesktopBackend {
         let environment = self.probe_environment().await?;
         require_supported_environment(&environment)?;
         let capabilities = Self::capabilities(&environment);
+        let doctor_report = crate::doctor::build_doctor_report(environment.clone());
         let mut diagnostics = DiagnosticBuilder::new();
+        if !doctor_report.readiness.can_build_accessibility_tree {
+            diagnostics.push(
+                BackendErrorCode::AccessibilityUnavailable,
+                "Semantic accessibility is unavailable; Computer Use will fall back to window and screenshot anchors where possible.",
+                Some(doctor_report.readiness.recommended_next_step.clone()),
+            );
+        }
         let mut portal_session_error: Option<BackendError> = None;
         let mut capture_error: Option<BackendError> = None;
-        let x11_windows = windowing::discover_windows().unwrap_or_default();
-        let kwin_windows = kwin::discover_windows(&environment).unwrap_or_default();
+        let registry_windows = linux_windowing::discover_app_windows(&environment)
+            .await
+            .unwrap_or_default();
 
         let mut capture = (environment.capture_backend != CaptureBackendKind::None).then_some(
             sky_cua_platform::model::CaptureInfo {
@@ -368,16 +490,8 @@ impl DesktopBackend for LinuxDesktopBackend {
                 );
                 let fallback_window = selector
                     .as_ref()
-                    .and_then(|selector| {
-                        select_x11_window(&x11_windows, selector).map(FallbackWindow::X11)
-                    })
-                    .or_else(|| {
-                        selector
-                            .as_ref()
-                            .and_then(|selector| select_kwin_window(&kwin_windows, selector))
-                    })
-                    .or_else(|| preferred_x11_window(&x11_windows).map(FallbackWindow::X11))
-                    .or_else(|| preferred_kwin_window(&kwin_windows).map(FallbackWindow::KWin));
+                    .and_then(|selector| select_linux_window(&registry_windows, selector))
+                    .or_else(|| preferred_linux_window(&registry_windows));
                 push_capture_diagnostics(
                     &environment,
                     capture.as_ref(),
@@ -387,39 +501,24 @@ impl DesktopBackend for LinuxDesktopBackend {
                 );
                 push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
                 if let Some(window) = fallback_window {
-                    let summary = selector_or_window_summary(selector.as_ref(), window.app());
-                    match window {
-                        FallbackWindow::X11(window) => {
-                            diagnostics.push(
-                                BackendErrorCode::AccessibilityCoverageLimited,
-                                "The selected X11/XWayland window is visible through X11, but no AT-SPI application tree was available for it",
-                                Some(summary),
-                            );
-                            return Ok(x11_fallback_snapshot(
-                                snapshot_id,
-                                environment,
-                                capabilities,
-                                capture,
-                                diagnostics,
-                                window,
-                            ));
-                        }
-                        FallbackWindow::KWin(window) => {
-                            diagnostics.push(
-                                BackendErrorCode::AccessibilityCoverageLimited,
-                                "The active Wayland window is visible through KWin, but no AT-SPI application tree was available for it",
-                                Some(summary),
-                            );
-                            return Ok(kwin_fallback_snapshot(
-                                snapshot_id,
-                                environment,
-                                capabilities,
-                                capture,
-                                diagnostics,
-                                window,
-                            ));
-                        }
-                    }
+                    let app = app_from_linux_window(&window);
+                    diagnostics.push(
+                        BackendErrorCode::AccessibilityCoverageLimited,
+                        format!(
+                            "The selected {} window is visible through the window registry, but no AT-SPI application tree was available for it",
+                            window.backend
+                        ),
+                        Some(selector_or_window_summary(selector.as_ref(), &app)),
+                    );
+                    return Ok(linux_fallback_snapshot(
+                        snapshot_id,
+                        environment,
+                        capabilities,
+                        capture,
+                        diagnostics,
+                        Some(doctor_report),
+                        window,
+                    ));
                 }
                 return Ok(AppStateSnapshot {
                     snapshot_id,
@@ -431,12 +530,12 @@ impl DesktopBackend for LinuxDesktopBackend {
                     elements: Vec::new(),
                     diagnostics: diagnostics.finish(),
                     app_guidance: None,
+                    doctor_report: Some(doctor_report),
                 });
             }
         };
 
-        enrich_accessible_apps_from_x11(&mut apps, &x11_windows);
-        enrich_accessible_apps_from_kwin(&mut apps, &kwin_windows);
+        enrich_accessible_apps_from_windows(&mut apps, &registry_windows);
         if apps.is_empty() {
             diagnostics.push(
                 BackendErrorCode::AccessibilityCoverageLimited,
@@ -453,50 +552,27 @@ impl DesktopBackend for LinuxDesktopBackend {
             push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
             if let Some(window) = selector
                 .as_ref()
-                .and_then(|selector| {
-                    select_x11_window(&x11_windows, selector).map(FallbackWindow::X11)
-                })
-                .or_else(|| {
-                    selector
-                        .as_ref()
-                        .and_then(|selector| select_kwin_window(&kwin_windows, selector))
-                })
-                .or_else(|| preferred_x11_window(&x11_windows).map(FallbackWindow::X11))
-                .or_else(|| preferred_kwin_window(&kwin_windows).map(FallbackWindow::KWin))
+                .and_then(|selector| select_linux_window(&registry_windows, selector))
+                .or_else(|| preferred_linux_window(&registry_windows))
             {
-                let summary = selector_or_window_summary(selector.as_ref(), window.app());
-                match window {
-                    FallbackWindow::X11(window) => {
-                        diagnostics.push(
-                            BackendErrorCode::AccessibilityCoverageLimited,
-                            "The selected X11/XWayland window is visible through X11, but no accessible AT-SPI application tree matched it",
-                            Some(summary),
-                        );
-                        return Ok(x11_fallback_snapshot(
-                            snapshot_id,
-                            environment,
-                            capabilities,
-                            capture,
-                            diagnostics,
-                            window,
-                        ));
-                    }
-                    FallbackWindow::KWin(window) => {
-                        diagnostics.push(
-                            BackendErrorCode::AccessibilityCoverageLimited,
-                            "The active Wayland window is visible through KWin, but no accessible AT-SPI application tree matched it",
-                            Some(summary),
-                        );
-                        return Ok(kwin_fallback_snapshot(
-                            snapshot_id,
-                            environment,
-                            capabilities,
-                            capture,
-                            diagnostics,
-                            window,
-                        ));
-                    }
-                }
+                let app = app_from_linux_window(&window);
+                diagnostics.push(
+                    BackendErrorCode::AccessibilityCoverageLimited,
+                    format!(
+                        "The selected {} window is visible through the window registry, but no accessible AT-SPI application tree matched it",
+                        window.backend
+                    ),
+                    Some(selector_or_window_summary(selector.as_ref(), &app)),
+                );
+                return Ok(linux_fallback_snapshot(
+                    snapshot_id,
+                    environment,
+                    capabilities,
+                    capture,
+                    diagnostics,
+                    Some(doctor_report),
+                    window,
+                ));
             }
             return Ok(AppStateSnapshot {
                 snapshot_id,
@@ -508,6 +584,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                 elements: Vec::new(),
                 diagnostics: diagnostics.finish(),
                 app_guidance: None,
+                doctor_report: Some(doctor_report),
             });
         }
 
@@ -525,10 +602,7 @@ impl DesktopBackend for LinuxDesktopBackend {
         let chosen_app: DiscoveredApp = if let Some(selector) = selector.as_ref() {
             if let Some(app) = select_app(&apps, selector) {
                 app
-            } else if let Some(window) = select_x11_window(&x11_windows, selector)
-                .map(FallbackWindow::X11)
-                .or_else(|| select_kwin_window(&kwin_windows, selector))
-            {
+            } else if let Some(window) = select_linux_window(&registry_windows, selector) {
                 push_capture_diagnostics(
                     &environment,
                     capture.as_ref(),
@@ -537,39 +611,24 @@ impl DesktopBackend for LinuxDesktopBackend {
                     &mut diagnostics,
                 );
                 push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
-                let summary = selector_or_window_summary(Some(selector), window.app());
-                match window {
-                    FallbackWindow::X11(window) => {
-                        diagnostics.push(
-                            BackendErrorCode::AccessibilityCoverageLimited,
-                            "The selected X11/XWayland window is visible through X11, but no accessible AT-SPI application tree matched it",
-                            Some(summary),
-                        );
-                        return Ok(x11_fallback_snapshot(
-                            snapshot_id,
-                            environment,
-                            capabilities,
-                            capture,
-                            diagnostics,
-                            window,
-                        ));
-                    }
-                    FallbackWindow::KWin(window) => {
-                        diagnostics.push(
-                            BackendErrorCode::AccessibilityCoverageLimited,
-                            "The active Wayland window is visible through KWin, but no accessible AT-SPI application tree matched it",
-                            Some(summary),
-                        );
-                        return Ok(kwin_fallback_snapshot(
-                            snapshot_id,
-                            environment,
-                            capabilities,
-                            capture,
-                            diagnostics,
-                            window,
-                        ));
-                    }
-                }
+                let app = app_from_linux_window(&window);
+                diagnostics.push(
+                    BackendErrorCode::AccessibilityCoverageLimited,
+                    format!(
+                        "The selected {} window is visible through the window registry, but no accessible AT-SPI application tree matched it",
+                        window.backend
+                    ),
+                    Some(selector_or_window_summary(Some(selector), &app)),
+                );
+                return Ok(linux_fallback_snapshot(
+                    snapshot_id,
+                    environment,
+                    capabilities,
+                    capture,
+                    diagnostics,
+                    Some(doctor_report),
+                    window,
+                ));
             } else {
                 return Err(BackendError::new(
                     BackendErrorCode::InvalidRequest,
@@ -580,15 +639,19 @@ impl DesktopBackend for LinuxDesktopBackend {
                 ));
             }
         } else {
-            if let Some(window) = preferred_x11_window(&x11_windows)
+            if let Some(window) = preferred_linux_window(&registry_windows)
                 && !apps
                     .iter()
-                    .any(|app| x11_window_matches_app(&window, &app.info))
+                    .any(|app| linux_window_matches_app(&window, &app.info))
             {
+                let app = app_from_linux_window(&window);
                 diagnostics.push(
                     BackendErrorCode::AccessibilityCoverageLimited,
-                    "The focused X11/XWayland window is visible through X11, but no accessible AT-SPI application tree matched it",
-                    Some(window_summary(&window.app)),
+                    format!(
+                        "The focused {} window is visible through the window registry, but no accessible AT-SPI application tree matched it",
+                        window.backend
+                    ),
+                    Some(window_summary(&app)),
                 );
                 push_capture_diagnostics(
                     &environment,
@@ -598,45 +661,22 @@ impl DesktopBackend for LinuxDesktopBackend {
                     &mut diagnostics,
                 );
                 push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
-                return Ok(x11_fallback_snapshot(
+                return Ok(linux_fallback_snapshot(
                     snapshot_id,
                     environment,
                     capabilities,
                     capture,
                     diagnostics,
+                    Some(doctor_report),
                     window,
                 ));
             }
 
-            if let Some(window) = preferred_kwin_window(&kwin_windows)
-                && !apps
-                    .iter()
-                    .any(|app| kwin_window_matches_app(&window, &app.info))
-            {
-                diagnostics.push(
-                    BackendErrorCode::AccessibilityCoverageLimited,
-                    "The active Wayland window is visible through KWin, but no accessible AT-SPI application tree matched it",
-                    Some(window_summary(&window.app)),
-                );
-                push_capture_diagnostics(
-                    &environment,
-                    capture.as_ref(),
-                    portal_session_error.as_ref(),
-                    capture_error.as_ref(),
-                    &mut diagnostics,
-                );
-                push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
-                return Ok(kwin_fallback_snapshot(
-                    snapshot_id,
-                    environment,
-                    capabilities,
-                    capture,
-                    diagnostics,
-                    window,
-                ));
-            }
-
-            focused.unwrap_or_else(|| apps[0].clone())
+            focused.unwrap_or_else(|| {
+                apps.first()
+                    .cloned()
+                    .expect("apps should not be empty at this point")
+            })
         };
         let focused_app = Some(Self::focused_from_app(&chosen_app.info));
 
@@ -668,6 +708,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             elements,
             diagnostics: diagnostics.finish(),
             app_guidance: None,
+            doctor_report: Some(doctor_report),
         })
     }
 
@@ -683,6 +724,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             ActionName::CollapseElement => self.collapse_element(request).await,
             ActionName::ToggleElement => self.toggle_element(request).await,
             ActionName::Click => self.click(request).await,
+            ActionName::PerformAction => self.perform_action(request).await,
             ActionName::PerformSecondaryAction => self.secondary_click(request).await,
             ActionName::Scroll => self.scroll(request).await,
             ActionName::Drag => self.drag(request).await,
@@ -703,11 +745,14 @@ fn semantic_backend_ref<'a>(
     request: &'a ActionRequest,
     tool_name: &str,
 ) -> Result<&'a str, BackendError> {
+    if let Some(backend_ref) = direct_backend_ref(&request.arguments) {
+        return Ok(backend_ref);
+    }
     let element = request.resolved_element.as_ref().ok_or_else(|| {
         BackendError::new(
             BackendErrorCode::InvalidRequest,
             format!(
-                "{tool_name} requires element_index so the service can resolve a semantic target"
+                "{tool_name} requires element_index, element_identifier, or a semantic selector so the service can resolve a semantic target"
             ),
         )
     })?;
@@ -717,6 +762,14 @@ fn semantic_backend_ref<'a>(
             format!("{tool_name} target did not include a backend_ref"),
         )
     })
+}
+
+fn direct_backend_ref(arguments: &serde_json::Value) -> Option<&str> {
+    arguments
+        .get("element_identifier")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn is_retryable_accessibility_error(error: &BackendError) -> bool {
@@ -862,6 +915,40 @@ impl LinuxDesktopBackend {
         }
     }
 
+    async fn perform_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        let backend_ref = semantic_backend_ref(&request, "perform_action")?;
+        let connection = self.accessibility_connection().await?;
+        let action_index = self
+            .resolve_requested_action_index(&connection, backend_ref, &request)
+            .await?;
+        let invocation =
+            atspi_actions::invoke_action_by_index(&connection, backend_ref, action_index).await?;
+        if invocation.ok {
+            Ok(success(format!(
+                "Invoked AT-SPI action {} ({}).",
+                invocation.action_index,
+                invocation
+                    .action_name
+                    .as_deref()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("unnamed")
+            )))
+        } else {
+            Err(BackendError::new(
+                BackendErrorCode::AccessibilityCoverageLimited,
+                format!(
+                    "AT-SPI action {} ({}) returned false for element {backend_ref}",
+                    invocation.action_index,
+                    invocation
+                        .action_name
+                        .as_deref()
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or("unnamed")
+                ),
+            ))
+        }
+    }
+
     async fn secondary_click(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
         if let Some(element) = request.resolved_element.as_ref()
             && let Some(backend_ref) = element.backend_ref.as_deref()
@@ -982,9 +1069,9 @@ impl LinuxDesktopBackend {
             InputBackendKind::XTest => {
                 input_xtest::pointer_move_absolute(from.0, from.1)?;
                 input_xtest::pointer_button(X11MouseButton::Left, true)?;
-                std::thread::sleep(std::time::Duration::from_millis(40));
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
                 input_xtest::pointer_move_absolute(to.0, to.1)?;
-                std::thread::sleep(std::time::Duration::from_millis(40));
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
                 input_xtest::pointer_button(X11MouseButton::Left, false)?;
                 Ok(success("Dragged through the X11 input fallback."))
             }
@@ -999,27 +1086,41 @@ impl LinuxDesktopBackend {
     }
 
     async fn type_text(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        if let Some(element) = request.resolved_element.as_ref()
-            && let Some(backend_ref) = element.backend_ref.as_deref()
-        {
-            let connection = self.accessibility_connection().await?;
-            let _ = atspi_actions::grab_focus(&connection, backend_ref).await;
-        }
-
         let text = request
             .arguments
             .get("text")
             .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
             .ok_or_else(|| {
                 BackendError::new(
                     BackendErrorCode::InvalidRequest,
                     "type_text requires a text argument",
                 )
             })?;
-        let x11_window = matched_x11_window_for_request(&request);
-        match effective_keyboard_input_backend(&request, x11_window.as_ref()) {
+        if let Some(element) = request.resolved_element.as_ref()
+            && let Some(backend_ref) = element.backend_ref.as_deref()
+        {
+            let connection = self.accessibility_connection().await?;
+            let _ = atspi_actions::grab_focus(&connection, backend_ref).await;
+        }
+        let target_window = self.focus_window_target_for_keyboard(&request).await?;
+        let x11_window = if target_window.is_none() {
+            matched_x11_window_for_request(&request)
+        } else {
+            None
+        };
+        let x11_window_id = target_window
+            .as_ref()
+            .filter(|window| window.backend == "x11")
+            .map(|window| window.window_id.as_str())
+            .or_else(|| x11_window.as_ref().map(|window| window.window_id.as_str()));
+        match effective_keyboard_input_backend_for_target(
+            &request,
+            x11_window.as_ref(),
+            x11_window_id,
+        ) {
             InputBackendKind::PortalRemoteDesktop => {
-                self.portal.send_text(text).await?;
+                self.portal.send_text(&text).await?;
                 Ok(success_with_diagnostics(
                     "Typed text through the RemoteDesktop portal.",
                     portal_lifecycle_diagnostics(&self.portal.take_lifecycle_events().await),
@@ -1027,10 +1128,7 @@ impl LinuxDesktopBackend {
             }
             InputBackendKind::XTest => {
                 activate_x11_window(x11_window.as_ref())?;
-                input_xtest::send_text_to_target(
-                    x11_window.as_ref().map(|window| window.window_id.as_str()),
-                    text,
-                )?;
+                input_xtest::send_text_to_target(x11_window_id, &text)?;
                 Ok(success("Typed text through the X11 input fallback."))
             }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
@@ -1044,6 +1142,12 @@ impl LinuxDesktopBackend {
     }
 
     async fn press_key(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        let keys = parse_key_sequence(&request.arguments).ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                "press_key requires a key string or keys array",
+            )
+        })?;
         if let Some(element) = request.resolved_element.as_ref()
             && let Some(backend_ref) = element.backend_ref.as_deref()
         {
@@ -1051,14 +1155,22 @@ impl LinuxDesktopBackend {
             let _ = atspi_actions::grab_focus(&connection, backend_ref).await;
         }
 
-        let keys = parse_key_sequence(&request.arguments).ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::InvalidRequest,
-                "press_key requires a key string or keys array",
-            )
-        })?;
-        let x11_window = matched_x11_window_for_request(&request);
-        match effective_keyboard_input_backend(&request, x11_window.as_ref()) {
+        let target_window = self.focus_window_target_for_keyboard(&request).await?;
+        let x11_window = if target_window.is_none() {
+            matched_x11_window_for_request(&request)
+        } else {
+            None
+        };
+        let x11_window_id = target_window
+            .as_ref()
+            .filter(|window| window.backend == "x11")
+            .map(|window| window.window_id.as_str())
+            .or_else(|| x11_window.as_ref().map(|window| window.window_id.as_str()));
+        match effective_keyboard_input_backend_for_target(
+            &request,
+            x11_window.as_ref(),
+            x11_window_id,
+        ) {
             InputBackendKind::PortalRemoteDesktop => {
                 self.portal.press_key_sequence(&keys).await?;
                 Ok(success_with_diagnostics(
@@ -1068,10 +1180,7 @@ impl LinuxDesktopBackend {
             }
             InputBackendKind::XTest => {
                 activate_x11_window(x11_window.as_ref())?;
-                input_xtest::press_key_sequence_to_target(
-                    x11_window.as_ref().map(|window| window.window_id.as_str()),
-                    &keys,
-                )?;
+                input_xtest::press_key_sequence_to_target(x11_window_id, &keys)?;
                 Ok(success(
                     "Pressed the key sequence through the X11 input fallback.",
                 ))
@@ -1087,18 +1196,7 @@ impl LinuxDesktopBackend {
     }
 
     async fn set_value(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        let element = request.resolved_element.as_ref().ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::InvalidRequest,
-                "set_value requires element_index so the service can resolve a semantic target",
-            )
-        })?;
-        let backend_ref = element.backend_ref.as_deref().ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::InvalidRequest,
-                "set_value target did not include a backend_ref",
-            )
-        })?;
+        let backend_ref = semantic_backend_ref(&request, "set_value")?;
         let value = request
             .arguments
             .get("value")
@@ -1129,8 +1227,14 @@ impl LinuxDesktopBackend {
         let connection = self.accessibility_connection().await?;
         let _ = atspi_actions::grab_focus(&connection, backend_ref).await;
         match atspi_actions::set_value(&connection, backend_ref, value).await {
-            Ok(true) => return Ok(success("Set the value semantically through AT-SPI.")),
-            Ok(false) => {}
+            Ok(atspi_actions::SetValueResult::EditableText) => {
+                return Ok(success("Set editable text semantically through AT-SPI."));
+            }
+            Ok(atspi_actions::SetValueResult::Numeric { value }) => {
+                return Ok(success(format!(
+                    "Set numeric value to {value} semantically through AT-SPI."
+                )));
+            }
             Err(error) if error.code == BackendErrorCode::ActionRequiresPhysicalInput.as_str() => {
                 if let Some(policy) = policy.as_ref() {
                     return self
@@ -1145,6 +1249,71 @@ impl LinuxDesktopBackend {
             BackendErrorCode::ActionRequiresPhysicalInput,
             "semantic set_value failed and no physical fallback is enabled for set_value",
         ))
+    }
+
+    async fn resolve_requested_action_index(
+        &self,
+        connection: &AccessibilityConnection,
+        backend_ref: &str,
+        request: &ActionRequest,
+    ) -> Result<i32, BackendError> {
+        if let Some(index) = request
+            .arguments
+            .get("action_index")
+            .and_then(serde_json::Value::as_i64)
+            .or_else(|| {
+                request
+                    .arguments
+                    .get("action_index")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| value.trim().parse::<i64>().ok())
+            })
+            .or_else(|| {
+                request
+                    .arguments
+                    .get("action")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| value.trim().parse::<i64>().ok())
+            })
+        {
+            return i32::try_from(index).map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::InvalidRequest,
+                    format!("action_index {index} is not a valid AT-SPI action index: {error}"),
+                )
+            });
+        }
+
+        let Some(action_name) = request
+            .arguments
+            .get("action_name")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                request
+                    .arguments
+                    .get("action")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(0);
+        };
+
+        let actions = atspi_actions::available_actions(connection, backend_ref).await?;
+        actions
+            .iter()
+            .position(|candidate| action_name_matches(candidate, action_name))
+            .and_then(|index| i32::try_from(index).ok())
+            .ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::InvalidRequest,
+                    format!(
+                        "element {backend_ref} exposes actions [{}], but none matched requested action_name {action_name:?}",
+                        actions.join(", ")
+                    ),
+                )
+            })
     }
 
     async fn set_value_with_fallback_policy(
@@ -1200,12 +1369,12 @@ impl LinuxDesktopBackend {
                         activate_x11_window(x11_window.as_ref())?;
                         input_xtest::pointer_move_absolute(x, y)?;
                         input_xtest::click(X11MouseButton::Left)?;
-                        std::thread::sleep(std::time::Duration::from_millis(40));
+                        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
                         input_xtest::press_key_sequence_to_target(
                             x11_window.as_ref().map(|window| window.window_id.as_str()),
                             &select_all,
                         )?;
-                        std::thread::sleep(std::time::Duration::from_millis(25));
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                         input_xtest::send_text_to_target(
                             x11_window.as_ref().map(|window| window.window_id.as_str()),
                             value,
@@ -1278,6 +1447,44 @@ fn effective_keyboard_input_backend(
     backend
 }
 
+fn effective_keyboard_input_backend_for_target(
+    request: &ActionRequest,
+    x11_window: Option<&X11WindowInfo>,
+    target_window_id: Option<&str>,
+) -> InputBackendKind {
+    if target_window_id.is_some() {
+        if input_xtest::xtest_is_available() {
+            InputBackendKind::XTest
+        } else {
+            InputBackendKind::None
+        }
+    } else {
+        effective_keyboard_input_backend(request, x11_window)
+    }
+}
+
+fn action_name_matches(candidate: &str, requested: &str) -> bool {
+    let candidate = normalize_action(candidate);
+    let requested = normalize_action(requested);
+    if candidate == requested {
+        return true;
+    }
+    canonical_action_aliases(&requested)
+        .iter()
+        .any(|alias| candidate == *alias)
+}
+
+fn canonical_action_aliases(action: &str) -> &'static [&'static str] {
+    match action {
+        "activate" => &["press", "click", "open", "jump", "invoke"],
+        "select" => &["choose"],
+        "expand" => &["open"],
+        "collapse" => &["close"],
+        "toggle" => &["check", "uncheck"],
+        _ => &[],
+    }
+}
+
 fn activate_x11_window(window: Option<&X11WindowInfo>) -> Result<(), BackendError> {
     if let Some(window) = window {
         input_xtest::window_activate(&window.window_id)?;
@@ -1305,6 +1512,45 @@ fn matched_x11_window_for_request(request: &ActionRequest) -> Option<X11WindowIn
         is_focused_candidate: true,
     };
     best_x11_window_match(&windows, &app).cloned()
+}
+
+fn window_target_from_arguments(
+    arguments: &serde_json::Value,
+) -> Result<Option<sky_cua_platform::model::WindowTarget>, BackendError> {
+    const TARGET_FIELDS: &[&str] = &[
+        "window_id",
+        "pid",
+        "tty",
+        "terminal_pid",
+        "terminal_command",
+        "terminal_cwd",
+        "app_id",
+        "wm_class",
+        "title",
+    ];
+    let has_target = TARGET_FIELDS
+        .iter()
+        .any(|field| arguments.get(*field).is_some_and(value_is_present));
+    if !has_target {
+        return Ok(None);
+    }
+
+    serde_json::from_value(arguments.clone())
+        .map(Some)
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                format!("invalid window target arguments: {error}"),
+            )
+        })
+}
+
+fn value_is_present(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::String(value) => !value.trim().is_empty(),
+        _ => true,
+    }
 }
 
 fn action_point_for_backend(
@@ -1540,108 +1786,59 @@ fn select_app(apps: &[DiscoveredApp], selector: &AppSelector) -> Option<Discover
         .map(|(_, app)| app.clone())
 }
 
-#[derive(Debug, Clone)]
-enum FallbackWindow {
-    X11(X11WindowInfo),
-    KWin(KWinWindowInfo),
-}
-
-impl FallbackWindow {
-    fn app(&self) -> &AppInfo {
-        match self {
-            Self::X11(window) => &window.app,
-            Self::KWin(window) => &window.app,
-        }
-    }
-}
-
-fn select_x11_window(windows: &[X11WindowInfo], selector: &AppSelector) -> Option<X11WindowInfo> {
+fn select_linux_window(
+    windows: &[linux_windowing::LinuxWindowInfo],
+    selector: &AppSelector,
+) -> Option<linux_windowing::LinuxWindowInfo> {
     windows
         .iter()
         .filter_map(|window| {
-            selector_match_score(&window.app, selector).map(|score| (score, window))
+            let app = app_from_linux_window(window);
+            selector_match_score(&app, selector).map(|score| (score, window))
         })
-        .max_by_key(|(score, window)| (*score, window.app.is_focused_candidate))
+        .max_by_key(|(score, window)| (*score, window.focused))
         .map(|(_, window)| window.clone())
 }
 
-fn select_kwin_window(
-    windows: &[KWinWindowInfo],
-    selector: &AppSelector,
-) -> Option<FallbackWindow> {
+fn preferred_linux_window(
+    windows: &[linux_windowing::LinuxWindowInfo],
+) -> Option<linux_windowing::LinuxWindowInfo> {
     windows
         .iter()
-        .filter_map(|window| {
-            selector_match_score(&window.app, selector).map(|score| (score, window))
-        })
-        .max_by_key(|(score, window)| (*score, window.app.is_focused_candidate))
-        .map(|(_, window)| FallbackWindow::KWin(window.clone()))
-}
-
-fn preferred_x11_window(windows: &[X11WindowInfo]) -> Option<X11WindowInfo> {
-    windows
-        .iter()
-        .find(|window| window.app.is_focused_candidate)
+        .find(|window| window.focused)
         .cloned()
         .or_else(|| windows.first().cloned())
 }
 
-fn preferred_kwin_window(windows: &[KWinWindowInfo]) -> Option<KWinWindowInfo> {
-    windows
-        .iter()
-        .find(|window| window.app.is_focused_candidate)
-        .cloned()
-        .or_else(|| windows.first().cloned())
-}
-
-fn enrich_accessible_apps_from_x11(apps: &mut [DiscoveredApp], x11_windows: &[X11WindowInfo]) {
+fn enrich_accessible_apps_from_windows(
+    apps: &mut [DiscoveredApp],
+    windows: &[linux_windowing::LinuxWindowInfo],
+) {
     for app in apps {
-        let Some(window) = best_x11_window_match(x11_windows, &app.info) else {
+        let Some(window) = best_linux_window_match(windows, &app.info) else {
             continue;
         };
+        let window_app = app_from_linux_window(window);
 
         if app.info.pid.is_none() {
-            app.info.pid = window.app.pid;
+            app.info.pid = window_app.pid;
         }
         if app.info.executable.is_none() {
-            app.info.executable = window.app.executable.clone();
+            app.info.executable = window_app.executable.clone();
         }
         if app.info.desktop_file_id.is_none() {
-            app.info.desktop_file_id = window.app.desktop_file_id.clone();
+            app.info.desktop_file_id = window_app.desktop_file_id.clone();
         }
         if app.info.toolkit_guess.is_none() {
-            app.info.toolkit_guess = window.app.toolkit_guess.clone();
+            app.info.toolkit_guess = window_app.toolkit_guess.clone();
         }
         if app.info.window_title.is_none() {
-            app.info.window_title = window.app.window_title.clone();
+            app.info.window_title = window_app.window_title.clone();
         }
         if app.info.name.eq_ignore_ascii_case("Unnamed") {
-            app.info.name = window.app.name.clone();
+            app.info.name = window_app.name.clone();
         }
-        if !app.info.is_focused_candidate && window.app.is_focused_candidate {
-            app.info.is_focused_candidate = true;
-        }
-    }
-}
-
-fn enrich_accessible_apps_from_kwin(apps: &mut [DiscoveredApp], windows: &[KWinWindowInfo]) {
-    for app in apps {
-        let Some(window) = best_kwin_window_match(windows, &app.info) else {
-            continue;
-        };
-        if app.info.desktop_file_id.is_none() {
-            app.info.desktop_file_id = window.app.desktop_file_id.clone();
-        }
-        if app.info.window_title.is_none() {
-            app.info.window_title = window.app.window_title.clone();
-        }
-        if app.info.executable.is_none() {
-            app.info.executable = window.app.executable.clone();
-        }
-        if app.info.toolkit_guess.is_none() {
-            app.info.toolkit_guess = window.app.toolkit_guess.clone();
-        }
-        if !app.info.is_focused_candidate && window.app.is_focused_candidate {
+        if !app.info.is_focused_candidate && window_app.is_focused_candidate {
             app.info.is_focused_candidate = true;
         }
     }
@@ -1649,51 +1846,53 @@ fn enrich_accessible_apps_from_kwin(apps: &mut [DiscoveredApp], windows: &[KWinW
 
 fn merge_app_lists(
     apps: &[DiscoveredApp],
-    x11_windows: &[X11WindowInfo],
-    kwin_windows: &[KWinWindowInfo],
+    windows: &[linux_windowing::LinuxWindowInfo],
 ) -> Vec<AppInfo> {
     let mut merged = apps.iter().map(|app| app.info.clone()).collect::<Vec<_>>();
-    for window in x11_windows {
-        if !merged.iter().any(|app| x11_window_matches_app(window, app)) {
-            merged.push(window.app.clone());
-        }
-    }
-    for window in kwin_windows {
+    for window in windows {
         if !merged
             .iter()
-            .any(|app| kwin_window_matches_app(window, app))
+            .any(|app| linux_window_matches_app(window, app))
         {
-            merged.push(window.app.clone());
+            merged.push(app_from_linux_window(window));
         }
     }
     merged
 }
 
-fn best_kwin_window_match<'a>(
-    windows: &'a [KWinWindowInfo],
+fn best_linux_window_match<'a>(
+    windows: &'a [linux_windowing::LinuxWindowInfo],
     app: &AppInfo,
-) -> Option<&'a KWinWindowInfo> {
+) -> Option<&'a linux_windowing::LinuxWindowInfo> {
     windows
         .iter()
-        .filter_map(|window| kwin_match_score(window, app).map(|score| (score, window)))
-        .max_by_key(|(score, window)| (*score, window.app.is_focused_candidate))
+        .filter_map(|window| linux_window_match_score(window, app).map(|score| (score, window)))
+        .max_by_key(|(score, window)| (*score, window.focused))
         .map(|(_, window)| window)
 }
 
-fn kwin_window_matches_app(window: &KWinWindowInfo, app: &AppInfo) -> bool {
-    kwin_match_score(window, app).is_some()
+fn linux_window_matches_app(window: &linux_windowing::LinuxWindowInfo, app: &AppInfo) -> bool {
+    linux_window_match_score(window, app).is_some()
 }
 
-fn kwin_match_score(window: &KWinWindowInfo, app: &AppInfo) -> Option<i32> {
-    if app.app_id == window.app.app_id {
+fn linux_window_match_score(
+    window: &linux_windowing::LinuxWindowInfo,
+    app: &AppInfo,
+) -> Option<i32> {
+    let window_app = app_from_linux_window(window);
+    if app.app_id == window_app.app_id {
         return Some(1_000);
+    }
+    if let (Some(window_pid), Some(app_pid)) = (window.pid, app.pid)
+        && window_pid == app_pid
+    {
+        return Some(900);
     }
 
     let mut score = 0i32;
     let mut identity_signals = 0u8;
 
-    let window_title = window
-        .app
+    let window_title = window_app
         .window_title
         .as_deref()
         .map(normalize_match_key)
@@ -1703,12 +1902,11 @@ fn kwin_match_score(window: &KWinWindowInfo, app: &AppInfo) -> Option<i32> {
         .as_deref()
         .map(normalize_match_key)
         .unwrap_or_default();
-    let window_name = normalize_match_key(&window.app.name);
+    let window_name = normalize_match_key(&window_app.name);
     let app_name = normalize_match_key(&app.name);
-    let window_executable = window.app.executable.as_deref().map(normalize_match_key);
+    let window_executable = window_app.executable.as_deref().map(normalize_match_key);
     let app_executable = app.executable.as_deref().map(normalize_match_key);
-    let window_desktop = window
-        .app
+    let window_desktop = window_app
         .desktop_file_id
         .as_deref()
         .map(normalize_desktop_id_stem);
@@ -1716,8 +1914,8 @@ fn kwin_match_score(window: &KWinWindowInfo, app: &AppInfo) -> Option<i32> {
         .desktop_file_id
         .as_deref()
         .map(normalize_desktop_id_stem);
-    let window_resource_name = window.resource_name.as_deref().map(normalize_match_key);
-    let window_resource_class = window.resource_class.as_deref().map(normalize_match_key);
+    let window_resource_name = window.app_id.as_deref().map(normalize_match_key);
+    let window_resource_class = window.wm_class.as_deref().map(normalize_match_key);
 
     if !window_title.is_empty()
         && !app_title.is_empty()
@@ -1774,13 +1972,54 @@ fn kwin_match_score(window: &KWinWindowInfo, app: &AppInfo) -> Option<i32> {
         score += 120;
     }
 
-    if window.app.is_focused_candidate {
+    if window.focused {
         score += 5;
     }
 
     (identity_signals > 0 && score > 0).then_some(score)
 }
 
+fn app_from_linux_window(window: &linux_windowing::LinuxWindowInfo) -> AppInfo {
+    let name = window
+        .app_id
+        .as_deref()
+        .or(window.wm_class.as_deref())
+        .or(window.title.as_deref())
+        .unwrap_or("Window")
+        .to_string();
+    AppInfo {
+        app_id: window
+            .app_id
+            .clone()
+            .unwrap_or_else(|| format!("{}:{}", window.backend, window.window_id)),
+        name,
+        pid: window.pid,
+        executable: None,
+        desktop_file_id: window
+            .app_id
+            .as_ref()
+            .filter(|value| value.ends_with(".desktop"))
+            .cloned(),
+        app_user_model_id: None,
+        window_handle: Some(window.window_id.clone()),
+        toolkit_guess: window.client_type.clone(),
+        window_title: window.title.clone(),
+        is_focused_candidate: window.focused,
+    }
+}
+
+#[cfg(test)]
+fn select_x11_window(windows: &[X11WindowInfo], selector: &AppSelector) -> Option<X11WindowInfo> {
+    windows
+        .iter()
+        .filter_map(|window| {
+            selector_match_score(&window.app, selector).map(|score| (score, window))
+        })
+        .max_by_key(|(score, window)| (*score, window.app.is_focused_candidate))
+        .map(|(_, window)| window.clone())
+}
+
+#[cfg(test)]
 fn x11_window_matches_app(window: &X11WindowInfo, app: &AppInfo) -> bool {
     x11_match_score(window, app).is_some()
 }
@@ -2048,79 +2287,57 @@ fn portal_approval_pending(error: Option<&BackendError>) -> bool {
     error.is_some_and(|error| error.code == BackendErrorCode::PortalApprovalPending.as_str())
 }
 
-fn x11_fallback_snapshot(
+fn linux_fallback_snapshot(
     snapshot_id: String,
     environment: EnvironmentInfo,
     capabilities: ToolCapabilities,
     capture: Option<sky_cua_platform::model::CaptureInfo>,
     diagnostics: DiagnosticBuilder,
-    window: X11WindowInfo,
+    doctor_report: Option<DoctorReport>,
+    window: linux_windowing::LinuxWindowInfo,
 ) -> AppStateSnapshot {
-    let elements = x11_window_elements(&window);
+    let app = app_from_linux_window(&window);
     AppStateSnapshot {
         snapshot_id,
         created_at: chrono::Utc::now(),
         environment,
         capabilities,
-        focused_app: Some(LinuxDesktopBackend::focused_from_app(&window.app)),
+        focused_app: Some(LinuxDesktopBackend::focused_from_app(&app)),
         capture,
-        elements,
+        elements: linux_window_elements(&window),
         diagnostics: diagnostics.finish(),
         app_guidance: None,
+        doctor_report,
     }
 }
 
-fn kwin_fallback_snapshot(
-    snapshot_id: String,
-    environment: EnvironmentInfo,
-    capabilities: ToolCapabilities,
-    capture: Option<sky_cua_platform::model::CaptureInfo>,
-    diagnostics: DiagnosticBuilder,
-    window: KWinWindowInfo,
-) -> AppStateSnapshot {
-    AppStateSnapshot {
-        snapshot_id,
-        created_at: chrono::Utc::now(),
-        environment,
-        capabilities,
-        focused_app: Some(LinuxDesktopBackend::focused_from_app(&window.app)),
-        capture,
-        elements: kwin_window_elements(&window),
-        diagnostics: diagnostics.finish(),
-        app_guidance: None,
-    }
-}
-
-fn kwin_window_elements(window: &KWinWindowInfo) -> Vec<ElementNode> {
+fn linux_window_elements(window: &linux_windowing::LinuxWindowInfo) -> Vec<ElementNode> {
     let Some(bounds) = window.bounds.clone() else {
         return Vec::new();
     };
 
     let mut root_state_flags = vec![
-        "kwin_fallback".to_string(),
+        "native_window_fallback".to_string(),
         "physical_target".to_string(),
         "vision_anchor".to_string(),
         "container".to_string(),
         "content_like".to_string(),
     ];
-    if window.app.is_focused_candidate {
+    if window.focused {
         root_state_flags.push("focused".to_string());
         root_state_flags.push("active".to_string());
     }
+    let app = app_from_linux_window(window);
 
     let mut elements = vec![ElementNode {
         element_index: 0,
         parent_index: None,
         role: "window".to_string(),
-        name: window
-            .app
-            .window_title
-            .clone()
-            .or_else(|| Some(window.app.name.clone())),
-        description: Some(
-            "Wayland window surfaced from KWin without a matching AT-SPI tree. The child regions below are geometric anchors only: use them to narrow the search space, then confirm the real target on the screenshot before clicking, dragging, or typing."
-                .to_string(),
-        ),
+        name: app.window_title.clone().or_else(|| Some(app.name.clone())),
+        description: Some(format!(
+            "{} window surfaced from the window registry without a matching AT-SPI tree. The child regions below are geometric anchors only: use them to narrow the search space, then confirm the real target on the screenshot before clicking, dragging, or typing.",
+            window.backend
+        )),
         value: None,
         state_flags: root_state_flags,
         semantic_actions: Vec::new(),
@@ -2453,6 +2670,7 @@ fn push_kwin_anchor(
     element_index
 }
 
+#[cfg(test)]
 fn x11_window_elements(window: &X11WindowInfo) -> Vec<ElementNode> {
     let Some(bounds) = window.bounds.clone() else {
         return Vec::new();
@@ -2539,6 +2757,7 @@ fn x11_window_elements(window: &X11WindowInfo) -> Vec<ElementNode> {
     elements
 }
 
+#[cfg(test)]
 fn x11_region_role(
     region: &crate::x11::windowing::X11WindowRegion,
     has_children: bool,
@@ -2559,6 +2778,7 @@ fn x11_region_role(
     }
 }
 
+#[cfg(test)]
 fn x11_region_description(region: &crate::x11::windowing::X11WindowRegion, role: &str) -> String {
     let role_hint = match role {
         "x11_container" => "container-like region",
@@ -2698,12 +2918,13 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AppInfo, AppSelector, best_x11_window_match, drag_to_point, explicit_point,
-        kwin_window_elements, matches_selector, parse_key_sequence, point_from_screenshot_pixels,
+        AppInfo, AppSelector, LinuxDesktopBackend, action_name_matches, app_from_linux_window,
+        best_x11_window_match, drag_to_point, explicit_point, linux_fallback_snapshot,
+        linux_window_elements, matches_selector, parse_key_sequence, point_from_screenshot_pixels,
         push_capture_diagnostics, select_x11_window, selector_summary, x11_window_elements,
         x11_window_matches_app,
     };
-    use crate::kwin::KWinWindowInfo;
+    use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::{
@@ -2740,6 +2961,14 @@ mod tests {
             parse_key_sequence(&json!({"key": "Ctrl+L"})),
             Some(vec!["Ctrl".to_string(), "L".to_string()])
         );
+    }
+
+    #[test]
+    fn action_name_matching_accepts_advertised_canonical_aliases() {
+        assert!(action_name_matches("Press", "activate"));
+        assert!(action_name_matches("choose", "select"));
+        assert!(action_name_matches("close", "collapse"));
+        assert!(!action_name_matches("scroll", "activate"));
     }
 
     #[test]
@@ -2938,6 +3167,7 @@ mod tests {
                 is_focused_candidate: true,
             },
             bounds: None,
+            workspace: None,
             child_regions: Vec::new(),
         };
         assert!(x11_window_matches_app(&window, &app));
@@ -2968,6 +3198,7 @@ mod tests {
                 height: 180.0,
                 space: CoordinateSpace::DesktopLogical,
             }),
+            workspace: None,
             child_regions: vec![
                 X11WindowRegion {
                     window_id: "0x3800031".to_string(),
@@ -3025,22 +3256,12 @@ mod tests {
 
     #[test]
     fn creates_structural_anchor_regions_for_kwin_fallback_windows() {
-        let window = KWinWindowInfo {
-            window_id: "{tidal-window}".to_string(),
-            resource_name: Some("tidal".to_string()),
-            resource_class: Some("TIDAL".to_string()),
-            app: AppInfo {
-                app_id: "kwin:{tidal-window}".to_string(),
-                name: "TIDAL".to_string(),
-                pid: Some(4242),
-                executable: Some("TIDAL".to_string()),
-                desktop_file_id: Some("tidal-hifi.desktop".to_string()),
-                app_user_model_id: None,
-                window_handle: None,
-                toolkit_guess: Some("Qt".to_string()),
-                window_title: Some("TIDAL Hi-Fi".to_string()),
-                is_focused_candidate: true,
-            },
+        let window = LinuxWindowInfo {
+            window_id: "kwin:{tidal-window}".to_string(),
+            title: Some("TIDAL Hi-Fi".to_string()),
+            app_id: Some("tidal-hifi.desktop".to_string()),
+            wm_class: Some("TIDAL".to_string()),
+            pid: Some(4242),
             bounds: Some(RectF {
                 x: 100.0,
                 y: 80.0,
@@ -3048,9 +3269,15 @@ mod tests {
                 height: 820.0,
                 space: CoordinateSpace::DesktopLogical,
             }),
+            workspace: None,
+            focused: true,
+            hidden: false,
+            client_type: Some("wayland".to_string()),
+            backend: "kwin".to_string(),
+            terminal: None,
         };
 
-        let elements = kwin_window_elements(&window);
+        let elements = linux_window_elements(&window);
         assert!(elements.len() >= 8);
         assert_eq!(elements[0].role, "window");
         assert!(
@@ -3116,6 +3343,66 @@ mod tests {
                 .iter()
                 .any(|element| element.role == "wayland_main_region")
         );
+    }
+
+    #[test]
+    fn linux_fallback_snapshot_preserves_doctor_report() {
+        let environment = wayland_pipewire_environment();
+        let capabilities = LinuxDesktopBackend::capabilities(&environment);
+        let report = crate::doctor::build_doctor_report(environment.clone());
+        let window = LinuxWindowInfo {
+            window_id: "kwin:{tidal-window}".to_string(),
+            title: Some("TIDAL Hi-Fi".to_string()),
+            app_id: Some("tidal-hifi.desktop".to_string()),
+            wm_class: Some("TIDAL".to_string()),
+            pid: Some(4242),
+            bounds: Some(RectF {
+                x: 100.0,
+                y: 80.0,
+                width: 1280.0,
+                height: 820.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            workspace: None,
+            focused: true,
+            hidden: false,
+            client_type: Some("wayland".to_string()),
+            backend: "kwin".to_string(),
+            terminal: None,
+        };
+
+        let snapshot = linux_fallback_snapshot(
+            "snap-1".to_string(),
+            environment,
+            capabilities,
+            None,
+            DiagnosticBuilder::new(),
+            Some(report.clone()),
+            window,
+        );
+
+        assert_eq!(snapshot.doctor_report, Some(report));
+    }
+
+    #[test]
+    fn registry_window_app_does_not_invent_executable() {
+        let app = app_from_linux_window(&LinuxWindowInfo {
+            window_id: "kwin:{tidal-window}".to_string(),
+            title: Some("TIDAL Hi-Fi".to_string()),
+            app_id: Some("tidal-hifi.desktop".to_string()),
+            wm_class: Some("TIDAL".to_string()),
+            pid: Some(4242),
+            bounds: None,
+            workspace: None,
+            focused: true,
+            hidden: false,
+            client_type: Some("wayland".to_string()),
+            backend: "kwin".to_string(),
+            terminal: None,
+        });
+
+        assert_eq!(app.desktop_file_id.as_deref(), Some("tidal-hifi.desktop"));
+        assert_eq!(app.executable, None);
     }
 
     #[test]
@@ -3249,6 +3536,7 @@ mod tests {
                 is_focused_candidate: false,
             },
             bounds: None,
+            workspace: None,
             child_regions: Vec::new(),
         };
 
@@ -3286,6 +3574,7 @@ mod tests {
                 is_focused_candidate: true,
             },
             bounds: None,
+            workspace: None,
             child_regions: Vec::new(),
         };
 
@@ -3317,6 +3606,7 @@ mod tests {
                 is_focused_candidate: true,
             },
             bounds: None,
+            workspace: None,
             child_regions: Vec::new(),
         };
         let beta = X11WindowInfo {
@@ -3336,6 +3626,7 @@ mod tests {
                 is_focused_candidate: false,
             },
             bounds: None,
+            workspace: None,
             child_regions: Vec::new(),
         };
 
@@ -3369,6 +3660,7 @@ mod tests {
                 is_focused_candidate: false,
             },
             bounds: None,
+            workspace: None,
             child_regions: Vec::new(),
         };
         let focused = X11WindowInfo {
@@ -3388,6 +3680,7 @@ mod tests {
                 is_focused_candidate: true,
             },
             bounds: None,
+            workspace: None,
             child_regions: Vec::new(),
         };
 
@@ -3427,6 +3720,7 @@ mod tests {
                 is_focused_candidate: false,
             },
             bounds: None,
+            workspace: None,
             child_regions: Vec::new(),
         };
         let stronger = X11WindowInfo {
@@ -3446,6 +3740,7 @@ mod tests {
                 is_focused_candidate: true,
             },
             bounds: None,
+            workspace: None,
             child_regions: Vec::new(),
         };
 

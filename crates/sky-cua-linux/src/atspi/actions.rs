@@ -5,6 +5,21 @@ use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use zbus::names::UniqueName;
 use zbus::zvariant::ObjectPath;
 
+use crate::atspi::normalize_action;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionInvocationResult {
+    pub action_index: i32,
+    pub action_name: Option<String>,
+    pub ok: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetValueResult {
+    Numeric { value: f64 },
+    EditableText,
+}
+
 pub async fn available_actions(
     connection: &AccessibilityConnection,
     backend_ref: &str,
@@ -162,11 +177,82 @@ pub async fn grab_focus(
     })
 }
 
+pub async fn invoke_action_by_index(
+    connection: &AccessibilityConnection,
+    backend_ref: &str,
+    action_index: i32,
+) -> Result<ActionInvocationResult, BackendError> {
+    if action_index < 0 {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("AT-SPI action index must be non-negative, got {action_index}"),
+        ));
+    }
+
+    let object_ref = parse_backend_ref(backend_ref)?;
+    let accessible = object_ref
+        .as_accessible_proxy(connection.connection())
+        .await
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::AccessibilityCoverageLimited,
+                format!(
+                    "failed to resolve backend_ref {backend_ref} into an accessible object: {error}"
+                ),
+            )
+        })?;
+    let proxies: atspi::proxy::proxy_ext::Proxies<'_> =
+        accessible.proxies().await.map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::AccessibilityCoverageLimited,
+                format!("failed to enumerate accessibility proxies for {backend_ref}: {error}"),
+            )
+        })?;
+    let action = proxies.action().await.map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::AccessibilityCoverageLimited,
+            format!("element {backend_ref} does not expose the AT-SPI Action interface: {error}"),
+        )
+    })?;
+    let actions = action.get_actions().await.map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::AccessibilityCoverageLimited,
+            format!("failed to fetch AT-SPI actions for {backend_ref}: {error}"),
+        )
+    })?;
+    let action_name = usize::try_from(action_index)
+        .ok()
+        .and_then(|index| actions.get(index))
+        .map(|action| action.name.clone());
+    if action_name.is_none() {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!(
+                "element {backend_ref} has {} AT-SPI actions; action_index {action_index} is out of range",
+                actions.len()
+            ),
+        ));
+    }
+
+    let ok = action.do_action(action_index).await.map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::AccessibilityCoverageLimited,
+            format!("failed to invoke AT-SPI action {action_index} on {backend_ref}: {error}"),
+        )
+    })?;
+
+    Ok(ActionInvocationResult {
+        action_index,
+        action_name,
+        ok,
+    })
+}
+
 pub async fn set_value(
     connection: &AccessibilityConnection,
     backend_ref: &str,
     value: &str,
-) -> Result<bool, BackendError> {
+) -> Result<SetValueResult, BackendError> {
     let object_ref = parse_backend_ref(backend_ref)?;
     let accessible = object_ref
         .as_accessible_proxy(connection.connection())
@@ -188,7 +274,7 @@ pub async fn set_value(
         })?;
 
     if let Ok(editable_text) = proxies.editable_text().await {
-        return editable_text
+        editable_text
             .set_text_contents(value)
             .await
             .map_err(|error| {
@@ -196,7 +282,8 @@ pub async fn set_value(
                     BackendErrorCode::AccessibilityCoverageLimited,
                     format!("failed to set editable text contents for {backend_ref}: {error}"),
                 )
-            });
+            })?;
+        return Ok(SetValueResult::EditableText);
     }
 
     if let Ok(value_proxy) = proxies.value().await {
@@ -215,7 +302,7 @@ pub async fn set_value(
                     format!("failed to set numeric value for {backend_ref}: {error}"),
                 )
             })?;
-        return Ok(true);
+        return Ok(SetValueResult::Numeric { value: parsed });
     }
 
     Err(BackendError::new(
@@ -272,15 +359,18 @@ async fn invoke_preferred_action(
         return Ok(false);
     };
 
-    action
-        .do_action(i32::try_from(preferred_index).unwrap_or(0))
-        .await
-        .map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::AccessibilityCoverageLimited,
-                format!("failed to invoke AT-SPI action on {backend_ref}: {error}"),
-            )
-        })
+    let action_index = i32::try_from(preferred_index).map_err(|_| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("preferred action index {preferred_index} exceeds i32 range"),
+        )
+    })?;
+    action.do_action(action_index).await.map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::AccessibilityCoverageLimited,
+            format!("failed to invoke AT-SPI action on {backend_ref}: {error}"),
+        )
+    })
 }
 
 fn preferred_action_index<'a>(
@@ -300,13 +390,6 @@ fn preferred_action_index<'a>(
         }
     }
     (fallback_to_first && found_any).then_some(0)
-}
-
-fn normalize_action(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .replace([' ', '-', '_'], "")
 }
 
 fn parse_backend_ref(backend_ref: &str) -> Result<atspi::ObjectRefOwned, BackendError> {
