@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from types import ModuleType
+from typing import cast
 
 import pytest
 
 import _plugin_bundle as plugin_bundle
 import build_plugin
 import deploy_release_plugin as release_deploy
+import install_mcp_server
+import install_plugin
+import package_runtime_artifact
 import publish_marketplace_release
 import setup_heliasar_marketplace
 from _app_server_harness import build_schema_accept_value, response_contains_computer_use_server
@@ -36,6 +42,7 @@ from _plugin_bundle import (
     runtime_binary_path,
     runtime_binary_source_name,
     stop_unix_runtime_processes,
+    stop_windows_cache_processes,
     update_codex_config,
     update_plugin_manifest_version,
     version_from_tag,
@@ -43,6 +50,16 @@ from _plugin_bundle import (
 )
 from _tidal_workflow import tidal_playlist_prompt
 from live_app_server_tidal_image_ab import DEFAULT_VARIANTS, playlist_name_for_variant
+
+
+def load_chrome_preflight() -> ModuleType:
+    module_path = Path(__file__).resolve().parents[1] / "resources" / "chrome_preflight.py"
+    spec = importlib.util.spec_from_file_location("chrome_preflight", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed to load {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_codex_config_helpers_update_existing_sections() -> None:
@@ -78,19 +95,24 @@ def test_codex_config_helpers_update_existing_sections() -> None:
 
 def test_runtime_binary_names_match_host_platform() -> None:
     suffix = ".exe" if executable_name("tool").endswith(".exe") else ""
+    expected = [f"sky-cua-client{suffix}", f"sky-cua-service{suffix}"]
+    if suffix == "":
+        expected.append("sky-cua-cosmic-helper")
+        expected.append("sky-cua-chrome-host")
 
-    assert runtime_binary_names() == [
-        f"sky-cua-client{suffix}",
-        f"sky-cua-service{suffix}",
-    ]
+    assert runtime_binary_names() == expected
 
 
 def test_all_runtime_binary_names_include_linux_and_windows_binaries() -> None:
     assert all_runtime_binary_names() == [
         "runtimes/linux-x64/sky-cua-client",
         "runtimes/linux-x64/sky-cua-service",
+        "runtimes/linux-x64/sky-cua-cosmic-helper",
+        "runtimes/linux-x64/sky-cua-chrome-host",
         "runtimes/linux-arm64/sky-cua-client",
         "runtimes/linux-arm64/sky-cua-service",
+        "runtimes/linux-arm64/sky-cua-cosmic-helper",
+        "runtimes/linux-arm64/sky-cua-chrome-host",
         "sky-cua-client.exe",
         "sky-cua-service.exe",
     ]
@@ -103,7 +125,20 @@ def test_runtime_binary_paths_map_platform_variants() -> None:
     assert runtime_binary_path("linux-arm64", "sky-cua-service") == Path(
         "bin/runtimes/linux-arm64/sky-cua-service"
     )
+    assert runtime_binary_path("linux-x64", "sky-cua-cosmic-helper") == Path(
+        "bin/runtimes/linux-x64/sky-cua-cosmic-helper"
+    )
+    assert runtime_binary_path("linux-arm64", "sky-cua-chrome-host") == Path(
+        "bin/runtimes/linux-arm64/sky-cua-chrome-host"
+    )
     assert runtime_binary_path("windows-x64", "sky-cua-client") == Path("bin/sky-cua-client.exe")
+
+
+def test_runtime_binary_source_names_reject_invalid_platform_or_binary() -> None:
+    with pytest.raises(ValueError, match="unknown runtime platform"):
+        runtime_binary_source_name("linux-riscv64", "sky-cua-client")
+    with pytest.raises(ValueError, match="unknown runtime binary"):
+        runtime_binary_source_name("windows-x64", "sky-cua-cosmic-helper")
 
 
 def test_bundle_entrypoint_paths_always_include_unix_launchers(
@@ -140,6 +175,15 @@ def test_stop_unix_runtime_processes_targets_deleted_cache_process(
     (ignored_proc / "exe").symlink_to("/usr/bin/sky-cua-client")
     (ignored_proc / "cwd").symlink_to("/usr/bin")
 
+    helper_exe = (
+        cache_root / "plugin-backup-old" / "sky-cua" / "0.1.0" / "bin" / "sky-cua-cosmic-helper"
+    )
+    helper_proc = proc_root / "789"
+    helper_proc.mkdir()
+    (helper_proc / "cmdline").write_bytes(str(helper_exe).encode() + b"\0")
+    (helper_proc / "exe").symlink_to(helper_exe)
+    (helper_proc / "cwd").symlink_to(helper_exe.parent.parent)
+
     terminated: set[int] = set()
     calls: list[tuple[int, int]] = []
 
@@ -155,7 +199,32 @@ def test_stop_unix_runtime_processes_targets_deleted_cache_process(
     stop_unix_runtime_processes([cache_root], proc_root=proc_root)
 
     assert (123, plugin_bundle.SIGTERM) in calls
+    assert (789, plugin_bundle.SIGTERM) in calls
     assert all(pid != 456 for pid, _signal in calls)
+
+
+def test_stop_windows_cache_processes_uses_powershell_string_escaping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeWindowsPath:
+        def resolve(self) -> str:
+            return r"C:\Users\O'Brien\sky-cua"
+
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(plugin_bundle.sys, "platform", "win32")
+    monkeypatch.setattr(plugin_bundle.subprocess, "run", fake_run)
+
+    stop_windows_cache_processes(cast(Path, FakeWindowsPath()))
+
+    script = commands[0][-1]
+    assert "$cacheRoot = 'C:\\Users\\O''Brien\\sky-cua';" in script
+    assert "C:\\\\Users" not in script
 
 
 def test_build_bundle_inputs_are_selected_from_git_index(
@@ -190,6 +259,13 @@ def test_bundle_source_paths_include_standard_optional_plugin_roots() -> None:
     assert Path("skills") in build_plugin.BUNDLE_SOURCE_PATHS
 
 
+def test_worktree_bundle_dirs_include_untracked_runtime_resources() -> None:
+    assert Path("resources/chrome-extension") in build_plugin.WORKTREE_BUNDLE_DIRS
+    assert (
+        Path("skills/computer-use-workflows/references/apps") in build_plugin.WORKTREE_BUNDLE_DIRS
+    )
+
+
 def write_minimal_bundle(root: Path, *, binaries: list[str]) -> None:
     write_minimal_bundle_sources(root)
     (root / "bin").mkdir(parents=True, exist_ok=True)
@@ -216,6 +292,7 @@ def write_minimal_bundle_sources(root: Path) -> None:
     (root / "bin").mkdir(parents=True, exist_ok=True)
     (root / "bin" / "sky-cua-client").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "bin" / "sky-cua-service").write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / "bin" / "sky-cua-browser-preflight").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "skills" / "computer-use-workflows").mkdir(parents=True)
     (root / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
         "skill",
@@ -233,6 +310,7 @@ def tracked_minimal_bundle_files() -> list[Path]:
         Path(".codex-plugin/plugin.json"),
         Path("bin/sky-cua-client"),
         Path("bin/sky-cua-service"),
+        Path("bin/sky-cua-browser-preflight"),
         Path("skills/computer-use-workflows/SKILL.md"),
         Path("resources/app-instructions/index.json"),
     ]
@@ -321,6 +399,184 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
         )
 
 
+def test_browser_preflight_links_browser_use_into_bundled_marketplace(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    source_plugin = tmp_path / "source" / "plugins" / "openai-bundled" / "plugins" / "browser-use"
+    (source_plugin / ".codex-plugin").mkdir(parents=True)
+    (source_plugin / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"version": "1.2.3"}),
+        encoding="utf-8",
+    )
+    (source_plugin / "scripts").mkdir()
+    (source_plugin / "scripts" / "browser-client.mjs").write_text(
+        "client",
+        encoding="utf-8",
+    )
+    codex_home = tmp_path / "codex-home"
+
+    chrome_preflight.sync_browser_use_plugin(source_plugin.parents[1], codex_home)
+
+    cache_root = codex_home / "plugins" / "cache" / "openai-bundled" / "browser-use"
+    assert (cache_root / "latest").readlink() == Path("1.2.3")
+    plugin_link = (
+        codex_home / ".tmp" / "bundled-marketplaces" / "openai-bundled" / "plugins" / "browser-use"
+    )
+    assert plugin_link.readlink() == cache_root / "latest"
+
+
+def test_browser_preflight_adds_coupled_plugins_to_marketplace(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    marketplace_path = (
+        tmp_path
+        / "codex-home"
+        / ".tmp"
+        / "bundled-marketplaces"
+        / "openai-bundled"
+        / ".agents"
+        / "plugins"
+        / "marketplace.json"
+    )
+    marketplace_path.parent.mkdir(parents=True)
+    marketplace_path.write_text(
+        json.dumps({"name": "openai-bundled", "plugins": [{"name": "chrome"}]}),
+        encoding="utf-8",
+    )
+
+    chrome_preflight.ensure_marketplace_entries(tmp_path / "codex-home")
+
+    manifest = json.loads(marketplace_path.read_text(encoding="utf-8"))
+    names = {plugin["name"] for plugin in manifest["plugins"]}
+    assert {"chrome", "browser-use", "computer-use"} <= names
+    computer_use = next(
+        plugin for plugin in manifest["plugins"] if plugin["name"] == "computer-use"
+    )
+    assert computer_use["source"]["path"] == "./plugins/computer-use"
+
+
+def test_browser_preflight_update_config_enables_browser_plugins_only(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    codex_home = tmp_path / "codex-home"
+
+    chrome_preflight.update_codex_config(codex_home)
+
+    parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    assert parsed["features"]["plugins"] is True
+    assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is True
+    assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is True
+    assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is False
+
+
+def test_browser_preflight_rejects_uppercase_native_host_name(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    plugin_root = tmp_path / "chrome"
+    scripts = plugin_root / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "extension-id.json").write_text(
+        json.dumps(
+            {
+                "extensionId": "abcdefghijklmnopabcdefghijklmnop",
+                "extensionHostName": "Com.OpenAI.CodexExtension",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="invalid Chrome native host name"):
+        chrome_preflight.read_chrome_extension_metadata(plugin_root)
+
+
+def test_browser_preflight_computer_use_compat_plugin_preserves_env_allowlist(
+    tmp_path: Path,
+) -> None:
+    chrome_preflight = load_chrome_preflight()
+    sky_root = tmp_path / "sky-cua"
+    source_root = sky_root / "resources" / "plugins" / "openai-bundled"
+    source_root.mkdir(parents=True)
+    (sky_root / ".codex-plugin").mkdir()
+    (sky_root / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"version": "1.2.3"}),
+        encoding="utf-8",
+    )
+    (sky_root / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "computer-use": {
+                        "command": "./bin/sky-cua-client",
+                        "args": ["mcp"],
+                        "env_vars": ["DISPLAY", "SKY_CUA_COSMIC_HELPER"],
+                        "cwd": ".",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    codex_home = tmp_path / "codex-home"
+
+    chrome_preflight.sync_computer_use_compat_plugin(source_root, codex_home)
+
+    compat_mcp_path = (
+        codex_home
+        / "plugins"
+        / "cache"
+        / "openai-bundled"
+        / "computer-use"
+        / "1.2.3-sky-cua"
+        / ".mcp.json"
+    )
+    cache_root = compat_mcp_path.parents[1]
+    compat_mcp = json.loads(compat_mcp_path.read_text(encoding="utf-8"))
+    server = compat_mcp["mcpServers"]["computer-use"]
+    assert server["env_vars"] == ["DISPLAY", "SKY_CUA_COSMIC_HELPER"]
+    assert server["command"] == str((sky_root / "bin" / "sky-cua-client").resolve())
+    assert server["cwd"] == str(sky_root.resolve())
+    assert (cache_root / "latest").readlink() == Path("1.2.3-sky-cua")
+    assert (
+        codex_home / ".tmp" / "bundled-marketplaces" / "openai-bundled" / "plugins" / "computer-use"
+    ).readlink() == cache_root / "latest"
+
+
+def test_bundled_resource_root_accepts_upstream_codex_resource_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream_root = tmp_path / "codex-app" / "resources"
+    bundled_root = upstream_root / "plugins" / "openai-bundled"
+    bundled_root.mkdir(parents=True)
+    monkeypatch.setenv("SKY_CUA_UPSTREAM_CODEX_RESOURCES", str(upstream_root))
+    monkeypatch.delenv("SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT", raising=False)
+
+    assert build_plugin.bundled_resource_root() == bundled_root
+
+
+def test_bundled_resource_root_accepts_legacy_openai_bundled_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundled_root = tmp_path / "openai-bundled"
+    monkeypatch.delenv("SKY_CUA_UPSTREAM_CODEX_RESOURCES", raising=False)
+    monkeypatch.setenv("SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT", str(bundled_root))
+
+    assert build_plugin.bundled_resource_root() == bundled_root
+
+
+def test_build_stage_marketplace_entries_include_coupled_plugins(tmp_path: Path) -> None:
+    marketplace_path = tmp_path / "marketplace.json"
+    marketplace_path.write_text(
+        json.dumps({"name": "openai-bundled", "plugins": [{"name": "chrome"}]}),
+        encoding="utf-8",
+    )
+
+    build_plugin.ensure_openai_bundled_marketplace_entries(marketplace_path)
+
+    manifest = json.loads(marketplace_path.read_text(encoding="utf-8"))
+    names = {plugin["name"] for plugin in manifest["plugins"]}
+    assert {"chrome", "browser-use", "computer-use"} <= names
+    browser_use = next(plugin for plugin in manifest["plugins"] if plugin["name"] == "browser-use")
+    assert browser_use["source"]["path"] == "./plugins/browser-use"
+
+
 def test_release_install_preserves_existing_other_platform_binaries(tmp_path: Path) -> None:
     marketplace_root = tmp_path / "marketplace"
     source = tmp_path / "bundle"
@@ -359,7 +615,7 @@ def test_merge_runtime_artifacts_requires_all_platforms(tmp_path: Path) -> None:
     for platform_id in REQUIRED_RUNTIME_PLATFORMS:
         platform_root = artifacts_root / platform_id
         platform_root.mkdir(parents=True)
-        for binary_name in ["sky-cua-client", "sky-cua-service"]:
+        for binary_name in plugin_bundle.platform_runtime_binary_base_names(platform_id):
             source_name = runtime_binary_source_name(platform_id, binary_name)
             (platform_root / source_name).write_text(
                 f"{platform_id}/{source_name}",
@@ -370,6 +626,16 @@ def test_merge_runtime_artifacts_requires_all_platforms(tmp_path: Path) -> None:
 
     for relative_path in all_runtime_binary_paths():
         assert (bundle_root / relative_path).exists()
+    linux_x64_host_path = plugin_bundle.chrome_extension_host_path("linux-x64")
+    linux_arm64_host_path = plugin_bundle.chrome_extension_host_path("linux-arm64")
+    assert linux_x64_host_path is not None
+    assert linux_arm64_host_path is not None
+    assert (bundle_root / linux_x64_host_path).read_text(
+        encoding="utf-8"
+    ) == "linux-x64/sky-cua-chrome-host"
+    assert (bundle_root / linux_arm64_host_path).read_text(
+        encoding="utf-8"
+    ) == "linux-arm64/sky-cua-chrome-host"
 
 
 def test_merge_runtime_artifacts_fails_when_variant_is_missing(tmp_path: Path) -> None:
@@ -379,7 +645,7 @@ def test_merge_runtime_artifacts_fails_when_variant_is_missing(tmp_path: Path) -
     for platform_id in REQUIRED_RUNTIME_PLATFORMS:
         platform_root = artifacts_root / platform_id
         platform_root.mkdir(parents=True)
-        for binary_name in ["sky-cua-client", "sky-cua-service"]:
+        for binary_name in plugin_bundle.platform_runtime_binary_base_names(platform_id):
             if platform_id == "linux-arm64" and binary_name == "sky-cua-service":
                 continue
             (platform_root / runtime_binary_source_name(platform_id, binary_name)).write_text(
@@ -389,6 +655,183 @@ def test_merge_runtime_artifacts_fails_when_variant_is_missing(tmp_path: Path) -
 
     with pytest.raises(FileNotFoundError, match="linux-arm64"):
         merge_runtime_artifacts(bundle_root, artifacts_root)
+
+
+def test_package_runtime_artifact_uses_platform_binary_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    release_root = repo_root / "target" / "release"
+    release_root.mkdir(parents=True)
+    output_root = tmp_path / "artifacts"
+    stale_linux_root = output_root / "linux-x64"
+    stale_linux_root.mkdir(parents=True)
+    (stale_linux_root / "stale-binary").write_text("stale", encoding="utf-8")
+
+    for binary_name in plugin_bundle.platform_runtime_binary_base_names("linux-x64"):
+        (release_root / runtime_binary_source_name("linux-x64", binary_name)).write_text(
+            binary_name,
+            encoding="utf-8",
+        )
+    (release_root / "sky-cua-cosmic-helper.exe").write_text(
+        "windows should not package helper",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(package_runtime_artifact, "REPO_ROOT", repo_root)
+
+    linux_root = package_runtime_artifact.package_runtime_artifact("linux-x64", output_root)
+
+    assert sorted(path.name for path in linux_root.iterdir()) == [
+        "sky-cua-chrome-host",
+        "sky-cua-client",
+        "sky-cua-cosmic-helper",
+        "sky-cua-service",
+    ]
+    assert not (linux_root / "stale-binary").exists()
+
+    for binary_name in plugin_bundle.platform_runtime_binary_base_names("windows-x64"):
+        (release_root / runtime_binary_source_name("windows-x64", binary_name)).write_text(
+            binary_name,
+            encoding="utf-8",
+        )
+
+    windows_root = package_runtime_artifact.package_runtime_artifact("windows-x64", output_root)
+
+    assert sorted(path.name for path in windows_root.iterdir()) == [
+        "sky-cua-client.exe",
+        "sky-cua-service.exe",
+    ]
+
+
+def test_package_runtime_artifact_rejects_invalid_platform_before_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    output_root = tmp_path / "artifacts"
+    escaped = tmp_path / "escaped"
+    escaped.mkdir()
+    sentinel = escaped / "sentinel"
+    sentinel.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(package_runtime_artifact, "REPO_ROOT", repo_root)
+
+    with pytest.raises(ValueError, match="unknown runtime platform"):
+        package_runtime_artifact.package_runtime_artifact("../escaped", output_root)
+
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_install_bundle_uses_runtime_binary_paths(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "installed"
+    write_minimal_bundle(source, binaries=runtime_binary_names())
+
+    install_plugin.install_bundle(source, destination, symlink=False)
+
+    platform_id = current_runtime_platform()
+    for binary_name in plugin_bundle.platform_runtime_binary_base_names(platform_id):
+        binary_path = destination / runtime_binary_path(platform_id, binary_name)
+        assert binary_path.exists()
+        if not binary_path.name.endswith(".exe"):
+            assert binary_path.stat().st_mode & 0o111
+
+
+def test_install_plugin_skips_browser_preflight_on_non_linux(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "installed"
+    preflight = destination / "resources" / "chrome_preflight.py"
+    preflight.parent.mkdir(parents=True)
+    preflight.write_text("raise SystemExit(99)", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(install_plugin.sys, "platform", "win32")
+    monkeypatch.setattr(install_plugin.subprocess, "run", fake_run)
+
+    install_plugin.run_browser_preflight(destination, tmp_path / "codex-home")
+
+    assert calls == []
+
+
+def test_generic_mcp_install_copies_all_current_platform_binaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    release_root = repo_root / "target" / "release"
+    release_root.mkdir(parents=True)
+    target_dir = tmp_path / "installed"
+    platform_id = install_mcp_server.current_platform()
+
+    for binary_name in install_mcp_server.platform_runtime_binary_base_names(platform_id):
+        source_name = runtime_binary_source_name(platform_id, binary_name)
+        (release_root / source_name).write_text(binary_name, encoding="utf-8")
+
+    monkeypatch.setattr(install_mcp_server, "REPO_ROOT", repo_root)
+
+    client_path = install_mcp_server.install_binaries(target_dir)
+
+    assert client_path == target_dir / install_mcp_server.entrypoint_path(
+        platform_id, "sky-cua-client"
+    )
+    for binary_name in install_mcp_server.platform_runtime_binary_base_names(platform_id):
+        binary_path = target_dir / install_mcp_server.entrypoint_path(platform_id, binary_name)
+        assert binary_path.exists()
+        if not binary_path.name.endswith(".exe"):
+            assert binary_path.stat().st_mode & 0o111
+
+
+def test_generic_mcp_bin_links_use_platform_entrypoint_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_dir = tmp_path / "installed"
+    bin_dir = tmp_path / "bin"
+    for name in install_mcp_server.platform_runtime_binary_base_names("windows-x64"):
+        binary = target_dir / install_mcp_server.entrypoint_path("windows-x64", name)
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_text(name, encoding="utf-8")
+    monkeypatch.setattr(install_mcp_server, "current_platform", lambda: "windows-x64")
+
+    install_mcp_server.link_current_platform_binaries(target_dir, bin_dir)
+
+    assert (bin_dir / "sky-cua-client.exe").readlink() == target_dir / "bin" / "sky-cua-client.exe"
+    assert (
+        bin_dir / "sky-cua-service.exe"
+    ).readlink() == target_dir / "bin" / "sky-cua-service.exe"
+    assert not (bin_dir / "sky-cua-client").exists()
+
+
+def test_generic_mcp_bin_links_copy_when_symlinks_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_dir = tmp_path / "installed"
+    bin_dir = tmp_path / "bin"
+    binary = target_dir / install_mcp_server.entrypoint_path("windows-x64", "sky-cua-client")
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_text("client", encoding="utf-8")
+    service = target_dir / install_mcp_server.entrypoint_path("windows-x64", "sky-cua-service")
+    service.write_text("service", encoding="utf-8")
+
+    def fake_symlink_to(self: Path, target: Path) -> None:
+        _ = self, target
+        raise OSError("symlinks unavailable")
+
+    monkeypatch.setattr(install_mcp_server, "current_platform", lambda: "windows-x64")
+    monkeypatch.setattr(Path, "symlink_to", fake_symlink_to)
+
+    install_mcp_server.link_current_platform_binaries(target_dir, bin_dir)
+
+    assert (bin_dir / "sky-cua-client.exe").read_text(encoding="utf-8") == "client"
+    assert (bin_dir / "sky-cua-service.exe").read_text(encoding="utf-8") == "service"
 
 
 def test_version_from_tag_updates_plugin_manifest(tmp_path: Path) -> None:
@@ -468,6 +911,7 @@ def test_build_release_binaries_does_not_retry_unrelated_failure(
         text: bool,
         capture_output: bool,
     ) -> subprocess.CompletedProcess[str]:
+        _ = command, cwd, check, env, text
         nonlocal calls
         assert capture_output is True
         calls += 1
@@ -749,6 +1193,24 @@ def test_plugin_manifest_tracks_scaffold_metadata_contract() -> None:
     assert (plugin_bundle.REPO_ROOT / interface["logo"]).exists()
 
 
+def test_mcp_config_allows_runtime_override_env_vars() -> None:
+    mcp_config = json.loads((plugin_bundle.REPO_ROOT / ".mcp.json").read_text(encoding="utf-8"))
+    env_vars = set(mcp_config["mcpServers"]["computer-use"]["env_vars"])
+
+    assert "SKY_CUA_COSMIC_HELPER" in env_vars
+    assert "CODEX_COMPUTER_USE_COSMIC_HELPER" in env_vars
+    assert "SKY_CUA_REPO_ROOT" in env_vars
+    assert "SKY_CUA_SERVICE_PATH" in env_vars
+
+
+def test_chrome_preflight_default_env_allowlist_matches_primary_mcp_config() -> None:
+    chrome_preflight = load_chrome_preflight()
+    mcp_config = json.loads((plugin_bundle.REPO_ROOT / ".mcp.json").read_text(encoding="utf-8"))
+    env_vars = mcp_config["mcpServers"]["computer-use"]["env_vars"]
+
+    assert env_vars == chrome_preflight.DEFAULT_COMPUTER_USE_ENV_VARS
+
+
 def test_publish_marketplace_detects_staged_plugin_changes(tmp_path: Path) -> None:
     repo_root = tmp_path / "marketplace"
     plugin_root = repo_root / "plugins" / plugin_bundle.PLUGIN_NAME
@@ -827,7 +1289,7 @@ def test_setup_marketplace_checkout_expands_github_short_source(
     ) -> subprocess.CompletedProcess[str]:
         del cwd, check
         commands.append(command)
-        return subprocess.CompletedProcess(command, 0)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(setup_heliasar_marketplace, "run", fake_run)
 
