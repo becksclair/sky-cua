@@ -22,16 +22,18 @@ python3 scripts/live_app_server_smoke.py
 - DO: Preserve the "tree as structure, screenshot as visual truth" stance in `SKILL.md`.
 - DO: Keep compact-state guidance aligned with `crates/sky-cua-client/src/mcp_server.rs`.
 - DO: Use `references/hybrid-patterns.md` for longer workflow examples.
+- DO: Mirror app-specific guidance from `resources/app-instructions/` into `references/apps/` when bundling for hosts that cannot reach the runtime `resources/` tree.
 - DON'T: Hardcode Linux-only tool names in generic workflow rules unless the section is explicitly Linux-specific.
 - DON'T: Encourage typing placeholder junk or acting from stale screenshots.
-- DON'T: Duplicate app-specific guidance already living in `resources/app-instructions/*.md`.
+- DON'T: Let the skill `references/apps/` drift from `resources/app-instructions/`; keep them in sync.
 
 ## Touch Points / Key Files
 
 - Skill entrypoint: `SKILL.md`
 - Agent adapter: `agents/openai.yaml`
 - Longer workflow reference: `references/hybrid-patterns.md`
-- App-specific runtime guidance: `../../resources/app-instructions/*.md`
+- App-specific guidance for the skill bundle: `references/apps/*.md`
+- Canonical app instructions (runtime): `../../resources/app-instructions/*.md`
 - MCP tool output contract: `../../crates/sky-cua-client/src/mcp_server.rs`
 
 ## JIT Index Hints

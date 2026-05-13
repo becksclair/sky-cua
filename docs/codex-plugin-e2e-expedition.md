@@ -259,6 +259,40 @@ What is now proven:
   - proving artifact: `artifacts/codex-e2e/app-server-smoke/20260423T163318Z/last-message.json`
   - transcript proof: `artifacts/codex-e2e/app-server-smoke/20260423T163318Z/app-server-output.jsonl`
 
+## 2026-05-13 Codex Desktop Bundled-Plugin Addendum
+
+The newer Codex Desktop compatibility lane is adjacent to this expedition but
+not the same proof target. The installed-plugin E2E above proves `sky-cua` as a
+local plugin bundle. The bundled-plugin lane makes the same runtime present as
+Codex Desktop's expected `computer-use` plugin while keeping Browser Use and
+Chrome visible as companions.
+
+Current bundled-plugin truth:
+
+- `scripts/build_plugin.py` can stage OpenAI-bundled `chrome` and `browser-use`
+  resources and embeds `sky-cua-chrome-host` under the Chrome plugin's Linux
+  extension-host path.
+- `resources/chrome_preflight.py` syncs `chrome`, `browser-use`, and a
+  `computer-use` compatibility plugin into the local Codex bundled marketplace
+  cache.
+- `resources/chrome_preflight.py` enables
+  `chrome@openai-bundled` and `browser-use@openai-bundled`. It stages
+  `computer-use@openai-bundled` disabled so it is available for marketplace
+  completeness without colliding with the active `sky-cua` MCP server.
+- The companion CodexDesktop-Rebuild patch is intentionally narrow: it enables
+  Linux `computerUse`, removes external Browser Use build-flavor pruning, and
+  keeps Browser Use/Chrome descriptors available when `computerUse` is true.
+
+Proof artifacts:
+
+- `artifacts/desktop-ui-proof/20260513T100515Z-browser-settings-patched-profile/renderer-settings-computer-use-patched.png`
+- `artifacts/desktop-ui-proof/20260513T100515Z-browser-settings-patched-profile/renderer-settings-browser-patched.png`
+- `artifacts/desktop-ui-proof/20260513T100515Z-browser-settings-patched-profile/codexdesktop-dev.log`
+
+The Settings proof shows `Computer Use` and `Browser Use` in Codex Desktop with
+the Chrome companion plugin present. This does not replace the ChatGPT-auth
+installed-plugin E2E recipe above; it proves a different adapter path.
+
 What still remains to prove next:
 
 - repeatability for the fuller real-app workflow through the rich-client lane

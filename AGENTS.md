@@ -26,6 +26,7 @@ python3 scripts/build_plugin.py
 - Keep runtime contracts explicit: structured diagnostics, concrete backend names, and honest fallback states.
 - Rust uses workspace-managed dependencies in `Cargo.toml`; do not add crate-local versions unless needed.
 - Python harnesses are typed enough for basedpyright `standard`; do not weaken checks to hide real issues.
+- Validate Python file changes with Ruff and basedpyright (`uv run ruff format --check scripts`, `uv run ruff check scripts`, and `uv run basedpyright`).
 - Avoid speculative semantics in UI fallback code. Real bounds and blunt roles are better than fake widgets.
 - Keep examples and docs professional. No persona, no private shorthand, no transcript paste.
 - Preserve executable wrapper contracts in `bin/` and `.mcp.json`.

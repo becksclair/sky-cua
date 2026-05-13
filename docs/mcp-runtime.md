@@ -22,6 +22,17 @@ The service can also be run directly for debugging:
 ./bin/sky-cua-service daemon
 ```
 
+Linux bundles may also include a browser preflight wrapper:
+
+```bash
+./bin/sky-cua-browser-preflight --codex-home ~/.codex
+```
+
+That wrapper is a Codex Desktop adapter helper, not part of the portable MCP
+runtime. It syncs the OpenAI-bundled `chrome` and `browser-use` plugins plus a
+disabled `computer-use` compatibility entry into the local Codex bundled
+marketplace cache and writes Chromium-family native-host manifests.
+
 ## Required host responsibilities
 
 A host adapter should provide:
@@ -40,6 +51,53 @@ Codex satisfies this through `.codex-plugin/plugin.json` plus `.mcp.json`.
 Other hosts, including OpenCode, should map their own install and instruction
 mechanisms onto the same pieces.
 
+For Codex Desktop compatibility, the shipped plugin presents one active
+`computer-use` MCP server while still launching the `sky-cua-client mcp`
+runtime. Browser Use remains a companion integration: the adapter syncs
+OpenAI-bundled `chrome` and `browser-use` resources and enables their plugin
+ids. It stages `computer-use@openai-bundled` for marketplace completeness but
+keeps it disabled so Codex does not see duplicate active `computer-use`
+servers. Other MCP hosts do not need these Codex bundled plugin cache steps.
+
+For plain MCP hosts, build release binaries and emit a host-specific config:
+
+```bash
+cargo build --release
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host generic
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host claude-desktop
+```
+
+The generated generic config keeps the MCP server name `computer-use`, uses
+absolute paths, and preserves the same desktop-session environment allowlist as
+the Codex plugin config.
+
+## MCP tool surface
+
+The host-facing tools are the portable product contract. Current tools:
+
+- readiness/setup: `doctor`, `setup_accessibility`, `setup_window_targeting`
+- app/window discovery: `list_apps`, `list_windows`, `focused_window`,
+  `activate_window`
+- state capture: `get_app_state`, with `detail: "full"` by default and
+  `detail: "compact"` for repeated screenshot-first loops
+- semantic element actions: `focus_element`, `activate_element`,
+  `select_element`, `expand_element`, `collapse_element`, `toggle_element`,
+  and `perform_action`
+- physical or hybrid actions: `click`, `perform_secondary_action`, `scroll`,
+  `drag`, `type_text`, `press_key`, and `set_value`
+
+Action tools accept `snapshot_id` from the latest `get_app_state` result. With
+`snapshot_id`, explicit coordinates are screenshot pixel coordinates from that
+snapshot image. Without `snapshot_id`, supported coordinate actions use the
+current screen coordinate space exposed by the active input backend.
+
+`list_windows`, `focused_window`, and `activate_window` use native window
+metadata when available. Linux currently probes GNOME Shell extension, GNOME
+Shell Introspect, COSMIC helper, KWin/Plasma, Hyprland, i3, and X11 metadata
+backends. Window payloads may include bounds, workspace, PID, client type, and
+terminal metadata depending on what the backend can prove.
+
 ## Adapter split
 
 Use these lanes when validating changes:
@@ -55,6 +113,27 @@ Use these lanes when validating changes:
 Runtime changes should pass the narrowest relevant runtime lane first. Codex
 plugin checks prove that the Codex adapter still packages and activates the
 same runtime correctly.
+
+`scripts/gui_desktop_smoke.py` is a matrix-harness scaffold for KDE, GNOME,
+COSMIC, Hyprland, and i3 profiles. It records the selected profile artifact and
+exits non-zero until the profile-specific graphical session runners are
+implemented; do not treat it as a passing smoke.
+
+Codex Desktop browser compatibility has an additional adapter lane:
+
+```bash
+python3 scripts/build_plugin.py
+python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
+uv run pytest scripts/test_python_harness_helpers.py -k 'browser_preflight or update_codex_config'
+```
+
+The corresponding CodexDesktop-Rebuild patch checks live in that project:
+
+```bash
+bun test ./scripts/patch-computer-use.test.ts
+bun scripts/patch-computer-use.ts --check
+bun scripts/patch/apply.ts --check
+```
 
 ## OpenCode adapter
 
@@ -88,3 +167,9 @@ Keep new behavior behind the MCP tool contract and shared resources whenever
 possible. Avoid putting core behavior in Codex-only prompts, app-server
 harnesses, or plugin metadata. If host-specific wording is needed, put it under
 an adapter-specific file and keep the shared workflow guidance neutral.
+
+Do not make Chrome/Browser Use behavior a dependency of the core MCP runtime.
+The native-host and bundled-plugin cache work is an adapter layer for Codex
+Desktop's existing Browser Use flow. First-class `browser_*` MCP tools should
+wait for an isolated host/client or extension smoke that proves the protocol
+outside Codex Desktop.

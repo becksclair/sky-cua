@@ -41,6 +41,16 @@ packaged adapter around that runtime, not the runtime boundary itself.
 - host-portable workflow guidance in `skills/computer-use-workflows/`
 - Windows compile/runtime foundation through `sky-cua-windows`, including
   top-level window fallback snapshots, GDI screenshots, and SendInput actions
+- Linux window targeting through a registry of KWin, X11, GNOME, COSMIC,
+  Hyprland, and i3 backends, with terminal metadata selectors where available
+- `doctor`, `setup_accessibility`, and `setup_window_targeting` MCP tools with
+  structured readiness reports
+- Codex Desktop compatibility as a `computer-use` companion bundle: Linux
+  installs can sync OpenAI-bundled `chrome` and `browser-use` resources beside
+  a sky-cua-backed `computer-use` compatibility plugin
+- Chrome/Brave/Chromium native-host manifest preflight on Linux through
+  `resources/chrome_preflight.py` and the `bin/sky-cua-browser-preflight`
+  wrapper
 
 ## Development
 
@@ -75,6 +85,43 @@ Build and install a Codex debug bundle:
 ```bash
 python3 scripts/build_plugin.py
 python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
+```
+
+On Linux, `install_plugin.py` also runs browser preflight when the built bundle
+contains `resources/chrome_preflight.py`. That preflight syncs the local
+OpenAI-bundled marketplace cache for `chrome`, `browser-use`, and a
+`computer-use` compatibility entry, writes native-host manifests for Google
+Chrome, Brave, and Chromium, and enables `chrome@openai-bundled` plus
+`browser-use@openai-bundled` in `config.toml`. The compatibility
+`computer-use@openai-bundled` entry is staged but disabled so it does not
+collide with the active `sky-cua` MCP server.
+
+Run the browser preflight directly when debugging Codex Desktop browser
+integration:
+
+```bash
+bin/sky-cua-browser-preflight --codex-home ~/.codex
+```
+
+To stage OpenAI bundled Chrome/Browser Use resources during build, point the
+builder at an upstream Codex Desktop resource root:
+
+```bash
+SKY_CUA_UPSTREAM_CODEX_RESOURCES=/path/to/codex/resources \
+  python3 scripts/build_plugin.py
+```
+
+`SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT` may also point directly at an
+`openai-bundled` marketplace root. If neither variable is set, the builder
+checks the sibling `../codex-desktop-linux/codex-app/resources/plugins/openai-bundled`
+path and skips Chrome/Browser Use staging with a warning when it is absent.
+
+Install the runtime as a plain MCP server for non-Codex hosts:
+
+```bash
+cargo build --release
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host generic
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
 ```
 
 Deploy local Codex plugin builds:
@@ -114,7 +161,12 @@ python3 scripts/live_kate_smoke.py
 python3 scripts/live_krita_smoke.py
 python3 scripts/live_app_server_smoke.py
 python3 scripts/live_app_server_tidal_playlist.py
+python3 scripts/gui_desktop_smoke.py --profile kde
 ```
+
+`scripts/gui_desktop_smoke.py` is currently a matrix-harness scaffold. It
+writes the selected profile artifact and exits non-zero until the
+profile-specific graphical session runners exist.
 
 Diagnostic or legacy lanes:
 
@@ -129,6 +181,10 @@ For the full installed-plugin ChatGPT-auth E2E investigation, see
 
 For the portable runtime boundary and host-adapter expectations, see
 `docs/mcp-runtime.md`.
+
+For the current Codex Desktop compatibility plan, including the exact Browser
+Use/Chrome proof artifacts, see
+`.opencode/plans/1778463694899-nimble-knight.md`.
 
 ## Current Limitations
 
@@ -157,6 +213,15 @@ For the portable runtime boundary and host-adapter expectations, see
 - Installed-plugin harnesses are opt-in acceptance tools, not default regression
   tests. The rich-client path uses `codex app-server`; `codex exec` remains a
   diagnostic probe.
+- Browser Use support currently relies on Codex Desktop's bundled `chrome` and
+  `browser-use` plugins plus the Linux native-host preflight. `sky-cua` does not
+  yet expose first-class `browser_*` MCP tools of its own.
+- GNOME Shell extension setup installs files and asks GNOME to enable the
+  extension, but GNOME may still require a Shell reload or login restart before
+  the extension DBus backend appears.
+- Cross-desktop windowing has parser/unit coverage, but GNOME, COSMIC,
+  Hyprland, i3, and a fresh KDE registry-path smoke still need live desktop
+  matrix proof.
 - Windows v1 is intentionally conservative: it exposes real top-level window
   bounds and physical actions, but does not yet provide rich UI Automation
   child trees or semantic invoke/value routing.
