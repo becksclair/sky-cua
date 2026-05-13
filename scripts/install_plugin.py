@@ -3,17 +3,21 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DIST_PLUGIN_ROOT,
     copytree_replace_preserving_platform_binaries,
+    current_runtime_platform,
     ensure_bundle_structure,
     ensure_executable,
     installed_plugin_root,
+    platform_runtime_binary_base_names,
     remove_path,
-    runtime_binary_names,
+    runtime_binary_path,
     update_codex_config,
 )
 
@@ -26,8 +30,23 @@ def install_bundle(bundle_root: Path, destination: Path, symlink: bool) -> None:
     else:
         copytree_replace_preserving_platform_binaries(bundle_root, destination)
     ensure_bundle_structure(destination)
-    for binary_name in runtime_binary_names():
-        ensure_executable(destination / "bin" / binary_name)
+    platform_id = current_runtime_platform()
+    for binary_name in platform_runtime_binary_base_names(platform_id):
+        ensure_executable(destination / runtime_binary_path(platform_id, binary_name))
+
+
+def run_browser_preflight(destination: Path, codex_home: Path) -> None:
+    if sys.platform != "linux":
+        return
+    preflight = destination / "resources" / "chrome_preflight.py"
+    if not preflight.exists():
+        return
+    subprocess.run(
+        [sys.executable, str(preflight), "--codex-home", str(codex_home)],
+        check=True,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+    )
 
 
 def main() -> int:
@@ -56,6 +75,7 @@ def main() -> int:
 
     destination = installed_plugin_root(args.codex_home)
     install_bundle(bundle_root, destination, args.symlink)
+    run_browser_preflight(destination, args.codex_home)
 
     config_path = args.codex_home / "config.toml"
     update_codex_config(config_path)

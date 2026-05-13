@@ -2,6 +2,7 @@
 /.venv
 /.idea
 /.vscode
+/.opencode
 *.log
 __pycache__/
 *.py[cod]

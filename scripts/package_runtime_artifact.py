@@ -7,19 +7,24 @@ from pathlib import Path
 
 from _plugin_bundle import (
     REPO_ROOT,
-    RUNTIME_BINARY_BASE_NAMES,
     current_runtime_platform,
     ensure_executable,
+    platform_runtime_binary_base_names,
     runtime_binary_source_name,
 )
 
 
 def package_runtime_artifact(platform_id: str, output_root: Path) -> Path:
+    binary_names = platform_runtime_binary_base_names(platform_id)
     artifact_root = output_root / platform_id
+    if artifact_root.exists():
+        shutil.rmtree(artifact_root)
     artifact_root.mkdir(parents=True, exist_ok=True)
-    for binary_name in RUNTIME_BINARY_BASE_NAMES:
+    for binary_name in binary_names:
         source_name = runtime_binary_source_name(platform_id, binary_name)
         source = REPO_ROOT / "target" / "release" / source_name
+        if not source.exists():
+            raise FileNotFoundError(f"runtime binary not found: {source}")
         destination = artifact_root / source_name
         shutil.copy2(source, destination)
         if not destination.name.endswith(".exe"):

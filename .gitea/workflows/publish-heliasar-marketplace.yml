@@ -1,10 +1,8 @@
 name: Publish Heliasar Marketplace
-
 on:
   push:
     tags:
       - "v*"
-
 jobs:
   build-linux-x64:
     runs-on: asgard-build-1
@@ -13,14 +11,13 @@ jobs:
       - name: Build release runtime
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          cargo build --release --package sky-cua-client --package sky-cua-service
+          cargo build --release --package sky-cua-client --package sky-cua-service --package sky-cua-cosmic-helper --package sky-cua-chrome-host
       - name: Package runtime artifact
         run: python3 scripts/package_runtime_artifact.py --platform linux-x64 --output-root artifacts/runtime
       - uses: actions/upload-artifact@v3
         with:
           name: sky-cua-runtime-linux-x64
           path: artifacts/runtime/linux-x64
-
   build-linux-arm64:
     runs-on: orion-aarch64
     steps:
@@ -28,14 +25,13 @@ jobs:
       - name: Build release runtime
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          cargo build --release --package sky-cua-client --package sky-cua-service
+          cargo build --release --package sky-cua-client --package sky-cua-service --package sky-cua-cosmic-helper --package sky-cua-chrome-host
       - name: Package runtime artifact
         run: python3 scripts/package_runtime_artifact.py --platform linux-arm64 --output-root artifacts/runtime
       - uses: actions/upload-artifact@v3
         with:
           name: sky-cua-runtime-linux-arm64
           path: artifacts/runtime/linux-arm64
-
   build-windows-x64:
     runs-on: windows
     steps:
@@ -61,7 +57,6 @@ jobs:
         with:
           name: sky-cua-runtime-windows-x64
           path: artifacts/runtime/windows-x64
-
   publish:
     runs-on: asgard-build-1
     needs:

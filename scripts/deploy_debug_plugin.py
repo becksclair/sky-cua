@@ -15,7 +15,7 @@ from _plugin_bundle import (
     stop_windows_cache_processes,
     update_codex_config,
 )
-from install_plugin import install_bundle
+from install_plugin import install_bundle, run_browser_preflight
 
 
 def main() -> int:
@@ -49,6 +49,7 @@ def main() -> int:
     stop_unix_runtime_processes([destination])
     stop_windows_cache_processes(destination)
     install_bundle(bundle_root, destination, args.symlink)
+    run_browser_preflight(destination, args.codex_home)
     config_path = args.codex_home / "config.toml"
     update_codex_config(config_path, disabled_plugin_ids=[RELEASE_PLUGIN_ID])
     print(f"installed_path={destination}")

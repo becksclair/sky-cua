@@ -32,7 +32,13 @@ LINUX_ARM64 = "linux-arm64"
 WINDOWS_X64 = "windows-x64"
 REQUIRED_RUNTIME_PLATFORMS = (LINUX_X64, LINUX_ARM64, WINDOWS_X64)
 RUNTIME_BINARY_BASE_NAMES = ("sky-cua-client", "sky-cua-service")
+LINUX_RUNTIME_BINARY_BASE_NAMES = (
+    *RUNTIME_BINARY_BASE_NAMES,
+    "sky-cua-cosmic-helper",
+    "sky-cua-chrome-host",
+)
 UNIX_RUNTIME_ENTRYPOINT_PATHS = tuple(Path("bin") / name for name in RUNTIME_BINARY_BASE_NAMES)
+UNIX_PRE_FLIGHT_ENTRYPOINT_PATHS = (Path("bin") / "sky-cua-browser-preflight",)
 TAG_VERSION_RE = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)$")
 SIGTERM = signal.SIGTERM
 SIGKILL = getattr(signal, "SIGKILL", SIGTERM)
@@ -46,7 +52,8 @@ def executable_name(name: str) -> str:
 
 def platform_runtime_binary_names(*, windows: bool) -> list[str]:
     suffix = ".exe" if windows else ""
-    return [f"sky-cua-client{suffix}", f"sky-cua-service{suffix}"]
+    base_names = RUNTIME_BINARY_BASE_NAMES if windows else LINUX_RUNTIME_BINARY_BASE_NAMES
+    return [f"{name}{suffix}" for name in base_names]
 
 
 def current_runtime_platform() -> str:
@@ -61,7 +68,7 @@ def current_runtime_platform() -> str:
 
 
 def runtime_binary_path(platform_id: str, binary_name: str) -> Path:
-    if binary_name not in RUNTIME_BINARY_BASE_NAMES:
+    if binary_name not in platform_runtime_binary_base_names(platform_id):
         raise ValueError(f"unknown runtime binary: {binary_name}")
     if platform_id == WINDOWS_X64:
         return Path("bin") / f"{binary_name}.exe"
@@ -75,8 +82,44 @@ def runtime_binary_source_name(platform_id: str, binary_name: str) -> str:
     return f"{binary_name}.exe" if platform_id == WINDOWS_X64 else binary_name
 
 
+def chrome_extension_host_arch(platform_id: str) -> str | None:
+    if platform_id == LINUX_X64:
+        return "x64"
+    if platform_id == LINUX_ARM64:
+        return "arm64"
+    return None
+
+
+def chrome_extension_host_path(platform_id: str) -> Path | None:
+    arch = chrome_extension_host_arch(platform_id)
+    if arch is None:
+        return None
+    return (
+        Path("resources")
+        / "plugins"
+        / "openai-bundled"
+        / "plugins"
+        / "chrome"
+        / "extension-host"
+        / "linux"
+        / arch
+        / "extension-host"
+    )
+
+
+def platform_runtime_binary_base_names(platform_id: str) -> tuple[str, ...]:
+    if platform_id in {LINUX_X64, LINUX_ARM64}:
+        return LINUX_RUNTIME_BINARY_BASE_NAMES
+    if platform_id == WINDOWS_X64:
+        return RUNTIME_BINARY_BASE_NAMES
+    raise ValueError(f"unknown runtime platform: {platform_id}")
+
+
 def platform_runtime_binary_paths(platform_id: str) -> list[Path]:
-    return [runtime_binary_path(platform_id, name) for name in RUNTIME_BINARY_BASE_NAMES]
+    return [
+        runtime_binary_path(platform_id, name)
+        for name in platform_runtime_binary_base_names(platform_id)
+    ]
 
 
 def all_runtime_binary_paths() -> list[Path]:
@@ -96,12 +139,16 @@ def runtime_binary_names() -> list[str]:
 
 
 def runtime_entrypoint_paths() -> list[Path]:
-    return [Path("bin") / name for name in runtime_binary_names()]
+    return [Path("bin") / executable_name(name) for name in RUNTIME_BINARY_BASE_NAMES]
 
 
 def bundle_entrypoint_paths() -> list[Path]:
     return sorted(
-        {*UNIX_RUNTIME_ENTRYPOINT_PATHS, *runtime_entrypoint_paths()},
+        {
+            *UNIX_RUNTIME_ENTRYPOINT_PATHS,
+            *UNIX_PRE_FLIGHT_ENTRYPOINT_PATHS,
+            *runtime_entrypoint_paths(),
+        },
         key=lambda path: path.as_posix(),
     )
 
@@ -124,7 +171,7 @@ def merge_runtime_artifacts(bundle_root: Path, artifacts_root: Path) -> None:
     missing: list[str] = []
     for platform_id in REQUIRED_RUNTIME_PLATFORMS:
         platform_root = artifacts_root / platform_id
-        for binary_name in RUNTIME_BINARY_BASE_NAMES:
+        for binary_name in platform_runtime_binary_base_names(platform_id):
             source = platform_root / runtime_binary_source_name(platform_id, binary_name)
             destination = bundle_root / runtime_binary_path(platform_id, binary_name)
             if not source.exists():
@@ -134,6 +181,13 @@ def merge_runtime_artifacts(bundle_root: Path, artifacts_root: Path) -> None:
             shutil.copy2(source, destination)
             if not destination.name.endswith(".exe"):
                 ensure_executable(destination)
+            if binary_name == "sky-cua-chrome-host" and (
+                host_destination := chrome_extension_host_path(platform_id)
+            ):
+                bundled_host = bundle_root / host_destination
+                bundled_host.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, bundled_host)
+                ensure_executable(bundled_host)
     if missing:
         raise FileNotFoundError(f"runtime artifact set is missing required binaries: {missing}")
 
@@ -149,8 +203,13 @@ def mcp_config_source() -> Path:
 def ensure_executable(path: Path) -> None:
     if sys.platform == "win32":
         return
-    mode = path.stat().st_mode
-    path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    try:
+        mode = path.stat().st_mode
+        path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except FileNotFoundError:
+        pass
+    except PermissionError as exc:
+        print(f"warning: cannot make {path} executable: {exc}", file=sys.stderr)
 
 
 def remove_path(path: Path) -> None:
@@ -274,7 +333,12 @@ def _is_sky_cua_runtime_process(
     root_prefixes: list[str],
 ) -> bool:
     process_name = Path(exe or "").name
-    if process_name not in {"sky-cua-client", "sky-cua-service"}:
+    if process_name not in {
+        "sky-cua-client",
+        "sky-cua-service",
+        "sky-cua-chrome-host",
+        "sky-cua-cosmic-helper",
+    }:
         return False
     candidates = [candidate for candidate in [exe, cwd, cmdline] if candidate]
     return any(prefix in candidate for prefix in root_prefixes for candidate in candidates)
@@ -472,7 +536,10 @@ def update_codex_config(
     marketplace_root: Path | None = None,
 ) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_text = config_path.read_text() if config_path.exists() else ""
+    try:
+        config_text = config_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        config_text = ""
     config_text = ensure_plugins_feature_enabled(config_text)
     if disable_apps:
         config_text = ensure_apps_feature_disabled(config_text)
@@ -485,4 +552,4 @@ def update_codex_config(
     for disabled_plugin_id in disabled_plugin_ids or []:
         if disabled_plugin_id != plugin_id:
             config_text = set_plugin_enabled(config_text, disabled_plugin_id, enabled=False)
-    config_path.write_text(config_text)
+    config_path.write_text(config_text, encoding="utf-8")
