@@ -523,6 +523,104 @@ def test_browser_preflight_links_browser_use_into_bundled_marketplace(tmp_path: 
     assert plugin_link.readlink() == cache_root / "latest"
 
 
+def test_browser_preflight_replaces_read_only_cached_plugin_tree(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "fresh.txt").write_text("fresh", encoding="utf-8")
+    destination.mkdir()
+    (destination / "stale.txt").write_text("stale", encoding="utf-8")
+    destination.chmod(0o500)
+
+    try:
+        chrome_preflight.copytree_replace(source, destination)
+    finally:
+        destination.chmod(0o700)
+
+    assert (destination / "fresh.txt").read_text(encoding="utf-8") == "fresh"
+    assert not (destination / "stale.txt").exists()
+
+
+def test_browser_use_node_repl_is_staged_from_upstream_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    true_binary = shutil.which("true")
+    if true_binary is None:
+        pytest.skip("true binary is not available")
+
+    source_root = tmp_path / "upstream" / "resources" / "plugins" / "openai-bundled"
+    marketplace = source_root / ".agents" / "plugins" / "marketplace.json"
+    marketplace.parent.mkdir(parents=True)
+    marketplace.write_text(json.dumps({"plugins": []}), encoding="utf-8")
+    for plugin_name in ("browser-use", "chrome"):
+        plugin = source_root / "plugins" / plugin_name
+        (plugin / ".codex-plugin").mkdir(parents=True)
+        (plugin / ".codex-plugin" / "plugin.json").write_text(
+            json.dumps({"name": plugin_name, "version": "1.0.0"}),
+            encoding="utf-8",
+        )
+        (plugin / "scripts").mkdir()
+        (plugin / "scripts" / "browser-client.mjs").write_text("client", encoding="utf-8")
+    shutil.copy2(true_binary, source_root.parents[1] / "node_repl")
+
+    monkeypatch.setattr(build_plugin, "bundled_resource_root", lambda: source_root)
+    monkeypatch.setattr(build_plugin, "install_bundled_chrome_host", lambda _root: None)
+    temp_root = tmp_path / "bundle"
+
+    build_plugin.stage_openai_bundled_plugins(temp_root)
+
+    staged = temp_root / "resources" / "node_repl"
+    assert staged.exists()
+    assert staged.stat().st_mode & 0o111
+    assert staged.read_bytes() == Path(true_binary).read_bytes()
+
+
+def test_browser_use_node_repl_installer_rejects_incompatible_ldd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "node_repl"
+    destination = tmp_path / "out" / "node_repl"
+    source.write_text("fake", encoding="utf-8")
+
+    monkeypatch.setattr(build_plugin, "node_repl_ldd_compatible", lambda _path: False)
+
+    assert not build_plugin.install_browser_use_node_repl(source, destination)
+    assert not destination.exists()
+
+
+def test_browser_use_node_repl_non_elf_patch_is_noop(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    node_repl = tmp_path / "node_repl"
+    node_repl.write_bytes(b"not an elf")
+
+    assert chrome_preflight.patch_browser_use_node_repl_glibc_pidfd_symbols(node_repl) is False
+    assert node_repl.read_bytes() == b"not an elf"
+
+
+def test_browser_preflight_validates_node_repl_without_installing_to_codex_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chrome_preflight = load_chrome_preflight()
+    source_root = tmp_path / "upstream" / "resources" / "plugins" / "openai-bundled"
+    source_root.mkdir(parents=True)
+    source_node_repl = source_root.parents[1] / "node_repl"
+    source_node_repl.write_text("fake", encoding="utf-8")
+    calls: list[tuple[Path, Path]] = []
+
+    def fake_install(source: Path, destination: Path) -> bool:
+        calls.append((source, destination))
+        return True
+
+    monkeypatch.setattr(chrome_preflight, "install_browser_use_node_repl", fake_install)
+
+    chrome_preflight.validate_browser_use_node_repl(source_root)
+
+    assert calls
+    assert calls[0][0] == source_node_repl
+    assert calls[0][1].name == "node_repl"
+
+
 def test_browser_preflight_adds_coupled_plugins_to_marketplace(tmp_path: Path) -> None:
     chrome_preflight = load_chrome_preflight()
     marketplace_path = (
