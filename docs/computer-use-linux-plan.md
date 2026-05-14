@@ -47,6 +47,7 @@ The goal is not to pretend Linux parity is magically finished. The goal is to st
 - [x] (2026-05-13 10:05Z) Added Codex Desktop compatibility for a `computer-use` presentation layer while preserving the `sky-cua-client mcp` runtime boundary: `scripts/build_plugin.py` stages OpenAI-bundled `chrome` and `browser-use` resources when available, embeds `sky-cua-chrome-host` under the Chrome plugin's Linux extension-host path, and `resources/chrome_preflight.py` syncs `chrome`, `browser-use`, and `computer-use` into the local Codex bundled marketplace cache.
 - [x] (2026-05-13 10:05Z) Proved the corresponding narrow CodexDesktop-Rebuild patch: Browser Use and Chrome companion descriptors stay available when `computerUse` is enabled, Settings shows `Computer Use` and `Browser Use` with the Chrome plugin present, and the Desktop patch chain passes.
 - [x] (2026-05-13 12:00Z) Closed the KWin/X11 workspace metadata gap: KWin and X11 window structs now carry backend-native workspace values through the unified registry into public `WindowInfo.workspace`.
+- [x] (2026-05-14 15:39Z) Added and ran `scripts/live_chrome_host_client_smoke.py --browser brave --install-temp-native-manifest --host-path target/debug/sky-cua-chrome-host`, proving the official Codex extension `hehggadaopoacecdllhhajmbjkdcmajg` can connect to `com.openai.codexextension` through the sky-cua host binary, bridge `getInfo` and `getTabs` from a mock Codex browser client to the extension, bridge the extension heartbeat `ping` back to that client, emit `turnEnded` from a matching session-log completion, receive the extension response, and restore the original Brave manifest. Artifact: `artifacts/chrome-host-smoke/20260514T154125Z/result.json`.
 - [ ] Pending live-smoke matrix: GNOME, COSMIC, Hyprland, i3, and a KDE re-smoke after the registry changes must still be proven inside real desktop sessions. Compile/unit tests cover the new registry and backend parsers, but they do not prove compositor-local listing, focus, portals, AT-SPI, extension behavior, or compositor focus side effects. The blocked matrix, intended commands, and artifact contract are tracked in `docs/gui-desktop-test-harness.md`; the current `scripts/gui_desktop_smoke.py` runner is only a scaffold that creates `artifacts/gui-desktop-smoke/<profile>/result.json` and exits non-zero until profile startup is implemented.
 
 ## Current Status Ledger
@@ -61,12 +62,13 @@ Complete:
 - Portal lifecycle reporting: restore token storage, session recovery, token rotation, portal-pending diagnostics, and explicit lifecycle summaries.
 - Rich-client installed-plugin proof: app-server harness and TIDAL workflow proof artifacts remain the strongest end-to-end plugin acceptance proof.
 - Codex Desktop compatibility: `computer-use` presentation, Chrome/Browser Use companion staging, Linux native host placement, browser preflight, and Settings proof are implemented.
+- Browser bridge proof: the official extension/native-host/socket bridge is now covered by `scripts/live_chrome_host_client_smoke.py`, including the sky-cua host process path and rollout `turnEnded` lifecycle.
 - KWin/X11 workspace metadata: backend-native workspace values now reach public `WindowInfo.workspace`.
 - Documentation and plan state: current docs, OpenCode plans, and workflow skill guidance have been refreshed and committed.
 
 Partial:
 
-- Browser automation: Chrome extension resources, native host binary, native-host manifests, and Codex Desktop Browser Use visibility are implemented, but the host/extension protocol still lacks an isolated request/response smoke and first-class `browser_*` MCP tools remain deferred.
+- Browser automation: Chrome extension resources, native host binary, native-host manifests, Codex Desktop Browser Use visibility, the official-extension bridge, generic Browser Use request forwarding, heartbeat handling, and rollout/session completion are implemented. First-class `browser_*` MCP tools remain intentionally deferred while Browser Use is provided by the companion bundled plugin.
 - Cross-desktop support: GNOME, COSMIC, Hyprland, i3, KWin, and X11 adapters exist with parser/unit coverage where practical, but not all have live compositor proof.
 - Doctor/setup hardening: the tools exist and report actionable state, but more real launch environments are needed to refine blocker wording and recovery paths.
 - Regression harnessing: live KDE, X11, Krita, Kate, downgrade, app-server, and packaging smokes exist in various forms, but the new GUI desktop matrix runner is still a scaffold.
@@ -75,7 +77,7 @@ Pending:
 
 - Implement `scripts/gui_desktop_smoke.py` profile startup/attach behavior for KDE, GNOME, COSMIC, Hyprland, and i3.
 - Record live compositor artifacts for every GUI profile under `artifacts/gui-desktop-smoke/<profile>/`.
-- Add an isolated Chrome/native-host protocol smoke before claiming browser automation outside Codex Desktop's existing Browser Use flow.
+- Add any future first-class `browser_*` MCP tools only after deciding to move browser automation out of Codex Desktop's existing Browser Use companion flow.
 - Re-run the Codex Desktop Settings proof after Desktop upstream refreshes or plugin descriptor changes.
 - Run a fresh release build/install inspection before broad release or marketplace publishing.
 
@@ -218,7 +220,7 @@ Pending:
   Rationale: Codex Desktop already has first-class expectations for `computer-use`, `browser-use`, and `chrome` as coupled bundled plugins. Renaming the adapter layer is less invasive than patching Codex Desktop broadly, and other hosts can still consume the same MCP server and skills directly.
   Date/Author: 2026-05-13 / Sarah
 - Decision: keep Chrome and Browser Use as companion OpenAI-bundled plugins instead of folding browser automation into the core sky-cua MCP surface.
-  Rationale: the current proof is that Codex Desktop's existing Browser Use flow remains visible and installed beside Linux Computer Use. First-class `browser_*` MCP tools should wait for an isolated native-host/extension protocol smoke.
+  Rationale: the current proof is that Codex Desktop's existing Browser Use flow remains visible and installed beside Linux Computer Use, and `scripts/live_chrome_host_client_smoke.py` proves the sky-cua host can bridge the official extension protocol including `getInfo`, `getTabs`, heartbeat, and rollout `turnEnded`. First-class `browser_*` MCP tools should be a separate product decision rather than a host-compatibility requirement.
   Date/Author: 2026-05-13 / Sarah
 
 ## Outcomes & Retrospective

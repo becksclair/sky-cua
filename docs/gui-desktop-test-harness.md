@@ -43,7 +43,7 @@ Progress ledger:
 | COSMIC | Pending | `sky-cua-cosmic-helper` exists and is packaged for Linux. | Real COSMIC session proving listing, focused-window detection, and activation. |
 | Hyprland | Pending | `hyprctl` parser/focus code exists. | Real Hyprland session proving listing, focus dispatch, terminal enrichment, and portal behavior. |
 | i3 | Pending | `i3-msg` parser/focus code exists. | Real i3/X11 session proving listing, PID hydration, focus activation, terminal enrichment, and X11/XTest input. |
-| Browser companion | Partial | Codex Desktop Settings proof shows Browser Use and Chrome visible beside Computer Use. | Isolated Chrome/native-host protocol smoke outside Desktop Settings. |
+| Browser companion | Complete for host compatibility | Codex Desktop Settings proof shows Browser Use and Chrome visible beside Computer Use. `artifacts/chrome-host-smoke/20260514T154125Z/result.json` proves the official extension using the sky-cua host binary for `getInfo`, `getTabs`, heartbeat, and rollout `turnEnded`. | First-class `browser_*` MCP tools are a separate future product decision, not a host-compatibility gate. |
 
 Separate from this matrix, Codex Desktop Settings proof for the bundled
 `computer-use`/`browser-use`/`chrome` compatibility lane exists under
@@ -59,9 +59,9 @@ Pending gaps:
 - `hyprland`: needs a real Hyprland session to prove `hyprctl clients -j`, focus dispatch, terminal enrichment, and portal behavior.
 - `i3`: needs a real i3/X11 session to prove `i3-msg -t get_tree`, `xprop` PID hydration, focus activation, terminal enrichment, and X11/XTest input.
 - `kde`: should be re-smoked after registry changes to prove KWin/X11 fallback behavior still passes through the new probe-order path.
-- Browser companion: needs an isolated Chrome/native-host protocol smoke before
-  claiming browser automation works outside Codex Desktop's existing Browser
-  Use plugin flow.
+- Browser companion: host compatibility is live-proven through the official
+  extension and sky-cua host binary. Browser automation outside Codex Desktop's
+  existing Browser Use plugin flow remains a separate future MCP-tooling scope.
 
 Do not mark any of these live-smoke gaps complete until the command, desktop profile, and artifact directory are recorded.
 
