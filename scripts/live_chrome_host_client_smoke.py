@@ -16,7 +16,9 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.server
 import json
+import math
 import os
 import re
 import secrets
@@ -25,12 +27,14 @@ import socket
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.request
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +50,64 @@ SMOKE_TURN_ID = "smoke-turn"
 TURN_ENDED_ID = f"native-turn-ended:{SMOKE_SESSION_ID}:{SMOKE_TURN_ID}"
 CDP_COUNTER = 0
 NATIVE_COUNTER = 0
+CURSOR_TARGET_CSS_X = 240
+CURSOR_TARGET_CSS_Y = 160
+CURSOR_DIFF_RADIUS_CSS = 72
+CURSOR_OUTSIDE_COMPONENT_MAX_CSS = 96
+CURSOR_FIXTURE_HTML = b"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>sky-cua cursor proof</title>
+    <style>
+      html, body {
+        background: white;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body></body>
+</html>
+"""
+
+
+def connected_components(points: set[tuple[int, int]]) -> list[dict[str, int]]:
+    components: list[dict[str, int]] = []
+    remaining = set(points)
+    while remaining:
+        start = remaining.pop()
+        stack = [start]
+        pixels = 0
+        min_x = start[0]
+        min_y = start[1]
+        max_x = start[0]
+        max_y = start[1]
+        while stack:
+            x, y = stack.pop()
+            pixels += 1
+            min_x = min(min_x, x)
+            min_y = min(min_y, y)
+            max_x = max(max_x, x)
+            max_y = max(max_y, y)
+            for next_y in range(y - 1, y + 2):
+                for next_x in range(x - 1, x + 2):
+                    neighbor = (next_x, next_y)
+                    if neighbor in remaining:
+                        remaining.remove(neighbor)
+                        stack.append(neighbor)
+        components.append(
+            {
+                "pixels": pixels,
+                "x": min_x,
+                "y": min_y,
+                "width": max_x - min_x + 1,
+                "height": max_y - min_y + 1,
+            }
+        )
+    components.sort(key=lambda component: component["pixels"], reverse=True)
+    return components
 
 
 class BrowserSelection(NamedTuple):
@@ -187,6 +249,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip the session-log completion proof for turnEnded.",
     )
     parser.add_argument(
+        "--skip-cursor-proof",
+        action="store_true",
+        help="Skip the browser agent cursor overlay proof.",
+    )
+    parser.add_argument(
         "--artifacts-root",
         type=Path,
         default=Path("artifacts/chrome-host-smoke"),
@@ -304,6 +371,175 @@ def native_result(response: dict[str, object]) -> object:
     if "result" not in response:
         raise RuntimeError(f"native response had no result: {response!r}")
     return response["result"]
+
+
+class CursorFixtureHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(CURSOR_FIXTURE_HTML)))
+        self.end_headers()
+        self.wfile.write(CURSOR_FIXTURE_HTML)
+
+    def log_message(self, format: str, *_args: object) -> None:
+        del format, _args
+        return
+
+
+@contextmanager
+def cursor_fixture_url() -> Iterator[str]:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), CursorFixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, name="cursor-fixture-http", daemon=True)
+    thread.start()
+    try:
+        host, port = cast(tuple[str, int], server.server_address)
+        yield f"http://{host}:{port}/cursor-proof.html"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def cursor_diff_stats(
+    before_path: Path,
+    after_path: Path,
+    *,
+    target_x_css: float,
+    target_y_css: float,
+    device_pixel_ratio: float,
+    radius_css: float = CURSOR_DIFF_RADIUS_CSS,
+    threshold: int = 24,
+) -> dict[str, object]:
+    if device_pixel_ratio <= 0:
+        raise ValueError(f"invalid device pixel ratio: {device_pixel_ratio}")
+    from PIL import Image
+
+    with Image.open(before_path) as before_image, Image.open(after_path) as after_image:
+        before = before_image.convert("RGB")
+        after = after_image.convert("RGB")
+
+    if before.size != after.size:
+        raise AssertionError(
+            f"cursor proof screenshots have different sizes: {before.size} != {after.size}"
+        )
+
+    width, height = before.size
+    target_x = round(target_x_css * device_pixel_ratio)
+    target_y = round(target_y_css * device_pixel_ratio)
+    radius = max(1, math.ceil(radius_css * device_pixel_ratio))
+    radius_squared = radius * radius
+    changed = 0
+    near_changed = 0
+    outside_changed = 0
+    outside_points: set[tuple[int, int]] = set()
+    min_x = width
+    min_y = height
+    max_x = -1
+    max_y = -1
+
+    before_pixels = before.load()
+    after_pixels = after.load()
+    if before_pixels is None or after_pixels is None:
+        raise AssertionError("cursor proof screenshots could not be loaded as RGB pixels")
+    for y in range(height):
+        for x in range(width):
+            before_pixel = cast(tuple[int, int, int], before_pixels[x, y])
+            after_pixel = cast(tuple[int, int, int], after_pixels[x, y])
+            delta = sum(
+                abs(int(after_pixel[channel]) - int(before_pixel[channel])) for channel in range(3)
+            )
+            if delta <= threshold:
+                continue
+            changed += 1
+            min_x = min(min_x, x)
+            min_y = min(min_y, y)
+            max_x = max(max_x, x)
+            max_y = max(max_y, y)
+            if (x - target_x) ** 2 + (y - target_y) ** 2 <= radius_squared:
+                near_changed += 1
+            else:
+                outside_changed += 1
+                outside_points.add((x, y))
+
+    bounds = None
+    if changed:
+        bounds = {
+            "x": min_x,
+            "y": min_y,
+            "width": max_x - min_x + 1,
+            "height": max_y - min_y + 1,
+        }
+
+    return {
+        "changed_pixels": changed,
+        "near_changed_pixels": near_changed,
+        "outside_changed_pixels": outside_changed,
+        "outside_components": connected_components(outside_points),
+        "bounds": bounds,
+        "device_pixel_ratio": device_pixel_ratio,
+        "target_css": {"x": target_x_css, "y": target_y_css},
+        "target_pixel": {"x": target_x, "y": target_y},
+        "radius_pixels": radius,
+        "screenshot_size": {"width": width, "height": height},
+    }
+
+
+def assert_localized_cursor_diff(
+    before_path: Path,
+    after_path: Path,
+    *,
+    target_x_css: float,
+    target_y_css: float,
+    device_pixel_ratio: float,
+    min_near_changed_pixels: int = 25,
+    max_outside_changed_pixels: int = 500,
+    max_outside_changed_ratio: float = 0.30,
+    max_outside_components: int = 1,
+    max_outside_component_pixels: int = 900,
+    max_outside_component_size_css: float = CURSOR_OUTSIDE_COMPONENT_MAX_CSS,
+) -> dict[str, object]:
+    stats = cursor_diff_stats(
+        before_path,
+        after_path,
+        target_x_css=target_x_css,
+        target_y_css=target_y_css,
+        device_pixel_ratio=device_pixel_ratio,
+    )
+    changed = cast(int, stats["changed_pixels"])
+    near_changed = cast(int, stats["near_changed_pixels"])
+    outside_changed = cast(int, stats["outside_changed_pixels"])
+    if near_changed < min_near_changed_pixels:
+        raise AssertionError(
+            "cursor proof did not find enough changed pixels near the requested point: "
+            f"{near_changed} < {min_near_changed_pixels}; stats={stats}"
+        )
+    outside_limit = min(
+        max_outside_changed_pixels,
+        max(1, math.ceil(changed * max_outside_changed_ratio)),
+    )
+    if outside_changed > outside_limit:
+        outside_components = cast(list[dict[str, int]], stats["outside_components"])
+        outside_size_limit = max(1, math.ceil(max_outside_component_size_css * device_pixel_ratio))
+        outside_component_pixel_limit = max(
+            max_outside_component_pixels,
+            outside_size_limit * outside_size_limit,
+        )
+        outside_components_fit_cursor_move = len(
+            outside_components
+        ) <= max_outside_components and all(
+            component["pixels"] <= outside_component_pixel_limit
+            and component["width"] <= outside_size_limit
+            and component["height"] <= outside_size_limit
+            for component in outside_components
+        )
+        if outside_components_fit_cursor_move:
+            return {"ok": True, **stats}
+        raise AssertionError(
+            "cursor proof changed too many pixels outside the cursor region: "
+            f"{outside_changed} > {outside_limit}; stats={stats}"
+        )
+    return {"ok": True, **stats}
 
 
 def read_heartbeat(sock: socket.socket, timeout: float = 10) -> tuple[dict[str, object], bool]:
@@ -622,6 +858,63 @@ def extension_capture_screenshot(client: socket.socket, *, tab_id: int, output_p
     if not isinstance(data, str):
         raise RuntimeError(f"unexpected extension screenshot payload: {value!r}")
     output_path.write_bytes(base64.b64decode(data))
+
+
+def page_device_pixel_ratio(client: socket.socket, tab_id: int) -> float:
+    value = extension_evaluate(
+        client,
+        tab_id=tab_id,
+        expression="window.devicePixelRatio || 1",
+        timeout_ms=2000,
+    )
+    if not isinstance(value, int | float):
+        raise RuntimeError(f"unexpected devicePixelRatio value: {value!r}")
+    return float(value)
+
+
+def run_cursor_proof(client: socket.socket, artifact_dir: Path) -> dict[str, object]:
+    proof_dir = artifact_dir / "cursor"
+    proof_dir.mkdir(parents=True, exist_ok=True)
+    tab, tab_id = create_attached_tab(client)
+    with cursor_fixture_url() as fixture_url:
+        extension_navigate_and_wait(client, tab_id=tab_id, url=fixture_url)
+        device_pixel_ratio = page_device_pixel_ratio(client, tab_id)
+        before_path = proof_dir / "before.png"
+        after_path = proof_dir / "after.png"
+        extension_capture_screenshot(client, tab_id=tab_id, output_path=before_path)
+        move_response = native_request(
+            client,
+            "moveMouse",
+            {
+                **browser_session_params(),
+                "tabId": tab_id,
+                "x": CURSOR_TARGET_CSS_X,
+                "y": CURSOR_TARGET_CSS_Y,
+                "waitForArrival": True,
+            },
+            timeout=20,
+            request_id="client-move-mouse-cursor-proof",
+        )
+        time.sleep(0.2)
+        extension_capture_screenshot(client, tab_id=tab_id, output_path=after_path)
+
+    diff = assert_localized_cursor_diff(
+        before_path,
+        after_path,
+        target_x_css=CURSOR_TARGET_CSS_X,
+        target_y_css=CURSOR_TARGET_CSS_Y,
+        device_pixel_ratio=device_pixel_ratio,
+    )
+    return {
+        "ok": True,
+        "tab": tab,
+        "tab_id": tab_id,
+        "fixture_url": fixture_url,
+        "moveMouse_response": move_response,
+        "before_screenshot": str(before_path),
+        "after_screenshot": str(after_path),
+        "diff": diff,
+    }
 
 
 def collect_hacker_news_stories(client: socket.socket, tab_id: int) -> list[dict[str, object]]:
@@ -995,6 +1288,9 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
                     browser_session_params(),
                     request_id="client-get-tabs",
                 )
+                cursor_proof = (
+                    None if args.skip_cursor_proof else run_cursor_proof(client, artifact_dir)
+                )
                 hacker_news_proof = (
                     run_hacker_news_proof(client, artifact_dir) if args.hacker_news_proof else None
                 )
@@ -1067,6 +1363,7 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
         "native_status_before": status_before,
         "client_to_extension_getInfo": get_info,
         "client_to_extension_getTabs": get_tabs,
+        "cursor_proof": cursor_proof,
         "hacker_news_proof": hacker_news_proof,
         "client_to_extension_getTabs_after_hacker_news": get_tabs_after_hacker_news,
         "extension_to_client_heartbeat": {

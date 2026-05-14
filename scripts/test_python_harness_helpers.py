@@ -1409,6 +1409,177 @@ def test_chrome_preflight_default_env_allowlist_matches_primary_mcp_config() -> 
     assert env_vars == chrome_preflight.DEFAULT_COMPUTER_USE_ENV_VARS
 
 
+def test_bundled_chrome_extension_cursor_overlay_contract() -> None:
+    extension_dir = live_chrome_host_client_smoke.FALLBACK_EXTENSION_DIR
+    manifest = json.loads((extension_dir / "manifest.json").read_text(encoding="utf-8"))
+    content_script = (extension_dir / "content-scripts" / "codex.js").read_text(encoding="utf-8")
+    background = (extension_dir / "background.js").read_text(encoding="utf-8")
+
+    assert (extension_dir / "images" / "cursor-chat.png").exists()
+    assert any(
+        "images/cursor-chat.png" in entry.get("resources", [])
+        for entry in manifest["web_accessible_resources"]
+    )
+    assert "codex-agent-overlay" in content_script
+    assert "pointer-events:none" in content_script
+    assert "images/cursor-chat.png" in content_script
+    assert "AGENT_CURSOR_STATE" in content_script
+    assert "GET_AGENT_CURSOR_STATE" in content_script
+    assert "AGENT_CURSOR_ARRIVED" in content_script
+    assert "async moveMouse" in background
+    assert "waitForArrival" in background
+    assert "createCursorArrivalWaiter" in background
+    assert "AGENT_CURSOR_ARRIVED" in background
+
+
+def write_cursor_diff_fixture(path: Path, points: list[tuple[int, int]]) -> None:
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (400, 300), "white")
+    draw = ImageDraw.Draw(image)
+    for x, y in points:
+        draw.rectangle((x - 4, y - 4, x + 4, y + 4), fill="black")
+    image.save(path)
+
+
+def write_cursor_rectangle_fixture(path: Path, rectangles: list[tuple[int, int, int, int]]) -> None:
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (400, 300), "white")
+    draw = ImageDraw.Draw(image)
+    for x, y, width, height in rectangles:
+        draw.rectangle((x, y, x + width - 1, y + height - 1), fill="black")
+    image.save(path)
+
+
+def test_cursor_diff_accepts_localized_cursor_change(tmp_path: Path) -> None:
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    write_cursor_diff_fixture(before, [])
+    write_cursor_diff_fixture(after, [(100, 80)])
+
+    result = live_chrome_host_client_smoke.assert_localized_cursor_diff(
+        before,
+        after,
+        target_x_css=100,
+        target_y_css=80,
+        device_pixel_ratio=1,
+    )
+
+    assert result["ok"] is True
+    assert result["near_changed_pixels"] == 81
+
+
+def test_cursor_diff_accepts_compact_prior_cursor_disappearing(tmp_path: Path) -> None:
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    write_cursor_diff_fixture(before, [(280, 220)])
+    write_cursor_diff_fixture(after, [(100, 80)])
+
+    result = live_chrome_host_client_smoke.assert_localized_cursor_diff(
+        before,
+        after,
+        target_x_css=100,
+        target_y_css=80,
+        device_pixel_ratio=1,
+    )
+
+    assert result["ok"] is True
+    assert result["near_changed_pixels"] == 81
+    assert result["outside_changed_pixels"] == 81
+
+
+def test_cursor_diff_accepts_full_size_prior_cursor_disappearing(tmp_path: Path) -> None:
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    write_cursor_rectangle_fixture(before, [(260, 210, 46, 48)])
+    write_cursor_diff_fixture(after, [(100, 80)])
+
+    result = live_chrome_host_client_smoke.assert_localized_cursor_diff(
+        before,
+        after,
+        target_x_css=100,
+        target_y_css=80,
+        device_pixel_ratio=1,
+    )
+
+    assert result["ok"] is True
+    assert result["near_changed_pixels"] == 81
+    assert result["outside_changed_pixels"] == 2208
+
+
+def test_cursor_diff_rejects_missing_visible_change(tmp_path: Path) -> None:
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    write_cursor_diff_fixture(before, [])
+    write_cursor_diff_fixture(after, [])
+
+    with pytest.raises(AssertionError, match="enough changed pixels"):
+        live_chrome_host_client_smoke.assert_localized_cursor_diff(
+            before,
+            after,
+            target_x_css=100,
+            target_y_css=80,
+            device_pixel_ratio=1,
+        )
+
+
+def test_cursor_diff_rejects_far_away_change(tmp_path: Path) -> None:
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    write_cursor_diff_fixture(before, [])
+    write_cursor_diff_fixture(after, [(320, 240)])
+
+    with pytest.raises(AssertionError, match="enough changed pixels"):
+        live_chrome_host_client_smoke.assert_localized_cursor_diff(
+            before,
+            after,
+            target_x_css=100,
+            target_y_css=80,
+            device_pixel_ratio=1,
+        )
+
+
+def test_cursor_diff_rejects_broad_unrelated_change(tmp_path: Path) -> None:
+    from PIL import Image, ImageDraw
+
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    write_cursor_diff_fixture(before, [])
+    image = Image.new("RGB", (400, 300), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((96, 76, 104, 84), fill="black")
+    draw.rectangle((250, 20, 390, 260), fill="black")
+    image.save(after)
+
+    with pytest.raises(AssertionError, match="outside the cursor region"):
+        live_chrome_host_client_smoke.assert_localized_cursor_diff(
+            before,
+            after,
+            target_x_css=100,
+            target_y_css=80,
+            device_pixel_ratio=1,
+        )
+
+
+def test_cursor_diff_scales_css_coordinates_by_device_pixel_ratio(tmp_path: Path) -> None:
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    write_cursor_diff_fixture(before, [])
+    write_cursor_diff_fixture(after, [(200, 160)])
+
+    result = live_chrome_host_client_smoke.assert_localized_cursor_diff(
+        before,
+        after,
+        target_x_css=100,
+        target_y_css=80,
+        device_pixel_ratio=2,
+    )
+
+    assert result["ok"] is True
+    assert result["target_pixel"] == {"x": 200, "y": 160}
+
+
 def test_chrome_host_smoke_accepts_same_origin_web_redirects() -> None:
     assert live_chrome_host_client_smoke.same_requested_origin(
         "http://www.example.com/article",

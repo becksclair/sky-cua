@@ -936,6 +936,62 @@ mod tests {
     }
 
     #[test]
+    fn extracts_session_turn_from_cursor_move_request() {
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": "request-1",
+            "method": "moveMouse",
+            "params": {
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "tabId": 42,
+                "x": 240,
+                "y": 160,
+                "waitForArrival": true
+            }
+        });
+
+        assert_eq!(
+            session_turn_from_message(&message),
+            Some(("session-1".to_string(), "turn-1".to_string()))
+        );
+    }
+
+    #[test]
+    fn id_replacement_preserves_cursor_move_params() {
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": "request-1",
+            "method": "moveMouse",
+            "params": {
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "tabId": 42,
+                "x": 240,
+                "y": 160,
+                "waitForArrival": true
+            }
+        });
+
+        assert_eq!(
+            with_id(message, Value::String("linux-1-1".to_string())),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "linux-1-1",
+                "method": "moveMouse",
+                "params": {
+                    "session_id": "session-1",
+                    "turn_id": "turn-1",
+                    "tabId": 42,
+                    "x": 240,
+                    "y": 160,
+                    "waitForArrival": true
+                }
+            })
+        );
+    }
+
+    #[test]
     fn builds_turn_ended_message_for_chrome_extension() {
         assert_eq!(
             turn_ended_message("session-1", "turn-1"),
@@ -1124,6 +1180,32 @@ mod tests {
                 "params": {
                     "session_id": "session-1",
                     "turn_id": "turn-1"
+                }
+            }),
+        );
+
+        let tracker = state.lock().unwrap().rollout_tracker.clone();
+        assert!(tracker.inner.lock().unwrap().observed.is_empty());
+    }
+
+    #[test]
+    fn stale_cursor_move_requests_do_not_observe_rollout_turns() {
+        let state = Arc::new(Mutex::new(test_host_state()));
+
+        handle_client_message(
+            &state,
+            99,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "moveMouse",
+                "params": {
+                    "session_id": "session-1",
+                    "turn_id": "turn-1",
+                    "tabId": 42,
+                    "x": 240,
+                    "y": 160,
+                    "waitForArrival": true
                 }
             }),
         );
