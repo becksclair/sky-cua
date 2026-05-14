@@ -14,7 +14,7 @@ use crate::apps::discovery::{DiscoveredApp, discover_apps};
 use crate::atspi::{
     actions as atspi_actions, connect, normalize_action, snapshot::snapshot_for_app,
 };
-use crate::coords::{center_of, desktop_to_stream};
+use crate::coords::{center_of, desktop_to_stream, logical_to_pixel};
 use crate::env_probe::{probe_environment, require_supported_environment};
 use crate::focus::pick_focused_app;
 use crate::portal::remote_desktop::{
@@ -25,8 +25,13 @@ use crate::windowing as linux_windowing;
 use crate::x11::capture as x11_capture;
 use crate::x11::input_xtest::{self, X11MouseButton};
 use crate::x11::windowing::{self, X11WindowInfo};
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::warn;
+use zbus::Proxy;
 
 #[derive(Debug, Clone)]
 pub struct LinuxDesktopBackend {
@@ -888,8 +893,9 @@ impl LinuxDesktopBackend {
             }
         }
 
-        let (x, y) = action_point(&request)?;
-        match input_backend_for(&request) {
+        let input_backend = effective_pointer_input_backend_for_target(&request);
+        let (x, y) = action_point_for_backend(&request, input_backend.clone())?;
+        match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
                 self.portal.pointer_move_absolute(x, y).await?;
                 self.portal.click(MouseButton::Left).await?;
@@ -899,6 +905,8 @@ impl LinuxDesktopBackend {
                 ))
             }
             InputBackendKind::XTest => {
+                let x11_window = matched_x11_window_for_request(&request);
+                activate_x11_window(x11_window.as_ref());
                 input_xtest::pointer_move_absolute(x, y)?;
                 input_xtest::click(X11MouseButton::Left)?;
                 Ok(success(
@@ -964,8 +972,9 @@ impl LinuxDesktopBackend {
             }
         }
 
-        let (x, y) = action_point(&request)?;
-        match input_backend_for(&request) {
+        let input_backend = effective_pointer_input_backend_for_target(&request);
+        let (x, y) = action_point_for_backend(&request, input_backend.clone())?;
+        match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
                 self.portal.pointer_move_absolute(x, y).await?;
                 self.portal.click(MouseButton::Right).await?;
@@ -975,6 +984,8 @@ impl LinuxDesktopBackend {
                 ))
             }
             InputBackendKind::XTest => {
+                let x11_window = matched_x11_window_for_request(&request);
+                activate_x11_window(x11_window.as_ref());
                 input_xtest::pointer_move_absolute(x, y)?;
                 input_xtest::click(X11MouseButton::Right)?;
                 Ok(success(
@@ -1041,11 +1052,16 @@ impl LinuxDesktopBackend {
     }
 
     async fn drag(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        let from = drag_from_point(&request)?;
+        let input_backend = effective_pointer_input_backend_for_target(&request);
+        let from = drag_from_point(&request, input_backend.clone())?;
         let to = if let Some(element) = request.resolved_target_element.as_ref() {
-            point_for_element(element, request.resolved_capture.as_ref())?
+            point_for_element_for_backend(
+                element,
+                request.resolved_capture.as_ref(),
+                input_backend.clone(),
+            )?
         } else {
-            drag_to_point(&request).ok_or_else(|| {
+            drag_to_point(&request, input_backend.clone()).ok_or_else(|| {
                 BackendError::new(
                     BackendErrorCode::InvalidRequest,
                     "drag requires either to_element_index or explicit to_x/to_y coordinates",
@@ -1053,7 +1069,7 @@ impl LinuxDesktopBackend {
             })?
         };
 
-        match input_backend_for(&request) {
+        match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
                 self.portal.pointer_move_absolute(from.0, from.1).await?;
                 self.portal.pointer_button(MouseButton::Left, true).await?;
@@ -1114,12 +1130,36 @@ impl LinuxDesktopBackend {
             .filter(|window| window.backend == "x11")
             .map(|window| window.window_id.as_str())
             .or_else(|| x11_window.as_ref().map(|window| window.window_id.as_str()));
-        match effective_keyboard_input_backend_for_target(
+        let input_backend = effective_keyboard_input_backend_for_target(
             &request,
             x11_window.as_ref(),
             x11_window_id,
-        ) {
+        );
+        match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
+                if should_prefer_kde_clipboard_text_backend(&request) {
+                    match run_kde_clipboard_paste_text(&self.portal, &text).await {
+                        Ok(message) => {
+                            return Ok(success_with_diagnostics(
+                                message,
+                                portal_lifecycle_diagnostics(
+                                    &self.portal.take_lifecycle_events().await,
+                                ),
+                            ));
+                        }
+                        Err(error) => {
+                            if error.clear_portal_session {
+                                self.portal.reset_session().await;
+                            }
+                            if !error.can_fallback_to_portal_keysym {
+                                return Err(BackendError::new(
+                                    BackendErrorCode::ActionUnsupportedForEnvironment,
+                                    error.message,
+                                ));
+                            }
+                        }
+                    }
+                }
                 self.portal.send_text(&text).await?;
                 Ok(success_with_diagnostics(
                     "Typed text through the RemoteDesktop portal.",
@@ -1127,7 +1167,7 @@ impl LinuxDesktopBackend {
                 ))
             }
             InputBackendKind::XTest => {
-                activate_x11_window(x11_window.as_ref())?;
+                activate_x11_window(x11_window.as_ref());
                 input_xtest::send_text_to_target(x11_window_id, &text)?;
                 Ok(success("Typed text through the X11 input fallback."))
             }
@@ -1179,7 +1219,7 @@ impl LinuxDesktopBackend {
                 ))
             }
             InputBackendKind::XTest => {
-                activate_x11_window(x11_window.as_ref())?;
+                activate_x11_window(x11_window.as_ref());
                 input_xtest::press_key_sequence_to_target(x11_window_id, &keys)?;
                 Ok(success(
                     "Pressed the key sequence through the X11 input fallback.",
@@ -1366,7 +1406,7 @@ impl LinuxDesktopBackend {
                         ))
                     }
                     InputBackendKind::XTest => {
-                        activate_x11_window(x11_window.as_ref())?;
+                        activate_x11_window(x11_window.as_ref());
                         input_xtest::pointer_move_absolute(x, y)?;
                         input_xtest::click(X11MouseButton::Left)?;
                         tokio::time::sleep(std::time::Duration::from_millis(40)).await;
@@ -1433,6 +1473,18 @@ fn input_backend_for(request: &ActionRequest) -> InputBackendKind {
         .unwrap_or(InputBackendKind::None)
 }
 
+fn effective_pointer_input_backend_for_target(request: &ActionRequest) -> InputBackendKind {
+    input_backend_for(request)
+}
+
+fn element_is_x11_fallback(element: &ElementNode) -> bool {
+    element.role.starts_with("x11_")
+        || element
+            .state_flags
+            .iter()
+            .any(|flag| flag == "x11_fallback")
+}
+
 fn effective_keyboard_input_backend(
     request: &ActionRequest,
     x11_window: Option<&X11WindowInfo>,
@@ -1463,6 +1515,233 @@ fn effective_keyboard_input_backend_for_target(
     }
 }
 
+const EVDEV_KEY_LEFTCTRL: i32 = 29;
+const EVDEV_KEY_V: i32 = 47;
+const KDE_CLIPBOARD_RESTORE_DELAY_MS: u64 = 500;
+const WL_COPY_STARTUP_GRACE_MS: u64 = 50;
+const WL_COPY_PASTE_ONCE_TIMEOUT_MS: u64 = 2_000;
+const PLAIN_TEXT_CLIPBOARD_MIME_TYPES: &[&str] = &["text/plain", "utf8_string", "string", "text"];
+
+#[derive(Debug)]
+struct KdeClipboardPasteError {
+    message: String,
+    can_fallback_to_portal_keysym: bool,
+    clear_portal_session: bool,
+}
+
+impl KdeClipboardPasteError {
+    fn before_text_input(message: String) -> Self {
+        Self {
+            message,
+            can_fallback_to_portal_keysym: true,
+            clear_portal_session: false,
+        }
+    }
+
+    fn after_portal_input(message: String) -> Self {
+        Self {
+            message,
+            can_fallback_to_portal_keysym: false,
+            clear_portal_session: true,
+        }
+    }
+}
+
+fn should_prefer_kde_clipboard_text_backend(request: &ActionRequest) -> bool {
+    let Some(environment) = request.environment.as_ref() else {
+        return false;
+    };
+    if environment.input_backend != InputBackendKind::PortalRemoteDesktop {
+        return false;
+    }
+    environment
+        .desktop_environment
+        .as_deref()
+        .is_some_and(|desktop| desktop.to_ascii_lowercase().contains("kde"))
+}
+
+async fn run_kde_clipboard_paste_text(
+    portal: &RemoteDesktopSessionManager,
+    text: &str,
+) -> Result<String, KdeClipboardPasteError> {
+    ensure_clipboard_is_plain_text_only()
+        .await
+        .map_err(KdeClipboardPasteError::before_text_input)?;
+    let previous = kde_clipboard_contents()
+        .await
+        .map_err(KdeClipboardPasteError::before_text_input)?;
+    wl_copy_sensitive_paste_once(text)
+        .await
+        .map_err(KdeClipboardPasteError::before_text_input)?;
+
+    let paste_result = portal
+        .press_keycode_chord(&[EVDEV_KEY_LEFTCTRL], EVDEV_KEY_V)
+        .await
+        .map_err(|error| error.message);
+
+    tokio::time::sleep(Duration::from_millis(KDE_CLIPBOARD_RESTORE_DELAY_MS)).await;
+    let restore_result = kde_set_clipboard_contents(&previous).await;
+
+    match (paste_result, restore_result) {
+        (Ok(()), Ok(())) => Ok("Typed text through the KDE clipboard portal fallback.".to_string()),
+        (Err(error), Ok(())) => Err(KdeClipboardPasteError::after_portal_input(error)),
+        (Ok(()), Err(restore_error)) => Ok(format!(
+            "Typed text through the KDE clipboard portal fallback. Warning: previous KDE clipboard contents could not be restored: {restore_error}"
+        )),
+        (Err(error), Err(restore_error)) => {
+            Err(KdeClipboardPasteError::after_portal_input(format!(
+                "{error}; previous KDE clipboard contents could not be restored: {restore_error}"
+            )))
+        }
+    }
+}
+
+async fn ensure_clipboard_is_plain_text_only() -> Result<(), String> {
+    let mime_types = wl_paste_mime_types().await?;
+    if clipboard_mime_types_are_plain_text_only(&mime_types) {
+        return Ok(());
+    }
+    Err(format!(
+        "KDE clipboard paste fallback refused to overwrite non-text clipboard contents: {}",
+        mime_types.join(", ")
+    ))
+}
+
+fn clipboard_mime_types_are_plain_text_only(mime_types: &[String]) -> bool {
+    mime_types.iter().all(|mime_type| {
+        let normalized = mime_type.trim().to_ascii_lowercase();
+        normalized.is_empty()
+            || PLAIN_TEXT_CLIPBOARD_MIME_TYPES
+                .iter()
+                .any(|plain| normalized == *plain || normalized.starts_with(&format!("{plain};")))
+    })
+}
+
+async fn kde_clipboard_contents() -> Result<String, String> {
+    let connection = zbus::Connection::session()
+        .await
+        .map_err(|error| format!("failed to connect to session bus: {error}"))?;
+    let proxy = kde_klipper_proxy(&connection).await?;
+    proxy
+        .call("getClipboardContents", &())
+        .await
+        .map_err(|error| format!("failed to read KDE clipboard contents: {error}"))
+}
+
+async fn kde_set_clipboard_contents(text: &str) -> Result<(), String> {
+    let connection = zbus::Connection::session()
+        .await
+        .map_err(|error| format!("failed to connect to session bus: {error}"))?;
+    let proxy = kde_klipper_proxy(&connection).await?;
+    proxy
+        .call("setClipboardContents", &(text))
+        .await
+        .map_err(|error| format!("failed to set KDE clipboard contents: {error}"))
+}
+
+async fn wl_paste_mime_types() -> Result<Vec<String>, String> {
+    if !command_exists("wl-paste") {
+        return Err(
+            "wl-paste is required to safely inspect current clipboard MIME types".to_string(),
+        );
+    }
+    let output = Command::new("wl-paste")
+        .args(["--list-types"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|error| format!("failed to run wl-paste --list-types: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("wl-paste --list-types exited with {}", output.status)
+        } else {
+            format!(
+                "wl-paste --list-types exited with {}: {stderr}",
+                output.status
+            )
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+async fn wl_copy_sensitive_paste_once(text: &str) -> Result<(), String> {
+    if !command_exists("wl-copy") {
+        return Err("wl-copy is required for KDE clipboard paste fallback".to_string());
+    }
+    let mut child = Command::new("wl-copy")
+        .args([
+            "--foreground",
+            "--paste-once",
+            "--sensitive",
+            "--type",
+            "text/plain;charset=utf-8",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to run wl-copy: {error}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "failed to open wl-copy stdin".to_string())?;
+    stdin
+        .write_all(text.as_bytes())
+        .await
+        .map_err(|error| format!("failed to write text to wl-copy stdin: {error}"))?;
+    drop(stdin);
+
+    tokio::time::sleep(Duration::from_millis(WL_COPY_STARTUP_GRACE_MS)).await;
+    if let Some(status) = child
+        .try_wait()
+        .map_err(|error| format!("failed to inspect wl-copy status: {error}"))?
+    {
+        return Err(format!(
+            "wl-copy exited before the paste request with {status}"
+        ));
+    }
+
+    tokio::spawn(async move {
+        if tokio::time::timeout(
+            Duration::from_millis(WL_COPY_PASTE_ONCE_TIMEOUT_MS),
+            child.wait(),
+        )
+        .await
+        .is_err()
+        {
+            let _ = child.kill().await;
+        }
+    });
+
+    Ok(())
+}
+
+async fn kde_klipper_proxy(connection: &zbus::Connection) -> Result<Proxy<'_>, String> {
+    Proxy::new(
+        connection,
+        "org.kde.klipper",
+        "/klipper",
+        "org.kde.klipper.klipper",
+    )
+    .await
+    .map_err(|error| format!("failed to create KDE Klipper proxy: {error}"))
+}
+
+fn command_exists(command: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| dir.join(command).is_file())
+}
+
 fn action_name_matches(candidate: &str, requested: &str) -> bool {
     let candidate = normalize_action(candidate);
     let requested = normalize_action(requested);
@@ -1485,11 +1764,15 @@ fn canonical_action_aliases(action: &str) -> &'static [&'static str] {
     }
 }
 
-fn activate_x11_window(window: Option<&X11WindowInfo>) -> Result<(), BackendError> {
-    if let Some(window) = window {
-        input_xtest::window_activate(&window.window_id)?;
+fn activate_x11_window(window: Option<&X11WindowInfo>) {
+    if let Some(window) = window
+        && let Err(error) = input_xtest::window_activate(&window.window_id)
+    {
+        warn!(
+            "X11 window activation failed before input fallback; continuing with pointer injection: {}",
+            error.message
+        );
     }
-    Ok(())
 }
 
 fn matched_x11_window_for_request(request: &ActionRequest) -> Option<X11WindowInfo> {
@@ -1571,14 +1854,20 @@ fn action_point_for_backend(
         )
     })?;
 
-    let capture = match backend {
-        InputBackendKind::PortalRemoteDesktop => request.resolved_capture.as_ref(),
-        InputBackendKind::XTest
-        | InputBackendKind::SendInput
+    match backend {
+        InputBackendKind::PortalRemoteDesktop if element_is_x11_fallback(element) => {
+            point_for_x11_element_through_portal(element, request.resolved_capture.as_ref())
+        }
+        InputBackendKind::PortalRemoteDesktop => {
+            point_for_element(element, request.resolved_capture.as_ref())
+        }
+        InputBackendKind::XTest => {
+            point_for_x11_element(element, request.resolved_capture.as_ref())
+        }
+        InputBackendKind::SendInput
         | InputBackendKind::WindowsMessages
-        | InputBackendKind::None => None,
-    };
-    point_for_element(element, capture)
+        | InputBackendKind::None => point_for_element(element, None),
+    }
 }
 
 fn action_point(request: &ActionRequest) -> Result<(f64, f64), BackendError> {
@@ -1607,18 +1896,96 @@ fn point_for_element(
     Ok(center)
 }
 
+fn point_for_x11_element(
+    element: &ElementNode,
+    capture: Option<&sky_cua_platform::model::CaptureInfo>,
+) -> Result<(f64, f64), BackendError> {
+    let bounds = element.bounds.as_ref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!(
+                "element {} did not include bounds, so a physical action target cannot be derived",
+                element.element_index
+            ),
+        )
+    })?;
+    let center = center_of(bounds);
+    if bounds.space == CoordinateSpace::DesktopLogical
+        && let Some(capture) = capture
+        && let (Some(logical_rect), Some(original_pixel_size)) = (
+            capture.logical_rect.as_ref(),
+            capture.original_pixel_size.as_ref(),
+        )
+        && let Some(pixel_point) = logical_to_pixel(center, logical_rect, original_pixel_size)
+    {
+        return Ok(pixel_point);
+    }
+    Ok(center)
+}
+
+fn point_for_x11_element_through_portal(
+    element: &ElementNode,
+    capture: Option<&sky_cua_platform::model::CaptureInfo>,
+) -> Result<(f64, f64), BackendError> {
+    let bounds = element.bounds.as_ref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!(
+                "element {} did not include bounds, so a physical action target cannot be derived",
+                element.element_index
+            ),
+        )
+    })?;
+    let center = center_of(bounds);
+    if let Some(capture) = capture
+        && let (Some(logical_rect), Some(original_pixel_size)) = (
+            capture.logical_rect.as_ref(),
+            capture.original_pixel_size.as_ref(),
+        )
+        && logical_rect.width > 0.0
+        && logical_rect.height > 0.0
+        && original_pixel_size.width > 0
+        && original_pixel_size.height > 0
+    {
+        let rel_x = center.0 / f64::from(original_pixel_size.width);
+        let rel_y = center.1 / f64::from(original_pixel_size.height);
+        return Ok((rel_x * logical_rect.width, rel_y * logical_rect.height));
+    }
+    Ok(center)
+}
+
+fn point_for_element_for_backend(
+    element: &ElementNode,
+    capture: Option<&CaptureInfo>,
+    backend: InputBackendKind,
+) -> Result<(f64, f64), BackendError> {
+    match backend {
+        InputBackendKind::PortalRemoteDesktop if element_is_x11_fallback(element) => {
+            point_for_x11_element_through_portal(element, capture)
+        }
+        InputBackendKind::PortalRemoteDesktop => point_for_element(element, capture),
+        InputBackendKind::XTest => point_for_x11_element(element, capture),
+        InputBackendKind::SendInput
+        | InputBackendKind::WindowsMessages
+        | InputBackendKind::None => point_for_element(element, None),
+    }
+}
+
 fn explicit_point(arguments: &serde_json::Value) -> Option<(f64, f64)> {
     point_from_fields(arguments, "x", "y")
 }
 
-fn drag_from_point(request: &ActionRequest) -> Result<(f64, f64), BackendError> {
+fn drag_from_point(
+    request: &ActionRequest,
+    backend: InputBackendKind,
+) -> Result<(f64, f64), BackendError> {
     if let Some(point) = point_from_fields(&request.arguments, "from_x", "from_y")
         .or_else(|| explicit_point(&request.arguments))
     {
         return Ok(point_from_screenshot_pixels(
             point,
             request.resolved_capture.as_ref(),
-            input_backend_for(request),
+            backend,
         ));
     }
 
@@ -1628,16 +1995,12 @@ fn drag_from_point(request: &ActionRequest) -> Result<(f64, f64), BackendError> 
             "drag requires either element_index or explicit from_x/from_y coordinates",
         )
     })?;
-    point_for_element(element, request.resolved_capture.as_ref())
+    point_for_element_for_backend(element, request.resolved_capture.as_ref(), backend)
 }
 
-fn drag_to_point(request: &ActionRequest) -> Option<(f64, f64)> {
+fn drag_to_point(request: &ActionRequest, backend: InputBackendKind) -> Option<(f64, f64)> {
     point_from_fields(&request.arguments, "to_x", "to_y").map(|point| {
-        point_from_screenshot_pixels(
-            point,
-            request.resolved_capture.as_ref(),
-            input_backend_for(request),
-        )
+        point_from_screenshot_pixels(point, request.resolved_capture.as_ref(), backend)
     })
 }
 
@@ -2304,11 +2667,38 @@ fn linux_fallback_snapshot(
         capabilities,
         focused_app: Some(LinuxDesktopBackend::focused_from_app(&app)),
         capture,
-        elements: linux_window_elements(&window),
+        elements: fallback_window_elements(&window),
         diagnostics: diagnostics.finish(),
         app_guidance: None,
         doctor_report,
     }
+}
+
+fn fallback_window_elements(window: &linux_windowing::LinuxWindowInfo) -> Vec<ElementNode> {
+    let x11_window = refreshed_x11_window_for_linux_window(window);
+    fallback_window_elements_with_x11_detail(window, x11_window.as_ref())
+}
+
+fn fallback_window_elements_with_x11_detail(
+    window: &linux_windowing::LinuxWindowInfo,
+    x11_window: Option<&X11WindowInfo>,
+) -> Vec<ElementNode> {
+    x11_window
+        .map(x11_window_elements)
+        .filter(|elements| !elements.is_empty())
+        .unwrap_or_else(|| linux_window_elements(window))
+}
+
+fn refreshed_x11_window_for_linux_window(
+    window: &linux_windowing::LinuxWindowInfo,
+) -> Option<X11WindowInfo> {
+    if window.backend != "x11" {
+        return None;
+    }
+    windowing::discover_windows()
+        .ok()?
+        .into_iter()
+        .find(|candidate| candidate.window_id == window.window_id)
 }
 
 fn linux_window_elements(window: &linux_windowing::LinuxWindowInfo) -> Vec<ElementNode> {
@@ -2670,7 +3060,6 @@ fn push_kwin_anchor(
     element_index
 }
 
-#[cfg(test)]
 fn x11_window_elements(window: &X11WindowInfo) -> Vec<ElementNode> {
     let Some(bounds) = window.bounds.clone() else {
         return Vec::new();
@@ -2681,6 +3070,9 @@ fn x11_window_elements(window: &X11WindowInfo) -> Vec<ElementNode> {
         state_flags.push("focused".to_string());
         state_flags.push("active".to_string());
     }
+    state_flags.push("native_window_fallback".to_string());
+    state_flags.push("x11_fallback".to_string());
+    state_flags.push("physical_target".to_string());
 
     let mut elements = vec![ElementNode {
         element_index: 0,
@@ -2757,7 +3149,6 @@ fn x11_window_elements(window: &X11WindowInfo) -> Vec<ElementNode> {
     elements
 }
 
-#[cfg(test)]
 fn x11_region_role(
     region: &crate::x11::windowing::X11WindowRegion,
     has_children: bool,
@@ -2778,7 +3169,6 @@ fn x11_region_role(
     }
 }
 
-#[cfg(test)]
 fn x11_region_description(region: &crate::x11::windowing::X11WindowRegion, role: &str) -> String {
     let role_hint = match role {
         "x11_container" => "container-like region",
@@ -2918,17 +3308,20 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AppInfo, AppSelector, LinuxDesktopBackend, action_name_matches, app_from_linux_window,
-        best_x11_window_match, drag_to_point, explicit_point, linux_fallback_snapshot,
-        linux_window_elements, matches_selector, parse_key_sequence, point_from_screenshot_pixels,
-        push_capture_diagnostics, select_x11_window, selector_summary, x11_window_elements,
+        AppInfo, AppSelector, KdeClipboardPasteError, LinuxDesktopBackend, action_name_matches,
+        app_from_linux_window, best_x11_window_match, clipboard_mime_types_are_plain_text_only,
+        drag_from_point, drag_to_point, effective_pointer_input_backend_for_target, explicit_point,
+        fallback_window_elements_with_x11_detail, linux_fallback_snapshot, linux_window_elements,
+        matches_selector, parse_key_sequence, point_for_x11_element_through_portal,
+        point_from_screenshot_pixels, push_capture_diagnostics, select_x11_window,
+        selector_summary, should_prefer_kde_clipboard_text_backend, x11_window_elements,
         x11_window_matches_app,
     };
     use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::{
-        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace,
+        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace, ElementNode,
         EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
         SemanticBackendKind, SessionKind,
     };
@@ -2961,6 +3354,106 @@ mod tests {
             parse_key_sequence(&json!({"key": "Ctrl+L"})),
             Some(vec!["Ctrl".to_string(), "L".to_string()])
         );
+    }
+
+    #[test]
+    fn kde_clipboard_text_backend_is_kde_portal_only() {
+        let request = ActionRequest {
+            action: ActionName::TypeText,
+            snapshot_id: None,
+            element_index: None,
+            arguments: json!({"text": "hello"}),
+            resolved_element: None,
+            resolved_target_element: None,
+            resolved_capture: None,
+            resolved_focused_app: None,
+            environment: Some(wayland_pipewire_environment()),
+        };
+        assert!(should_prefer_kde_clipboard_text_backend(&request));
+
+        let non_kde = ActionRequest {
+            environment: Some(EnvironmentInfo {
+                desktop_environment: Some("GNOME".to_string()),
+                ..wayland_pipewire_environment()
+            }),
+            ..request.clone()
+        };
+        assert!(!should_prefer_kde_clipboard_text_backend(&non_kde));
+
+        let non_portal = ActionRequest {
+            environment: Some(EnvironmentInfo {
+                input_backend: InputBackendKind::XTest,
+                ..wayland_pipewire_environment()
+            }),
+            ..request
+        };
+        assert!(!should_prefer_kde_clipboard_text_backend(&non_portal));
+    }
+
+    #[test]
+    fn kde_clipboard_error_contract_only_falls_back_before_text_input() {
+        let before = KdeClipboardPasteError::before_text_input("missing qdbus".to_string());
+        assert!(before.can_fallback_to_portal_keysym);
+        assert!(!before.clear_portal_session);
+        assert_eq!(before.message, "missing qdbus");
+
+        let after = KdeClipboardPasteError::after_portal_input("paste failed".to_string());
+        assert!(!after.can_fallback_to_portal_keysym);
+        assert!(after.clear_portal_session);
+        assert_eq!(after.message, "paste failed");
+    }
+
+    #[test]
+    fn xwayland_fallback_elements_stay_on_portal_pointer_backend() {
+        let request = ActionRequest {
+            action: ActionName::Click,
+            snapshot_id: Some("snapshot-1".to_string()),
+            element_index: Some(1),
+            arguments: json!({}),
+            resolved_element: Some(ElementNode {
+                element_index: 1,
+                parent_index: Some(0),
+                role: "x11_action_region".to_string(),
+                name: None,
+                description: None,
+                value: None,
+                state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
+                semantic_actions: Vec::new(),
+                bounds: Some(RectF {
+                    x: 10.0,
+                    y: 20.0,
+                    width: 30.0,
+                    height: 40.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                backend_ref: None,
+            }),
+            resolved_target_element: None,
+            resolved_capture: None,
+            resolved_focused_app: None,
+            environment: Some(wayland_pipewire_environment()),
+        };
+
+        assert_eq!(
+            effective_pointer_input_backend_for_target(&request),
+            InputBackendKind::PortalRemoteDesktop
+        );
+    }
+
+    #[test]
+    fn kde_clipboard_plain_text_guard_rejects_rich_clipboard_types() {
+        assert!(clipboard_mime_types_are_plain_text_only(&[]));
+        assert!(clipboard_mime_types_are_plain_text_only(&[
+            "text/plain;charset=utf-8".to_string(),
+            "UTF8_STRING".to_string(),
+        ]));
+        assert!(!clipboard_mime_types_are_plain_text_only(&[
+            "text/plain".to_string(),
+            "text/html".to_string(),
+        ]));
+        assert!(!clipboard_mime_types_are_plain_text_only(&[
+            "image/png".to_string()
+        ]));
     }
 
     #[test]
@@ -3007,12 +3500,18 @@ mod tests {
             resolved_focused_app: None,
             environment: None,
         };
-        assert_eq!(drag_to_point(&request), Some((320.0, 240.0)));
+        assert_eq!(
+            drag_to_point(&request, InputBackendKind::PortalRemoteDesktop),
+            Some((320.0, 240.0))
+        );
         let request_without_to = ActionRequest {
             arguments: json!({"x": 1.0, "y": 2.0}),
             ..request
         };
-        assert_eq!(drag_to_point(&request_without_to), None);
+        assert_eq!(
+            drag_to_point(&request_without_to, InputBackendKind::PortalRemoteDesktop),
+            None
+        );
     }
 
     #[test]
@@ -3097,6 +3596,130 @@ mod tests {
             point_from_screenshot_pixels((960.0, 540.0), Some(&capture), InputBackendKind::XTest),
             (1280.0, 720.0)
         );
+    }
+
+    #[test]
+    fn maps_xwayland_x11_pixels_to_portal_logical_coordinates() {
+        let capture = CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("166".to_string()),
+            source_type: Some(1),
+            mapping_id: None,
+            logical_rect: Some(RectF {
+                x: 100.0,
+                y: 50.0,
+                width: 1536.0,
+                height: 864.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            pixel_size: Some(PixelSize {
+                width: 1440,
+                height: 810,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 1920,
+                height: 1080,
+            }),
+            logical_to_pixel_scale: Some(0.9375),
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
+        };
+        let element = ElementNode {
+            element_index: 4,
+            parent_index: Some(1),
+            role: "x11_action_region".to_string(),
+            name: None,
+            description: None,
+            value: None,
+            state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
+            semantic_actions: Vec::new(),
+            bounds: Some(RectF {
+                x: 896.0,
+                y: 552.0,
+                width: 32.0,
+                height: 24.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            backend_ref: None,
+        };
+
+        let point = point_for_x11_element_through_portal(&element, Some(&capture)).unwrap();
+
+        assert!((point.0 - 729.6).abs() < 0.000_001);
+        assert!((point.1 - 451.2).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn maps_xwayland_drag_element_start_through_same_portal_scaling() {
+        let capture = CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("166".to_string()),
+            source_type: Some(1),
+            mapping_id: None,
+            logical_rect: Some(RectF {
+                x: 100.0,
+                y: 50.0,
+                width: 1536.0,
+                height: 864.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            pixel_size: Some(PixelSize {
+                width: 1440,
+                height: 810,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 1920,
+                height: 1080,
+            }),
+            logical_to_pixel_scale: Some(0.9375),
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
+        };
+        let request = ActionRequest {
+            action: ActionName::Drag,
+            snapshot_id: Some("snapshot-1".to_string()),
+            element_index: Some(4),
+            arguments: json!({"to_x": 640.0, "to_y": 480.0}),
+            resolved_element: Some(ElementNode {
+                element_index: 4,
+                parent_index: Some(1),
+                role: "x11_action_region".to_string(),
+                name: None,
+                description: None,
+                value: None,
+                state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
+                semantic_actions: Vec::new(),
+                bounds: Some(RectF {
+                    x: 896.0,
+                    y: 552.0,
+                    width: 32.0,
+                    height: 24.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                backend_ref: None,
+            }),
+            resolved_target_element: None,
+            resolved_capture: Some(capture),
+            resolved_focused_app: None,
+            environment: Some(wayland_pipewire_environment()),
+        };
+
+        let point = drag_from_point(&request, InputBackendKind::PortalRemoteDesktop).unwrap();
+
+        assert!((point.0 - 729.6).abs() < 0.000_001);
+        assert!((point.1 - 451.2).abs() < 0.000_001);
     }
 
     #[test]
@@ -3252,6 +3875,57 @@ mod tests {
                 .iter()
                 .any(|flag| flag == "action_like")
         );
+    }
+
+    #[test]
+    fn registry_fallback_prefers_refreshed_x11_child_regions() {
+        let linux_window = LinuxWindowInfo {
+            window_id: "0x3800030".to_string(),
+            title: Some("sky-cua xmessage probe".to_string()),
+            app_id: Some("xmessage.desktop".to_string()),
+            wm_class: Some("Xmessage".to_string()),
+            pid: None,
+            bounds: Some(RectF {
+                x: 100.0,
+                y: 200.0,
+                width: 320.0,
+                height: 180.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            workspace: None,
+            focused: true,
+            hidden: false,
+            client_type: Some("xwayland".to_string()),
+            backend: "x11".to_string(),
+            terminal: None,
+        };
+        let x11_window = X11WindowInfo {
+            window_id: "0x3800030".to_string(),
+            instance_name: Some("xmessage".to_string()),
+            class_name: Some("Xmessage".to_string()),
+            app: app_from_linux_window(&linux_window),
+            bounds: linux_window.bounds.clone(),
+            workspace: None,
+            child_regions: vec![X11WindowRegion {
+                window_id: "0x3800032".to_string(),
+                parent_window_id: Some("0x3800030".to_string()),
+                depth: 1,
+                name: Some("OK".to_string()),
+                bounds: RectF {
+                    x: 180.0,
+                    y: 330.0,
+                    width: 48.0,
+                    height: 24.0,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+            }],
+        };
+
+        let elements = fallback_window_elements_with_x11_detail(&linux_window, Some(&x11_window));
+
+        assert_eq!(elements.len(), 2);
+        assert_eq!(elements[1].role, "x11_action_region");
+        assert_eq!(elements[1].parent_index, Some(0));
     }
 
     #[test]

@@ -17,6 +17,8 @@ import build_plugin
 import deploy_release_plugin as release_deploy
 import install_mcp_server
 import install_plugin
+import live_desktop_smoke
+import live_portal_downgrade_smoke
 import package_runtime_artifact
 import publish_marketplace_release
 import setup_heliasar_marketplace
@@ -150,6 +152,103 @@ def test_bundle_entrypoint_paths_always_include_unix_launchers(
     assert Path("bin/sky-cua-service") in bundle_entrypoint_paths()
     assert Path("bin/sky-cua-client.exe") in bundle_entrypoint_paths()
     assert Path("bin/sky-cua-service.exe") in bundle_entrypoint_paths()
+
+
+def test_x11_click_target_falls_back_to_native_root_window() -> None:
+    snapshot = {
+        "snapshot_id": "snapshot-root-only",
+        "elements": [
+            {
+                "bounds": {"height": 52.0, "width": 128.0, "x": 895.0, "y": 526.0},
+                "element_index": 0,
+                "parent_index": None,
+                "role": "window",
+                "state_flags": ["native_window_fallback", "physical_target"],
+            }
+        ],
+    }
+
+    target = live_desktop_smoke.pick_x11_click_target(snapshot)
+
+    assert target["element_index"] == 0
+    assert live_desktop_smoke.x11_click_arguments(snapshot, target) == {
+        "x": 959.0,
+        "y": 565.52,
+    }
+
+
+def test_x11_click_target_prefers_lowest_leaf_region_when_available() -> None:
+    snapshot = {
+        "snapshot_id": "snapshot-with-leaves",
+        "elements": [
+            {
+                "bounds": {"height": 80.0, "width": 160.0, "x": 0.0, "y": 0.0},
+                "element_index": 0,
+                "parent_index": None,
+                "role": "window",
+                "state_flags": ["native_window_fallback"],
+            },
+            {
+                "bounds": {"height": 20.0, "width": 80.0, "x": 10.0, "y": 10.0},
+                "element_index": 1,
+                "parent_index": 0,
+                "role": "x11_leaf_region",
+            },
+            {
+                "bounds": {"height": 16.0, "width": 64.0, "x": 20.0, "y": 44.0},
+                "element_index": 2,
+                "parent_index": 0,
+                "role": "x11_action_region",
+            },
+        ],
+    }
+
+    target = live_desktop_smoke.pick_x11_click_target(snapshot)
+
+    assert target["element_index"] == 2
+    assert live_desktop_smoke.x11_click_arguments(snapshot, target) == {
+        "snapshot_id": "snapshot-with-leaves",
+        "element_index": 2,
+    }
+    live_desktop_smoke.require_x11_action_region_hints(snapshot, "X11")
+
+
+def test_x11_action_region_hints_reject_root_only_snapshot() -> None:
+    snapshot = {
+        "snapshot_id": "snapshot-root-only",
+        "elements": [
+            {
+                "bounds": {"height": 52.0, "width": 128.0, "x": 895.0, "y": 526.0},
+                "element_index": 0,
+                "parent_index": None,
+                "role": "window",
+                "state_flags": ["native_window_fallback", "physical_target"],
+            }
+        ],
+    }
+
+    with pytest.raises(RuntimeError, match="did not recover any child X11 regions"):
+        live_desktop_smoke.require_x11_action_region_hints(snapshot, "X11")
+
+
+def test_portal_downgrade_accepts_restored_session_diagnostic() -> None:
+    diagnostics: list[dict[str, object]] = [
+        {"code": "PipeWireStreamFailed"},
+        {"code": "CaptureBackendDowngraded"},
+        {"code": "PortalSessionRestored"},
+    ]
+
+    assert live_portal_downgrade_smoke.has_portal_session_diagnostic(diagnostics)
+    assert live_portal_downgrade_smoke.diagnostic_codes(diagnostics) >= {
+        "PipeWireStreamFailed",
+        "CaptureBackendDowngraded",
+    }
+
+
+def test_portal_downgrade_summary_accepts_restored_session_text() -> None:
+    summary = "Reused a persisted RemoteDesktop approval token for the combined portal session."
+
+    assert live_portal_downgrade_smoke.summary_mentions_portal_session(summary)
 
 
 def test_stop_unix_runtime_processes_targets_deleted_cache_process(

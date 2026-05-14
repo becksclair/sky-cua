@@ -21,6 +21,23 @@ from live_desktop_smoke import (
 )
 
 DOWNGRADE_TITLE = "sky-cua forced downgrade smoke"
+SESSION_DIAGNOSTIC_CODES = {"PortalSessionStarted", "PortalSessionRestored"}
+SESSION_SUMMARY_MARKERS = (
+    "Started a new combined RemoteDesktop and ScreenCast portal session.",
+    "Reused a persisted RemoteDesktop approval token for the combined portal session.",
+)
+
+
+def diagnostic_codes(diagnostics: list[dict[str, object]]) -> set[str]:
+    return {code for entry in diagnostics if isinstance(code := entry.get("code"), str)}
+
+
+def has_portal_session_diagnostic(diagnostics: list[dict[str, object]]) -> bool:
+    return bool(diagnostic_codes(diagnostics).intersection(SESSION_DIAGNOSTIC_CODES))
+
+
+def summary_mentions_portal_session(summary_text: str) -> bool:
+    return any(marker in summary_text for marker in SESSION_SUMMARY_MARKERS)
 
 
 def main() -> int:
@@ -67,11 +84,15 @@ def main() -> int:
             diagnostics = snapshot.get("diagnostics") or []
 
             expected_codes = {
-                "PortalSessionStarted",
                 "PipeWireStreamFailed",
                 "CaptureBackendDowngraded",
             }
-            seen_codes = {entry.get("code") for entry in diagnostics}
+            seen_codes = diagnostic_codes(diagnostics)
+            if not has_portal_session_diagnostic(diagnostics):
+                raise RuntimeError(
+                    "Forced downgrade snapshot did not report a portal session startup or restore diagnostic.\n"
+                    f"diagnostics={json.dumps(diagnostics, indent=2, sort_keys=True)}"
+                )
             missing_codes = sorted(expected_codes - seen_codes)
             if missing_codes:
                 raise RuntimeError(
@@ -98,12 +119,9 @@ def main() -> int:
                     f"capture={json.dumps(capture, indent=2, sort_keys=True)}"
                 )
 
-            if (
-                "Started a new combined RemoteDesktop and ScreenCast portal session."
-                not in summary_text
-            ):
+            if not summary_mentions_portal_session(summary_text):
                 raise RuntimeError(
-                    "Forced downgrade summary did not mention portal session startup.\n"
+                    "Forced downgrade summary did not mention portal session startup or restore.\n"
                     f"summary={summary_text!r}"
                 )
             if (

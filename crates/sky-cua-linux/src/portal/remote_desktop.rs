@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use ashpd::desktop::PersistMode;
 use ashpd::desktop::remote_desktop::{
-    Axis, DeviceType, KeyState, NotifyKeyboardKeysymOptions, NotifyPointerAxisDiscreteOptions,
-    NotifyPointerAxisOptions, NotifyPointerButtonOptions, NotifyPointerMotionAbsoluteOptions,
-    RemoteDesktop, SelectDevicesOptions,
+    Axis, DeviceType, KeyState, NotifyKeyboardKeycodeOptions, NotifyKeyboardKeysymOptions,
+    NotifyPointerAxisDiscreteOptions, NotifyPointerAxisOptions, NotifyPointerButtonOptions,
+    NotifyPointerMotionAbsoluteOptions, RemoteDesktop, SelectDevicesOptions,
 };
 use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
 use chrono::Utc;
@@ -160,6 +160,11 @@ impl RemoteDesktopSessionManager {
     pub async fn take_lifecycle_events(&self) -> Vec<PortalLifecycleEvent> {
         let mut state = self.inner.lock().await;
         std::mem::take(&mut state.pending_events)
+    }
+
+    pub async fn reset_session(&self) {
+        let mut state = self.inner.lock().await;
+        state.session = None;
     }
 
     pub async fn pointer_move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
@@ -316,9 +321,63 @@ impl RemoteDesktopSessionManager {
         Ok(())
     }
 
+    pub async fn press_keycode_chord(
+        &self,
+        modifiers: &[i32],
+        keycode: i32,
+    ) -> Result<(), BackendError> {
+        let mut pressed_modifiers = Vec::with_capacity(modifiers.len());
+        for modifier in modifiers {
+            self.send_keycode_state(*modifier, KeyState::Pressed)
+                .await?;
+            pressed_modifiers.push(*modifier);
+        }
+
+        let mut result = self.send_keycode_raw(keycode).await;
+        for modifier in pressed_modifiers.iter().rev() {
+            if let Err(error) = self.send_keycode_state(*modifier, KeyState::Released).await
+                && result.is_ok()
+            {
+                result = Err(error);
+            }
+        }
+        result
+    }
+
     async fn send_keysym_raw(&self, keysym: i32) -> Result<(), BackendError> {
         self.send_keysym_state(keysym, KeyState::Pressed).await?;
         self.send_keysym_state(keysym, KeyState::Released).await
+    }
+
+    async fn send_keycode_raw(&self, keycode: i32) -> Result<(), BackendError> {
+        self.send_keycode_state(keycode, KeyState::Pressed).await?;
+        tokio::time::sleep(Duration::from_millis(35)).await;
+        self.send_keycode_state(keycode, KeyState::Released).await
+    }
+
+    async fn send_keycode_state(&self, keycode: i32, state: KeyState) -> Result<(), BackendError> {
+        let mut manager_state = self.inner.lock().await;
+        self.ensure_session_started_locked(&mut manager_state)
+            .await?;
+        let session = manager_state
+            .session
+            .as_ref()
+            .expect("portal session should exist");
+        session
+            .remote_desktop
+            .notify_keyboard_keycode(
+                &session.session,
+                keycode,
+                state,
+                NotifyKeyboardKeycodeOptions::default(),
+            )
+            .await
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::ActionUnsupportedForEnvironment,
+                    format!("failed to inject keyboard keycode through the portal: {error}"),
+                )
+            })
     }
 
     async fn send_keysym_state(&self, keysym: i32, state: KeyState) -> Result<(), BackendError> {
