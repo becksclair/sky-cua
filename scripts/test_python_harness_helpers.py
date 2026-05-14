@@ -17,6 +17,7 @@ import build_plugin
 import deploy_release_plugin as release_deploy
 import install_mcp_server
 import install_plugin
+import live_chrome_host_client_smoke
 import live_desktop_smoke
 import live_portal_downgrade_smoke
 import package_runtime_artifact
@@ -1406,6 +1407,50 @@ def test_chrome_preflight_default_env_allowlist_matches_primary_mcp_config() -> 
     env_vars = mcp_config["mcpServers"]["computer-use"]["env_vars"]
 
     assert env_vars == chrome_preflight.DEFAULT_COMPUTER_USE_ENV_VARS
+
+
+def test_chrome_host_smoke_accepts_same_origin_web_redirects() -> None:
+    assert live_chrome_host_client_smoke.same_requested_origin(
+        "http://www.example.com/article",
+        "https://example.com/article",
+    )
+
+
+def test_chrome_host_smoke_rejects_unexpected_navigation_origin() -> None:
+    assert not live_chrome_host_client_smoke.same_requested_origin(
+        "https://example.com/article",
+        "chrome-error://chromewebdata/",
+    )
+    assert not live_chrome_host_client_smoke.same_requested_origin(
+        "https://example.com/article",
+        "https://other.example.com/article",
+    )
+
+
+def test_chrome_host_smoke_accepts_successful_turn_ended_response() -> None:
+    stderr = (
+        "[com.openai.codexextension] received unmatched Chrome response "
+        "id=native-turn-ended:smoke-session:smoke-turn "
+        'payload={"jsonrpc":"2.0","id":"native-turn-ended:smoke-session:smoke-turn"}'
+    )
+
+    response = live_chrome_host_client_smoke.turn_ended_response_from_stderr(stderr)
+
+    assert live_chrome_host_client_smoke.turn_ended_response_was_successful(response)
+
+
+def test_chrome_host_smoke_rejects_turn_ended_error_response() -> None:
+    stderr = (
+        "[com.openai.codexextension] received unmatched Chrome response "
+        "id=native-turn-ended:smoke-session:smoke-turn "
+        'payload={"jsonrpc":"2.0","id":"native-turn-ended:smoke-session:smoke-turn",'
+        '"error":{"code":-32601,"message":"No handler registered for method"}}'
+    )
+
+    response = live_chrome_host_client_smoke.turn_ended_response_from_stderr(stderr)
+
+    assert response is not None
+    assert not live_chrome_host_client_smoke.turn_ended_response_was_successful(response)
 
 
 def test_publish_marketplace_detects_staged_plugin_changes(tmp_path: Path) -> None:

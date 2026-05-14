@@ -1,0 +1,1093 @@
+#!/usr/bin/env python3
+"""Live-smoke the Codex Chrome extension through the native host bridge.
+
+This live smoke starts a temporary browser profile, loads the official Codex
+Chrome extension, waits for the native host socket, then proves the native
+messaging host used by the running browser can bridge:
+
+- client -> native host -> extension -> client with `getInfo`
+- client -> native host -> extension -> client with `getTabs`
+- extension -> native host -> client with the heartbeat `ping`
+- session-log completion -> native host -> extension with `turnEnded`
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import socket
+import struct
+import subprocess
+import tempfile
+import time
+import urllib.request
+from contextlib import suppress
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import NamedTuple
+from urllib.parse import urlparse
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_EXTENSION_ID = "hehggadaopoacecdllhhajmbjkdcmajg"
+DEFAULT_EXTENSION_DIR = (
+    Path.home() / ".config/google-chrome/Default/Extensions" / DEFAULT_EXTENSION_ID / "1.1.4_0"
+)
+FALLBACK_EXTENSION_DIR = REPO_ROOT / "resources/chrome-extension/codex/1.1.4_0"
+DEFAULT_HOST_PATH = REPO_ROOT / "target/debug/sky-cua-chrome-host"
+HOST_NAME = "com.openai.codexextension"
+SMOKE_SESSION_ID = "smoke-session"
+SMOKE_TURN_ID = "smoke-turn"
+TURN_ENDED_ID = f"native-turn-ended:{SMOKE_SESSION_ID}:{SMOKE_TURN_ID}"
+CDP_COUNTER = 0
+NATIVE_COUNTER = 0
+
+
+class BrowserSelection(NamedTuple):
+    name: str
+    command: str
+
+
+class ManifestRestore(NamedTuple):
+    path: Path
+    previous_content: bytes | None
+
+
+class DevToolsWebSocket:
+    def __init__(self, url: str) -> None:
+        parsed = urlparse(url)
+        if parsed.scheme != "ws" or parsed.hostname is None or parsed.port is None:
+            raise ValueError(f"unsupported websocket URL: {url}")
+        self._path = parsed.path
+        if parsed.query:
+            self._path += f"?{parsed.query}"
+        self._sock = socket.create_connection((parsed.hostname, parsed.port), timeout=5)
+        self._handshake(parsed.hostname, parsed.port)
+
+    def __enter__(self) -> DevToolsWebSocket:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def _handshake(self, host: str, port: int) -> None:
+        key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+        request = (
+            f"GET {self._path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "Origin: http://127.0.0.1\r\n"
+            "\r\n"
+        )
+        self._sock.sendall(request.encode("ascii"))
+        response = self._read_until(b"\r\n\r\n")
+        if not response.startswith(b"HTTP/1.1 101"):
+            raise RuntimeError(f"DevTools websocket handshake failed: {response!r}")
+        accept = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+        ).decode("ascii")
+        if accept.encode("ascii") not in response:
+            raise RuntimeError("DevTools websocket handshake did not echo the expected accept key")
+
+    def _read_until(self, marker: bytes) -> bytes:
+        data = b""
+        while marker not in data:
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                raise RuntimeError("unexpected EOF during websocket handshake")
+            data += chunk
+        return data
+
+    def send_json(self, message: dict[str, object]) -> None:
+        payload = json.dumps(message, separators=(",", ":")).encode("utf-8")
+        header = bytearray([0x81])
+        if len(payload) < 126:
+            header.append(0x80 | len(payload))
+        elif len(payload) <= 0xFFFF:
+            header.extend([0x80 | 126, *struct.pack("!H", len(payload))])
+        else:
+            header.extend([0x80 | 127, *struct.pack("!Q", len(payload))])
+        mask = secrets.token_bytes(4)
+        masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        self._sock.sendall(bytes(header) + mask + masked)
+
+    def recv_json(self) -> dict[str, object]:
+        while True:
+            first, second = self._recv_exact(2)
+            opcode = first & 0x0F
+            masked = bool(second & 0x80)
+            length = second & 0x7F
+            if length == 126:
+                length = struct.unpack("!H", self._recv_exact(2))[0]
+            elif length == 127:
+                length = struct.unpack("!Q", self._recv_exact(8))[0]
+            mask = self._recv_exact(4) if masked else b""
+            payload = self._recv_exact(length)
+            if masked:
+                payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+            if opcode == 0x8:
+                raise RuntimeError("DevTools websocket closed")
+            if opcode == 0x9:
+                self._send_pong(payload)
+                continue
+            if opcode == 0x1:
+                value = json.loads(payload.decode("utf-8"))
+                if isinstance(value, dict):
+                    return value
+                raise RuntimeError(f"unexpected DevTools payload: {value!r}")
+
+    def _send_pong(self, payload: bytes) -> None:
+        header = bytearray([0x8A])
+        header.append(0x80 | len(payload))
+        mask = secrets.token_bytes(4)
+        masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        self._sock.sendall(bytes(header) + mask + masked)
+
+    def _recv_exact(self, length: int) -> bytes:
+        data = b""
+        while len(data) < length:
+            chunk = self._sock.recv(length - len(data))
+            if not chunk:
+                raise RuntimeError("unexpected EOF from DevTools websocket")
+            data += chunk
+        return data
+
+    def close(self) -> None:
+        with suppress(OSError):
+            self._sock.close()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--browser", choices=["auto", "brave", "chromium"], default="auto")
+    parser.add_argument("--extension-id", default=DEFAULT_EXTENSION_ID)
+    parser.add_argument("--extension-dir", type=Path, default=default_extension_dir())
+    parser.add_argument(
+        "--host-path",
+        type=Path,
+        default=DEFAULT_HOST_PATH,
+        help="sky-cua-chrome-host binary to install temporarily for this smoke.",
+    )
+    parser.add_argument(
+        "--install-temp-native-manifest",
+        action="store_true",
+        help="Temporarily point the selected browser native manifest at --host-path, then restore it.",
+    )
+    parser.add_argument(
+        "--skip-turn-ended-proof",
+        action="store_true",
+        help="Skip the session-log completion proof for turnEnded.",
+    )
+    parser.add_argument(
+        "--artifacts-root",
+        type=Path,
+        default=Path("artifacts/chrome-host-smoke"),
+    )
+    parser.add_argument(
+        "--hacker-news-proof",
+        action="store_true",
+        help=(
+            "Visit Hacker News in the launched browser, open the top 3 external stories, "
+            "save website screenshots, and write a markdown proof with the first 3 comments."
+        ),
+    )
+    parser.add_argument("--keep-browser-open", action="store_true")
+    return parser.parse_args()
+
+
+def default_extension_dir() -> Path:
+    if DEFAULT_EXTENSION_DIR.exists():
+        return DEFAULT_EXTENSION_DIR
+    return FALLBACK_EXTENSION_DIR
+
+
+def read_native_frame(sock: socket.socket, timeout: float = 10) -> dict[str, object]:
+    sock.settimeout(timeout)
+    header = recv_exact(sock, 4)
+    length = struct.unpack("@I", header)[0]
+    payload = recv_exact(sock, length)
+    value = json.loads(payload.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise RuntimeError(f"unexpected native frame payload: {value!r}")
+    return value
+
+
+def recv_exact(sock: socket.socket, length: int) -> bytes:
+    data = b""
+    while len(data) < length:
+        chunk = sock.recv(length - len(data))
+        if not chunk:
+            raise RuntimeError("unexpected EOF from native socket")
+        data += chunk
+    return data
+
+
+def write_native_frame(sock: socket.socket, message: dict[str, object]) -> None:
+    payload = json.dumps(message, separators=(",", ":")).encode("utf-8")
+    sock.sendall(struct.pack("@I", len(payload)) + payload)
+
+
+def turn_ended_response_from_stderr(stderr: str) -> dict[str, object] | None:
+    marker = f"received unmatched Chrome response id={TURN_ENDED_ID} payload="
+    for line in stderr.splitlines():
+        if marker not in line:
+            continue
+        payload_text = line.split(marker, 1)[1].strip()
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(payload, dict):
+            return payload
+        return None
+    return None
+
+
+def turn_ended_response_was_successful(response: dict[str, object] | None) -> bool:
+    return (
+        isinstance(response, dict)
+        and response.get("id") == TURN_ENDED_ID
+        and "error" not in response
+    )
+
+
+def native_request(
+    sock: socket.socket,
+    method: str,
+    params: dict[str, object],
+    *,
+    timeout: float = 15,
+    request_id: str | None = None,
+) -> dict[str, object]:
+    global NATIVE_COUNTER
+    NATIVE_COUNTER += 1
+    message_id = request_id or f"client-{method}-{NATIVE_COUNTER}"
+    write_native_frame(
+        sock,
+        {
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "method": method,
+            "params": params,
+        },
+    )
+    while True:
+        response = read_native_frame(sock, timeout=timeout)
+        if response.get("id") == message_id:
+            if "error" in response:
+                raise RuntimeError(f"native request {method} failed: {response['error']!r}")
+            return response
+        if response.get("method") == "ping":
+            write_native_frame(
+                sock,
+                {
+                    "jsonrpc": "2.0",
+                    "id": response.get("id"),
+                    "result": "pong",
+                },
+            )
+            continue
+        if isinstance(response.get("method"), str):
+            continue
+        raise RuntimeError(f"unexpected native frame while waiting for {message_id}: {response!r}")
+
+
+def native_result(response: dict[str, object]) -> object:
+    if "result" not in response:
+        raise RuntimeError(f"native response had no result: {response!r}")
+    return response["result"]
+
+
+def read_heartbeat(sock: socket.socket, timeout: float = 10) -> tuple[dict[str, object], bool]:
+    while True:
+        message = read_native_frame(sock, timeout=timeout)
+        if message.get("method") != "ping":
+            if isinstance(message.get("method"), str):
+                continue
+            raise RuntimeError(f"unexpected native frame while waiting for heartbeat: {message!r}")
+        write_native_frame(
+            sock,
+            {
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "result": "pong",
+            },
+        )
+        return message, True
+
+
+def browser_command(choice: str) -> BrowserSelection:
+    candidates = [
+        ("brave", "brave"),
+        ("brave", "brave-browser"),
+        ("chromium", "chromium"),
+        ("chromium", "chromium-browser"),
+    ]
+    if choice == "brave":
+        candidates = [("brave", "brave"), ("brave", "brave-browser")]
+    elif choice == "chromium":
+        candidates = [("chromium", "chromium"), ("chromium", "chromium-browser")]
+    for browser_name, candidate in candidates:
+        command = shutil.which(candidate)
+        if command is not None:
+            return BrowserSelection(browser_name, command)
+    raise FileNotFoundError(f"no browser command found for {choice}")
+
+
+def wait_for_devtools_port(user_data_dir: Path, proc: subprocess.Popen[str]) -> str:
+    active_port = user_data_dir / "DevToolsActivePort"
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        if active_port.exists():
+            return active_port.read_text(encoding="utf-8").splitlines()[0].strip()
+        if proc.poll() is not None:
+            stderr = proc.stderr.read() if proc.stderr is not None else ""
+            raise RuntimeError(f"browser exited early with {proc.returncode}\n{stderr}")
+        time.sleep(0.1)
+    raise TimeoutError("DevToolsActivePort did not appear")
+
+
+def load_targets(port: str) -> list[dict[str, object]]:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=3) as response:
+        value = json.loads(response.read().decode("utf-8"))
+    if not isinstance(value, list):
+        raise RuntimeError(f"unexpected DevTools target list: {value!r}")
+    return [target for target in value if isinstance(target, dict)]
+
+
+def wait_for_extension_target(port: str, extension_id: str) -> dict[str, object]:
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        for target in load_targets(port):
+            target_type = target.get("type")
+            target_url = str(target.get("url", ""))
+            if target_type in {"service_worker", "background_page"} and extension_id in target_url:
+                return target
+        time.sleep(0.25)
+    raise TimeoutError(f"extension target for {extension_id} did not appear")
+
+
+def cdp_call(
+    websocket_url: str, method: str, params: dict[str, object] | None = None
+) -> dict[str, object]:
+    global CDP_COUNTER
+    CDP_COUNTER += 1
+    message: dict[str, object] = {"id": CDP_COUNTER, "method": method}
+    if params is not None:
+        message["params"] = params
+    with DevToolsWebSocket(websocket_url) as ws:
+        ws.send_json(message)
+        while True:
+            response = ws.recv_json()
+            if response.get("id") == message["id"]:
+                if "error" in response:
+                    raise RuntimeError(f"DevTools call failed: {response['error']!r}")
+                return response
+
+
+def evaluate(websocket_url: str, expression: str, timeout_ms: int = 5000) -> object:
+    response = cdp_call(
+        websocket_url,
+        "Runtime.evaluate",
+        {
+            "expression": expression,
+            "awaitPromise": True,
+            "returnByValue": True,
+            "timeout": timeout_ms,
+        },
+    )
+    result = response.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError(f"unexpected Runtime.evaluate response: {response!r}")
+    inner = result.get("result")
+    if not isinstance(inner, dict):
+        raise RuntimeError(f"unexpected Runtime.evaluate result: {response!r}")
+    if "exceptionDetails" in result:
+        raise RuntimeError(f"extension evaluation failed: {result['exceptionDetails']!r}")
+    return inner.get("value")
+
+
+def markdown_escape(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def comment_excerpt(value: object, limit: int = 900) -> str:
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def story_filename(index: int, title: object) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(title).lower()).strip("-")
+    if not slug:
+        slug = "story"
+    return f"story-{index:02d}-{slug[:48]}.png"
+
+
+def require_story_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise RuntimeError(f"unexpected Hacker News story list: {value!r}")
+    stories = [story for story in value if isinstance(story, dict)]
+    if len(stories) < 3:
+        raise RuntimeError(f"Hacker News yielded fewer than 3 external stories: {value!r}")
+    return stories[:3]
+
+
+def require_comment_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise RuntimeError(f"unexpected Hacker News comments list: {value!r}")
+    return [comment for comment in value if isinstance(comment, dict)][:3]
+
+
+def require_tab_id(value: object) -> int:
+    if not isinstance(value, dict) or not isinstance(value.get("id"), int):
+        raise RuntimeError(f"extension createTab returned no tab id: {value!r}")
+    return value["id"]
+
+
+def browser_session_params() -> dict[str, object]:
+    return {
+        "session_id": SMOKE_SESSION_ID,
+        "turn_id": SMOKE_TURN_ID,
+    }
+
+
+def create_attached_tab(client: socket.socket) -> tuple[dict[str, object], int]:
+    tab = native_result(native_request(client, "createTab", browser_session_params()))
+    tab_id = require_tab_id(tab)
+    native_request(
+        client,
+        "attach",
+        {
+            **browser_session_params(),
+            "tabId": tab_id,
+        },
+    )
+    extension_execute_cdp(client, tab_id=tab_id, method="Page.enable")
+    if not isinstance(tab, dict):
+        raise RuntimeError(f"extension createTab returned unexpected result: {tab!r}")
+    return tab, tab_id
+
+
+def extension_execute_cdp(
+    client: socket.socket,
+    *,
+    tab_id: int,
+    method: str,
+    command_params: dict[str, object] | None = None,
+    timeout_ms: int = 10000,
+) -> object:
+    response = native_request(
+        client,
+        "executeCdp",
+        {
+            **browser_session_params(),
+            "target": {"tabId": tab_id},
+            "method": method,
+            "commandParams": command_params or {},
+            "timeoutMs": timeout_ms,
+        },
+        timeout=max(15, (timeout_ms / 1000) + 5),
+    )
+    return native_result(response)
+
+
+def same_requested_origin(requested_url: str, settled_url: object) -> bool:
+    if not isinstance(settled_url, str):
+        return False
+    requested = urlparse(requested_url)
+    settled = urlparse(settled_url)
+    if requested.hostname is None or settled.hostname is None:
+        return requested_url == settled_url
+    requested_host = requested.hostname.removeprefix("www.")
+    settled_host = settled.hostname.removeprefix("www.")
+    web_schemes = {"http", "https"}
+    compatible_scheme = (
+        requested.scheme == settled.scheme
+        or {
+            requested.scheme,
+            settled.scheme,
+        }
+        <= web_schemes
+    )
+    return compatible_scheme and requested_host == settled_host
+
+
+def extension_evaluate(
+    client: socket.socket,
+    *,
+    tab_id: int,
+    expression: str,
+    timeout_ms: int = 5000,
+) -> object:
+    value = extension_execute_cdp(
+        client,
+        tab_id=tab_id,
+        method="Runtime.evaluate",
+        command_params={
+            "expression": expression,
+            "awaitPromise": True,
+            "returnByValue": True,
+            "timeout": timeout_ms,
+        },
+        timeout_ms=timeout_ms + 2000,
+    )
+    if not isinstance(value, dict):
+        raise RuntimeError(f"unexpected extension Runtime.evaluate response: {value!r}")
+    inner = value.get("result")
+    if not isinstance(inner, dict):
+        raise RuntimeError(f"unexpected extension Runtime.evaluate result: {value!r}")
+    if "exceptionDetails" in value:
+        raise RuntimeError(f"extension page evaluation failed: {value['exceptionDetails']!r}")
+    return inner.get("value")
+
+
+def extension_navigate_and_wait(
+    client: socket.socket,
+    *,
+    tab_id: int,
+    url: str,
+    timeout_s: float = 20,
+) -> dict[str, object]:
+    navigate_result = extension_execute_cdp(
+        client,
+        tab_id=tab_id,
+        method="Page.navigate",
+        command_params={"url": url},
+        timeout_ms=10000,
+    )
+    if isinstance(navigate_result, dict):
+        error_text = navigate_result.get("errorText")
+        if isinstance(error_text, str) and error_text:
+            raise RuntimeError(f"extension navigation to {url} failed: {error_text}")
+    deadline = time.time() + timeout_s
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            state = extension_evaluate(
+                client,
+                tab_id=tab_id,
+                expression=(
+                    "({readyState: document.readyState, href: location.href, "
+                    "title: document.title})"
+                ),
+                timeout_ms=1000,
+            )
+            if (
+                isinstance(state, dict)
+                and state.get("readyState") in {"interactive", "complete"}
+                and same_requested_origin(url, state.get("href"))
+            ):
+                return state
+        except RuntimeError as exc:
+            last_error = exc
+        time.sleep(0.25)
+    if last_error is not None:
+        raise TimeoutError(
+            f"extension-driven page did not settle at {url}: {last_error}"
+        ) from last_error
+    raise TimeoutError(f"extension-driven page did not settle at {url}")
+
+
+def extension_capture_screenshot(client: socket.socket, *, tab_id: int, output_path: Path) -> None:
+    extension_execute_cdp(
+        client,
+        tab_id=tab_id,
+        method="Page.bringToFront",
+        timeout_ms=5000,
+    )
+    value = extension_execute_cdp(
+        client,
+        tab_id=tab_id,
+        method="Page.captureScreenshot",
+        command_params={
+            "format": "png",
+            "fromSurface": True,
+            "captureBeyondViewport": True,
+        },
+        timeout_ms=10000,
+    )
+    if not isinstance(value, dict):
+        raise RuntimeError(f"unexpected extension screenshot response: {value!r}")
+    data = value.get("data")
+    if not isinstance(data, str):
+        raise RuntimeError(f"unexpected extension screenshot payload: {value!r}")
+    output_path.write_bytes(base64.b64decode(data))
+
+
+def collect_hacker_news_stories(client: socket.socket, tab_id: int) -> list[dict[str, object]]:
+    value = extension_evaluate(
+        client,
+        tab_id=tab_id,
+        expression=r"""
+(() => Array.from(document.querySelectorAll('tr.athing'))
+  .map((row) => {
+    const titleLink = row.querySelector('.titleline > a');
+    const subtext = row.nextElementSibling?.querySelector('.subtext');
+    const commentsLink = Array.from(subtext?.querySelectorAll('a') || [])
+      .find((link) => link.href.includes('item?id=') || /comments?$/i.test(link.textContent || ''));
+    let host = '';
+    try { host = titleLink?.href ? new URL(titleLink.href).hostname : ''; } catch (_) {}
+    return {
+      id: row.id || '',
+      rank: row.querySelector('.rank')?.textContent?.trim() || '',
+      title: titleLink?.textContent?.trim() || '',
+      url: titleLink?.href || '',
+      host,
+      hnUrl: commentsLink?.href || (row.id ? `https://news.ycombinator.com/item?id=${row.id}` : ''),
+    };
+  })
+  .filter((story) => story.title && story.url && story.hnUrl && story.host !== 'news.ycombinator.com')
+  .slice(0, 3))()
+""",
+        timeout_ms=5000,
+    )
+    return require_story_list(value)
+
+
+def collect_hacker_news_comments(client: socket.socket, tab_id: int) -> list[dict[str, object]]:
+    value = extension_evaluate(
+        client,
+        tab_id=tab_id,
+        expression=r"""
+(() => Array.from(document.querySelectorAll('tr.athing.comtr'))
+  .slice(0, 3)
+  .map((row) => ({
+    id: row.id || '',
+    user: row.querySelector('.hnuser')?.textContent?.trim() || '[deleted]',
+    age: row.querySelector('.age a')?.textContent?.trim() || '',
+    text: row.querySelector('.commtext')?.innerText?.trim() || '',
+  })))()
+""",
+        timeout_ms=5000,
+    )
+    return require_comment_list(value)
+
+
+def write_hacker_news_markdown(proof_dir: Path, stories: list[dict[str, object]]) -> Path:
+    markdown_path = proof_dir / "hacker-news-top3-proof.md"
+    lines = [
+        "# Hacker News Chrome Host Smoke Proof",
+        "",
+        f"Generated: {datetime.now(UTC).isoformat()}",
+        "",
+    ]
+    for index, story in enumerate(stories, start=1):
+        title = markdown_escape(story.get("title", "Untitled"))
+        lines.extend(
+            [
+                f"## {index}. {title}",
+                "",
+                f"- Rank: {story.get('rank', '')}",
+                f"- Website: [{markdown_escape(story.get('host', ''))}]({story.get('url', '')})",
+                f"- Hacker News: [comments]({story.get('hnUrl', '')})",
+                f"- Screenshot: `{story.get('screenshot', '')}`",
+                "",
+                "### Top Comments",
+                "",
+            ]
+        )
+        comments = story.get("comments")
+        if not isinstance(comments, list) or not comments:
+            lines.extend(["No comments captured.", ""])
+            continue
+        for comment_index, comment in enumerate(comments[:3], start=1):
+            if not isinstance(comment, dict):
+                continue
+            user = markdown_escape(comment.get("user", "[unknown]"))
+            age = markdown_escape(comment.get("age", ""))
+            text = comment_excerpt(comment.get("text", ""))
+            lines.extend(
+                [
+                    f"{comment_index}. **{user}** {age}",
+                    "",
+                    f"   {text}",
+                    "",
+                ]
+            )
+    markdown_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return markdown_path
+
+
+def run_hacker_news_proof(client: socket.socket, artifact_dir: Path) -> dict[str, object]:
+    proof_dir = artifact_dir / "hacker-news"
+    screenshots_dir = proof_dir / "screenshots"
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+    hn_tab, hn_tab_id = create_attached_tab(client)
+    extension_navigate_and_wait(
+        client,
+        tab_id=hn_tab_id,
+        url="https://news.ycombinator.com/",
+    )
+    stories = collect_hacker_news_stories(client, hn_tab_id)
+    captured: list[dict[str, object]] = []
+    for index, story in enumerate(stories, start=1):
+        extension_navigate_and_wait(client, tab_id=hn_tab_id, url=str(story["hnUrl"]))
+        comments = collect_hacker_news_comments(client, hn_tab_id)
+        article_tab, article_tab_id = create_attached_tab(client)
+        extension_navigate_and_wait(
+            client,
+            tab_id=article_tab_id,
+            url=str(story["url"]),
+            timeout_s=25,
+        )
+        screenshot_name = story_filename(index, story["title"])
+        screenshot_path = screenshots_dir / screenshot_name
+        extension_capture_screenshot(client, tab_id=article_tab_id, output_path=screenshot_path)
+        captured_story = {
+            **story,
+            "article_tab": article_tab,
+            "article_tab_id": article_tab_id,
+            "comments": comments,
+            "screenshot": str(screenshot_path.relative_to(proof_dir)),
+            "screenshot_path": str(screenshot_path),
+        }
+        captured.append(captured_story)
+    markdown_path = write_hacker_news_markdown(proof_dir, captured)
+    return {
+        "hn_tab": hn_tab,
+        "hn_tab_id": hn_tab_id,
+        "proof_dir": str(proof_dir),
+        "markdown_path": str(markdown_path),
+        "screenshots": [story["screenshot_path"] for story in captured],
+        "stories": captured,
+    }
+
+
+def wait_for_extension_runtime(websocket_url: str) -> str:
+    expression = (
+        "typeof chrome !== 'undefined' && chrome.runtime && chrome.storage && chrome.alarms "
+        "? chrome.runtime.id : null"
+    )
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        value = evaluate(websocket_url, expression, timeout_ms=1000)
+        if isinstance(value, str) and value:
+            return value
+        time.sleep(0.25)
+    raise TimeoutError("extension runtime APIs did not become available")
+
+
+def wait_for_socket(socket_dir: Path) -> Path:
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        sockets = sorted(socket_dir.glob("extension-*.sock"))
+        if sockets:
+            return sockets[0]
+        time.sleep(0.1)
+    raise TimeoutError(f"native host socket did not appear in {socket_dir}")
+
+
+def native_manifest_path(browser_name: str) -> Path:
+    home = Path.home()
+    if browser_name == "brave":
+        return (
+            home / ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts" / f"{HOST_NAME}.json"
+        )
+    if browser_name == "chromium":
+        return home / ".config/chromium/NativeMessagingHosts" / f"{HOST_NAME}.json"
+    raise ValueError(f"unsupported browser for native manifest: {browser_name}")
+
+
+def install_temp_manifest(browser_name: str, extension_id: str, host_path: Path) -> ManifestRestore:
+    manifest_path = native_manifest_path(browser_name)
+    previous = manifest_path.read_bytes() if manifest_path.exists() else None
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "name": HOST_NAME,
+        "description": "sky-cua Chrome native messaging host live smoke",
+        "type": "stdio",
+        "path": str(host_path),
+        "allowed_origins": [f"chrome-extension://{extension_id}/"],
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return ManifestRestore(manifest_path, previous)
+
+
+def restore_manifest(restore: ManifestRestore | None) -> bool:
+    if restore is None:
+        return False
+    if restore.previous_content is None:
+        with suppress(FileNotFoundError):
+            restore.path.unlink()
+        return True
+    restore.path.write_bytes(restore.previous_content)
+    return True
+
+
+def host_process(host_path: Path, pid: int) -> dict[str, object] | None:
+    resolved = str(host_path)
+    proc_dir = Path("/proc") / str(pid)
+    try:
+        raw_cmdline = (proc_dir / "cmdline").read_bytes()
+    except OSError:
+        return None
+    parts = [part.decode("utf-8", "replace") for part in raw_cmdline.split(b"\0") if part]
+    if parts and parts[0] == resolved:
+        return {"pid": pid, "cmdline": parts}
+    return None
+
+
+def host_pid_from_socket(socket_path: Path) -> int:
+    parts = socket_path.stem.split("-")
+    if len(parts) < 2 or not parts[1].isdecimal():
+        raise RuntimeError(f"could not parse host pid from socket path: {socket_path}")
+    return int(parts[1])
+
+
+def wait_for_host_process(host_path: Path, pid: int) -> dict[str, object] | None:
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        match = host_process(host_path, pid)
+        if match is not None:
+            return match
+        time.sleep(0.1)
+    return None
+
+
+def write_task_complete(sessions_dir: Path, session_id: str, turn_id: str) -> Path:
+    now = datetime.now(UTC)
+    rollout_dir = sessions_dir / now.strftime("%Y") / now.strftime("%m") / now.strftime("%d")
+    rollout_dir.mkdir(parents=True, exist_ok=True)
+    path = rollout_dir / f"rollout-live-smoke-{session_id}.jsonl"
+    line = {
+        "type": "event_msg",
+        "payload": {
+            "type": "task_complete",
+            "turn_id": turn_id,
+        },
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(line, separators=(",", ":")) + "\n")
+    return path
+
+
+def launch_browser(
+    command: str,
+    *,
+    user_data_dir: Path,
+    extension_dir: Path,
+    socket_dir: Path,
+    sessions_dir: Path,
+) -> subprocess.Popen[str]:
+    env = os.environ.copy()
+    env["CODEX_BROWSER_USE_SOCKET_DIR"] = str(socket_dir)
+    env["SKY_CUA_BROWSER_USE_SOCKET_DIR"] = str(socket_dir)
+    env["CODEX_BROWSER_USE_SESSIONS_DIR"] = str(sessions_dir)
+    env["SKY_CUA_BROWSER_USE_SESSIONS_DIR"] = str(sessions_dir)
+    env["SKY_CUA_CHROME_HOST_TRACE"] = "1"
+    args = [
+        command,
+        f"--user-data-dir={user_data_dir}",
+        "--remote-debugging-port=0",
+        "--remote-allow-origins=*",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-sync",
+        f"--disable-extensions-except={extension_dir}",
+        f"--load-extension={extension_dir}",
+        "--ozone-platform=wayland",
+        "about:blank",
+    ]
+    return subprocess.Popen(
+        args,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def terminate_browser(proc: subprocess.Popen[str], keep_open: bool) -> str:
+    if keep_open:
+        return ""
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+    return proc.stderr.read() if proc.stderr is not None else ""
+
+
+def create_artifact_dir(artifacts_root: Path) -> Path:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    output_dir = artifacts_root / stamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
+def write_artifact(output_dir: Path, result: dict[str, object]) -> Path:
+    output_path = output_dir / "result.json"
+    output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return output_path
+
+
+def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]:
+    extension_dir = args.extension_dir.expanduser().resolve()
+    if not extension_dir.exists():
+        raise FileNotFoundError(f"extension directory not found: {extension_dir}")
+    host_path = args.host_path.expanduser().resolve()
+    if args.install_temp_native_manifest and not host_path.exists():
+        raise FileNotFoundError(f"host binary not found: {host_path}")
+    if args.keep_browser_open and not args.skip_turn_ended_proof:
+        raise ValueError(
+            "--keep-browser-open cannot prove turnEnded because stderr is read on exit"
+        )
+    browser = browser_command(args.browser)
+    manifest_restore: ManifestRestore | None = None
+    manifest_restored = False
+    with tempfile.TemporaryDirectory(prefix="sky-cua-chrome-host-smoke-") as temp:
+        root = Path(temp)
+        user_data_dir = root / "profile"
+        socket_dir = root / "sockets"
+        sessions_dir = root / "sessions"
+        socket_dir.mkdir()
+        sessions_dir.mkdir()
+        proc: subprocess.Popen[str] | None = None
+        try:
+            if args.install_temp_native_manifest:
+                manifest_restore = install_temp_manifest(browser.name, args.extension_id, host_path)
+            proc = launch_browser(
+                browser.command,
+                user_data_dir=user_data_dir,
+                extension_dir=extension_dir,
+                socket_dir=socket_dir,
+                sessions_dir=sessions_dir,
+            )
+            port = wait_for_devtools_port(user_data_dir, proc)
+            target = wait_for_extension_target(port, args.extension_id)
+            websocket_url = str(target["webSocketDebuggerUrl"])
+            extension_id = wait_for_extension_runtime(websocket_url)
+            status_before = evaluate(
+                websocket_url, "chrome.storage.local.get('NATIVE_HOST_STATUS')"
+            )
+            socket_path = wait_for_socket(socket_dir)
+            host_pid = host_pid_from_socket(socket_path)
+            host_process = (
+                wait_for_host_process(host_path, host_pid)
+                if args.install_temp_native_manifest
+                else None
+            )
+            if args.install_temp_native_manifest and host_process is None:
+                raise RuntimeError(f"native host process did not match {host_path}")
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                client.connect(str(socket_path))
+                get_info = native_request(
+                    client,
+                    "getInfo",
+                    browser_session_params(),
+                    request_id="client-get-info",
+                )
+                get_tabs = native_request(
+                    client,
+                    "getTabs",
+                    browser_session_params(),
+                    request_id="client-get-tabs",
+                )
+                hacker_news_proof = (
+                    run_hacker_news_proof(client, artifact_dir) if args.hacker_news_proof else None
+                )
+                get_tabs_after_hacker_news = None
+                if hacker_news_proof is not None:
+                    get_tabs_after_hacker_news = native_request(
+                        client,
+                        "getTabs",
+                        browser_session_params(),
+                        request_id="client-get-tabs-after-hacker-news",
+                    )
+                session_file = None
+                if not args.skip_turn_ended_proof:
+                    session_file = write_task_complete(
+                        sessions_dir, SMOKE_SESSION_ID, SMOKE_TURN_ID
+                    )
+                    time.sleep(2)
+                evaluate(
+                    websocket_url,
+                    "chrome.alarms.create('client-heartbeat-alarm', "
+                    "{when: Date.now() + 100}); 'alarm-scheduled'",
+                )
+                heartbeat, heartbeat_replied = read_heartbeat(client)
+                status_after = evaluate(
+                    websocket_url,
+                    "chrome.storage.local.get('NATIVE_HOST_STATUS')",
+                )
+            finally:
+                client.close()
+            stderr_tail = terminate_browser(proc, args.keep_browser_open)[-4000:]
+            turn_ended_response = turn_ended_response_from_stderr(stderr_tail)
+            turn_ended_proof = {
+                "session_file": str(session_file) if session_file is not None else None,
+                "emitted": (f"emitting turnEnded session={SMOKE_SESSION_ID} turn={SMOKE_TURN_ID}")
+                in stderr_tail,
+                "extension_response": turn_ended_response,
+                "extension_accepted": turn_ended_response_was_successful(turn_ended_response),
+            }
+            if not args.skip_turn_ended_proof and not (
+                turn_ended_proof["emitted"] and turn_ended_proof["extension_accepted"]
+            ):
+                raise RuntimeError(
+                    "turnEnded proof failed; expected host emit trace and successful extension response\n"
+                    + stderr_tail
+                )
+        except BaseException:
+            if proc is not None:
+                terminate_browser(proc, args.keep_browser_open)
+            raise
+        finally:
+            manifest_restored = restore_manifest(manifest_restore)
+
+    return {
+        "ok": True,
+        "browser": browser.name,
+        "browser_command": browser.command,
+        "extension_dir": str(extension_dir),
+        "extension_id": extension_id,
+        "host_path": str(host_path) if args.install_temp_native_manifest else None,
+        "native_manifest_path": str(manifest_restore.path)
+        if manifest_restore is not None
+        else None,
+        "native_manifest_restored": manifest_restored,
+        "host_process": host_process,
+        "extension_target": {
+            "type": target.get("type"),
+            "url": target.get("url"),
+        },
+        "native_socket_path": str(socket_path),
+        "native_status_before": status_before,
+        "client_to_extension_getInfo": get_info,
+        "client_to_extension_getTabs": get_tabs,
+        "hacker_news_proof": hacker_news_proof,
+        "client_to_extension_getTabs_after_hacker_news": get_tabs_after_hacker_news,
+        "extension_to_client_heartbeat": {
+            "received": heartbeat,
+            "replied": heartbeat_replied,
+        },
+        "turn_ended_proof": turn_ended_proof,
+        "native_status_after": status_after,
+        "browser_stderr_tail": stderr_tail,
+    }
+
+
+def main() -> int:
+    args = parse_args()
+    artifact_dir = create_artifact_dir(args.artifacts_root)
+    result = run_smoke(args, artifact_dir)
+    artifact_path = write_artifact(artifact_dir, result)
+    result["artifact_path"] = str(artifact_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

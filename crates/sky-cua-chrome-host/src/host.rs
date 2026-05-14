@@ -3,8 +3,9 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    fs,
-    io::{self, Read, Write},
+    env, fs,
+    fs::File,
+    io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::Shutdown,
     os::unix::{
         fs::{MetadataExt, PermissionsExt},
@@ -15,12 +16,18 @@ use std::{
     process,
     sync::{Arc, Mutex},
     thread,
-    time::Instant,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const SKY_CUA_SOCKET_DIR_ENV: &str = "SKY_CUA_BROWSER_USE_SOCKET_DIR";
 const CODEX_SOCKET_DIR_ENV: &str = "CODEX_BROWSER_USE_SOCKET_DIR";
+const SKY_CUA_SESSIONS_DIR_ENV: &str = "SKY_CUA_BROWSER_USE_SESSIONS_DIR";
+const CODEX_SESSIONS_DIR_ENV: &str = "CODEX_BROWSER_USE_SESSIONS_DIR";
+const TRACE_ENV: &str = "SKY_CUA_CHROME_HOST_TRACE";
 const DEFAULT_SOCKET_DIR: &str = "/tmp/codex-browser-use";
+const ROLLOUT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const OBSERVED_TURN_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const ROLLOUT_SEARCH_MAX_DEPTH: usize = 5;
 
 type SharedState = Arc<Mutex<HostState>>;
 type SharedClientWriter = Arc<Mutex<UnixStream>>;
@@ -63,6 +70,7 @@ impl ChromeClientRouteError {
 struct HostState {
     host_name: String,
     stdout: Arc<Mutex<io::Stdout>>,
+    rollout_tracker: RolloutTracker,
     clients: HashMap<usize, Client>,
     pending_chrome_requests: HashMap<String, PendingChromeRequest>,
     pending_client_requests: HashMap<String, PendingClientRequest>,
@@ -72,10 +80,15 @@ struct HostState {
 }
 
 impl HostState {
-    fn new(host_name: impl Into<String>, stdout: Arc<Mutex<io::Stdout>>) -> Self {
+    fn new(
+        host_name: impl Into<String>,
+        stdout: Arc<Mutex<io::Stdout>>,
+        rollout_tracker: RolloutTracker,
+    ) -> Self {
         Self {
             host_name: host_name.into(),
             stdout,
+            rollout_tracker,
             clients: HashMap::new(),
             pending_chrome_requests: HashMap::new(),
             pending_client_requests: HashMap::new(),
@@ -166,6 +179,173 @@ impl HostState {
     }
 }
 
+#[derive(Clone)]
+struct RolloutTracker {
+    host_name: String,
+    inner: Arc<Mutex<RolloutTrackerState>>,
+    stdout: Arc<Mutex<io::Stdout>>,
+    sessions_root: Option<PathBuf>,
+}
+
+struct RolloutTrackerState {
+    observed: HashMap<String, ObservedTurn>,
+}
+
+struct ObservedTurn {
+    session_id: String,
+    turn_id: String,
+    path: Option<PathBuf>,
+    offset: u64,
+    created_at: Instant,
+}
+
+impl RolloutTracker {
+    fn new(host_name: String, stdout: Arc<Mutex<io::Stdout>>) -> Self {
+        let tracker = Self::without_worker(host_name, stdout, sessions_root());
+        let worker = tracker.clone();
+        if let Err(error) = thread::Builder::new()
+            .name("sky-cua-chrome-rollout-tracker".to_string())
+            .spawn(move || worker.watch_loop())
+        {
+            log(
+                &tracker.host_name,
+                &format!("rollout watcher error: {error}"),
+            );
+        }
+        tracker
+    }
+
+    fn without_worker(
+        host_name: String,
+        stdout: Arc<Mutex<io::Stdout>>,
+        sessions_root: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            host_name,
+            inner: Arc::new(Mutex::new(RolloutTrackerState {
+                observed: HashMap::new(),
+            })),
+            stdout,
+            sessions_root,
+        }
+    }
+
+    fn observe_turn(&self, session_id: String, turn_id: String) {
+        let key = observed_turn_key(&session_id, &turn_id);
+        let mut state = self.inner.lock().expect("rollout watcher mutex poisoned");
+        if state.observed.contains_key(&key) {
+            return;
+        }
+
+        let (path, offset) = self
+            .sessions_root
+            .as_deref()
+            .and_then(|root| find_rollout_path(root, &session_id))
+            .map(|path| {
+                let offset = file_len(&path).unwrap_or_default();
+                (Some(path), offset)
+            })
+            .unwrap_or((None, 0));
+
+        trace(
+            &self.host_name,
+            &format!("observed browser turn session={session_id} turn={turn_id}"),
+        );
+        state.observed.insert(
+            key,
+            ObservedTurn {
+                session_id,
+                turn_id,
+                path,
+                offset,
+                created_at: Instant::now(),
+            },
+        );
+    }
+
+    fn watch_loop(self) {
+        loop {
+            thread::sleep(ROLLOUT_POLL_INTERVAL);
+            match self.process_rollouts() {
+                Ok(completed) => {
+                    for (session_id, turn_id) in completed {
+                        self.emit_turn_ended(&session_id, &turn_id);
+                    }
+                }
+                Err(error) => log(&self.host_name, &format!("rollout watcher error: {error}")),
+            }
+        }
+    }
+
+    fn process_rollouts(&self) -> Result<Vec<(String, String)>> {
+        let Some(sessions_root) = self.sessions_root.as_deref() else {
+            return Ok(Vec::new());
+        };
+
+        let mut completed = Vec::new();
+        let mut expired = Vec::new();
+        {
+            let mut state = self.inner.lock().expect("tracker mutex poisoned");
+            for (key, observed) in &mut state.observed {
+                if observed.created_at.elapsed() >= OBSERVED_TURN_TTL {
+                    expired.push(key.clone());
+                    continue;
+                }
+
+                if observed.path.is_none()
+                    && let Some(path) = find_rollout_path(sessions_root, &observed.session_id)
+                {
+                    observed.offset = 0;
+                    observed.path = Some(path);
+                }
+
+                let Some(path) = observed.path.as_ref() else {
+                    continue;
+                };
+                let (offset, is_complete) =
+                    drain_rollout_file(path, observed.offset, &observed.turn_id).with_context(
+                        || format!("failed to drain rollout file {}", path.display()),
+                    )?;
+                observed.offset = offset;
+                if is_complete {
+                    completed.push((
+                        key.clone(),
+                        observed.session_id.clone(),
+                        observed.turn_id.clone(),
+                    ));
+                }
+            }
+
+            for key in expired {
+                state.observed.remove(&key);
+            }
+            for (key, _, _) in &completed {
+                state.observed.remove(key);
+            }
+        }
+
+        Ok(completed
+            .into_iter()
+            .map(|(_, session_id, turn_id)| (session_id, turn_id))
+            .collect())
+    }
+
+    fn emit_turn_ended(&self, session_id: &str, turn_id: &str) {
+        let message = turn_ended_message(session_id, turn_id);
+        trace(
+            &self.host_name,
+            &format!("emitting turnEnded session={session_id} turn={turn_id}"),
+        );
+        let mut stdout = self.stdout.lock().expect("stdout writer mutex poisoned");
+        if let Err(error) = write_frame(&mut *stdout, &message) {
+            log(
+                &self.host_name,
+                &format!("failed to emit turnEnded for session {session_id}: {error}"),
+            );
+        }
+    }
+}
+
 pub fn serve(host_name: String) -> Result<()> {
     let socket_dir = socket_dir();
     prepare_socket_dir(&socket_dir)?;
@@ -186,7 +366,12 @@ pub fn serve(host_name: String) -> Result<()> {
         &format!("listening on {}", socket_path.display()),
     );
     let stdout = Arc::new(Mutex::new(io::stdout()));
-    let state = Arc::new(Mutex::new(HostState::new(host_name, stdout)));
+    let rollout_tracker = RolloutTracker::new(host_name.clone(), Arc::clone(&stdout));
+    let state = Arc::new(Mutex::new(HostState::new(
+        host_name,
+        stdout,
+        rollout_tracker,
+    )));
     {
         let state = Arc::clone(&state);
         thread::spawn(move || accept_clients(listener, state));
@@ -204,6 +389,21 @@ fn socket_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_SOCKET_DIR))
 }
 
+fn sessions_root() -> Option<PathBuf> {
+    if let Some(path) = env::var_os(SKY_CUA_SESSIONS_DIR_ENV).map(PathBuf::from) {
+        return Some(path);
+    }
+    if let Some(path) = env::var_os(CODEX_SESSIONS_DIR_ENV).map(PathBuf::from) {
+        return Some(path);
+    }
+    if let Some(path) = env::var_os("CODEX_HOME").map(PathBuf::from) {
+        return Some(path.join("sessions"));
+    }
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".codex").join("sessions"))
+}
+
 fn socket_path(socket_dir: &Path) -> PathBuf {
     let mut nonce = [0u8; 8];
     if let Ok(mut file) = fs::File::open("/dev/urandom") {
@@ -219,8 +419,8 @@ fn socket_path(socket_dir: &Path) -> PathBuf {
 fn prepare_socket_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))?;
     let metadata =
-        fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
-    if !metadata.is_dir() {
+        fs::symlink_metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if !metadata.file_type().is_dir() {
         bail!(
             "unix socket directory path is not a directory: {}",
             path.display()
@@ -386,6 +586,13 @@ fn read_client_messages(state: SharedState, client_id: usize, mut stream: UnixSt
 }
 
 fn handle_client_message(state: &SharedState, client_id: usize, message: Value) {
+    {
+        let state = state.lock().expect("host state mutex poisoned");
+        if !state.clients.contains_key(&client_id) {
+            return;
+        }
+    }
+
     if is_response(&message) {
         let Some(id) = message_id_as_string(&message) else {
             return;
@@ -428,6 +635,18 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         return;
     };
 
+    let observed_turn = session_turn_from_message(&message);
+    let tracker = {
+        let state = state.lock().expect("host state mutex poisoned");
+        if !state.clients.contains_key(&client_id) {
+            return;
+        }
+        state.rollout_tracker.clone()
+    };
+    if let Some((session_id, turn_id)) = observed_turn {
+        tracker.observe_turn(session_id, turn_id);
+    }
+
     let mut state = state.lock().expect("host state mutex poisoned");
     if !state.clients.contains_key(&client_id) {
         return;
@@ -443,7 +662,8 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
             created_at: Instant::now(),
         },
     );
-    state.send_chrome(&with_id(message, Value::String(chrome_id)));
+    let outbound = with_id(message, Value::String(chrome_id));
+    state.send_chrome(&outbound);
 }
 
 fn handle_chrome_message(state: &SharedState, message: Value) {
@@ -454,6 +674,10 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
 
         let mut state = state.lock().expect("host state mutex poisoned");
         let Some(pending) = state.pending_chrome_requests.remove(&id) else {
+            trace(
+                &state.host_name,
+                &unmatched_chrome_response_trace(&id, &message),
+            );
             return;
         };
 
@@ -546,8 +770,138 @@ fn with_id(mut message: Value, id: Value) -> Value {
     message
 }
 
+fn turn_ended_message(session_id: &str, turn_id: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": format!("native-turn-ended:{session_id}:{turn_id}"),
+        "method": "turnEnded",
+        "params": {
+            "session_id": session_id,
+            "turn_id": turn_id,
+        },
+    })
+}
+
+fn session_turn_from_message(message: &Value) -> Option<(String, String)> {
+    let params = message.get("params")?;
+    let session_id = non_empty_string(params.get("session_id")?)?;
+    let turn_id = non_empty_string(params.get("turn_id")?)?;
+    Some((session_id.to_string(), turn_id.to_string()))
+}
+
+fn non_empty_string(value: &Value) -> Option<&str> {
+    let value = value.as_str()?.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn observed_turn_key(session_id: &str, turn_id: &str) -> String {
+    format!("{session_id}\n{turn_id}")
+}
+
+fn file_len(path: &Path) -> io::Result<u64> {
+    Ok(fs::metadata(path)?.len())
+}
+
+fn find_rollout_path(root: &Path, session_id: &str) -> Option<PathBuf> {
+    let mut stack = vec![(root.to_path_buf(), 0_usize)];
+    let mut best: Option<(SystemTime, PathBuf)> = None;
+
+    while let Some((dir, depth)) = stack.pop() {
+        let entries = fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+
+            if file_type.is_dir() {
+                if depth < ROLLOUT_SEARCH_MAX_DEPTH {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if !file_name.contains(session_id)
+                || !(file_name.ends_with(".jsonl") || file_name.ends_with(".json"))
+            {
+                continue;
+            }
+
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            if best
+                .as_ref()
+                .is_none_or(|(best_modified, _)| modified > *best_modified)
+            {
+                best = Some((modified, path));
+            }
+        }
+    }
+
+    best.map(|(_, path)| path)
+}
+
+fn drain_rollout_file(path: &Path, offset: u64, turn_id: &str) -> io::Result<(u64, bool)> {
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    file.seek(SeekFrom::Start(offset.min(len)))?;
+
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    let mut is_complete = false;
+
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        if line_marks_turn_complete(&line, turn_id) {
+            is_complete = true;
+        }
+    }
+
+    Ok((reader.stream_position()?, is_complete))
+}
+
+fn line_marks_turn_complete(line: &str, turn_id: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+
+    let payload = value.get("payload").unwrap_or(&value);
+    let payload_type = payload.get("type").and_then(Value::as_str);
+    let payload_turn_id = payload.get("turn_id").and_then(Value::as_str);
+    if payload_type == Some("task_complete") && payload_turn_id == Some(turn_id) {
+        return true;
+    }
+
+    let top_level_type = value.get("type").and_then(Value::as_str);
+    let kind = value.get("kind").and_then(Value::as_str);
+    top_level_type == Some("turn")
+        && matches!(kind, Some("end" | "completed" | "complete"))
+        && value.get("turn_id").and_then(Value::as_str) == Some(turn_id)
+}
+
+fn unmatched_chrome_response_trace(id: &str, message: &Value) -> String {
+    format!("received unmatched Chrome response id={id} payload={message}")
+}
+
 fn log(host_name: &str, message: &str) {
     let _ = writeln!(io::stderr(), "[{host_name}] {message}");
+}
+
+fn trace(host_name: &str, message: &str) {
+    if env::var_os(TRACE_ENV).is_some() {
+        log(host_name, message);
+    }
 }
 
 #[cfg(test)]
@@ -561,6 +915,127 @@ mod tests {
             with_id(message, Value::String("linux-1-1".to_string())),
             json!({ "jsonrpc": "2.0", "id": "linux-1-1", "method": "getTabs" })
         );
+    }
+
+    #[test]
+    fn extracts_session_turn_from_browser_request() {
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": "request-1",
+            "method": "getTabs",
+            "params": {
+                "session_id": " session-1 ",
+                "turn_id": "turn-1"
+            }
+        });
+
+        assert_eq!(
+            session_turn_from_message(&message),
+            Some(("session-1".to_string(), "turn-1".to_string()))
+        );
+    }
+
+    #[test]
+    fn builds_turn_ended_message_for_chrome_extension() {
+        assert_eq!(
+            turn_ended_message("session-1", "turn-1"),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "native-turn-ended:session-1:turn-1",
+                "method": "turnEnded",
+                "params": {
+                    "session_id": "session-1",
+                    "turn_id": "turn-1"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn unmatched_chrome_response_trace_includes_payload() {
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": "native-turn-ended:session-1:turn-1",
+            "result": null,
+        });
+
+        assert_eq!(
+            unmatched_chrome_response_trace("native-turn-ended:session-1:turn-1", &message),
+            r#"received unmatched Chrome response id=native-turn-ended:session-1:turn-1 payload={"id":"native-turn-ended:session-1:turn-1","jsonrpc":"2.0","result":null}"#
+        );
+    }
+
+    #[test]
+    fn recognizes_rollout_completion_lines() {
+        let payload_line = r#"{"timestamp":"2026-05-09T12:00:00Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#;
+        let top_level_line = r#"{"type":"turn","kind":"completed","turn_id":"turn-1"}"#;
+
+        assert!(line_marks_turn_complete(payload_line, "turn-1"));
+        assert!(line_marks_turn_complete(top_level_line, "turn-1"));
+        assert!(!line_marks_turn_complete(payload_line, "turn-2"));
+        assert!(!line_marks_turn_complete("not json", "turn-1"));
+    }
+
+    #[test]
+    fn finds_nested_rollout_path_by_session_id() {
+        let root = unique_test_dir("sky-cua-rollout-path");
+        let nested = root.join("2026").join("05").join("09");
+        fs::create_dir_all(&nested).unwrap();
+        let path = nested.join("rollout-2026-05-09T12-00-00-session-1.jsonl");
+        fs::write(&path, "{}\n").unwrap();
+
+        assert_eq!(find_rollout_path(&root, "session-1"), Some(path));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn drains_rollout_file_from_offset() {
+        let root = unique_test_dir("sky-cua-rollout-drain");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout-session-1.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"other\"}}\n",
+        )
+        .unwrap();
+        let offset = file_len(&path).unwrap();
+
+        let complete =
+            r#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#;
+        writeln!(
+            fs::OpenOptions::new().append(true).open(&path).unwrap(),
+            "ignored\n{complete}"
+        )
+        .unwrap();
+        let (new_offset, is_complete) = drain_rollout_file(&path, offset, "turn-1").unwrap();
+
+        assert!(new_offset >= offset);
+        assert!(is_complete);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rollout_tracker_detects_late_discovered_completion_and_removes_observation() {
+        let root = unique_test_dir("sky-cua-rollout-late");
+        fs::create_dir_all(&root).unwrap();
+        let tracker = test_rollout_tracker(Some(root.clone()));
+        tracker.observe_turn("session-1".to_string(), "turn-1".to_string());
+
+        assert!(tracker.process_rollouts().unwrap().is_empty());
+
+        let nested = root.join("2026").join("05").join("09");
+        fs::create_dir_all(&nested).unwrap();
+        let path = nested.join("rollout-session-1.jsonl");
+        let complete =
+            r#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#;
+        writeln!(File::create(path).unwrap(), "{complete}").unwrap();
+
+        assert_eq!(
+            tracker.process_rollouts().unwrap(),
+            vec![("session-1".to_string(), "turn-1".to_string())]
+        );
+        assert!(tracker.process_rollouts().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -636,6 +1111,28 @@ mod tests {
     }
 
     #[test]
+    fn stale_client_requests_do_not_observe_rollout_turns() {
+        let state = Arc::new(Mutex::new(test_host_state()));
+
+        handle_client_message(
+            &state,
+            99,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getTabs",
+                "params": {
+                    "session_id": "session-1",
+                    "turn_id": "turn-1"
+                }
+            }),
+        );
+
+        let tracker = state.lock().unwrap().rollout_tracker.clone();
+        assert!(tracker.inner.lock().unwrap().observed.is_empty());
+    }
+
+    #[test]
     fn disconnect_cleanup_removes_pending_state_for_client() {
         let mut pending_chrome = HashMap::from([
             (
@@ -697,9 +1194,27 @@ mod tests {
     }
 
     fn test_host_state() -> HostState {
+        let stdout = Arc::new(Mutex::new(io::stdout()));
         HostState::new(
             "com.openai.codexextension",
-            Arc::new(Mutex::new(io::stdout())),
+            Arc::clone(&stdout),
+            RolloutTracker::without_worker("com.openai.codexextension".to_string(), stdout, None),
         )
+    }
+
+    fn test_rollout_tracker(sessions_root: Option<PathBuf>) -> RolloutTracker {
+        RolloutTracker::without_worker(
+            "com.openai.codexextension".to_string(),
+            Arc::new(Mutex::new(io::stdout())),
+            sessions_root,
+        )
+    }
+
+    fn unique_test_dir(prefix: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir().join(format!("{prefix}-{}-{nonce}", process::id()))
     }
 }
