@@ -14,16 +14,21 @@ import pytest
 
 import _plugin_bundle as plugin_bundle
 import build_plugin
+import build_runtime_packages
 import deploy_release_plugin as release_deploy
 import install_mcp_server
 import install_plugin
+import live_agent_cursor_kde_smoke
+import live_agent_cursor_x11_overlay_smoke
 import live_chrome_host_client_smoke
 import live_desktop_smoke
 import live_portal_downgrade_smoke
 import package_runtime_artifact
 import publish_marketplace_release
+import run_gui_testing_vm_smoke
 import setup_heliasar_marketplace
 from _app_server_harness import build_schema_accept_value, response_contains_computer_use_server
+from _codex_exec import DEFAULT_MODEL, DEFAULT_REASONING_EFFORT
 from _plugin_bundle import (
     PLUGIN_CATEGORY,
     RELEASE_PLUGIN_ID,
@@ -51,8 +56,8 @@ from _plugin_bundle import (
     version_from_tag,
     write_release_marketplace,
 )
-from _tidal_workflow import tidal_playlist_prompt
-from live_app_server_tidal_image_ab import DEFAULT_VARIANTS, playlist_name_for_variant
+from _pointer_geometry import adjusted_origin_for_visible_monitor
+from _smoke_config import LIVE_SMOKE_MODEL, LIVE_SMOKE_REASONING_EFFORT
 
 
 def load_chrome_preflight() -> ModuleType:
@@ -63,6 +68,35 @@ def load_chrome_preflight() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_live_smoke_model_config_is_centralized() -> None:
+    assert LIVE_SMOKE_MODEL == "gpt-5.5"
+    assert LIVE_SMOKE_REASONING_EFFORT == "low"
+    assert DEFAULT_MODEL == LIVE_SMOKE_MODEL
+    assert DEFAULT_REASONING_EFFORT == LIVE_SMOKE_REASONING_EFFORT
+
+
+def test_pointer_fixture_adjusts_origin_when_fullscreen_allocation_is_clipped() -> None:
+    assert adjusted_origin_for_visible_monitor(
+        origin_x=0,
+        origin_y=0,
+        allocation_width=1280,
+        allocation_height=955,
+        monitor_width=1280,
+        monitor_height=800,
+    ) == (0, -78)
+
+
+def test_pointer_fixture_keeps_origin_when_allocation_fits_monitor() -> None:
+    assert adjusted_origin_for_visible_monitor(
+        origin_x=12,
+        origin_y=34,
+        allocation_width=1280,
+        allocation_height=800,
+        monitor_width=1280,
+        monitor_height=800,
+    ) == (12, 34)
 
 
 def test_codex_config_helpers_update_existing_sections() -> None:
@@ -98,7 +132,11 @@ def test_codex_config_helpers_update_existing_sections() -> None:
 
 def test_runtime_binary_names_match_host_platform() -> None:
     suffix = ".exe" if executable_name("tool").endswith(".exe") else ""
-    expected = [f"sky-cua-client{suffix}", f"sky-cua-service{suffix}"]
+    expected = [
+        f"sky-cua-client{suffix}",
+        f"sky-cua-service{suffix}",
+        f"sky-cua-overlay-host{suffix}",
+    ]
     if suffix == "":
         expected.append("sky-cua-cosmic-helper")
         expected.append("sky-cua-chrome-host")
@@ -110,14 +148,17 @@ def test_all_runtime_binary_names_include_linux_and_windows_binaries() -> None:
     assert all_runtime_binary_names() == [
         "runtimes/linux-x64/sky-cua-client",
         "runtimes/linux-x64/sky-cua-service",
+        "runtimes/linux-x64/sky-cua-overlay-host",
         "runtimes/linux-x64/sky-cua-cosmic-helper",
         "runtimes/linux-x64/sky-cua-chrome-host",
         "runtimes/linux-arm64/sky-cua-client",
         "runtimes/linux-arm64/sky-cua-service",
+        "runtimes/linux-arm64/sky-cua-overlay-host",
         "runtimes/linux-arm64/sky-cua-cosmic-helper",
         "runtimes/linux-arm64/sky-cua-chrome-host",
         "sky-cua-client.exe",
         "sky-cua-service.exe",
+        "sky-cua-overlay-host.exe",
     ]
 
 
@@ -128,6 +169,9 @@ def test_runtime_binary_paths_map_platform_variants() -> None:
     assert runtime_binary_path("linux-arm64", "sky-cua-service") == Path(
         "bin/runtimes/linux-arm64/sky-cua-service"
     )
+    assert runtime_binary_path("linux-x64", "sky-cua-overlay-host") == Path(
+        "bin/runtimes/linux-x64/sky-cua-overlay-host"
+    )
     assert runtime_binary_path("linux-x64", "sky-cua-cosmic-helper") == Path(
         "bin/runtimes/linux-x64/sky-cua-cosmic-helper"
     )
@@ -135,6 +179,9 @@ def test_runtime_binary_paths_map_platform_variants() -> None:
         "bin/runtimes/linux-arm64/sky-cua-chrome-host"
     )
     assert runtime_binary_path("windows-x64", "sky-cua-client") == Path("bin/sky-cua-client.exe")
+    assert runtime_binary_path("windows-x64", "sky-cua-overlay-host") == Path(
+        "bin/sky-cua-overlay-host.exe"
+    )
 
 
 def test_runtime_binary_source_names_reject_invalid_platform_or_binary() -> None:
@@ -151,8 +198,102 @@ def test_bundle_entrypoint_paths_always_include_unix_launchers(
 
     assert Path("bin/sky-cua-client") in bundle_entrypoint_paths()
     assert Path("bin/sky-cua-service") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-overlay-host") in bundle_entrypoint_paths()
     assert Path("bin/sky-cua-client.exe") in bundle_entrypoint_paths()
     assert Path("bin/sky-cua-service.exe") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-overlay-host.exe") in bundle_entrypoint_paths()
+
+
+def test_remove_path_retries_transient_non_empty_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "bundle.tmp"
+    target.mkdir()
+    (target / "file.txt").write_text("content", encoding="utf-8")
+    calls = 0
+    real_rmtree = shutil.rmtree
+
+    def flaky_rmtree(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError(plugin_bundle.errno.ENOTEMPTY, "Directory not empty", str(path))
+        real_rmtree(path)
+
+    monkeypatch.setattr(plugin_bundle.shutil, "rmtree", flaky_rmtree)
+    monkeypatch.setattr(plugin_bundle.time, "sleep", lambda _seconds: None)
+
+    plugin_bundle.remove_path(target)
+
+    assert calls == 2
+    assert not target.exists()
+
+
+def test_kwin_effect_static_mode_requires_explicit_install_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "live_agent_cursor_kde_smoke.py",
+            "--mode",
+            "kwin-effect-static",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        live_agent_cursor_kde_smoke.main()
+
+    message = str(exc_info.value)
+    assert "kwin-effect-static installs and loads a user-level KWin C++ effect" in message
+    assert "--allow-kwin-effect-install" in message
+
+
+def test_agent_cursor_smoke_x11_mode_forces_x11_backend(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakePopen:
+        def __init__(self, args: list[str], **kwargs: object) -> None:
+            captured["args"] = args
+            captured.update(kwargs)
+
+    monkeypatch.setattr(live_agent_cursor_kde_smoke.subprocess, "Popen", FakePopen)
+
+    process = live_agent_cursor_kde_smoke.start_service(
+        tmp_path / "svc.sock", tmp_path, mode="x11-debug-visible"
+    )
+
+    assert isinstance(process, FakePopen)
+    env = cast(dict[str, str], captured["env"])
+    assert env["SKY_CUA_OVERLAY_BACKEND"] == "x11"
+    assert env["SKY_CUA_SCREENSHOT_CURSOR"] == "never"
+    assert env["SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE"] == "never"
+
+
+def test_agent_cursor_smoke_layer_shell_click_through_mode_forces_visible_overlay_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakePopen:
+        def __init__(self, args: list[str], **kwargs: object) -> None:
+            captured["args"] = args
+            captured.update(kwargs)
+
+    monkeypatch.setattr(live_agent_cursor_kde_smoke.subprocess, "Popen", FakePopen)
+
+    process = live_agent_cursor_kde_smoke.start_service(
+        tmp_path / "svc.sock", tmp_path, mode="layer-shell-click-through"
+    )
+
+    assert isinstance(process, FakePopen)
+    env = cast(dict[str, str], captured["env"])
+    assert env["SKY_CUA_OVERLAY_BACKEND"] == "wayland-layer-shell"
+    assert env["SKY_CUA_SCREENSHOT_CURSOR"] == "never"
+    assert env["SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE"] == "never"
 
 
 def test_x11_click_target_falls_back_to_native_root_window() -> None:
@@ -284,6 +425,15 @@ def test_stop_unix_runtime_processes_targets_deleted_cache_process(
     (helper_proc / "exe").symlink_to(helper_exe)
     (helper_proc / "cwd").symlink_to(helper_exe.parent.parent)
 
+    overlay_exe = (
+        cache_root / "plugin-backup-old" / "sky-cua" / "0.1.0" / "bin" / "sky-cua-overlay-host"
+    )
+    overlay_proc = proc_root / "790"
+    overlay_proc.mkdir()
+    (overlay_proc / "cmdline").write_bytes(str(overlay_exe).encode() + b"\0serve")
+    (overlay_proc / "exe").symlink_to(overlay_exe)
+    (overlay_proc / "cwd").symlink_to(overlay_exe.parent.parent)
+
     terminated: set[int] = set()
     calls: list[tuple[int, int]] = []
 
@@ -300,6 +450,7 @@ def test_stop_unix_runtime_processes_targets_deleted_cache_process(
 
     assert (123, plugin_bundle.SIGTERM) in calls
     assert (789, plugin_bundle.SIGTERM) in calls
+    assert (790, plugin_bundle.SIGTERM) in calls
     assert all(pid != 456 for pid, _signal in calls)
 
 
@@ -361,9 +512,469 @@ def test_bundle_source_paths_include_standard_optional_plugin_roots() -> None:
 
 def test_worktree_bundle_dirs_include_untracked_runtime_resources() -> None:
     assert Path("resources/chrome-extension") in build_plugin.WORKTREE_BUNDLE_DIRS
+    assert Path("resources/kwin") in build_plugin.WORKTREE_BUNDLE_DIRS
     assert (
         Path("skills/computer-use-workflows/references/apps") in build_plugin.WORKTREE_BUNDLE_DIRS
     )
+    assert Path("skills/sky-cua-isolated-daemon/references") in build_plugin.WORKTREE_BUNDLE_DIRS
+
+
+def test_copy_worktree_bundle_dirs_includes_kwin_effect_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    effect_dir = repo_root / "resources" / "kwin" / "effects" / "sky-cua-agent-cursor"
+    effect_dir.mkdir(parents=True)
+    (effect_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "KPackageStructure": "KWin/Effect",
+                "KPlugin": {"Id": "sky-cua-agent-cursor"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    bundle_root = tmp_path / "bundle"
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", repo_root)
+
+    build_plugin.copy_worktree_bundle_dirs(bundle_root)
+
+    copied = (
+        bundle_root / "resources" / "kwin" / "effects" / "sky-cua-agent-cursor" / "metadata.json"
+    )
+    assert json.loads(copied.read_text(encoding="utf-8"))["KPlugin"]["Id"] == (
+        "sky-cua-agent-cursor"
+    )
+
+
+def test_testing_vm_provisioner_installs_arch_desktop_packages() -> None:
+    provisioner = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "testing-vm"
+        / "provision-arch-testing-vm.sh"
+    )
+    content = provisioner.read_text(encoding="utf-8")
+
+    assert "pacman-key --populate archlinux" in content
+    assert "google-chrome-stable_current_amd64.deb" in content
+    assert "google-chrome-stable" in content
+    assert "CODEX_DESKTOP_PACKAGE" in content
+    assert "pacman -U --noconfirm" in content
+    assert "rust" in content
+    assert "rsync" in content
+    assert "openssh" in content
+    assert "greetd" in content
+    assert "seatd" in content
+    assert "ydotool" in content
+    assert "systemctl --global enable ydotool.service" in content
+    assert "80-sky-cua-uinput.rules" in content
+    assert "org.gnome.desktop.session idle-delay 0" in content
+    assert "org.gnome.desktop.screensaver lock-enabled false" in content
+    assert "org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing" in content
+    assert "kwin" in content
+    assert "plasma-desktop" in content
+    assert "gnome-shell" in content
+    assert "cosmic-session" in content
+    assert "hyprland" in content
+    assert "i3-wm" in content
+    assert "gst-plugins-good" in content
+    assert "libxss" in content
+    assert "nss" in content
+    assert "python-dbus" in content
+    assert "python-gobject" in content
+    assert "qt6-tools" in content
+    assert "imagemagick" in content
+    assert "jq" in content
+    assert "libinput" in content
+    assert "slurp" in content
+    assert "socat" in content
+    assert "strace" in content
+    assert "tk" in content
+    assert "wev" in content
+    assert "weston" in content
+    assert "wl-clipboard" in content
+    assert "xorg-server" in content
+    assert "xorg-server-xvfb" not in content
+    assert "xorg-xev" in content
+    assert "xorg-xdpyinfo" in content
+    assert "xorg-xwininfo" in content
+    assert "libxtst" in content
+    assert "xdg-utils" in content
+    assert "xdg-desktop-portal-cosmic" in content
+    assert "xdg-desktop-portal-gnome" in content
+    assert "xdg-desktop-portal-hyprland" in content
+    assert "xdg-desktop-portal-kde" in content
+    assert "xdg-desktop-portal-wlr" in content
+    assert "XDG_CURRENT_DESKTOP=COSMIC" in content
+    assert "XDG_CURRENT_DESKTOP=KDE" in content
+    assert "XDG_CURRENT_DESKTOP=GNOME" in content
+    assert "XDG_CURRENT_DESKTOP=Hyprland" in content
+    assert "XDG_CURRENT_DESKTOP=i3" in content
+    assert "sky-cua-testing-vm-session" in content
+
+
+def test_gui_test_profile_copies_essential_codex_settings() -> None:
+    run_profile = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "testing-vm"
+        / "profiles"
+        / "run-profile.sh"
+    )
+    content = run_profile.read_text(encoding="utf-8")
+
+    assert "SKY_CUA_COPY_CODEX_SETTINGS" in content
+    assert "auth.json" in content
+    assert "config.toml" in content
+    assert "config.json" in content
+    assert "installation_id" in content
+    assert "internal_storage.json" in content
+    assert "cap_sid" in content
+    assert "browser/config.toml" in content
+    assert "for relative_dir in plugins skills" in content
+    assert "/mnt/host-codex" in content
+
+
+def test_gui_test_profiles_use_host_built_rust_artifacts() -> None:
+    profile_root = Path(__file__).resolve().parents[1] / "scripts" / "testing-vm" / "profiles"
+    wayland_pointer = (profile_root / "wayland-pointer.sh").read_text(encoding="utf-8")
+    kde = (profile_root / "kde-kwin-effect.sh").read_text(encoding="utf-8")
+    cosmic_helper = (profile_root / "cosmic-helper.sh").read_text(encoding="utf-8")
+    run_profile = (profile_root / "run-profile.sh").read_text(encoding="utf-8")
+
+    assert "cargo build" not in wayland_pointer
+    assert "live_wayland_pointer_smoke.py" in wayland_pointer
+    assert "cargo build" not in cosmic_helper
+    assert "/workspace/target/release/sky-cua-cosmic-helper" in cosmic_helper
+    assert "weston-flower" in cosmic_helper
+    assert "cargo build" not in kde
+    assert "SKY_CUA_OVERLAY_HOST_PATH" in kde
+    assert "/workspace/target/release/sky-cua-overlay-host" in kde
+    assert "${SKY_CUA_COPY_CODEX_SETTINGS:-0}" in run_profile
+
+
+def test_testing_vm_runner_runs_remote_arch_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is False
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    assert (
+        run_gui_testing_vm_smoke.run_remote_profile(
+            "skycua@testing-vm",
+            2222,
+            ["StrictHostKeyChecking=no"],
+            Path("/workspace"),
+            "kde-kwin-effect",
+            desktop_env="KDE",
+        )
+        == 0
+    )
+
+    command_text = " ".join(commands[0])
+    assert "ssh -p 2222" in command_text
+    assert "-o StrictHostKeyChecking=no" in command_text
+    assert "SKY_CUA_USE_PREBUILT_RUNTIMES=1" in command_text
+    assert "SKY_CUA_COPY_CODEX_SETTINGS=0" in command_text
+    assert (
+        "SKY_CUA_OVERLAY_HOST_PATH=/workspace/target/release/sky-cua-overlay-host" in command_text
+    )
+    assert (
+        "SKY_CUA_DEBUG_OVERLAY_HOST_PATH=/workspace/target/debug/sky-cua-overlay-host"
+        in command_text
+    )
+    assert "SKY_CUA_COSMIC_HELPER=/workspace/target/release/sky-cua-cosmic-helper" in command_text
+    assert "PATH=/workspace/bin:" in command_text
+    assert "XDG_CURRENT_DESKTOP=KDE" in command_text
+    assert "systemctl --user import-environment" in command_text
+    assert "scripts/testing-vm/profiles/run-profile.sh" in command_text
+    assert "kde-kwin-effect" in command_text
+    assert "kde-plasma" in run_gui_testing_vm_smoke.PROFILES
+    assert "mcp-x11" not in run_gui_testing_vm_smoke.PROFILES
+    assert "computer-use" in run_gui_testing_vm_smoke.PROFILES
+
+
+def test_testing_vm_runner_remote_profile_opts_into_codex_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is False
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    assert (
+        run_gui_testing_vm_smoke.run_remote_profile(
+            "skycua@testing-vm",
+            2222,
+            [],
+            Path("/workspace"),
+            "kde-kwin-effect",
+            sync_codex_settings=True,
+        )
+        == 0
+    )
+
+    assert "SKY_CUA_COPY_CODEX_SETTINGS=1" in " ".join(commands[0])
+    assert "codex-desktop" in run_gui_testing_vm_smoke.PROFILES
+    assert "cosmic-helper" in run_gui_testing_vm_smoke.PROFILES
+    assert "wayland-pointer" in run_gui_testing_vm_smoke.PROFILES
+
+
+def test_testing_vm_runner_preauthorizes_kde_remote_desktop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    assert run_gui_testing_vm_smoke.should_preauthorize_kde_remote_desktop("computer-use", "KDE")
+    assert run_gui_testing_vm_smoke.should_preauthorize_kde_remote_desktop(
+        "wayland-pointer", "plasma"
+    )
+    assert not run_gui_testing_vm_smoke.should_preauthorize_kde_remote_desktop(
+        "codex-desktop", "KDE"
+    )
+    assert not run_gui_testing_vm_smoke.should_preauthorize_kde_remote_desktop(
+        "computer-use", "GNOME"
+    )
+
+    run_gui_testing_vm_smoke.preauthorize_kde_remote_desktop(
+        "skycua@testing-vm",
+        2222,
+        ["StrictHostKeyChecking=no"],
+        Path("/workspace"),
+        wayland_display="wayland-1",
+        desktop_env="KDE",
+    )
+
+    command_text = " ".join(commands[0])
+    assert "ssh -p 2222" in command_text
+    assert "-o StrictHostKeyChecking=no" in command_text
+    assert "XDG_CURRENT_DESKTOP=KDE" in command_text
+    assert 'WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"' in command_text
+    assert "scripts/testing-vm/preauthorize_kde_remote_desktop.py" in command_text
+    assert "--app-id '' --app-id desktop --print-json" in command_text
+
+
+def test_kde_remote_desktop_preauthorizer_grants_empty_and_desktop_app_ids() -> None:
+    helper = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "testing-vm"
+        / "preauthorize_kde_remote_desktop.py"
+    )
+    content = helper.read_text(encoding="utf-8")
+
+    assert 'DEFAULT_APP_IDS = ("", "desktop")' in content
+    assert "for app_id in app_ids" in content
+    assert "missing_app_ids" in content
+
+
+def test_testing_vm_runner_resets_overlay_host_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    run_gui_testing_vm_smoke.reset_guest_sky_cua_processes(
+        "skycua@testing-vm",
+        2222,
+        ["StrictHostKeyChecking=no"],
+    )
+
+    command_text = " ".join(commands[0])
+    assert "pkill -x sky-cua-service" in command_text
+    assert "pkill -f '(^|/)sky-cua-overlay-host( |$)'" in command_text
+    assert "pkill -x sky-cua-overlay" in command_text
+    assert "pkill -x cosmic-randr" in command_text
+    assert "agent-cursor.sock" in command_text
+
+
+def test_testing_vm_runner_wakes_guest_display(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    run_gui_testing_vm_smoke.wake_guest_display(
+        "skycua@testing-vm", 2222, ["StrictHostKeyChecking=no"]
+    )
+
+    command_text = " ".join(commands[0])
+    assert "ssh -p 2222" in command_text
+    assert "ydotool mousemove --absolute 20 20" in command_text
+    assert "ydotool key 57:1 57:0" in command_text
+
+
+def test_testing_vm_runner_refreshes_portal_stack_after_session_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    run_gui_testing_vm_smoke.refresh_guest_portal_stack(
+        "skycua@testing-vm",
+        2222,
+        ["StrictHostKeyChecking=no"],
+        wayland_display="wayland-0",
+        desktop_env="KDE",
+    )
+
+    command_text = " ".join(commands[0])
+    assert "XDG_CURRENT_DESKTOP=KDE" in command_text
+    assert 'WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"' in command_text
+    assert "systemctl --user stop xdg-desktop-portal.service" in command_text
+    assert "plasma-xdg-desktop-portal-kde.service" in command_text
+    assert "pkill -f '(^|/)xdg-desktop-portal-[^/ ]+( |$)'" in command_text
+
+
+def test_testing_vm_syncs_checkout_with_excludes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    run_gui_testing_vm_smoke.sync_checkout("skycua@testing-vm", 22, [], Path("/workspace"))
+
+    assert commands[0] == ["ssh", "-p", "22", "skycua@testing-vm", "mkdir", "-p", "/workspace"]
+    command_text = " ".join(commands[1])
+    assert commands[1][0] == "rsync"
+    assert "--delete" in commands[1]
+    assert "--exclude target/debug/" in command_text
+    assert "--exclude artifacts/" in command_text
+    assert f"{run_gui_testing_vm_smoke.REPO_ROOT}/" in command_text
+    assert "skycua@testing-vm:/workspace/" in command_text
+
+
+def test_testing_vm_runner_builds_runtimes_on_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    run_gui_testing_vm_smoke.build_host_runtime_artifacts()
+
+    assert commands == [
+        [
+            "cargo",
+            "build",
+            "--release",
+            "-p",
+            "sky-cua-client",
+            "-p",
+            "sky-cua-service",
+            "-p",
+            "sky-cua-cosmic-helper",
+            "-p",
+            "sky-cua-overlay-host",
+        ],
+        ["cargo", "build", "-p", "sky-cua-overlay-host"],
+    ]
+
+
+def test_testing_vm_runner_syncs_essential_codex_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+    codex_home = tmp_path / ".codex"
+    (codex_home / "browser").mkdir(parents=True)
+    (codex_home / "auth.json").write_text("{}", encoding="utf-8")
+    (codex_home / "config.toml").write_text("model = 'gpt-5'\n", encoding="utf-8")
+    (codex_home / "browser" / "config.toml").write_text("", encoding="utf-8")
+    (codex_home / "plugins").mkdir()
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    run_gui_testing_vm_smoke.sync_codex_settings(
+        "skycua@testing-vm", 2222, ["StrictHostKeyChecking=no"], codex_home
+    )
+
+    command_text = "\n".join(" ".join(command) for command in commands)
+    assert (
+        "ssh -p 2222 -o StrictHostKeyChecking=no skycua@testing-vm mkdir -p .codex" in command_text
+    )
+    assert "auth.json skycua@testing-vm:.codex/auth.json" in command_text
+    assert "config.toml skycua@testing-vm:.codex/config.toml" in command_text
+    assert "browser/config.toml" in command_text
+    assert "--delete" in command_text
+    assert "plugins/" in command_text
 
 
 def write_minimal_bundle(root: Path, *, binaries: list[str]) -> None:
@@ -392,10 +1003,18 @@ def write_minimal_bundle_sources(root: Path) -> None:
     (root / "bin").mkdir(parents=True, exist_ok=True)
     (root / "bin" / "sky-cua-client").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "bin" / "sky-cua-service").write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / "bin" / "sky-cua-overlay-host").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "bin" / "sky-cua-browser-preflight").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "skills" / "computer-use-workflows").mkdir(parents=True)
     (root / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
         "skill",
+        encoding="utf-8",
+    )
+    (root / "skills" / "sky-cua-isolated-daemon" / "references").mkdir(parents=True)
+    (
+        root / "skills" / "sky-cua-isolated-daemon" / "references" / "testing-vm-desktop-smokes.md"
+    ).write_text(
+        "testing vm desktop smoke notes\n",
         encoding="utf-8",
     )
     (root / "resources" / "app-instructions").mkdir(parents=True)
@@ -410,8 +1029,10 @@ def tracked_minimal_bundle_files() -> list[Path]:
         Path(".codex-plugin/plugin.json"),
         Path("bin/sky-cua-client"),
         Path("bin/sky-cua-service"),
+        Path("bin/sky-cua-overlay-host"),
         Path("bin/sky-cua-browser-preflight"),
         Path("skills/computer-use-workflows/SKILL.md"),
+        Path("skills/sky-cua-isolated-daemon/references/testing-vm-desktop-smokes.md"),
         Path("resources/app-instructions/index.json"),
     ]
 
@@ -885,6 +1506,7 @@ def test_package_runtime_artifact_uses_platform_binary_contract(
         "sky-cua-chrome-host",
         "sky-cua-client",
         "sky-cua-cosmic-helper",
+        "sky-cua-overlay-host",
         "sky-cua-service",
     ]
     assert not (linux_root / "stale-binary").exists()
@@ -899,6 +1521,7 @@ def test_package_runtime_artifact_uses_platform_binary_contract(
 
     assert sorted(path.name for path in windows_root.iterdir()) == [
         "sky-cua-client.exe",
+        "sky-cua-overlay-host.exe",
         "sky-cua-service.exe",
     ]
 
@@ -919,6 +1542,50 @@ def test_package_runtime_artifact_rejects_invalid_platform_before_cleanup(
         package_runtime_artifact.package_runtime_artifact("../escaped", output_root)
 
     assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_build_runtime_packages_uses_packaging_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], *, check: bool) -> None:
+        calls.append(command)
+        assert check is True
+
+    monkeypatch.setattr(build_runtime_packages.subprocess, "run", fake_run)
+
+    build_runtime_packages.build_runtime_packages("linux-x64")
+    build_runtime_packages.build_runtime_packages("windows-x64")
+
+    assert calls == [
+        [
+            "cargo",
+            "build",
+            "--release",
+            "--package",
+            "sky-cua-client",
+            "--package",
+            "sky-cua-service",
+            "--package",
+            "sky-cua-overlay-host",
+            "--package",
+            "sky-cua-cosmic-helper",
+            "--package",
+            "sky-cua-chrome-host",
+        ],
+        [
+            "cargo",
+            "build",
+            "--release",
+            "--package",
+            "sky-cua-client",
+            "--package",
+            "sky-cua-service",
+            "--package",
+            "sky-cua-overlay-host",
+        ],
+    ]
 
 
 def test_install_bundle_uses_runtime_binary_paths(tmp_path: Path) -> None:
@@ -1004,6 +1671,9 @@ def test_generic_mcp_bin_links_use_platform_entrypoint_names(
     assert (
         bin_dir / "sky-cua-service.exe"
     ).readlink() == target_dir / "bin" / "sky-cua-service.exe"
+    assert (bin_dir / "sky-cua-overlay-host.exe").readlink() == (
+        target_dir / "bin" / "sky-cua-overlay-host.exe"
+    )
     assert not (bin_dir / "sky-cua-client").exists()
 
 
@@ -1018,6 +1688,8 @@ def test_generic_mcp_bin_links_copy_when_symlinks_are_unavailable(
     binary.write_text("client", encoding="utf-8")
     service = target_dir / install_mcp_server.entrypoint_path("windows-x64", "sky-cua-service")
     service.write_text("service", encoding="utf-8")
+    overlay = target_dir / install_mcp_server.entrypoint_path("windows-x64", "sky-cua-overlay-host")
+    overlay.write_text("overlay", encoding="utf-8")
 
     def fake_symlink_to(self: Path, target: Path) -> None:
         _ = self, target
@@ -1030,6 +1702,7 @@ def test_generic_mcp_bin_links_copy_when_symlinks_are_unavailable(
 
     assert (bin_dir / "sky-cua-client.exe").read_text(encoding="utf-8") == "client"
     assert (bin_dir / "sky-cua-service.exe").read_text(encoding="utf-8") == "service"
+    assert (bin_dir / "sky-cua-overlay-host.exe").read_text(encoding="utf-8") == "overlay"
 
 
 def test_version_from_tag_updates_plugin_manifest(tmp_path: Path) -> None:
@@ -1356,21 +2029,6 @@ def test_response_contains_computer_use_server_accepts_common_shapes() -> None:
     assert not response_contains_computer_use_server({"result": {"servers": []}})
 
 
-def test_tidal_prompt_uses_custom_playlist_name() -> None:
-    prompt = tidal_playlist_prompt(
-        app_server=True, playlist_name="Codex Favorites AB test webp-q85"
-    )
-
-    assert "Codex Favorites AB test webp-q85" in prompt
-
-
-def test_tidal_ab_playlist_names_are_variant_scoped() -> None:
-    names = [playlist_name_for_variant("20260424T120000Z", variant) for variant in DEFAULT_VARIANTS]
-
-    assert len(names) == len(set(names))
-    assert all(name.startswith("Codex Favorites AB 20260424T120000Z ") for name in names)
-
-
 def test_plugin_manifest_tracks_scaffold_metadata_contract() -> None:
     manifest_path = plugin_bundle.REPO_ROOT / ".codex-plugin" / "plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1397,8 +2055,15 @@ def test_mcp_config_allows_runtime_override_env_vars() -> None:
 
     assert "SKY_CUA_COSMIC_HELPER" in env_vars
     assert "CODEX_COMPUTER_USE_COSMIC_HELPER" in env_vars
+    assert "SKY_CUA_AGENT_CURSOR" in env_vars
+    assert "SKY_CUA_OVERLAY_BACKEND" in env_vars
+    assert "SKY_CUA_INPUT_BACKEND" in env_vars
+    assert "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE" in env_vars
+    assert "SKY_CUA_OVERLAY_HOST_PATH" in env_vars
+    assert "SKY_CUA_SCREENSHOT_CURSOR" in env_vars
     assert "SKY_CUA_REPO_ROOT" in env_vars
     assert "SKY_CUA_SERVICE_PATH" in env_vars
+    assert "YDOTOOL_SOCKET" in env_vars
 
 
 def test_chrome_preflight_default_env_allowlist_matches_primary_mcp_config() -> None:
@@ -1416,6 +2081,22 @@ def test_bundled_chrome_extension_cursor_overlay_contract() -> None:
     background = (extension_dir / "background.js").read_text(encoding="utf-8")
 
     assert (extension_dir / "images" / "cursor-chat.png").exists()
+    native_cursor_asset = (
+        plugin_bundle.REPO_ROOT / "crates" / "sky-cua-overlay-host" / "assets" / "cursor-chat.png"
+    )
+    assert (
+        native_cursor_asset.read_bytes()
+        == (extension_dir / "images" / "cursor-chat.png").read_bytes()
+    )
+    from PIL import Image
+
+    with Image.open(native_cursor_asset) as cursor_image:
+        assert cursor_image.size == (
+            live_agent_cursor_kde_smoke.CURSOR_ASSET_SOURCE_WIDTH,
+            live_agent_cursor_kde_smoke.CURSOR_ASSET_SOURCE_HEIGHT,
+        )
+    assert live_agent_cursor_kde_smoke.CURSOR_ASSET_WIDTH == 23
+    assert live_agent_cursor_kde_smoke.CURSOR_ASSET_HEIGHT == 24
     assert any(
         "images/cursor-chat.png" in entry.get("resources", [])
         for entry in manifest["web_accessible_resources"]
@@ -1430,6 +2111,286 @@ def test_bundled_chrome_extension_cursor_overlay_contract() -> None:
     assert "waitForArrival" in background
     assert "createCursorArrivalWaiter" in background
     assert "AGENT_CURSOR_ARRIVED" in background
+
+
+def test_x11_overlay_smoke_forces_true_x11_backend_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+
+    env = live_agent_cursor_x11_overlay_smoke.x11_overlay_env(":42", tmp_path)
+
+    assert env["DISPLAY"] == ":42"
+    assert env["XDG_SESSION_TYPE"] == "x11"
+    assert env["XDG_RUNTIME_DIR"] == str(tmp_path)
+    assert env["SKY_CUA_OVERLAY_BACKEND"] == "x11"
+    assert "WAYLAND_DISPLAY" not in env
+
+
+def test_x11_overlay_smoke_cursor_message_uses_stream_pixels() -> None:
+    message = live_agent_cursor_x11_overlay_smoke.cursor_message((330.0, 240.0), sequence=7)
+
+    assert message == {
+        "version": 1,
+        "kind": "set_cursor",
+        "state": {
+            "visible": True,
+            "sequence": 7,
+            "model_point": {
+                "x": 330.0,
+                "y": 240.0,
+                "coordinate_space": "stream_pixels",
+            },
+            "source_action": "click",
+            "updated_at_ms": 0,
+        },
+    }
+
+
+def test_x11_overlay_smoke_show_message_reuses_state_and_forces_visible() -> None:
+    hidden_reply = {
+        "ok": True,
+        "state": {
+            "visible": False,
+            "sequence": 7,
+            "model_point": {
+                "x": 330.0,
+                "y": 240.0,
+                "coordinate_space": "stream_pixels",
+            },
+            "source_action": "click",
+            "updated_at_ms": 0,
+        },
+    }
+
+    message = live_agent_cursor_x11_overlay_smoke.show_cursor_message(hidden_reply)
+
+    assert message["version"] == 1
+    assert message["kind"] == "show"
+    assert message["state"]["visible"] is True
+    assert message["state"]["sequence"] == 7
+    assert hidden_reply["state"]["visible"] is False
+
+
+def test_x11_overlay_smoke_show_message_requires_state() -> None:
+    with pytest.raises(RuntimeError, match="did not include cursor state"):
+        live_agent_cursor_x11_overlay_smoke.show_cursor_message({"ok": True})
+
+
+def test_x11_overlay_smoke_rejects_non_x11_overlay_reply() -> None:
+    with pytest.raises(RuntimeError, match="x11_shaped_window"):
+        live_agent_cursor_x11_overlay_smoke.require_x11_overlay_reply(
+            {
+                "ok": True,
+                "capabilities": {
+                    "backend": "none",
+                    "visible_overlay": False,
+                    "click_through": False,
+                    "system_cursor_hide_supported": False,
+                    "system_cursor_hidden": False,
+                },
+            }
+        )
+
+
+def test_x11_overlay_smoke_visible_cursor_reply_requires_visible_state() -> None:
+    with pytest.raises(RuntimeError, match="visible cursor"):
+        live_agent_cursor_x11_overlay_smoke.require_visible_cursor_reply(
+            {"ok": True, "state": {"visible": False}},
+            context="show",
+        )
+
+    live_agent_cursor_x11_overlay_smoke.require_visible_cursor_reply(
+        {"ok": True, "state": {"visible": True}},
+        context="show",
+    )
+
+
+def test_x11_overlay_smoke_system_cursor_reply_tracks_hide_state() -> None:
+    live_agent_cursor_x11_overlay_smoke.require_system_cursor_reply(
+        {
+            "ok": True,
+            "capabilities": {
+                "system_cursor_hide_supported": True,
+                "system_cursor_hidden": True,
+            },
+        },
+        hidden=True,
+        context="set",
+    )
+    live_agent_cursor_x11_overlay_smoke.require_system_cursor_reply(
+        {
+            "ok": True,
+            "capabilities": {
+                "system_cursor_hide_supported": True,
+                "system_cursor_hidden": False,
+            },
+        },
+        hidden=False,
+        context="hide",
+    )
+    assert (
+        live_agent_cursor_x11_overlay_smoke.capability_bool(
+            {
+                "capabilities": {
+                    "system_cursor_hidden": True,
+                }
+            },
+            "system_cursor_hidden",
+        )
+        is True
+    )
+
+
+def test_x11_overlay_current_display_requires_real_x11_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+
+    with pytest.raises(RuntimeError, match="real X11 session"):
+        live_agent_cursor_x11_overlay_smoke.require_current_x11_display()
+
+
+def test_x11_overlay_current_display_accepts_x11_without_wayland(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":7")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    assert live_agent_cursor_x11_overlay_smoke.require_current_x11_display() == ":7"
+
+
+def test_kwin_effect_list_parser_ignores_blank_lines() -> None:
+    assert live_agent_cursor_kde_smoke.parse_kwin_effect_list(
+        "\nblur\n\nsky-cua-agent-cursor\n  showfps  \n"
+    ) == ["blur", "sky-cua-agent-cursor", "showfps"]
+
+
+def test_kde_smoke_names_expected_visible_overlay_backend_by_mode() -> None:
+    assert (
+        live_agent_cursor_kde_smoke.expected_overlay_backend("layer-shell-debug-visible")
+        == "wayland_layer_shell"
+    )
+    assert (
+        live_agent_cursor_kde_smoke.expected_overlay_backend("layer-shell-hide-for-capture")
+        == "wayland_layer_shell"
+    )
+    assert (
+        live_agent_cursor_kde_smoke.expected_overlay_backend("layer-shell-click-through")
+        == "wayland_layer_shell"
+    )
+    assert (
+        live_agent_cursor_kde_smoke.expected_overlay_backend("x11-debug-visible")
+        == "x11_shaped_window"
+    )
+    assert live_agent_cursor_kde_smoke.expected_overlay_backend("synthetic") is None
+
+
+def test_kde_smoke_rejects_visible_overlay_mode_without_expected_backend() -> None:
+    with pytest.raises(RuntimeError, match="wayland_layer_shell"):
+        live_agent_cursor_kde_smoke.require_cursor_backend_capabilities(
+            {
+                "capabilities": {
+                    "backend": "screenshot_synthetic",
+                    "visible_overlay": False,
+                    "click_through": False,
+                }
+            },
+            expected_backend="wayland_layer_shell",
+        )
+
+
+def test_kde_smoke_accepts_expected_visible_overlay_capabilities() -> None:
+    live_agent_cursor_kde_smoke.require_cursor_backend_capabilities(
+        {
+            "capabilities": {
+                "backend": "wayland_layer_shell",
+                "visible_overlay": True,
+                "click_through": True,
+            }
+        },
+        expected_backend="wayland_layer_shell",
+    )
+
+
+def test_kde_smoke_native_point_for_portal_capture_is_output_local() -> None:
+    point = live_agent_cursor_kde_smoke.native_point_from_capture(
+        {
+            "backend": "portal_pipe_wire",
+            "pixel_size": {"width": 400, "height": 200},
+            "logical_rect": {
+                "x": 100,
+                "y": 50,
+                "width": 200,
+                "height": 100,
+                "space": "desktop_logical",
+            },
+            "mapping_id": "mapping",
+        },
+        (40.0, 50.0),
+    )
+
+    assert point == {
+        "x": 20.0,
+        "y": 25.0,
+        "coordinate_space": "stream_logical",
+        "mapping_id": "mapping",
+    }
+
+
+def test_kde_smoke_maps_logical_fixture_point_to_model_pixels() -> None:
+    point = live_agent_cursor_kde_smoke.model_point_from_logical_capture(
+        {
+            "backend": "portal_pipe_wire",
+            "pixel_size": {"width": 800, "height": 400},
+            "logical_rect": {
+                "x": 100,
+                "y": 50,
+                "width": 400,
+                "height": 200,
+                "space": "desktop_logical",
+            },
+        },
+        {"x": 300.0, "y": 100.0},
+    )
+
+    assert point == (400.0, 100.0)
+
+
+def test_kde_smoke_rejects_fixture_point_outside_capture() -> None:
+    with pytest.raises(RuntimeError, match="outside capture pixel bounds"):
+        live_agent_cursor_kde_smoke.model_point_from_logical_capture(
+            {
+                "pixel_size": {"width": 800, "height": 400},
+                "logical_rect": {
+                    "x": 100,
+                    "y": 50,
+                    "width": 400,
+                    "height": 200,
+                    "space": "desktop_logical",
+                },
+            },
+            {"x": 900.0, "y": 100.0},
+        )
+
+
+def test_kde_smoke_execute_click_request_uses_snapshot_and_stream_pixels() -> None:
+    assert live_agent_cursor_kde_smoke.execute_click_request("snap-1", (12.5, 99.0)) == {
+        "type": "execute_action",
+        "request": {
+            "action": "click",
+            "snapshot_id": "snap-1",
+            "arguments": {"x": 12.5, "y": 99.0},
+        },
+    }
+
+
+def test_kde_smoke_fixture_point_requires_named_point() -> None:
+    with pytest.raises(RuntimeError, match="click_button"):
+        live_agent_cursor_kde_smoke.fixture_point({"points": {}}, "click_button")
 
 
 def write_cursor_diff_fixture(path: Path, points: list[tuple[int, int]]) -> None:

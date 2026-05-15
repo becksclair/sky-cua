@@ -17,6 +17,8 @@ from typing import Any
 
 import gi
 
+from _pointer_geometry import adjusted_origin_for_visible_monitor
+
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
@@ -240,7 +242,7 @@ class PointerSmokeWindow(Gtk.Window):
         self.fixed.move(self.status, margin_x, status_y)
         self.status.set_size_request(width - (margin_x * 2), -1)
 
-        origin_x, origin_y = self.window_origin()
+        origin_x, origin_y = self.window_origin(width, height)
         self.state["window_origin"] = {"x": origin_x, "y": origin_y}
         self.state["window_size"] = {"width": width, "height": height}
         self.state["points"] = {
@@ -271,6 +273,12 @@ class PointerSmokeWindow(Gtk.Window):
             "scroll": self.center(
                 origin_x + scroll_x, origin_y + scroll_y, region_width, region_height
             ),
+            "scroll_safe": self.center(
+                origin_x + scroll_x,
+                origin_y + scroll_y,
+                region_width,
+                min(96, region_height),
+            ),
         }
         self.state["ready"] = True
         self.state["last_event"] = f"layout:{width}x{height}"
@@ -280,26 +288,49 @@ class PointerSmokeWindow(Gtk.Window):
     def center(self, x: int, y: int, width: int, height: int) -> dict[str, float]:
         return {"x": x + (width / 2.0), "y": y + (height / 2.0)}
 
-    def window_origin(self) -> tuple[int, int]:
+    def window_origin(self, allocation_width: int, allocation_height: int) -> tuple[int, int]:
         gdk_window = self.get_window()
         if gdk_window is None:
             return (0, 0)
 
+        origin_x = 0
+        origin_y = 0
         try:
             origin = gdk_window.get_origin()
         except TypeError:
-            return (0, 0)
+            origin = None
 
         if isinstance(origin, tuple):
             if len(origin) == 3:
                 success, x, y = origin
                 if success:
-                    return (int(x), int(y))
+                    origin_x = int(x)
+                    origin_y = int(y)
             elif len(origin) == 2:
                 x, y = origin
-                return (int(x), int(y))
+                origin_x = int(x)
+                origin_y = int(y)
 
-        return (0, 0)
+        display = Gdk.Display.get_default()
+        if display is None:
+            return (origin_x, origin_y)
+
+        monitor = display.get_monitor_at_window(gdk_window)
+        if monitor is None:
+            return (origin_x, origin_y)
+
+        if "gnome" not in os.environ.get("XDG_CURRENT_DESKTOP", "").lower():
+            return (origin_x, origin_y)
+
+        geometry = monitor.get_geometry()
+        return adjusted_origin_for_visible_monitor(
+            origin_x,
+            origin_y,
+            allocation_width,
+            allocation_height,
+            geometry.width,
+            geometry.height,
+        )
 
     def update_status(self) -> None:
         points = self.state.get("points", {})

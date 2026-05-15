@@ -11,8 +11,8 @@ It is the runtime-sensitive crate; validate claims against source and live smoke
 cargo test -p sky-cua-linux
 cargo clippy -p sky-cua-linux --all-targets
 python3 scripts/live_desktop_smoke.py
-python3 scripts/live_x11_smoke.py
 python3 scripts/live_portal_downgrade_smoke.py
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use
 ```
 
 ## Patterns & Conventions

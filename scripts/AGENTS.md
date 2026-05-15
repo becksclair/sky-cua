@@ -22,9 +22,9 @@ python3 scripts/deploy_release_plugin.py
 ## Patterns & Conventions
 
 - Shared plugin paths/config helpers live in `_plugin_bundle.py`.
+- Shared live-smoke model and reasoning settings live in `_smoke_config.py`.
 - Shared `codex exec` harness behavior lives in `_codex_exec.py`.
 - Shared rich app-server JSON-RPC behavior lives in `_app_server_harness.py`.
-- Shared TIDAL constants and validation live in `_tidal_workflow.py`.
 - Live operator smokes are named `live_*_smoke.py` and should fail honestly when app state is blocked.
 - JSON schemas for final agent messages live in `scripts/schemas/*.json`.
 - DO: Use `_app_server_harness.run_rich_app_server_turn` like `live_app_server_smoke.py` for installed-plugin acceptance.
@@ -44,7 +44,6 @@ python3 scripts/deploy_release_plugin.py
 - Rich app-server harness: `_app_server_harness.py`
 - Codex exec harness: `_codex_exec.py`
 - Minimal installed-plugin acceptance smoke: `live_app_server_smoke.py`
-- TIDAL workflow harness: `live_app_server_tidal_playlist.py`
 - Pure helper tests: `test_python_harness_helpers.py`
 
 ## JIT Index Hints
@@ -58,7 +57,7 @@ python3 scripts/deploy_release_plugin.py
 ## Common Gotchas
 
 - `pytest` should stay useful without launching desktop apps; keep live smokes as explicit scripts.
-- Some live smokes require portal approval, KDE/Wayland, Xvfb, zenity, Krita, Kate, or TIDAL.
+- Some live smokes require portal approval, KDE/Wayland, Xvfb, zenity, Krita, or Kate.
 - `codex exec` is diagnostic; rich `codex app-server` is the current installed-plugin acceptance lane.
 
 ## Pre-PR Checks
