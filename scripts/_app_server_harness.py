@@ -12,6 +12,7 @@ from typing import Any
 
 from _codex_exec import (
     DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
     FAST_SERVICE_TIER,
     PLUGIN_MENTION,
     prepare_chatgpt_plugin_test_home,
@@ -439,7 +440,7 @@ def run_rich_app_server_turn(
     artifact_dir: Path,
     output_schema: Path,
     model: str = DEFAULT_MODEL,
-    reasoning_effort: str = "low",
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     max_turn_seconds: float | None = 180.0,
     policy: AppServerHarnessPolicy | None = None,
     extra_env: dict[str, str] | None = None,

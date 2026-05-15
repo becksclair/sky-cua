@@ -16,8 +16,10 @@ from _plugin_bundle import (
     REPO_ROOT,
     update_codex_config,
 )
+from _smoke_config import LIVE_SMOKE_MODEL, LIVE_SMOKE_REASONING_EFFORT
 
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MODEL = LIVE_SMOKE_MODEL
+DEFAULT_REASONING_EFFORT = LIVE_SMOKE_REASONING_EFFORT
 FAST_SERVICE_TIER = "fast"
 PLUGIN_MENTION = "[@sky-cua](plugin://sky-cua@debug)"
 COMPUTER_USE_NAMESPACE = "mcp__computer_use__"
@@ -147,7 +149,7 @@ def run_codex_exec(
     artifact_dir: Path,
     output_schema: Path,
     model: str = DEFAULT_MODEL,
-    reasoning_effort: str = "low",
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     workdir: Path | None = None,
     extra_args: Iterable[str] = (),
     extra_env: dict[str, str] | None = None,
