@@ -86,6 +86,53 @@ impl PortalTokenStore {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PortalCompositorFamily {
+    Gnome,
+    Kde,
+}
+
+pub(crate) fn current_compositor_hint() -> Option<String> {
+    let xdg_current_desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+    let desktop_session = std::env::var("DESKTOP_SESSION").ok();
+    let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
+    match (xdg_current_desktop, desktop_session, wayland_display) {
+        (Some(desktop), _, Some(_))
+            if desktop.to_ascii_lowercase().contains("kde")
+                || desktop.to_ascii_lowercase().contains("plasma") =>
+        {
+            Some("kde-kwin-wayland".to_string())
+        }
+        (Some(desktop), _, _) => Some(desktop),
+        (None, Some(session), _) => Some(session),
+        _ => None,
+    }
+}
+
+pub(crate) fn portal_compositor_family(value: &str) -> Option<PortalCompositorFamily> {
+    let value = value.to_ascii_lowercase();
+    if value.contains("gnome") || value.contains("mutter") {
+        Some(PortalCompositorFamily::Gnome)
+    } else if value.contains("kde") || value.contains("plasma") || value.contains("kwin") {
+        Some(PortalCompositorFamily::Kde)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn portal_token_compositor_mismatch(record: &PersistedPortalToken) -> Option<String> {
+    let token_compositor = record.compositor.as_deref()?;
+    let token_family = portal_compositor_family(token_compositor)?;
+    let current_compositor = current_compositor_hint()?;
+    let current_family = portal_compositor_family(&current_compositor)?;
+    if token_family == current_family {
+        return None;
+    }
+    Some(format!(
+        "token_compositor={token_compositor}; current_compositor={current_compositor}"
+    ))
+}
+
 fn set_owner_only_directory_permissions(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -110,8 +157,12 @@ fn set_owner_only_file_permissions(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PersistedPortalToken, PortalTokenStore};
+    use super::{
+        PersistedPortalToken, PortalCompositorFamily, PortalTokenStore, current_compositor_hint,
+        portal_compositor_family, portal_token_compositor_mismatch,
+    };
     use chrono::Utc;
+    use serial_test::serial;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -150,5 +201,75 @@ mod tests {
         let path = temp_path("missing");
         let store = PortalTokenStore::for_path(path.clone());
         assert!(!store.clear().expect("missing clear should succeed"));
+    }
+
+    #[test]
+    fn portal_compositor_family_matches_common_desktop_names() {
+        assert_eq!(
+            portal_compositor_family("GNOME"),
+            Some(PortalCompositorFamily::Gnome)
+        );
+        assert_eq!(
+            portal_compositor_family("kde-kwin-wayland"),
+            Some(PortalCompositorFamily::Kde)
+        );
+        assert_eq!(
+            portal_compositor_family("plasma"),
+            Some(PortalCompositorFamily::Kde)
+        );
+        assert_eq!(portal_compositor_family("sway"), None);
+    }
+
+    #[test]
+    #[serial]
+    fn compositor_mismatch_detects_cross_portal_tokens() {
+        struct EnvRestore {
+            xdg_current_desktop: Option<std::ffi::OsString>,
+            desktop_session: Option<std::ffi::OsString>,
+            wayland_display: Option<std::ffi::OsString>,
+        }
+
+        impl Drop for EnvRestore {
+            fn drop(&mut self) {
+                match self.xdg_current_desktop.take() {
+                    Some(value) => unsafe { std::env::set_var("XDG_CURRENT_DESKTOP", value) },
+                    None => unsafe { std::env::remove_var("XDG_CURRENT_DESKTOP") },
+                }
+                match self.desktop_session.take() {
+                    Some(value) => unsafe { std::env::set_var("DESKTOP_SESSION", value) },
+                    None => unsafe { std::env::remove_var("DESKTOP_SESSION") },
+                }
+                match self.wayland_display.take() {
+                    Some(value) => unsafe { std::env::set_var("WAYLAND_DISPLAY", value) },
+                    None => unsafe { std::env::remove_var("WAYLAND_DISPLAY") },
+                }
+            }
+        }
+
+        let _restore = EnvRestore {
+            xdg_current_desktop: std::env::var_os("XDG_CURRENT_DESKTOP"),
+            desktop_session: std::env::var_os("DESKTOP_SESSION"),
+            wayland_display: std::env::var_os("WAYLAND_DISPLAY"),
+        };
+        unsafe {
+            std::env::set_var("XDG_CURRENT_DESKTOP", "KDE");
+            std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
+            std::env::remove_var("DESKTOP_SESSION");
+        }
+
+        let record = PersistedPortalToken {
+            restore_token: "token-1".to_string(),
+            updated_at: Utc::now(),
+            xdg_session_type: Some("wayland".to_string()),
+            compositor: Some("GNOME".to_string()),
+            remote_desktop_version: Some(2),
+            screencast_version: Some(5),
+        };
+
+        assert_eq!(
+            current_compositor_hint(),
+            Some("kde-kwin-wayland".to_string())
+        );
+        assert!(portal_token_compositor_mismatch(&record).is_some());
     }
 }

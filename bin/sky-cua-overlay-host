@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+case "$(uname -m)" in
+  x86_64|amd64)
+    sky_cua_platform="linux-x64"
+    ;;
+  aarch64|arm64)
+    sky_cua_platform="linux-arm64"
+    ;;
+  *)
+    echo "sky-cua-overlay-host: unsupported Linux architecture: $(uname -m)" >&2
+    exit 127
+    ;;
+esac
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+bundled_runtime="$script_dir/runtimes/$sky_cua_platform/sky-cua-overlay-host"
+if [ -x "$bundled_runtime" ]; then
+  exec "$bundled_runtime" "$@"
+fi
+
+source_runtime="$script_dir/../target/release/sky-cua-overlay-host"
+exec "$source_runtime" "$@"

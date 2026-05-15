@@ -24,6 +24,7 @@ pub enum CaptureBackendKind {
 #[serde(rename_all = "snake_case")]
 pub enum InputBackendKind {
     PortalRemoteDesktop,
+    LinuxVirtualInput,
     XTest,
     SendInput,
     WindowsMessages,
@@ -46,11 +47,95 @@ pub enum CoordinateSpace {
     StreamPixels,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCursorBackendKind {
+    None,
+    ScreenshotSynthetic,
+    WaylandLayerShell,
+    KwinEffect,
+    X11ShapedWindow,
+    WindowsLayeredWindow,
+    MacosPanel,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCursorSystemCursorBackendKind {
+    #[default]
+    None,
+    Unsupported,
+    WaylandClientUnsupported,
+    X11Xfixes,
+    KwinEffect,
+    WindowsWin32,
+    MacosNative,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCursorPlane {
+    UserVisible,
+    ScreenshotSynthetic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentCursorPoint {
+    pub x: f64,
+    pub y: f64,
+    pub coordinate_space: CoordinateSpace,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapping_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentCursorState {
+    pub visible: bool,
+    pub sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_point: Option<AgentCursorPoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_point: Option<AgentCursorPoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_action: Option<ActionName>,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentCursorCapabilities {
+    pub backend: AgentCursorBackendKind,
+    pub visible_overlay: bool,
+    pub screenshot_synthetic_cursor: bool,
+    pub click_through: bool,
+    pub capture_exclusion: bool,
+    #[serde(default)]
+    pub system_cursor_hide_supported: bool,
+    #[serde(default)]
+    pub system_cursor_hidden: bool,
+    #[serde(default)]
+    pub system_cursor_backend: AgentCursorSystemCursorBackendKind,
+    pub needs_user_install: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelImageFormat {
     Jpeg,
     Webp,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureScreenMode {
+    Auto,
+    #[default]
+    IfChanged,
+    Always,
+    Never,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -467,6 +552,8 @@ pub struct AppStateSnapshot {
     pub app_guidance: Option<HeuristicMatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doctor_report: Option<DoctorReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_cursor: Option<AgentCursorState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -507,12 +594,14 @@ pub struct ActionRequest {
     pub environment: Option<EnvironmentInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ActionOutcome {
     pub success: bool,
     pub message: String,
     pub code: String,
     pub diagnostics: Vec<DiagnosticEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_cursor: Option<AgentCursorState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -530,6 +619,7 @@ impl ActionOutcome {
             message: message.into(),
             code: "NotImplemented".to_string(),
             diagnostics: Vec::new(),
+            agent_cursor: None,
         }
     }
 }
@@ -551,11 +641,26 @@ pub enum ServiceRequest {
     GetAppState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         selector: Option<AppSelector>,
+        #[serde(default, skip_serializing_if = "is_default_capture_screen")]
+        capture_screen: CaptureScreenMode,
     },
     ResetPortalTokens,
+    AgentCursorStatus,
+    SetAgentCursor {
+        state: AgentCursorState,
+    },
+    HideAgentCursor {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    ShowAgentCursor,
     ExecuteAction {
         request: Box<ActionRequest>,
     },
+}
+
+fn is_default_capture_screen(mode: &CaptureScreenMode) -> bool {
+    *mode == CaptureScreenMode::default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -602,6 +707,30 @@ pub enum ServiceResponse {
         token_path: String,
         dropped_cached_session: bool,
     },
+    AgentCursorStatus {
+        capabilities: AgentCursorCapabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<AgentCursorState>,
+        diagnostics: Vec<DiagnosticEntry>,
+    },
+    SetAgentCursor {
+        capabilities: AgentCursorCapabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<AgentCursorState>,
+        diagnostics: Vec<DiagnosticEntry>,
+    },
+    HideAgentCursor {
+        capabilities: AgentCursorCapabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<AgentCursorState>,
+        diagnostics: Vec<DiagnosticEntry>,
+    },
+    ShowAgentCursor {
+        capabilities: AgentCursorCapabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<AgentCursorState>,
+        diagnostics: Vec<DiagnosticEntry>,
+    },
     ExecuteAction {
         outcome: ActionOutcome,
     },
@@ -614,11 +743,13 @@ pub enum ServiceResponse {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActionName, ActionRequest, AppStateSnapshot, CaptureBackendKind, CaptureInfo,
-        CoordinateSpace, DoctorCheck, DoctorReadiness, DoctorReport, EnvironmentInfo,
-        InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
-        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport,
-        ToolAvailability, ToolCapabilities, WindowInfo, WindowTargetingSetupReport,
+        ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
+        AgentCursorPlane, AgentCursorPoint, AgentCursorState, AgentCursorSystemCursorBackendKind,
+        AppStateSnapshot, CaptureBackendKind, CaptureInfo, CoordinateSpace, DoctorCheck,
+        DoctorReadiness, DoctorReport, EnvironmentInfo, InputBackendKind, ModelImageFormat,
+        PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
+        SessionKind, SetupCommandReport, ToolAvailability, ToolCapabilities, WindowInfo,
+        WindowTargetingSetupReport,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -651,6 +782,27 @@ mod tests {
                     "arguments": {"x": 10, "y": 20}
                 }
             })
+        );
+    }
+
+    #[test]
+    fn get_app_state_capture_screen_defaults_to_if_changed_on_wire() {
+        let rendered = serde_json::to_value(ServiceRequest::GetAppState {
+            selector: None,
+            capture_screen: Default::default(),
+        })
+        .expect("service request should serialize");
+
+        assert_eq!(rendered, json!({"type": "get_app_state"}));
+
+        let parsed: ServiceRequest =
+            serde_json::from_value(json!({"type": "get_app_state"})).expect("request parses");
+        assert_eq!(
+            parsed,
+            ServiceRequest::GetAppState {
+                selector: None,
+                capture_screen: Default::default(),
+            }
         );
     }
 
@@ -715,6 +867,7 @@ mod tests {
                 }),
                 app_guidance: None,
                 doctor_report: None,
+                agent_cursor: None,
             }),
         })
         .expect("service response should serialize");
@@ -727,6 +880,7 @@ mod tests {
         );
         assert!(rendered.get("snapshot").is_some());
         assert!(rendered["snapshot"].get("doctor_report").is_none());
+        assert!(rendered["snapshot"].get("agent_cursor").is_none());
     }
 
     #[test]
@@ -785,6 +939,7 @@ mod tests {
                 capture: None,
                 app_guidance: None,
                 doctor_report: Some(report),
+                agent_cursor: None,
             }),
         })
         .expect("service response should serialize");
@@ -848,6 +1003,162 @@ mod tests {
             rendered["permissions_hint"].as_str(),
             Some("Check permissions")
         );
+    }
+
+    #[test]
+    fn agent_cursor_contract_serializes_snake_case_and_skips_absent_optional_fields() {
+        let state = AgentCursorState {
+            visible: true,
+            sequence: 7,
+            model_point: Some(AgentCursorPoint {
+                x: 40.0,
+                y: 25.5,
+                coordinate_space: CoordinateSpace::StreamPixels,
+                mapping_id: Some("stream-1".to_string()),
+            }),
+            native_point: None,
+            snapshot_id: Some("snap-1".to_string()),
+            source_action: Some(ActionName::Click),
+            updated_at_ms: 1_714_000_000_000,
+        };
+        let rendered = serde_json::to_value(&state).expect("cursor state should serialize");
+
+        assert_eq!(rendered["model_point"]["coordinate_space"], "stream_pixels");
+        assert_eq!(rendered["source_action"], "click");
+        assert!(rendered.get("native_point").is_none());
+        assert_eq!(
+            serde_json::to_value(AgentCursorPlane::ScreenshotSynthetic).expect("serialize plane"),
+            json!("screenshot_synthetic")
+        );
+    }
+
+    #[test]
+    fn agent_cursor_capabilities_report_backend_as_snake_case() {
+        let rendered = serde_json::to_value(AgentCursorCapabilities {
+            backend: AgentCursorBackendKind::WaylandLayerShell,
+            visible_overlay: true,
+            screenshot_synthetic_cursor: true,
+            click_through: true,
+            capture_exclusion: false,
+            system_cursor_hide_supported: false,
+            system_cursor_hidden: false,
+            system_cursor_backend: AgentCursorSystemCursorBackendKind::WaylandClientUnsupported,
+            needs_user_install: false,
+            reason: None,
+        })
+        .expect("capabilities should serialize");
+
+        assert_eq!(rendered["backend"], "wayland_layer_shell");
+        assert_eq!(rendered["system_cursor_hide_supported"], false);
+        assert_eq!(rendered["system_cursor_hidden"], false);
+        assert_eq!(
+            rendered["system_cursor_backend"],
+            "wayland_client_unsupported"
+        );
+        assert!(rendered.get("reason").is_none());
+
+        let old: AgentCursorCapabilities = serde_json::from_value(json!({
+            "backend": "wayland_layer_shell",
+            "visible_overlay": true,
+            "screenshot_synthetic_cursor": true,
+            "click_through": true,
+            "capture_exclusion": false,
+            "needs_user_install": false
+        }))
+        .expect("old capabilities without system cursor fields should deserialize");
+        assert!(!old.system_cursor_hide_supported);
+        assert!(!old.system_cursor_hidden);
+        assert_eq!(
+            old.system_cursor_backend,
+            AgentCursorSystemCursorBackendKind::None
+        );
+    }
+
+    #[test]
+    fn action_outcome_skips_absent_cursor_and_accepts_old_wire_shape() {
+        let rendered = serde_json::to_value(ActionOutcome {
+            success: true,
+            message: "ok".to_string(),
+            code: "Ok".to_string(),
+            diagnostics: Vec::new(),
+            agent_cursor: None,
+        })
+        .expect("outcome should serialize");
+
+        assert!(rendered.get("agent_cursor").is_none());
+
+        let old: ActionOutcome = serde_json::from_value(json!({
+            "success": true,
+            "message": "ok",
+            "code": "Ok",
+            "diagnostics": []
+        }))
+        .expect("old outcomes without cursor should deserialize");
+        assert_eq!(old.agent_cursor, None);
+    }
+
+    #[test]
+    fn app_state_snapshot_accepts_old_wire_shape_without_agent_cursor() {
+        let old = json!({
+            "snapshot_id": "snap-old",
+            "created_at": "2026-05-14T19:00:00Z",
+            "environment": {
+                "session_kind": "wayland",
+                "compositor": "KWin",
+                "desktop_environment": "KDE",
+                "capture_backend": "portal_pipe_wire",
+                "input_backend": "portal_remote_desktop",
+                "semantic_backend": "atspi",
+                "portal_capabilities": {
+                    "screencast_version": 5,
+                    "remote_desktop_version": 2,
+                    "screenshot_version": 1,
+                    "available_source_types": null,
+                    "available_cursor_modes": null,
+                    "available_device_types": null
+                },
+                "xdg_session_type": "wayland",
+                "display": null,
+                "wayland_display": "wayland-0"
+            },
+            "capabilities": available_capabilities(),
+            "focused_app": null,
+            "capture": null,
+            "elements": [],
+            "diagnostics": [],
+            "app_guidance": null
+        });
+
+        let snapshot: AppStateSnapshot =
+            serde_json::from_value(old).expect("old snapshot should deserialize");
+        assert_eq!(snapshot.agent_cursor, None);
+    }
+
+    #[test]
+    fn agent_cursor_service_requests_preserve_json_wire_shape() {
+        let state = AgentCursorState {
+            visible: true,
+            sequence: 1,
+            model_point: Some(AgentCursorPoint {
+                x: 10.0,
+                y: 20.0,
+                coordinate_space: CoordinateSpace::StreamPixels,
+                mapping_id: None,
+            }),
+            native_point: None,
+            snapshot_id: Some("snap-1".to_string()),
+            source_action: Some(ActionName::Click),
+            updated_at_ms: 42,
+        };
+        let rendered = serde_json::to_value(ServiceRequest::SetAgentCursor { state })
+            .expect("request should serialize");
+
+        assert_eq!(rendered["type"], "set_agent_cursor");
+        assert_eq!(
+            rendered["state"]["model_point"]["coordinate_space"],
+            "stream_pixels"
+        );
+        assert!(rendered["state"]["model_point"].get("mapping_id").is_none());
     }
 
     fn available_capabilities() -> ToolCapabilities {

@@ -394,6 +394,7 @@ mod tests {
             diagnostics: Vec::new(),
             app_guidance: None,
             doctor_report: None,
+            agent_cursor: None,
         }
     }
 

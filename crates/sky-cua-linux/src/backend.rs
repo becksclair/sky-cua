@@ -3,9 +3,9 @@ use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind,
-    CaptureInfo, CoordinateSpace, DiagnosticEntry, DoctorReport, ElementNode, EnvironmentInfo,
-    FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, RectF, SemanticBackendKind,
-    ToolAvailability, ToolCapabilities,
+    CaptureInfo, CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorReport, ElementNode,
+    EnvironmentInfo, FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, RectF,
+    SemanticBackendKind, ToolAvailability, ToolCapabilities,
 };
 use sky_cua_platform::{AppInfo, SetValueFallbackMode, SetValueRouting, new_snapshot_id};
 
@@ -21,6 +21,7 @@ use crate::portal::remote_desktop::{
     MouseButton, PortalLifecycleEvent, RemoteDesktopSessionManager,
 };
 use crate::portal::screenshot;
+use crate::virtual_input::{LinuxVirtualInput, virtual_input_keyboard_available};
 use crate::windowing as linux_windowing;
 use crate::x11::capture as x11_capture;
 use crate::x11::input_xtest::{self, X11MouseButton};
@@ -150,6 +151,7 @@ impl LinuxDesktopBackend {
             .iter()
             .any(|probe| probe.can_list_windows);
         let physical_ready = environment.input_backend != InputBackendKind::None;
+        let keyboard_ready = keyboard_input_ready(environment);
 
         ToolCapabilities {
             list_apps: ToolAvailability {
@@ -211,14 +213,14 @@ impl LinuxDesktopBackend {
                     .then(|| "No physical input backend is available".to_string()),
             },
             type_text: ToolAvailability {
-                available: physical_ready,
-                reason: (!physical_ready)
-                    .then(|| "No physical input backend is available".to_string()),
+                available: keyboard_ready,
+                reason: (!keyboard_ready)
+                    .then(|| keyboard_input_unavailable_reason(environment).to_string()),
             },
             press_key: ToolAvailability {
-                available: physical_ready,
-                reason: (!physical_ready)
-                    .then(|| "No physical input backend is available".to_string()),
+                available: keyboard_ready,
+                reason: (!keyboard_ready)
+                    .then(|| keyboard_input_unavailable_reason(environment).to_string()),
             },
             set_value: ToolAvailability {
                 available: semantic_ready,
@@ -244,6 +246,11 @@ impl LinuxDesktopBackend {
 
 #[async_trait::async_trait]
 impl DesktopBackend for LinuxDesktopBackend {
+    async fn prepare_automation_permissions(&self) -> Result<(), BackendError> {
+        self.portal.preauthorize_permissions().await;
+        Ok(())
+    }
+
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
         let mut environment = probe_environment().await?;
         environment.semantic_backend = if require_supported_environment(&environment).is_ok()
@@ -345,6 +352,7 @@ impl DesktopBackend for LinuxDesktopBackend {
     async fn get_app_state(
         &self,
         selector: Option<AppSelector>,
+        capture_screen: CaptureScreenMode,
     ) -> Result<AppStateSnapshot, BackendError> {
         let _ = self.portal.take_lifecycle_events().await;
         let snapshot_id = new_snapshot_id();
@@ -366,8 +374,10 @@ impl DesktopBackend for LinuxDesktopBackend {
             .await
             .unwrap_or_default();
 
-        let mut capture = (environment.capture_backend != CaptureBackendKind::None).then_some(
-            sky_cua_platform::model::CaptureInfo {
+        let should_capture_screen = capture_screen != CaptureScreenMode::Never;
+        let mut capture = (should_capture_screen
+            && environment.capture_backend != CaptureBackendKind::None)
+            .then_some(sky_cua_platform::model::CaptureInfo {
                 backend: environment.capture_backend.clone(),
                 image_backend: None,
                 coordinate_space: None,
@@ -384,10 +394,11 @@ impl DesktopBackend for LinuxDesktopBackend {
                 model_image_quality: None,
                 model_image_bytes: None,
                 model_image_encode_ms: None,
-            },
-        );
+            });
 
-        if environment.input_backend == InputBackendKind::PortalRemoteDesktop {
+        if should_capture_screen
+            && environment.input_backend == InputBackendKind::PortalRemoteDesktop
+        {
             match self.portal.ensure_started().await {
                 Ok(Some(stream)) => {
                     if let Some(capture_info) = capture.as_mut() {
@@ -410,7 +421,8 @@ impl DesktopBackend for LinuxDesktopBackend {
             }
         }
 
-        if environment.capture_backend == CaptureBackendKind::PortalPipeWire
+        if should_capture_screen
+            && environment.capture_backend == CaptureBackendKind::PortalPipeWire
             && environment.input_backend == InputBackendKind::PortalRemoteDesktop
             && portal_session_error.is_none()
         {
@@ -430,7 +442,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                     capture_error = Some(error);
                 }
             }
-        } else if environment.capture_backend == CaptureBackendKind::X11 {
+        } else if should_attempt_x11_capture(capture_screen, &environment) {
             match x11_capture::capture_still(&snapshot_id).await {
                 Ok(frame) => {
                     if let Some(capture_info) = capture.as_mut() {
@@ -536,6 +548,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                     diagnostics: diagnostics.finish(),
                     app_guidance: None,
                     doctor_report: Some(doctor_report),
+                    agent_cursor: None,
                 });
             }
         };
@@ -590,6 +603,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                 diagnostics: diagnostics.finish(),
                 app_guidance: None,
                 doctor_report: Some(doctor_report),
+                agent_cursor: None,
             });
         }
 
@@ -714,6 +728,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             diagnostics: diagnostics.finish(),
             app_guidance: None,
             doctor_report: Some(doctor_report),
+            agent_cursor: None,
         })
     }
 
@@ -913,6 +928,13 @@ impl LinuxDesktopBackend {
                     "Clicked the target through the X11 input fallback.",
                 ))
             }
+            InputBackendKind::LinuxVirtualInput => {
+                let input = LinuxVirtualInput::new()?;
+                input.click_at(x, y, MouseButton::Left)?;
+                Ok(success(
+                    "Clicked the target through the Linux virtual input fallback.",
+                ))
+            }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
                 Err(windows_input_backend_error("click fallback"))
             }
@@ -992,6 +1014,13 @@ impl LinuxDesktopBackend {
                     "Performed the secondary click through the X11 input fallback.",
                 ))
             }
+            InputBackendKind::LinuxVirtualInput => {
+                let input = LinuxVirtualInput::new()?;
+                input.click_at(x, y, MouseButton::Right)?;
+                Ok(success(
+                    "Performed the secondary click through the Linux virtual input fallback.",
+                ))
+            }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
                 Err(windows_input_backend_error("secondary click fallback"))
             }
@@ -1003,12 +1032,14 @@ impl LinuxDesktopBackend {
     }
 
     async fn scroll(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        if let Ok((x, y)) = action_point(&request) {
-            match input_backend_for(&request) {
+        let input_backend = input_backend_for(&request);
+        if let Ok((x, y)) = action_point_for_backend(&request, input_backend.clone()) {
+            match input_backend {
                 InputBackendKind::PortalRemoteDesktop => {
                     self.portal.pointer_move_absolute(x, y).await?
                 }
                 InputBackendKind::XTest => input_xtest::pointer_move_absolute(x, y)?,
+                InputBackendKind::LinuxVirtualInput => {}
                 InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {}
                 InputBackendKind::None => {}
             }
@@ -1025,7 +1056,7 @@ impl LinuxDesktopBackend {
             .and_then(|value| i32::try_from(value).ok())
             .unwrap_or(-1);
 
-        match input_backend_for(&request) {
+        match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
                 if let Some(delta_y) = delta_y {
                     self.portal.scroll_vertical_smooth(delta_y).await?;
@@ -1040,6 +1071,18 @@ impl LinuxDesktopBackend {
             InputBackendKind::XTest => {
                 input_xtest::scroll_vertical(delta_y, Some(steps))?;
                 Ok(success("Scrolled through the X11 input fallback."))
+            }
+            InputBackendKind::LinuxVirtualInput => {
+                let steps = portal_scroll_steps_from_delta(delta_y).unwrap_or(steps);
+                let input = LinuxVirtualInput::new()?;
+                if let Ok((x, y)) = action_point_for_backend(&request, input_backend) {
+                    input.scroll_vertical_at(x, y, steps)?;
+                } else {
+                    input.scroll_vertical(steps)?;
+                }
+                Ok(success(
+                    "Scrolled through the Linux virtual input fallback.",
+                ))
             }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
                 Err(windows_input_backend_error("scroll"))
@@ -1061,7 +1104,7 @@ impl LinuxDesktopBackend {
                 input_backend.clone(),
             )?
         } else {
-            drag_to_point(&request, input_backend.clone()).ok_or_else(|| {
+            drag_to_point(&request, input_backend.clone())?.ok_or_else(|| {
                 BackendError::new(
                     BackendErrorCode::InvalidRequest,
                     "drag requires either to_element_index or explicit to_x/to_y coordinates",
@@ -1090,6 +1133,11 @@ impl LinuxDesktopBackend {
                 tokio::time::sleep(std::time::Duration::from_millis(40)).await;
                 input_xtest::pointer_button(X11MouseButton::Left, false)?;
                 Ok(success("Dragged through the X11 input fallback."))
+            }
+            InputBackendKind::LinuxVirtualInput => {
+                let input = LinuxVirtualInput::new()?;
+                input.drag(from, to)?;
+                Ok(success("Dragged through the Linux virtual input fallback."))
             }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
                 Err(windows_input_backend_error("drag"))
@@ -1171,6 +1219,12 @@ impl LinuxDesktopBackend {
                 input_xtest::send_text_to_target(x11_window_id, &text)?;
                 Ok(success("Typed text through the X11 input fallback."))
             }
+            InputBackendKind::LinuxVirtualInput => {
+                LinuxVirtualInput::new()?.type_text(&text)?;
+                Ok(success(
+                    "Typed text through the Linux virtual input fallback.",
+                ))
+            }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
                 Err(windows_input_backend_error("type_text"))
             }
@@ -1223,6 +1277,12 @@ impl LinuxDesktopBackend {
                 input_xtest::press_key_sequence_to_target(x11_window_id, &keys)?;
                 Ok(success(
                     "Pressed the key sequence through the X11 input fallback.",
+                ))
+            }
+            InputBackendKind::LinuxVirtualInput => {
+                LinuxVirtualInput::new()?.press_key_sequence(&keys)?;
+                Ok(success(
+                    "Pressed the key sequence through the Linux virtual input fallback.",
                 ))
             }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
@@ -1424,6 +1484,18 @@ impl LinuxDesktopBackend {
                             diagnostics,
                         ))
                     }
+                    InputBackendKind::LinuxVirtualInput => {
+                        let input = LinuxVirtualInput::new()?;
+                        input.click_at(x, y, MouseButton::Left)?;
+                        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                        input.press_key_sequence(&select_all)?;
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        input.type_text(value)?;
+                        Ok(success_with_diagnostics(
+                            "Set the value through a heuristics-backed physical typing fallback.",
+                            diagnostics,
+                        ))
+                    }
                     InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
                         Err(windows_input_backend_error("set_value fallback"))
                     }
@@ -1437,12 +1509,46 @@ impl LinuxDesktopBackend {
     }
 }
 
+fn keyboard_input_ready(environment: &EnvironmentInfo) -> bool {
+    match environment.input_backend {
+        InputBackendKind::PortalRemoteDesktop | InputBackendKind::XTest => true,
+        InputBackendKind::LinuxVirtualInput => virtual_input_keyboard_available(),
+        InputBackendKind::None
+        | InputBackendKind::SendInput
+        | InputBackendKind::WindowsMessages => false,
+    }
+}
+
+fn keyboard_input_unavailable_reason(environment: &EnvironmentInfo) -> &'static str {
+    match environment.input_backend {
+        InputBackendKind::LinuxVirtualInput => {
+            "Linux virtual input is pointer-only; text and key actions require a usable ydotool daemon"
+        }
+        InputBackendKind::None => "No physical input backend is available",
+        InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+            "Windows input backends are unavailable on Linux"
+        }
+        InputBackendKind::PortalRemoteDesktop | InputBackendKind::XTest => {
+            "No keyboard input backend is available"
+        }
+    }
+}
+
+fn should_attempt_x11_capture(
+    capture_screen: CaptureScreenMode,
+    environment: &EnvironmentInfo,
+) -> bool {
+    capture_screen != CaptureScreenMode::Never
+        && environment.capture_backend == CaptureBackendKind::X11
+}
+
 fn success(message: impl Into<String>) -> ActionOutcome {
     ActionOutcome {
         success: true,
         message: message.into(),
         code: "Ok".to_string(),
         diagnostics: Vec::new(),
+        agent_cursor: None,
     }
 }
 
@@ -1455,6 +1561,7 @@ fn success_with_diagnostics(
         message: message.into(),
         code: "Ok".to_string(),
         diagnostics,
+        agent_cursor: None,
     }
 }
 
@@ -1475,6 +1582,19 @@ fn input_backend_for(request: &ActionRequest) -> InputBackendKind {
 
 fn effective_pointer_input_backend_for_target(request: &ActionRequest) -> InputBackendKind {
     input_backend_for(request)
+}
+
+fn portal_scroll_steps_from_delta(delta_y: Option<f64>) -> Option<i32> {
+    let delta_y = delta_y?;
+    if delta_y == 0.0 {
+        return None;
+    }
+    let magnitude = (delta_y.abs() / 120.0).ceil().max(1.0) as i32;
+    Some(if delta_y.is_sign_positive() {
+        -magnitude
+    } else {
+        magnitude
+    })
 }
 
 fn element_is_x11_fallback(element: &ElementNode) -> bool {
@@ -1841,11 +1961,7 @@ fn action_point_for_backend(
     backend: InputBackendKind,
 ) -> Result<(f64, f64), BackendError> {
     if let Some(point) = explicit_point(&request.arguments) {
-        return Ok(point_from_screenshot_pixels(
-            point,
-            request.resolved_capture.as_ref(),
-            backend,
-        ));
+        return point_from_action_pixels(point, request, backend);
     }
     let element = request.resolved_element.as_ref().ok_or_else(|| {
         BackendError::new(
@@ -1864,14 +1980,13 @@ fn action_point_for_backend(
         InputBackendKind::XTest => {
             point_for_x11_element(element, request.resolved_capture.as_ref())
         }
+        InputBackendKind::LinuxVirtualInput => {
+            point_for_linux_virtual_element(element, request.resolved_capture.as_ref())
+        }
         InputBackendKind::SendInput
         | InputBackendKind::WindowsMessages
         | InputBackendKind::None => point_for_element(element, None),
     }
-}
-
-fn action_point(request: &ActionRequest) -> Result<(f64, f64), BackendError> {
-    action_point_for_backend(request, input_backend_for(request))
 }
 
 fn point_for_element(
@@ -1954,6 +2069,34 @@ fn point_for_x11_element_through_portal(
     Ok(center)
 }
 
+fn point_for_linux_virtual_element(
+    element: &ElementNode,
+    capture: Option<&CaptureInfo>,
+) -> Result<(f64, f64), BackendError> {
+    let bounds = element.bounds.as_ref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!(
+                "element {} did not include bounds, so a Linux virtual input target cannot be derived",
+                element.element_index
+            ),
+        )
+    })?;
+    let center = center_of(bounds);
+    match bounds.space {
+        CoordinateSpace::DesktopLogical => Ok(center),
+        CoordinateSpace::StreamLogical => {
+            let logical_rect = capture
+                .and_then(|capture| capture.logical_rect.as_ref())
+                .ok_or_else(missing_linux_virtual_logical_rect_error)?;
+            Ok((logical_rect.x + center.0, logical_rect.y + center.1))
+        }
+        CoordinateSpace::StreamPixels => {
+            linux_virtual_point_from_screenshot_pixels(center, capture, true)
+        }
+    }
+}
+
 fn point_for_element_for_backend(
     element: &ElementNode,
     capture: Option<&CaptureInfo>,
@@ -1965,6 +2108,7 @@ fn point_for_element_for_backend(
         }
         InputBackendKind::PortalRemoteDesktop => point_for_element(element, capture),
         InputBackendKind::XTest => point_for_x11_element(element, capture),
+        InputBackendKind::LinuxVirtualInput => point_for_linux_virtual_element(element, capture),
         InputBackendKind::SendInput
         | InputBackendKind::WindowsMessages
         | InputBackendKind::None => point_for_element(element, None),
@@ -1982,11 +2126,7 @@ fn drag_from_point(
     if let Some(point) = point_from_fields(&request.arguments, "from_x", "from_y")
         .or_else(|| explicit_point(&request.arguments))
     {
-        return Ok(point_from_screenshot_pixels(
-            point,
-            request.resolved_capture.as_ref(),
-            backend,
-        ));
+        return point_from_action_pixels(point, request, backend);
     }
 
     let element = request.resolved_element.as_ref().ok_or_else(|| {
@@ -1998,10 +2138,13 @@ fn drag_from_point(
     point_for_element_for_backend(element, request.resolved_capture.as_ref(), backend)
 }
 
-fn drag_to_point(request: &ActionRequest, backend: InputBackendKind) -> Option<(f64, f64)> {
-    point_from_fields(&request.arguments, "to_x", "to_y").map(|point| {
-        point_from_screenshot_pixels(point, request.resolved_capture.as_ref(), backend)
-    })
+fn drag_to_point(
+    request: &ActionRequest,
+    backend: InputBackendKind,
+) -> Result<Option<(f64, f64)>, BackendError> {
+    point_from_fields(&request.arguments, "to_x", "to_y")
+        .map(|point| point_from_action_pixels(point, request, backend))
+        .transpose()
 }
 
 fn point_from_fields(
@@ -2012,6 +2155,25 @@ fn point_from_fields(
     let x = arguments.get(x_field).and_then(serde_json::Value::as_f64)?;
     let y = arguments.get(y_field).and_then(serde_json::Value::as_f64)?;
     Some((x, y))
+}
+
+fn point_from_action_pixels(
+    point: (f64, f64),
+    request: &ActionRequest,
+    backend: InputBackendKind,
+) -> Result<(f64, f64), BackendError> {
+    if backend == InputBackendKind::LinuxVirtualInput {
+        return linux_virtual_point_from_screenshot_pixels(
+            point,
+            request.resolved_capture.as_ref(),
+            request.snapshot_id.is_some(),
+        );
+    }
+    Ok(point_from_screenshot_pixels(
+        point,
+        request.resolved_capture.as_ref(),
+        backend,
+    ))
 }
 
 fn apply_model_capture(
@@ -2088,9 +2250,80 @@ fn point_from_screenshot_pixels(
             }
             point
         }
+        InputBackendKind::LinuxVirtualInput => {
+            if let Some(logical_rect) = capture.logical_rect.as_ref()
+                && logical_rect.width > 0.0
+                && logical_rect.height > 0.0
+            {
+                return (
+                    logical_rect.x + (rel_x * logical_rect.width),
+                    logical_rect.y + (rel_y * logical_rect.height),
+                );
+            }
+            point
+        }
         InputBackendKind::SendInput | InputBackendKind::WindowsMessages => point,
         InputBackendKind::None => point,
     }
+}
+
+fn linux_virtual_point_from_screenshot_pixels(
+    point: (f64, f64),
+    capture: Option<&CaptureInfo>,
+    snapshot_based: bool,
+) -> Result<(f64, f64), BackendError> {
+    let Some(capture) = capture else {
+        if snapshot_based {
+            return Err(missing_linux_virtual_capture_error());
+        }
+        return Ok(point);
+    };
+    let pixel_size = capture.pixel_size.as_ref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "Linux virtual input requires capture pixel_size to map screenshot pixels to desktop logical coordinates",
+        )
+    })?;
+    if pixel_size.width == 0 || pixel_size.height == 0 {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "Linux virtual input cannot map screenshot pixels from a zero-sized capture",
+        ));
+    }
+    let logical_rect = capture
+        .logical_rect
+        .as_ref()
+        .ok_or_else(missing_linux_virtual_logical_rect_error)?;
+    if logical_rect.space != CoordinateSpace::DesktopLogical
+        || logical_rect.width <= 0.0
+        || logical_rect.height <= 0.0
+    {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "Linux virtual input requires a positive desktop-logical capture logical_rect",
+        ));
+    }
+
+    let rel_x = point.0 / f64::from(pixel_size.width);
+    let rel_y = point.1 / f64::from(pixel_size.height);
+    Ok((
+        logical_rect.x + (rel_x * logical_rect.width),
+        logical_rect.y + (rel_y * logical_rect.height),
+    ))
+}
+
+fn missing_linux_virtual_capture_error() -> BackendError {
+    BackendError::new(
+        BackendErrorCode::InvalidRequest,
+        "Linux virtual input requires capture metadata for snapshot-based screenshot coordinates",
+    )
+}
+
+fn missing_linux_virtual_logical_rect_error() -> BackendError {
+    BackendError::new(
+        BackendErrorCode::InvalidRequest,
+        "Linux virtual input requires capture logical_rect to map screenshot coordinates to desktop logical coordinates",
+    )
 }
 
 fn portal_lifecycle_diagnostics(
@@ -2671,6 +2904,7 @@ fn linux_fallback_snapshot(
         diagnostics: diagnostics.finish(),
         app_guidance: None,
         doctor_report,
+        agent_cursor: None,
     }
 }
 
@@ -3313,17 +3547,17 @@ mod tests {
         drag_from_point, drag_to_point, effective_pointer_input_backend_for_target, explicit_point,
         fallback_window_elements_with_x11_detail, linux_fallback_snapshot, linux_window_elements,
         matches_selector, parse_key_sequence, point_for_x11_element_through_portal,
-        point_from_screenshot_pixels, push_capture_diagnostics, select_x11_window,
-        selector_summary, should_prefer_kde_clipboard_text_backend, x11_window_elements,
-        x11_window_matches_app,
+        point_from_screenshot_pixels, portal_scroll_steps_from_delta, push_capture_diagnostics,
+        select_x11_window, selector_summary, should_attempt_x11_capture,
+        should_prefer_kde_clipboard_text_backend, x11_window_elements, x11_window_matches_app,
     };
     use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::{
-        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace, ElementNode,
-        EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
-        SemanticBackendKind, SessionKind,
+        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScreenMode,
+        CoordinateSpace, ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat,
+        PixelSize, PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
     };
 
     fn wayland_pipewire_environment() -> EnvironmentInfo {
@@ -3354,6 +3588,46 @@ mod tests {
             parse_key_sequence(&json!({"key": "Ctrl+L"})),
             Some(vec!["Ctrl".to_string(), "L".to_string()])
         );
+    }
+
+    #[test]
+    fn maps_scroll_delta_to_portal_discrete_steps() {
+        assert_eq!(portal_scroll_steps_from_delta(Some(-180.0)), Some(2));
+        assert_eq!(portal_scroll_steps_from_delta(Some(120.0)), Some(-1));
+        assert_eq!(portal_scroll_steps_from_delta(Some(0.0)), None);
+        assert_eq!(portal_scroll_steps_from_delta(None), None);
+    }
+
+    #[test]
+    fn capture_never_disables_x11_still_capture() {
+        let environment = EnvironmentInfo {
+            session_kind: SessionKind::X11,
+            compositor: Some("x11-xorg".to_string()),
+            desktop_environment: None,
+            capture_backend: CaptureBackendKind::X11,
+            input_backend: InputBackendKind::XTest,
+            semantic_backend: SemanticBackendKind::Atspi,
+            portal_capabilities: PortalCapabilities {
+                screencast_version: None,
+                remote_desktop_version: None,
+                screenshot_version: None,
+                available_source_types: None,
+                available_cursor_modes: None,
+                available_device_types: None,
+            },
+            xdg_session_type: Some("x11".to_string()),
+            display: Some(":0".to_string()),
+            wayland_display: None,
+        };
+
+        assert!(!should_attempt_x11_capture(
+            CaptureScreenMode::Never,
+            &environment
+        ));
+        assert!(should_attempt_x11_capture(
+            CaptureScreenMode::Always,
+            &environment
+        ));
     }
 
     #[test]
@@ -3501,7 +3775,7 @@ mod tests {
             environment: None,
         };
         assert_eq!(
-            drag_to_point(&request, InputBackendKind::PortalRemoteDesktop),
+            drag_to_point(&request, InputBackendKind::PortalRemoteDesktop).unwrap(),
             Some((320.0, 240.0))
         );
         let request_without_to = ActionRequest {
@@ -3509,7 +3783,7 @@ mod tests {
             ..request
         };
         assert_eq!(
-            drag_to_point(&request_without_to, InputBackendKind::PortalRemoteDesktop),
+            drag_to_point(&request_without_to, InputBackendKind::PortalRemoteDesktop).unwrap(),
             None
         );
     }
@@ -3596,6 +3870,92 @@ mod tests {
             point_from_screenshot_pixels((960.0, 540.0), Some(&capture), InputBackendKind::XTest),
             (1280.0, 720.0)
         );
+    }
+
+    #[test]
+    fn maps_screenshot_pixels_to_linux_virtual_desktop_logical_coordinates() {
+        let capture = CaptureInfo {
+            backend: CaptureBackendKind::PortalScreenshot,
+            image_backend: Some(CaptureBackendKind::PortalScreenshot),
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: None,
+            source_type: None,
+            mapping_id: None,
+            logical_rect: Some(RectF {
+                x: 1920.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 720.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            pixel_size: Some(PixelSize {
+                width: 2560,
+                height: 1440,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 2560,
+                height: 1440,
+            }),
+            logical_to_pixel_scale: Some(2.0),
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
+        };
+
+        assert_eq!(
+            point_from_screenshot_pixels(
+                (1280.0, 720.0),
+                Some(&capture),
+                InputBackendKind::LinuxVirtualInput
+            ),
+            (2560.0, 360.0)
+        );
+    }
+
+    #[test]
+    fn linux_virtual_snapshot_coordinates_fail_without_logical_rect() {
+        let request = ActionRequest {
+            action: ActionName::Click,
+            snapshot_id: Some("snapshot-1".to_string()),
+            element_index: None,
+            arguments: json!({"x": 640.0, "y": 360.0}),
+            resolved_element: None,
+            resolved_target_element: None,
+            resolved_capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalScreenshot,
+                image_backend: Some(CaptureBackendKind::PortalScreenshot),
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: None,
+                source_type: None,
+                mapping_id: None,
+                logical_rect: None,
+                pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                original_pixel_size: None,
+                logical_to_pixel_scale: None,
+                screenshot_path: Some("/tmp/capture.jpg".to_string()),
+                original_screenshot_path: None,
+                model_image_format: Some(ModelImageFormat::Jpeg),
+                model_image_quality: Some(85),
+                model_image_bytes: Some(1234),
+                model_image_encode_ms: Some(7),
+            }),
+            resolved_focused_app: None,
+            environment: Some(EnvironmentInfo {
+                input_backend: InputBackendKind::LinuxVirtualInput,
+                ..wayland_pipewire_environment()
+            }),
+        };
+
+        let error = drag_from_point(&request, InputBackendKind::LinuxVirtualInput).unwrap_err();
+
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(error.message.contains("capture logical_rect"));
     }
 
     #[test]

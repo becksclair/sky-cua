@@ -40,6 +40,11 @@ impl SnapshotManager {
         self.order.back().map(String::as_str)
     }
 
+    pub fn latest(&self) -> Option<&AppStateSnapshot> {
+        self.latest_snapshot_id()
+            .and_then(|snapshot_id| self.snapshots.get(snapshot_id))
+    }
+
     pub fn is_latest(&self, snapshot_id: &str) -> bool {
         self.latest_snapshot_id() == Some(snapshot_id)
     }
@@ -122,6 +127,7 @@ mod tests {
             diagnostics: Vec::new(),
             app_guidance: None,
             doctor_report: None,
+            agent_cursor: None,
         }
     }
 

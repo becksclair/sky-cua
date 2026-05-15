@@ -5,6 +5,7 @@ mod daemon;
 mod diagnostics;
 mod element_resolver;
 mod ipc_server;
+mod overlay;
 mod session_store;
 mod snapshot_manager;
 

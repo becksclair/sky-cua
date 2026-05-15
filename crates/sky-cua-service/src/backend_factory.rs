@@ -43,6 +43,7 @@ impl DesktopBackend for UnsupportedDesktopBackend {
     async fn get_app_state(
         &self,
         _selector: Option<sky_cua_platform::model::AppSelector>,
+        _capture_screen: sky_cua_platform::model::CaptureScreenMode,
     ) -> Result<sky_cua_platform::model::AppStateSnapshot, sky_cua_platform::BackendError> {
         Err(sky_cua_platform::BackendError::new(
             sky_cua_platform::BackendErrorCode::UnsupportedEnvironment,

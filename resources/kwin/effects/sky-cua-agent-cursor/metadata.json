@@ -1,0 +1,19 @@
+{
+    "KPackageStructure": "KWin/Effect",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "sky-cua@example.invalid",
+                "Name": "sky-cua"
+            }
+        ],
+        "Category": "Accessibility",
+        "Description": "Static proof effect for the sky-cua agent cursor overlay.",
+        "EnabledByDefault": false,
+        "Icon": "input-mouse",
+        "Id": "sky-cua-agent-cursor",
+        "License": "MIT",
+        "Name": "sky-cua Agent Cursor",
+        "Version": "0.1.0"
+    }
+}

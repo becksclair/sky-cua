@@ -3,8 +3,8 @@ use std::io::{self, BufRead, BufReader, Write};
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    ActionName, ActionRequest, AppInfo, AppSelector, AppStateSnapshot, ElementNode, ServiceRequest,
-    ServiceResponse, WindowInfo,
+    ActionName, ActionRequest, AppInfo, AppSelector, AppStateSnapshot, CaptureScreenMode,
+    DiagnosticEntry, ElementNode, ServiceRequest, ServiceResponse, WindowInfo,
 };
 
 use crate::heuristics::HeuristicsRegistry;
@@ -26,16 +26,33 @@ enum AppStateDetail {
     Compact,
 }
 
+#[derive(Debug, Clone, Default)]
+struct ServerSession {
+    initialized: bool,
+    model: ModelSessionInfo,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ModelSessionInfo {
+    supports_images: Option<bool>,
+}
+
+impl ModelSessionInfo {
+    fn can_receive_images(&self) -> bool {
+        self.supports_images.unwrap_or(true)
+    }
+}
+
 pub fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut reader = BufReader::new(stdin.lock());
     let mut writer = stdout.lock();
-    let mut initialized = false;
+    let mut session = ServerSession::default();
 
     while let Some((message, framing)) = read_message(&mut reader)? {
         let id = message.get("id").cloned().unwrap_or(Value::Null);
-        let response = match handle_message(&service, &heuristics, &mut initialized, message) {
+        let response = match handle_message(&service, &heuristics, &mut session, message) {
             Ok(Some(response)) => Some(response),
             Ok(None) => None,
             Err(error) => Some(json!({
@@ -58,7 +75,7 @@ pub fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Result<(
 fn handle_message(
     service: &ServiceClient,
     heuristics: &HeuristicsRegistry,
-    initialized: &mut bool,
+    session: &mut ServerSession,
     body: Value,
 ) -> Result<Option<Value>> {
     let method = body
@@ -69,7 +86,8 @@ fn handle_message(
 
     match method {
         "initialize" => {
-            *initialized = true;
+            session.initialized = true;
+            session.model = parse_model_session_info(&body);
             let protocol_version = body
                 .pointer("/params/protocolVersion")
                 .and_then(Value::as_str)
@@ -93,17 +111,17 @@ fn handle_message(
         }
         "notifications/initialized" | "initialized" => Ok(None),
         "tools/list" => {
-            if !*initialized {
+            if !session.initialized {
                 return Ok(Some(not_initialized(id)));
             }
             Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": tools_list_result()
+                "result": tools_list_result(&session.model)
             })))
         }
         "tools/call" => {
-            if !*initialized {
+            if !session.initialized {
                 return Ok(Some(not_initialized(id)));
             }
             let tool_name = body
@@ -114,7 +132,8 @@ fn handle_message(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let result = handle_tool_call(service, heuristics, tool_name, arguments)?;
+            let result =
+                handle_tool_call(service, heuristics, &session.model, tool_name, arguments)?;
             Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -136,6 +155,7 @@ fn handle_message(
 fn handle_tool_call(
     service: &ServiceClient,
     heuristics: &HeuristicsRegistry,
+    model: &ModelSessionInfo,
     tool_name: &str,
     arguments: Value,
 ) -> Result<Value> {
@@ -290,9 +310,20 @@ fn handle_tool_call(
         "get_app_state" => {
             let selector = parse_app_selector(&arguments);
             let detail = parse_app_state_detail(&arguments);
-            match service.call(&ServiceRequest::GetAppState { selector })? {
+            let capture_screen = effective_capture_screen(&arguments, model);
+            match service.call(&ServiceRequest::GetAppState {
+                selector,
+                capture_screen,
+            })? {
                 ServiceResponse::GetAppState { mut snapshot } => {
                     enrich_snapshot(heuristics, &mut snapshot);
+                    if !model.can_receive_images() {
+                        snapshot.diagnostics.push(DiagnosticEntry {
+                            code: "ModelImageInputUnsupported".to_string(),
+                            message: "Screen capture was disabled because the active model does not support image input.".to_string(),
+                            details: None,
+                        });
+                    }
                     let structured_content = match detail {
                         AppStateDetail::Full => serde_json::to_value(&snapshot)?,
                         AppStateDetail::Compact => compact_snapshot(&snapshot),
@@ -628,7 +659,18 @@ fn not_initialized(id: Value) -> Value {
     })
 }
 
-fn tool_definitions() -> Value {
+fn tool_definitions(model: &ModelSessionInfo) -> Value {
+    let can_receive_images = model.can_receive_images();
+    let point_description = if can_receive_images {
+        "With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend."
+    } else {
+        "Use current screen coordinates for the active input backend. This session's model does not support image input, so screenshot-coordinate targeting is disabled."
+    };
+    let drag_point_description = if can_receive_images {
+        "With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."
+    } else {
+        "Use current screen coordinates for the active input backend. This session's model does not support image input, so screenshot-coordinate targeting is disabled."
+    };
     json!([
         {
             "name": "doctor",
@@ -695,20 +737,14 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "get_app_state",
-            "description": "Build a structured desktop app-state snapshot with environment diagnostics and flattened accessibility elements.",
+            "description": if can_receive_images {
+                "Build a structured desktop app-state snapshot with environment diagnostics, flattened accessibility elements, and optional screen capture."
+            } else {
+                "Build a structured desktop app-state snapshot with environment diagnostics and flattened accessibility elements. This session's model does not support image input, so screen capture is disabled."
+            },
             "inputSchema": {
                 "type": "object",
-                "properties": {
-                    "app_id": { "type": "string" },
-                    "desktop_file_id": { "type": "string" },
-                    "window_title": { "type": "string" },
-                    "name": { "type": "string" },
-                    "detail": {
-                        "type": "string",
-                        "enum": ["full", "compact"],
-                        "description": "Use compact for fast screenshot-first loops. It keeps identifiers, screenshot metadata, diagnostics, and lean element anchors while omitting verbose element descriptions and static environment/capability details."
-                    }
-                },
+                "properties": get_app_state_properties(can_receive_images),
                 "additionalProperties": false
             }
         },
@@ -741,8 +777,8 @@ fn tool_definitions() -> Value {
             "Click an element by index from the current snapshot, or explicit x/y screen coordinates without a snapshot.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
-                "x": coordinate_schema("X coordinate. With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend."),
-                "y": coordinate_schema("Y coordinate. With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend.")
+                "x": coordinate_schema(&format!("X coordinate. {point_description}")),
+                "y": coordinate_schema(&format!("Y coordinate. {point_description}"))
             }),
             json!([]),
         ),
@@ -782,8 +818,8 @@ fn tool_definitions() -> Value {
             "Perform a secondary click or context action by element index from the current snapshot, or explicit x/y screen coordinates without a snapshot.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
-                "x": coordinate_schema("X coordinate. With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend."),
-                "y": coordinate_schema("Y coordinate. With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend."),
+                "x": coordinate_schema(&format!("X coordinate. {point_description}")),
+                "y": coordinate_schema(&format!("Y coordinate. {point_description}")),
                 "action": { "type": "string" }
             }),
             json!([]),
@@ -806,12 +842,12 @@ fn tool_definitions() -> Value {
             "Drag from one point or element to another; explicit coordinates can run without a snapshot.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
-                "x": coordinate_schema("Drag start X coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
-                "y": coordinate_schema("Drag start Y coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
-                "from_x": coordinate_schema("Drag start X coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
-                "from_y": coordinate_schema("Drag start Y coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
-                "to_x": coordinate_schema("Drag end X coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
-                "to_y": coordinate_schema("Drag end Y coordinate. With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."),
+                "x": coordinate_schema(&format!("Drag start X coordinate. {drag_point_description}")),
+                "y": coordinate_schema(&format!("Drag start Y coordinate. {drag_point_description}")),
+                "from_x": coordinate_schema(&format!("Drag start X coordinate. {drag_point_description}")),
+                "from_y": coordinate_schema(&format!("Drag start Y coordinate. {drag_point_description}")),
+                "to_x": coordinate_schema(&format!("Drag end X coordinate. {drag_point_description}")),
+                "to_y": coordinate_schema(&format!("Drag end Y coordinate. {drag_point_description}")),
                 "to_element_index": { "type": "integer", "minimum": 0 }
             }),
             json!([]),
@@ -855,10 +891,37 @@ fn tool_definitions() -> Value {
     ])
 }
 
-fn tools_list_result() -> Value {
+fn tools_list_result(model: &ModelSessionInfo) -> Value {
     json!({
-        "tools": tool_definitions()
+        "tools": tool_definitions(model)
     })
+}
+
+fn get_app_state_properties(can_receive_images: bool) -> Value {
+    let mut properties = json!({
+        "app_id": { "type": "string" },
+        "desktop_file_id": { "type": "string" },
+        "window_title": { "type": "string" },
+        "name": { "type": "string" },
+        "detail": {
+            "type": "string",
+            "enum": ["full", "compact"],
+            "description": "Use compact after discovery. It keeps identifiers, diagnostics, app identity, and lean element anchors while omitting verbose element descriptions and static environment/capability details."
+        }
+    });
+
+    if can_receive_images && let Some(property_map) = properties.as_object_mut() {
+        property_map.insert(
+            "capture_screen".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["auto", "if_changed", "always", "never"],
+                "description": "Screen-capture policy for this state snapshot. Defaults to if_changed. Use always when a fresh visual frame is required, never for structure-only loops, and auto when the runtime should choose."
+            }),
+        );
+    }
+
+    properties
 }
 
 fn coordinate_schema(description: &str) -> Value {
@@ -965,6 +1028,23 @@ fn parse_app_state_detail(arguments: &Value) -> AppStateDetail {
     }
 }
 
+fn effective_capture_screen(arguments: &Value, model: &ModelSessionInfo) -> CaptureScreenMode {
+    if !model.can_receive_images() {
+        return CaptureScreenMode::Never;
+    }
+    parse_capture_screen_mode(arguments).unwrap_or_default()
+}
+
+fn parse_capture_screen_mode(arguments: &Value) -> Option<CaptureScreenMode> {
+    match arguments.get("capture_screen").and_then(Value::as_str) {
+        Some("auto") => Some(CaptureScreenMode::Auto),
+        Some("if_changed") => Some(CaptureScreenMode::IfChanged),
+        Some("always") => Some(CaptureScreenMode::Always),
+        Some("never") => Some(CaptureScreenMode::Never),
+        _ => None,
+    }
+}
+
 fn parse_app_selector(arguments: &Value) -> Option<AppSelector> {
     let selector = AppSelector {
         app_id: arguments
@@ -996,6 +1076,94 @@ fn parse_app_selector(arguments: &Value) -> Option<AppSelector> {
     }
 }
 
+fn parse_model_session_info(body: &Value) -> ModelSessionInfo {
+    let env_override = std::env::var("SKY_CUA_MODEL_SUPPORTS_IMAGES")
+        .ok()
+        .and_then(|value| parse_bool_like(&Value::String(value)));
+    let supports_images = env_override.or_else(|| model_supports_images_from_initialize(body));
+    ModelSessionInfo { supports_images }
+}
+
+fn model_name_from_initialize(body: &Value) -> Option<String> {
+    [
+        "/params/model",
+        "/params/model/name",
+        "/params/model/id",
+        "/params/modelId",
+        "/params/model_id",
+    ]
+    .into_iter()
+    .find_map(|pointer| {
+        body.pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn model_supports_images_from_initialize(body: &Value) -> Option<bool> {
+    [
+        "/params/modelCapabilities/supportsImages",
+        "/params/modelCapabilities/images",
+        "/params/modelCapabilities/imageInput",
+        "/params/modelCapabilities/vision",
+        "/params/model_capabilities/supports_images",
+        "/params/model_capabilities/images",
+        "/params/model_capabilities/image_input",
+        "/params/model_capabilities/vision",
+        "/params/model/capabilities/supportsImages",
+        "/params/model/capabilities/images",
+        "/params/model/capabilities/imageInput",
+        "/params/model/capabilities/vision",
+        "/params/model/supportsImages",
+        "/params/model/supports_images",
+    ]
+    .into_iter()
+    .find_map(|pointer| body.pointer(pointer).and_then(parse_bool_like))
+    .or_else(|| model_name_from_initialize(body).and_then(infer_image_support_from_model_name))
+}
+
+fn parse_bool_like(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(value) => Some(*value),
+        Value::String(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" | "supported" | "enabled" => Some(true),
+            "0" | "false" | "no" | "off" | "unsupported" | "disabled" => Some(false),
+            _ => None,
+        },
+        Value::Array(values) => {
+            if values.is_empty() {
+                Some(false)
+            } else {
+                values.iter().find_map(parse_bool_like).or(Some(true))
+            }
+        }
+        Value::Object(map) => [
+            "input",
+            "input_image",
+            "image",
+            "images",
+            "vision",
+            "supported",
+        ]
+        .into_iter()
+        .find_map(|key| map.get(key).and_then(parse_bool_like)),
+        _ => None,
+    }
+}
+
+fn infer_image_support_from_model_name(name: String) -> Option<bool> {
+    let normalized = name.to_ascii_lowercase();
+    if normalized.contains("codex-spark") {
+        return Some(false);
+    }
+    if normalized.contains("gpt-5.4") || normalized.contains("gpt-5.5") {
+        return Some(true);
+    }
+    None
+}
+
 fn compact_snapshot(snapshot: &AppStateSnapshot) -> Value {
     let elements: Vec<Value> = snapshot.elements.iter().map(compact_element).collect();
     json!({
@@ -1004,6 +1172,7 @@ fn compact_snapshot(snapshot: &AppStateSnapshot) -> Value {
         "created_at": snapshot.created_at,
         "focused_app": snapshot.focused_app,
         "capture": snapshot.capture,
+        "agent_cursor": snapshot.agent_cursor,
         "diagnostics": snapshot.diagnostics,
         "app_guidance": snapshot.app_guidance,
         "doctor_report": snapshot.doctor_report,
@@ -1114,17 +1283,18 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        MessageFraming, action_summary, compact_element, compact_snapshot,
-        invalid_request_tool_error, list_apps_summary, parse_app_state_detail, parse_window_target,
-        read_message, setup_accessibility_is_error, setup_window_targeting_is_error,
-        snapshot_summary, tool_definitions, tools_list_result, write_message,
+        MessageFraming, ModelSessionInfo, action_summary, compact_element, compact_snapshot,
+        effective_capture_screen, invalid_request_tool_error, list_apps_summary,
+        parse_app_state_detail, parse_model_session_info, parse_window_target, read_message,
+        setup_accessibility_is_error, setup_window_targeting_is_error, snapshot_summary,
+        tool_definitions, tools_list_result, write_message,
     };
     use sky_cua_platform::model::{
-        AccessibilitySetupReport, ActionOutcome, AppInfo, AppStateSnapshot, CaptureBackendKind,
-        CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorReadiness, DoctorReport, ElementNode,
-        EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities, RectF,
-        SemanticBackendKind, SessionKind, SetupCommandReport, ToolAvailability, ToolCapabilities,
-        WindowTargetingSetupReport,
+        AccessibilitySetupReport, ActionOutcome, AgentCursorPoint, AgentCursorState, AppInfo,
+        AppStateSnapshot, CaptureBackendKind, CaptureScreenMode, CoordinateSpace, DiagnosticEntry,
+        DoctorCheck, DoctorReadiness, DoctorReport, ElementNode, EnvironmentInfo, FocusedApp,
+        InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
+        SetupCommandReport, ToolAvailability, ToolCapabilities, WindowTargetingSetupReport,
     };
 
     #[test]
@@ -1140,6 +1310,56 @@ mod tests {
         assert_eq!(
             parse_app_state_detail(&json!({})),
             super::AppStateDetail::Full
+        );
+    }
+
+    #[test]
+    fn capture_screen_defaults_and_respects_text_only_models() {
+        let vision_model = ModelSessionInfo {
+            supports_images: Some(true),
+        };
+        assert_eq!(
+            effective_capture_screen(&json!({}), &vision_model),
+            CaptureScreenMode::IfChanged
+        );
+        assert_eq!(
+            effective_capture_screen(&json!({"capture_screen": "always"}), &vision_model),
+            CaptureScreenMode::Always
+        );
+
+        let text_only_model = ModelSessionInfo {
+            supports_images: Some(false),
+        };
+        assert_eq!(
+            effective_capture_screen(&json!({"capture_screen": "always"}), &text_only_model),
+            CaptureScreenMode::Never
+        );
+    }
+
+    #[test]
+    fn initialize_model_capabilities_gate_capture_schema() {
+        let session = parse_model_session_info(&json!({
+            "method": "initialize",
+            "params": {
+                "model": "gpt-5.3-codex-spark",
+                "modelCapabilities": {
+                    "images": false
+                }
+            }
+        }));
+        assert_eq!(session.supports_images, Some(false));
+
+        let tools = tool_definitions(&session);
+        let get_app_state = tools
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["name"] == "get_app_state")
+            .expect("get_app_state tool");
+        assert!(
+            get_app_state["inputSchema"]["properties"]
+                .get("capture_screen")
+                .is_none()
         );
     }
 
@@ -1172,7 +1392,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_snapshot_includes_doctor_report() {
+    fn compact_snapshot_includes_doctor_report_and_agent_cursor() {
         let report = DoctorReport {
             environment: EnvironmentInfo {
                 session_kind: SessionKind::Wayland,
@@ -1291,6 +1511,20 @@ mod tests {
             diagnostics: Vec::new(),
             app_guidance: None,
             doctor_report: Some(report),
+            agent_cursor: Some(AgentCursorState {
+                visible: true,
+                sequence: 7,
+                model_point: Some(AgentCursorPoint {
+                    x: 42.0,
+                    y: 64.0,
+                    coordinate_space: CoordinateSpace::StreamPixels,
+                    mapping_id: Some("pipewire-stream-1".to_string()),
+                }),
+                native_point: None,
+                snapshot_id: Some("snap-1".to_string()),
+                source_action: None,
+                updated_at_ms: 1234,
+            }),
         };
         let compact = compact_snapshot(&snapshot);
         assert!(compact.get("doctor_report").is_some());
@@ -1298,11 +1532,16 @@ mod tests {
             compact["doctor_report"]["readiness"]["can_build_accessibility_tree"],
             true
         );
+        assert_eq!(compact["agent_cursor"]["sequence"], 7);
+        assert_eq!(
+            compact["agent_cursor"]["model_point"]["coordinate_space"],
+            "stream_pixels"
+        );
     }
 
     #[test]
     fn action_tool_schemas_are_strict_and_snapshot_scoped_where_needed() {
-        let tools = tool_definitions();
+        let tools = tool_definitions(&ModelSessionInfo::default());
         let click = tools
             .as_array()
             .expect("tools")
@@ -1429,7 +1668,7 @@ mod tests {
 
     #[test]
     fn tools_list_result_omits_empty_next_cursor() {
-        let result = tools_list_result();
+        let result = tools_list_result(&ModelSessionInfo::default());
 
         assert!(result.get("tools").is_some());
         assert!(result.get("nextCursor").is_none());
@@ -1531,6 +1770,7 @@ mod tests {
             }],
             app_guidance: None,
             doctor_report: None,
+            agent_cursor: None,
         };
 
         let summary = snapshot_summary(&snapshot);
@@ -1547,6 +1787,7 @@ mod tests {
             message: "timed out waiting for the RemoteDesktop portal session to start".to_string(),
             code: "PortalApprovalPending".to_string(),
             diagnostics: Vec::new(),
+            agent_cursor: None,
         };
 
         let summary = action_summary(&outcome);
@@ -1609,6 +1850,7 @@ mod tests {
             ],
             app_guidance: None,
             doctor_report: None,
+            agent_cursor: None,
         };
 
         let summary = snapshot_summary(&snapshot);
@@ -1633,6 +1875,7 @@ mod tests {
                     .to_string(),
                 details: Some("capture timed out on cached stream".to_string()),
             }],
+            agent_cursor: None,
         };
 
         let summary = action_summary(&outcome);
@@ -1753,6 +1996,7 @@ mod tests {
             ],
             app_guidance: None,
             doctor_report: None,
+            agent_cursor: None,
         };
 
         let summary = snapshot_summary(&snapshot);
@@ -1809,6 +2053,7 @@ mod tests {
             }],
             app_guidance: None,
             doctor_report: None,
+            agent_cursor: None,
         };
 
         let summary = snapshot_summary(&snapshot);

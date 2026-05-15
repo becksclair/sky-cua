@@ -11,6 +11,7 @@ pub mod kwin;
 pub mod portal;
 pub mod session_env;
 pub mod setup;
+pub mod virtual_input;
 pub mod windowing;
 pub mod x11;
 

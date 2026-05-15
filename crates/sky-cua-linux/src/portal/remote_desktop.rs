@@ -17,8 +17,12 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 use crate::portal::pipewire::{self, PipeWireFrameCapture};
+use crate::portal::preauthorize;
 use crate::portal::session::portal_u32_property;
-use crate::portal::token_store::{PersistedPortalToken, PortalTokenStore};
+use crate::portal::token_store::{
+    PersistedPortalToken, PortalTokenStore, current_compositor_hint,
+    portal_token_compositor_mismatch,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PortalStreamInfo {
@@ -71,6 +75,8 @@ pub struct PortalLifecycleEvent {
 }
 
 const SESSION_START_TIMEOUT: Duration = Duration::from_secs(12);
+const PORTAL_PREAUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(5);
+const PORTAL_SESSION_INPUT_SETTLE_DELAY: Duration = Duration::from_millis(120);
 const PIPEWIRE_REMOTE_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 const PORTAL_SESSION_STARTED: &str = "PortalSessionStarted";
 const PORTAL_SESSION_RESTORED: &str = "PortalSessionRestored";
@@ -165,6 +171,10 @@ impl RemoteDesktopSessionManager {
     pub async fn reset_session(&self) {
         let mut state = self.inner.lock().await;
         state.session = None;
+    }
+
+    pub async fn preauthorize_permissions(&self) {
+        preauthorize_with_timeout(self.token_store.as_ref()).await;
     }
 
     pub async fn pointer_move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
@@ -566,6 +576,8 @@ async fn start_session(
     )
     .await;
 
+    tokio::time::sleep(PORTAL_SESSION_INPUT_SETTLE_DELAY).await;
+
     Ok(StartedPortalSession {
         session: ActiveRemoteDesktopSession {
             remote_desktop,
@@ -581,6 +593,7 @@ async fn start_session(
 async fn start_session_with_timeout(
     token_store: Option<&PortalTokenStore>,
 ) -> Result<StartedPortalSession, BackendError> {
+    preauthorize_with_timeout(token_store).await;
     tokio::time::timeout(SESSION_START_TIMEOUT, start_session(token_store))
         .await
         .map_err(|_| {
@@ -597,7 +610,20 @@ fn load_stored_token(
 ) -> Option<PersistedPortalToken> {
     let token_store = token_store?;
     match token_store.load() {
-        Ok(token) => token,
+        Ok(Some(record)) => {
+            if let Some(details) = portal_token_compositor_mismatch(&record) {
+                lifecycle_events.push(PortalLifecycleEvent {
+                    code: PORTAL_SESSION_RESTORE_MISS,
+                    message: "Persisted portal restore token belongs to another compositor; falling back to a fresh portal session."
+                        .to_string(),
+                    details: Some(details),
+                });
+                None
+            } else {
+                Some(record)
+            }
+        }
+        Ok(None) => None,
         Err(error) => {
             lifecycle_events.push(PortalLifecycleEvent {
                 code: PORTAL_SESSION_RESTORE_MISS,
@@ -635,7 +661,7 @@ async fn persist_selected_restore_token(
         restore_token: restore_token.to_string(),
         updated_at: Utc::now(),
         xdg_session_type: std::env::var("XDG_SESSION_TYPE").ok(),
-        compositor: compositor_hint(),
+        compositor: current_compositor_hint(),
         remote_desktop_version: version().await.ok(),
         screencast_version: crate::portal::screencast::version().await.ok(),
     };
@@ -667,20 +693,17 @@ async fn persist_selected_restore_token(
     }
 }
 
-fn compositor_hint() -> Option<String> {
-    let xdg_current_desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
-    let desktop_session = std::env::var("DESKTOP_SESSION").ok();
-    let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
-    match (xdg_current_desktop, desktop_session, wayland_display) {
-        (Some(desktop), _, Some(_))
-            if desktop.to_ascii_lowercase().contains("kde")
-                || desktop.to_ascii_lowercase().contains("plasma") =>
-        {
-            Some("kde-kwin-wayland".to_string())
-        }
-        (Some(desktop), _, _) => Some(desktop),
-        (None, Some(session), _) => Some(session),
-        _ => None,
+async fn preauthorize_with_timeout(token_store: Option<&PortalTokenStore>) {
+    match tokio::time::timeout(
+        PORTAL_PREAUTHORIZATION_TIMEOUT,
+        preauthorize::preauthorize_remote_desktop(token_store),
+    )
+    .await
+    {
+        Ok(()) => {}
+        Err(_) => warn!(
+            "timed out preauthorizing RemoteDesktop portal state; falling back to the normal portal startup path"
+        ),
     }
 }
 

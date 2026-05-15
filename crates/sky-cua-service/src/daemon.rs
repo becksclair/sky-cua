@@ -1,14 +1,19 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::PathBuf;
 
 use sky_cua_platform::backend::DesktopBackend;
-use sky_cua_platform::model::{ActionName, ActionRequest, ServiceRequest, ServiceResponse};
+use sky_cua_platform::model::{
+    ActionName, ActionRequest, AppStateSnapshot, CaptureInfo, CaptureScreenMode, DiagnosticEntry,
+    ServiceRequest, ServiceResponse,
+};
 
 use crate::action_router::route_action;
 use crate::approval_store::ApprovalStore;
 use crate::backend_factory::create_backend;
 use crate::diagnostics::error_response;
 use crate::element_resolver::{resolve_action_element, resolve_target_element};
+use crate::overlay::{AgentCursorStatus, OverlayController};
 use crate::session_store::SessionStore;
 use crate::snapshot_manager::SnapshotManager;
 use tracing::debug;
@@ -17,16 +22,26 @@ pub struct ServiceDaemon {
     backend: Box<dyn DesktopBackend>,
     sessions: SessionStore,
     snapshots: SnapshotManager,
+    overlay: OverlayController,
     socket_path: PathBuf,
 }
 
 impl ServiceDaemon {
-    pub fn new(socket_path: PathBuf) -> std::io::Result<Self> {
+    pub async fn new(socket_path: PathBuf) -> std::io::Result<Self> {
         ApprovalStore::initialize()?;
+        let backend = create_backend();
+        if let Err(error) = backend.prepare_automation_permissions().await {
+            debug!(
+                code = error.code,
+                message = error.message,
+                "desktop backend automation permission preparation did not complete"
+            );
+        }
         Ok(Self {
-            backend: create_backend(),
+            backend,
             sessions: SessionStore::new(),
             snapshots: SnapshotManager::new(8),
+            overlay: OverlayController::new(&socket_path),
             socket_path,
         })
     }
@@ -128,22 +143,67 @@ impl ServiceDaemon {
                                 message: error.message.clone(),
                                 code: error.code.to_string(),
                                 diagnostics: vec![diagnostic],
+                                agent_cursor: None,
                             },
                         }
                     }
                 }
             }
-            ServiceRequest::GetAppState { selector } => {
-                debug!(selector = ?selector, "handling get_app_state request");
-                match self.backend.get_app_state(selector).await {
-                    Ok(snapshot) => {
+            ServiceRequest::GetAppState {
+                selector,
+                capture_screen,
+            } => {
+                debug!(selector = ?selector, ?capture_screen, "handling get_app_state request");
+                let capture_guard = (capture_screen != CaptureScreenMode::Never)
+                    .then(|| self.overlay.prepare_for_capture());
+                match self.backend.get_app_state(selector, capture_screen).await {
+                    Ok(mut snapshot) => {
+                        if capture_screen == CaptureScreenMode::IfChanged
+                            && reuse_unchanged_capture(&mut snapshot, self.snapshots.latest())
+                        {
+                            snapshot.diagnostics.push(DiagnosticEntry {
+                                code: "CaptureScreenUnchanged".to_string(),
+                                message: "Screen capture matched the previous model-facing image; reusing the previous screenshot path.".to_string(),
+                                details: None,
+                            });
+                        }
+                        if let Some(capture_guard) = capture_guard.as_ref() {
+                            snapshot
+                                .diagnostics
+                                .extend(capture_guard.diagnostics.iter().cloned());
+                        }
+                        self.overlay.apply_to_snapshot(&mut snapshot);
+                        if let Some(capture_guard) = capture_guard {
+                            snapshot
+                                .diagnostics
+                                .extend(self.overlay.restore_after_capture(capture_guard));
+                        }
                         self.snapshots.store(snapshot.clone());
                         ServiceResponse::GetAppState {
                             snapshot: Box::new(snapshot),
                         }
                     }
-                    Err(error) => error_response(error.code, error.message),
+                    Err(error) => {
+                        if let Some(capture_guard) = capture_guard {
+                            let _ = self.overlay.restore_after_capture(capture_guard);
+                        }
+                        error_response(error.code, error.message)
+                    }
                 }
+            }
+            ServiceRequest::AgentCursorStatus => {
+                agent_cursor_status_response(self.overlay.status(), AgentCursorResponseKind::Status)
+            }
+            ServiceRequest::SetAgentCursor { state } => agent_cursor_status_response(
+                self.overlay.set_state(state),
+                AgentCursorResponseKind::Set,
+            ),
+            ServiceRequest::HideAgentCursor { reason } => agent_cursor_status_response(
+                self.overlay.hide(reason),
+                AgentCursorResponseKind::Hide,
+            ),
+            ServiceRequest::ShowAgentCursor => {
+                agent_cursor_status_response(self.overlay.show(), AgentCursorResponseKind::Show)
             }
             ServiceRequest::ResetPortalTokens => {
                 debug!("handling reset_portal_tokens request");
@@ -161,7 +221,9 @@ impl ServiceDaemon {
                     Ok(request) => request,
                     Err((code, message)) => return error_response(code, message),
                 };
-                let outcome = route_action(self.backend.as_ref(), request).await;
+                let mut outcome = route_action(self.backend.as_ref(), request.clone()).await;
+                let cursor_diagnostics = self.overlay.update_from_action(&request, &mut outcome);
+                outcome.diagnostics.extend(cursor_diagnostics);
                 ServiceResponse::ExecuteAction { outcome }
             }
         }
@@ -223,6 +285,91 @@ impl ServiceDaemon {
     }
 }
 
+fn reuse_unchanged_capture(
+    snapshot: &mut AppStateSnapshot,
+    previous: Option<&AppStateSnapshot>,
+) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    let (Some(current_capture), Some(previous_capture)) =
+        (snapshot.capture.as_mut(), previous.capture.as_ref())
+    else {
+        return false;
+    };
+    if !capture_metadata_compatible_for_reuse(current_capture, previous_capture) {
+        return false;
+    }
+    let (Some(current_path), Some(previous_path)) = (
+        current_capture.screenshot_path.as_deref(),
+        previous_capture.screenshot_path.as_deref(),
+    ) else {
+        return false;
+    };
+    let Ok(current_bytes) = fs::read(current_path) else {
+        return false;
+    };
+    let Ok(previous_bytes) = fs::read(previous_path) else {
+        return false;
+    };
+    if current_bytes != previous_bytes {
+        return false;
+    }
+
+    current_capture.screenshot_path = previous_capture.screenshot_path.clone();
+    current_capture.original_screenshot_path = previous_capture.original_screenshot_path.clone();
+    current_capture.model_image_bytes = previous_capture.model_image_bytes;
+    current_capture.model_image_encode_ms = previous_capture.model_image_encode_ms;
+    true
+}
+
+fn capture_metadata_compatible_for_reuse(current: &CaptureInfo, previous: &CaptureInfo) -> bool {
+    current.backend == previous.backend
+        && current.image_backend == previous.image_backend
+        && current.coordinate_space == previous.coordinate_space
+        && current.pixel_size == previous.pixel_size
+        && current.original_pixel_size == previous.original_pixel_size
+        && current.logical_to_pixel_scale == previous.logical_to_pixel_scale
+        && current.logical_rect == previous.logical_rect
+        && current.model_image_format == previous.model_image_format
+        && current.model_image_quality == previous.model_image_quality
+}
+
+enum AgentCursorResponseKind {
+    Status,
+    Set,
+    Hide,
+    Show,
+}
+
+fn agent_cursor_status_response(
+    status: AgentCursorStatus,
+    kind: AgentCursorResponseKind,
+) -> ServiceResponse {
+    match kind {
+        AgentCursorResponseKind::Status => ServiceResponse::AgentCursorStatus {
+            capabilities: status.capabilities,
+            state: status.state,
+            diagnostics: status.diagnostics,
+        },
+        AgentCursorResponseKind::Set => ServiceResponse::SetAgentCursor {
+            capabilities: status.capabilities,
+            state: status.state,
+            diagnostics: status.diagnostics,
+        },
+        AgentCursorResponseKind::Hide => ServiceResponse::HideAgentCursor {
+            capabilities: status.capabilities,
+            state: status.state,
+            diagnostics: status.diagnostics,
+        },
+        AgentCursorResponseKind::Show => ServiceResponse::ShowAgentCursor {
+            capabilities: status.capabilities,
+            state: status.state,
+            diagnostics: status.diagnostics,
+        },
+    }
+}
+
 fn desktop_env_values_present() -> BTreeMap<String, String> {
     [
         "DBUS_SESSION_BUS_ADDRESS",
@@ -277,9 +424,54 @@ fn action_requires_snapshot_context(request: &ActionRequest) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::action_requires_snapshot_context;
+    use super::{
+        OverlayController, ServiceDaemon, SessionStore, SnapshotManager,
+        action_requires_snapshot_context, reuse_unchanged_capture,
+    };
+    use image::{ImageBuffer, Rgba};
     use serde_json::json;
-    use sky_cua_platform::model::{ActionName, ActionRequest};
+    use sky_cua_platform::backend::DesktopBackend;
+    use sky_cua_platform::diagnostics::BackendError;
+    use sky_cua_platform::model::{
+        ActionName, ActionOutcome, ActionRequest, AgentCursorPoint, AgentCursorState, AppInfo,
+        AppSelector, AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScreenMode,
+        CoordinateSpace, ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat,
+        PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
+        SessionKind, ToolAvailability, ToolCapabilities,
+    };
+    use std::path::{Path, PathBuf};
+
+    #[derive(Debug, Clone)]
+    struct FakeBackend {
+        snapshot: AppStateSnapshot,
+        outcome: ActionOutcome,
+    }
+
+    #[async_trait::async_trait]
+    impl DesktopBackend for FakeBackend {
+        async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+            Ok(self.snapshot.environment.clone())
+        }
+
+        async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_app_state(
+            &self,
+            _selector: Option<AppSelector>,
+            _capture_screen: CaptureScreenMode,
+        ) -> Result<AppStateSnapshot, BackendError> {
+            Ok(self.snapshot.clone())
+        }
+
+        async fn execute_action(
+            &self,
+            _request: ActionRequest,
+        ) -> Result<ActionOutcome, BackendError> {
+            Ok(self.outcome.clone())
+        }
+    }
 
     fn request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
         ActionRequest {
@@ -341,5 +533,345 @@ mod tests {
             ActionName::Drag,
             json!({"element_identifier": ":1.2:/node/3", "to_element_index": 4}),
         )));
+    }
+
+    #[tokio::test]
+    async fn cursor_status_requests_round_trip_through_daemon_handle() {
+        let mut daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
+        let state = AgentCursorState {
+            visible: true,
+            sequence: 99,
+            model_point: Some(AgentCursorPoint {
+                x: 12.0,
+                y: 34.0,
+                coordinate_space: CoordinateSpace::StreamPixels,
+                mapping_id: Some("stream".to_string()),
+            }),
+            native_point: None,
+            snapshot_id: Some("snap".to_string()),
+            source_action: Some(ActionName::Click),
+            updated_at_ms: 0,
+        };
+
+        match daemon
+            .handle(ServiceRequest::SetAgentCursor { state })
+            .await
+        {
+            ServiceResponse::SetAgentCursor {
+                state: Some(state),
+                diagnostics,
+                ..
+            } => {
+                assert_eq!(state.sequence, 1);
+                assert!(diagnostics.is_empty());
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        match daemon.handle(ServiceRequest::AgentCursorStatus).await {
+            ServiceResponse::AgentCursorStatus {
+                capabilities,
+                state: Some(state),
+                diagnostics,
+            } => {
+                assert!(capabilities.screenshot_synthetic_cursor);
+                assert_eq!(state.sequence, 1);
+                assert!(diagnostics.is_empty());
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        match daemon
+            .handle(ServiceRequest::HideAgentCursor {
+                reason: Some("capture".to_string()),
+            })
+            .await
+        {
+            ServiceResponse::HideAgentCursor {
+                state: Some(state),
+                diagnostics,
+                ..
+            } => {
+                assert!(!state.visible);
+                assert!(
+                    diagnostics
+                        .iter()
+                        .any(|entry| entry.code == "AgentCursorHidden")
+                );
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        match daemon.handle(ServiceRequest::ShowAgentCursor).await {
+            ServiceResponse::ShowAgentCursor {
+                state: Some(state), ..
+            } => assert!(state.visible),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_app_state_attaches_cursor_state_and_synthetic_screenshot() {
+        let dir = unique_temp_dir("daemon-get-state");
+        let source = dir.join("capture.png");
+        ImageBuffer::from_pixel(96, 96, Rgba([240u8, 240, 240, 255]))
+            .save(&source)
+            .expect("write source image");
+        let mut daemon = daemon_with(
+            snapshot(Some(capture_with_path(&source)), Vec::new()),
+            success_outcome(),
+        );
+        let state = AgentCursorState {
+            visible: true,
+            sequence: 0,
+            model_point: Some(AgentCursorPoint {
+                x: 48.0,
+                y: 48.0,
+                coordinate_space: CoordinateSpace::StreamPixels,
+                mapping_id: Some("stream".to_string()),
+            }),
+            native_point: None,
+            snapshot_id: Some("snap".to_string()),
+            source_action: Some(ActionName::Click),
+            updated_at_ms: 0,
+        };
+        let _ = daemon
+            .handle(ServiceRequest::SetAgentCursor { state })
+            .await;
+
+        match daemon
+            .handle(ServiceRequest::GetAppState {
+                selector: None,
+                capture_screen: CaptureScreenMode::Always,
+            })
+            .await
+        {
+            ServiceResponse::GetAppState { snapshot } => {
+                assert!(snapshot.agent_cursor.is_some());
+                let capture = snapshot.capture.expect("capture should remain present");
+                let output = capture.screenshot_path.expect("synthetic screenshot path");
+                assert!(output.ends_with("capture.agent-cursor.png"));
+                let rendered = image::open(&output).expect("open output").to_rgba8();
+                assert!(
+                    rendered
+                        .pixels()
+                        .any(|pixel| pixel != &Rgba([240u8, 240, 240, 255]))
+                );
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_action_updates_cursor_state_for_explicit_click() {
+        let mut daemon = daemon_with(
+            snapshot(Some(capture_with_rect()), Vec::new()),
+            success_outcome(),
+        );
+        let _ = daemon
+            .handle(ServiceRequest::GetAppState {
+                selector: None,
+                capture_screen: CaptureScreenMode::Always,
+            })
+            .await;
+
+        let mut click = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
+        click.snapshot_id = Some("snap".to_string());
+
+        match daemon
+            .handle(ServiceRequest::ExecuteAction {
+                request: Box::new(click),
+            })
+            .await
+        {
+            ServiceResponse::ExecuteAction { outcome } => {
+                let state = outcome.agent_cursor.expect("outcome cursor state");
+                let point = state.model_point.expect("model point");
+                assert_eq!(point.x, 42.0);
+                assert_eq!(point.y, 24.0);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        match daemon.handle(ServiceRequest::AgentCursorStatus).await {
+            ServiceResponse::AgentCursorStatus {
+                state: Some(state), ..
+            } => assert_eq!(state.sequence, 1),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn if_changed_reuses_previous_identical_model_capture_path() {
+        let dir = unique_temp_dir("if-changed");
+        let previous_path = dir.join("previous.jpg");
+        let current_path = dir.join("current.jpg");
+        std::fs::write(&previous_path, b"same model image").expect("write previous");
+        std::fs::write(&current_path, b"same model image").expect("write current");
+
+        let previous = snapshot(Some(capture_with_path(&previous_path)), Vec::new());
+        let mut current = snapshot(Some(capture_with_path(&current_path)), Vec::new());
+
+        assert!(reuse_unchanged_capture(&mut current, Some(&previous)));
+        assert_eq!(
+            current
+                .capture
+                .expect("capture")
+                .screenshot_path
+                .expect("path"),
+            previous_path.display().to_string()
+        );
+    }
+
+    #[test]
+    fn if_changed_keeps_current_capture_when_image_changed() {
+        let dir = unique_temp_dir("if-changed-different");
+        let previous_path = dir.join("previous.jpg");
+        let current_path = dir.join("current.jpg");
+        std::fs::write(&previous_path, b"old model image").expect("write previous");
+        std::fs::write(&current_path, b"new model image").expect("write current");
+
+        let previous = snapshot(Some(capture_with_path(&previous_path)), Vec::new());
+        let mut current = snapshot(Some(capture_with_path(&current_path)), Vec::new());
+
+        assert!(!reuse_unchanged_capture(&mut current, Some(&previous)));
+        assert_eq!(
+            current
+                .capture
+                .expect("capture")
+                .screenshot_path
+                .expect("path"),
+            current_path.display().to_string()
+        );
+    }
+
+    fn daemon_with(snapshot: AppStateSnapshot, outcome: ActionOutcome) -> ServiceDaemon {
+        ServiceDaemon {
+            backend: Box::new(FakeBackend { snapshot, outcome }),
+            sessions: SessionStore::new(),
+            snapshots: SnapshotManager::new(8),
+            overlay: OverlayController::new_for_tests(),
+            socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
+        }
+    }
+
+    fn success_outcome() -> ActionOutcome {
+        ActionOutcome {
+            success: true,
+            message: "ok".to_string(),
+            code: "Ok".to_string(),
+            diagnostics: Vec::new(),
+            agent_cursor: None,
+        }
+    }
+
+    fn snapshot(capture: Option<CaptureInfo>, elements: Vec<ElementNode>) -> AppStateSnapshot {
+        AppStateSnapshot {
+            snapshot_id: "snap".to_string(),
+            created_at: chrono::Utc::now(),
+            environment: environment(),
+            capabilities: available_capabilities(),
+            focused_app: None,
+            capture,
+            elements,
+            diagnostics: Vec::new(),
+            app_guidance: None,
+            doctor_report: None,
+            agent_cursor: None,
+        }
+    }
+
+    fn environment() -> EnvironmentInfo {
+        EnvironmentInfo {
+            session_kind: SessionKind::Wayland,
+            compositor: Some("KWin".to_string()),
+            desktop_environment: Some("KDE".to_string()),
+            capture_backend: CaptureBackendKind::PortalPipeWire,
+            input_backend: InputBackendKind::PortalRemoteDesktop,
+            semantic_backend: SemanticBackendKind::Atspi,
+            portal_capabilities: PortalCapabilities {
+                screencast_version: Some(5),
+                remote_desktop_version: Some(2),
+                screenshot_version: Some(1),
+                available_source_types: None,
+                available_cursor_modes: None,
+                available_device_types: None,
+            },
+            xdg_session_type: Some("wayland".to_string()),
+            display: None,
+            wayland_display: Some("wayland-0".to_string()),
+        }
+    }
+
+    fn capture_with_rect() -> CaptureInfo {
+        CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("stream".to_string()),
+            source_type: Some(1),
+            mapping_id: Some("mapping".to_string()),
+            logical_rect: Some(RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 200.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            pixel_size: Some(PixelSize {
+                width: 400,
+                height: 200,
+            }),
+            original_pixel_size: None,
+            logical_to_pixel_scale: None,
+            screenshot_path: None,
+            original_screenshot_path: None,
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: None,
+            model_image_encode_ms: None,
+        }
+    }
+
+    fn capture_with_path(path: &Path) -> CaptureInfo {
+        let mut capture = capture_with_rect();
+        capture.screenshot_path = Some(path.display().to_string());
+        capture.model_image_format = None;
+        capture
+    }
+
+    fn available_capabilities() -> ToolCapabilities {
+        let available = || ToolAvailability {
+            available: true,
+            reason: None,
+        };
+        ToolCapabilities {
+            list_apps: available(),
+            get_app_state: available(),
+            focus_element: available(),
+            activate_element: available(),
+            select_element: available(),
+            expand_element: available(),
+            collapse_element: available(),
+            toggle_element: available(),
+            click: available(),
+            perform_action: available(),
+            perform_secondary_action: available(),
+            scroll: available(),
+            drag: available(),
+            type_text: available(),
+            press_key: available(),
+            set_value: available(),
+        }
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sky-cua-daemon-agent-cursor-{name}-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
     }
 }

@@ -947,6 +947,7 @@ fn success(message: &str) -> ActionOutcome {
         message: message.to_string(),
         code: "Completed".to_string(),
         diagnostics: Vec::new(),
+        agent_cursor: None,
     }
 }
 

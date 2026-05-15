@@ -3,13 +3,17 @@ use async_trait::async_trait;
 use crate::diagnostics::BackendError;
 use crate::model::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
-    CaptureBackendKind, DoctorCheck, DoctorReadiness, DoctorReport, EnvironmentInfo,
-    HeuristicMatch, InputBackendKind, PortalTokenResetOutcome, SemanticBackendKind, WindowInfo,
-    WindowTarget, WindowTargetingSetupReport,
+    CaptureBackendKind, CaptureScreenMode, DoctorCheck, DoctorReadiness, DoctorReport,
+    EnvironmentInfo, HeuristicMatch, InputBackendKind, PortalTokenResetOutcome,
+    SemanticBackendKind, WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
 
 #[async_trait]
 pub trait DesktopBackend: Send + Sync {
+    async fn prepare_automation_permissions(&self) -> Result<(), BackendError> {
+        Ok(())
+    }
+
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError>;
     async fn doctor(&self) -> Result<DoctorReport, BackendError> {
         let environment = self.probe_environment().await?;
@@ -105,6 +109,7 @@ pub trait DesktopBackend: Send + Sync {
     async fn get_app_state(
         &self,
         selector: Option<AppSelector>,
+        capture_screen: CaptureScreenMode,
     ) -> Result<AppStateSnapshot, BackendError>;
     async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError>;
     async fn reset_portal_tokens(&self) -> Result<PortalTokenResetOutcome, BackendError> {

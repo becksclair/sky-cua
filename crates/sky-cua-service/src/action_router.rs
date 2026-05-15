@@ -15,6 +15,7 @@ pub async fn route_action(
                 message: error.message.clone(),
                 code: error.code.to_string(),
                 diagnostics: vec![diagnostic],
+                agent_cursor: None,
             }
         })
 }

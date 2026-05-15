@@ -8,6 +8,7 @@ use sky_cua_platform::model::{
 };
 
 use crate::portal::{remote_desktop, screencast, screenshot};
+use crate::virtual_input;
 use crate::x11;
 use tracing::debug;
 
@@ -62,10 +63,12 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
         x11::capture::x11_capture_available(),
     );
 
+    let virtual_input_available = virtual_input::probe_virtual_input().is_ok();
     let input_backend = select_input_backend(
         session_kind.clone(),
         &portal_capabilities,
         x11::input_xtest::xtest_is_available(),
+        virtual_input_available,
     );
 
     Ok(EnvironmentInfo {
@@ -106,12 +109,10 @@ fn infer_session_kind(
         _ => {}
     }
 
-    if compositor.is_some_and(|value| value.contains("wayland")) {
+    if has_wayland_display || compositor.is_some_and(|value| value.contains("wayland")) {
         SessionKind::Wayland
     } else if has_display && x11_server_available {
         SessionKind::X11
-    } else if has_wayland_display {
-        SessionKind::Wayland
     } else {
         SessionKind::Unsupported
     }
@@ -147,7 +148,16 @@ fn select_input_backend(
     session_kind: SessionKind,
     portal_capabilities: &PortalCapabilities,
     xtest_available: bool,
+    virtual_input_available: bool,
 ) -> InputBackendKind {
+    if let Some(override_backend) = input_backend_override(
+        session_kind.clone(),
+        xtest_available,
+        virtual_input_available,
+    ) {
+        return override_backend;
+    }
+
     match session_kind {
         SessionKind::X11 => {
             if xtest_available {
@@ -159,12 +169,51 @@ fn select_input_backend(
         SessionKind::Wayland => {
             if portal_capabilities.remote_desktop_version.is_some() {
                 InputBackendKind::PortalRemoteDesktop
+            } else if virtual_input_available {
+                InputBackendKind::LinuxVirtualInput
             } else {
                 InputBackendKind::None
             }
         }
         SessionKind::Windows | SessionKind::Unsupported => InputBackendKind::None,
     }
+}
+
+fn input_backend_override(
+    session_kind: SessionKind,
+    xtest_available: bool,
+    virtual_input_available: bool,
+) -> Option<InputBackendKind> {
+    let value = env::var("SKY_CUA_INPUT_BACKEND").ok()?;
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() || normalized == "auto" {
+        return None;
+    }
+    Some(match normalized.as_str() {
+        "portal" | "remote-desktop" | "remote_desktop" => {
+            if session_kind == SessionKind::Wayland {
+                InputBackendKind::PortalRemoteDesktop
+            } else {
+                InputBackendKind::None
+            }
+        }
+        "x11" | "xtest" => {
+            if session_kind == SessionKind::X11 && xtest_available {
+                InputBackendKind::XTest
+            } else {
+                InputBackendKind::None
+            }
+        }
+        "linux-virtual" | "linux_virtual" | "virtual" | "ydotool" => {
+            if virtual_input_available {
+                InputBackendKind::LinuxVirtualInput
+            } else {
+                InputBackendKind::None
+            }
+        }
+        "none" => InputBackendKind::None,
+        _ => return None,
+    })
 }
 
 fn empty_portal_capabilities() -> PortalCapabilities {
@@ -337,6 +386,12 @@ mod tests {
     }
 
     #[test]
+    fn ssh_tty_with_wayland_display_prefers_wayland_over_xwayland_display() {
+        let session_kind = infer_session_kind(Some("tty"), true, true, None, true);
+        assert_eq!(session_kind, SessionKind::Wayland);
+    }
+
+    #[test]
     fn unsupported_environment_returns_no_display_error() {
         let environment = EnvironmentInfo {
             session_kind: SessionKind::Unsupported,
@@ -408,7 +463,7 @@ mod tests {
             CaptureBackendKind::X11
         );
         assert_eq!(
-            select_input_backend(SessionKind::X11, &capabilities, true),
+            select_input_backend(SessionKind::X11, &capabilities, true, true),
             InputBackendKind::XTest
         );
     }
@@ -429,8 +484,29 @@ mod tests {
             CaptureBackendKind::PortalPipeWire
         );
         assert_eq!(
-            select_input_backend(SessionKind::Wayland, &capabilities, true),
+            select_input_backend(SessionKind::Wayland, &capabilities, true, true),
             InputBackendKind::PortalRemoteDesktop
+        );
+    }
+
+    #[test]
+    fn wayland_without_remote_desktop_uses_linux_virtual_input_when_available() {
+        let capabilities = PortalCapabilities {
+            screencast_version: Some(5),
+            remote_desktop_version: None,
+            screenshot_version: Some(2),
+            available_source_types: None,
+            available_cursor_modes: None,
+            available_device_types: None,
+        };
+
+        assert_eq!(
+            select_input_backend(SessionKind::Wayland, &capabilities, false, true),
+            InputBackendKind::LinuxVirtualInput
+        );
+        assert_eq!(
+            select_input_backend(SessionKind::Wayland, &capabilities, false, false),
+            InputBackendKind::None
         );
     }
 }

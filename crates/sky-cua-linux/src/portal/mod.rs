@@ -1,4 +1,5 @@
 pub mod pipewire;
+pub mod preauthorize;
 pub mod remote_desktop;
 pub mod screencast;
 pub mod screenshot;

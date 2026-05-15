@@ -32,7 +32,7 @@ pub async fn run_service() -> Result<()> {
     }
 
     let listener = UnixListener::bind(&socket_path)?;
-    let mut daemon = ServiceDaemon::new(socket_path.clone())?;
+    let mut daemon = ServiceDaemon::new(socket_path.clone()).await?;
     info!("sky-cua-service listening on {}", socket_path.display());
 
     loop {
@@ -55,6 +55,10 @@ pub async fn run_service() -> Result<()> {
                     break;
                 }
             }
+            _ = shutdown_signal() => {
+                info!("sky-cua-service shutdown signal received; exiting");
+                break;
+            }
         }
     }
 
@@ -62,12 +66,27 @@ pub async fn run_service() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    match signal(SignalKind::terminate()) {
+        Ok(mut signal) => {
+            signal.recv().await;
+        }
+        Err(error) => {
+            warn!("failed to install SIGTERM handler: {error}");
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
 #[cfg(windows)]
 pub async fn run_service() -> Result<()> {
     let bind_addr = service_tcp_addr();
     let listener = TcpListener::bind(&bind_addr).await?;
     let local_addr = listener.local_addr()?.to_string();
-    let mut daemon = ServiceDaemon::new(local_addr.clone().into())?;
+    let mut daemon = ServiceDaemon::new(local_addr.clone().into()).await?;
     info!("sky-cua-service listening on {}", local_addr);
 
     loop {

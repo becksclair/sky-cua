@@ -8,9 +8,9 @@ use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
-    CaptureBackendKind, CaptureInfo, CoordinateSpace, ElementNode, EnvironmentInfo, FocusedApp,
-    InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF, SemanticBackendKind,
-    SessionKind, ToolAvailability, ToolCapabilities,
+    CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, ElementNode,
+    EnvironmentInfo, FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities,
+    RectF, SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
 };
 use sky_cua_platform::{new_snapshot_id, sky_cua_state_dir};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, WPARAM};
@@ -210,6 +210,7 @@ impl DesktopBackend for WindowsDesktopBackend {
     async fn get_app_state(
         &self,
         selector: Option<AppSelector>,
+        capture_screen: CaptureScreenMode,
     ) -> Result<AppStateSnapshot, BackendError> {
         let snapshot_id = new_snapshot_id();
         let environment = self.probe_environment().await?;
@@ -236,18 +237,22 @@ impl DesktopBackend for WindowsDesktopBackend {
             .or_else(|| windows.iter().find(|window| window.is_foreground).cloned())
             .or_else(|| windows.first().cloned());
 
-        let capture_result = match capture_desktop(&snapshot_id, selected.as_ref()).await {
-            Ok(result) => Some(result),
-            Err(error) => {
-                diagnostics.push(
-                    BackendErrorCode::Internal,
-                    "Windows GDI screenshot capture failed",
-                    Some(error.message),
-                );
-                Some(CaptureResult {
-                    capture: empty_capture(),
-                    blank_frame: None,
-                })
+        let capture_result = if capture_screen == CaptureScreenMode::Never {
+            None
+        } else {
+            match capture_desktop(&snapshot_id, selected.as_ref()).await {
+                Ok(result) => Some(result),
+                Err(error) => {
+                    diagnostics.push(
+                        BackendErrorCode::Internal,
+                        "Windows GDI screenshot capture failed",
+                        Some(error.message),
+                    );
+                    Some(CaptureResult {
+                        capture: empty_capture(),
+                        blank_frame: None,
+                    })
+                }
             }
         };
 
@@ -330,6 +335,7 @@ impl DesktopBackend for WindowsDesktopBackend {
             diagnostics: diagnostics.finish(),
             app_guidance: None,
             doctor_report: None,
+            agent_cursor: None,
         })
     }
 
@@ -390,7 +396,8 @@ fn execute_send_input_action(request: &ActionRequest) -> Result<ActionOutcome, B
         | ActionName::SelectElement
         | ActionName::ExpandElement
         | ActionName::CollapseElement
-        | ActionName::ToggleElement => Err(BackendError::new(
+        | ActionName::ToggleElement
+        | ActionName::PerformAction => Err(BackendError::new(
             BackendErrorCode::ActionUnsupportedForEnvironment,
             "this semantic automation primitive requires Windows UI Automation",
         )),
@@ -453,6 +460,7 @@ fn execute_send_input_action(request: &ActionRequest) -> Result<ActionOutcome, B
                             .to_string(),
                     details: None,
                 }],
+                agent_cursor: None,
             })
         }
     }
@@ -465,7 +473,8 @@ fn execute_window_message_action(request: &ActionRequest) -> Result<ActionOutcom
         | ActionName::SelectElement
         | ActionName::ExpandElement
         | ActionName::CollapseElement
-        | ActionName::ToggleElement => Err(BackendError::new(
+        | ActionName::ToggleElement
+        | ActionName::PerformAction => Err(BackendError::new(
             BackendErrorCode::ActionUnsupportedForEnvironment,
             "this semantic automation primitive requires Windows UI Automation",
         )),
@@ -526,6 +535,7 @@ fn execute_window_message_action(request: &ActionRequest) -> Result<ActionOutcom
                             .to_string(),
                     details: None,
                 }],
+                agent_cursor: None,
             })
         }
     }
@@ -564,6 +574,7 @@ fn success(message: &str) -> ActionOutcome {
         message: message.to_string(),
         code: "Completed".to_string(),
         diagnostics: Vec::new(),
+        agent_cursor: None,
     }
 }
 
