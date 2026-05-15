@@ -140,13 +140,20 @@ python3 scripts/deploy_release_plugin.py
 `deploy_debug_plugin.py` keeps the direct debug-cache install as
 `sky-cua@debug`. `deploy_release_plugin.py` stages a release bundle through the
 local Heliasar marketplace checkout under `~/projects/heliasar-marketplace`,
-installs it through Codex, and enables `sky-cua@Heliasar` without changing the
-configured marketplace source. `publish_marketplace_release.py` commits and
-pushes that marketplace checkout before upgrading the Codex Git marketplace.
-The deploy scripts switch debug and release plugin ids mutually so Codex does
-not see duplicate `computer-use` MCP servers. Deploys preserve already-staged
-binaries for other platforms, so rebuilding on Linux does not delete Windows
-`.exe` binaries from the local marketplace and vice versa.
+installs it through Codex, and enables `sky-cua@Heliasar`. If
+`~/.codex/config.toml` already has a Heliasar marketplace source, release deploy
+preserves it; otherwise it configures the local checkout as
+`[marketplaces.Heliasar]`. The deploy scripts switch debug and release plugin
+ids mutually so Codex does not see duplicate `computer-use` MCP servers, and
+`computer-use@openai-bundled` should remain disabled when `sky-cua@Heliasar` is
+active. Deploys preserve already-staged binaries for other platforms, so
+rebuilding on Linux does not delete Windows `.exe` binaries from the local
+marketplace and vice versa.
+
+If the local Codex config gets stale, the durable reset procedure is documented
+in `docs/mcp-runtime.md` under "Codex release deploy and config reset".
+`publish_marketplace_release.py` commits and pushes the marketplace checkout
+before upgrading the Codex Git marketplace.
 
 Reset persisted portal restore tokens:
 

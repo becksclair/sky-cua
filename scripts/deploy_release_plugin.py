@@ -221,6 +221,10 @@ def install_release_cache(bundle_root: Path, codex_home: Path) -> Path:
     return destination
 
 
+def config_has_release_marketplace(config_text: str) -> bool:
+    return f"[marketplaces.{RELEASE_MARKETPLACE_NAME}]" in config_text
+
+
 def is_cache_backup_access_denied(error: RuntimeError) -> bool:
     message = str(error)
     return "failed to back up plugin cache entry" in message and "Access is denied" in message
@@ -306,6 +310,7 @@ def main() -> int:
     deploy_complete = False
     installed_path = release_root
     previous_config = config_path.read_text() if config_path.exists() else None
+    configure_local_marketplace = not config_has_release_marketplace(previous_config or "")
     try:
         stop_unix_runtime_processes([cache_root.parent, release_root])
         if not args.skip_codex_install:
@@ -316,6 +321,7 @@ def main() -> int:
                 config_path,
                 plugin_id=RELEASE_PLUGIN_ID,
                 plugin_enabled=False,
+                marketplace_root=args.marketplace_root if configure_local_marketplace else None,
             )
             stop_windows_cache_processes(cache_root)
             try:
@@ -330,6 +336,7 @@ def main() -> int:
                 config_path,
                 plugin_id=RELEASE_PLUGIN_ID,
                 disabled_plugin_ids=[PLUGIN_ID],
+                marketplace_root=args.marketplace_root if configure_local_marketplace else None,
             )
             reload_mcp_servers(codex_bin, args.codex_home)
             deploy_complete = True
@@ -340,6 +347,7 @@ def main() -> int:
                 config_path,
                 plugin_id=RELEASE_PLUGIN_ID,
                 disabled_plugin_ids=[PLUGIN_ID],
+                marketplace_root=args.marketplace_root if configure_local_marketplace else None,
             )
             deploy_complete = True
     except Exception:

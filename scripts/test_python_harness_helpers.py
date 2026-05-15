@@ -1926,6 +1926,49 @@ def test_release_deploy_preserves_existing_git_marketplace_source(
     assert parsed["plugins"]["sky-cua@debug"]["enabled"] is False
 
 
+def test_release_deploy_configures_local_marketplace_when_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    marketplace_root = tmp_path / "marketplace"
+    bundle_root = tmp_path / "bundle"
+    config_path = codex_home / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '[plugins."sky-cua@debug"]\nenabled = false\n',
+        encoding="utf-8",
+    )
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+
+    monkeypatch.setattr(release_deploy, "install_with_codex", lambda *_args: None)
+    monkeypatch.setattr(release_deploy, "reload_mcp_servers", lambda *_args: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "deploy_release_plugin.py",
+            "--no-build",
+            "--codex-home",
+            str(codex_home),
+            "--marketplace-root",
+            str(marketplace_root),
+            "--bundle-root",
+            str(bundle_root),
+            "--codex-bin",
+            "codex",
+        ],
+    )
+
+    assert release_deploy.main() == 0
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["marketplaces"]["Heliasar"]["source_type"] == "local"
+    assert parsed["marketplaces"]["Heliasar"]["source"] == codex_config_path(marketplace_root)
+    assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is True
+    assert parsed["plugins"]["sky-cua@debug"]["enabled"] is False
+
+
 def test_codex_config_upsert_updates_crlf_sections_without_duplicate_tables(tmp_path: Path) -> None:
     config_path = tmp_path / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
