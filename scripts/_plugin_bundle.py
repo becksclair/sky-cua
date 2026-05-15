@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import platform
@@ -31,7 +32,7 @@ LINUX_X64 = "linux-x64"
 LINUX_ARM64 = "linux-arm64"
 WINDOWS_X64 = "windows-x64"
 REQUIRED_RUNTIME_PLATFORMS = (LINUX_X64, LINUX_ARM64, WINDOWS_X64)
-RUNTIME_BINARY_BASE_NAMES = ("sky-cua-client", "sky-cua-service")
+RUNTIME_BINARY_BASE_NAMES = ("sky-cua-client", "sky-cua-service", "sky-cua-overlay-host")
 LINUX_RUNTIME_BINARY_BASE_NAMES = (
     *RUNTIME_BINARY_BASE_NAMES,
     "sky-cua-cosmic-helper",
@@ -218,7 +219,14 @@ def remove_path(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink()
         return
-    shutil.rmtree(path)
+    for attempt in range(3):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as exc:
+            if exc.errno != errno.ENOTEMPTY or attempt == 2:
+                raise
+            time.sleep(0.05)
 
 
 def copytree_replace(src: Path, dst: Path) -> None:
@@ -335,6 +343,7 @@ def _is_sky_cua_runtime_process(
     process_name = Path(exe or "").name
     if process_name not in {
         "sky-cua-client",
+        "sky-cua-overlay-host",
         "sky-cua-service",
         "sky-cua-chrome-host",
         "sky-cua-cosmic-helper",
@@ -365,6 +374,7 @@ def ensure_bundle_structure(root: Path) -> None:
         root / ".codex-plugin" / "plugin.json",
         root / ".mcp.json",
         root / "skills" / "computer-use-workflows" / "SKILL.md",
+        root / "skills" / "sky-cua-isolated-daemon" / "references" / "testing-vm-desktop-smokes.md",
         root / "resources" / "app-instructions" / "index.json",
     ]
     required.extend(root / path for path in bundle_entrypoint_paths())

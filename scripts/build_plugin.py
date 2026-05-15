@@ -44,12 +44,15 @@ NODE_REPL_NAME = "node_repl"
 WORKTREE_BUNDLE_FILES = (Path("resources") / "chrome_preflight.py",)
 WORKTREE_BUNDLE_DIRS = (
     Path("resources") / "chrome-extension",
+    Path("resources") / "kwin",
     Path("skills") / "computer-use-workflows" / "references" / "apps",
+    Path("skills") / "sky-cua-isolated-daemon" / "references",
 )
 
 CARGO_BUILD_PACKAGES = [
     "sky-cua-client",
     "sky-cua-service",
+    "sky-cua-overlay-host",
     "sky-cua-chrome-host",
     *([] if sys.platform == "win32" else ["sky-cua-cosmic-helper"]),
 ]

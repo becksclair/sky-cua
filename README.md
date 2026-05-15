@@ -124,6 +124,12 @@ python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
 ```
 
+For production-like Linux GUI and non-Codex harness proof, use the Arch
+`testing-vm` path in `docs/gui-desktop-test-harness.md`. The VM provisioner
+installs OpenCode, and `scripts/testing-vm/sync-opencode-to-vm.sh` copies the
+host OpenCode config/auth without copying the host OpenCode database, logs, or
+snapshots.
+
 Deploy local Codex plugin builds:
 
 ```bash
@@ -156,23 +162,22 @@ portal approval, installed apps, or local Codex auth.
 ```bash
 python3 scripts/live_desktop_smoke.py
 python3 scripts/live_portal_downgrade_smoke.py
-python3 scripts/live_x11_smoke.py
 python3 scripts/live_kate_smoke.py
 python3 scripts/live_krita_smoke.py
 python3 scripts/live_app_server_smoke.py
-python3 scripts/live_app_server_tidal_playlist.py
-python3 scripts/gui_desktop_smoke.py --profile kde
+python3 scripts/live_wayland_pointer_smoke.py
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use
 ```
 
-`scripts/gui_desktop_smoke.py` is currently a matrix-harness scaffold. It
-writes the selected profile artifact and exits non-zero until the
-profile-specific graphical session runners exist.
+`scripts/run_gui_testing_vm_smoke.py` is the current Linux GUI matrix runner.
+It targets the Arch `testing-vm` with real guest desktop sessions rather than
+embedded X servers or container-nested compositors. It only copies selected
+host Codex auth/config into the VM when `--sync-codex-settings` is set.
 
 Diagnostic or legacy lanes:
 
 ```bash
 python3 scripts/live_codex_exec_smoke.py
-python3 scripts/live_codex_exec_tidal_playlist.py
 python3 scripts/live_kdialog_smoke.py
 ```
 

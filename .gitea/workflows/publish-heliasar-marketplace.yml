@@ -11,7 +11,7 @@ jobs:
       - name: Build release runtime
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          cargo build --release --package sky-cua-client --package sky-cua-service --package sky-cua-cosmic-helper --package sky-cua-chrome-host
+          python3 scripts/build_runtime_packages.py --platform linux-x64
       - name: Package runtime artifact
         run: python3 scripts/package_runtime_artifact.py --platform linux-x64 --output-root artifacts/runtime
       - uses: actions/upload-artifact@v3
@@ -25,7 +25,7 @@ jobs:
       - name: Build release runtime
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          cargo build --release --package sky-cua-client --package sky-cua-service --package sky-cua-cosmic-helper --package sky-cua-chrome-host
+          python3 scripts/build_runtime_packages.py --platform linux-arm64
       - name: Package runtime artifact
         run: python3 scripts/package_runtime_artifact.py --platform linux-arm64 --output-root artifacts/runtime
       - uses: actions/upload-artifact@v3
@@ -45,7 +45,7 @@ jobs:
           set RUSTC_WRAPPER=
           set RUSTC_WORKSPACE_WRAPPER=
           set PATH=C:\Users\bex\scoop\apps\llvm\current\bin;C:\Users\bex\scoop\shims;C:\Users\bex\.cargo\bin;%PATH%
-          cargo build --release --package sky-cua-client --package sky-cua-service
+          python scripts/build_runtime_packages.py --platform windows-x64
       - name: Package runtime artifact
         shell: cmd
         run: |
