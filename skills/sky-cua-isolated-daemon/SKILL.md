@@ -1,6 +1,6 @@
 ---
 name: sky-cua-isolated-daemon
-description: "Use when running or debugging sky-cua live tests, browser/X11/portal smokes, or daemon-backed checks that must exercise the current checkout's latest build through an isolated service socket instead of any older installed or already-running sky-cua daemon."
+description: "Use when running or debugging sky-cua live tests, browser/X11/Wayland/portal smokes, testing-vm desktop matrix profiles, or daemon-backed checks that must exercise the current checkout's latest build through an isolated service socket instead of any older installed or already-running sky-cua daemon."
 ---
 
 # Sky CUA Isolated Daemon
@@ -55,13 +55,13 @@ rm -f "$SOCKET"
 SKY_CUA_SERVICE_SOCKET_PATH="$SOCKET" python3 scripts/live_desktop_smoke.py
 ```
 
-Pure X11 smoke:
+Wayland pointer smoke:
 
 ```bash
 cargo build --release -p sky-cua-service -p sky-cua-client
-SOCKET="/tmp/sky-cua-live-x11-$$.sock"
+SOCKET="/tmp/sky-cua-live-wayland-pointer-$$.sock"
 rm -f "$SOCKET"
-SKY_CUA_SERVICE_SOCKET_PATH="$SOCKET" python3 scripts/live_x11_smoke.py
+SKY_CUA_SERVICE_SOCKET_PATH="$SOCKET" python3 scripts/live_wayland_pointer_smoke.py
 ```
 
 Chrome native-host smoke:
@@ -76,6 +76,10 @@ SKY_CUA_SERVICE_SOCKET_PATH="$SOCKET" python3 scripts/live_chrome_host_client_sm
   --host-path target/release/sky-cua-chrome-host
 ```
 
+## Testing VM desktop matrix
+
+When the task mentions the Arch `testing-vm`, KWin, Plasma, COSMIC, Hyprland, layer-shell, KDE effect install, scaled Wayland pointer input, or `run_gui_testing_vm_smoke.py`, read `references/testing-vm-desktop-smokes.md` before running commands. That reference records the host/port, session switching, display names, local-host false trails, and ydotool/grim quirks that have already burned time.
+
 ## Sanity checks
 
 Before trusting the result:
@@ -84,6 +88,7 @@ Before trusting the result:
 - Confirm the smoke command printed or logged the isolated socket path, or report the exact path you passed.
 - For browser smokes, pass `--host-path target/release/sky-cua-chrome-host` when available so the browser does not discover an older installed host.
 - If a test unexpectedly connects to the default socket or an installed binary, discard that run as contaminated and rerun with a fresh isolated socket.
+- For testing-vm desktop profiles, confirm the selected guest session and `WAYLAND_DISPLAY`/`DISPLAY` before treating a failure as backend evidence.
 
 ## Reporting
 

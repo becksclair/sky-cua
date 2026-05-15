@@ -26,7 +26,7 @@ The goal is not to pretend Linux parity is magically finished. The goal is to st
 - [x] (2026-04-22 14:35Z) Tightened the live smoke harness so the XWayland `xmessage` probe now verifies both `list_apps` visibility and focused-window fallback through `get_app_state`.
 - [x] (2026-04-22 15:45Z) Upgraded the X11/XWayland fallback snapshot to expose a synthetic root element with real window bounds from `xwininfo`, so X11-only windows are targetable by bounds even without an AT-SPI tree.
 - [x] (2026-04-22 15:45Z) Replaced the helper-based PipeWire capture path with an in-process GStreamer pipeline (`pipewiresrc -> videoconvert -> pngenc -> appsink`) and re-proved the live KDE smoke against that path.
-- [x] (2026-04-22 17:40Z) Hardened pure-X11 fallback selection so explicit-coordinate actions probe the live environment without requiring a snapshot, and added real X11 capture/input implementations plus a dedicated nested-`Xvfb` smoke harness.
+- [x] (2026-04-22 17:40Z) Hardened pure-X11 fallback selection so explicit-coordinate actions probe the live environment without requiring a snapshot, and added real X11 capture/input implementations. The old nested-`Xvfb` VM smoke is retired; VM X11 proof now requires a real X11 guest session.
 - [x] (2026-04-22 18:25Z) Hardened the Wayland portal session lane with startup timeouts, stale-session reset/retry for PipeWire capture, and a wider client-side IPC timeout; re-proved both the live KDE Wayland smoke and the nested pure-X11 smoke.
 - [x] (2026-04-22 18:55Z) Added explicit operator-facing `PortalApprovalPending` diagnostics for missed Wayland approval prompts and tightened X11/XWayland correlation with score-based matching over PID, desktop id, executable, class, instance, title, and focus hints.
 - [x] (2026-04-22 19:20Z) Tightened the X11/XWayland matcher again so exact title only helps rank already plausible matches, then re-proved both the live KDE Wayland smoke and the nested pure-X11 smoke with the corrected focused-window fallback.
@@ -48,7 +48,7 @@ The goal is not to pretend Linux parity is magically finished. The goal is to st
 - [x] (2026-05-13 10:05Z) Proved the corresponding narrow CodexDesktop-Rebuild patch: Browser Use and Chrome companion descriptors stay available when `computerUse` is enabled, Settings shows `Computer Use` and `Browser Use` with the Chrome plugin present, and the Desktop patch chain passes.
 - [x] (2026-05-13 12:00Z) Closed the KWin/X11 workspace metadata gap: KWin and X11 window structs now carry backend-native workspace values through the unified registry into public `WindowInfo.workspace`.
 - [x] (2026-05-14 15:39Z) Added and ran `scripts/live_chrome_host_client_smoke.py --browser brave --install-temp-native-manifest --host-path target/debug/sky-cua-chrome-host`, proving the official Codex extension `hehggadaopoacecdllhhajmbjkdcmajg` can connect to `com.openai.codexextension` through the sky-cua host binary, bridge `getInfo` and `getTabs` from a mock Codex browser client to the extension, bridge the extension heartbeat `ping` back to that client, emit `turnEnded` from a matching session-log completion, receive the extension response, and restore the original Brave manifest. Artifact: `artifacts/chrome-host-smoke/20260514T154125Z/result.json`.
-- [ ] Pending live-smoke matrix: GNOME, COSMIC, Hyprland, i3, and a KDE re-smoke after the registry changes must still be proven inside real desktop sessions. Compile/unit tests cover the new registry and backend parsers, but they do not prove compositor-local listing, focus, portals, AT-SPI, extension behavior, or compositor focus side effects. The blocked matrix, intended commands, and artifact contract are tracked in `docs/gui-desktop-test-harness.md`; the current `scripts/gui_desktop_smoke.py` runner is only a scaffold that creates `artifacts/gui-desktop-smoke/<profile>/result.json` and exits non-zero until profile startup is implemented.
+- [ ] Pending live-smoke matrix: GNOME, Hyprland, i3, and a KDE re-smoke after the registry changes must still be proven inside real desktop sessions. COSMIC now has first live VM proof for the embedded Computer Use smoke and `sky-cua-cosmic-helper` listing/activation/focused-window readback. Compile/unit tests cover the other registry and backend parsers, but they do not prove compositor-local listing, focus, portals, AT-SPI, extension behavior, or compositor focus side effects. The blocked matrix, intended commands, and artifact contract are tracked in `docs/gui-desktop-test-harness.md`; the current preferred runner is `scripts/run_gui_testing_vm_smoke.py` against an Arch `testing-vm`.
 
 ## Current Status Ledger
 
@@ -60,22 +60,24 @@ Complete:
 - Capture model: PipeWire primary image path, Screenshot fallback, explicit `capture.image_backend`, and downgrade diagnostics.
 - X11/XWayland fallback: window discovery, focused-window fallback snapshots, synthetic bounds, recovered child regions, structural region roles, and descendant-region targeting.
 - Portal lifecycle reporting: restore token storage, session recovery, token rotation, portal-pending diagnostics, and explicit lifecycle summaries.
-- Rich-client installed-plugin proof: app-server harness and TIDAL workflow proof artifacts remain the strongest end-to-end plugin acceptance proof.
+- Rich-client installed-plugin proof: the app-server harness is the active end-to-end plugin acceptance path; retired TIDAL proof artifacts remain historical evidence for fallback-only screenshot interaction.
 - Codex Desktop compatibility: `computer-use` presentation, Chrome/Browser Use companion staging, Linux native host placement, browser preflight, and Settings proof are implemented.
 - Browser bridge proof: the official extension/native-host/socket bridge is now covered by `scripts/live_chrome_host_client_smoke.py`, including the sky-cua host process path and rollout `turnEnded` lifecycle.
 - KWin/X11 workspace metadata: backend-native workspace values now reach public `WindowInfo.workspace`.
-- Documentation and plan state: current docs, OpenCode plans, and workflow skill guidance have been refreshed and committed.
+- OpenCode VM harness prep: the Arch testing VM now installs `opencode-ai@1.14.51`, `scripts/testing-vm/sync-opencode-to-vm.sh` syncs host OpenCode config/auth without DB/log/snapshot state, and `opencode models openai` succeeds in the guest.
+- Documentation and plan state: current docs, OpenCode VM prep, and workflow skill guidance have been refreshed.
 
 Partial:
 
 - Browser automation: Chrome extension resources, native host binary, native-host manifests, Codex Desktop Browser Use visibility, the official-extension bridge, generic Browser Use request forwarding, heartbeat handling, and rollout/session completion are implemented. First-class `browser_*` MCP tools remain intentionally deferred while Browser Use is provided by the companion bundled plugin.
-- Cross-desktop support: GNOME, COSMIC, Hyprland, i3, KWin, and X11 adapters exist with parser/unit coverage where practical, but not all have live compositor proof.
+- Cross-desktop support: COSMIC has live VM proof for helper listing/focus/activation; GNOME, Hyprland, i3, KWin, and X11 adapters exist with parser/unit coverage where practical, but not all have live compositor proof.
 - Doctor/setup hardening: the tools exist and report actionable state, but more real launch environments are needed to refine blocker wording and recovery paths.
-- Regression harnessing: live KDE, X11, Krita, Kate, downgrade, app-server, and packaging smokes exist in various forms, but the new GUI desktop matrix runner is still a scaffold.
+- Regression harnessing: live KDE, X11, Krita, Kate, downgrade, app-server, packaging, and COSMIC helper smokes exist in various forms, and the new Arch testing-VM runner/provisioner has first live VM proof.
 
 Pending:
 
-- Implement `scripts/gui_desktop_smoke.py` profile startup/attach behavior for KDE, GNOME, COSMIC, Hyprland, and i3.
+- Prove `scripts/run_gui_testing_vm_smoke.py` against the Arch testing VM for KDE, GNOME, Hyprland, and i3.
+- Register and smoke the `sky-cua` MCP runtime under OpenCode in the Arch testing VM after the non-Codex harness lane starts.
 - Record live compositor artifacts for every GUI profile under `artifacts/gui-desktop-smoke/<profile>/`.
 - Add any future first-class `browser_*` MCP tools only after deciding to move browser automation out of Codex Desktop's existing Browser Use companion flow.
 - Re-run the Codex Desktop Settings proof after Desktop upstream refreshes or plugin descriptor changes.
@@ -167,9 +169,9 @@ Pending:
 - Decision: replace the helper-based PipeWire frame capture with an in-process GStreamer pipeline before doing any wider capture refactors.
   Rationale: it removes an obvious source of flakiness and shell/process overhead while preserving the same high-level ScreenCast architecture and validation surface.
   Date/Author: 2026-04-22 / Sarah
-- Decision: validate the pure-X11 lane under nested `Xvfb` instead of trying to fake confidence from the Wayland host session alone.
-  Rationale: it forces the X11 capture/input path to stand on its own feet, including discovery behavior when no EWMH window manager is present.
-  Date/Author: 2026-04-22 / Sarah
+- Decision: validate the VM X11 lane only against a real guest X11 session.
+  Rationale: embedded X servers hide the session/compositor boundary the VM is meant to prove.
+  Date/Author: 2026-05-15 / Codex
 - Decision: let the service own portal-session recovery rather than pushing all recovery burden onto the client.
   Rationale: stale cached RemoteDesktop/PipeWire state is a backend concern, and the service has the state needed to drop and rebuild that session cleanly.
   Date/Author: 2026-04-22 / Sarah
@@ -229,9 +231,9 @@ The current milestone now proves much more than the initial architectural slice.
 
 The latest Codex Desktop proof is captured under `artifacts/desktop-ui-proof/20260513T100515Z-browser-settings-patched-profile/`. The Settings screenshots there show both `Computer Use` and `Browser Use` in the patched Desktop profile, and the dev log records the bundled marketplace containing `browser-use`, `chrome`, and `computer-use` without uninstall pruning. The supporting narrow gates were `uv run pytest scripts/test_python_harness_helpers.py -k 'browser_preflight or update_codex_config'`, `bun test ./scripts/patch-computer-use.test.ts`, `bun scripts/patch-computer-use.ts --check`, and `bun scripts/patch/apply.ts --check`.
 
-What remains is narrower and much more specific: hardening the ugly corners of semantic richness, improving AT-SPI bounds quality on native Wayland apps that currently report misleading physical coordinates, broadening policy-driven workflows beyond Kate, making the normal-path KDE smoke less dependent on prompt timing during repeated manual runs, broader XWayland/X11 parity now that both the X11 fallback lane and the in-process PipeWire capture seam are live, and turning screenshot-first interaction on sparse fallback-only consumer apps into a repeatable regression target. The first rich-client TIDAL workflow harness is now in place and has a live passing proof: `artifacts/codex-e2e/tidal-playlist-app-server/20260423T190545Z/last-message.json` completed with `gpt-5.5`, medium reasoning, the `Codex Favorites` playlist, five songs, and a fresh verification screenshot. The core transport and action architecture are no longer speculative.
+What remains is narrower and much more specific: hardening the ugly corners of semantic richness, improving AT-SPI bounds quality on native Wayland apps that currently report misleading physical coordinates, broadening policy-driven workflows beyond Kate, making the normal-path KDE smoke less dependent on prompt timing during repeated manual runs, broader XWayland/X11 parity now that both the X11 fallback lane and the in-process PipeWire capture seam are live, and turning screenshot-first interaction on sparse fallback-only consumer apps into a repeatable regression target. The retired rich-client TIDAL workflow still provides historical proof that fallback-only screenshot interaction can complete a real desktop task, but it is no longer an active live workflow. The core transport and action architecture are no longer speculative.
 
-One honest remaining annoyance is the operator-facing nature of the Wayland portal flow. The pure-X11 smoke now passes unattended under `Xvfb`, and the Wayland lane now reports `PortalApprovalPending` explicitly when the compositor is still waiting for approval, but any first-run portal approval still depends on a human clicking the compositor dialog.
+One honest remaining annoyance is the operator-facing nature of the Wayland portal flow. The Wayland lane now reports `PortalApprovalPending` explicitly when the compositor is still waiting for approval, but any first-run portal approval still depends on a human clicking the compositor dialog.
 
 ## Context and Orientation
 
@@ -338,7 +340,7 @@ Revision note: updated the plan again after landing the xprop-backed X11/XWaylan
 
 Revision note: updated the plan again after upgrading the X11 fallback snapshot with synthetic root bounds and replacing the helper-based PipeWire capture seam with an in-process GStreamer pipeline.
 
-Revision note: updated the plan again after landing real X11 capture/input routing, the nested-`Xvfb` smoke harness, the `xwininfo -root -tree` fallback for WM-less X11 discovery, and the wider client-side socket timeout for portal-driven waits.
+Revision note: updated the plan again after landing real X11 capture/input routing, the `xwininfo -root -tree` fallback for sparse X11 discovery, and the wider client-side socket timeout for portal-driven waits. The old nested-`Xvfb` VM smoke has since been retired in favor of real X11 guest sessions.
 
 Revision note: updated the plan again after hardening portal-session startup/recovery in the service and re-proving both the Wayland and pure-X11 smoke harnesses.
 

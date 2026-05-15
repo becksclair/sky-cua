@@ -16,7 +16,7 @@ Treat the accessibility tree as structure, not gospel.
 - Use `list_windows`, `focused_window`, and `activate_window` when the task is about choosing a desktop window, terminal, or app instance rather than interacting with a control inside the current app.
 - If `get_app_state` gives you a `screenshot_path`, inspect it with `view_image` before you commit to a target in a murky UI.
 - Start from the screenshot. The tree is optional structure, not a prerequisite for action.
-- Use full `get_app_state` for discovery and debugging. Once the target app/window is known, prefer `get_app_state` with `detail: "compact"` for repeated screenshot-first action loops so old verbose state does not bloat later model steps.
+- Use full `get_app_state` for discovery and debugging. Once the target app/window is known, prefer `detail: "compact"` for repeated loops. Use `capture_screen: "never"` for structure-only semantic passes, `capture_screen: "always"` when a fresh visual frame is required, and the default `capture_screen: "if_changed"` otherwise.
 - If the tree is thin, missing, or fallback-only, use the screenshot to decide where to click, drag, scroll, or type.
 - If the tree and the screenshot disagree, trust what is actually on screen.
 - Treat action-tool success as transport success, not UI truth. Re-check state after meaningful actions.
@@ -30,10 +30,11 @@ Treat the accessibility tree as structure, not gospel.
 
 ## Interaction ladder
 
-1. **Take a fresh screenshot-backed state snapshot**
-   - call `get_app_state` first so you have the current screenshot path, diagnostics, and any visible element anchors
+1. **Take a state snapshot**
+   - call `get_app_state` first so you have diagnostics, element anchors, and a screenshot path when the active model supports image input
    - after the first full orientation pass, use `detail: "compact"` unless you specifically need verbose element descriptions, environment details, or app guidance
-   - re-run it after meaningful actions instead of steering from stale geometry
+   - for rich accessibility trees, use `capture_screen: "never"` when you only need structure; re-run with `capture_screen: "always"` before screenshot-coordinate targeting or visually murky work
+   - re-run it after meaningful actions instead of steering from stale geometry or stale structure
 
 2. **Use the tree to understand the app when it exists**
    - identify the focused app and window

@@ -1,92 +1,454 @@
 # GUI Desktop Test Harness
 
-This project needs live desktop sessions to validate Linux Computer Use backends. Unit tests cover parsers and routing, but GNOME Shell, KWin, COSMIC, Hyprland, i3, portals, AT-SPI, and rendered windows need a real compositor session.
+This is the preferred Linux test path for the `sky-cua` plugin, MCP server,
+desktop backends, and agent-cursor overlay work. Unit tests cover parsers,
+serialization, and routing, but the important Linux behavior lives inside real
+desktop sessions: KWin, GNOME Shell, COSMIC, Hyprland, i3, portals, AT-SPI,
+PipeWire capture, X11 input, and compositor-rendered overlays.
 
-## Host Findings
+The preferred environment is an Arch Linux `testing-vm` managed through
+QEMU/libvirt/virt-manager. The VM should boot into the target desktop session
+as its own guest display, not a nested compositor in a container. Build
+`sky-cua` runtime binaries on the host and push them into the VM; the VM is a
+clean production-like smoke environment, not a Rust build worker.
 
-Current CachyOS/KDE6 host checks found these installed: `at-spi2-core`, `xdg-desktop-portal`, `xdg-desktop-portal-kde`, `gdbus`, `xprop`, `xdotool`, `ydotool`, `pipewire`, `gsettings`, `cosmic-session`, Rust, `chromium`, and `brave`.
+## Provisioning
 
-Missing for local live-testing outside containers:
+Provision a fresh Arch guest by copying this repository into the VM or scp-ing
+the provisioner, then run it as root:
 
 ```bash
-sudo pacman -S gnome-shell xdg-desktop-portal-gnome
-sudo pacman -S hyprland i3-wm
+sudo SKY_CUA_TESTING_VM_USER=skycua \
+  SKY_CUA_TESTING_VM_SESSION=cosmic \
+  CODEX_DESKTOP_PACKAGE=/path/to/codex-desktop.pkg.tar.zst \
+  bash scripts/testing-vm/provision-arch-testing-vm.sh
 ```
 
-## Intended Harness Shape
+`SKY_CUA_TESTING_VM_SESSION` selects the autologin session that greetd starts on
+the VM display. Supported values are `cosmic`, `kde`, `plasma`, `gnome`,
+`hyprland`, and `i3`.
 
-Use a GUI-enabled container with all target desktop environments installed. Each run selects one profile and starts a full nested graphical session, not a headless process tree.
+The provisioner was retargeted from the retired Arch Docker image and keeps the
+same dependency intent:
 
-Profiles:
+- base/runtime: `bash`, `git`, `grep`, `openssh`, `python`, `rsync`, `sudo`
+- build/proof tools: `base-devel`, `clang`, `gcc`, `cmake`,
+  `extra-cmake-modules`, `ninja`, `pkgconf`, `rust`
+- GUI runtime libraries: AT-SPI, DBus, GTK, Qt6, X11 libraries, Mesa, NSS,
+  PipeWire, Wayland, and the portal backends for COSMIC, GNOME, Hyprland,
+  KDE/Plasma, wlroots, and GTK fallback
+- desktop stacks: KWin/Plasma, GNOME Shell, COSMIC, Hyprland, i3, Xwayland,
+  and their portal backends
+- terminal apps: COSMIC Terminal, Konsole, GNOME Terminal, GNOME Console,
+  foot, xterm, Alacritty, Kitty, WezTerm, and Ghostty, so every installed
+  desktop has a native or practical terminal target for launch/list/focus tests
+- smoke tools: `gst-plugins-good`, ImageMagick, `grim`, `jq`, `libinput`,
+  `openbox`, `slurp`, `socat`, `strace`, `wev`, `weston`, `wl-clipboard`,
+  `wmctrl`, `xdotool`, `ydotool`/`ydotoold`, Xorg, xauth, xdpyinfo, xev,
+  xmessage, and xwininfo
+- browser-use smoke browser: Google Chrome installed from Google's stable
+  Linux package
+- Codex Desktop: installed from the local CodexDesktop-Rebuild Arch package
+  when `CODEX_DESKTOP_PACKAGE` is set
+- OpenCode CLI: installed from npm with `OPENCODE_NPM_SPEC`, defaulting to the
+  host-proven `opencode-ai@1.14.51`, so future non-Codex harness work can run
+  in the same production-like VM
 
-- `kde`: KWin, KDE portal, PipeWire capture, X11/XWayland fallback, AT-SPI.
-- `gnome`: GNOME Shell Introspect, Codex GNOME Shell extension, GNOME portal.
-- `cosmic`: `sky-cua-cosmic-helper`, COSMIC window listing/focus, portal behavior.
-- `hyprland`: `hyprctl clients -j`, focus dispatch, terminal enrichment.
-- `i3`: `i3-msg -t get_tree`, `xprop` PID hydration, X11/XTest input.
+The VM should have a visible virt-manager/virt-viewer console and SSH access.
+If libvirt's default network is absent, direct QEMU user networking with an SSH
+forward is acceptable for automation, but visual proof still comes from the VM
+display.
 
-The harness should expose VNC/noVNC for visual debugging and preserve logs under `artifacts/gui-desktop-smoke/<profile>/`.
+When opening the viewer from an agent shell, detach it from the command session
+so the viewer process survives after the command returns:
+
+```bash
+setsid -f virt-viewer --connect qemu:///session testing-vm \
+  >/tmp/sky-cua-virt-viewer.log 2>&1
+```
+
+If the viewer appears blank, first capture the libvirt framebuffer with
+`virsh --connect qemu:///session screenshot testing-vm <path>.png` and check
+the guest session processes over SSH. A blanked or locked guest display can
+look like an overlay failure even when the overlay is not drawing anything.
+
+## Runner
+
+Run profiles from the host with:
+
+```bash
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use
+```
+
+The runner:
+
+- builds host artifacts with
+  `cargo build --release -p sky-cua-client -p sky-cua-service -p sky-cua-overlay-host`
+  plus a debug `sky-cua-overlay-host` build
+- syncs the checkout into `/workspace` with `rsync`
+- excludes heavy/generated host state such as `.git/`, `.venv/`, `dist/`,
+  `artifacts/`, and irrelevant `target/` subtrees
+- copies selected `~/.codex` settings, auth, browser config, plugins, and
+  skills into the VM user account only when `--sync-codex-settings` is set
+- runs `scripts/testing-vm/profiles/run-profile.sh` over SSH
+
+Useful commands:
+
+```bash
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile kde-kwin-effect
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile kde-kwin-effect-system-install --vm-name testing-vm --libvirt-uri qemu:///session
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile codex-desktop --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-helper --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all
+```
+
+Use `--skip-host-build` only when the synced runtime artifacts are already the
+ones under test. Use `--skip-sync` only for remote debugging after confirming
+the VM checkout is current.
+
+The runner defaults to `WAYLAND_DISPLAY=wayland-0` and the remote user's
+`/run/user/<uid>` runtime directory when a real desktop session is active. Use
+`--wayland-display` only when the guest session uses a different socket name.
+Use `--desktop-env` for SSH-launched real-session smokes when the graphical
+session did not import `XDG_CURRENT_DESKTOP` into the SSH environment. For the
+current COSMIC VM, pass `--desktop-env COSMIC` so `xdg-desktop-portal` loads
+`cosmic-portals.conf` instead of falling through to generic GTK choices.
+
+Plasma must run on the normal user DBus bus, not a private `dbus-run-session`
+bus. The provisioner exports `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`,
+imports the desktop environment into DBus/systemd activation, and then execs
+`startplasma-wayland`. This keeps KWin DBus discovery, portals, and SSH-run
+smokes in the same session world. The provisioner also disables the KDE
+screen locker and masks PowerDevil for the test image; visual framebuffer
+proofs are not useful if the guest has dimmed or locked itself.
+
+## OpenCode Harness Prep
+
+OpenCode is installed by the VM provisioner, but user config and auth are
+deliberately synced from the host as a separate operator step because they
+contain live credentials. The sync copies `~/.config/opencode` into
+`~/.agents/opencode` on the VM, recreates `~/.config/opencode` as a symlink,
+copies only `~/.local/share/opencode/auth.json` from OpenCode's data directory,
+and then runs `npm install --omit=dev` inside the VM config. It does not copy
+the host OpenCode database, logs, snapshots, or tool-output history.
+
+This prepares the VM for the non-Codex harness lane. Registering the sky-cua
+MCP runtime inside OpenCode still follows the plain MCP host instructions in
+`docs/mcp-runtime.md`; the VM prep here only installs OpenCode itself and
+copies the user's OpenCode config/auth safely.
+
+For the current QEMU user-networking VM:
+
+```bash
+scripts/testing-vm/sync-opencode-to-vm.sh
+```
+
+Then verify:
+
+```bash
+ssh -p 22222 \
+  -o StrictHostKeyChecking=no \
+  -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  skycua@127.0.0.1 'opencode --version && opencode models openai | head'
+```
+
+## Portal Selection
+
+Portal backend selection is environment-driven. `xdg-desktop-portal` looks at
+`XDG_CURRENT_DESKTOP`, then loads the matching
+`/usr/share/xdg-desktop-portal/<desktop>-portals.conf` or an override in
+`~/.config/xdg-desktop-portal/`. The VM session launcher therefore exports
+explicit desktop values for `cosmic`, `kde`, `gnome`, `hyprland`, and `i3`.
+The runner can also import those values into the user systemd environment with
+`--desktop-env`.
+
+COSMIC is correctly selected when `XDG_CURRENT_DESKTOP=COSMIC`: the router
+activates `org.freedesktop.impl.portal.desktop.cosmic`, and the public
+`org.freedesktop.portal.Desktop` object exposes COSMIC `ScreenCast` and
+`Screenshot`. Current upstream and Arch `xdg-desktop-portal-cosmic` do not
+advertise `org.freedesktop.impl.portal.RemoteDesktop`; their
+`cosmic.portal` interface list is `Access`, `FileChooser`, `Screenshot`,
+`Settings`, and `ScreenCast`. That means COSMIC RemoteDesktop absence is an
+upstream capability gap, not a local package-selection bug.
+
+Do not force GNOME or KDE `RemoteDesktop` as the COSMIC answer. Those backends
+are session/compositor-specific and make a misleading production proof. COSMIC
+Wayland physical input should use the Linux virtual input backend when
+virtual input is available. That backend exposes one runtime selection,
+`LinuxVirtualInput`; pointer actions prefer the direct absolute `/dev/uinput`
+adapter when `/dev/uinput` is writable and desktop bounds are detected, while
+`ydotool` remains the keyboard/text adapter and lower-priority fallback. KDE and
+GNOME continue to prefer their `RemoteDesktop` portals in their own real
+sessions.
+
+## Session Switching
+
+Switch visible VM sessions with the guest helper, not raw display-manager
+restarts:
+
+```bash
+ssh -p 22222 \
+  -o StrictHostKeyChecking=no \
+  -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  skycua@127.0.0.1 'cd /workspace && sudo scripts/testing-vm/select-session.sh hyprland'
+```
+
+Use `plasma`, `cosmic`, `gnome`, `hyprland`, or `i3`. The helper rewrites the
+greetd/GDM target, kills stale compositor and sky-cua processes for the VM user,
+and restarts the display manager. This matters because raw session switches can
+leave stale sockets, such as old KWin on `wayland-0` while Hyprland is active on
+`wayland-1`.
+
+## Profiles
+
+Profiles live under `scripts/testing-vm/profiles/`.
+
+- `computer-use`: real-session visible pointer smoke for the installed Computer
+  Use plugin path. It opens the fullscreen GTK pointer fixture on the VM's
+  active Wayland session and drives click, drag, and scroll through
+  `sky-cua-client mcp`.
+- `wayland-pointer`: explicit name for the same visible real-session pointer
+  smoke used by `computer-use`.
+- `wayland-layer-shell-overlay`: real Wayland session proof for the native
+  layer-shell cursor overlay. It uses the active session socket, draws the
+  copied Chrome cursor asset through `sky-cua-overlay-host`, captures with the
+  compositor screenshot tool (`grim -o <output>` on Hyprland), and proves visible
+  then hidden cursor pixels.
+- `codex-desktop`: real-session launch smoke for the installed
+  CodexDesktop-Rebuild package. It requires a visible Codex window on the VM's
+  active desktop session and records Codex and Chrome versions.
+- `cosmic-helper`: real COSMIC Wayland guest-session proof for the
+  `sky-cua-cosmic-helper` protocol path. It launches a Wayland client on the
+  guest session socket, proves helper `probe`, `list-windows`,
+  `activate-window`, and `focused-window`, and records the JSON replies.
+- `i3`: real X11 session proof. Boot the VM into i3/X11 first; the profile
+  refuses Wayland and runs the X11 overlay/current-display smoke against the
+  guest session display.
+- `kde-kwin-effect`: KWin effect build/load/IPC and agent-cursor overlay proof.
+  Run this from a VM booted into Plasma Wayland when testing production KWin
+  behavior.
+- `kde-kwin-effect-system-install`: VM-only production package-path proof. It
+  installs the compiled effect under `/usr` with `sudo`, restarts Plasma, proves
+  KWin discovery/load and overlay-host `kwin_effect` IPC, then uninstalls the
+  system files and restarts Plasma again. The host runner owns pixel proof:
+  it captures before/after VM framebuffers with `virsh screenshot`, probes the
+  cursor diff locally, and writes `host-summary.json`.
+- `kde-plasma`, `gnome`, `cosmic`, and `hyprland`: legacy nested visual-debug
+  profiles retained for targeted compositor debugging. They are not acceptance
+  proof for the VM session matrix. For COSMIC/GNOME/Plasma/Hyprland acceptance,
+  boot the VM into that desktop and run the app/plugin smoke against the real
+  guest session.
+- `all`: runs the fast non-session-specific profiles. It does not claim that
+  every desktop session has been proved.
 
 ## Current Verification Status
 
-The new cross-desktop windowing code has compile/unit-test coverage, but the desktop-specific live smokes are still pending. They are blocked until the runner can start or attach to the real sessions listed below. Parser tests and a KDE host session are not enough proof for compositor-local IPC, focus, portal, AT-SPI, or extension behavior.
+The Docker GUI harness has been retired as the preferred path. Its package list
+and profile ideas were folded into the Arch testing-VM provisioner and runner,
+and the VM path now has a first live COSMIC guest proof.
 
-The current runner is deliberately not a passing smoke: it records the selected profile under `artifacts/gui-desktop-smoke/<profile>/result.json` with `"implemented": false` and exits non-zero. Treat that artifact as a blocked-status marker only, not proof that the desktop profile works.
+First live VM proof:
+
+```bash
+python3 scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 \
+  --port 22222 \
+  --user skycua \
+  --profile computer-use \
+  --wayland-display wayland-1 \
+  --desktop-env COSMIC \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts
+
+python3 scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 \
+  --port 22222 \
+  --user skycua \
+  --profile cosmic-helper \
+  --wayland-display wayland-1 \
+  --desktop-env COSMIC \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts
+
+python3 scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 \
+  --port 22222 \
+  --user skycua \
+  --profile codex-desktop \
+  --skip-host-build \
+  --skip-sync \
+  --desktop-env COSMIC \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts
+```
+
+The VM was booted through greetd into COSMIC Wayland with `cosmic-session`,
+`cosmic-comp`, and `/run/user/1000/wayland-1` active. The earlier
+`mcp-x11`/embedded-X11 VM smoke was retired; Computer Use proof on this VM now
+means a visible real-session pointer smoke.
+The COSMIC helper artifact is
+`/workspace/artifacts/gui-desktop-smoke/cosmic-helper/20260515T031400Z/` in the
+VM; it proves `probe`, `list-windows`, `activate-window`, and `focused-window`
+against `org.freedesktop.weston.flower` on the real `wayland-1` session.
+The Codex Desktop launch artifact is
+`/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260515T030818Z/` in the
+VM, with `codex-desktop 26.506.31421-1`, Google Chrome
+`148.0.7778.167`, and a visible `codex.Codex` X11 window.
+After the COSMIC portal-selection pass, fresh COSMIC session smokes produced:
+`/workspace/artifacts/gui-desktop-smoke/cosmic-helper/20260515T034206Z/`,
+`/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260515T034206Z/`, and
+the expected visible pointer blocker
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T034151Z/`.
+The pointer smoke now fails honestly with
+`ActionUnsupportedForEnvironment: no physical input backend is available for click fallback`
+instead of falsely routing through the X11/XWayland input fallback.
+
+After the Linux virtual input pass, COSMIC pointer input is accepted through the
+direct absolute `/dev/uinput` adapter. Artifact
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T091758Z`
+proves the fullscreen GTK fixture received click, drag, and scroll
+(`clicked=true`, `drag_completed=true`, `scroll_events=1`). The ydotool pointer
+calibration artifacts immediately before that were useful negative proof:
+ydotool's VM pointer device is relative-only and `mousemove --absolute` landed
+at accelerated coordinates, so ydotool is not the COSMIC pointer adapter.
+`ydotool` remains useful for keyboard/text fallback.
+The extended COSMIC artifact
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T092606Z`
+also proves `type_text` and `press_key` through the same Linux virtual input
+backend: the fixture recorded `entry_text="cosmic-text-smoke"` and
+`submitted_text="cosmic-text-smoke"`.
+The scaled COSMIC artifact
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T093335Z`
+repeats that full input proof at 1600x1200 with `Scale: 125%`, after the direct
+uinput adapter converts desktop logical coordinates into physical absolute
+device coordinates.
+The repeatable profile proof is
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T093737Z`,
+from `--profile wayland-pointer-scaled`; the profile restores COSMIC to
+1280x800 at 100% scale after the smoke.
+
+Fresh Plasma VM cursor proof after fixing the session bus:
+
+```bash
+ssh -p 22222 \
+  -o StrictHostKeyChecking=no \
+  -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  skycua@127.0.0.1 \
+  'cd /workspace && env XDG_CURRENT_DESKTOP=KDE XDG_SESSION_DESKTOP=KDE DESKTOP_SESSION=plasma XDG_SESSION_TYPE=wayland WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland SKY_CUA_SKIP_LOCAL_BUILD=1 SKY_CUA_SERVICE_BIN=/workspace/target/debug/sky-cua-service SKY_CUA_OVERLAY_HOST_BIN=/workspace/target/debug/sky-cua-overlay-host SKY_CUA_LAYER_SHELL_LAYER=overlay python scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-hide-for-capture --request-timeout 180'
+
+ssh -p 22222 \
+  -o StrictHostKeyChecking=no \
+  -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  skycua@127.0.0.1 \
+  'cd /workspace && env XDG_CURRENT_DESKTOP=KDE XDG_SESSION_DESKTOP=KDE DESKTOP_SESSION=plasma XDG_SESSION_TYPE=wayland WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland SKY_CUA_SKIP_LOCAL_BUILD=1 SKY_CUA_SERVICE_BIN=/workspace/target/debug/sky-cua-service SKY_CUA_OVERLAY_HOST_BIN=/workspace/target/debug/sky-cua-overlay-host SKY_CUA_LAYER_SHELL_LAYER=overlay python scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-click-through --request-timeout 180'
+```
+
+The latest accepted VM artifacts are
+`/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100302670580-syn`,
+`/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100303845615-vis`,
+`/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100305142807-hide`, and
+`/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click`.
+The host-side headed framebuffer proof is
+`artifacts/kde-framebuffer-cursor-proof/cursor-overlay-clean/after.png`.
+When comparing `virsh screenshot` output, convert to RGB before diffing; RGBA
+diffs can hide real pixel changes because of the screenshot alpha channel.
+
+The fuller KDE real-session pointer smoke artifact is
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T100113Z`. It
+proves the fullscreen GTK fixture received the portal-driven click, drag,
+scroll, `type_text`, and `press_key` events.
+
+Two cleanup details are part of the harness contract. First, the runner imports
+the target desktop environment and refreshes the user portal stack before
+preauthorization/profile startup; otherwise a previous COSMIC session can leave
+`xdg-desktop-portal` selecting the wrong implementation for Plasma. Second,
+cleanup kills stale `cosmic-randr` probes as well as sky-cua service and overlay
+processes; Linux virtual input scopes `cosmic-randr` probing to COSMIC desktops
+so KDE portal smokes cannot hang behind an irrelevant display helper.
+
+Fresh GNOME VM pointer proof:
+
+```bash
+python3 scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 \
+  --port 22222 \
+  --user skycua \
+  --profile wayland-pointer \
+  --wayland-display wayland-0 \
+  --desktop-env GNOME \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts
+```
+
+The accepted GNOME artifact is
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T084643Z`.
+It proves click, drag, and scroll through the GNOME RemoteDesktop portal
+(`clicked=true`, `drag_completed=true`, `scroll_events=2`). This run depends on
+two GNOME-specific fixes: session switching must stop the inactive display
+manager so Plasma and GNOME do not run together, and the GTK fixture adjusts
+GNOME fullscreen coordinates when the reported allocation is taller than the
+visible framebuffer.
+
+Fresh i3/X11 VM proof:
+
+```bash
+python3 scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 \
+  --port 22222 \
+  --user skycua \
+  --profile i3 \
+  --desktop-env i3 \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts
+```
+
+Boot or switch the VM to `SKY_CUA_TESTING_VM_SESSION=i3` first. The i3 profile
+derives the real Xorg display and Xauthority from the active `Xorg` process,
+because `startx` may choose `:1` while the user systemd environment still has
+stale Wayland or Xwayland values from an earlier session. The accepted X11
+artifact is
+`/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T075301057704Z`;
+it proves visible capture, hide, re-show, click-through, and XFixes cursor
+hide/show state transitions.
+
+The production KWin effect discovery blocker was rechecked after the Plasma
+session-bus fix. User-level artifact
+`/workspace/artifacts/codex-e2e/agent-cursor-kde/0515075621741796-kwin` shows
+KWin DBus reachable on the normal user bus, the C++ effect building and
+installing user-level files, and cleanup succeeding, but KWin still reports
+`listed=false`, `effect_supported=false`, and `load_stdout="false"`.
+
+The system path is viable and automated in the disposable VM: installing under
+`/usr`, restarting Plasma, and loading the effect makes KWin list
+`sky-cua-agent-cursor`; `sky-cua-overlay-host` returns `backend=kwin_effect`
+with `system_cursor_hidden=true`; host libvirt framebuffer diff finds the cursor
+at `(420,260)`; cleanup removes the system files and KWin no longer lists the
+effect after restart. Latest proof:
+`artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T100852814643Z/host-summary.json`.
 
 Progress ledger:
 
 | Area | Status | Current proof | Remaining proof |
 | --- | --- | --- | --- |
-| Runner contract | Partial | `scripts/gui_desktop_smoke.py` accepts target profiles and writes blocked-status artifacts. | Start or attach to real nested sessions and run MCP actions inside them. |
-| KDE/KWin | Partial | Existing KDE host proofs cover earlier live flows; KWin parser/registry code exists. | Re-smoke through the unified registry path and record `artifacts/gui-desktop-smoke/kde/`. |
-| GNOME | Pending | GNOME Introspect and extension code paths exist. | Real GNOME Shell session proving Introspect, extension install/enable, DBus listing, and activation. |
-| COSMIC | Pending | `sky-cua-cosmic-helper` exists and is packaged for Linux. | Real COSMIC session proving listing, focused-window detection, and activation. |
-| Hyprland | Pending | `hyprctl` parser/focus code exists. | Real Hyprland session proving listing, focus dispatch, terminal enrichment, and portal behavior. |
-| i3 | Pending | `i3-msg` parser/focus code exists. | Real i3/X11 session proving listing, PID hydration, focus activation, terminal enrichment, and X11/XTest input. |
-| Browser companion | Complete for host compatibility | Codex Desktop Settings proof shows Browser Use and Chrome visible beside Computer Use. `artifacts/chrome-host-smoke/20260514T154125Z/result.json` proves the official extension using the sky-cua host binary for `getInfo`, `getTabs`, heartbeat, and rollout `turnEnded`. | First-class `browser_*` MCP tools are a separate future product decision, not a host-compatibility gate. |
+| VM provisioner | First live proof | `scripts/testing-vm/provision-arch-testing-vm.sh` provisioned a QEMU/libvirt Arch guest with COSMIC Wayland, Chrome, OpenCode, Codex Desktop, SSH, rsync, matching terminal apps, and the desktop matrix. | Re-run from a fully fresh guest after future package-list changes. |
+| VM runner | First live proof | `scripts/run_gui_testing_vm_smoke.py` built host runtime artifacts, synced the checkout, copied selected Codex settings, and executed COSMIC helper proof over SSH. | Add host-side artifact pullback or index generation if repeated VM runs need easier local browsing. |
+| OpenCode | Config/auth prep proof | `scripts/testing-vm/sync-opencode-to-vm.sh` synced host OpenCode config/auth without DB/log/snapshot state; VM `opencode --version` returned `1.14.51`, and `opencode models openai` succeeded. | Register and smoke the sky-cua MCP runtime under OpenCode when the non-Codex harness lane starts. |
+| COSMIC | Helper, app launch, pointer, text/key, and scaled input accepted | Real COSMIC Wayland guest session was active with `cosmic-session`, `cosmic-comp`, and `/run/user/1000/wayland-1`; `cosmic-helper` proved helper listing, activation, and focused-window readback. Fresh helper/app artifacts: `/workspace/artifacts/gui-desktop-smoke/cosmic-helper/20260515T034206Z/` and `/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260515T034206Z/`. Full input artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T092606Z` proves `LinuxVirtualInput` direct uinput click, drag, scroll plus ydotool-backed `type_text`/`press_key`; repeatable scaled profile artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T093737Z` proves the same path at 125%. Previous blocker before the backend existed: `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T034151Z/`. | Keep this in the session-matrix gate; broaden later to multi-output when the VM exposes more than one real output. |
+| KDE/KWin | Layer-shell and KWin effect system path accepted | Real Plasma Wayland VM proofs: headed framebuffer cursor `artifacts/kde-framebuffer-cursor-proof/cursor-overlay-clean/after.png`, clean cursor sequence `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100302670580-syn`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100303845615-vis`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100305142807-hide`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click`, full pointer `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T100113Z/`, user-level effect discovery blocker `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515075621741796-kwin`, and automated system-install proof `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T100852814643Z/host-summary.json`. | Keep this profile in the pre-merge/live-smoke gate for future KWin effect changes. |
+| GNOME | Pointer input accepted; listing/focus matrix pending | Real GNOME Wayland VM artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T084643Z` proves click, drag, and scroll through GNOME RemoteDesktop. | Add GNOME Introspect/extension/listing/activation proof and visible overlay strategy. |
+| Hyprland | Layer-shell overlay accepted; app/focus matrix pending | Real Hyprland VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-wayland-layer-shell/20260515T080912397166Z` proves `wayland_layer_shell`, visible overlay capture through `grim -o Virtual-1`, click-through capability, and hide-for-capture. The same slice fixed the unconfigured layer-surface buffer attach protocol bug. | Prove `hyprctl clients -j`, focus dispatch, terminal enrichment, portal behavior, and full pointer input once the physical input backend matrix is ready. |
+| i3/X11 | X11 overlay accepted | Real i3/X11 VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T075301057704Z` proves visible overlay capture, hide, re-show, click-through, and XFixes system cursor hide/show. | Broaden the i3 profile later for `i3-msg -t get_tree`, app focus activation, terminal enrichment, and X11/XTest input beyond the cursor overlay proof. |
 
-Separate from this matrix, Codex Desktop Settings proof for the bundled
-`computer-use`/`browser-use`/`chrome` compatibility lane exists under
-`artifacts/desktop-ui-proof/20260513T100515Z-browser-settings-patched-profile/`.
-That proof confirms the Desktop UI sees Computer Use and Browser Use with the
-Chrome companion plugin after the narrow CodexDesktop-Rebuild patch. It does
-not replace the compositor-specific live smoke matrix below.
+Do not mark any live-smoke gap complete until the command, desktop profile, and
+artifact directory are recorded.
 
-Pending gaps:
+## Retired Docker Path
 
-- `gnome`: needs a real GNOME Shell session to prove GNOME Introspect listing, bundled extension install/enable, extension DBus listing, and exact activation.
-- `cosmic`: needs a real COSMIC session to prove `sky-cua-cosmic-helper` listing, focused-window detection, and activation.
-- `hyprland`: needs a real Hyprland session to prove `hyprctl clients -j`, focus dispatch, terminal enrichment, and portal behavior.
-- `i3`: needs a real i3/X11 session to prove `i3-msg -t get_tree`, `xprop` PID hydration, focus activation, terminal enrichment, and X11/XTest input.
-- `kde`: should be re-smoked after registry changes to prove KWin/X11 fallback behavior still passes through the new probe-order path.
-- Browser companion: host compatibility is live-proven through the official
-  extension and sky-cua host binary. Browser automation outside Codex Desktop's
-  existing Browser Use plugin flow remains a separate future MCP-tooling scope.
-
-Do not mark any of these live-smoke gaps complete until the command, desktop profile, and artifact directory are recorded.
-
-## Runner Contract
-
-The runner is `scripts/gui_desktop_smoke.py`:
-
-```bash
-python3 scripts/gui_desktop_smoke.py --profile kde
-python3 scripts/gui_desktop_smoke.py --profile gnome
-python3 scripts/gui_desktop_smoke.py --profile cosmic
-python3 scripts/gui_desktop_smoke.py --profile hyprland
-python3 scripts/gui_desktop_smoke.py --profile i3
-python3 scripts/gui_desktop_smoke.py --profile kde --include-browser-smoke
-```
-
-For now the runner records the contract and creates the artifact directory. `--include-browser-smoke` is only part of that recorded contract until profile startup and browser-extension smoke are implemented. The full Docker profile implementation should add `docker/gui-test/Dockerfile` plus `docker/gui-test/profiles/*.sh`.
-
-## Container Requirements
-
-The eventual Docker run may need:
-
-- `/dev/dri` passthrough for hardware rendering when available.
-- A software-rendering fallback for CI or restricted hosts.
-- Semi-privileged portal tests for RemoteDesktop behavior.
-- A session bus, PipeWire/WirePlumber, desktop-specific portal backend, and deterministic test apps inside the container.
-
-Document exact Docker flags once the first profile is implemented.
+The earlier `docker/gui-test` image and
+`scripts/run_gui_desktop_docker_smoke.py` runner were useful for package
+discovery, but containers could only prove nested compositor behavior. They
+could not provide the real standalone COSMIC/GNOME/Plasma/Hyprland sessions
+needed for Computer Use acceptance. Keep future Linux desktop proof centered on
+the Arch testing VM.

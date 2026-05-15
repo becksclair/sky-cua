@@ -18,7 +18,10 @@ The raw capture contract is unchanged:
 
 ## Why 1440x900
 
-The TIDAL rich app-server workflow is a good stress case because TIDAL on KDE Wayland exposes only fallback geometric anchors, so the model has to rely heavily on repeated screenshots. The workflow creates or finds `Codex Favorites`, adds exactly five tracks, and verifies the final playlist from a fresh plugin screenshot.
+The historical TIDAL rich app-server workflow was a good stress case because
+TIDAL on KDE Wayland exposed only fallback geometric anchors, so the model had
+to rely heavily on repeated screenshots. That live workflow has been retired,
+but the measured artifacts remain the evidence behind the default cap.
 
 After deleting `Codex Favorites` between runs, the full-flow A/B results were:
 
@@ -33,12 +36,13 @@ The plugin backend was not the bottleneck in either run. MCP tool time stayed un
 
 ## Format and Size Overrides
 
-For an A/B run or an app that needs more visual detail, override the cap through the plugin MCP environment:
+For an A/B run or an app that needs more visual detail, override the cap through
+the plugin MCP environment when running an active live-smoke entrypoint:
 
 ```bash
 SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH=1920 \
 SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT=1080 \
-python3 scripts/live_app_server_tidal_playlist.py
+python3 scripts/live_app_server_smoke.py
 ```
 
 The installed plugin receives these variables because `.mcp.json` includes them in `env_vars`. Invalid values and values outside the safe range fall back to the compiled default.
@@ -49,7 +53,7 @@ and produced the proven TIDAL win above. WebP is available for profiling:
 ```bash
 SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp \
 SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY=85 \
-python3 scripts/live_app_server_tidal_playlist.py
+python3 scripts/live_app_server_smoke.py
 ```
 
 JPEG quality can also be varied:
@@ -57,7 +61,7 @@ JPEG quality can also be varied:
 ```bash
 SKY_CUA_MODEL_SCREENSHOT_FORMAT=jpeg \
 SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY=75 \
-python3 scripts/live_app_server_tidal_playlist.py
+python3 scripts/live_app_server_smoke.py
 ```
 
 The WebP path uses lossy WebP encoding so quality-level A/B runs are meaningful.
@@ -65,20 +69,9 @@ The model still receives a real image input once the screenshot path is inspecte
 the file format only changes local encoding, transport size, and decode/ingest
 behavior.
 
-Use the bundled A/B runner when a multi-run comparison is desired. By default it
-runs the cheaper `jpeg-q85` and `webp-q85` pair, and gives each variant an
-isolated playlist name so sequential runs do not reuse or mutate the same
-playlist state:
-
-```bash
-python3 scripts/live_app_server_tidal_image_ab.py
-```
-
-Use `--all-variants` for the full `jpeg-q85`, `webp-q80`, `webp-q85`, and
-`webp-q95` sweep. The runner writes
-`artifacts/codex-e2e/tidal-image-ab-summary.json` with elapsed time, MCP calls,
-uncached input-token metrics, final screenshot file size, status, playlist name,
-and artifact paths.
+The former TIDAL A/B runner has been removed. For future multi-run comparisons,
+add a new active workflow-specific runner with isolated state and the same
+timing-summary fields below.
 
 ## Validation
 
@@ -86,7 +79,7 @@ Relevant checks:
 
 ```bash
 cargo test -p sky-cua-linux portal::screenshot
-python3 scripts/live_app_server_tidal_image_ab.py --variants jpeg-q85 webp-q85
+SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY=85 python3 scripts/live_app_server_smoke.py
 python3 scripts/build_plugin.py
 ```
 

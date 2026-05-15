@@ -19,7 +19,7 @@ This is **not** the same thing as backend proof. Backend proof can be done with:
 
 - direct MCP stdio against `sky-cua-client mcp`
 - the live desktop smoke harnesses
-- the pure-X11 smoke
+- the historical X11/XWayland smoke evidence
 - the Kate / Krita workflow smokes
 
 Those remain important, but they do not prove the installed-plugin Codex lane.
@@ -40,7 +40,6 @@ For local-plugin E2E on this machine, the working setup is:
 That exact combination is what the current harnesses now use:
 
 - `scripts/live_codex_exec_smoke.py`
-- `scripts/live_codex_exec_tidal_playlist.py`
 
 The lightweight installed-plugin smoke is now live-proven with that recipe:
 
@@ -293,20 +292,15 @@ The Settings proof shows `Computer Use` and `Browser Use` in Codex Desktop with
 the Chrome companion plugin present. This does not replace the ChatGPT-auth
 installed-plugin E2E recipe above; it proves a different adapter path.
 
-What still remains to prove next:
-
-- repeatability for the fuller real-app workflow through the rich-client lane
-  - the TIDAL workflow has now moved onto the app-server harness shape as `scripts/live_app_server_tidal_playlist.py`
-  - on Asgard, TIDAL appears through `list_apps` / `get_app_state`, `gpt-5.5` can inspect the screenshot with `view_image`, and the turn can complete the playlist workflow through fallback anchors plus screenshot-guided clicks
-  - live proof: `artifacts/codex-e2e/tidal-playlist-app-server/20260423T190545Z/last-message.json`
-  - transcript proof: `artifacts/codex-e2e/tidal-playlist-app-server/20260423T190545Z/app-server-output.jsonl`
-  - the remaining work is making that acceptance path less fussy: keep the prompt disciplined, preserve the 420-second budget for the heavier `gpt-5.5` workflow, and avoid letting geometric fallback anchors become fake semantics
+The former TIDAL rich-client workflow remains useful as historical proof for
+fallback-only screenshot interaction, but its live harness has been retired.
+Current installed-plugin acceptance should use `scripts/live_app_server_smoke.py`
+and other active `live_*_smoke.py` entrypoints.
 
 ## Related files
 
 - `scripts/_plugin_bundle.py`
 - `scripts/_codex_exec.py`
 - `scripts/live_codex_exec_smoke.py`
-- `scripts/live_codex_exec_tidal_playlist.py`
 - `CONTINUITY.md`
 - `NOTES.md`

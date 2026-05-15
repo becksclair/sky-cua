@@ -104,7 +104,7 @@ Use these lanes when validating changes:
 
 - Runtime lane: direct MCP and desktop smokes such as
   `scripts/live_desktop_smoke.py`, `scripts/live_portal_downgrade_smoke.py`,
-  `scripts/live_x11_smoke.py`, `scripts/live_kate_smoke.py`, and
+  `scripts/live_wayland_pointer_smoke.py`, `scripts/live_kate_smoke.py`, and
   `scripts/live_krita_smoke.py`.
 - Codex adapter lane: bundle/install checks and app-server smokes such as
   `scripts/build_plugin.py`, `scripts/install_plugin.py`, and
@@ -114,10 +114,13 @@ Runtime changes should pass the narrowest relevant runtime lane first. Codex
 plugin checks prove that the Codex adapter still packages and activates the
 same runtime correctly.
 
-`scripts/gui_desktop_smoke.py` is a matrix-harness scaffold for KDE, GNOME,
-COSMIC, Hyprland, and i3 profiles. It records the selected profile artifact and
-exits non-zero until the profile-specific graphical session runners are
-implemented; do not treat it as a passing smoke.
+`scripts/run_gui_testing_vm_smoke.py` is the current Linux GUI matrix runner.
+It builds runtime artifacts on the host, syncs the checkout into the Arch
+`testing-vm`, copies selected Codex state, and runs profiles over SSH against
+real guest desktop sessions. Keep non-Codex host proof in the same VM: OpenCode
+is installed there by `scripts/testing-vm/provision-arch-testing-vm.sh`, and
+`scripts/testing-vm/sync-opencode-to-vm.sh` syncs host OpenCode config/auth
+without copying the host DB/log/snapshot history.
 
 Codex Desktop browser compatibility has an additional adapter lane:
 
@@ -145,6 +148,27 @@ opencode mcp list
 opencode run --dir /home/bex/projects/sky-cua \
   "Use the sky_cua MCP tool list_apps directly."
 ```
+
+For VM-based non-Codex harness work, use the Arch testing VM documented in
+`docs/gui-desktop-test-harness.md`. The provisioner installs OpenCode from npm
+with `OPENCODE_NPM_SPEC` defaulting to `opencode-ai@1.14.51`; then sync host
+OpenCode config/auth into the VM without copying the host DB, logs, snapshots,
+or tool-output history:
+
+```bash
+scripts/testing-vm/sync-opencode-to-vm.sh
+ssh -p 22222 \
+  -o StrictHostKeyChecking=no \
+  -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  skycua@127.0.0.1 'opencode --version && opencode models openai | head'
+```
+
+The current live VM proof is `opencode 1.14.51` with copied
+`~/.config/opencode` and `~/.local/share/opencode/auth.json`; `opencode models
+openai` succeeds in the guest. This proves the OpenCode auth/config surface,
+not sky-cua MCP behavior under OpenCode yet. For that, install/register the MCP
+runtime with `scripts/install_mcp_server.py --host opencode` and then run an
+OpenCode MCP tool smoke.
 
 For the LAN server at `https://opencode.heliasar.com`, restart the
 `opencode-lan.service` user service after changing repo-local OpenCode config:
