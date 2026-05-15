@@ -6,15 +6,15 @@ This document must be maintained in accordance with `~/.codex/PLANS.md`.
 
 ## Purpose / Big Picture
 
-After this change, native Wayland apps that expose only a KWin fallback window instead of a real AT-SPI tree will still give Codex something useful to work with: a small, honest region tree that marks likely navigation, search, action, and content areas. The model will use those regions as structural anchors, then use the screenshot as the final source of truth for targeting. The immediate proving target is TIDAL on KDE Wayland: the app is already visible and focusable, and after this change the fallback snapshot should contain more than one element and guidance that tells the model how to use those anchors without pretending they are real semantics.
+After this change, native Wayland apps that expose only a KWin fallback window instead of a real AT-SPI tree will still give Codex something useful to work with: a small, honest region tree that marks likely navigation, search, action, and content areas. The model will use those regions as structural anchors, then use the screenshot as the final source of truth for targeting. The original proving target was TIDAL on KDE Wayland, but the TIDAL live workflow is now retired; future proof should use a current fallback-only target with isolated, resettable state.
 
 ## Progress
 
 - [x] (2026-04-23 19:11Z) Re-read current repo state, the KWin fallback implementation, the rich TIDAL harness evidence, and PLANS.md.
-- [ ] Implement a richer native-Wayland fallback region tree in `crates/sky-cua-linux/src/backend.rs`.
-- [ ] Add TIDAL-oriented app guidance in `resources/app-instructions/` and register it in `resources/app-instructions/index.json`.
-- [ ] Re-run the narrow validations: Linux unit tests and the rich TIDAL app-server harness.
-- [ ] Update `CONTINUITY.md` and `NOTES.md` with the new blocker or proof.
+- [x] (2026-05-15 06:36Z) Current source contains the richer native-Wayland fallback region tree in `crates/sky-cua-linux/src/backend.rs`, with `vision_anchor` roles such as `wayland_header_band`.
+- [x] (2026-05-15 06:36Z) Retired the TIDAL-specific live workflow command path. TIDAL artifacts remain historical proof; future workflow proof needs a current fallback-only target with isolated, resettable state.
+- [x] (2026-05-15 06:36Z) Re-ran the broad local gates for the current diff: `cargo fmt --check`, `cargo test`, Ruff, basedpyright, pytest, `python3 scripts/build_plugin.py`, and `git diff --check`.
+- [x] (2026-05-15 06:36Z) Updated `CONTINUITY.md`, `NOTES.md`, and command docs to point away from deleted TIDAL and nested-X11 harness scripts.
 
 ## Surprises & Discoveries
 
@@ -37,15 +37,15 @@ The KWin fallback lives in `crates/sky-cua-linux/src/backend.rs` inside `kwin_fa
 
 The element model is defined in `crates/sky-cua-platform/src/model.rs` as `ElementNode`. The only fields available for richer fallback guidance are `role`, `name`, `description`, `state_flags`, `bounds`, and the tree relation via `parent_index`. That means the fallback must encode its extra guidance through names, descriptions, and state flags.
 
-App guidance is loaded from `resources/app-instructions/index.json` and resolved by the client from the focused app in `crates/sky-cua-client/src/heuristics.rs`. The rich TIDAL harness is `scripts/live_app_server_tidal_playlist.py`.
+App guidance is loaded from `resources/app-instructions/index.json` and resolved by the client from the focused app in `crates/sky-cua-client/src/heuristics.rs`. The former rich TIDAL harness has been removed, so this plan is historical evidence rather than an active command recipe.
 
 ## Plan of Work
 
 First, replace the one-node KWin fallback with a helper that emits a root window plus a few heuristic child regions derived from the window bounds. These regions must be clearly labeled as candidates or anchors, not as definite controls. Each region should describe how it might help a screenshot-guided model: header/search band, navigation rail, main content region, list-like region, and action-like strip. The state flags should make those affordances grep-friendly, for example `vision_anchor`, `navigation_like`, `search_like`, `list_like`, `text_like`, `action_like`, `content_like`, `container`, and `leaf`.
 
-Second, add a TIDAL app-instruction Markdown file that tells the model exactly how to use these fallback anchors: narrow to the likely region using the tree, confirm the target on the screenshot, then click/type physically and re-check state. Register that guidance in `resources/app-instructions/index.json` under `tidal-hifi.desktop` with sensible aliases.
+Second, add app-specific Markdown guidance only for active target apps that still need special handling. The retired TIDAL proof should not drive new command or prompt surface unless TIDAL becomes an active target again.
 
-Finally, prove the change with the narrowest meaningful validators. The unit tests should confirm the fallback tree shape. The rich TIDAL harness should progress from “one fallback window node” to a snapshot with multiple fallback anchor nodes, even if the full playlist workflow is still blocked by UI complexity.
+Finally, prove the change with the narrowest meaningful validators. The unit tests should confirm the fallback tree shape. Any future workflow proof should use the active app-server smoke infrastructure with a current app target, not the retired TIDAL runner.
 
 ## Concrete Steps
 
@@ -53,19 +53,19 @@ Run from `/home/bex/projects/sky-cua`.
 
 1. Edit `crates/sky-cua-linux/src/backend.rs` to factor KWin fallback elements into a helper that returns multiple nodes.
 2. Add or update unit tests in the `#[cfg(test)]` section of the same file.
-3. Add `resources/app-instructions/TIDAL.md` and register it in `resources/app-instructions/index.json`.
+3. Add or update app guidance only for the current target app, then register it in `resources/app-instructions/index.json`.
 4. Run:
 
     cargo fmt --all
     cargo test -p sky-cua-linux
-    python3 scripts/live_app_server_tidal_playlist.py
+    python3 scripts/live_app_server_smoke.py
 
 ## Validation and Acceptance
 
 Acceptance for the code change is behavioral, not cosmetic:
 
 - `cargo test -p sky-cua-linux` passes.
-- The rich TIDAL harness transcript shows `list_apps` finding `tidal-hifi.desktop` and `get_app_state` for the focused TIDAL window returning more than one fallback element instead of a single `window` node.
+- A current rich app-server transcript shows `list_apps` finding the target app and `get_app_state` for the focused fallback-only window returning more than one fallback element instead of a single `window` node.
 - If the full playlist flow still cannot complete, the failure message must be more informative than “no app visible”; it should clearly reflect the next real blocker.
 
 ## Idempotence and Recovery
