@@ -43,6 +43,10 @@ packaged adapter around that runtime, not the runtime boundary itself.
   top-level window fallback snapshots, GDI screenshots, and SendInput actions
 - Linux window targeting through a registry of KWin, X11, GNOME, COSMIC,
   Hyprland, and i3 backends, with terminal metadata selectors where available
+- Linux compositor cursor overlay and hide/show support through X11/XFixes, the
+  KWin effect, the bundled GNOME Shell extension, Hyprland
+  `cursor:invisible`, the COSMIC bridge prototype, and the dedicated no-patch
+  `cosmic_transparent_xcursor` VM session mode
 - `doctor`, `setup_accessibility`, and `setup_window_targeting` MCP tools with
   structured readiness reports
 - Codex Desktop compatibility as a `computer-use` companion bundle: Linux
@@ -196,7 +200,7 @@ For the portable runtime boundary and host-adapter expectations, see
 
 For the current Codex Desktop compatibility plan, including the exact Browser
 Use/Chrome proof artifacts, see
-`.opencode/plans/1778463694899-nimble-knight.md`.
+`plans/1778463694899-nimble-knight.md`.
 
 ## Current Limitations
 
@@ -231,9 +235,14 @@ Use/Chrome proof artifacts, see
 - GNOME Shell extension setup installs files and asks GNOME to enable the
   extension, but GNOME may still require a Shell reload or login restart before
   the extension DBus backend appears.
-- Cross-desktop windowing has parser/unit coverage, but GNOME, COSMIC,
-  Hyprland, i3, and a fresh KDE registry-path smoke still need live desktop
-  matrix proof.
+- Cross-desktop cursor proof is live on the Arch `testing-vm` for KDE/KWin,
+  GNOME, Hyprland, i3/X11, and COSMIC helper/cursor modes. The remaining
+  desktop-matrix work is narrower: broader registry/list/focus re-smokes on
+  some desktops and routine reruns after harness or compositor changes.
+- Normal unpatched COSMIC still has no dynamic compositor cursor hide/show API.
+  The no-patch `cosmic_transparent_xcursor` mode keeps the native cursor
+  transparent for the full session instead of restoring it when the overlay
+  hides.
 - Windows v1 is intentionally conservative: it exposes real top-level window
   bounds and physical actions, but does not yet provide rich UI Automation
   child trees or semantic invoke/value routing.

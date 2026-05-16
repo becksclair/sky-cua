@@ -48,7 +48,7 @@ The goal is not to pretend Linux parity is magically finished. The goal is to st
 - [x] (2026-05-13 10:05Z) Proved the corresponding narrow CodexDesktop-Rebuild patch: Browser Use and Chrome companion descriptors stay available when `computerUse` is enabled, Settings shows `Computer Use` and `Browser Use` with the Chrome plugin present, and the Desktop patch chain passes.
 - [x] (2026-05-13 12:00Z) Closed the KWin/X11 workspace metadata gap: KWin and X11 window structs now carry backend-native workspace values through the unified registry into public `WindowInfo.workspace`.
 - [x] (2026-05-14 15:39Z) Added and ran `scripts/live_chrome_host_client_smoke.py --browser brave --install-temp-native-manifest --host-path target/debug/sky-cua-chrome-host`, proving the official Codex extension `hehggadaopoacecdllhhajmbjkdcmajg` can connect to `com.openai.codexextension` through the sky-cua host binary, bridge `getInfo` and `getTabs` from a mock Codex browser client to the extension, bridge the extension heartbeat `ping` back to that client, emit `turnEnded` from a matching session-log completion, receive the extension response, and restore the original Brave manifest. Artifact: `artifacts/chrome-host-smoke/20260514T154125Z/result.json`.
-- [ ] Pending live-smoke matrix: GNOME, Hyprland, i3, and a KDE re-smoke after the registry changes must still be proven inside real desktop sessions. COSMIC now has first live VM proof for the embedded Computer Use smoke and `sky-cua-cosmic-helper` listing/activation/focused-window readback. Compile/unit tests cover the other registry and backend parsers, but they do not prove compositor-local listing, focus, portals, AT-SPI, extension behavior, or compositor focus side effects. The blocked matrix, intended commands, and artifact contract are tracked in `docs/gui-desktop-test-harness.md`; the current preferred runner is `scripts/run_gui_testing_vm_smoke.py` against an Arch `testing-vm`.
+- [x] (2026-05-16 21:13Z) Completed the current real-session compositor cursor matrix on the Arch `testing-vm`: KDE/KWin `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T132649888064Z/host-summary.json`, GNOME `artifacts/gnome-framebuffer-cursor-proof/20260515T140437893805720Z/host-summary.json`, Hyprland `/workspace/artifacts/codex-e2e/agent-cursor-wayland-layer-shell/20260515T142710878162Z/`, i3/X11 `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T142731049499Z/`, patched COSMIC `artifacts/cosmic-framebuffer-cursor-proof/20260515T142538562074Z/host-summary.json`, and no-patch transparent COSMIC `artifacts/cosmic-transparent-xcursor-cursor-proof/20260516T073232164704Z/host-summary.json` all report the accepted one-cursor behavior or honest backend state for their lane. `docs/gui-desktop-test-harness.md` is now the durable matrix index.
 
 ## Current Status Ledger
 
@@ -70,15 +70,15 @@ Complete:
 Partial:
 
 - Browser automation: Chrome extension resources, native host binary, native-host manifests, Codex Desktop Browser Use visibility, the official-extension bridge, generic Browser Use request forwarding, heartbeat handling, and rollout/session completion are implemented. First-class `browser_*` MCP tools remain intentionally deferred while Browser Use is provided by the companion bundled plugin.
-- Cross-desktop support: COSMIC has live VM proof for helper listing/focus/activation; GNOME, Hyprland, i3, KWin, and X11 adapters exist with parser/unit coverage where practical, but not all have live compositor proof.
+- Cross-desktop support: live VM proof now exists for COSMIC helper listing plus patched and no-patch cursor modes, the GNOME Shell extension cursor path, Hyprland layer-shell plus compositor hide, the KWin effect system-install path, and i3/X11 overlay plus XFixes hide/show. The remaining desktop-proof work is narrower: broader registry/list/focus/terminal-enrichment validation on some desktops and routine reruns after harness or compositor changes.
 - Doctor/setup hardening: the tools exist and report actionable state, but more real launch environments are needed to refine blocker wording and recovery paths.
-- Regression harnessing: live KDE, X11, Krita, Kate, downgrade, app-server, packaging, and COSMIC helper smokes exist in various forms, and the new Arch testing-VM runner/provisioner has first live VM proof.
+- Regression harnessing: live KDE, GNOME, COSMIC, Hyprland, and X11 compositor cursor proofs now exist alongside Krita, Kate, downgrade, app-server, packaging, and COSMIC helper smokes. The Arch testing-VM runner/provisioner is the accepted Linux desktop matrix lane.
 
 Pending:
 
-- Prove `scripts/run_gui_testing_vm_smoke.py` against the Arch testing VM for KDE, GNOME, Hyprland, and i3.
+- Broaden the Arch testing-VM desktop matrix beyond cursor proof: re-smoke registry/list/focus/terminal-enrichment paths on KDE, GNOME, COSMIC, Hyprland, and i3 as those backends evolve.
 - Register and smoke the `sky-cua` MCP runtime under OpenCode in the Arch testing VM after the non-Codex harness lane starts.
-- Record live compositor artifacts for every GUI profile under `artifacts/gui-desktop-smoke/<profile>/`.
+- Refresh the accepted compositor artifact set whenever the VM runner, session launcher, or compositor-specific adapters change.
 - Add any future first-class `browser_*` MCP tools only after deciding to move browser automation out of Codex Desktop's existing Browser Use companion flow.
 - Re-run the Codex Desktop Settings proof after Desktop upstream refreshes or plugin descriptor changes.
 - Run a fresh release build/install inspection before broad release or marketplace publishing.

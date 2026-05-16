@@ -25,8 +25,8 @@ sudo SKY_CUA_TESTING_VM_USER=skycua \
 ```
 
 `SKY_CUA_TESTING_VM_SESSION` selects the autologin session that greetd starts on
-the VM display. Supported values are `cosmic`, `kde`, `plasma`, `gnome`,
-`hyprland`, and `i3`.
+the VM display. Supported values are `cosmic`, `cosmic-blank`,
+`cosmic-transparent`, `kde`, `plasma`, `gnome`, `hyprland`, and `i3`.
 
 The provisioner was retargeted from the retired Arch Docker image and keeps the
 same dependency intent:
@@ -101,6 +101,8 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile kde-kwin
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use --desktop-env COSMIC
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile codex-desktop --desktop-env COSMIC
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-helper --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-patched-cursor-host-proof --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-transparent-xcursor-host-proof --desktop-env COSMIC
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all
 ```
 
@@ -223,6 +225,15 @@ Profiles live under `scripts/testing-vm/profiles/`.
   `sky-cua-cosmic-helper` protocol path. It launches a Wayland client on the
   guest session socket, proves helper `probe`, `list-windows`,
   `activate-window`, and `focused-window`, and records the JSON replies.
+- `cosmic-patched-cursor-host-proof`: patched COSMIC compositor proof for the
+  host-visible one-cursor invariant. It requires a `cosmic-comp` build with the
+  repo patch applied, drives `sky-cua-overlay-host` over the real guest session,
+  and verifies the framebuffer/host-summary contract.
+- `cosmic-transparent-xcursor-host-proof`: no-patch COSMIC proof for the
+  dedicated transparent native-cursor session mode. Boot the VM into
+  `cosmic-blank` or `cosmic-transparent`; the profile verifies
+  `system_cursor_backend=cosmic_transparent_xcursor`, visible overlay proof, and
+  the absence of a native cursor in the hidden frame.
 - `i3`: real X11 session proof. Boot the VM into i3/X11 first; the profile
   refuses Wayland and runs the X11 overlay/current-display smoke against the
   guest session display.
@@ -246,10 +257,13 @@ Profiles live under `scripts/testing-vm/profiles/`.
 ## Current Verification Status
 
 The Docker GUI harness has been retired as the preferred path. Its package list
-and profile ideas were folded into the Arch testing-VM provisioner and runner,
-and the VM path now has a first live COSMIC guest proof.
+and profile ideas were folded into the Arch testing-VM provisioner and runner.
+The accepted VM matrix now covers COSMIC helper/input, patched COSMIC cursor
+bridge, no-patch transparent COSMIC session mode, KDE/KWin system-install
+effect proof, GNOME Shell extension cursor proof, Hyprland compositor cursor
+hide, and i3/X11 overlay proof.
 
-First live VM proof:
+Early COSMIC bring-up proofs:
 
 ```bash
 python3 scripts/run_gui_testing_vm_smoke.py \
@@ -433,13 +447,13 @@ Progress ledger:
 | Area | Status | Current proof | Remaining proof |
 | --- | --- | --- | --- |
 | VM provisioner | First live proof | `scripts/testing-vm/provision-arch-testing-vm.sh` provisioned a QEMU/libvirt Arch guest with COSMIC Wayland, Chrome, OpenCode, Codex Desktop, SSH, rsync, matching terminal apps, and the desktop matrix. | Re-run from a fully fresh guest after future package-list changes. |
-| VM runner | First live proof | `scripts/run_gui_testing_vm_smoke.py` built host runtime artifacts, synced the checkout, copied selected Codex settings, and executed COSMIC helper proof over SSH. | Add host-side artifact pullback or index generation if repeated VM runs need easier local browsing. |
+| VM runner | Accepted matrix runner | `scripts/run_gui_testing_vm_smoke.py` now owns the accepted real-session matrix for COSMIC helper/input, patched COSMIC cursor bridge, transparent COSMIC, KDE/KWin system-install, GNOME, Hyprland, and i3/X11 cursor proof profiles. | Add host-side artifact pullback or index generation if repeated VM runs need easier local browsing. |
 | OpenCode | Config/auth prep proof | `scripts/testing-vm/sync-opencode-to-vm.sh` synced host OpenCode config/auth without DB/log/snapshot state; VM `opencode --version` returned `1.14.51`, and `opencode models openai` succeeded. | Register and smoke the sky-cua MCP runtime under OpenCode when the non-Codex harness lane starts. |
-| COSMIC | Helper, app launch, pointer, text/key, and scaled input accepted | Real COSMIC Wayland guest session was active with `cosmic-session`, `cosmic-comp`, and `/run/user/1000/wayland-1`; `cosmic-helper` proved helper listing, activation, and focused-window readback. Fresh helper/app artifacts: `/workspace/artifacts/gui-desktop-smoke/cosmic-helper/20260515T034206Z/` and `/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260515T034206Z/`. Full input artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T092606Z` proves `LinuxVirtualInput` direct uinput click, drag, scroll plus ydotool-backed `type_text`/`press_key`; repeatable scaled profile artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T093737Z` proves the same path at 125%. Previous blocker before the backend existed: `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T034151Z/`. | Keep this in the session-matrix gate; broaden later to multi-output when the VM exposes more than one real output. |
-| KDE/KWin | Layer-shell and KWin effect system path accepted | Real Plasma Wayland VM proofs: headed framebuffer cursor `artifacts/kde-framebuffer-cursor-proof/cursor-overlay-clean/after.png`, clean cursor sequence `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100302670580-syn`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100303845615-vis`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100305142807-hide`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click`, full pointer `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T100113Z/`, user-level effect discovery blocker `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515075621741796-kwin`, and automated system-install proof `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T100852814643Z/host-summary.json`. | Keep this profile in the pre-merge/live-smoke gate for future KWin effect changes. |
-| GNOME | Pointer input accepted; listing/focus matrix pending | Real GNOME Wayland VM artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T084643Z` proves click, drag, and scroll through GNOME RemoteDesktop. | Add GNOME Introspect/extension/listing/activation proof and visible overlay strategy. |
-| Hyprland | Layer-shell overlay accepted; app/focus matrix pending | Real Hyprland VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-wayland-layer-shell/20260515T080912397166Z` proves `wayland_layer_shell`, visible overlay capture through `grim -o Virtual-1`, click-through capability, and hide-for-capture. The same slice fixed the unconfigured layer-surface buffer attach protocol bug. | Prove `hyprctl clients -j`, focus dispatch, terminal enrichment, portal behavior, and full pointer input once the physical input backend matrix is ready. |
-| i3/X11 | X11 overlay accepted | Real i3/X11 VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T075301057704Z` proves visible overlay capture, hide, re-show, click-through, and XFixes system cursor hide/show. | Broaden the i3 profile later for `i3-msg -t get_tree`, app focus activation, terminal enrichment, and X11/XTest input beyond the cursor overlay proof. |
+| COSMIC | Helper, app launch, pointer, text/key, patched cursor bridge, and transparent no-patch mode accepted | Real COSMIC Wayland guest session was active with `cosmic-session`, `cosmic-comp`, and `/run/user/1000/wayland-1`; `cosmic-helper` proved helper listing, activation, and focused-window readback at `/workspace/artifacts/gui-desktop-smoke/cosmic-helper/20260515T034206Z/`. Full input artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T092606Z` proves `LinuxVirtualInput` direct uinput click, drag, scroll plus ydotool-backed `type_text`/`press_key`; repeatable scaled profile artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T093737Z` proves the same path at 125%. Patched compositor proof `artifacts/cosmic-framebuffer-cursor-proof/20260515T142538562074Z/host-summary.json` reports `ok=true` with `system_cursor_backend=cosmic_comp_bridge`. No-patch transparent session proof `artifacts/cosmic-transparent-xcursor-cursor-proof/20260516T073232164704Z/host-summary.json` reports `ok=true` with `system_cursor_backend=cosmic_transparent_xcursor`. | Keep this in the session-matrix gate; broaden later to multi-output and richer list/focus coverage when the VM exposes more than one real output. |
+| KDE/KWin | Layer-shell, pointer input, and KWin effect system path accepted | Real Plasma Wayland VM proofs: clean cursor sequence `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100302670580-syn`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100303845615-vis`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100305142807-hide`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click`, full pointer `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T100113Z/`, user-level effect discovery blocker `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515075621741796-kwin`, and automated system-install proof `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T132649888064Z/host-summary.json`. | Keep this profile in the pre-merge/live-smoke gate for future KWin effect changes; broader registry/list/focus proof is still a separate seam. |
+| GNOME | Pointer input and Shell-extension cursor proof accepted | Real GNOME Wayland VM pointer artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T084643Z` proves click, drag, and scroll through GNOME RemoteDesktop. The GNOME Shell extension cursor artifact `artifacts/gnome-framebuffer-cursor-proof/20260515T140437893805720Z/host-summary.json` reports `ok=true` with `backend=gnome_shell_extension` and `system_cursor_backend=gnome_shell_extension`. | Broaden GNOME registry/listing/focus proof beyond the current cursor and pointer seams, and re-run after Shell or session-launch changes. |
+| Hyprland | Layer-shell overlay and compositor cursor hide accepted | Real Hyprland VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-wayland-layer-shell/20260515T142710878162Z` proves `wayland_layer_shell`, `system_cursor_backend=hyprland_config`, visible overlay capture, click-through capability, hide-for-capture, and restore of `cursor:invisible`. The same slice fixed the unconfigured layer-surface buffer attach protocol bug. | Broaden Hyprland registry/list/focus/terminal-enrichment proof and full pointer-input matrix as those paths mature. |
+| i3/X11 | X11 overlay and XFixes system cursor hide accepted | Real i3/X11 VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T142731049499Z` proves visible overlay capture, hide, re-show, click-through, and XFixes system cursor hide/show. | Broaden the i3 profile later for `i3-msg -t get_tree`, app focus activation, terminal enrichment, and X11/XTest input beyond the cursor overlay proof. |
 
 Do not mark any live-smoke gap complete until the command, desktop profile, and
 artifact directory are recorded.

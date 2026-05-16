@@ -355,13 +355,16 @@ Run the narrowest relevant checks as each milestone lands:
 - `uv run pytest`
 - `python3 scripts/build_plugin.py`
 
-Live compositor proofs are required before this plan is complete:
+Accepted live compositor proofs now cover:
 
-- KDE/KWin profile with KWin effect installed and enabled.
-- X11 profile with XFixes available.
+- KDE/KWin profile with the bundled KWin effect installed and enabled.
+- X11/i3 profile with XFixes-backed cursor hiding.
 - GNOME Shell profile with the bundled extension enabled.
-- Hyprland profile using `scripts/testing-vm/profiles/hyprland.sh`.
-- COSMIC profile using `scripts/testing-vm/profiles/cosmic.sh` or `scripts/testing-vm/profiles/cosmic-helper.sh`.
+- Hyprland profile using compositor-owned `cursor:invisible` restore.
+- COSMIC patched-compositor proof via `--profile cosmic-patched-cursor-host-proof`.
+- COSMIC no-patch transparent-session proof via `--profile cosmic-transparent-xcursor-host-proof`.
+
+These proofs are the current Linux acceptance baseline. Re-run the affected profile and refresh the cited artifact whenever the overlay host, helper bridge, VM session wrappers, or compositor integration changes.
 
 Each live proof must capture:
 
@@ -376,7 +379,7 @@ GNOME Shell API drift is likely. The extension must guard every cursor API call 
 
 Hyprland runtime config restore is user-visible state. The adapter must snapshot once, restore exactly, and avoid overwriting user changes made after sky-cua starts unless sky-cua still owns the hide state.
 
-COSMIC may require an upstream patch or user-installed compositor component. Until a compositor bridge exists and is live-proved, sky-cua must honestly report COSMIC system cursor hiding as unsupported while preserving the visible layer-shell agent cursor.
+COSMIC still has two distinct lanes. The patched compositor bridge is live-proved and gives proper dynamic hide/show, but it remains a downstream prototype until COSMIC grows an upstream cursor-visibility inhibitor/API. Unpatched COSMIC still cannot do dynamic hide/show correctly; sky-cua must either report system cursor hiding unsupported or run the dedicated transparent-session mode that keeps the native cursor transparent for the whole session.
 
 ## Recovery and Idempotence
 
