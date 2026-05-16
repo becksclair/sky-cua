@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -222,7 +223,15 @@ def install_release_cache(bundle_root: Path, codex_home: Path) -> Path:
 
 
 def config_has_release_marketplace(config_text: str) -> bool:
-    return f"[marketplaces.{RELEASE_MARKETPLACE_NAME}]" in config_text
+    try:
+        parsed = tomllib.loads(config_text)
+    except tomllib.TOMLDecodeError:
+        return (
+            f"[marketplaces.{RELEASE_MARKETPLACE_NAME}]" in config_text
+            or f'[marketplaces."{RELEASE_MARKETPLACE_NAME}"]' in config_text
+        )
+    marketplaces = parsed.get("marketplaces")
+    return isinstance(marketplaces, dict) and RELEASE_MARKETPLACE_NAME in marketplaces
 
 
 def is_cache_backup_access_denied(error: RuntimeError) -> bool:

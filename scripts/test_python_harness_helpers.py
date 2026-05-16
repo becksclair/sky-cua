@@ -1874,9 +1874,14 @@ def test_update_codex_config_can_stage_disabled_plugin_before_install(tmp_path: 
     assert parsed["features"]["plugins"] is True
 
 
+@pytest.mark.parametrize(
+    "marketplace_header",
+    ["[marketplaces.Heliasar]", '[marketplaces."Heliasar"]'],
+)
 def test_release_deploy_preserves_existing_git_marketplace_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    marketplace_header: str,
 ) -> None:
     codex_home = tmp_path / "codex-home"
     marketplace_root = tmp_path / "marketplace"
@@ -1886,7 +1891,7 @@ def test_release_deploy_preserves_existing_git_marketplace_source(
     config_path.write_text(
         "\n".join(
             [
-                "[marketplaces.Heliasar]",
+                marketplace_header,
                 'source_type = "git"',
                 'source = "https://github.com/becksclair/heliasar-marketplace.git"',
                 "",
