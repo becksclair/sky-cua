@@ -5,7 +5,10 @@ use cosmic_protocols::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child,
@@ -16,7 +19,7 @@ use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
     ext_foreign_toplevel_handle_v1, ext_foreign_toplevel_list_v1,
 };
 
-const HELP: &str = "sky-cua-cosmic-helper\n\nUsage:\n  sky-cua-cosmic-helper probe\n  sky-cua-cosmic-helper list-windows\n  sky-cua-cosmic-helper focused-window\n  sky-cua-cosmic-helper activate-window --window-id <id>";
+const HELP: &str = "sky-cua-cosmic-helper\n\nUsage:\n  sky-cua-cosmic-helper probe\n  sky-cua-cosmic-helper list-windows\n  sky-cua-cosmic-helper focused-window\n  sky-cua-cosmic-helper activate-window --window-id <id>\n  sky-cua-cosmic-helper cursor-bridge [--socket <path>] [--state-file <path>]";
 const BACKEND: &str = "cosmic-wayland";
 const ACTIVATION_STATE_TTL: Duration = Duration::from_secs(5);
 
@@ -61,6 +64,19 @@ struct ActivationOutput {
 struct ActivationState {
     window_id: u64,
     timestamp_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CursorBridgeRequest {
+    command: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CursorBridgeResponse {
+    ok: bool,
+    supported: bool,
+    hidden: bool,
+    detail: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -111,6 +127,11 @@ fn main() -> Result<()> {
         Command::ListWindows => print_json(&collect_windows()?),
         Command::FocusedWindow => print_json(&focused_window()?),
         Command::ActivateWindow { window_id } => print_json(&activate_window(window_id)?),
+        Command::CursorBridge {
+            socket_path,
+            state_file,
+            ready_file,
+        } => run_cursor_bridge(socket_path, state_file, ready_file),
     }
 }
 
@@ -119,7 +140,14 @@ enum Command {
     Probe,
     ListWindows,
     FocusedWindow,
-    ActivateWindow { window_id: u64 },
+    ActivateWindow {
+        window_id: u64,
+    },
+    CursorBridge {
+        socket_path: PathBuf,
+        state_file: PathBuf,
+        ready_file: PathBuf,
+    },
 }
 
 impl Command {
@@ -135,6 +163,40 @@ impl Command {
                         .with_context(|| format!("invalid window id {value}"))?,
                 })
             }
+            [command] if command == "cursor-bridge" => Ok(Self::CursorBridge {
+                socket_path: default_cursor_bridge_socket()?,
+                state_file: default_cursor_bridge_state_file()?,
+                ready_file: default_cursor_bridge_ready_file()?,
+            }),
+            [command, socket_flag, socket]
+                if command == "cursor-bridge" && socket_flag == "--socket" =>
+            {
+                Ok(Self::CursorBridge {
+                    socket_path: PathBuf::from(socket),
+                    state_file: default_cursor_bridge_state_file()?,
+                    ready_file: default_cursor_bridge_ready_file()?,
+                })
+            }
+            [command, state_flag, state_file]
+                if command == "cursor-bridge" && state_flag == "--state-file" =>
+            {
+                Ok(Self::CursorBridge {
+                    socket_path: default_cursor_bridge_socket()?,
+                    state_file: PathBuf::from(state_file),
+                    ready_file: default_cursor_bridge_ready_file()?,
+                })
+            }
+            [command, socket_flag, socket, state_flag, state_file]
+                if command == "cursor-bridge"
+                    && socket_flag == "--socket"
+                    && state_flag == "--state-file" =>
+            {
+                Ok(Self::CursorBridge {
+                    socket_path: PathBuf::from(socket),
+                    state_file: PathBuf::from(state_file),
+                    ready_file: default_cursor_bridge_ready_file()?,
+                })
+            }
             [command] if command == "--help" || command == "-h" => {
                 println!("{HELP}");
                 std::process::exit(0);
@@ -144,10 +206,187 @@ impl Command {
                 std::process::exit(0);
             }
             _ => bail!(
-                "unknown arguments. Expected one of: probe, list-windows, focused-window, activate-window --window-id <id>"
+                "unknown arguments. Expected one of: probe, list-windows, focused-window, activate-window --window-id <id>, cursor-bridge [--socket <path>] [--state-file <path>]"
             ),
         }
     }
+}
+
+fn default_cursor_bridge_socket() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("SKY_CUA_COSMIC_CURSOR_BRIDGE") {
+        return Ok(PathBuf::from(path));
+    }
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .ok_or_else(|| anyhow!("XDG_RUNTIME_DIR is required for the COSMIC cursor bridge"))?;
+    Ok(PathBuf::from(runtime_dir).join("sky-cua-cosmic-cursor.sock"))
+}
+
+fn default_cursor_bridge_state_file() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("SKY_CUA_COSMIC_CURSOR_STATE") {
+        return Ok(PathBuf::from(path));
+    }
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .ok_or_else(|| anyhow!("XDG_RUNTIME_DIR is required for the COSMIC cursor bridge"))?;
+    Ok(PathBuf::from(runtime_dir).join("sky-cua-cosmic-cursor-hidden"))
+}
+
+fn default_cursor_bridge_ready_file() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("SKY_CUA_COSMIC_CURSOR_READY") {
+        return Ok(PathBuf::from(path));
+    }
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .ok_or_else(|| anyhow!("XDG_RUNTIME_DIR is required for the COSMIC cursor bridge"))?;
+    Ok(PathBuf::from(runtime_dir).join("sky-cua-cosmic-cursor-ready"))
+}
+
+fn run_cursor_bridge(socket_path: PathBuf, state_file: PathBuf, ready_file: PathBuf) -> Result<()> {
+    let _ = write_cursor_bridge_state(&state_file, false);
+    if let Some(parent) = socket_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create socket directory {}", parent.display()))?;
+    }
+    if socket_path.exists() {
+        fs::remove_file(&socket_path)
+            .with_context(|| format!("failed to remove stale socket {}", socket_path.display()))?;
+    }
+    let listener = UnixListener::bind(&socket_path).with_context(|| {
+        format!(
+            "failed to bind COSMIC cursor bridge {}",
+            socket_path.display()
+        )
+    })?;
+    eprintln!(
+        "COSMIC cursor bridge listening on {} with state {} and ready sentinel {}",
+        socket_path.display(),
+        state_file.display(),
+        ready_file.display()
+    );
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                if let Err(error) = handle_cursor_bridge_client(stream, &state_file, &ready_file) {
+                    eprintln!("COSMIC cursor bridge request failed: {error:#}");
+                }
+            }
+            Err(error) => eprintln!("COSMIC cursor bridge accept failed: {error}"),
+        }
+    }
+    Ok(())
+}
+
+fn handle_cursor_bridge_client(
+    mut stream: UnixStream,
+    state_file: &Path,
+    ready_file: &Path,
+) -> Result<()> {
+    let mut line = String::new();
+    BufReader::new(stream.try_clone()?)
+        .read_line(&mut line)
+        .context("failed to read COSMIC cursor bridge request")?;
+    let request: CursorBridgeRequest =
+        serde_json::from_str(line.trim()).context("invalid COSMIC cursor bridge request")?;
+    let response = handle_cursor_bridge_request(&request.command, state_file, ready_file);
+    serde_json::to_writer(&mut stream, &response)
+        .context("failed to write COSMIC cursor bridge response")?;
+    stream
+        .write_all(b"\n")
+        .context("failed to terminate COSMIC cursor bridge response")?;
+    Ok(())
+}
+
+fn handle_cursor_bridge_request(
+    command: &str,
+    state_file: &Path,
+    ready_file: &Path,
+) -> CursorBridgeResponse {
+    let supported = ready_file.exists();
+    match command {
+        "status" => cursor_bridge_response(
+            supported,
+            state_file,
+            ready_file,
+            if supported {
+                "COSMIC cursor bridge is running and compositor integration is active"
+            } else {
+                "COSMIC cursor bridge is running but compositor integration is not active"
+            },
+        ),
+        "hide" if !supported => cursor_bridge_response(
+            false,
+            state_file,
+            ready_file,
+            "COSMIC cursor compositor integration is not active",
+        ),
+        "hide" => match write_cursor_bridge_state(state_file, true) {
+            Ok(()) => {
+                cursor_bridge_response(true, state_file, ready_file, "COSMIC cursor hide requested")
+            }
+            Err(error) => CursorBridgeResponse {
+                ok: false,
+                supported,
+                hidden: state_file.exists(),
+                detail: format!("failed to request COSMIC cursor hide: {error:#}"),
+            },
+        },
+        "show" => match write_cursor_bridge_state(state_file, false) {
+            Ok(()) => cursor_bridge_response(
+                true,
+                state_file,
+                ready_file,
+                if supported {
+                    "COSMIC cursor show requested"
+                } else {
+                    "COSMIC cursor hidden state cleared; compositor integration is not active"
+                },
+            ),
+            Err(error) => CursorBridgeResponse {
+                ok: false,
+                supported,
+                hidden: state_file.exists(),
+                detail: format!("failed to request COSMIC cursor show: {error:#}"),
+            },
+        },
+        other => CursorBridgeResponse {
+            ok: false,
+            supported,
+            hidden: state_file.exists(),
+            detail: format!("unknown COSMIC cursor bridge command: {other}"),
+        },
+    }
+}
+
+fn cursor_bridge_response(
+    ok: bool,
+    state_file: &Path,
+    ready_file: &Path,
+    detail: &str,
+) -> CursorBridgeResponse {
+    CursorBridgeResponse {
+        ok,
+        supported: ready_file.exists(),
+        hidden: state_file.exists(),
+        detail: detail.to_string(),
+    }
+}
+
+fn write_cursor_bridge_state(state_file: &Path, hidden: bool) -> Result<()> {
+    if hidden {
+        if let Some(parent) = state_file.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create COSMIC cursor state directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        fs::write(state_file, b"hidden\n")
+            .with_context(|| format!("failed to write {}", state_file.display()))?;
+    } else if state_file.exists() {
+        fs::remove_file(state_file)
+            .with_context(|| format!("failed to remove {}", state_file.display()))?;
+    }
+    Ok(())
 }
 
 fn probe() -> Result<ProbeOutput> {
@@ -687,5 +926,92 @@ mod tests {
         };
 
         assert!(!state_is_stale(&state));
+    }
+
+    #[test]
+    fn cursor_bridge_hide_and_show_toggle_state_file() {
+        let state_file =
+            std::env::temp_dir().join(format!("sky-cua-cosmic-helper-test-{}", std::process::id()));
+        let ready_file = std::env::temp_dir().join(format!(
+            "sky-cua-cosmic-helper-ready-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&state_file);
+        fs::write(&ready_file, b"ready\n").unwrap();
+
+        let hide = handle_cursor_bridge_request("hide", &state_file, &ready_file);
+        assert!(hide.ok);
+        assert!(hide.supported);
+        assert!(hide.hidden);
+        assert!(state_file.exists());
+
+        let show = handle_cursor_bridge_request("show", &state_file, &ready_file);
+        assert!(show.ok);
+        assert!(show.supported);
+        assert!(!show.hidden);
+        assert!(!state_file.exists());
+        let _ = fs::remove_file(&ready_file);
+    }
+
+    #[test]
+    fn cursor_bridge_rejects_unknown_command() {
+        let state_file = std::env::temp_dir().join(format!(
+            "sky-cua-cosmic-helper-test-unknown-{}",
+            std::process::id()
+        ));
+        let ready_file = std::env::temp_dir().join(format!(
+            "sky-cua-cosmic-helper-ready-test-unknown-{}",
+            std::process::id()
+        ));
+        fs::write(&ready_file, b"ready\n").unwrap();
+        let response = handle_cursor_bridge_request("dance", &state_file, &ready_file);
+
+        assert!(!response.ok);
+        assert!(response.supported);
+        assert!(
+            response
+                .detail
+                .contains("unknown COSMIC cursor bridge command")
+        );
+        let _ = fs::remove_file(&ready_file);
+    }
+
+    #[test]
+    fn cursor_bridge_reports_unsupported_without_compositor_ready_sentinel() {
+        let state_file = std::env::temp_dir().join(format!(
+            "sky-cua-cosmic-helper-test-unsupported-{}",
+            std::process::id()
+        ));
+        let ready_file = std::env::temp_dir().join(format!(
+            "sky-cua-cosmic-helper-ready-test-unsupported-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&ready_file);
+
+        let response = handle_cursor_bridge_request("hide", &state_file, &ready_file);
+        assert!(!response.ok);
+        assert!(!response.supported);
+        assert!(!response.hidden);
+        assert!(!state_file.exists());
+    }
+
+    #[test]
+    fn cursor_bridge_show_clears_hidden_state_without_ready_sentinel() {
+        let state_file = std::env::temp_dir().join(format!(
+            "sky-cua-cosmic-helper-test-show-unsupported-{}",
+            std::process::id()
+        ));
+        let ready_file = std::env::temp_dir().join(format!(
+            "sky-cua-cosmic-helper-ready-test-show-unsupported-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&ready_file);
+        fs::write(&state_file, b"hidden\n").unwrap();
+
+        let response = handle_cursor_bridge_request("show", &state_file, &ready_file);
+        assert!(response.ok);
+        assert!(!response.supported);
+        assert!(!response.hidden);
+        assert!(!state_file.exists());
     }
 }

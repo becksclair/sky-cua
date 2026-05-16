@@ -17,6 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REMOTE_ROOT = Path("/workspace")
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
 KWIN_EFFECT_SYSTEM_POINT = (420.0, 260.0)
+COSMIC_HOST_AGENT_POINT = (360.0, 260.0)
+COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT = (360.0, 295.0)
+COSMIC_HOST_RESTORED_CURSOR_POINT = (160.0, 171.0)
 PROFILES = (
     "kde-kwin-effect",
     "kde-kwin-effect-system-install",
@@ -25,6 +28,8 @@ PROFILES = (
     "computer-use",
     "codex-desktop",
     "cosmic-helper",
+    "cosmic-patched-cursor-host-proof",
+    "cosmic-transparent-xcursor-host-proof",
     "wayland-layer-shell-overlay",
     "wayland-pointer",
     "wayland-pointer-scaled",
@@ -211,6 +216,28 @@ def main() -> int:
             wayland_display=args.wayland_display,
             desktop_env=args.desktop_env,
             sync_codex_settings=args.sync_codex_settings and not args.skip_codex_settings,
+            vm_name=args.vm_name,
+            libvirt_uri=args.libvirt_uri,
+        )
+    if args.profile == "cosmic-patched-cursor-host-proof":
+        return run_remote_cosmic_patched_cursor_host_proof_profile(
+            ssh_target,
+            args.port,
+            args.ssh_option,
+            remote_root,
+            wayland_display=args.wayland_display,
+            desktop_env=args.desktop_env or "COSMIC",
+            vm_name=args.vm_name,
+            libvirt_uri=args.libvirt_uri,
+        )
+    if args.profile == "cosmic-transparent-xcursor-host-proof":
+        return run_remote_cosmic_transparent_xcursor_host_proof_profile(
+            ssh_target,
+            args.port,
+            args.ssh_option,
+            remote_root,
+            wayland_display=args.wayland_display,
+            desktop_env=args.desktop_env or "COSMIC",
             vm_name=args.vm_name,
             libvirt_uri=args.libvirt_uri,
         )
@@ -543,6 +570,464 @@ def run_remote_profile(
     return completed.returncode
 
 
+def run_remote_cosmic_patched_cursor_host_proof_profile(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    wayland_display: str,
+    desktop_env: str,
+    vm_name: str,
+    libvirt_uri: str,
+) -> int:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    remote_artifact_dir = (
+        remote_root
+        / "artifacts"
+        / "codex-e2e"
+        / "agent-cursor-cosmic-patched-host-proof"
+        / timestamp
+    )
+    local_artifact_dir = REPO_ROOT / "artifacts" / "cosmic-framebuffer-cursor-proof" / timestamp
+    local_artifact_dir.mkdir(parents=True, exist_ok=True)
+    before_path = local_artifact_dir / "before.png"
+    visible_path = local_artifact_dir / "visible.png"
+    hidden_path = local_artifact_dir / "hidden.png"
+
+    subprocess.run(
+        [
+            *ssh_base_command(port, ssh_options),
+            ssh_target,
+            "ydotool mousemove --absolute -x 80 -y 80 >/dev/null 2>&1 || true",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    time.sleep(0.5)
+    capture_vm_framebuffer(vm_name, libvirt_uri, before_path)
+
+    desktop_exports = desktop_environment_exports(desktop_env)
+    remote_script = f"""
+set -euo pipefail
+cd {shlex.quote(str(remote_root))}
+mkdir -p {shlex.quote(str(remote_artifact_dir))}
+test -e /run/user/$(id -u)/sky-cua-cosmic-cursor-ready
+export SKY_CUA_COSMIC_HOST_PROOF_ARTIFACT_DIR={shlex.quote(str(remote_artifact_dir))}
+export SKY_CUA_REMOTE_ROOT={shlex.quote(str(remote_root))}
+export SKY_CUA_OVERLAY_BACKEND=layer-shell
+export XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+export DBUS_SESSION_BUS_ADDRESS="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=${{XDG_RUNTIME_DIR}}/bus}}"
+export WAYLAND_DISPLAY="${{WAYLAND_DISPLAY:-{shlex.quote(wayland_display)}}}"
+export XDG_SESSION_TYPE=wayland
+{desktop_exports}
+python3 - <<'PY'
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+
+artifact = Path(os.environ["SKY_CUA_COSMIC_HOST_PROOF_ARTIFACT_DIR"])
+remote_root = Path(os.environ["SKY_CUA_REMOTE_ROOT"])
+proc = subprocess.Popen(
+    [str(remote_root / "target/release/sky-cua-overlay-host"), "serve"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    env=os.environ.copy(),
+    cwd=remote_root,
+)
+assert proc.stdin and proc.stdout
+state = {{
+    "version": 1,
+    "kind": "set_cursor",
+    "state": {{
+        "visible": True,
+        "sequence": 1,
+        "native_point": {{"x": 360.0, "y": 260.0, "coordinate_space": "desktop_logical"}},
+        "model_point": {{"x": 360.0, "y": 260.0, "coordinate_space": "stream_pixels"}},
+        "source_action": "click",
+        "updated_at_ms": int(time.time() * 1000),
+    }},
+}}
+proc.stdin.write(json.dumps(state) + "\\n")
+proc.stdin.flush()
+set_reply = proc.stdout.readline().strip()
+(artifact / "set-reply.json").write_text(set_reply + "\\n", encoding="utf-8")
+(artifact / "visible-ready").write_text("ready\\n", encoding="utf-8")
+time.sleep(8)
+hide = {{"version": 1, "kind": "hide", "reason": "cosmic-host-framebuffer-proof"}}
+proc.stdin.write(json.dumps(hide) + "\\n")
+proc.stdin.flush()
+hide_reply = proc.stdout.readline().strip()
+(artifact / "hide-reply.json").write_text(hide_reply + "\\n", encoding="utf-8")
+time.sleep(0.5)
+(artifact / "hidden-ready").write_text("ready\\n", encoding="utf-8")
+proc.terminate()
+try:
+    proc.wait(timeout=2)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    proc.wait(timeout=2)
+stderr = proc.stderr.read() if proc.stderr else ""
+if stderr:
+    (artifact / "overlay-stderr.log").write_text(stderr, encoding="utf-8")
+PY
+"""
+    stdout_path = local_artifact_dir / "remote.stdout.log"
+    stderr_path = local_artifact_dir / "remote.stderr.log"
+    with (
+        stdout_path.open("w", encoding="utf-8") as stdout,
+        stderr_path.open("w", encoding="utf-8") as stderr,
+    ):
+        remote_process = subprocess.Popen(
+            [*ssh_base_command(port, ssh_options), ssh_target, remote_script],
+            cwd=REPO_ROOT,
+            stdout=stdout,
+            stderr=stderr,
+            text=True,
+        )
+        visible_ready = wait_for_remote_path(
+            ssh_target,
+            port,
+            ssh_options,
+            remote_artifact_dir / "visible-ready",
+            remote_process,
+            deadline=time.time() + 30,
+        )
+        if visible_ready:
+            capture_vm_framebuffer(vm_name, libvirt_uri, visible_path)
+        hidden_ready = wait_for_remote_path(
+            ssh_target,
+            port,
+            ssh_options,
+            remote_artifact_dir / "hidden-ready",
+            remote_process,
+            deadline=time.time() + 30,
+        )
+        if not hidden_ready:
+            hidden_ready = remote_path_exists(
+                ssh_target,
+                port,
+                ssh_options,
+                remote_artifact_dir / "hidden-ready",
+            )
+        if hidden_ready:
+            capture_vm_framebuffer(vm_name, libvirt_uri, hidden_path)
+        returncode = remote_process.wait(timeout=30)
+
+    set_reply = read_remote_json(
+        ssh_target, port, ssh_options, remote_artifact_dir / "set-reply.json"
+    )
+    hide_reply = read_remote_json(
+        ssh_target, port, ssh_options, remote_artifact_dir / "hide-reply.json"
+    )
+    agent_probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
+    restored_cursor_probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
+    before_vs_hidden_probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
+    probe_error: str | None = None
+    if visible_ready and hidden_ready:
+        try:
+            agent_probe = probe_marker(
+                hidden_path, visible_path, COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT
+            )
+            restored_cursor_probe = probe_marker(
+                hidden_path, visible_path, COSMIC_HOST_RESTORED_CURSOR_POINT
+            )
+            before_vs_hidden_probe = probe_marker(
+                before_path, hidden_path, COSMIC_HOST_RESTORED_CURSOR_POINT
+            )
+        except Exception as error:
+            probe_error = f"{type(error).__name__}: {error}"
+    else:
+        probe_error = "remote proof did not reach visible-ready and hidden-ready markers"
+
+    set_capabilities = json_object_field(set_reply, "capabilities")
+    hide_capabilities = json_object_field(hide_reply, "capabilities")
+    system_cursor_ok = (
+        set_capabilities.get("system_cursor_backend") == "cosmic_comp_bridge"
+        and set_capabilities.get("system_cursor_hide_supported") is True
+        and set_capabilities.get("system_cursor_hidden") is True
+        and hide_capabilities.get("system_cursor_hidden") is False
+    )
+    host_ok = (
+        returncode == 0
+        and system_cursor_ok
+        and agent_probe.found
+        and restored_cursor_probe.found
+        and not before_vs_hidden_probe.found
+    )
+    host_summary = {
+        "ok": host_ok,
+        "mode": "cosmic-patched-cursor-host-framebuffer",
+        "vm_name": vm_name,
+        "libvirt_uri": libvirt_uri,
+        "remote_returncode": returncode,
+        "remote_artifact_dir": str(remote_artifact_dir),
+        "local_artifact_dir": str(local_artifact_dir),
+        "before_screenshot": str(before_path),
+        "visible_screenshot": str(visible_path) if visible_path.exists() else None,
+        "hidden_screenshot": str(hidden_path) if hidden_path.exists() else None,
+        "visible_ready": visible_ready,
+        "hidden_ready": hidden_ready,
+        "requested_agent_point": {"x": COSMIC_HOST_AGENT_POINT[0], "y": COSMIC_HOST_AGENT_POINT[1]},
+        "observed_agent_marker_point": {
+            "x": COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT[0],
+            "y": COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT[1],
+        },
+        "observed_restored_cursor_point": {
+            "x": COSMIC_HOST_RESTORED_CURSOR_POINT[0],
+            "y": COSMIC_HOST_RESTORED_CURSOR_POINT[1],
+        },
+        "agent_visible_vs_hidden_marker_probe": marker_probe_to_json(agent_probe),
+        "real_cursor_restore_delta_probe": marker_probe_to_json(restored_cursor_probe),
+        "before_vs_hidden_real_cursor_probe": marker_probe_to_json(before_vs_hidden_probe),
+        "host_probe_error": probe_error,
+        "system_cursor_ok": system_cursor_ok,
+        "set_reply": set_reply,
+        "hide_reply": hide_reply,
+    }
+    (local_artifact_dir / "host-summary.json").write_text(
+        json.dumps(host_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(host_summary, indent=2, sort_keys=True))
+    return 0 if host_ok else 1
+
+
+def run_remote_cosmic_transparent_xcursor_host_proof_profile(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    wayland_display: str,
+    desktop_env: str,
+    vm_name: str,
+    libvirt_uri: str,
+) -> int:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    remote_artifact_dir = (
+        remote_root
+        / "artifacts"
+        / "codex-e2e"
+        / "agent-cursor-cosmic-transparent-xcursor-host-proof"
+        / timestamp
+    )
+    local_artifact_dir = (
+        REPO_ROOT / "artifacts" / "cosmic-transparent-xcursor-cursor-proof" / timestamp
+    )
+    local_artifact_dir.mkdir(parents=True, exist_ok=True)
+    before_path = local_artifact_dir / "before.png"
+    visible_path = local_artifact_dir / "visible.png"
+    hidden_path = local_artifact_dir / "hidden.png"
+
+    subprocess.run(
+        [
+            *ssh_base_command(port, ssh_options),
+            ssh_target,
+            "ydotool mousemove --absolute -x 80 -y 80 >/dev/null 2>&1 || true",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    time.sleep(0.5)
+    capture_vm_framebuffer(vm_name, libvirt_uri, before_path)
+
+    desktop_exports = desktop_environment_exports(desktop_env)
+    remote_script = f"""
+set -euo pipefail
+cd {shlex.quote(str(remote_root))}
+mkdir -p {shlex.quote(str(remote_artifact_dir))}
+! test -e /run/user/$(id -u)/sky-cua-cosmic-cursor-ready
+pid="$(pgrep -n -x cosmic-comp)"
+tr '\\0' '\\n' <"/proc/${{pid}}/environ" >{shlex.quote(str(remote_artifact_dir))}/cosmic-comp-environ.txt
+grep -qx 'XCURSOR_THEME=sky-cua-blank' {shlex.quote(str(remote_artifact_dir))}/cosmic-comp-environ.txt
+test -f "$HOME/.local/share/icons/sky-cua-blank/cursors/left_ptr"
+export SKY_CUA_COSMIC_HOST_PROOF_ARTIFACT_DIR={shlex.quote(str(remote_artifact_dir))}
+export SKY_CUA_REMOTE_ROOT={shlex.quote(str(remote_root))}
+export SKY_CUA_OVERLAY_BACKEND=layer-shell
+export XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+export DBUS_SESSION_BUS_ADDRESS="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=${{XDG_RUNTIME_DIR}}/bus}}"
+export WAYLAND_DISPLAY="${{WAYLAND_DISPLAY:-{shlex.quote(wayland_display)}}}"
+export XDG_SESSION_TYPE=wayland
+export XCURSOR_THEME=sky-cua-blank
+export XCURSOR_SIZE=24
+{desktop_exports}
+python3 - <<'PY'
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+
+artifact = Path(os.environ["SKY_CUA_COSMIC_HOST_PROOF_ARTIFACT_DIR"])
+remote_root = Path(os.environ["SKY_CUA_REMOTE_ROOT"])
+proc = subprocess.Popen(
+    [str(remote_root / "target/release/sky-cua-overlay-host"), "serve"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    env=os.environ.copy(),
+    cwd=remote_root,
+)
+assert proc.stdin and proc.stdout
+state = {{
+    "version": 1,
+    "kind": "set_cursor",
+    "state": {{
+        "visible": True,
+        "sequence": 1,
+        "native_point": {{"x": 360.0, "y": 260.0, "coordinate_space": "desktop_logical"}},
+        "model_point": {{"x": 360.0, "y": 260.0, "coordinate_space": "stream_pixels"}},
+        "source_action": "click",
+        "updated_at_ms": int(time.time() * 1000),
+    }},
+}}
+proc.stdin.write(json.dumps(state) + "\\n")
+proc.stdin.flush()
+set_reply = proc.stdout.readline().strip()
+(artifact / "set-reply.json").write_text(set_reply + "\\n", encoding="utf-8")
+(artifact / "visible-ready").write_text("ready\\n", encoding="utf-8")
+time.sleep(8)
+hide = {{"version": 1, "kind": "hide", "reason": "cosmic-transparent-xcursor-host-proof"}}
+proc.stdin.write(json.dumps(hide) + "\\n")
+proc.stdin.flush()
+hide_reply = proc.stdout.readline().strip()
+(artifact / "hide-reply.json").write_text(hide_reply + "\\n", encoding="utf-8")
+time.sleep(0.5)
+(artifact / "hidden-ready").write_text("ready\\n", encoding="utf-8")
+proc.terminate()
+try:
+    proc.wait(timeout=2)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    proc.wait(timeout=2)
+stderr = proc.stderr.read() if proc.stderr else ""
+if stderr:
+    (artifact / "overlay-stderr.log").write_text(stderr, encoding="utf-8")
+PY
+"""
+    stdout_path = local_artifact_dir / "remote.stdout.log"
+    stderr_path = local_artifact_dir / "remote.stderr.log"
+    with (
+        stdout_path.open("w", encoding="utf-8") as stdout,
+        stderr_path.open("w", encoding="utf-8") as stderr,
+    ):
+        remote_process = subprocess.Popen(
+            [*ssh_base_command(port, ssh_options), ssh_target, remote_script],
+            cwd=REPO_ROOT,
+            stdout=stdout,
+            stderr=stderr,
+            text=True,
+        )
+        visible_ready = wait_for_remote_path(
+            ssh_target,
+            port,
+            ssh_options,
+            remote_artifact_dir / "visible-ready",
+            remote_process,
+            deadline=time.time() + 30,
+        )
+        if visible_ready:
+            capture_vm_framebuffer(vm_name, libvirt_uri, visible_path)
+        hidden_ready = wait_for_remote_path(
+            ssh_target,
+            port,
+            ssh_options,
+            remote_artifact_dir / "hidden-ready",
+            remote_process,
+            deadline=time.time() + 30,
+        )
+        if not hidden_ready:
+            hidden_ready = remote_path_exists(
+                ssh_target,
+                port,
+                ssh_options,
+                remote_artifact_dir / "hidden-ready",
+            )
+        if hidden_ready:
+            capture_vm_framebuffer(vm_name, libvirt_uri, hidden_path)
+        returncode = remote_process.wait(timeout=30)
+
+    set_reply = read_remote_json(
+        ssh_target, port, ssh_options, remote_artifact_dir / "set-reply.json"
+    )
+    hide_reply = read_remote_json(
+        ssh_target, port, ssh_options, remote_artifact_dir / "hide-reply.json"
+    )
+    set_capabilities = json_object_field(set_reply, "capabilities")
+    hide_capabilities = json_object_field(hide_reply, "capabilities")
+    agent_probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
+    hidden_agent_probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
+    native_cursor_probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
+    probe_error: str | None = None
+    if visible_ready and hidden_ready:
+        try:
+            agent_probe = probe_marker(
+                hidden_path, visible_path, COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT
+            )
+            hidden_agent_probe = probe_marker(
+                before_path, hidden_path, COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT
+            )
+            native_cursor_probe = probe_marker(
+                before_path, hidden_path, COSMIC_HOST_RESTORED_CURSOR_POINT
+            )
+        except Exception as error:
+            probe_error = f"{type(error).__name__}: {error}"
+    else:
+        probe_error = "remote proof did not reach visible-ready and hidden-ready markers"
+
+    system_cursor_ok = (
+        set_capabilities.get("system_cursor_backend") == "cosmic_transparent_xcursor"
+        and set_capabilities.get("system_cursor_hide_supported") is True
+        and set_capabilities.get("system_cursor_hidden") is True
+        and hide_capabilities.get("system_cursor_hidden") is False
+    )
+    host_ok = (
+        returncode == 0
+        and system_cursor_ok
+        and agent_probe.found
+        and not hidden_agent_probe.found
+        and not native_cursor_probe.found
+    )
+    host_summary = {
+        "ok": host_ok,
+        "mode": "cosmic-transparent-xcursor-host-framebuffer",
+        "vm_name": vm_name,
+        "libvirt_uri": libvirt_uri,
+        "remote_returncode": returncode,
+        "remote_artifact_dir": str(remote_artifact_dir),
+        "local_artifact_dir": str(local_artifact_dir),
+        "before_screenshot": str(before_path),
+        "visible_screenshot": str(visible_path) if visible_path.exists() else None,
+        "hidden_screenshot": str(hidden_path) if hidden_path.exists() else None,
+        "visible_ready": visible_ready,
+        "hidden_ready": hidden_ready,
+        "requested_agent_point": {"x": COSMIC_HOST_AGENT_POINT[0], "y": COSMIC_HOST_AGENT_POINT[1]},
+        "observed_agent_marker_point": {
+            "x": COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT[0],
+            "y": COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT[1],
+        },
+        "agent_visible_vs_hidden_marker_probe": marker_probe_to_json(agent_probe),
+        "hidden_frame_agent_marker_probe": marker_probe_to_json(hidden_agent_probe),
+        "native_cursor_probe": marker_probe_to_json(native_cursor_probe),
+        "host_probe_error": probe_error,
+        "system_cursor_ok": system_cursor_ok,
+        "set_reply": set_reply,
+        "hide_reply": hide_reply,
+    }
+    (local_artifact_dir / "host-summary.json").write_text(
+        json.dumps(host_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(host_summary, indent=2, sort_keys=True))
+    return 0 if host_ok else 1
+
+
 def run_remote_kwin_effect_system_install_profile(
     ssh_target: str,
     port: int,
@@ -683,6 +1168,37 @@ def capture_vm_framebuffer(vm_name: str, libvirt_uri: str, output_path: Path) ->
     )
 
 
+def marker_probe_to_json(probe: MarkerProbe) -> dict[str, object]:
+    return {
+        "found": probe.found,
+        "changed_pixels_near_hotspot": probe.changed_pixels_near_hotspot,
+        "max_channel_delta_near_hotspot": probe.max_channel_delta_near_hotspot,
+        "checked_box": list(probe.checked_box),
+    }
+
+
+def remote_path_exists(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_path: Path,
+) -> bool:
+    return (
+        subprocess.run(
+            [
+                *ssh_base_command(port, ssh_options),
+                ssh_target,
+                f"test -f {shlex.quote(str(remote_path))}",
+            ],
+            cwd=REPO_ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
 def wait_for_remote_path(
     ssh_target: str,
     port: int,
@@ -728,6 +1244,15 @@ def read_remote_json(
     if not isinstance(payload, dict):
         raise RuntimeError(f"remote JSON was not an object: {payload!r}")
     return payload
+
+
+def json_object_field(parent: dict[str, object] | None, key: str) -> dict[str, object]:
+    if parent is None:
+        return {}
+    value = parent.get(key)
+    if not isinstance(value, dict):
+        return {}
+    return value
 
 
 def requested_point_from_summary(summary: dict[str, object]) -> tuple[float, float]:

@@ -1,0 +1,34 @@
+diff --git a/src/shell/seats.rs b/src/shell/seats.rs
+--- a/src/shell/seats.rs
++++ b/src/shell/seats.rs
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: GPL-3.0-only
+ 
+-use std::{any::Any, cell::RefCell, collections::HashMap, sync::Mutex};
++use std::{any::Any, cell::RefCell, collections::HashMap, env, path::PathBuf, sync::Mutex};
+ 
+ use crate::{
+     backend::render::cursor::CursorState,
+@@ -382,6 +382,9 @@ impl SeatExt for Seat<State> {
+     }
+ 
+     fn cursor_image_status(&self) -> CursorImageStatus {
++        if sky_cua_cursor_hidden() {
++            return CursorImageStatus::Hidden;
++        }
+         let lock = self.user_data().get::<Mutex<CursorImageStatus>>().unwrap();
+         // Reset the cursor if the surface is no longer alive
+         let mut cursor_status = lock.lock().unwrap();
+@@ -399,3 +402,12 @@ impl SeatExt for Seat<State> {
+         *cursor_status.lock().unwrap() = status;
+     }
+ }
++
++fn sky_cua_cursor_hidden() -> bool {
++    let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") else {
++        return false;
++    };
++    let runtime_dir = PathBuf::from(runtime_dir);
++    let _ = std::fs::write(runtime_dir.join("sky-cua-cosmic-cursor-ready"), b"ready\n");
++    runtime_dir.join("sky-cua-cosmic-cursor-hidden").exists()
++}

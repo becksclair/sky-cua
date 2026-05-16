@@ -99,6 +99,11 @@ def main() -> int:
         action="store_true",
         help="Return success when layer-shell is unavailable, recording the negative proof.",
     )
+    parser.add_argument(
+        "--overlay-backend",
+        default=os.environ.get("SKY_CUA_OVERLAY_BACKEND", "layer-shell"),
+        help="Overlay host backend to request. Defaults to layer-shell.",
+    )
     args = parser.parse_args()
 
     require_wayland_session()
@@ -106,7 +111,7 @@ def main() -> int:
     overlay_binary = build_overlay_host()
     point = parse_point(args.point)
     wayland_display = resolve_wayland_display(args.wayland_display)
-    env = wayland_overlay_env(wayland_display)
+    env = wayland_overlay_env(wayland_display, args.overlay_backend)
     capture_output = args.capture_output.strip() or detect_capture_output(env, args.capture_command)
 
     artifact_dir = ARTIFACT_ROOT / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -159,34 +164,50 @@ def main() -> int:
 
         backend = backend_from_reply(set_reply)
         visible_overlay = capability_bool(set_reply, "visible_overlay")
+        system_cursor_backend = capability_string(set_reply, "system_cursor_backend")
+        system_cursor_hide_supported = capability_bool(set_reply, "system_cursor_hide_supported")
+        system_cursor_hidden_after_set = capability_bool(set_reply, "system_cursor_hidden")
+        system_cursor_hidden_after_hide = capability_bool(hide_reply, "system_cursor_hidden")
+        system_cursor_ok = system_cursor_hide_supported is not True or (
+            system_cursor_hidden_after_set is True and system_cursor_hidden_after_hide is False
+        )
         unavailable_ok = (
             args.allow_no_visible_overlay
             and backend == "none"
             and visible_overlay is False
             and not visible_probe.found
         )
+        expected_backend = (
+            "gnome_shell_extension"
+            if args.overlay_backend
+            in {
+                "gnome",
+                "gnome-shell",
+                "gnome_shell",
+                "gnome-shell-extension",
+                "gnome_shell_extension",
+            }
+            else "wayland_layer_shell"
+        )
         ok = (
-            backend == "wayland_layer_shell"
+            backend == expected_backend
             and visible_overlay is True
             and visible_probe.found
             and not hidden_probe.found
+            and system_cursor_ok
         ) or unavailable_ok
 
         summary.update(
             {
                 "ok": ok,
                 "backend": backend,
+                "system_cursor_backend": system_cursor_backend,
                 "visible_overlay_capability": visible_overlay,
                 "click_through_capability": capability_bool(set_reply, "click_through"),
-                "system_cursor_hide_supported": capability_bool(
-                    set_reply, "system_cursor_hide_supported"
-                ),
-                "system_cursor_hidden_after_set": capability_bool(
-                    set_reply, "system_cursor_hidden"
-                ),
-                "system_cursor_hidden_after_hide": capability_bool(
-                    hide_reply, "system_cursor_hidden"
-                ),
+                "system_cursor_hide_supported": system_cursor_hide_supported,
+                "system_cursor_hidden_after_set": system_cursor_hidden_after_set,
+                "system_cursor_hidden_after_hide": system_cursor_hidden_after_hide,
+                "system_cursor_ok": system_cursor_ok,
                 "visible_overlay_captured": visible_probe.found,
                 "hidden_overlay_captured": hidden_probe.found,
                 "capabilities": capabilities_reply,
@@ -270,11 +291,11 @@ def parse_point(value: str) -> tuple[float, float]:
         raise argparse.ArgumentTypeError("--point must be formatted as x,y") from exc
 
 
-def wayland_overlay_env(wayland_display: str) -> dict[str, str]:
+def wayland_overlay_env(wayland_display: str, overlay_backend: str) -> dict[str, str]:
     env = dict(os.environ)
     env["WAYLAND_DISPLAY"] = wayland_display
     env["XDG_SESSION_TYPE"] = "wayland"
-    env["SKY_CUA_OVERLAY_BACKEND"] = "layer-shell"
+    env["SKY_CUA_OVERLAY_BACKEND"] = overlay_backend
     env["QT_QPA_PLATFORM"] = "wayland"
     env["GDK_BACKEND"] = "wayland"
     env.pop("DISPLAY", None)
@@ -398,6 +419,15 @@ def capability_bool(reply: Mapping[str, Any], key: str) -> bool | None:
     if isinstance(capabilities, Mapping):
         value = capabilities.get(key)
         if isinstance(value, bool):
+            return value
+    return None
+
+
+def capability_string(reply: Mapping[str, Any], key: str) -> str | None:
+    capabilities = reply.get("capabilities")
+    if isinstance(capabilities, Mapping):
+        value = capabilities.get(key)
+        if isinstance(value, str):
             return value
     return None
 

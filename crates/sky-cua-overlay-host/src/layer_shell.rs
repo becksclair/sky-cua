@@ -95,9 +95,7 @@ impl LayerShellOverlayBackend {
         let mut backend = Self {
             event_queue,
             app,
-            system_cursor: SystemCursorAdapter::wayland_client_unsupported(
-                "Wayland clients can only hide the pointer for their own pointer focus; the click-through layer-shell overlay has an empty input region, so compositor cursor hiding requires a compositor-specific adapter",
-            ),
+            system_cursor: SystemCursorAdapter::for_wayland_session(),
         };
         backend.prime()?;
         backend.render_current()?;
@@ -225,7 +223,11 @@ impl LayerShellOverlayBackend {
             self.app.open_layer_count()
         );
         if let Some(system_cursor_reason) = self.system_cursor.reason() {
-            reason.push_str("; system cursor hide unsupported: ");
+            if self.system_cursor.supported() {
+                reason.push_str("; system cursor: ");
+            } else {
+                reason.push_str("; system cursor hide unsupported: ");
+            }
             reason.push_str(system_cursor_reason);
         }
         AgentCursorCapabilities {

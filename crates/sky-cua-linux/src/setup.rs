@@ -21,6 +21,7 @@ const METADATA_JSON: &str = include_str!(
 const EXTENSION_JS: &str = include_str!(
     "../../../resources/gnome-shell-extension/codex-window-control@openai.com/extension.js"
 );
+const CURSOR_CHAT_PNG: &[u8] = include_bytes!("../../sky-cua-overlay-host/assets/cursor-chat.png");
 
 pub async fn setup_accessibility_report<F, Fut>(
     doctor_fn: F,
@@ -154,6 +155,12 @@ fn write_extension_files(extension_dir: &Path) -> Result<(), String> {
         format!(
             "failed to write {}: {error}",
             extension_dir.join("extension.js").display()
+        )
+    })?;
+    fs::write(extension_dir.join("cursor-chat.png"), CURSOR_CHAT_PNG).map_err(|error| {
+        format!(
+            "failed to write {}: {error}",
+            extension_dir.join("cursor-chat.png").display()
         )
     })?;
     Ok(())
@@ -510,5 +517,12 @@ mod tests {
             setup_window_targeting_message(true, false, false),
             "GNOME Shell extension files were installed, but enabling the extension failed."
         );
+    }
+
+    #[test]
+    fn bundled_gnome_extension_includes_agent_cursor_asset() {
+        assert!(EXTENSION_JS.contains("SetAgentCursorState"));
+        assert!(EXTENSION_JS.contains("cursor-chat.png"));
+        assert!(CURSOR_CHAT_PNG.len() > 100);
     }
 }

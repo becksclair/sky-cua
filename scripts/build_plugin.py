@@ -44,6 +44,7 @@ NODE_REPL_NAME = "node_repl"
 WORKTREE_BUNDLE_FILES = (Path("resources") / "chrome_preflight.py",)
 WORKTREE_BUNDLE_DIRS = (
     Path("resources") / "chrome-extension",
+    Path("resources") / "cosmic",
     Path("resources") / "kwin",
     Path("skills") / "computer-use-workflows" / "references" / "apps",
     Path("skills") / "sky-cua-isolated-daemon" / "references",

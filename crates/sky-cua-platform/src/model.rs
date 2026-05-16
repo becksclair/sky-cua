@@ -53,6 +53,7 @@ pub enum AgentCursorBackendKind {
     None,
     ScreenshotSynthetic,
     WaylandLayerShell,
+    GnomeShellExtension,
     KwinEffect,
     X11ShapedWindow,
     WindowsLayeredWindow,
@@ -68,6 +69,10 @@ pub enum AgentCursorSystemCursorBackendKind {
     WaylandClientUnsupported,
     X11Xfixes,
     KwinEffect,
+    GnomeShellExtension,
+    HyprlandConfig,
+    CosmicCompBridge,
+    CosmicTransparentXcursor,
     WindowsWin32,
     MacosNative,
 }
@@ -1056,6 +1061,31 @@ mod tests {
             "wayland_client_unsupported"
         );
         assert!(rendered.get("reason").is_none());
+        assert_eq!(
+            serde_json::to_value(AgentCursorBackendKind::GnomeShellExtension)
+                .expect("serialize backend"),
+            json!("gnome_shell_extension")
+        );
+        assert_eq!(
+            serde_json::to_value(AgentCursorSystemCursorBackendKind::GnomeShellExtension)
+                .expect("serialize system cursor backend"),
+            json!("gnome_shell_extension")
+        );
+        assert_eq!(
+            serde_json::to_value(AgentCursorSystemCursorBackendKind::HyprlandConfig)
+                .expect("serialize system cursor backend"),
+            json!("hyprland_config")
+        );
+        assert_eq!(
+            serde_json::to_value(AgentCursorSystemCursorBackendKind::CosmicCompBridge)
+                .expect("serialize system cursor backend"),
+            json!("cosmic_comp_bridge")
+        );
+        assert_eq!(
+            serde_json::to_value(AgentCursorSystemCursorBackendKind::CosmicTransparentXcursor)
+                .expect("serialize system cursor backend"),
+            json!("cosmic_transparent_xcursor")
+        );
 
         let old: AgentCursorCapabilities = serde_json::from_value(json!({
             "backend": "wayland_layer_shell",

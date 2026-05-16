@@ -5,6 +5,8 @@ use sky_cua_platform::model::{
 };
 
 #[cfg(target_os = "linux")]
+mod gnome_shell;
+#[cfg(target_os = "linux")]
 mod kwin_effect;
 #[cfg(target_os = "linux")]
 mod layer_shell;
@@ -162,6 +164,8 @@ impl NoopOverlayBackend {
 pub enum OverlayHostBackend {
     Noop(NoopOverlayBackend),
     #[cfg(target_os = "linux")]
+    GnomeShell(gnome_shell::GnomeShellOverlayBackend),
+    #[cfg(target_os = "linux")]
     KwinEffect(kwin_effect::KwinEffectOverlayBackend),
     #[cfg(target_os = "linux")]
     LayerShell(Box<layer_shell::LayerShellOverlayBackend>),
@@ -190,6 +194,21 @@ impl OverlayHostBackend {
 
         #[cfg(target_os = "linux")]
         {
+            if matches!(
+                mode.as_str(),
+                "gnome"
+                    | "gnome-shell"
+                    | "gnome_shell"
+                    | "gnome-shell-extension"
+                    | "gnome_shell_extension"
+            ) {
+                return match gnome_shell::GnomeShellOverlayBackend::connect() {
+                    Ok(backend) => Self::GnomeShell(backend),
+                    Err(error) => Self::Noop(NoopOverlayBackend::with_reason(format!(
+                        "GNOME Shell extension overlay unavailable: {error}"
+                    ))),
+                };
+            }
             if matches!(
                 mode.as_str(),
                 "kwin" | "kwin-effect" | "kwin_effect" | "kde-kwin-effect" | "kde_kwin_effect"
@@ -231,6 +250,16 @@ impl OverlayHostBackend {
                         reasons.push(format!("KWin effect overlay unavailable: {error}"));
                     }
                 }
+                if is_gnome_session() {
+                    match gnome_shell::GnomeShellOverlayBackend::connect() {
+                        Ok(backend) => return Self::GnomeShell(backend),
+                        Err(error) => {
+                            reasons.push(format!(
+                                "GNOME Shell extension overlay unavailable: {error}"
+                            ));
+                        }
+                    }
+                }
                 if linux_env_value("WAYLAND_DISPLAY").is_some() {
                     match layer_shell::LayerShellOverlayBackend::connect() {
                         Ok(backend) => return Self::LayerShell(Box::new(backend)),
@@ -269,6 +298,8 @@ impl OverlayHostBackend {
         match self {
             Self::Noop(backend) => backend.handle_message(message),
             #[cfg(target_os = "linux")]
+            Self::GnomeShell(backend) => backend.handle_message(message),
+            #[cfg(target_os = "linux")]
             Self::KwinEffect(backend) => backend.handle_message(message),
             #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.handle_message(message),
@@ -283,6 +314,24 @@ fn linux_env_value(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn is_gnome_session() -> bool {
+    [
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "DESKTOP_SESSION",
+    ]
+    .into_iter()
+    .filter_map(linux_env_value)
+    .flat_map(|value| {
+        value
+            .split([':', ';'])
+            .map(|part| part.trim().to_ascii_lowercase())
+            .collect::<Vec<_>>()
+    })
+    .any(|part| part == "gnome")
 }
 
 #[cfg(target_os = "linux")]

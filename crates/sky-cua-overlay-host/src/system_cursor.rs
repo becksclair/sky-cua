@@ -1,4 +1,17 @@
-use anyhow::Result;
+use std::{
+    env, fs,
+    io::{Read, Write},
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    thread,
+    time::Duration,
+};
+
+use anyhow::{Context, Result, bail};
+#[cfg(target_os = "linux")]
+use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixStream;
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as X11Connection;
 
@@ -7,6 +20,12 @@ use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
 #[derive(Debug)]
 pub enum SystemCursorAdapter {
     Unsupported(UnsupportedSystemCursorAdapter),
+    #[cfg(target_os = "linux")]
+    CosmicTransparentXcursor(CosmicTransparentXcursorAdapter),
+    #[cfg(target_os = "linux")]
+    Cosmic(CosmicCompBridgeAdapter),
+    #[cfg(target_os = "linux")]
+    Hyprland(HyprlandSystemCursorAdapter),
     #[cfg(target_os = "linux")]
     X11(X11SystemCursorAdapter),
 }
@@ -17,6 +36,29 @@ impl SystemCursorAdapter {
         Self::unsupported_with_backend(
             AgentCursorSystemCursorBackendKind::WaylandClientUnsupported,
             reason,
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn for_wayland_session() -> Self {
+        if let Some(adapter) = HyprlandSystemCursorAdapter::probe() {
+            return Self::Hyprland(adapter);
+        }
+        if is_cosmic_session() {
+            if let Some(adapter) = CosmicTransparentXcursorAdapter::probe() {
+                return Self::CosmicTransparentXcursor(adapter);
+            }
+            if let Some(adapter) = CosmicCompBridgeAdapter::probe() {
+                return Self::Cosmic(adapter);
+            }
+            return Self::unsupported_with_backend(
+                AgentCursorSystemCursorBackendKind::CosmicCompBridge,
+                "COSMIC cursor bridge is not installed or not reachable; generic Wayland clients cannot hide the compositor cursor globally",
+            );
+        }
+        Self::wayland_client_unsupported(
+            "Wayland clients can only hide the pointer for their own pointer focus; the click-through layer-shell overlay has an empty input region, so compositor cursor hiding requires a compositor-specific adapter",
         )
     }
 
@@ -42,6 +84,12 @@ impl SystemCursorAdapter {
         match self {
             Self::Unsupported(adapter) => adapter.backend(),
             #[cfg(target_os = "linux")]
+            Self::CosmicTransparentXcursor(adapter) => adapter.backend(),
+            #[cfg(target_os = "linux")]
+            Self::Cosmic(adapter) => adapter.backend(),
+            #[cfg(target_os = "linux")]
+            Self::Hyprland(adapter) => adapter.backend(),
+            #[cfg(target_os = "linux")]
             Self::X11(adapter) => adapter.backend(),
         }
     }
@@ -50,6 +98,12 @@ impl SystemCursorAdapter {
     pub fn supported(&self) -> bool {
         match self {
             Self::Unsupported(adapter) => adapter.supported(),
+            #[cfg(target_os = "linux")]
+            Self::CosmicTransparentXcursor(adapter) => adapter.supported(),
+            #[cfg(target_os = "linux")]
+            Self::Cosmic(adapter) => adapter.supported(),
+            #[cfg(target_os = "linux")]
+            Self::Hyprland(adapter) => adapter.supported(),
             #[cfg(target_os = "linux")]
             Self::X11(adapter) => adapter.supported(),
         }
@@ -60,6 +114,12 @@ impl SystemCursorAdapter {
         match self {
             Self::Unsupported(adapter) => adapter.hidden(),
             #[cfg(target_os = "linux")]
+            Self::CosmicTransparentXcursor(adapter) => adapter.hidden(),
+            #[cfg(target_os = "linux")]
+            Self::Cosmic(adapter) => adapter.hidden(),
+            #[cfg(target_os = "linux")]
+            Self::Hyprland(adapter) => adapter.hidden(),
+            #[cfg(target_os = "linux")]
             Self::X11(adapter) => adapter.hidden(),
         }
     }
@@ -69,6 +129,12 @@ impl SystemCursorAdapter {
         match self {
             Self::Unsupported(adapter) => adapter.reason(),
             #[cfg(target_os = "linux")]
+            Self::CosmicTransparentXcursor(adapter) => adapter.reason(),
+            #[cfg(target_os = "linux")]
+            Self::Cosmic(adapter) => adapter.reason(),
+            #[cfg(target_os = "linux")]
+            Self::Hyprland(adapter) => adapter.reason(),
+            #[cfg(target_os = "linux")]
             Self::X11(adapter) => adapter.reason(),
         }
     }
@@ -77,6 +143,12 @@ impl SystemCursorAdapter {
         match self {
             Self::Unsupported(adapter) => adapter.set_hidden(hidden),
             #[cfg(target_os = "linux")]
+            Self::CosmicTransparentXcursor(adapter) => adapter.set_hidden(hidden),
+            #[cfg(target_os = "linux")]
+            Self::Cosmic(adapter) => adapter.set_hidden(hidden),
+            #[cfg(target_os = "linux")]
+            Self::Hyprland(adapter) => adapter.set_hidden(hidden),
+            #[cfg(target_os = "linux")]
             Self::X11(adapter) => adapter.set_hidden(hidden),
         }
     }
@@ -84,6 +156,303 @@ impl SystemCursorAdapter {
     pub fn restore(&mut self) -> Result<()> {
         self.set_hidden(false)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn is_cosmic_session() -> bool {
+    [
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "DESKTOP_SESSION",
+    ]
+    .into_iter()
+    .filter_map(|name| env::var(name).ok())
+    .flat_map(|value| {
+        value
+            .split([':', ';'])
+            .map(|part| part.trim().to_ascii_lowercase())
+            .collect::<Vec<_>>()
+    })
+    .any(|part| part == "cosmic")
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct CosmicTransparentXcursorAdapter {
+    hidden: bool,
+    reason: String,
+}
+
+#[cfg(target_os = "linux")]
+impl CosmicTransparentXcursorAdapter {
+    const THEME_NAME: &str = "sky-cua-blank";
+
+    #[must_use]
+    pub fn probe() -> Option<Self> {
+        let theme = env::var("XCURSOR_THEME").ok()?;
+        if theme != Self::THEME_NAME {
+            return None;
+        }
+        if !blank_xcursor_theme_exists(&theme)
+            || !cosmic_comp_uses_blank_xcursor_theme(Self::THEME_NAME)
+        {
+            return None;
+        }
+        let reason = format!(
+            "COSMIC compositor is running with transparent XCURSOR theme {theme}; native cursor remains transparent for the full session"
+        );
+        Some(Self {
+            hidden: false,
+            reason,
+        })
+    }
+
+    #[must_use]
+    pub fn backend(&self) -> AgentCursorSystemCursorBackendKind {
+        AgentCursorSystemCursorBackendKind::CosmicTransparentXcursor
+    }
+
+    #[must_use]
+    pub fn supported(&self) -> bool {
+        true
+    }
+
+    #[must_use]
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        Some(self.reason.as_str())
+    }
+
+    pub fn set_hidden(&mut self, hidden: bool) -> Result<()> {
+        self.hidden = hidden;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn blank_xcursor_theme_exists(theme: &str) -> bool {
+    let Some(home) = env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
+    let cursor_dir = home.join(".local/share/icons").join(theme).join("cursors");
+    ["left_ptr", "default", "xterm", "hand2"]
+        .into_iter()
+        .all(|name| cursor_dir.join(name).is_file())
+}
+
+#[cfg(target_os = "linux")]
+fn cosmic_comp_uses_blank_xcursor_theme(theme: &str) -> bool {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return false;
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            fs::read_to_string(path.join("comm"))
+                .map(|name| name.trim() == "cosmic-comp")
+                .unwrap_or(false)
+        })
+        .any(|path| {
+            fs::read(path.join("environ"))
+                .map(|environ| environ_has_xcursor_theme(&environ, theme))
+                .unwrap_or(false)
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn environ_has_xcursor_theme(environ: &[u8], theme: &str) -> bool {
+    environ
+        .split(|byte| *byte == b'\0')
+        .any(|entry| entry == format!("XCURSOR_THEME={theme}").as_bytes())
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct CosmicCompBridgeAdapter {
+    socket_path: PathBuf,
+    bridge_process: Option<Child>,
+    supported: bool,
+    hidden: bool,
+    reason: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl CosmicCompBridgeAdapter {
+    pub fn probe() -> Option<Self> {
+        let socket_path = cosmic_bridge_socket_path()?;
+        let mut bridge_process = None;
+        let status = match cosmic_bridge_request(&socket_path, "status") {
+            Ok(status) => status,
+            Err(_) => {
+                bridge_process = start_cosmic_cursor_bridge(&socket_path).ok();
+                let Some(status) = wait_for_cosmic_bridge_status(&socket_path) else {
+                    stop_child_process(&mut bridge_process);
+                    return None;
+                };
+                status
+            }
+        };
+        if !status.supported {
+            stop_child_process(&mut bridge_process);
+            return None;
+        }
+        Some(Self {
+            socket_path,
+            bridge_process,
+            supported: true,
+            hidden: status.hidden,
+            reason: Some(status.detail),
+        })
+    }
+
+    #[must_use]
+    pub fn backend(&self) -> AgentCursorSystemCursorBackendKind {
+        AgentCursorSystemCursorBackendKind::CosmicCompBridge
+    }
+
+    #[must_use]
+    pub fn supported(&self) -> bool {
+        self.supported
+    }
+
+    #[must_use]
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    pub fn set_hidden(&mut self, hidden: bool) -> Result<()> {
+        if self.hidden == hidden {
+            return Ok(());
+        }
+        let command = if hidden { "hide" } else { "show" };
+        let response = cosmic_bridge_request(&self.socket_path, command)?;
+        if !response.ok {
+            bail!("COSMIC cursor bridge {command} failed: {}", response.detail);
+        }
+        self.supported = response.supported;
+        self.hidden = response.hidden;
+        self.reason = Some(response.detail);
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for CosmicCompBridgeAdapter {
+    fn drop(&mut self) {
+        if self.hidden {
+            let _ = self.set_hidden(false);
+        }
+        stop_child_process(&mut self.bridge_process);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn stop_child_process(child: &mut Option<Child>) {
+    if let Some(mut child) = child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn start_cosmic_cursor_bridge(socket_path: &PathBuf) -> Result<Child> {
+    let helper = cosmic_helper_path().context("sky-cua-cosmic-helper binary not found")?;
+    Command::new(&helper)
+        .arg("cursor-bridge")
+        .arg("--socket")
+        .arg(socket_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to start {}", helper.display()))
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_cosmic_bridge_status(socket_path: &PathBuf) -> Option<CosmicBridgeResponse> {
+    for _ in 0..20 {
+        if let Ok(status) = cosmic_bridge_request(socket_path, "status") {
+            return Some(status);
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn cosmic_helper_path() -> Option<PathBuf> {
+    for env_name in ["SKY_CUA_COSMIC_HELPER", "CODEX_COMPUTER_USE_COSMIC_HELPER"] {
+        if let Some(path) = env::var_os(env_name) {
+            let path = PathBuf::from(path);
+            if !path.as_os_str().is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        let sibling = current_exe.with_file_name("sky-cua-cosmic-helper");
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+    }
+    command_path("sky-cua-cosmic-helper")
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Serialize)]
+struct CosmicBridgeRequest<'a> {
+    command: &'a str,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Deserialize)]
+struct CosmicBridgeResponse {
+    ok: bool,
+    supported: bool,
+    hidden: bool,
+    detail: String,
+}
+
+#[cfg(target_os = "linux")]
+fn cosmic_bridge_request(socket_path: &PathBuf, command: &str) -> Result<CosmicBridgeResponse> {
+    let mut stream = UnixStream::connect(socket_path)
+        .with_context(|| format!("failed to connect to {}", socket_path.display()))?;
+    let request = serde_json::to_vec(&CosmicBridgeRequest { command })
+        .context("serialize COSMIC cursor bridge request")?;
+    stream
+        .write_all(&request)
+        .context("failed to write COSMIC cursor bridge request")?;
+    stream
+        .write_all(b"\n")
+        .context("failed to terminate COSMIC cursor bridge request")?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .context("failed to read COSMIC cursor bridge response")?;
+    serde_json::from_str(response.trim()).context("COSMIC cursor bridge returned invalid JSON")
+}
+
+#[cfg(target_os = "linux")]
+fn cosmic_bridge_socket_path() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("SKY_CUA_COSMIC_CURSOR_BRIDGE") {
+        let path = PathBuf::from(path);
+        if path.as_os_str().is_empty() {
+            return None;
+        }
+        return Some(path);
+    }
+    let runtime_dir = env::var_os("XDG_RUNTIME_DIR")?;
+    Some(PathBuf::from(runtime_dir).join("sky-cua-cosmic-cursor.sock"))
 }
 
 #[derive(Debug)]
@@ -123,6 +492,190 @@ impl UnsupportedSystemCursorAdapter {
 
     pub fn set_hidden(&mut self, _hidden: bool) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct HyprlandSystemCursorAdapter {
+    previous: Option<bool>,
+    hidden: bool,
+    reason: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl HyprlandSystemCursorAdapter {
+    #[must_use]
+    pub fn probe() -> Option<Self> {
+        if env::var("HYPRLAND_INSTANCE_SIGNATURE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .is_none()
+        {
+            return None;
+        }
+        if command_path("hyprctl").is_none() {
+            return None;
+        }
+        Some(Self {
+            previous: None,
+            hidden: false,
+            reason: None,
+        })
+    }
+
+    #[must_use]
+    pub fn backend(&self) -> AgentCursorSystemCursorBackendKind {
+        AgentCursorSystemCursorBackendKind::HyprlandConfig
+    }
+
+    #[must_use]
+    pub fn supported(&self) -> bool {
+        true
+    }
+
+    #[must_use]
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    pub fn set_hidden(&mut self, hidden: bool) -> Result<()> {
+        if self.hidden == hidden {
+            return Ok(());
+        }
+        if hidden {
+            if self.previous.is_none() {
+                self.previous = Some(query_hyprland_cursor_invisible()?);
+            }
+            set_hyprland_cursor_invisible(true)?;
+            self.hidden = true;
+            self.reason = Some("Hyprland cursor:invisible is enabled for sky-cua".to_string());
+            return Ok(());
+        }
+        let restore_to = self.previous.take().unwrap_or(false);
+        set_hyprland_cursor_invisible(restore_to)?;
+        self.hidden = false;
+        self.reason = Some(format!(
+            "Hyprland cursor:invisible restored to {restore_to}"
+        ));
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for HyprlandSystemCursorAdapter {
+    fn drop(&mut self) {
+        if self.hidden {
+            let _ = self.set_hidden(false);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn query_hyprland_cursor_invisible() -> Result<bool> {
+    let output = Command::new("hyprctl")
+        .args(["getoption", "cursor:invisible", "-j"])
+        .output()
+        .context("failed to run hyprctl getoption cursor:invisible -j")?;
+    if output.status.success()
+        && let Some(value) =
+            parse_hyprland_cursor_invisible(&String::from_utf8_lossy(&output.stdout))
+    {
+        return Ok(value);
+    }
+
+    let output = Command::new("hyprctl")
+        .args(["getoption", "cursor:invisible"])
+        .output()
+        .context("failed to run hyprctl getoption cursor:invisible")?;
+    if !output.status.success() {
+        bail!(
+            "hyprctl getoption cursor:invisible failed: {}",
+            command_detail(&output.stdout, &output.stderr)
+        );
+    }
+    parse_hyprland_cursor_invisible(&String::from_utf8_lossy(&output.stdout))
+        .context("hyprctl getoption cursor:invisible output did not contain a boolean value")
+}
+
+#[cfg(target_os = "linux")]
+fn set_hyprland_cursor_invisible(hidden: bool) -> Result<()> {
+    let value = if hidden { "true" } else { "false" };
+    let output = Command::new("hyprctl")
+        .args(["keyword", "cursor:invisible", value])
+        .output()
+        .with_context(|| format!("failed to run hyprctl keyword cursor:invisible {value}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    bail!(
+        "hyprctl keyword cursor:invisible {value} failed: {}",
+        command_detail(&output.stdout, &output.stderr)
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn parse_hyprland_cursor_invisible(output: &str) -> Option<bool> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(output) {
+        for key in ["value", "int", "float", "str", "set"] {
+            if let Some(parsed) = value.get(key).and_then(json_boolish) {
+                return Some(parsed);
+            }
+        }
+        if let Some(parsed) = json_boolish(&value) {
+            return Some(parsed);
+        }
+    }
+    for line in output.lines() {
+        let lower = line.trim().to_ascii_lowercase();
+        if lower.contains("true") || lower.ends_with(": 1") || lower.ends_with(" = 1") {
+            return Some(true);
+        }
+        if lower.contains("false") || lower.ends_with(": 0") || lower.ends_with(" = 0") {
+            return Some(false);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn json_boolish(value: &serde_json::Value) -> Option<bool> {
+    match value {
+        serde_json::Value::Bool(value) => Some(*value),
+        serde_json::Value::Number(value) => value.as_i64().map(|value| value != 0),
+        serde_json::Value::String(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Some(true),
+            "false" | "0" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn command_path(binary: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path)
+        .map(|entry| entry.join(binary))
+        .find(|candidate| candidate.is_file())
+}
+
+#[cfg(target_os = "linux")]
+fn command_detail(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    let stdout = String::from_utf8_lossy(stdout).trim().to_string();
+    if stdout.is_empty() {
+        "no output".to_string()
+    } else {
+        stdout
     }
 }
 
@@ -192,7 +745,7 @@ impl X11SystemCursorAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::SystemCursorAdapter;
+    use super::{SystemCursorAdapter, environ_has_xcursor_theme, parse_hyprland_cursor_invisible};
     use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
 
     #[test]
@@ -228,5 +781,43 @@ mod tests {
         );
         assert!(!adapter.supported());
         assert!(!adapter.hidden());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_hyprland_cursor_invisible_json_and_text() {
+        assert_eq!(
+            parse_hyprland_cursor_invisible(r#"{"option":"cursor:invisible","set":true}"#),
+            Some(true)
+        );
+        assert_eq!(
+            parse_hyprland_cursor_invisible(r#"{"option":"cursor:invisible","int":0}"#),
+            Some(false)
+        );
+        assert_eq!(
+            parse_hyprland_cursor_invisible(r#"{"option":"cursor:invisible","set":true,"int":0}"#),
+            Some(false)
+        );
+        assert_eq!(
+            parse_hyprland_cursor_invisible("option cursor:invisible\nint: 1"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_hyprland_cursor_invisible("option cursor:invisible\nint: 0"),
+            Some(false)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detects_exact_xcursor_theme_in_proc_environ() {
+        assert!(environ_has_xcursor_theme(
+            b"USER=skycua\0XCURSOR_THEME=sky-cua-blank\0XCURSOR_SIZE=24\0",
+            "sky-cua-blank"
+        ));
+        assert!(!environ_has_xcursor_theme(
+            b"USER=skycua\0XCURSOR_THEME=sky-cua-blankish\0",
+            "sky-cua-blank"
+        ));
     }
 }

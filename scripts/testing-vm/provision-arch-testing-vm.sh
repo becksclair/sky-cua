@@ -121,6 +121,7 @@ pacman -S --noconfirm --needed \
   xorg-xev \
   xorg-server \
   xorg-xauth \
+  xorg-xcursorgen \
   xorg-xdpyinfo \
   xorg-xinit \
   xorg-xmessage \
@@ -208,6 +209,8 @@ import_session_environment() {
   export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
   dbus-update-activation-environment --systemd \
     DBUS_SESSION_BUS_ADDRESS \
+    XDG_SESSION_ID \
+    XDG_SESSION_CLASS \
     XDG_CURRENT_DESKTOP \
     XDG_SESSION_DESKTOP \
     DESKTOP_SESSION \
@@ -215,9 +218,13 @@ import_session_environment() {
     WAYLAND_DISPLAY \
     DISPLAY \
     QT_QPA_PLATFORM \
-    GDK_BACKEND || true
+    GDK_BACKEND \
+    XCURSOR_THEME \
+    XCURSOR_SIZE || true
   systemctl --user import-environment \
     DBUS_SESSION_BUS_ADDRESS \
+    XDG_SESSION_ID \
+    XDG_SESSION_CLASS \
     XDG_CURRENT_DESKTOP \
     XDG_SESSION_DESKTOP \
     DESKTOP_SESSION \
@@ -225,7 +232,9 @@ import_session_environment() {
     WAYLAND_DISPLAY \
     DISPLAY \
     QT_QPA_PLATFORM \
-    GDK_BACKEND || true
+    GDK_BACKEND \
+    XCURSOR_THEME \
+    XCURSOR_SIZE || true
 }
 run_session() {
   import_session_environment
@@ -238,6 +247,18 @@ case "${session}" in
     export XDG_SESSION_DESKTOP=cosmic
     export DESKTOP_SESSION=cosmic
     export XDG_SESSION_TYPE=wayland
+    run_session cosmic-session
+    ;;
+  cosmic-blank|cosmic-transparent)
+    export XDG_CURRENT_DESKTOP=COSMIC
+    export XDG_SESSION_DESKTOP=cosmic
+    export DESKTOP_SESSION=cosmic
+    export XDG_SESSION_TYPE=wayland
+    export XCURSOR_THEME=sky-cua-blank
+    export XCURSOR_SIZE=24
+    if [[ -f /workspace/scripts/install_blank_xcursor_theme.py ]]; then
+      python3 /workspace/scripts/install_blank_xcursor_theme.py --theme-name sky-cua-blank --size "${XCURSOR_SIZE}" >/dev/null
+    fi
     run_session cosmic-session
     ;;
   kde|plasma)
@@ -256,7 +277,9 @@ case "${session}" in
     export XDG_SESSION_DESKTOP=gnome
     export DESKTOP_SESSION=gnome
     export XDG_SESSION_TYPE=wayland
-    run_session gnome-session
+    export XDG_SESSION_CLASS="${XDG_SESSION_CLASS:-user}"
+    import_session_environment
+    exec gnome-shell --wayland --display-server
     ;;
   hyprland)
     export XDG_CURRENT_DESKTOP=Hyprland
