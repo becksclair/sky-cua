@@ -33,6 +33,18 @@ Build a Linux-first Codex Computer Use plugin with a split Rust client/service a
   - session switching in the VM can leave stale compositor processes and sockets if the old session is not cleaned up. Use `scripts/testing-vm/select-session.sh` inside the guest before real-session matrix runs; it rewrites the greetd/GDM session target, kills stale compositor/sky-cua processes for `skycua`, and restarts the display manager.
 - `list_apps` and targeted `get_app_state` work end to end through MCP and the internal Unix-socket daemon.
 - Live KDE 6 Wayland probing works on Asgard, including portal capability detection and AT-SPI discovery.
+- Linux AT-SPI snapshots now expose richer readback for focused/editable text and numeric value controls:
+  - `ElementNode.value` is the short agent-facing summary for known text or numeric value state.
+  - `ElementNode.text` carries bounded text metadata (`content`, `character_count`, caret, truncation, selections).
+  - `ElementNode.numeric_value` carries AT-SPI Value data.
+  - `supports_editable_text` is defaulted/skipped when false, so old snapshots remain compatible.
+  - compact `get_app_state` preserves all readback fields so agents can verify edits without switching back to full detail.
+  - password/protected/name-sensitive fields suppress content and are not text-fetched; normal missing Text/Value proxies are absent metadata, not snapshot failures.
+- Text-readback proof on the Plasma `testing-vm` is complete:
+  - direct `scripts/live_desktop_smoke.py` proved initial `zenity` value readback, post-`set_value` readback, and post-`type_text` readback.
+  - `scripts/live_codex_exec_text_readback_smoke.py` passed with artifact `/workspace/artifacts/codex-e2e/codex-text-readback-smoke/20260517T041212Z`.
+  - `scripts/live_app_server_text_readback_smoke.py` passed with artifact `/workspace/artifacts/codex-e2e/app-server-text-readback-smoke/20260517T041242Z`.
+  - both agent smokes assert transcript-level `get_app_state` evidence for `stale-readback` and later `verified-readback`.
 - `get_app_state` now carries live ScreenCast stream metadata plus a real screenshot reference from an in-process PipeWire decode under `/run/user/1000/sky-cua/captures/*.png`, with Screenshot-portal capture only as fallback.
 - Snapshot capture metadata now distinguishes the configured capture lane from the actual image-producing lane:
   - `capture.backend` is the primary lane (`portal_pipe_wire`, `x11`, etc.)

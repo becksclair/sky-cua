@@ -2963,6 +2963,9 @@ fn linux_window_elements(window: &linux_windowing::LinuxWindowInfo) -> Vec<Eleme
             window.backend
         )),
         value: None,
+        text: None,
+        numeric_value: None,
+        supports_editable_text: false,
         state_flags: root_state_flags,
         semantic_actions: Vec::new(),
         bounds: Some(bounds.clone()),
@@ -3283,6 +3286,9 @@ fn push_kwin_anchor(
         name,
         description: Some(description.to_string()),
         value: None,
+        text: None,
+        numeric_value: None,
+        supports_editable_text: false,
         state_flags: state_flags
             .into_iter()
             .map(std::string::ToString::to_string)
@@ -3322,6 +3328,9 @@ fn x11_window_elements(window: &X11WindowInfo) -> Vec<ElementNode> {
                 .to_string(),
         ),
         value: None,
+        text: None,
+        numeric_value: None,
+        supports_editable_text: false,
         state_flags,
         semantic_actions: Vec::new(),
         bounds: Some(bounds.clone()),
@@ -3372,6 +3381,9 @@ fn x11_window_elements(window: &X11WindowInfo) -> Vec<ElementNode> {
             name: region.name.clone(),
             description: Some(x11_region_description(region, role)),
             value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
             state_flags,
             semantic_actions: Vec::new(),
             bounds: Some(region.bounds.clone()),
@@ -3691,6 +3703,9 @@ mod tests {
                 name: None,
                 description: None,
                 value: None,
+                text: None,
+                numeric_value: None,
+                supports_editable_text: false,
                 state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
                 semantic_actions: Vec::new(),
                 bounds: Some(RectF {
@@ -3997,6 +4012,9 @@ mod tests {
             name: None,
             description: None,
             value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
             state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
             semantic_actions: Vec::new(),
             bounds: Some(RectF {
@@ -4059,6 +4077,9 @@ mod tests {
                 name: None,
                 description: None,
                 value: None,
+                text: None,
+                numeric_value: None,
+                supports_editable_text: false,
                 state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
                 semantic_actions: Vec::new(),
                 bounds: Some(RectF {

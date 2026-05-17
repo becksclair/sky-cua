@@ -120,6 +120,13 @@ async fn discover_all_windows(
     let mut errors = Vec::new();
     let mut windows = Vec::new();
     for backend in BACKEND_ORDER {
+        if !backend_can_list_in_environment(*backend, environment) {
+            errors.push(format!(
+                "{} skipped for this desktop environment",
+                backend.failure_label()
+            ));
+            continue;
+        }
         match list_windows_for(*backend, environment).await {
             Ok(mut backend_windows) if !backend_windows.is_empty() => {
                 windows.append(&mut backend_windows);
@@ -144,7 +151,9 @@ pub async fn discover_activation_windows(
     let mut errors = Vec::new();
     let mut windows = Vec::new();
     for backend in BACKEND_ORDER {
-        if !backend_can_exact_focus_in_environment(*backend, environment) {
+        if !backend_can_list_in_environment(*backend, environment)
+            || !backend_can_exact_focus_in_environment(*backend, environment)
+        {
             continue;
         }
         match list_windows_for(*backend, environment).await {
@@ -279,20 +288,85 @@ fn backend_can_exact_focus_in_environment(
     }
 }
 
+fn backend_can_list_in_environment(backend: BackendKind, environment: &EnvironmentInfo) -> bool {
+    match backend {
+        BackendKind::GnomeExtension | BackendKind::GnomeIntrospect => {
+            environment_matches_or_unknown(environment, &["gnome"])
+        }
+        BackendKind::Cosmic => environment_matches_or_unknown(environment, &["cosmic"]),
+        BackendKind::Kwin => {
+            environment_matches_or_unknown(environment, &["kde", "plasma", "kwin"])
+        }
+        BackendKind::Hyprland => environment_matches_or_unknown(environment, &["hyprland"]),
+        BackendKind::I3 => environment_matches_or_unknown(environment, &["i3", "sway"]),
+        BackendKind::X11 => {
+            environment.xdg_session_type.as_deref() == Some("x11") || environment.display.is_some()
+        }
+    }
+}
+
+fn environment_matches_or_unknown(environment: &EnvironmentInfo, needles: &[&str]) -> bool {
+    !has_desktop_signal(environment) || environment_matches(environment, needles)
+}
+
+fn has_desktop_signal(environment: &EnvironmentInfo) -> bool {
+    environment
+        .desktop_environment
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || environment
+            .compositor
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn environment_matches(environment: &EnvironmentInfo, needles: &[&str]) -> bool {
+    let matches_value = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .is_some_and(|value| needles.iter().any(|needle| value.contains(needle)))
+    };
+    matches_value(&environment.desktop_environment) || matches_value(&environment.compositor)
+}
+
 pub fn focused_window_override() -> Option<LinuxWindowInfo> {
     cosmic::focused_window().ok().flatten()
 }
 
 pub fn probe_backends(environment: &EnvironmentInfo) -> Vec<BackendProbe> {
-    vec![
-        gnome_extension::probe(),
-        gnome_introspect::probe(),
-        cosmic::probe(),
-        probe_kwin(environment),
-        hyprland::probe(),
-        i3::probe(),
-        probe_x11(),
-    ]
+    BACKEND_ORDER
+        .iter()
+        .map(|backend| probe_backend(*backend, environment))
+        .collect()
+}
+
+fn probe_backend(backend: BackendKind, environment: &EnvironmentInfo) -> BackendProbe {
+    if !backend_can_list_in_environment(backend, environment) {
+        return skipped_probe(backend);
+    }
+
+    match backend {
+        BackendKind::GnomeExtension => gnome_extension::probe(),
+        BackendKind::GnomeIntrospect => gnome_introspect::probe(),
+        BackendKind::Cosmic => cosmic::probe(),
+        BackendKind::Kwin => probe_kwin(environment),
+        BackendKind::Hyprland => hyprland::probe(),
+        BackendKind::I3 => i3::probe(),
+        BackendKind::X11 => probe_x11(),
+    }
+}
+
+fn skipped_probe(backend: BackendKind) -> BackendProbe {
+    BackendProbe {
+        id: backend.id(),
+        ok: false,
+        can_list_windows: false,
+        can_focus_apps: false,
+        can_focus_windows: false,
+        detail: "Skipped because this backend does not match the current desktop environment"
+            .to_string(),
+    }
 }
 
 fn probe_kwin(environment: &EnvironmentInfo) -> BackendProbe {
@@ -616,6 +690,75 @@ mod tests {
             BackendKind::GnomeIntrospect,
             &environment
         ));
+    }
+
+    #[test]
+    fn listing_filter_skips_gnome_backends_on_kde() {
+        let environment = wayland_environment();
+
+        assert!(!backend_can_list_in_environment(
+            BackendKind::GnomeExtension,
+            &environment
+        ));
+        assert!(!backend_can_list_in_environment(
+            BackendKind::GnomeIntrospect,
+            &environment
+        ));
+        assert!(backend_can_list_in_environment(
+            BackendKind::Kwin,
+            &environment
+        ));
+    }
+
+    #[test]
+    fn listing_filter_keeps_gnome_backends_on_gnome() {
+        let mut environment = wayland_environment();
+        environment.desktop_environment = Some("GNOME".to_string());
+        environment.compositor = Some("gnome-shell".to_string());
+
+        assert!(backend_can_list_in_environment(
+            BackendKind::GnomeExtension,
+            &environment
+        ));
+        assert!(backend_can_list_in_environment(
+            BackendKind::GnomeIntrospect,
+            &environment
+        ));
+        assert!(!backend_can_list_in_environment(
+            BackendKind::Kwin,
+            &environment
+        ));
+    }
+
+    #[test]
+    fn listing_filter_allows_probe_fallback_when_desktop_is_unknown() {
+        let mut environment = wayland_environment();
+        environment.desktop_environment = None;
+        environment.compositor = None;
+
+        assert!(backend_can_list_in_environment(
+            BackendKind::GnomeExtension,
+            &environment
+        ));
+        assert!(backend_can_list_in_environment(
+            BackendKind::Kwin,
+            &environment
+        ));
+    }
+
+    #[test]
+    fn probe_filter_skips_incompatible_desktop_backends() {
+        let environment = wayland_environment();
+
+        let gnome_probe = probe_backend(BackendKind::GnomeIntrospect, &environment);
+        assert_eq!(gnome_probe.id, GNOME_SHELL_INTROSPECT_BACKEND);
+        assert!(!gnome_probe.ok);
+        assert!(!gnome_probe.can_list_windows);
+        assert!(gnome_probe.detail.contains("Skipped"));
+
+        let kwin_probe = probe_backend(BackendKind::Kwin, &environment);
+        assert_eq!(kwin_probe.id, KWIN_BACKEND);
+        assert!(!kwin_probe.detail.contains("Skipped"));
     }
 
     #[test]

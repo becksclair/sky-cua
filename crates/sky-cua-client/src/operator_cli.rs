@@ -2,9 +2,7 @@ use std::process::ExitCode;
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
-use sky_cua_platform::model::{
-    AppSelector, CaptureScreenMode, ServiceRequest, ServiceResponse,
-};
+use sky_cua_platform::model::{AppSelector, CaptureScreenMode, ServiceRequest, ServiceResponse};
 
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::enrich_snapshot;
@@ -85,9 +83,7 @@ where
         "health" => parse_simple_mode(rest, OperatorCommand::Health),
         "doctor" => parse_simple_mode(rest, OperatorCommand::Doctor),
         "setup-accessibility" => parse_simple_mode(rest, OperatorCommand::SetupAccessibility),
-        "setup-window-targeting" => {
-            parse_simple_mode(rest, OperatorCommand::SetupWindowTargeting)
-        }
+        "setup-window-targeting" => parse_simple_mode(rest, OperatorCommand::SetupWindowTargeting),
         "list-apps" => parse_simple_mode(rest, OperatorCommand::ListApps),
         "list-windows" => parse_simple_mode(rest, OperatorCommand::ListWindows),
         "focused-window" => parse_simple_mode(rest, OperatorCommand::FocusedWindow),
@@ -358,8 +354,8 @@ mod tests {
     use sky_cua_platform::model::{
         AccessibilitySetupReport, CaptureBackendKind, DiagnosticEntry, DoctorCheck,
         DoctorReadiness, DoctorReport, EnvironmentInfo, FocusedApp, InputBackendKind,
-        PortalCapabilities, SemanticBackendKind, SessionKind, SetupCommandReport,
-        ToolAvailability, ToolCapabilities, WindowTargetingSetupReport,
+        PortalCapabilities, SemanticBackendKind, SessionKind, SetupCommandReport, ToolAvailability,
+        ToolCapabilities, WindowTargetingSetupReport,
     };
 
     use super::*;
@@ -417,7 +413,11 @@ mod tests {
     #[test]
     fn rejects_unsupported_mode() {
         let error = parse_cli_mode(["wat"].into_iter().map(str::to_string)).unwrap_err();
-        assert!(error.to_string().contains("unsupported sky-cua-client mode"));
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported sky-cua-client mode")
+        );
     }
 
     #[test]
@@ -433,7 +433,8 @@ mod tests {
 
     #[test]
     fn rejects_extra_args_for_simple_mode() {
-        let error = parse_cli_mode(["health", "extra"].into_iter().map(str::to_string)).unwrap_err();
+        let error =
+            parse_cli_mode(["health", "extra"].into_iter().map(str::to_string)).unwrap_err();
         assert!(error.to_string().contains("unexpected argument for health"));
     }
 
@@ -452,7 +453,10 @@ mod tests {
             ),
             (OperatorCommand::ListApps, ServiceRequest::ListApps),
             (OperatorCommand::ListWindows, ServiceRequest::ListWindows),
-            (OperatorCommand::FocusedWindow, ServiceRequest::FocusedWindow),
+            (
+                OperatorCommand::FocusedWindow,
+                ServiceRequest::FocusedWindow,
+            ),
             (
                 OperatorCommand::GetAppState(GetAppStateArgs {
                     selector: Some(AppSelector {

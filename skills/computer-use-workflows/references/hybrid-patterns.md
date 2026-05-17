@@ -8,7 +8,7 @@ The model should not wait for a perfect control tree before it does anything use
 
 - take a fresh screenshot-backed state snapshot first
 - if a `screenshot_path` is available, inspect it with `view_image`
-- use the tree for names, bounds, and candidate regions when it exists
+- use the tree for names, bounds, values, text readback, and candidate regions when it exists
 - after initial orientation, prefer compact app-state snapshots for repeated action verification; keep full snapshots for debugging or when verbose element descriptions are actually needed
 - if the tree is sparse, fallback-only, or plainly wrong, use the screenshot to decide the target directly
 - once the screenshot confirms the target, coordinate-based physical actions are fair game
@@ -23,10 +23,11 @@ That is especially important for custom media apps, games, design tools, and nat
 
 When changing a cell or table value:
 
+- inspect `value` or `text.content` readback when the target element exposes it
 - click the cell to focus it
 - if replacement is intended, use a full-selection shortcut such as `Cmd + A / Ctrl + A` or the app's known replacement gesture
 - type the new value
-- verify the result with fresh state instead of assuming the write landed
+- verify the result with fresh state and readback when present instead of assuming the write landed
 
 This is often more reliable than trying to force a semantic write into a widget that only sort of behaves like a text field.
 
@@ -46,10 +47,10 @@ If `Cmd + A / Ctrl + A` has layered selection semantics, assume the first press 
 For media apps, browsers, and file managers:
 
 - first confirm the intended search field is actually focused
-- inspect whether the search field already contains a stale query before typing
+- inspect screenshot text and any `value` / `text.content` readback to decide whether the search field already contains a stale query before typing
 - clear or select stale text when replacement is intended
 - use text entry for the search term
-- re-run state before concluding that the app returned no results; search UIs are often lazy or network-backed
+- re-run state and check readback before concluding that the app returned no results; search UIs are often lazy or network-backed
 
 This matters especially in media apps where pressing `Return / Enter` in the wrong place can trigger playback instead of search.
 
@@ -59,9 +60,9 @@ When the app goal is “create, find, rename, or filter something” and the obv
 
 - look for visible text-entry controls first
 - treat search bars, inline rename boxes, modal title fields, and obvious empty text controls as exploratory tools, not just semantic form fields
-- inspect the field the screenshot actually shows before typing into it
+- inspect the field the screenshot actually shows, plus `value` or `text.content` readback when present, before typing into it
 - if the field contains stale or unrelated text, clear or select it before typing the deliberate value
-- click to focus the field, type one deliberate value, then reacquire state
+- click to focus the field, type one deliberate value, then reacquire state and verify readback when present
 - if the first text field did not do the right thing, do not blindly keep typing into the void; re-check the screenshot and pick the next plausible text target
 - never type placeholder junk like `test` into a field just to probe the UI; every typed value should be an intentional name, search term, or edit that directly serves the task
 - if the object you need is confirmed missing or deleted, move to the create/recreate path promptly instead of continuing through unrelated search results

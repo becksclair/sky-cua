@@ -70,22 +70,22 @@ For text replacement, the safest default is usually:
 
 1. get a fresh screenshot-backed state snapshot
 2. inspect the screenshot and identify the exact field or editor
-3. decide whether the field is empty, already selected, or contains stale text
+3. inspect the target element's `value` or `text.content` readback when present, then decide whether the field is empty, already selected, or contains stale text
 4. click to focus the field or editor
 5. select existing contents with `Cmd + A / Ctrl + A` or clear with `Delete / Backspace` when replacement is intended
 6. type the new text
-7. re-check state before assuming the edit landed
+7. re-check state and use `value` or `text.content` readback when present before assuming the edit landed
 
 Use semantic `set_value` only when the target exposes a proven semantic write path. Otherwise, keyboard-driven replacement is usually the grown-up choice.
 
 If you are not sure how an app wants something to be created, renamed, filtered, or found:
 
 1. look for visible text-entry controls first
-2. inspect the screenshot for the field's current text, placeholder, cursor, and selection state
+2. inspect the screenshot and any `value` or `text.content` readback for the field's current text, placeholder, cursor, and selection state
 3. click to focus the field the screenshot actually shows
 4. clear stale or unrelated contents before typing when replacement is intended
 5. type the intended name or search term
-6. reacquire state before deciding the UI ignored you
+6. reacquire state and check readback before deciding the UI ignored you
 
 Do not use global search just because it is easy to hit. If the current page already shows visible row-level add affordances or the target playlist row is plainly on screen, prefer those paths before changing the global query.
 

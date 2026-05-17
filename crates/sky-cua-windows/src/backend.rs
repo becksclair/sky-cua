@@ -642,6 +642,9 @@ fn window_element(window: &WindowInfo, element_index: usize) -> ElementNode {
             "Top-level Win32 window fallback with screenshot-local bounds".to_string(),
         ),
         value: None,
+        text: None,
+        numeric_value: None,
+        supports_editable_text: false,
         state_flags: if window.is_foreground {
             vec!["focused".to_string(), "win32_fallback".to_string()]
         } else {
@@ -1682,6 +1685,9 @@ mod tests {
                 name: Some("Settings".to_string()),
                 description: None,
                 value: None,
+                text: None,
+                numeric_value: None,
+                supports_editable_text: false,
                 state_flags: Vec::new(),
                 semantic_actions: Vec::new(),
                 bounds: Some(RectF {
@@ -1710,6 +1716,9 @@ mod tests {
                 name: Some("Open".to_string()),
                 description: None,
                 value: None,
+                text: None,
+                numeric_value: None,
+                supports_editable_text: false,
                 state_flags: Vec::new(),
                 semantic_actions: vec!["click".to_string()],
                 bounds: None,

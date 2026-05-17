@@ -162,6 +162,29 @@ def find_editable(snapshot: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("did not find an editable element in the focused snapshot")
 
 
+def require_editable_readback(
+    element: dict[str, Any],
+    expected: str,
+    *,
+    snapshot: dict[str, Any],
+    label: str,
+) -> None:
+    text = element.get("text") or {}
+    value = element.get("value")
+    content = text.get("content")
+    if value != expected or content != expected:
+        raise RuntimeError(
+            f"{label} did not expose expected editable readback {expected!r}.\n"
+            f"element={json.dumps(element, indent=2, sort_keys=True)}\n"
+            f"diagnostics={json.dumps(snapshot.get('diagnostics', []), indent=2, sort_keys=True)}"
+        )
+    if not element.get("supports_editable_text"):
+        raise RuntimeError(
+            f"{label} editable element did not advertise supports_editable_text.\n"
+            f"element={json.dumps(element, indent=2, sort_keys=True)}"
+        )
+
+
 def find_button(snapshot: dict[str, Any], label: str) -> dict[str, Any]:
     lowered = label.lower()
     for element in snapshot["elements"]:
@@ -172,18 +195,24 @@ def find_button(snapshot: dict[str, Any], label: str) -> dict[str, Any]:
 
 
 def run_zenity_input(
-    title: str, *, extra_env: dict[str, str] | None = None
+    title: str,
+    *,
+    initial_text: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.Popen[str]:
     env = dict(os.environ)
     if extra_env:
         env.update(extra_env)
+    command = [
+        "zenity",
+        "--entry",
+        f"--title={title}",
+        "--text=sky-cua live smoke",
+    ]
+    if initial_text is not None:
+        command.append(f"--entry-text={initial_text}")
     return subprocess.Popen(
-        [
-            "zenity",
-            "--entry",
-            f"--title={title}",
-            "--text=sky-cua live smoke",
-        ],
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -417,7 +446,7 @@ def require_no_portal_approval_pending(snapshot: dict[str, Any], label: str) -> 
 
 
 def semantic_text_smoke(client: McpClient) -> None:
-    dialog = run_zenity_input(ZENITY_TITLE)
+    dialog = run_zenity_input(ZENITY_TITLE, initial_text="stale-smoke")
     try:
         snapshot = wait_for_app_snapshot(client, ZENITY_TITLE, deadline=time.time() + 30)
         require_no_portal_approval_pending(snapshot, "initial zenity snapshot")
@@ -425,6 +454,12 @@ def semantic_text_smoke(client: McpClient) -> None:
         require_live_wayland_image_backend(snapshot, "initial zenity")
         editable = find_editable(snapshot)
         ok_button = find_button(snapshot, "OK")
+        require_editable_readback(
+            editable,
+            "stale-smoke",
+            snapshot=snapshot,
+            label="initial zenity snapshot",
+        )
 
         print(f"Focused app: {snapshot.get('focused_app')}")
         print(f"Editable element index: {editable['element_index']}")
@@ -443,12 +478,23 @@ def semantic_text_smoke(client: McpClient) -> None:
             ),
             "set_value",
         )
+        updated_snapshot = wait_for_app_snapshot(
+            client, ZENITY_TITLE, deadline=time.time() + 10
+        )
+        updated_editable = find_editable(updated_snapshot)
+        require_editable_readback(
+            updated_editable,
+            "smoke-value",
+            snapshot=updated_snapshot,
+            label="post-set_value zenity snapshot",
+        )
+        ok_button = find_button(updated_snapshot, "OK")
         require_ok(
             client.tools_call(
                 21,
                 "click",
                 {
-                    "snapshot_id": snapshot["snapshot_id"],
+                    "snapshot_id": updated_snapshot["snapshot_id"],
                     "element_index": ok_button["element_index"],
                 },
             ),
@@ -497,13 +543,23 @@ def semantic_text_smoke(client: McpClient) -> None:
             ),
             "type_text",
         )
+        typed_snapshot = wait_for_app_snapshot(
+            client, f"{ZENITY_TITLE} enter", deadline=time.time() + 10
+        )
+        typed_editable = find_editable(typed_snapshot)
+        require_editable_readback(
+            typed_editable,
+            "typed-smoke",
+            snapshot=typed_snapshot,
+            label="post-type_text zenity snapshot",
+        )
         require_ok(
             client.tools_call(
                 32,
                 "press_key",
                 {
-                    "snapshot_id": snapshot["snapshot_id"],
-                    "element_index": editable["element_index"],
+                    "snapshot_id": typed_snapshot["snapshot_id"],
+                    "element_index": typed_editable["element_index"],
                     "key": "Enter",
                 },
             ),

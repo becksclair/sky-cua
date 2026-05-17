@@ -303,11 +303,52 @@ pub struct ElementNode {
     pub name: Option<String>,
     pub description: Option<String>,
     pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<ElementTextReadback>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_value: Option<ElementNumericValueReadback>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub supports_editable_text: bool,
     pub state_flags: Vec<String>,
     pub semantic_actions: Vec<String>,
     pub bounds: Option<RectF>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ElementTextReadback {
+    pub character_count: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caret_offset: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub content_suppressed: bool,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selections: Vec<ElementTextSelection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ElementTextSelection {
+    pub start_offset: i32,
+    pub end_offset: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ElementNumericValueReadback {
+    pub current: f64,
+    pub minimum: f64,
+    pub maximum: f64,
+    pub minimum_increment: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -751,10 +792,11 @@ mod tests {
         ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
         AgentCursorPlane, AgentCursorPoint, AgentCursorState, AgentCursorSystemCursorBackendKind,
         AppStateSnapshot, CaptureBackendKind, CaptureInfo, CoordinateSpace, DoctorCheck,
-        DoctorReadiness, DoctorReport, EnvironmentInfo, InputBackendKind, ModelImageFormat,
-        PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
-        SessionKind, SetupCommandReport, ToolAvailability, ToolCapabilities, WindowInfo,
-        WindowTargetingSetupReport,
+        DoctorReadiness, DoctorReport, ElementNode, ElementNumericValueReadback,
+        ElementTextReadback, ElementTextSelection, EnvironmentInfo, InputBackendKind,
+        ModelImageFormat, PixelSize, PortalCapabilities, RectF, SemanticBackendKind,
+        ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport, ToolAvailability,
+        ToolCapabilities, WindowInfo, WindowTargetingSetupReport,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -809,6 +851,81 @@ mod tests {
                 capture_screen: Default::default(),
             }
         );
+    }
+
+    #[test]
+    fn element_node_deserializes_old_json_without_readback_fields() {
+        let node: ElementNode = serde_json::from_value(json!({
+            "element_index": 1,
+            "parent_index": null,
+            "role": "text",
+            "name": "Search",
+            "description": null,
+            "value": null,
+            "state_flags": ["focused"],
+            "semantic_actions": ["set_value"],
+            "bounds": null,
+            "backend_ref": ":1.2:/node/1"
+        }))
+        .expect("old element JSON should remain readable");
+
+        assert_eq!(node.text, None);
+        assert_eq!(node.numeric_value, None);
+        assert!(!node.supports_editable_text);
+    }
+
+    #[test]
+    fn element_node_serializes_readback_and_skips_absent_defaults() {
+        let without_readback = ElementNode {
+            element_index: 1,
+            parent_index: None,
+            role: "text".to_string(),
+            name: Some("Search".to_string()),
+            description: None,
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
+            state_flags: vec!["focused".to_string()],
+            semantic_actions: vec!["set_value".to_string()],
+            bounds: None,
+            backend_ref: None,
+        };
+        let rendered = serde_json::to_value(&without_readback).expect("serialize element");
+        assert!(rendered.get("text").is_none());
+        assert!(rendered.get("numeric_value").is_none());
+        assert!(rendered.get("supports_editable_text").is_none());
+
+        let with_readback = ElementNode {
+            value: Some("hello".to_string()),
+            text: Some(ElementTextReadback {
+                character_count: 5,
+                caret_offset: Some(5),
+                content: Some("hello".to_string()),
+                content_suppressed: false,
+                truncated: false,
+                selections: vec![ElementTextSelection {
+                    start_offset: 0,
+                    end_offset: 5,
+                }],
+            }),
+            numeric_value: Some(ElementNumericValueReadback {
+                current: 5.0,
+                minimum: 0.0,
+                maximum: 10.0,
+                minimum_increment: 1.0,
+                text: Some("5".to_string()),
+            }),
+            supports_editable_text: true,
+            ..without_readback
+        };
+        let rendered = serde_json::to_value(&with_readback).expect("serialize element");
+
+        assert_eq!(rendered["value"], "hello");
+        assert_eq!(rendered["text"]["content"], "hello");
+        assert_eq!(rendered["text"]["selections"][0]["end_offset"], 5);
+        assert_eq!(rendered["numeric_value"]["text"], "5");
+        assert_eq!(rendered["supports_editable_text"], true);
     }
 
     #[test]

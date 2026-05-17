@@ -180,6 +180,15 @@ Action tools accept `snapshot_id` from the latest `get_app_state` result. With
 snapshot image. Without `snapshot_id`, supported coordinate actions use the
 current screen coordinate space exposed by the active input backend.
 
+`get_app_state` elements may include readback fields when the backend can prove
+them. On Linux, focused or editable AT-SPI Text controls can populate
+`ElementNode.value` and `text.content` with the current text, including a known
+empty string. AT-SPI Value controls can populate `numeric_value` and use a
+short value summary. Password/protected controls suppress content and leave
+`value` absent even if AT-SPI exposes data. Compact snapshots intentionally
+preserve `value`, `text`, `numeric_value`, and `supports_editable_text` so
+agents can verify text entry without switching back to full detail.
+
 `list_windows`, `focused_window`, and `activate_window` use native window
 metadata when available. Linux currently probes GNOME Shell extension, GNOME
 Shell Introspect, COSMIC helper, KWin/Plasma, Hyprland, i3, and X11 metadata
@@ -197,6 +206,11 @@ Use these lanes when validating changes:
 - Codex adapter lane: bundle/install checks and app-server smokes such as
   `scripts/build_plugin.py`, `scripts/install_plugin.py`, and
   `scripts/live_app_server_smoke.py`.
+- Text-readback lane: `scripts/live_desktop_smoke.py` covers direct `zenity`
+  readback before and after `set_value` / `type_text`; `scripts/live_codex_exec_text_readback_smoke.py`
+  and `scripts/live_app_server_text_readback_smoke.py` prove agents consume
+  stale and replacement values from `get_app_state` transcripts before
+  submitting.
 
 Runtime changes should pass the narrowest relevant runtime lane first. Codex
 plugin checks prove that the Codex adapter still packages and activates the

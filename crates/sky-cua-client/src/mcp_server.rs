@@ -718,9 +718,9 @@ fn tool_definitions(model: &ModelSessionInfo) -> Value {
         {
             "name": "get_app_state",
             "description": if can_receive_images {
-                "Build a structured desktop app-state snapshot with environment diagnostics, flattened accessibility elements, and optional screen capture."
+                "Build a structured desktop app-state snapshot with environment diagnostics, flattened accessibility elements, optional screen capture, and readback for focused or editable text/value controls when the backend can prove it."
             } else {
-                "Build a structured desktop app-state snapshot with environment diagnostics and flattened accessibility elements. This session's model does not support image input, so screen capture is disabled."
+                "Build a structured desktop app-state snapshot with environment diagnostics, flattened accessibility elements, and readback for focused or editable text/value controls when the backend can prove it. This session's model does not support image input, so screen capture is disabled."
             },
             "inputSchema": {
                 "type": "object",
@@ -850,7 +850,7 @@ fn tool_definitions(model: &ModelSessionInfo) -> Value {
         ),
         action_tool(
             "set_value",
-            "Set an editable element value semantically where supported. Target by element_index, element_identifier, or a semantic selector from the latest get_app_state snapshot.",
+            "Set an editable element value semantically where supported. Target by element_index, element_identifier, or a semantic selector from the latest get_app_state snapshot, then reacquire get_app_state and inspect value/text readback to verify the edit landed.",
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
                 "element_identifier": {
@@ -1243,9 +1243,10 @@ mod tests {
     use sky_cua_platform::model::{
         AccessibilitySetupReport, ActionOutcome, AgentCursorPoint, AgentCursorState, AppInfo,
         AppStateSnapshot, CaptureBackendKind, CaptureScreenMode, CoordinateSpace, DiagnosticEntry,
-        DoctorCheck, DoctorReadiness, DoctorReport, ElementNode, EnvironmentInfo, FocusedApp,
-        InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
-        SetupCommandReport, ToolAvailability, ToolCapabilities, WindowTargetingSetupReport,
+        DoctorCheck, DoctorReadiness, DoctorReport, ElementNode, ElementTextReadback,
+        EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities, RectF,
+        SemanticBackendKind, SessionKind, SetupCommandReport, ToolAvailability, ToolCapabilities,
+        WindowTargetingSetupReport,
     };
 
     #[test]
@@ -1258,10 +1259,7 @@ mod tests {
             parse_app_state_detail(&json!({"detail": "full"})),
             AppStateDetail::Full
         );
-        assert_eq!(
-            parse_app_state_detail(&json!({})),
-            AppStateDetail::Full
-        );
+        assert_eq!(parse_app_state_detail(&json!({})), AppStateDetail::Full);
     }
 
     #[test]
@@ -1319,12 +1317,22 @@ mod tests {
         let compact = compact_element(&ElementNode {
             element_index: 7,
             parent_index: Some(1),
-            role: "button".to_string(),
-            name: Some("OK".to_string()),
+            role: "text".to_string(),
+            name: Some("Search".to_string()),
             description: Some("verbose guidance that should not ride every loop".to_string()),
-            value: None,
+            value: Some("query".to_string()),
+            text: Some(ElementTextReadback {
+                character_count: 5,
+                caret_offset: Some(5),
+                content: Some("query".to_string()),
+                content_suppressed: false,
+                truncated: false,
+                selections: Vec::new(),
+            }),
+            numeric_value: None,
+            supports_editable_text: true,
             state_flags: vec!["focused".to_string()],
-            semantic_actions: vec!["click".to_string()],
+            semantic_actions: vec!["set_value".to_string()],
             bounds: Some(RectF {
                 x: 10.0,
                 y: 20.0,
@@ -1336,10 +1344,13 @@ mod tests {
         });
 
         assert_eq!(compact["element_index"], 7);
-        assert_eq!(compact["role"], "button");
+        assert_eq!(compact["role"], "text");
         assert!(compact.get("description").is_none());
+        assert_eq!(compact["value"], "query");
+        assert_eq!(compact["text"]["content"], "query");
+        assert_eq!(compact["supports_editable_text"], true);
         assert_eq!(compact["backend_ref"], "opaque-backend-ref");
-        assert_eq!(compact["semantic_actions"][0], "click");
+        assert_eq!(compact["semantic_actions"][0], "set_value");
     }
 
     #[test]

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "blocked", "failed"]
+    },
+    "dialog_title": { "type": "string" },
+    "initial_value": { "type": "string" },
+    "replacement_value": { "type": "string" },
+    "screenshot_path": {
+      "type": ["string", "null"]
+    },
+    "proof_notes": { "type": "string" }
+  },
+  "required": [
+    "status",
+    "dialog_title",
+    "initial_value",
+    "replacement_value",
+    "screenshot_path",
+    "proof_notes"
+  ]
+}

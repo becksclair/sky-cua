@@ -24,6 +24,10 @@ use crate::portal::token_store::{
     portal_token_compositor_mismatch,
 };
 
+const CURSOR_MODE_HIDDEN: u32 = 1;
+const CURSOR_MODE_EMBEDDED: u32 = 2;
+const CURSOR_MODE_METADATA: u32 = 4;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PortalStreamInfo {
     pub node_id: u32,
@@ -508,15 +512,16 @@ async fn start_session(
             )
         })?;
 
+    let mut source_options = SelectSourcesOptions::default()
+        .set_sources(BitFlags::from_flag(SourceType::Monitor))
+        .set_multiple(false)
+        .set_persist_mode(PersistMode::DoNot);
+    if let Some(cursor_mode) = supported_cursor_mode().await {
+        source_options = source_options.set_cursor_mode(cursor_mode);
+    }
+
     screencast
-        .select_sources(
-            &session,
-            SelectSourcesOptions::default()
-                .set_cursor_mode(CursorMode::Metadata)
-                .set_sources(BitFlags::from_flag(SourceType::Monitor))
-                .set_multiple(false)
-                .set_persist_mode(PersistMode::DoNot),
-        )
+        .select_sources(&session, source_options)
         .await
         .map_err(|error| {
             BackendError::new(
@@ -588,6 +593,37 @@ async fn start_session(
         },
         lifecycle_events,
     })
+}
+
+async fn supported_cursor_mode() -> Option<CursorMode> {
+    match portal_u32_property("org.freedesktop.portal.ScreenCast", "AvailableCursorModes").await {
+        Ok(mask) => cursor_mode_for_available_modes(mask).or_else(|| {
+            warn!(
+                available_cursor_modes = mask,
+                "portal reported no supported cursor modes; omitting cursor mode from ScreenCast SelectSources"
+            );
+            None
+        }),
+        Err(error) => {
+            warn!(
+                error = %error,
+                "could not read portal cursor modes; falling back to metadata cursor mode"
+            );
+            Some(CursorMode::Metadata)
+        }
+    }
+}
+
+fn cursor_mode_for_available_modes(mask: u32) -> Option<CursorMode> {
+    if mask & CURSOR_MODE_METADATA != 0 {
+        Some(CursorMode::Metadata)
+    } else if mask & CURSOR_MODE_HIDDEN != 0 {
+        Some(CursorMode::Hidden)
+    } else if mask & CURSOR_MODE_EMBEDDED != 0 {
+        Some(CursorMode::Embedded)
+    } else {
+        None
+    }
 }
 
 async fn start_session_with_timeout(
@@ -866,7 +902,9 @@ pub fn keysym_for_key_name(key: &str) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{keysym_for_char, keysym_for_key_name};
+    use ashpd::desktop::screencast::CursorMode;
+
+    use super::{cursor_mode_for_available_modes, keysym_for_char, keysym_for_key_name};
 
     #[test]
     fn resolves_ascii_character_keysyms() {
@@ -879,5 +917,22 @@ mod tests {
         assert_eq!(keysym_for_key_name("Enter"), Some(0xff0d));
         assert_eq!(keysym_for_key_name("Ctrl"), Some(0xffe3));
         assert_eq!(keysym_for_key_name("f5"), Some(0xffc2));
+    }
+
+    #[test]
+    fn chooses_supported_portal_cursor_mode() {
+        assert!(matches!(
+            cursor_mode_for_available_modes(4),
+            Some(CursorMode::Metadata)
+        ));
+        assert!(matches!(
+            cursor_mode_for_available_modes(1),
+            Some(CursorMode::Hidden)
+        ));
+        assert!(matches!(
+            cursor_mode_for_available_modes(2),
+            Some(CursorMode::Embedded)
+        ));
+        assert!(cursor_mode_for_available_modes(0).is_none());
     }
 }
