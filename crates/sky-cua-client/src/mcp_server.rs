@@ -1701,6 +1701,38 @@ mod tests {
     }
 
     #[test]
+    fn list_apps_error_diagnostic_ignores_session_env_repair_context() {
+        let diagnostics = vec![DiagnosticEntry {
+            code: "SessionEnvRepaired".to_string(),
+            message: "Repaired missing Linux desktop session environment.".to_string(),
+            details: None,
+        }];
+
+        assert!(super::list_apps_error_diagnostic(&diagnostics).is_none());
+    }
+
+    #[test]
+    fn list_apps_error_diagnostic_keeps_errors_after_session_env_repair_context() {
+        let diagnostics = vec![
+            DiagnosticEntry {
+                code: "SessionEnvRepaired".to_string(),
+                message: "Repaired missing Linux desktop session environment.".to_string(),
+                details: None,
+            },
+            DiagnosticEntry {
+                code: "AccessibilityUnavailable".to_string(),
+                message: "AT-SPI is unavailable".to_string(),
+                details: None,
+            },
+        ];
+
+        let diagnostic = super::list_apps_error_diagnostic(&diagnostics)
+            .expect("fatal diagnostics after repair context should still mark list_apps as failed");
+
+        assert_eq!(diagnostic.code, "AccessibilityUnavailable");
+    }
+
+    #[test]
     fn snapshot_summary_surfaces_portal_approval_guidance() {
         let snapshot = AppStateSnapshot {
             snapshot_id: "snap-1".to_string(),

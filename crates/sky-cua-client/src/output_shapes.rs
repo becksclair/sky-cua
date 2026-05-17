@@ -4,6 +4,8 @@ use sky_cua_platform::model::{
     WindowTargetingSetupReport,
 };
 
+const LIST_APPS_INFORMATIONAL_DIAGNOSTIC_CODES: &[&str] = &["SessionEnvRepaired"];
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum AppStateDetail {
     #[default]
@@ -39,7 +41,9 @@ pub(crate) fn setup_accessibility_is_error(report: &AccessibilitySetupReport) ->
 pub(crate) fn list_apps_error_diagnostic(
     diagnostics: &[DiagnosticEntry],
 ) -> Option<&DiagnosticEntry> {
-    diagnostics.first()
+    diagnostics.iter().find(|diagnostic| {
+        !LIST_APPS_INFORMATIONAL_DIAGNOSTIC_CODES.contains(&diagnostic.code.as_str())
+    })
 }
 
 pub(crate) fn compact_element(element: &ElementNode) -> Value {
