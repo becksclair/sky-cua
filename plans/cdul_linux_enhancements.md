@@ -12,7 +12,7 @@ The work is grounded in two repositories available on this machine. The target r
 
 ## Progress
 
-- [x] (2026-05-17 08:00Z) Compared CDUL against the current `sky-cua` source with three read-only `codex-worker` lanes: windowing/session management, capture/input/AT-SPI, and packaging/host/diagnostics.
+- [x] (2026-05-17 08:00Z) Compared CDUL against the current `sky-cua` source with three read-only `codex-worker` lanes: windowing/session management, capture/input/AT-SPI, and packaging/host/diagnostics. The comparison summary is preserved in `docs/research/2026-05-cdul-comparison.md`.
 - [x] (2026-05-17 08:00Z) Confirmed the main adoption strategy: do not port CDUL wholesale; implement small fidelity and operator-experience enhancements where `sky-cua` still has a gap.
 - [x] (2026-05-17 08:00Z) Authored this ExecPlan under `plans/`.
 - [x] (2026-05-17 08:09Z) Recorded that desktop-facing validation must use the `$sky-cua:vm-tests` skill and the real Arch `testing-vm` runner documented in `docs/operations/gui-desktop-test-harness.md`.
