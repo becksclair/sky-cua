@@ -612,6 +612,26 @@ mod tests {
     }
 
     #[test]
+    fn session_env_repaired_list_apps_context_exits_successfully() {
+        let rendered = render_operator_response(
+            &OperatorCommand::ListApps,
+            ServiceResponse::ListApps {
+                environment: sample_environment(),
+                apps: vec![],
+                diagnostics: vec![DiagnosticEntry {
+                    code: "SessionEnvRepaired".to_string(),
+                    message: "detached desktop session environment was repaired".to_string(),
+                    details: None,
+                }],
+            },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(rendered.exit_code, ExitCode::SUCCESS);
+    }
+
+    #[test]
     fn degraded_list_windows_exits_non_zero() {
         let rendered = render_operator_response(
             &OperatorCommand::ListWindows,
