@@ -233,10 +233,10 @@ Retrospective notes:
   that I had written reflexively. Future cleanup-style migrations
   should run the link checker after each phase, not only at the end.
 - The "Originating ExecPlan retired" line in feature docs originally
-  used `\`plans/<slug>.md\`` as a backtick path. Those paths no longer
-  exist; the phrasing was rewritten to "see git history for ..." to
-  avoid grep-and-link confusion. Worth carrying into the feature doc
-  template if this comes up again.
+  linked to the retired plan path inside a backtick code span. Those
+  paths no longer exist, so the phrasing was rewritten to "see git
+  history for ..." to avoid grep-and-link confusion. Worth carrying
+  into the feature doc template if this comes up again.
 
 ## Context and Orientation
 
@@ -399,8 +399,9 @@ Bring `CONTINUITY.md` back under its original contract (~30–60 lines target).
 
 For each existing entry, classify and route:
 
-- "Latest <feature> proof artifact: …" → that feature's doc `Verification`
-  section (already covered by Phases 4–5), then delete from `CONTINUITY.md`.
+- "Latest `<feature>` proof artifact: …" → that feature's doc
+  `Verification` section (already covered by Phases 4–5), then delete
+  from `CONTINUITY.md`.
 - Multi-line milestone summaries → already covered by feature docs; delete.
 - Image-size A/B and Codex plugin / app-server / ChatGPT-auth investigation
   prose → covered by `docs/features/image-size-performance.md` and
