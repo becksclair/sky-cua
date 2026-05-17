@@ -247,7 +247,7 @@ Build a Linux-first Codex Computer Use plugin with a split Rust client/service a
       - baseline `1920x1080`: `artifacts/codex-e2e/tidal-playlist-app-server/20260424T041253Z/`, completed in 287.24s, 42 MCP calls, 21 image views, 5.17M total tokens, avg/max uncached input 8.6k/60.6k
       - `1440x810`: `artifacts/codex-e2e/tidal-playlist-app-server/20260424T042117Z/`, completed in 246.97s, 37 MCP calls, 19 image views, 3.72M total tokens, avg/max uncached input 5.0k/26.9k
       - delta: 40.27s faster, 5 fewer MCP calls, 2 fewer image views, and 1.44M fewer total tokens while still creating the playlist and verifying five tracks
-    - `docs/image-size-performance.md` documents the default, raw-capture contract, A/B evidence, override path, and validation commands
+    - `docs/features/image-size-performance.md` documents the default, raw-capture contract, A/B evidence, override path, and validation commands
     - narrow validation passed: `cargo test -p sky-cua-linux portal::screenshot`, `uv run ruff format --check scripts/_app_server_harness.py`, `uv run ruff check scripts/_app_server_harness.py`, `uv run basedpyright scripts/_app_server_harness.py`, and `uv run pytest scripts/test_python_harness_helpers.py`
   - The macOS `computer-use` contract review has now been folded into the plugin locally:
     - action tool schemas are closed with `additionalProperties: false` and require `snapshot_id`, while avoiding top-level `anyOf` because the live app-server/OpenAI function-parameter validator rejects it
@@ -261,7 +261,7 @@ Build a Linux-first Codex Computer Use plugin with a split Rust client/service a
 
 ## Next Step
 
-Use the rich-client harness as the installed-plugin acceptance path: `scripts/live_app_server_smoke.py` is live-proven for JPEG and WebP, and remaining live smokes share `scripts/_smoke_config.py` so they run on `gpt-5.5` with low reasoning by default. The TIDAL live workflow and image-format A/B runner have been retired; their artifacts remain historical evidence only. The next meaningful move is to keep screenshot capture policy and model image capability gating covered by the active app-server smoke path, then add a new workflow-specific A/B runner only when there is a current target app with isolated, resettable state. The full investigation write-up lives in `docs/codex-plugin-e2e-expedition.md`, and the image-size decision is documented in `docs/image-size-performance.md`.
+Use the rich-client harness as the installed-plugin acceptance path: `scripts/live_app_server_smoke.py` is live-proven for JPEG and WebP, and remaining live smokes share `scripts/_smoke_config.py` so they run on `gpt-5.5` with low reasoning by default. The TIDAL live workflow and image-format A/B runner have been retired; their artifacts remain historical evidence only. The next meaningful move is to keep screenshot capture policy and model image capability gating covered by the active app-server smoke path, then add a new workflow-specific A/B runner only when there is a current target app with isolated, resettable state. The full investigation write-up lives in `docs/research/2026-04-codex-plugin-chatgpt-auth-expedition.md`, and the image-size decision is documented in `docs/features/image-size-performance.md`.
 
 The plugin/runtime facts are now separated cleanly:
 - installed plugin discovery works

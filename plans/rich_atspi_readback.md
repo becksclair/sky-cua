@@ -26,7 +26,7 @@ Complete:
 Partial:
 
 - Linux AT-SPI numeric Value extraction is implemented, but live proof currently centers on `zenity` text-entry controls.
-- Desktop-backend probe filtering is now safer for wrong-compositor sessions and conservative when desktop detection is unknown; broader registry/list/focus matrix proof remains tracked in `docs/gui-desktop-test-harness.md`.
+- Desktop-backend probe filtering is now safer for wrong-compositor sessions and conservative when desktop detection is unknown; broader registry/list/focus matrix proof remains tracked in `docs/operations/gui-desktop-test-harness.md`.
 
 Pending:
 

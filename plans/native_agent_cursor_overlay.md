@@ -565,7 +565,7 @@ The important current Computer Use seams are:
 
 The preferred Linux GUI harness seams are:
 
-    docs/gui-desktop-test-harness.md
+    docs/operations/gui-desktop-test-harness.md
     scripts/testing-vm/provision-arch-testing-vm.sh
     scripts/testing-vm/sync-opencode-to-vm.sh
     scripts/testing-vm/profiles/run-profile.sh

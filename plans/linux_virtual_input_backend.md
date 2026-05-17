@@ -477,7 +477,7 @@ VM provisioning remains idempotent:
 
 Update:
 
-- `docs/gui-desktop-test-harness.md` with the `LinuxVirtualInput` fallback, direct uinput/ydotool prerequisites, and COSMIC acceptance command.
+- `docs/operations/gui-desktop-test-harness.md` with the `LinuxVirtualInput` fallback, direct uinput/ydotool prerequisites, and COSMIC acceptance command.
 - `CONTINUITY.md` with current status, next command, and any known incomplete backend actions.
 - `NOTES.md` only if the direct uinput, ydotool command semantics, or coordinate calibration produce durable facts worth preserving.
 - Any existing native cursor overlay plan only if it currently claims COSMIC requires RemoteDesktop for input.

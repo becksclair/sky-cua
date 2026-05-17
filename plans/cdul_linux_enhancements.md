@@ -15,7 +15,7 @@ The work is grounded in two repositories available on this machine. The target r
 - [x] (2026-05-17 08:00Z) Compared CDUL against the current `sky-cua` source with three read-only `codex-worker` lanes: windowing/session management, capture/input/AT-SPI, and packaging/host/diagnostics.
 - [x] (2026-05-17 08:00Z) Confirmed the main adoption strategy: do not port CDUL wholesale; implement small fidelity and operator-experience enhancements where `sky-cua` still has a gap.
 - [x] (2026-05-17 08:00Z) Authored this ExecPlan under `plans/`.
-- [x] (2026-05-17 08:09Z) Recorded that desktop-facing validation must use the `$sky-cua:vm-tests` skill and the real Arch `testing-vm` runner documented in `docs/gui-desktop-test-harness.md`.
+- [x] (2026-05-17 08:09Z) Recorded that desktop-facing validation must use the `$sky-cua:vm-tests` skill and the real Arch `testing-vm` runner documented in `docs/operations/gui-desktop-test-harness.md`.
 - [ ] Implement terminal command-line fidelity in `crates/sky-cua-linux/src/windowing/terminal.rs`.
 - [ ] Improve Linux input diagnostics and readiness text in `crates/sky-cua-linux/src/doctor.rs` and the platform model if needed.
 - [ ] Add portal screenshot/request-handle regression coverage or a lower-level fallback only if the current `ashpd` path proves insufficient under tests.
@@ -35,7 +35,7 @@ The work is grounded in two repositories available on this machine. The target r
   Evidence: `crates/sky-cua-linux/src/doctor.rs` already contains `ydotool_socket_check`, `ydotool_socket_candidates`, `binary_check`, `process_check`, and `path_check`, but the public readiness summary still mainly reports high-level `input_backend` and `can_send_input` state.
 
 - Observation: Local unit tests are not sufficient acceptance for portal, input, windowing, or AT-SPI behavior that depends on real compositors.
-  Evidence: `docs/gui-desktop-test-harness.md` says the preferred Linux test path is an Arch `testing-vm` running real KWin, GNOME Shell, COSMIC, Hyprland, or i3 sessions, and `.agents/skills/vm-tests/SKILL.md` requires using `scripts/run_gui_testing_vm_smoke.py` against the visible VM desktop session rather than nested Docker, Xvfb, or stale nested compositor paths.
+  Evidence: `docs/operations/gui-desktop-test-harness.md` says the preferred Linux test path is an Arch `testing-vm` running real KWin, GNOME Shell, COSMIC, Hyprland, or i3 sessions, and `.agents/skills/vm-tests/SKILL.md` requires using `scripts/run_gui_testing_vm_smoke.py` against the visible VM desktop session rather than nested Docker, Xvfb, or stale nested compositor paths.
 
 ## Decision Log
 
@@ -52,7 +52,7 @@ The work is grounded in two repositories available on this machine. The target r
   Date/Author: 2026-05-17 / Codex
 
 - Decision: Validate desktop-facing slices with `$sky-cua:vm-tests` and the Arch `testing-vm` runner.
-  Rationale: The enhancements affect Linux desktop behavior that can depend on real portal backends, compositor process state, Wayland display names, X11 metadata, and AT-SPI roots. The accepted project path for that proof is `scripts/run_gui_testing_vm_smoke.py` as described in `docs/gui-desktop-test-harness.md`, after selecting or confirming the visible guest session.
+  Rationale: The enhancements affect Linux desktop behavior that can depend on real portal backends, compositor process state, Wayland display names, X11 metadata, and AT-SPI roots. The accepted project path for that proof is `scripts/run_gui_testing_vm_smoke.py` as described in `docs/operations/gui-desktop-test-harness.md`, after selecting or confirming the visible guest session.
   Date/Author: 2026-05-17 / Codex
 
 ## Outcomes & Retrospective
@@ -73,7 +73,7 @@ The RemoteDesktop and Screenshot portals are desktop services exposed over D-Bus
 
 The GNOME window-targeting setup path writes a GNOME Shell extension under the user's local extension directory and enables it. In `sky-cua`, the setup code is `crates/sky-cua-linux/src/setup.rs`, and the bundled extension source is under `resources/gnome-shell-extension/codex-window-control@openai.com/`. CDUL has more explicit messages for the case where files are written and enabling is requested, but GNOME Shell has not loaded the DBus API yet.
 
-The accepted VM smoke lane is documented by the repo-local skill `.agents/skills/vm-tests/SKILL.md`, referred to in conversation as `$sky-cua:vm-tests`. Before running or interpreting a VM profile, read `docs/gui-desktop-test-harness.md`, `skills/sky-cua-isolated-daemon/references/testing-vm-desktop-smokes.md`, and `scripts/run_gui_testing_vm_smoke.py --help` or the script source if adding flags or diagnosing runner behavior. The VM lane uses a visible Arch `testing-vm` guest desktop session, not a nested compositor, Docker GUI image, or old nested-Xvfb smoke. When `testing-vm` does not resolve by hostname, use the SSH port-forward form with `--host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts`.
+The accepted VM smoke lane is documented by the repo-local skill `.agents/skills/vm-tests/SKILL.md`, referred to in conversation as `$sky-cua:vm-tests`. Before running or interpreting a VM profile, read `docs/operations/gui-desktop-test-harness.md`, `skills/sky-cua-isolated-daemon/references/testing-vm-desktop-smokes.md`, and `scripts/run_gui_testing_vm_smoke.py --help` or the script source if adding flags or diagnosing runner behavior. The VM lane uses a visible Arch `testing-vm` guest desktop session, not a nested compositor, Docker GUI image, or old nested-Xvfb smoke. When `testing-vm` does not resolve by hostname, use the SSH port-forward form with `--host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts`.
 
 ## Plan of Work
 
@@ -137,7 +137,7 @@ Run all commands from `/home/bex/projects/sky-cua`.
     uv run basedpyright
     uv run pytest
 
-11. For any implementation slice that changes desktop-facing behavior, follow `$sky-cua:vm-tests` and read `docs/gui-desktop-test-harness.md` before choosing a VM profile. First select or confirm the guest session. For Plasma/KWin proof over the forwarded SSH port, use:
+11. For any implementation slice that changes desktop-facing behavior, follow `$sky-cua:vm-tests` and read `docs/operations/gui-desktop-test-harness.md` before choosing a VM profile. First select or confirm the guest session. For Plasma/KWin proof over the forwarded SSH port, use:
 
     ssh -p 22222 \
       -o StrictHostKeyChecking=no \
@@ -183,7 +183,7 @@ If the implementation touches shared platform model fields, additionally run:
     cargo test -p sky-cua-platform
     cargo test -p sky-cua-client
 
-Desktop-facing acceptance requires a real `testing-vm` proof for the relevant seam, selected through `$sky-cua:vm-tests` and `docs/gui-desktop-test-harness.md`. Local-only tests are enough for pure parser/model edits, but portal, input, windowing, AT-SPI selection, GNOME setup, X11/i3 metadata, or operator smoke changes must be proved in a visible guest session. The closure note must include the selected guest session and display, the exact `scripts/run_gui_testing_vm_smoke.py` command, whether build or sync was skipped, the profile name, the artifact directory or host summary path, and any cleanup residue.
+Desktop-facing acceptance requires a real `testing-vm` proof for the relevant seam, selected through `$sky-cua:vm-tests` and `docs/operations/gui-desktop-test-harness.md`. Local-only tests are enough for pure parser/model edits, but portal, input, windowing, AT-SPI selection, GNOME setup, X11/i3 metadata, or operator smoke changes must be proved in a visible guest session. The closure note must include the selected guest session and display, the exact `scripts/run_gui_testing_vm_smoke.py` command, whether build or sync was skipped, the profile name, the artifact directory or host summary path, and any cleanup residue.
 
 ## Idempotence and Recovery
 
@@ -219,7 +219,7 @@ The key `sky-cua` source references for implementation are:
     crates/sky-cua-linux/src/setup.rs
     crates/sky-cua-linux/src/windowing/registry.rs
     crates/sky-cua-client/src/operator_cli.rs
-    docs/gui-desktop-test-harness.md
+    docs/operations/gui-desktop-test-harness.md
     .agents/skills/vm-tests/SKILL.md
     scripts/run_gui_testing_vm_smoke.py
 
@@ -235,4 +235,4 @@ Do not introduce new third-party dependencies for these enhancements. The requir
 
 Revision note: Created 2026-05-17 by Codex to turn the CDUL comparison proposal into a self-contained implementation plan. The plan records that `sky-cua` should adopt small fidelity and diagnostics improvements, not CDUL's architecture wholesale.
 
-Revision note: Updated 2026-05-17 by Codex to require `$sky-cua:vm-tests` and the Arch `testing-vm` runner from `docs/gui-desktop-test-harness.md` for desktop-facing validation.
+Revision note: Updated 2026-05-17 by Codex to require `$sky-cua:vm-tests` and the Arch `testing-vm` runner from `docs/operations/gui-desktop-test-harness.md` for desktop-facing validation.
