@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "projectId": "prj_git-git-heliasar-com-bex-sky-cua_daee90ca7b",
+  "name": "sky-cua",
+  "rootPath": "/home/bex/projects/sky-cua",
+  "git": {
+    "remoteUrl": "git@git.heliasar.com:bex/sky-cua.git",
+    "defaultBranch": "main",
+    "currentBranch": "main",
+    "headSha": "5594c4b8aef7afb38718dac49972ad4b0343c37a"
+  },
+  "detected": {
+    "languages": [
+      "rust",
+      "python"
+    ],
+    "frameworks": [],
+    "packageManagers": [
+      "cargo"
+    ],
+    "commands": {
+      "typecheck": "cargo check --workspace --all-targets",
+      "lint": null,
+      "format": "cargo fmt --all --check",
+      "test": "cargo test --workspace"
+    }
+  },
+  "createdAt": "2026-05-17T07:08:11.397Z",
+  "updatedAt": "2026-05-17T07:08:11.397Z"
+}

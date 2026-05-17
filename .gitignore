@@ -9,3 +9,9 @@ __pycache__/
 /dist
 /artifacts
 /docs/computer-use-1.0.750
+.clawpatch/features/
+.clawpatch/runs/
+.clawpatch/findings/
+.clawpatch/patches/
+.clawpatch/reports/
+.clawpatch/locks/
