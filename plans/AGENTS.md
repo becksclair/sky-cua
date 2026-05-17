@@ -45,8 +45,8 @@ When an ExecPlan reaches "code complete" with live proof, retire it:
    `docs/research/YYYY-MM-<slug>.md`. One research question per file.
 3. Update the matching `ROADMAP.md` entry: check the box, link the feature
    doc, add follow-up sub-items if partial work remains.
-4. Delete the ExecPlan, or move it to `archive/plans/` if the long-form
-   ledger has archaeological value beyond what git history preserves.
+4. Delete the ExecPlan. Git history is the canonical archive; do not
+   move retired plans into an `archive/plans/` shadow tree.
 
 Do not let `plans/` accumulate postmortems. If you are adding a "Status: code
 complete" line to a plan, you are retiring it, not annotating it.

@@ -2,9 +2,8 @@
 
 ## Goal
 
-Land the documentation and knowledge-tree consolidation
-(`plans/docs_and_plans_cleanup.md`) and keep the cleanup contract
-enforced for future work.
+Land the documentation and knowledge-tree consolidation and keep the
+cleanup contract enforced for future work.
 
 ## Constraints
 
@@ -16,9 +15,10 @@ enforced for future work.
 
 ## Current State
 
-- Cleanup branch is `bex/docs-and-plans-cleanup`; all nine phases of
-  [`plans/docs_and_plans_cleanup.md`](plans/docs_and_plans_cleanup.md)
-  landed with one commit per phase boundary.
+- Documentation and knowledge-tree cleanup landed on
+  `bex/docs-and-plans-cleanup` with one commit per phase boundary.
+  Original ExecPlan retired per the lifecycle rule; see git history
+  for the per-phase record.
 - Layered layout is in place: `ROADMAP.md` at the root,
   `docs/runtime/`, `docs/features/`, `docs/operations/`,
   `docs/research/`, and `plans/` for active forward-looking design only.
@@ -29,20 +29,17 @@ enforced for future work.
   [`wayland_fallback_vision_anchors.md`](plans/wayland_fallback_vision_anchors.md),
   [`windows_capture_ladder.md`](plans/windows_capture_ladder.md), and
   [`windows_app_shell_smokes.md`](plans/windows_app_shell_smokes.md).
-  The cleanup plan itself remains in `plans/` only as a record of how
-  the cleanup was done; it can be retired into `archive/plans/` or
-  deleted at any time.
 - AGENTS contract updated at root, `docs/`, and `plans/`. Naming rule
   bans timestamp-prefixed and auto-generated filenames; lifecycle rule
   requires retiring an ExecPlan into a feature doc plus research
-  extract plus a ROADMAP update when it reaches "code complete".
+  extract plus a ROADMAP update when it reaches "code complete", then
+  deleting the plan (git history is the canonical archive).
 - Pre-PR checks (`cargo fmt --check`, `cargo test`, `uv run ruff check`,
   `uv run basedpyright`, `uv run pytest`, `python3 scripts/build_plugin.py`)
-  all clean. All 79 Markdown links in the cleaned tree resolve.
+  all clean. All Markdown links in the cleaned tree resolve.
 
 ## Working Set
 
-- ExecPlan: `plans/docs_and_plans_cleanup.md`
 - Roadmap: `ROADMAP.md`
 - Feature docs: `docs/features/`
 - Research extracts: `docs/research/`
@@ -56,14 +53,6 @@ provide feedback on what to adjust. The branch is ready for review.
 
 ## Open Questions
 
-- Whether to archive retired ExecPlans under `archive/plans/` for
-  searchable history or rely on git log alone. Currently relying on
-  git log; revisit only if grepping retired plans becomes a real
-  need.
-- Whether the agent cursor overlay feature doc should be split if
-  visible-overlay and synthetic-screenshot-cursor paths grow further
-  divergent. Currently combined; revisit if the doc passes ~200 lines.
-- Whether to address the preexisting `scripts/live_desktop_smoke.py`
-  ruff format drift in a separate small change. It was present on
-  `main` before this cleanup and is unrelated, but it does flag in
-  the pre-PR checks.
+None blocking. The preexisting `scripts/live_desktop_smoke.py` ruff
+format drift will be addressed as a separate small change on its own
+branch.
