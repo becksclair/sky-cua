@@ -37,26 +37,45 @@ this consolidation, the next round of features will fragment further.
   `docs/research/` for dated research, `goals/` retired, ExecPlans as the
   single forward-looking format, "feature docs" rather than PRD/FTDD as the
   label.
-- [ ] Phase 1: Lock the contract — AGENTS.md rule updates at root, `docs/`,
-  and `plans/`.
-- [ ] Phase 2: Create the empty skeleton — `ROADMAP.md`, `docs/features/`,
-  `docs/research/`, `docs/runtime/`, `docs/operations/`. Move existing
-  `docs/` files into the new subdirectories.
-- [ ] Phase 3: Pilot extraction — distil `plans/native_agent_cursor_overlay.md`
-  into `docs/features/agent-cursor-overlay.md` plus 1–2 research extracts.
-- [ ] Phase 4: Migrate the remaining implemented plans into feature docs and
-  research extracts; retire each from `plans/`.
-- [ ] Phase 5: Dismantle `goals/windows-app-automation/` into a feature doc
-  for shipped work plus one or more ExecPlans for open work plus research
-  extracts.
-- [ ] Phase 6: Refactor `docs/computer-use-linux-plan.md` and
-  `plans/1778463694899-nimble-knight.md` into durable docs and roadmap
-  entries.
-- [ ] Phase 7: Trim `CONTINUITY.md` to a working snapshot.
-- [ ] Phase 8: Trim `NOTES.md` to durable tactical memory under section
-  headers.
-- [ ] Phase 9: Cross-link `ROADMAP.md` to every feature doc and active
-  ExecPlan; run validation pass.
+- [x] (2026-05-17) Phase 1: Locked the contract — AGENTS.md rule updates at
+  root, `docs/`, and `plans/`, including Document Hierarchy, File Naming,
+  Feature Doc Template, Research Doc Scope, Pre-PR Checks, and Lifecycle.
+- [x] (2026-05-17) Phase 2: Created the skeleton — `ROADMAP.md`,
+  `docs/features/`, `docs/research/`, `docs/runtime/`, `docs/operations/`.
+  Moved existing `docs/` files into the new subdirectories and updated
+  cross-references.
+- [x] (2026-05-17) Phase 3: Pilot extraction — `plans/native_agent_cursor_overlay.md`
+  retired into `docs/features/agent-cursor-overlay.md` plus
+  `docs/research/2026-05-kwin-effect-discovery.md` and
+  `docs/research/2026-05-x11-shaped-window-vs-layer-shell.md`.
+- [x] (2026-05-17) Phase 4: Migrated five shipped plans into feature docs
+  and extracted three research findings. CDUL comparison research extracted
+  while the forward-looking CDUL plan stayed active.
+- [x] (2026-05-17) Phase 5: Dismantled `goals/windows-app-automation/` into
+  `docs/features/windows-uia-automation.md`,
+  `plans/windows_capture_ladder.md`, `plans/windows_app_shell_smokes.md`,
+  and `docs/research/2026-05-windows-uia-investigation.md`. Deleted the
+  `goals/` directory.
+- [x] (2026-05-17) Phase 6: Refactored `docs/computer-use-linux-plan.md`
+  into `docs/runtime/linux-architecture.md` and
+  `docs/research/2026-04-pipewire-vs-screenshot-portal.md`. Distilled
+  `plans/1778463694899-nimble-knight.md` into ROADMAP entries plus a new
+  `docs/features/codex-desktop-compat.md`, then deleted the plan.
+- [x] (2026-05-17) Phase 7: Trimmed `CONTINUITY.md` from 284 lines and
+  ~48 KB to ~60 lines under the canonical session-snapshot contract.
+- [x] (2026-05-17) Phase 8: Trimmed `NOTES.md` from 201 lines of one flat
+  list to ~190 lines under eight named section headers, with artifact
+  paths routed into feature doc Verification sections and resolved
+  investigations collapsed to research extract pointers.
+- [x] (2026-05-17) Phase 9: Cross-link validation — all 79 Markdown
+  `[text](path)` links in `ROADMAP.md`, the four `docs/` subdirectories,
+  all `plans/`, root AGENTS.md, CONTINUITY.md, NOTES.md, and README.md
+  resolve. Pre-PR checks: `cargo fmt --check`, `cargo test` (321 tests
+  passed), `uv run ruff check scripts`, `uv run basedpyright`,
+  `uv run pytest` (113 tests passed), `python3 scripts/build_plugin.py`
+  all clean. The preexisting ruff-format issue with
+  `scripts/live_desktop_smoke.py` was present on `main` before this
+  cleanup and is unrelated.
 
 ## Surprises & Discoveries
 
@@ -153,16 +172,71 @@ this consolidation, the next round of features will fragment further.
 
 ## Outcomes & Retrospective
 
-Pending implementation. At completion, record:
+Complete. All nine phases landed in one branch (`bex/docs-and-plans-cleanup`)
+with one commit per phase boundary.
 
-- Which plans were retired into feature docs.
-- Which plans were kept in `plans/` because they had open forward-looking
-  work, with the slug they kept.
-- How many research extracts landed in `docs/research/` and which seam each
-  came from.
-- Final line counts of `CONTINUITY.md` and `NOTES.md`.
-- The ROADMAP entries that materialized and the workstreams that were
-  intentionally not given an entry.
+Plans retired into feature docs:
+
+- `plans/native_agent_cursor_overlay.md` → `docs/features/agent-cursor-overlay.md`
+- `plans/compositor_cursor_hiding.md` → `docs/features/compositor-cursor-hiding.md`
+- `plans/linux_virtual_input_backend.md` → `docs/features/linux-virtual-input.md`
+- `plans/rich_atspi_readback.md` → `docs/features/atspi-rich-readback.md`
+- `plans/detached_session_env_repair.md` → `docs/features/session-env-repair.md`
+- `plans/1778571910929-proud-mountain.md` → `docs/features/kwin-x11-workspace-metadata.md`
+- `plans/1778463694899-nimble-knight.md` → `docs/features/codex-desktop-compat.md` (plus ROADMAP entries for the rest)
+
+Plans kept in `plans/` (active forward-looking):
+
+- `plans/docs_and_plans_cleanup.md` — this plan
+- `plans/cdul_linux_enhancements.md` — open CDUL adoption slices
+- `plans/wayland_fallback_vision_anchors.md` — fallback anchor work
+- `plans/windows_capture_ladder.md` — new, extracted from the Windows goal
+- `plans/windows_app_shell_smokes.md` — new, extracted from the Windows goal
+
+Research extracts landed (eight total):
+
+- `docs/research/2026-04-codex-plugin-chatgpt-auth-expedition.md` (was in `docs/`)
+- `docs/research/2026-04-pipewire-vs-screenshot-portal.md` (from `docs/computer-use-linux-plan.md`)
+- `docs/research/2026-05-kwin-effect-discovery.md` (from native cursor overlay)
+- `docs/research/2026-05-x11-shaped-window-vs-layer-shell.md` (from native cursor overlay)
+- `docs/research/2026-05-cosmic-cursor-hiding-options.md` (from compositor cursor hiding)
+- `docs/research/2026-05-ydotool-vs-direct-uinput.md` (from Linux virtual input)
+- `docs/research/2026-05-cdul-comparison.md` (from CDUL plan)
+- `docs/research/2026-05-windows-uia-investigation.md` (from the Windows goal)
+
+Other shipped artifacts:
+
+- `ROADMAP.md` populated with active workstreams across Linux desktop
+  parity, Windows parity, host portability, performance, and operator UX
+  phases plus a backlog.
+- `docs/runtime/linux-architecture.md` as the durable Linux backend
+  architecture description, replacing the half-architecture, half-ledger
+  `docs/computer-use-linux-plan.md`.
+- `goals/` directory removed entirely.
+- `CONTINUITY.md` trimmed from 284 lines (~48 KB) to ~60 lines under
+  the canonical Goal / Constraints / Current State / Working Set /
+  Next Step / Open Questions sections.
+- `NOTES.md` trimmed from 201 lines (~48 KB) of one flat list to ~190
+  lines under eight section headers, with artifact paths routed into
+  feature doc Verification sections.
+
+Workstreams intentionally not given a ROADMAP entry:
+
+- The cleanup work itself (this plan); it is the work that produced the
+  ROADMAP, not a thing to track on it.
+- Internal refactor / cleanup items that are not user-facing features.
+
+Retrospective notes:
+
+- The Markdown link validator was useful late in the process and caught
+  several dead source-path references and retired-plan link pointers
+  that I had written reflexively. Future cleanup-style migrations
+  should run the link checker after each phase, not only at the end.
+- The "Originating ExecPlan retired" line in feature docs originally
+  used `\`plans/<slug>.md\`` as a backtick path. Those paths no longer
+  exist; the phrasing was rewritten to "see git history for ..." to
+  avoid grep-and-link confusion. Worth carrying into the feature doc
+  template if this comes up again.
 
 ## Context and Orientation
 
