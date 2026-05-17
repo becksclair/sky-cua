@@ -12,6 +12,12 @@ as its own guest display, not a nested compositor in a container. Build
 `sky-cua` runtime binaries on the host and push them into the VM; the VM is a
 clean production-like smoke environment, not a Rust build worker.
 
+For agent-run VM smoke work, use the local `$vm-tests` skill at
+`.agents/skills/vm-tests/`. It points agents at this document, the current
+runner, and the testing-VM desktop-smoke reference before choosing commands, so
+the workflow starts from the active matrix instead of stale nested-X11 or Docker
+paths.
+
 ## Provisioning
 
 Provision a fresh Arch guest by copying this repository into the VM or scp-ing

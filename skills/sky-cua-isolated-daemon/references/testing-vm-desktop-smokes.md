@@ -19,9 +19,9 @@ If a command fails with `Could not resolve hostname testing-vm`, rerun with the 
 Select the intended desktop inside the guest before every real-session profile:
 
 ```bash
-ssh -p 22222 skycua@127.0.0.1 'cd /workspace && scripts/testing-vm/select-session.sh hyprland'
-ssh -p 22222 skycua@127.0.0.1 'cd /workspace && scripts/testing-vm/select-session.sh cosmic'
-ssh -p 22222 skycua@127.0.0.1 'cd /workspace && scripts/testing-vm/select-session.sh plasma'
+ssh -p 22222 skycua@127.0.0.1 'cd /workspace && sudo scripts/testing-vm/select-session.sh hyprland'
+ssh -p 22222 skycua@127.0.0.1 'cd /workspace && sudo scripts/testing-vm/select-session.sh cosmic'
+ssh -p 22222 skycua@127.0.0.1 'cd /workspace && sudo scripts/testing-vm/select-session.sh plasma'
 ```
 
 The selector rewrites the greetd/GDM target, kills stale compositor and sky-cua processes for `skycua`, and restarts the display manager. Skipping it can leave stale Wayland sockets or the previous compositor alive, which turns profile failures into misleading environment noise.

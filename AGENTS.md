@@ -51,6 +51,7 @@ python3 scripts/build_plugin.py
 - Python harnesses: `scripts/` -> [scripts/AGENTS.md](scripts/AGENTS.md)
 - App-specific guidance: `resources/app-instructions/` -> [resources/app-instructions/AGENTS.md](resources/app-instructions/AGENTS.md)
 - Bundled workflow skill: `skills/computer-use-workflows/` -> [skills/computer-use-workflows/AGENTS.md](skills/computer-use-workflows/AGENTS.md)
+- Local VM smoke skill: `.agents/skills/vm-tests/` -> [.agents/skills/vm-tests/SKILL.md](.agents/skills/vm-tests/SKILL.md)
 - Docs: `docs/` -> [docs/AGENTS.md](docs/AGENTS.md)
 - Plans: `plans/` -> [plans/AGENTS.md](plans/AGENTS.md)
 
@@ -62,6 +63,7 @@ python3 scripts/build_plugin.py
 - Find backend routing: `rg -n "execute_action|ActionName|route_action" crates`
 - Find diagnostics: `rg -n "PortalApprovalPending|CaptureBackendDowngraded|DiagnosticEntry" crates scripts`
 - Find Python harness commands: `rg -n "subprocess|codex|app-server|exec" scripts`
+- Find VM smoke workflow guidance: `rg -n "run_gui_testing_vm_smoke|testing-vm|wayland-display|desktop-env" .agents/skills docs scripts`
 - Find app guidance entries: `rg -n "set_value_fallback|aliases|entries" resources/app-instructions`
 - Find tests: `rg -n "#\\[test\\]|tokio::test|def test_" crates scripts`
 
