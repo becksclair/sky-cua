@@ -11,16 +11,20 @@ It exposes the `computer-use` tool surface and translates service responses into
 cargo test -p sky-cua-client
 cargo clippy -p sky-cua-client --all-targets
 cargo run -p sky-cua-client -- mcp
+cargo run -p sky-cua-client -- health
+cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen if-changed
 ```
 
 ## Patterns & Conventions
 
 - MCP protocol handling belongs in `src/mcp_server.rs`.
+- Operator/debug CLI parsing and JSON response rendering belong in `src/operator_cli.rs`.
 - App guidance lookup belongs in `src/heuristics.rs`.
 - Service startup and Unix-socket client behavior belong in `src/service_launcher.rs`.
 - Keep tool names stable: `list_apps`, `get_app_state`, `click`, `perform_secondary_action`, `scroll`, `drag`, `type_text`, `press_key`, `set_value`.
 - Return both operator-friendly `content` text and machine-usable `structuredContent`.
-- DO: Add compact/full output behavior near `AppStateDetail` and `compact_snapshot` in `src/mcp_server.rs`.
+- Keep operator CLI output machine-friendly JSON and preserve `clear-portal-tokens` output compatibility.
+- DO: Keep compact/full snapshot shaping near `AppStateDetail` and `compact_snapshot` in `src/output_shapes.rs`, with `src/mcp_server.rs` and `src/operator_cli.rs` reusing the same logic.
 - DO: Keep `get_app_state` summaries explicit about portal lifecycle and downgrade diagnostics.
 - DO: Use `HeuristicsRegistry` to enrich snapshots with app guidance, not hardcoded client prose.
 - DON'T: Break newline-delimited JSON-RPC support; Codex's stdio MCP path depends on it.
@@ -29,6 +33,7 @@ cargo run -p sky-cua-client -- mcp
 ## Touch Points / Key Files
 
 - MCP server and tool definitions: `src/mcp_server.rs`
+- Operator/debug CLI: `src/operator_cli.rs`
 - App-guidance registry: `src/heuristics.rs`
 - Service launcher/client: `src/service_launcher.rs`
 - CLI entrypoint: `src/main.rs`

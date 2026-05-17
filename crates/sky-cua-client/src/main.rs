@@ -1,11 +1,14 @@
 mod heuristics;
 mod mcp_server;
+mod operator_cli;
+mod output_shapes;
 mod service_launcher;
 
 use anyhow::Result;
 use heuristics::HeuristicsRegistry;
+use std::process::ExitCode;
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -13,32 +16,25 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "mcp".to_string());
-    match mode.as_str() {
-        "mcp" => {
+    match run() {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run() -> Result<ExitCode> {
+    let mode = operator_cli::parse_cli_mode(std::env::args().skip(1))?;
+    match mode {
+        operator_cli::CliMode::Mcp => {
             let service = service_launcher::ServiceClient::connect_or_spawn()?;
             let heuristics = HeuristicsRegistry::load_from_repo()?;
-            mcp_server::serve(service, heuristics)
+            mcp_server::serve(service, heuristics)?;
+            Ok(ExitCode::SUCCESS)
         }
-        "clear-portal-tokens" => {
-            let service = service_launcher::ServiceClient::connect_or_spawn()?;
-            match service.clear_portal_tokens()? {
-                sky_cua_platform::model::ServiceResponse::ResetPortalTokens {
-                    cleared,
-                    token_path,
-                    dropped_cached_session,
-                } => {
-                    println!(
-                        "cleared={} dropped_cached_session={} token_path={}",
-                        cleared, dropped_cached_session, token_path
-                    );
-                    Ok(())
-                }
-                other => {
-                    anyhow::bail!("unexpected response for clear-portal-tokens mode: {other:?}")
-                }
-            }
-        }
-        other => anyhow::bail!("unsupported sky-cua-client mode: {other}"),
+        operator_cli::CliMode::ClearPortalTokens => operator_cli::run_clear_portal_tokens(),
+        operator_cli::CliMode::Operator(command) => operator_cli::run_operator_command(command),
     }
 }

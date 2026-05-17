@@ -4,10 +4,14 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppInfo, AppSelector, AppStateSnapshot, CaptureScreenMode,
-    DiagnosticEntry, ElementNode, ServiceRequest, ServiceResponse, WindowInfo,
+    DiagnosticEntry, ServiceRequest, ServiceResponse, WindowInfo,
 };
 
 use crate::heuristics::HeuristicsRegistry;
+use crate::output_shapes::{
+    AppStateDetail, compact_snapshot, list_apps_error_diagnostic, setup_accessibility_is_error,
+    setup_window_targeting_is_error,
+};
 use crate::service_launcher::ServiceClient;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -18,12 +22,6 @@ const SERVER_VERSION: &str = "0.1.0";
 enum MessageFraming {
     ContentLength,
     JsonLine,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AppStateDetail {
-    Full,
-    Compact,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -401,7 +399,7 @@ fn handle_action_call(
     }
 }
 
-fn enrich_snapshot(heuristics: &HeuristicsRegistry, snapshot: &mut AppStateSnapshot) {
+pub(crate) fn enrich_snapshot(heuristics: &HeuristicsRegistry, snapshot: &mut AppStateSnapshot) {
     if snapshot.app_guidance.is_none()
         && let Some(focused_app) = snapshot.focused_app.as_ref()
     {
@@ -548,24 +546,6 @@ fn parse_window_target(arguments: Value) -> Result<sky_cua_platform::model::Wind
         ));
     }
     Ok(target)
-}
-
-fn setup_window_targeting_is_error(
-    report: &sky_cua_platform::model::WindowTargetingSetupReport,
-) -> bool {
-    report.windows_error.is_some()
-}
-
-fn setup_accessibility_is_error(
-    report: &sky_cua_platform::model::AccessibilitySetupReport,
-) -> bool {
-    !report.accessibility_command.ok || !report.after.readiness.can_build_accessibility_tree
-}
-
-fn list_apps_error_diagnostic(
-    diagnostics: &[sky_cua_platform::model::DiagnosticEntry],
-) -> Option<&sky_cua_platform::model::DiagnosticEntry> {
-    diagnostics.first()
 }
 
 fn action_summary(outcome: &sky_cua_platform::model::ActionOutcome) -> String {
@@ -1164,37 +1144,6 @@ fn infer_image_support_from_model_name(name: String) -> Option<bool> {
     None
 }
 
-fn compact_snapshot(snapshot: &AppStateSnapshot) -> Value {
-    let elements: Vec<Value> = snapshot.elements.iter().map(compact_element).collect();
-    json!({
-        "detail": "compact",
-        "snapshot_id": snapshot.snapshot_id,
-        "created_at": snapshot.created_at,
-        "focused_app": snapshot.focused_app,
-        "capture": snapshot.capture,
-        "agent_cursor": snapshot.agent_cursor,
-        "diagnostics": snapshot.diagnostics,
-        "app_guidance": snapshot.app_guidance,
-        "doctor_report": snapshot.doctor_report,
-        "elements": elements,
-        "element_count": snapshot.elements.len()
-    })
-}
-
-fn compact_element(element: &ElementNode) -> Value {
-    json!({
-        "element_index": element.element_index,
-        "parent_index": element.parent_index,
-        "role": element.role,
-        "name": element.name,
-        "value": element.value,
-        "state_flags": element.state_flags,
-        "semantic_actions": element.semantic_actions,
-        "bounds": element.bounds,
-        "backend_ref": element.backend_ref
-    })
-}
-
 fn read_message(reader: &mut impl BufRead) -> Result<Option<(Value, MessageFraming)>> {
     let first_line = loop {
         let mut line = String::new();
@@ -1282,8 +1231,10 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
+    use crate::output_shapes::{AppStateDetail, compact_element};
+
     use super::{
-        MessageFraming, ModelSessionInfo, action_summary, compact_element, compact_snapshot,
+        MessageFraming, ModelSessionInfo, action_summary, compact_snapshot,
         effective_capture_screen, invalid_request_tool_error, list_apps_summary,
         parse_app_state_detail, parse_model_session_info, parse_window_target, read_message,
         setup_accessibility_is_error, setup_window_targeting_is_error, snapshot_summary,
@@ -1301,15 +1252,15 @@ mod tests {
     fn parses_compact_app_state_detail() {
         assert_eq!(
             parse_app_state_detail(&json!({"detail": "compact"})),
-            super::AppStateDetail::Compact
+            AppStateDetail::Compact
         );
         assert_eq!(
             parse_app_state_detail(&json!({"detail": "full"})),
-            super::AppStateDetail::Full
+            AppStateDetail::Full
         );
         assert_eq!(
             parse_app_state_detail(&json!({})),
-            super::AppStateDetail::Full
+            AppStateDetail::Full
         );
     }
 

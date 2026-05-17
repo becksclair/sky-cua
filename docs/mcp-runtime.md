@@ -22,6 +22,23 @@ The service can also be run directly for debugging:
 ./bin/sky-cua-service daemon
 ```
 
+For local operator triage without an MCP host, `sky-cua-client` also exposes a
+JSON-first CLI surface over the same service requests:
+
+```bash
+./bin/sky-cua-client health
+./bin/sky-cua-client doctor
+./bin/sky-cua-client list-apps
+./bin/sky-cua-client list-windows
+./bin/sky-cua-client focused-window
+./bin/sky-cua-client get-app-state --detail compact --capture-screen if-changed
+./bin/sky-cua-client get-app-state --app-id org.kde.kate --detail full --capture-screen never
+```
+
+These commands pretty-print JSON to stdout and exit non-zero for service
+errors, degraded discovery responses, or setup reports that are still not
+ready.
+
 Linux bundles may also include a browser preflight wrapper:
 
 ```bash
