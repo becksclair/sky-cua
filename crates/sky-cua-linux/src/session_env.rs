@@ -5,6 +5,8 @@ use std::{
     process::Command,
 };
 
+use sky_cua_platform::model::{DoctorSessionEnvRepair, DoctorSessionEnvReport};
+
 const DESKTOP_ENV_KEYS: &[&str] = &[
     "DBUS_SESSION_BUS_ADDRESS",
     "DESKTOP_SESSION",
@@ -14,19 +16,32 @@ const DESKTOP_ENV_KEYS: &[&str] = &[
     "XDG_RUNTIME_DIR",
     "XDG_SESSION_TYPE",
 ];
+const DEFAULT_PATH_DIRS: &[&str] = &[
+    "/usr/local/sbin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
+];
 
 /// Hydrate session bus and desktop environment variables by walking the
-/// process tree and reading parent process environ files. This is critical
-/// when sky-cua-service is launched by Codex Desktop without inheriting the
-/// user's graphical session environment.
-pub fn hydrate_session_bus_env() {
-    hydrate_desktop_env_from_process_tree();
+/// process tree, the systemd user manager, and well-known runtime paths. This
+/// is critical when sky-cua-service is launched without inheriting the user's
+/// graphical session environment.
+pub fn hydrate_session_env() -> DoctorSessionEnvReport {
+    let mut report = DoctorSessionEnvReport::default();
+    normalize_path(&mut report);
+    hydrate_desktop_env_from_process_tree(&mut report);
+    hydrate_desktop_env_from_systemd(&mut report);
 
     if env_var("XDG_RUNTIME_DIR").is_none()
         && let Some(runtime) = xdg_runtime_dir()
         && runtime.exists()
     {
+        let value = runtime.display().to_string();
         unsafe { env::set_var("XDG_RUNTIME_DIR", runtime) };
+        push_repair(&mut report, "XDG_RUNTIME_DIR", "runtime-dir", Some(value));
     }
 
     if env_var("DBUS_SESSION_BUS_ADDRESS").is_none()
@@ -34,17 +49,28 @@ pub fn hydrate_session_bus_env() {
     {
         let bus = runtime.join("bus");
         if bus.exists() {
+            let value = format!("unix:path={}", bus.display());
             unsafe {
-                env::set_var(
-                    "DBUS_SESSION_BUS_ADDRESS",
-                    format!("unix:path={}", bus.display()),
-                );
+                env::set_var("DBUS_SESSION_BUS_ADDRESS", &value);
             }
+            push_repair(
+                &mut report,
+                "DBUS_SESSION_BUS_ADDRESS",
+                "runtime-bus",
+                Some(value),
+            );
         }
     }
+
+    report
 }
 
-fn hydrate_desktop_env_from_process_tree() {
+/// Backward-compatible wrapper for older callers that only need mutation.
+pub fn hydrate_session_bus_env() {
+    let _ = hydrate_session_env();
+}
+
+fn hydrate_desktop_env_from_process_tree(report: &mut DoctorSessionEnvReport) {
     for process_env in desktop_process_environments() {
         for key in DESKTOP_ENV_KEYS {
             if env_var(key).is_some() {
@@ -55,6 +81,7 @@ fn hydrate_desktop_env_from_process_tree() {
                 .filter(|value| !value.trim().is_empty())
             {
                 unsafe { env::set_var(key, value) };
+                push_repair(report, *key, "process-tree", Some(value.clone()));
             }
         }
 
@@ -62,6 +89,163 @@ fn hydrate_desktop_env_from_process_tree() {
             break;
         }
     }
+}
+
+fn hydrate_desktop_env_from_systemd(report: &mut DoctorSessionEnvReport) {
+    let Some(systemd_env) = systemd_user_environment(report) else {
+        return;
+    };
+    hydrate_desktop_env_from_map(report, "systemd-user", &systemd_env);
+}
+
+fn hydrate_desktop_env_from_map(
+    report: &mut DoctorSessionEnvReport,
+    source: &str,
+    values: &HashMap<String, String>,
+) {
+    for key in DESKTOP_ENV_KEYS {
+        if env_var(key).is_some() {
+            continue;
+        }
+        if let Some(value) = values.get(*key).filter(|value| !value.trim().is_empty()) {
+            unsafe { env::set_var(key, value) };
+            push_repair(report, *key, source, Some(value.clone()));
+        }
+    }
+}
+
+fn systemd_user_environment(
+    report: &mut DoctorSessionEnvReport,
+) -> Option<HashMap<String, String>> {
+    let output = Command::new(systemctl_path())
+        .args(["--user", "show-environment"])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => Some(parse_systemd_environment(&output.stdout)),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if !stderr.is_empty() {
+                report
+                    .notes
+                    .push(format!("systemd-user show-environment failed: {stderr}"));
+            }
+            None
+        }
+        Err(error) => {
+            report.notes.push(format!(
+                "systemd-user show-environment unavailable: {error}"
+            ));
+            None
+        }
+    }
+}
+
+fn systemctl_path() -> &'static str {
+    if Path::new("/usr/bin/systemctl").is_file() {
+        "/usr/bin/systemctl"
+    } else {
+        "systemctl"
+    }
+}
+
+fn parse_systemd_environment(bytes: &[u8]) -> HashMap<String, String> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .filter_map(parse_environment_line)
+        .collect()
+}
+
+fn parse_environment_line(line: &str) -> Option<(String, String)> {
+    let split = line.find('=')?;
+    let (key, value) = line.split_at(split);
+    if key.is_empty() || key.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some((key.to_string(), value[1..].to_string()))
+}
+
+fn normalize_path(report: &mut DoctorSessionEnvReport) {
+    let original = env::var_os("PATH");
+    let mut normalized = Vec::<PathBuf>::new();
+    if let Some(path) = original.as_ref() {
+        for entry in env::split_paths(path) {
+            if entry.as_os_str().is_empty() || normalized.contains(&entry) {
+                continue;
+            }
+            normalized.push(entry);
+        }
+    }
+    for entry in DEFAULT_PATH_DIRS {
+        let path = PathBuf::from(entry);
+        if !normalized.contains(&path) {
+            normalized.push(path);
+        }
+    }
+
+    let Ok(joined) = env::join_paths(&normalized) else {
+        report
+            .notes
+            .push("PATH normalization skipped because joined PATH was invalid".to_string());
+        return;
+    };
+    let changed = original.as_ref() != Some(&joined);
+    if changed {
+        unsafe { env::set_var("PATH", &joined) };
+        report.path_changed = true;
+        report.final_path = Some(joined.to_string_lossy().to_string());
+    } else if let Some(path) = original {
+        report.final_path = Some(path.to_string_lossy().to_string());
+    }
+}
+
+fn push_repair(
+    report: &mut DoctorSessionEnvReport,
+    key: impl Into<String>,
+    source: impl Into<String>,
+    value: Option<String>,
+) {
+    report.repaired.push(DoctorSessionEnvRepair {
+        key: key.into(),
+        source: source.into(),
+        value,
+    });
+}
+
+pub fn session_env_diagnostic(
+    report: &DoctorSessionEnvReport,
+) -> Option<sky_cua_platform::model::DiagnosticEntry> {
+    if !report.changed() {
+        return None;
+    }
+    let keys = report
+        .repaired
+        .iter()
+        .map(|repair| format!("{}:{}", repair.key, repair.source))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let details = if report.path_changed && !keys.is_empty() {
+        Some(format!("repaired={keys}; PATH normalized"))
+    } else if report.path_changed {
+        Some("PATH normalized".to_string())
+    } else if !keys.is_empty() {
+        Some(format!("repaired={keys}"))
+    } else {
+        None
+    };
+    Some(sky_cua_platform::model::DiagnosticEntry {
+        code: "SessionEnvRepaired".to_string(),
+        message:
+            "Repaired missing Linux desktop session environment for detached Computer Use launch."
+                .to_string(),
+        details,
+    })
+}
+
+pub fn required_session_env_present() -> bool {
+    let has_display = env_var("DISPLAY").is_some() || env_var("WAYLAND_DISPLAY").is_some();
+    let has_runtime = env_var("XDG_RUNTIME_DIR").is_some();
+    let has_bus = dbus_session_address().is_some();
+    has_display && has_runtime && has_bus
 }
 
 fn desktop_process_environments() -> Vec<HashMap<String, String>> {
@@ -155,6 +339,33 @@ fn user_id() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    struct EnvRestore {
+        values: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvRestore {
+        fn capture(keys: &[&'static str]) -> Self {
+            Self {
+                values: keys
+                    .iter()
+                    .map(|key| (*key, std::env::var_os(key)))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, value) in self.values.drain(..) {
+                match value {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
 
     #[test]
     fn parses_parent_pid_from_proc_status() {
@@ -194,5 +405,79 @@ mod tests {
         let environment = parse_environ(b"VALID=yes\0INVALID=\xff\0");
         assert_eq!(environment.get("VALID").map(String::as_str), Some("yes"));
         assert_eq!(environment.len(), 1);
+    }
+
+    #[test]
+    fn parses_systemd_show_environment_output() {
+        let environment = parse_systemd_environment(
+            b"DISPLAY=:1\nWAYLAND_DISPLAY=wayland-1\nBAD LINE=value\nEMPTY=\nNO_EQUALS\n",
+        );
+
+        assert_eq!(environment.get("DISPLAY").map(String::as_str), Some(":1"));
+        assert_eq!(
+            environment.get("WAYLAND_DISPLAY").map(String::as_str),
+            Some("wayland-1")
+        );
+        assert_eq!(environment.get("EMPTY").map(String::as_str), Some(""));
+        assert!(!environment.contains_key("BAD LINE"));
+        assert!(!environment.contains_key("NO_EQUALS"));
+    }
+
+    #[test]
+    #[serial]
+    fn systemd_map_fills_missing_values_without_overwriting_existing_env() {
+        let _restore = EnvRestore::capture(&["DISPLAY", "WAYLAND_DISPLAY"]);
+        unsafe {
+            std::env::set_var("DISPLAY", ":existing");
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+        let mut report = DoctorSessionEnvReport::default();
+        let values = HashMap::from([
+            ("DISPLAY".to_string(), ":systemd".to_string()),
+            ("WAYLAND_DISPLAY".to_string(), "wayland-7".to_string()),
+        ]);
+
+        hydrate_desktop_env_from_map(&mut report, "systemd-user", &values);
+
+        assert_eq!(std::env::var("DISPLAY").ok().as_deref(), Some(":existing"));
+        assert_eq!(
+            std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+            Some("wayland-7")
+        );
+        assert_eq!(report.repaired.len(), 1);
+        assert_eq!(report.repaired[0].key, "WAYLAND_DISPLAY");
+        assert_eq!(report.repaired[0].source, "systemd-user");
+    }
+
+    #[test]
+    #[serial]
+    fn normalize_path_removes_duplicates_and_appends_default_dirs() {
+        let _restore = EnvRestore::capture(&["PATH"]);
+        unsafe {
+            std::env::set_var("PATH", "/tmp:/usr/bin:/tmp");
+        }
+        let mut report = DoctorSessionEnvReport::default();
+
+        normalize_path(&mut report);
+
+        let path = std::env::var("PATH").expect("PATH should be set");
+        let parts = std::env::split_paths(&path).collect::<Vec<_>>();
+        assert_eq!(parts[0], PathBuf::from("/tmp"));
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|entry| *entry == &PathBuf::from("/tmp"))
+                .count(),
+            1
+        );
+        assert!(parts.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(parts.contains(&PathBuf::from("/bin")));
+        assert!(report.path_changed);
+        assert_eq!(report.final_path.as_deref(), Some(path.as_str()));
+    }
+
+    #[test]
+    fn session_env_diagnostic_is_absent_when_nothing_changed() {
+        assert!(session_env_diagnostic(&DoctorSessionEnvReport::default()).is_none());
     }
 }

@@ -813,6 +813,7 @@ mod tests {
                 blockers: vec![],
             },
             platform: None,
+            session_env: None,
             portal: None,
             accessibility: None,
             windowing: None,

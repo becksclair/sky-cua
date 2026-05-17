@@ -13,6 +13,7 @@ Treat the accessibility tree as structure, not gospel.
 
 - Use `list_apps` and `get_app_state` to discover the focused app, candidate controls, diagnostics, semantic actions, and the latest screenshot path.
 - Use `doctor` when readiness is unclear, especially after missing screenshots, empty accessibility trees, portal failures, or unavailable input/window targeting.
+- On Linux, if a detached launch reports unsupported environment, missing capture/input, helper-command failures, or a thin app list, inspect `doctor.session_env` and snapshot diagnostics for `SessionEnvRepaired` before deciding the desktop is unavailable.
 - Use `list_windows`, `focused_window`, and `activate_window` when the task is about choosing a desktop window, terminal, or app instance rather than interacting with a control inside the current app.
 - If `get_app_state` gives you a `screenshot_path`, inspect it with `view_image` before you commit to a target in a murky UI.
 - Start from the screenshot. The tree is optional structure, not a prerequisite for action.
@@ -32,7 +33,8 @@ Treat the accessibility tree as structure, not gospel.
 
 1. **Take a state snapshot**
    - call `get_app_state` first so you have diagnostics, element anchors, and a screenshot path when the active model supports image input
-   - after the first full orientation pass, use `detail: "compact"` unless you specifically need verbose element descriptions, environment details, or app guidance
+- after the first full orientation pass, use `detail: "compact"` unless you specifically need verbose element descriptions, environment details, or app guidance
+- if diagnostics mention `SessionEnvRepaired`, treat it as useful context that the runtime recovered missing desktop env or normalized `PATH`; continue with normal verification rather than treating it as an error
    - for rich accessibility trees, use `capture_screen: "never"` when you only need structure; re-run with `capture_screen: "always"` before screenshot-coordinate targeting or visually murky work
    - re-run it after meaningful actions instead of steering from stale geometry or stale structure
 

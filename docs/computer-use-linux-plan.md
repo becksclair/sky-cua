@@ -52,6 +52,8 @@ The goal is not to pretend Linux parity is magically finished. The goal is to st
 - [x] (2026-05-17 04:15Z) Added rich Linux AT-SPI readback to snapshots: `ElementNode.value` now carries high-signal text/value summaries, `ElementNode.text` carries bounded focused/editable text metadata, `ElementNode.numeric_value` carries AT-SPI Value data, and compact `get_app_state` preserves those fields for agent verification loops.
 - [x] (2026-05-17 04:15Z) Hardened readback privacy and runtime stability: password/protected/name-sensitive controls suppress content and are not text-fetched, normal missing AT-SPI Text/Value proxies remain absent metadata instead of snapshot failures, and desktop-specific window probes are skipped only when the detected compositor positively points elsewhere.
 - [x] (2026-05-17 04:15Z) Proved readback on the Arch `testing-vm` Plasma session with `scripts/live_desktop_smoke.py`, `scripts/live_codex_exec_text_readback_smoke.py`, and `scripts/live_app_server_text_readback_smoke.py`. The agent smokes assert transcript-level `get_app_state` evidence for the stale initial value and the replacement value, not just a final model claim.
+- [x] (2026-05-17 08:02Z) Added detached Linux session-env repair in the client/service runtime: `PATH` normalization, process-tree and systemd-user environment hydration, runtime-dir and D-Bus bus recovery, structured `doctor.session_env`, and `SessionEnvRepaired` diagnostics.
+- [x] (2026-05-17 08:02Z) Added and live-proved detached session-env smokes for direct MCP, Codex exec, and rich app-server lanes: `scripts/live_session_env_smoke.py`, `scripts/live_codex_exec_session_env_smoke.py`, and `scripts/live_app_server_session_env_smoke.py`.
 
 ## Current Status Ledger
 
@@ -60,6 +62,7 @@ Complete:
 - Core architecture: Rust workspace, split MCP client/service, Unix-socket IPC, plugin wrappers, and installable bundle shape.
 - Linux app state: environment probing, AT-SPI app discovery, focused-app selection, flattened snapshots, screenshot capture, and structured diagnostics.
 - Linux readback: focused/editable AT-SPI text, numeric Value metadata, sensitive-content suppression, and compact-state preservation are implemented for agent-visible verification loops.
+- Detached Linux session-env repair: client startup and service backend hydration recover missing desktop variables and normalized command paths, with `doctor.session_env` and `SessionEnvRepaired` diagnostics proving when repair happened.
 - Action routing: semantic AT-SPI actions, snapshot-scoped target resolution, physical Wayland portal actions, X11/XTest fallback actions, and policy-gated `set_value` fallback.
 - Capture model: PipeWire primary image path, Screenshot fallback, explicit `capture.image_backend`, and downgrade diagnostics.
 - X11/XWayland fallback: window discovery, focused-window fallback snapshots, synthetic bounds, recovered child regions, structural region roles, and descendant-region targeting.
@@ -71,17 +74,20 @@ Complete:
 - OpenCode VM harness prep: the Arch testing VM now installs `opencode-ai@1.14.51`, `scripts/testing-vm/sync-opencode-to-vm.sh` syncs host OpenCode config/auth without DB/log/snapshot state, and `opencode models openai` succeeds in the guest.
 - Documentation and plan state: current docs, OpenCode VM prep, and workflow skill guidance have been refreshed.
 - Agent workflow guidance: the bundled computer-use skill and Codex harness prompts now tell agents to inspect `value` / `text.content` before replacing text and reacquire `get_app_state` to verify edits after `set_value`, `type_text`, or `press_key`.
+- Session-env workflow guidance: the bundled computer-use skill now tells Linux agents to inspect `doctor.session_env` and `SessionEnvRepaired` diagnostics before declaring a detached desktop unavailable.
 
 Partial:
 
 - Browser automation: Chrome extension resources, native host binary, native-host manifests, Codex Desktop Browser Use visibility, the official-extension bridge, generic Browser Use request forwarding, heartbeat handling, and rollout/session completion are implemented. First-class `browser_*` MCP tools remain intentionally deferred while Browser Use is provided by the companion bundled plugin.
 - Cross-desktop support: live VM proof now exists for COSMIC helper listing plus patched and no-patch cursor modes, the GNOME Shell extension cursor path, Hyprland layer-shell plus compositor hide, the KWin effect system-install path, and i3/X11 overlay plus XFixes hide/show. The remaining desktop-proof work is narrower: broader registry/list/focus/terminal-enrichment validation on some desktops and routine reruns after harness or compositor changes.
 - Doctor/setup hardening: the tools exist and report actionable state, but more real launch environments are needed to refine blocker wording and recovery paths.
+- Detached launch breadth: direct MCP, Codex exec, and app-server recovery are proven on the current KDE/Plasma environment. Other hosts and desktops should keep using the same `doctor.session_env` signal as broader launch modes are tested.
 - Regression harnessing: live KDE, GNOME, COSMIC, Hyprland, and X11 compositor cursor proofs now exist alongside Krita, Kate, downgrade, app-server, packaging, and COSMIC helper smokes. The Arch testing-VM runner/provisioner is the accepted Linux desktop matrix lane.
 
 Pending:
 
 - Broaden the Arch testing-VM desktop matrix beyond cursor/readback proof: re-smoke registry/list/focus/terminal-enrichment paths on KDE, GNOME, COSMIC, Hyprland, and i3 as those backends evolve.
+- Add detached session-env smoke coverage to the curated VM/profile set after choosing where stripped-env agent runs belong in the matrix.
 - Register and smoke the `sky-cua` MCP runtime under OpenCode in the Arch testing VM after the non-Codex harness lane starts.
 - Refresh the accepted compositor artifact set whenever the VM runner, session launcher, or compositor-specific adapters change.
 - Add any future first-class `browser_*` MCP tools only after deciding to move browser automation out of Codex Desktop's existing Browser Use companion flow.
@@ -122,6 +128,10 @@ Pending:
   Evidence: the first pure-X11 pointer smoke failed with “no physical input backend is available” until the service started probing the environment for action requests that do not carry a `snapshot_id`.
 - Observation: the client-side IPC timeout is part of the real UX on Wayland, not an implementation footnote.
   Evidence: unattended KDE Wayland `get_app_state` requests timed out at the old fifteen-second socket read limit while waiting on a portal-backed round trip, so the client timeout had to be widened to sixty seconds.
+- Observation: `sky-cua-client` finding `uname` or other basic helpers is not the problem. The real failure class is a detached host `PATH` that omits normal system command directories, causing desktop probes such as `systemctl`, `busctl`, `gnome-shell`, KWin helpers, and X11 tools to fail by lookup before they can report useful desktop state.
+  Evidence: the session-env repair normalizes `PATH` with `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin`, and `/bin`, then the live stripped-env smokes prove `doctor.session_env.path_changed` or repaired keys before desktop interaction.
+- Observation: the first `live_session_env_smoke.py` failure was a harness race, not a failed desktop action.
+  Evidence: after pressing Enter the smoke called `poll()` once and terminated `zenity` if it had not exited yet; waiting for the dialog to exit made the same direct MCP workflow pass and produce `artifacts/session-env-smoke/20260517T080206Z`.
 - Observation: a fresh service and a stale service are not morally equivalent once portal state is involved.
   Evidence: the previously failing live KDE Wayland smoke passed immediately against a freshly started foreground service; after adding portal-session reset/retry and startup timeouts, the full Wayland smoke re-passed through the normal MCP client path as well.
 - Observation: “approval pending” is a distinct user-facing state, not just a slower denial.

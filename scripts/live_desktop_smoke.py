@@ -42,8 +42,14 @@ class McpResponse:
 
 
 class McpClient:
-    def __init__(self, argv: list[str], *, extra_env: dict[str, str] | None = None) -> None:
-        env = dict(os.environ)
+    def __init__(
+        self,
+        argv: list[str],
+        *,
+        extra_env: dict[str, str] | None = None,
+        base_env: dict[str, str] | None = None,
+    ) -> None:
+        env = dict(os.environ if base_env is None else base_env)
         env.setdefault("SKY_CUA_REPO_ROOT", str(REPO_ROOT))
         if extra_env:
             env.update(extra_env)

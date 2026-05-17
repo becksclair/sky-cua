@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "session_env_repair_seen", "submitted_value", "reason"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "blocked", "failed"]
+    },
+    "session_env_repair_seen": {
+      "type": "boolean"
+    },
+    "submitted_value": {
+      "type": ["string", "null"]
+    },
+    "reason": {
+      "type": ["string", "null"]
+    }
+  }
+}

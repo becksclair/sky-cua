@@ -2,15 +2,17 @@ use std::{env, fs, path::Path, path::PathBuf, process::Command};
 
 use sky_cua_platform::model::{
     BrowserIntegrationReport, DoctorAccessibilityReport, DoctorCheck, DoctorInputReport,
-    DoctorPlatformReport, DoctorPortalReport, DoctorReadiness, DoctorReport, DoctorWindowingReport,
-    EnvironmentInfo, InputBackendKind, WindowBackendProbe,
+    DoctorPlatformReport, DoctorPortalReport, DoctorReadiness, DoctorReport,
+    DoctorSessionEnvReport, DoctorWindowingReport, EnvironmentInfo, InputBackendKind,
+    WindowBackendProbe,
 };
 
 use crate::{session_env, windowing};
 
-pub fn build_doctor_report(environment: EnvironmentInfo) -> DoctorReport {
-    session_env::hydrate_session_bus_env();
-
+pub fn build_doctor_report(
+    environment: EnvironmentInfo,
+    session_env_report: DoctorSessionEnvReport,
+) -> DoctorReport {
     let window_probes = windowing::probe_backends(&environment);
     let can_list_windows = window_probes.iter().any(|probe| probe.can_list_windows);
     let can_target_windows = window_probes.iter().any(|probe| probe.can_focus_windows);
@@ -53,6 +55,7 @@ pub fn build_doctor_report(environment: EnvironmentInfo) -> DoctorReport {
     ));
     checks.push(portal_interface_check("org.freedesktop.portal.ScreenCast"));
     checks.push(gnome_shell_version_check());
+    checks.push(session_env_check());
 
     let can_build_accessibility_tree = can_build_accessibility_tree(&accessibility);
     let can_capture_screen =
@@ -113,6 +116,7 @@ pub fn build_doctor_report(environment: EnvironmentInfo) -> DoctorReport {
             display: environment.display.clone(),
             wayland_display: environment.wayland_display.clone(),
         }),
+        session_env: Some(session_env_report),
         portal: Some(portal),
         accessibility: Some(accessibility),
         windowing: Some(DoctorWindowingReport {
@@ -134,6 +138,19 @@ pub fn build_doctor_report(environment: EnvironmentInfo) -> DoctorReport {
         }),
         input: Some(input),
         browser_integration: Some(browser_integration),
+    }
+}
+
+fn session_env_check() -> DoctorCheck {
+    let ok = session_env::required_session_env_present();
+    DoctorCheck {
+        name: "session_env".to_string(),
+        ok,
+        detail: if ok {
+            "display, runtime dir, and session bus are available after repair".to_string()
+        } else {
+            "desktop session env is incomplete after repair".to_string()
+        },
     }
 }
 

@@ -162,7 +162,7 @@ fn handle_tool_call(
             ServiceResponse::Doctor { report } => Ok(json!({
                 "content": [{
                     "type": "text",
-                    "text": report.readiness.recommended_next_step
+                    "text": doctor_summary(&report)
                 }],
                 "structuredContent": report,
                 "isError": false
@@ -639,6 +639,18 @@ fn not_initialized(id: Value) -> Value {
     })
 }
 
+fn doctor_summary(report: &sky_cua_platform::model::DoctorReport) -> String {
+    let mut summary = report.readiness.recommended_next_step.clone();
+    if report
+        .session_env
+        .as_ref()
+        .is_some_and(sky_cua_platform::model::DoctorSessionEnvReport::changed)
+    {
+        summary.push_str(" SessionEnvRepaired: detached desktop session environment was repaired.");
+    }
+    summary
+}
+
 fn tool_definitions(model: &ModelSessionInfo) -> Value {
     let can_receive_images = model.can_receive_images();
     let point_description = if can_receive_images {
@@ -654,7 +666,7 @@ fn tool_definitions(model: &ModelSessionInfo) -> Value {
     json!([
         {
             "name": "doctor",
-            "description": "Report Computer Use desktop integration readiness, including environment, semantic, capture, and input backend checks.",
+            "description": "Report Computer Use desktop integration readiness, including environment, detached session-env repair diagnostics, semantic, capture, and input backend checks.",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -681,7 +693,7 @@ fn tool_definitions(model: &ModelSessionInfo) -> Value {
         },
         {
             "name": "list_apps",
-            "description": "List currently exposed desktop applications from the active platform window and accessibility backends.",
+            "description": "List currently exposed desktop applications from the active platform window and accessibility backends, with diagnostics when detached session-env repair affected runtime readiness.",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -718,9 +730,9 @@ fn tool_definitions(model: &ModelSessionInfo) -> Value {
         {
             "name": "get_app_state",
             "description": if can_receive_images {
-                "Build a structured desktop app-state snapshot with environment diagnostics, flattened accessibility elements, optional screen capture, and readback for focused or editable text/value controls when the backend can prove it."
+                "Build a structured desktop app-state snapshot with environment and detached session-env diagnostics, flattened accessibility elements, optional screen capture, and readback for focused or editable text/value controls when the backend can prove it."
             } else {
-                "Build a structured desktop app-state snapshot with environment diagnostics, flattened accessibility elements, and readback for focused or editable text/value controls when the backend can prove it. This session's model does not support image input, so screen capture is disabled."
+                "Build a structured desktop app-state snapshot with environment and detached session-env diagnostics, flattened accessibility elements, and readback for focused or editable text/value controls when the backend can prove it. This session's model does not support image input, so screen capture is disabled."
             },
             "inputSchema": {
                 "type": "object",
@@ -1391,6 +1403,7 @@ mod tests {
                 blockers: Vec::new(),
             },
             platform: None,
+            session_env: None,
             portal: None,
             accessibility: None,
             windowing: None,
@@ -2086,6 +2099,7 @@ mod tests {
                 blockers: Vec::new(),
             },
             platform: None,
+            session_env: None,
             portal: None,
             accessibility: None,
             windowing: None,

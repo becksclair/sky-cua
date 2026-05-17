@@ -68,6 +68,15 @@ Codex satisfies this through `.codex-plugin/plugin.json` plus `.mcp.json`.
 Other hosts, including OpenCode, should map their own install and instruction
 mechanisms onto the same pieces.
 
+Linux detached launches are now repaired defensively at runtime, so a host that
+fails to forward those variables is no longer automatically fatal. The client
+normalizes `PATH`, probes `/run/user/<uid>`, X11 sockets, logind, and the
+systemd user manager before spawning `sky-cua-service`; the Linux service then
+hydrates the same session state again before probing portals, AT-SPI, KWin, and
+other desktop backends. The repair is observable through `doctor.session_env`,
+the `SessionEnvRepaired` diagnostic, and `list_apps` diagnostics. This is a
+recovery path, not a reason for host adapters to omit the environment allowlist.
+
 For Codex Desktop compatibility, the shipped plugin presents one active
 `computer-use` MCP server while still launching the `sky-cua-client mcp`
 runtime. Browser Use remains a companion integration: the adapter syncs
@@ -175,6 +184,13 @@ The host-facing tools are the portable product contract. Current tools:
 - physical or hybrid actions: `click`, `perform_secondary_action`, `scroll`,
   `drag`, `type_text`, `press_key`, and `set_value`
 
+`doctor` includes Linux `session_env` repair details when the runtime had to
+recover detached desktop state. `repaired` records which keys were filled and
+from which source, `path_changed` reports whether `PATH` was normalized, and
+`final_path` records the effective path after repair. Tool text summaries and
+snapshot/list diagnostics may include `SessionEnvRepaired`; treat that as
+useful context that the runtime recovered, not as an error by itself.
+
 Action tools accept `snapshot_id` from the latest `get_app_state` result. With
 `snapshot_id`, explicit coordinates are screenshot pixel coordinates from that
 snapshot image. Without `snapshot_id`, supported coordinate actions use the
@@ -206,6 +222,11 @@ Use these lanes when validating changes:
 - Codex adapter lane: bundle/install checks and app-server smokes such as
   `scripts/build_plugin.py`, `scripts/install_plugin.py`, and
   `scripts/live_app_server_smoke.py`.
+- Detached Linux session-env lane: `scripts/live_session_env_smoke.py` proves
+  direct MCP recovery from a stripped desktop environment, while
+  `scripts/live_codex_exec_session_env_smoke.py` and
+  `scripts/live_app_server_session_env_smoke.py` prove that agent harnesses can
+  see `SessionEnvRepaired` or `session_env` before operating the desktop.
 - Text-readback lane: `scripts/live_desktop_smoke.py` covers direct `zenity`
   readback before and after `set_value` / `type_text`; `scripts/live_codex_exec_text_readback_smoke.py`
   and `scripts/live_app_server_text_readback_smoke.py` prove agents consume

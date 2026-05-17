@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::diagnostics::BackendError;
 use crate::model::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
-    CaptureBackendKind, CaptureScreenMode, DoctorCheck, DoctorReadiness, DoctorReport,
-    EnvironmentInfo, HeuristicMatch, InputBackendKind, PortalTokenResetOutcome,
+    CaptureBackendKind, CaptureScreenMode, DiagnosticEntry, DoctorCheck, DoctorReadiness,
+    DoctorReport, EnvironmentInfo, HeuristicMatch, InputBackendKind, PortalTokenResetOutcome,
     SemanticBackendKind, WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
 
@@ -67,6 +67,7 @@ pub trait DesktopBackend: Send + Sync {
                 blockers,
             },
             platform: None,
+            session_env: None,
             portal: None,
             accessibility: None,
             windowing: None,
@@ -75,6 +76,9 @@ pub trait DesktopBackend: Send + Sync {
         })
     }
     async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError>;
+    fn session_env_diagnostics(&self) -> Vec<DiagnosticEntry> {
+        Vec::new()
+    }
     async fn setup_accessibility(&self) -> Result<AccessibilitySetupReport, BackendError> {
         Err(BackendError::new(
             crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,

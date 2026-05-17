@@ -20,6 +20,9 @@ packaged adapter around that runtime, not the runtime boundary itself.
   `SKY_CUA_SERVICE_TCP_ADDR`
 - Wayland/X11 environment probing, AT-SPI app discovery, and targeted
   `get_app_state` selection by app identity or window title
+- defensive Linux detached-session repair: client/service startup can recover
+  missing desktop env and normalize `PATH`, with `doctor.session_env` and
+  `SessionEnvRepaired` diagnostics showing what changed
 - Wayland portal session reuse for ScreenCast metadata and RemoteDesktop input,
   including restore-token persistence under the per-user state directory
 - in-process PipeWire frame capture from the active ScreenCast session, with
@@ -75,6 +78,15 @@ Run the runtime pieces directly:
 ```bash
 ./bin/sky-cua-client mcp
 ./bin/sky-cua-service daemon
+```
+
+When touching Linux launch or environment repair, run the detached session
+smokes as well:
+
+```bash
+python3 scripts/live_session_env_smoke.py
+python3 scripts/live_app_server_session_env_smoke.py
+python3 scripts/live_codex_exec_session_env_smoke.py
 ```
 
 On Windows, use the `.exe` binaries:

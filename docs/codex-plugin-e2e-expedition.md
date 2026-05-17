@@ -297,10 +297,44 @@ fallback-only screenshot interaction, but its live harness has been retired.
 Current installed-plugin acceptance should use `scripts/live_app_server_smoke.py`
 and other active `live_*_smoke.py` entrypoints.
 
+## 2026-05-17 Detached Session-Env Addendum
+
+Codex and other MCP hosts can launch `computer-use` without the full Linux
+desktop session environment. The runtime now repairs that detached state in both
+the MCP client and Linux service instead of relying only on host-side env
+forwarding.
+
+Current session-env truth:
+
+- `sky-cua-client` normalizes `PATH` and forwards reconstructed desktop
+  variables before spawning `sky-cua-service`.
+- `sky-cua-service` rehydrates the Linux backend from the process tree,
+  systemd user manager, `/run/user/<uid>`, and the runtime bus path before
+  probing desktop backends.
+- `doctor` exposes a structured `session_env` report, and MCP text/diagnostics
+  surface `SessionEnvRepaired` when repair changed the runtime.
+- The bundled workflow skill tells agents to treat `SessionEnvRepaired` as
+  recovered context and continue normal desktop verification.
+
+Proof artifacts:
+
+- Direct MCP: `artifacts/session-env-smoke/20260517T080206Z`
+- Rich app-server: `artifacts/codex-e2e/app-server-session-env-smoke/20260517T060242Z`
+- Codex exec: `artifacts/codex-e2e/codex-session-env-smoke/20260517T060439Z`
+
+The original `scripts/live_session_env_smoke.py` failure was not a runtime
+failure. The harness killed the `zenity` dialog immediately after sending Enter
+because it polled once and terminated if the process had not exited yet. The
+shared helper now waits for dialog submission before cleanup. The live smokes
+prove both the repair signal and the actual submitted value.
+
 ## Related files
 
 - `scripts/_plugin_bundle.py`
 - `scripts/_codex_exec.py`
 - `scripts/live_codex_exec_smoke.py`
+- `scripts/live_session_env_smoke.py`
+- `scripts/live_codex_exec_session_env_smoke.py`
+- `scripts/live_app_server_session_env_smoke.py`
 - `CONTINUITY.md`
 - `NOTES.md`

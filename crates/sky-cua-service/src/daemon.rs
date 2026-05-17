@@ -81,15 +81,22 @@ impl ServiceDaemon {
                     Err(error) => return error_response(error.code, error.message),
                 };
                 match self.backend.list_apps().await {
-                    Ok(apps) => ServiceResponse::ListApps {
-                        environment,
-                        apps,
-                        diagnostics: Vec::new(),
-                    },
+                    Ok(apps) => {
+                        let diagnostics = self.backend.session_env_diagnostics();
+                        ServiceResponse::ListApps {
+                            environment,
+                            apps,
+                            diagnostics,
+                        }
+                    }
                     Err(error) => ServiceResponse::ListApps {
                         environment,
                         apps: Vec::new(),
-                        diagnostics: vec![error.diagnostic()],
+                        diagnostics: {
+                            let mut diagnostics = self.backend.session_env_diagnostics();
+                            diagnostics.push(error.diagnostic());
+                            diagnostics
+                        },
                     },
                 }
             }
@@ -375,6 +382,7 @@ fn desktop_env_values_present() -> BTreeMap<String, String> {
         "DBUS_SESSION_BUS_ADDRESS",
         "DESKTOP_SESSION",
         "DISPLAY",
+        "PATH",
         "WAYLAND_DISPLAY",
         "XDG_CURRENT_DESKTOP",
         "XDG_RUNTIME_DIR",

@@ -45,6 +45,11 @@ Build a Linux-first Codex Computer Use plugin with a split Rust client/service a
   - `scripts/live_codex_exec_text_readback_smoke.py` passed with artifact `/workspace/artifacts/codex-e2e/codex-text-readback-smoke/20260517T041212Z`.
   - `scripts/live_app_server_text_readback_smoke.py` passed with artifact `/workspace/artifacts/codex-e2e/app-server-text-readback-smoke/20260517T041242Z`.
   - both agent smokes assert transcript-level `get_app_state` evidence for `stale-readback` and later `verified-readback`.
+- Detached Linux session-env repair is implemented and proved:
+  - `sky-cua-client` repairs startup state before service spawn by normalizing `PATH`, probing `/run/user/<uid>`, X11 sockets, logind, and `systemctl --user show-environment`.
+  - `sky-cua-service` rehydrates the Linux backend again from process-tree/systemd/runtime-dir/session-bus sources before desktop probing.
+  - `doctor.session_env` and `SessionEnvRepaired` diagnostics expose the recovery to operators and agents.
+  - live proof artifacts are direct MCP `artifacts/session-env-smoke/20260517T080206Z`, app-server `artifacts/codex-e2e/app-server-session-env-smoke/20260517T060242Z`, and Codex exec `artifacts/codex-e2e/codex-session-env-smoke/20260517T060439Z`.
 - `get_app_state` now carries live ScreenCast stream metadata plus a real screenshot reference from an in-process PipeWire decode under `/run/user/1000/sky-cua/captures/*.png`, with Screenshot-portal capture only as fallback.
 - Snapshot capture metadata now distinguishes the configured capture lane from the actual image-producing lane:
   - `capture.backend` is the primary lane (`portal_pipe_wire`, `x11`, etc.)

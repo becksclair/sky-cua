@@ -106,6 +106,23 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-t
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all
 ```
 
+Detached session-env repair is not yet a VM runner profile, but it is now a
+first-class Linux launch seam. Use the local live smokes when changing client
+startup, service health checks, Linux environment probing, or Codex harness
+env-scrubbing:
+
+```bash
+python3 scripts/live_session_env_smoke.py
+python3 scripts/live_codex_exec_session_env_smoke.py
+python3 scripts/live_app_server_session_env_smoke.py
+```
+
+These smokes intentionally strip desktop variables and put a minimal `PATH` in
+front of the runtime. Passing means the agent or direct MCP client saw
+`doctor.session_env` / `SessionEnvRepaired`, found the visible `zenity` dialog,
+submitted `session-env-ok`, and the harness observed that exact value from the
+dialog process.
+
 Use `--skip-host-build` only when the synced runtime artifacts are already the
 ones under test. Use `--skip-sync` only for remote debugging after confirming
 the VM checkout is current.

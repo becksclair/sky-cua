@@ -393,6 +393,33 @@ pub struct DoctorPlatformReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DoctorSessionEnvRepair {
+    pub key: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DoctorSessionEnvReport {
+    #[serde(default)]
+    pub repaired: Vec<DoctorSessionEnvRepair>,
+    #[serde(default)]
+    pub path_changed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_path: Option<String>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+impl DoctorSessionEnvReport {
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        !self.repaired.is_empty() || self.path_changed
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DoctorPortalReport {
     pub screencast_version: Option<u32>,
     pub remote_desktop_version: Option<u32>,
@@ -454,6 +481,8 @@ pub struct DoctorReport {
     pub readiness: DoctorReadiness,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<DoctorPlatformReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_env: Option<DoctorSessionEnvReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub portal: Option<DoctorPortalReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -792,11 +821,11 @@ mod tests {
         ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
         AgentCursorPlane, AgentCursorPoint, AgentCursorState, AgentCursorSystemCursorBackendKind,
         AppStateSnapshot, CaptureBackendKind, CaptureInfo, CoordinateSpace, DoctorCheck,
-        DoctorReadiness, DoctorReport, ElementNode, ElementNumericValueReadback,
-        ElementTextReadback, ElementTextSelection, EnvironmentInfo, InputBackendKind,
-        ModelImageFormat, PixelSize, PortalCapabilities, RectF, SemanticBackendKind,
-        ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport, ToolAvailability,
-        ToolCapabilities, WindowInfo, WindowTargetingSetupReport,
+        DoctorReadiness, DoctorReport, DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode,
+        ElementNumericValueReadback, ElementTextReadback, ElementTextSelection, EnvironmentInfo,
+        InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
+        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport,
+        ToolAvailability, ToolCapabilities, WindowInfo, WindowTargetingSetupReport,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -1043,6 +1072,7 @@ mod tests {
                 blockers: Vec::new(),
             },
             platform: None,
+            session_env: None,
             portal: None,
             accessibility: None,
             windowing: None,
@@ -1071,6 +1101,65 @@ mod tests {
             rendered["snapshot"]["doctor_report"]["readiness"]["can_build_accessibility_tree"],
             true
         );
+    }
+
+    #[test]
+    fn doctor_report_deserializes_without_session_env() {
+        let value = serde_json::json!({
+            "environment": {
+                "session_kind": "unsupported",
+                "compositor": null,
+                "desktop_environment": null,
+                "capture_backend": "none",
+                "input_backend": "none",
+                "semantic_backend": "none",
+                "portal_capabilities": {
+                    "screencast_version": null,
+                    "remote_desktop_version": null,
+                    "screenshot_version": null,
+                    "available_source_types": null,
+                    "available_cursor_modes": null,
+                    "available_device_types": null
+                },
+                "xdg_session_type": null,
+                "display": null,
+                "wayland_display": null
+            },
+            "checks": [],
+            "readiness": {
+                "can_register_mcp_tools": true,
+                "can_build_accessibility_tree": false,
+                "can_capture_screen": false,
+                "can_send_input": false,
+                "recommended_next_step": "not ready",
+                "blockers": []
+            }
+        });
+
+        let report: DoctorReport =
+            serde_json::from_value(value).expect("old doctor JSON should deserialize");
+
+        assert!(report.session_env.is_none());
+    }
+
+    #[test]
+    fn doctor_report_serializes_populated_session_env() {
+        let report = DoctorSessionEnvReport {
+            repaired: vec![DoctorSessionEnvRepair {
+                key: "WAYLAND_DISPLAY".to_string(),
+                source: "systemd-user".to_string(),
+                value: Some("wayland-0".to_string()),
+            }],
+            path_changed: true,
+            final_path: Some("/usr/bin:/bin".to_string()),
+            notes: Vec::new(),
+        };
+
+        let value = serde_json::to_value(report).expect("session env report should serialize");
+
+        assert_eq!(value["repaired"][0]["key"], "WAYLAND_DISPLAY");
+        assert_eq!(value["path_changed"], true);
+        assert_eq!(value["final_path"], "/usr/bin:/bin");
     }
 
     #[test]

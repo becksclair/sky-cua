@@ -26,10 +26,28 @@ const DESKTOP_ENV_KEYS: &[&str] = &[
     "DBUS_SESSION_BUS_ADDRESS",
     "DESKTOP_SESSION",
     "DISPLAY",
+    "PATH",
     "WAYLAND_DISPLAY",
     "XDG_CURRENT_DESKTOP",
     "XDG_RUNTIME_DIR",
     "XDG_SESSION_TYPE",
+];
+const CURRENT_ENV_HEALTH_KEYS: &[&str] = &[
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DESKTOP_SESSION",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+];
+const DEFAULT_PATH_DIRS: &[&str] = &[
+    "/usr/local/sbin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
 ];
 #[derive(Debug, Clone)]
 pub struct ServiceClient {
@@ -139,7 +157,79 @@ fn probe_desktop_env_vars() -> Vec<(String, String)> {
         }
     }
 
+    if let Some(systemd_env) = systemd_user_environment() {
+        for key in DESKTOP_ENV_KEYS {
+            if *key == "PATH" {
+                continue;
+            }
+            if needs(key)
+                && let Some(value) = systemd_env
+                    .get(*key)
+                    .filter(|value| !value.trim().is_empty())
+                && !found.iter().any(|(found_key, _)| found_key == key)
+            {
+                found.push(((*key).to_string(), value.clone()));
+            }
+        }
+    }
+
+    if let Some(path) = normalized_path() {
+        found.push(("PATH".to_string(), path));
+    }
+
     found
+}
+
+fn systemd_user_environment() -> Option<std::collections::HashMap<String, String>> {
+    let output = std::process::Command::new(systemctl_path())
+        .args(["--user", "show-environment"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let split = line.find('=')?;
+                let (key, value) = line.split_at(split);
+                if key.is_empty() || key.chars().any(char::is_whitespace) {
+                    return None;
+                }
+                Some((key.to_string(), value[1..].to_string()))
+            })
+            .collect(),
+    )
+}
+
+fn systemctl_path() -> &'static str {
+    if Path::new("/usr/bin/systemctl").is_file() {
+        "/usr/bin/systemctl"
+    } else {
+        "systemctl"
+    }
+}
+
+fn normalized_path() -> Option<String> {
+    let original = std::env::var_os("PATH");
+    let mut paths = Vec::<PathBuf>::new();
+    if let Some(path) = original.as_ref() {
+        for entry in std::env::split_paths(path) {
+            if entry.as_os_str().is_empty() || paths.contains(&entry) {
+                continue;
+            }
+            paths.push(entry);
+        }
+    }
+    for entry in DEFAULT_PATH_DIRS {
+        let path = PathBuf::from(entry);
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    let joined = std::env::join_paths(paths).ok()?;
+    (original.as_ref() != Some(&joined)).then(|| joined.to_string_lossy().to_string())
 }
 
 fn probe_x11_display() -> Option<String> {
@@ -316,7 +406,7 @@ fn ensure_health_satisfies_desktop_env(
         return Ok(());
     }
 
-    let mut required = DESKTOP_ENV_KEYS
+    let mut required = CURRENT_ENV_HEALTH_KEYS
         .iter()
         .copied()
         .filter_map(|key| {
@@ -580,6 +670,45 @@ mod tests {
     }
 
     #[test]
+    fn startup_health_rejects_service_missing_repaired_path() {
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::new(),
+        };
+        let desktop_vars = vec![("PATH".to_string(), "/tmp:/usr/bin".to_string())];
+
+        let error = ensure_health_satisfies_desktop_env(&response, &desktop_vars)
+            .expect_err("stale service PATH should be rejected");
+
+        assert!(error.to_string().contains("PATH"));
+    }
+
+    #[test]
+    fn normalized_path_preserves_order_and_appends_defaults() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("PATH", "/tmp:/usr/bin:/tmp");
+        }
+
+        let path = normalized_path().expect("PATH should need normalization");
+
+        restore_env("PATH", old_path);
+        let parts = std::env::split_paths(&path).collect::<Vec<_>>();
+        assert_eq!(parts[0], PathBuf::from("/tmp"));
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|entry| *entry == &PathBuf::from("/tmp"))
+                .count(),
+            1
+        );
+        assert!(parts.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(parts.contains(&PathBuf::from("/bin")));
+    }
+
+    #[test]
     fn startup_health_rejects_service_missing_client_desktop_env() {
         let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
@@ -776,6 +905,7 @@ while True:
                         "DBUS_SESSION_BUS_ADDRESS",
                         "DESKTOP_SESSION",
                         "DISPLAY",
+                        "PATH",
                         "WAYLAND_DISPLAY",
                         "XDG_CURRENT_DESKTOP",
                         "XDG_RUNTIME_DIR",

@@ -21,12 +21,15 @@ use crate::portal::remote_desktop::{
     MouseButton, PortalLifecycleEvent, RemoteDesktopSessionManager,
 };
 use crate::portal::screenshot;
+use crate::session_env;
 use crate::virtual_input::{LinuxVirtualInput, virtual_input_keyboard_available};
 use crate::windowing as linux_windowing;
 use crate::x11::capture as x11_capture;
 use crate::x11::input_xtest::{self, X11MouseButton};
 use crate::x11::windowing::{self, X11WindowInfo};
+use sky_cua_platform::model::DoctorSessionEnvReport;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -37,8 +40,9 @@ use zbus::Proxy;
 #[derive(Debug, Clone)]
 pub struct LinuxDesktopBackend {
     portal: RemoteDesktopSessionManager,
-    atspi: std::sync::Arc<Mutex<Option<AccessibilityConnection>>>,
+    atspi: Arc<Mutex<Option<AccessibilityConnection>>>,
     app_policies: AppActionPolicies,
+    session_env: Arc<StdMutex<DoctorSessionEnvReport>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -59,9 +63,10 @@ impl Default for LinuxDesktopBackend {
 impl LinuxDesktopBackend {
     #[must_use]
     pub fn new() -> Self {
+        let session_env_report = session_env::hydrate_session_env();
         Self {
             portal: RemoteDesktopSessionManager::new(),
-            atspi: std::sync::Arc::new(Mutex::new(None)),
+            atspi: Arc::new(Mutex::new(None)),
             app_policies: AppActionPolicies::load_from_repo().unwrap_or_else(|error| {
                 warn!(
                     message = %error,
@@ -69,7 +74,24 @@ impl LinuxDesktopBackend {
                 );
                 AppActionPolicies::default()
             }),
+            session_env: Arc::new(StdMutex::new(session_env_report)),
         }
+    }
+
+    fn session_env_report(&self) -> DoctorSessionEnvReport {
+        self.session_env
+            .lock()
+            .map(|report| report.clone())
+            .unwrap_or_default()
+    }
+
+    fn refresh_session_env(&self) -> DoctorSessionEnvReport {
+        let latest = session_env::hydrate_session_env();
+        if let Ok(mut report) = self.session_env.lock() {
+            merge_session_env_reports(&mut report, latest);
+            return report.clone();
+        }
+        latest
     }
 
     async fn accessibility_connection(&self) -> Result<AccessibilityConnection, BackendError> {
@@ -244,6 +266,23 @@ impl LinuxDesktopBackend {
     }
 }
 
+fn merge_session_env_reports(current: &mut DoctorSessionEnvReport, latest: DoctorSessionEnvReport) {
+    for repair in latest.repaired {
+        if !current.repaired.contains(&repair) {
+            current.repaired.push(repair);
+        }
+    }
+    current.path_changed |= latest.path_changed;
+    if latest.final_path.is_some() {
+        current.final_path = latest.final_path;
+    }
+    for note in latest.notes {
+        if !current.notes.contains(&note) {
+            current.notes.push(note);
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl DesktopBackend for LinuxDesktopBackend {
     async fn prepare_automation_permissions(&self) -> Result<(), BackendError> {
@@ -252,6 +291,7 @@ impl DesktopBackend for LinuxDesktopBackend {
     }
 
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+        self.refresh_session_env();
         let mut environment = probe_environment().await?;
         environment.semantic_backend = if require_supported_environment(&environment).is_ok()
             && self.accessibility_connection().await.is_ok()
@@ -265,7 +305,10 @@ impl DesktopBackend for LinuxDesktopBackend {
 
     async fn doctor(&self) -> Result<sky_cua_platform::model::DoctorReport, BackendError> {
         let environment = self.probe_environment().await?;
-        Ok(crate::doctor::build_doctor_report(environment))
+        Ok(crate::doctor::build_doctor_report(
+            environment,
+            self.session_env_report(),
+        ))
     }
 
     async fn setup_accessibility(
@@ -297,6 +340,13 @@ impl DesktopBackend for LinuxDesktopBackend {
         };
         enrich_accessible_apps_from_windows(&mut atspi_apps, &registry_windows);
         Ok(merge_app_lists(&atspi_apps, &registry_windows))
+    }
+
+    fn session_env_diagnostics(&self) -> Vec<DiagnosticEntry> {
+        let report = self.session_env_report();
+        session_env::session_env_diagnostic(&report)
+            .into_iter()
+            .collect()
     }
 
     async fn list_windows(&self) -> Result<Vec<sky_cua_platform::model::WindowInfo>, BackendError> {
@@ -359,8 +409,16 @@ impl DesktopBackend for LinuxDesktopBackend {
         let environment = self.probe_environment().await?;
         require_supported_environment(&environment)?;
         let capabilities = Self::capabilities(&environment);
-        let doctor_report = crate::doctor::build_doctor_report(environment.clone());
+        let doctor_report =
+            crate::doctor::build_doctor_report(environment.clone(), self.session_env_report());
         let mut diagnostics = DiagnosticBuilder::new();
+        if let Some(diagnostic) = doctor_report
+            .session_env
+            .as_ref()
+            .and_then(session_env::session_env_diagnostic)
+        {
+            diagnostics.push_code(diagnostic.code, diagnostic.message, diagnostic.details);
+        }
         if !doctor_report.readiness.can_build_accessibility_tree {
             diagnostics.push(
                 BackendErrorCode::AccessibilityUnavailable,
@@ -3558,18 +3616,20 @@ mod tests {
         app_from_linux_window, best_x11_window_match, clipboard_mime_types_are_plain_text_only,
         drag_from_point, drag_to_point, effective_pointer_input_backend_for_target, explicit_point,
         fallback_window_elements_with_x11_detail, linux_fallback_snapshot, linux_window_elements,
-        matches_selector, parse_key_sequence, point_for_x11_element_through_portal,
-        point_from_screenshot_pixels, portal_scroll_steps_from_delta, push_capture_diagnostics,
-        select_x11_window, selector_summary, should_attempt_x11_capture,
-        should_prefer_kde_clipboard_text_backend, x11_window_elements, x11_window_matches_app,
+        matches_selector, merge_session_env_reports, parse_key_sequence,
+        point_for_x11_element_through_portal, point_from_screenshot_pixels,
+        portal_scroll_steps_from_delta, push_capture_diagnostics, select_x11_window,
+        selector_summary, should_attempt_x11_capture, should_prefer_kde_clipboard_text_backend,
+        x11_window_elements, x11_window_matches_app,
     };
     use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::{
         ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScreenMode,
-        CoordinateSpace, ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat,
-        PixelSize, PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
+        CoordinateSpace, DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode,
+        EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
+        SemanticBackendKind, SessionKind,
     };
 
     fn wayland_pipewire_environment() -> EnvironmentInfo {
@@ -3592,6 +3652,34 @@ mod tests {
             display: None,
             wayland_display: Some("wayland-0".to_string()),
         }
+    }
+
+    #[test]
+    fn merge_session_env_reports_deduplicates_repeated_refreshes() {
+        let repair = DoctorSessionEnvRepair {
+            key: "WAYLAND_DISPLAY".to_string(),
+            source: "systemd-user".to_string(),
+            value: Some("wayland-0".to_string()),
+        };
+        let mut current = DoctorSessionEnvReport {
+            repaired: vec![repair.clone()],
+            path_changed: false,
+            final_path: Some("/tmp:/usr/bin".to_string()),
+            notes: vec!["systemd note".to_string()],
+        };
+        let latest = DoctorSessionEnvReport {
+            repaired: vec![repair],
+            path_changed: true,
+            final_path: Some("/tmp:/usr/bin:/bin".to_string()),
+            notes: vec!["systemd note".to_string()],
+        };
+
+        merge_session_env_reports(&mut current, latest);
+
+        assert_eq!(current.repaired.len(), 1);
+        assert_eq!(current.notes.len(), 1);
+        assert!(current.path_changed);
+        assert_eq!(current.final_path.as_deref(), Some("/tmp:/usr/bin:/bin"));
     }
 
     #[test]
@@ -4404,7 +4492,10 @@ mod tests {
     fn linux_fallback_snapshot_preserves_doctor_report() {
         let environment = wayland_pipewire_environment();
         let capabilities = LinuxDesktopBackend::capabilities(&environment);
-        let report = crate::doctor::build_doctor_report(environment.clone());
+        let report = crate::doctor::build_doctor_report(
+            environment.clone(),
+            DoctorSessionEnvReport::default(),
+        );
         let window = LinuxWindowInfo {
             window_id: "kwin:{tidal-window}".to_string(),
             title: Some("TIDAL Hi-Fi".to_string()),

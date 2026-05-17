@@ -30,7 +30,7 @@ where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Result<DoctorReport, BackendError>>,
 {
-    session_env::hydrate_session_bus_env();
+    let _ = session_env::hydrate_session_env();
 
     let before = doctor_fn().await?;
     let before_accessibility = before.accessibility.as_ref();
@@ -57,7 +57,7 @@ where
 }
 
 pub async fn setup_window_targeting_report() -> WindowTargetingSetupReport {
-    session_env::hydrate_session_bus_env();
+    let _ = session_env::hydrate_session_env();
 
     let extension_dir = extension_dir();
     let mut wrote_files = false;
@@ -346,6 +346,7 @@ mod tests {
                 blockers: vec![],
             },
             platform: None,
+            session_env: None,
             portal: Some(DoctorPortalReport {
                 screencast_version: Some(5),
                 remote_desktop_version: Some(2),
