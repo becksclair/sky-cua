@@ -1,201 +1,188 @@
 # NOTES
 
-- On Asgard, the remote shell can report `XDG_SESSION_TYPE=tty` even while the real desktop stack is KDE 6 Wayland. Do not trust that variable alone for environment detection; corroborate with live compositor and portal processes.
-- In the Arch `testing-vm`, do not launch Plasma/COSMIC/Hyprland under `dbus-run-session`. That puts KWin/compositor services on a private bus while SSH and user services talk to `/run/user/<uid>/bus`, which breaks KWin DBus discovery and makes portal state misleading. The session launcher should set `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`, import the desktop env, then exec the desktop session.
-- For headed VM framebuffer proofs, disable the KDE screen locker and PowerDevil in the test image. A blanked or dimmed guest can make cursor-overlay screenshots look like fullscreen-black overlay failures.
-- Launch `virt-viewer` detached from agent shells with `setsid -f virt-viewer --connect qemu:///session testing-vm >/tmp/sky-cua-virt-viewer.log 2>&1`; otherwise the shell command can return and take the viewer with it.
-- When diffing `virsh screenshot` PNGs, convert images to RGB before comparing. RGBA `getbbox()` can hide real changes because the screenshot alpha channel is not a useful proof signal.
-- Accepted Plasma VM cursor artifacts after the session-bus fix: host framebuffer `artifacts/kde-framebuffer-cursor-proof/cursor-overlay-clean/after.png`, hide-for-capture `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515073739578726-hide`, and click-through `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515073759757099-click`.
-- The KDE VM full pointer artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T085020Z` proves the visible fixture path for click, drag, and scroll after the GNOME compatibility fixes. It completed cleanly while `virt-viewer` was launched through detached `setsid`. If a local runner session drops before cleanup, kill `sky-cua-service`, full overlay-host argv matches for `sky-cua-overlay-host`, and the truncated Linux comm name `sky-cua-overlay`.
-- Accepted GNOME VM full pointer artifact: `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T084643Z`. The fixture had to adjust GNOME fullscreen coordinates because GTK reported a 1280x973 allocation on a 1280x800 framebuffer with the visible content centered/clipped vertically. Keep that adjustment GNOME-scoped; KDE can report a taller allocation because the window extends below the panel, but its top content is not centered/clipped.
-- GNOME RemoteDesktop accepted smooth portal scroll calls without moving the GTK scroller. Sending discrete wheel steps through the portal works; for portal scroll, convert model-style `delta_y` into discrete steps with the sign inverted from the XTest helper.
-- Linux virtual input is now the intended COSMIC Wayland physical-input path when RemoteDesktop is absent. The public backend is `LinuxVirtualInput`; pointer actions prefer the direct absolute `/dev/uinput` adapter when `/dev/uinput` is writable and desktop bounds are detectable, while `ydotool` remains a keyboard/text adapter and fallback. Snapshot-based action points map screenshot pixels to desktop logical coordinates through `capture.pixel_size` and `capture.logical_rect`, including monitor offsets, and fail closed if that metadata is missing.
-- In the COSMIC VM, the ydotool virtual pointer device is relative-only and `ydotool mousemove --absolute` landed at accelerated/doubled coordinates. Do not use ydotool as the precise screenshot-coordinate pointer adapter for COSMIC.
-- COSMIC accepts a direct uinput absolute tablet-style pointer device for click and drag. `cosmic-randr list` is the preferred COSMIC bounds source for that device; `SKY_CUA_VIRTUAL_INPUT_X/Y/WIDTH/HEIGHT` remain useful test overrides, with `xrandr` as a fallback bounds source.
-- Direct uinput scrolling on COSMIC needs both `REL_WHEEL_HI_RES` and `REL_WHEEL`, and the step sign is inverted from the portal discrete-scroll helper.
-- Accepted COSMIC LinuxVirtualInput input artifact: `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T092606Z`, proving click, drag, scroll, `type_text`, and `press_key` on the fullscreen GTK fixture with `clicked=true`, `drag_completed=true`, `scroll_events=1`, `entry_text="cosmic-text-smoke"`, and `submitted_text="cosmic-text-smoke"`. Pointer actions used direct uinput; text/key used the ydotool sub-adapter.
-- Accepted repeatable COSMIC scaled LinuxVirtualInput artifact: `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T093737Z`, proving the same full input suite at 1600x1200 with `Scale: 125%` through the `wayland-pointer-scaled` VM profile. Direct uinput must convert desktop logical points into physical absolute-device coordinates using output scale; otherwise click success can be reported while the target does not receive the event.
-- The GTK pointer fixture exposes `scroll_safe` because the center of the scrolled region can be too low in oversized scaled fullscreen allocations. Use that upper scroller point for the portable scroll proof.
-- The i3/X11 VM can start real Xorg on `:1` even if the user systemd environment still says `DISPLAY=:0` and `WAYLAND_DISPLAY=wayland-0` from a previous Plasma session. For the i3 profile, derive the display and `-auth` file from the active `Xorg` command, synthesize a temporary Xauthority, unset Wayland, then run the X11 overlay smoke.
-- Accepted i3/X11 VM artifact: `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T075301057704Z`. It proves `x11_shaped_window`, visible/hide/re-show capture behavior, click-through, and XFixes cursor hide/show on a real Xorg/i3 session.
-- KWin effect production discovery was rechecked after fixing the Plasma VM session bus. Artifact `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515075621741796-kwin` still has `listed=false`, `effect_supported=false`, and `load_stdout="false"` even with KWin DBus reachable on `/run/user/1000/bus`; this is a KWin plugin discovery/package-path blocker, not the old private-DBus-session bug.
-- A system install into the VM's KWin paths does make the compiled effect discoverable after a Plasma restart, and the preferred proof is now automated through `scripts/run_gui_testing_vm_smoke.py --profile kde-kwin-effect-system-install --vm-name testing-vm --libvirt-uri qemu:///session`. Latest proof: `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T100852814643Z/host-summary.json` has `ok=true`, KWin listed/loaded `sky-cua-agent-cursor`, overlay host reported `backend=kwin_effect` and `system_cursor_hidden=true`, host framebuffer diff found the cursor at `(420,260)`, and cleanup removed the `/usr` files so KWin no longer listed the effect after restart.
-- Real-session KWin `ScreenShot2` is not a reliable SSH smoke capture path: it returned `org.kde.KWin.ScreenShot2.Error.NoAuthorized` even with `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1`. Use host-side libvirt framebuffer capture for the production KWin effect pixel proof; nested KWin can still use `ScreenShot2`.
-- Real VM session switching can leave stale compositor processes and sockets. Switching Plasma to Hyprland through a raw greetd restart left `kwin_wayland` alive on `wayland-0` while Hyprland used `wayland-1`; switching GNOME with only `systemctl disable greetd` left GDM and greetd active at the same time. Use `scripts/testing-vm/select-session.sh <session>` from inside `/workspace`; it must stop the inactive display manager, clean stale compositor and sky-cua processes, then restart the selected display manager.
-- VM session switching must also refresh user portal state after the target compositor is live. A Plasma smoke hung because `xdg-desktop-portal` was still trying to use COSMIC's implementation, then another KDE pointer run hung behind `cosmic-randr list`. The runner now imports the target desktop environment and stops portal services before preauthorization/profile startup; Linux virtual input scopes `cosmic-randr` to COSMIC desktops and timeout-protects bounds helpers.
-- `sky-cua-service` must handle SIGTERM through normal teardown. Otherwise native overlay-host children survive smoke cleanup, and later cursor screenshots can already contain a stale marker before the test sets a new cursor. After adding the service SIGTERM path and overlay-host wait/reap, the clean KDE cursor sequence ending at `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click` left no `sky-cua-service`, `sky-cua-overlay-host`, or `cosmic-randr` processes.
-- Hyprland is stricter than KWin about layer-shell configure state. The first real Hyprland cursor overlay smoke failed with `Protocol error 4294967295 on object wl_surface@14: layerSurface was not configured, but a buffer was attached`; the overlay host must draw only to layer surfaces that have received configure events. The passing artifact is `/workspace/artifacts/codex-e2e/agent-cursor-wayland-layer-shell/20260515T080912397166Z`.
-- Hyprland `grim` capture should name the active nonzero output. In the VM, `grim` without `-o` failed with `failed to create buffer` because Hyprland exposed both `Virtual-1` at `1280x800` and a zero-sized `WAYLAND-1`; `grim -o Virtual-1` succeeded. `scripts/live_wayland_layer_shell_overlay_smoke.py` derives `HYPRLAND_INSTANCE_SIGNATURE` and selects the focused nonzero monitor from `hyprctl monitors -j`.
-- KDE's Screenshot portal works from this remote project context and returns a local `file://` URI that can be copied into `/run/user/1000/sky-cua/captures/`.
-- Cache the AT-SPI connection inside the Linux backend. Re-opening a fresh accessibility connection for each request can wedge repeated `list_apps` and `get_app_state` calls on this KDE desktop.
-- Cache the PipeWire remote file descriptor on the active portal session and `dup` it per frame capture. Re-opening a fresh PipeWire remote for every snapshot was a good way to make capture hang.
-- The current Wayland frame-capture seam is in-process GStreamer: `pipewiresrc -> videoconvert -> pngenc -> appsink`, then write the PNG bytes to disk in the service process.
-- `CaptureInfo.backend` and `CaptureInfo.image_backend` are not the same thing anymore, and that is deliberate. `backend` is the primary capture lane the environment selected; `image_backend` is the backend that actually produced the image file for this snapshot.
-- `SKY_CUA_SERVICE_SOCKET_PATH` is now a useful dev/operator seam for isolated smokes. It lets the client and service talk over a fresh socket without disturbing the default long-lived service under `$XDG_RUNTIME_DIR/sky-cua/service.sock`.
-- The X11/XWayland discovery lane now uses `xprop` on `_NET_CLIENT_LIST`, `_NET_ACTIVE_WINDOW`, `WM_CLASS`, `WM_NAME`, `_NET_WM_NAME`, and `_NET_WM_PID` to surface X11-only windows in `list_apps` and to anchor focused-window fallback in `get_app_state`.
-- On nested or WM-less X11 servers such as `Xvfb`, `_NET_CLIENT_LIST` may be absent. Fall back to `xwininfo -root -tree` so pure-X11 discovery still sees windows like `xmessage`.
-- `xwininfo -id` is now used to harvest X11 window bounds so X11-only fallback snapshots can expose a synthetic root element with real targetable geometry.
-- `xwininfo -id -tree` is now also useful source-of-truth input. For windows like `xmessage`, it exposes a small child-window hierarchy with absolute descendant bounds, which is good enough to build pseudo-elements for physical targeting without pretending there is an AT-SPI tree.
-- For `xmessage`, the useful conservative fallback roles are structural, not semantic theater: `x11_container` for recovered regions with children, `x11_leaf_region` for ordinary leaves, and `x11_action_region` for small lower leaves that behave like good practical click targets. Keep those hints blunt.
-- For `xmessage`, the lowest recovered `x11_action_region` is a good practical click target for the dismiss button on Asgard. The live smokes now prove descendant-element clicks by using that recovered leaf-ish region and waiting for the dialog to exit.
-- Snapshotless physical/focused actions still need backend context. If there is no `snapshot_id`, the service must probe the environment before routing the action; otherwise even perfectly good X11 clicks collapse into “no physical input backend is available.”
-- Keep the snapshot boundary honest: physical `click`, `perform_secondary_action`, `drag`, `scroll`, `type_text`, and `press_key` can run snapshotless only when they do not reference an element. `element_index`, `to_element_index`, `set_value`, and semantic AT-SPI actions need the cached snapshot context that produced the element ids.
-- In MCP schemas, describe coordinate space by call shape. With `snapshot_id`, coordinates are screenshot pixels from that snapshot. Without `snapshot_id`, coordinates are current screen coordinates for the active input backend.
-- The old nested-Xvfb pure-X11 smoke harness has been removed. X11 acceptance should use a real X11 guest session or a purpose-built overlay smoke, not `scripts/live_x11_smoke.py`.
-- The GTK pointer fixture now records root-relative points and a text-entry target. It is still useful for the real-session Wayland pointer smoke and can be reused by future X11 session smokes if needed.
-- The Wayland portal session can go stale across long-lived service runs. When PipeWire capture fails on a cached portal session, reset the cached session and retry once instead of assuming the whole service needs to die.
-- Portal session startup needs its own timeout inside the service. Otherwise the client just sits on a socket until its own read timeout fires, which is a much shittier error story.
-- The current Wayland operator-facing code for a missed approval prompt is `PortalApprovalPending`. That path is now deliberate and worth preserving; it is far better than a generic MCP `-32603` with an `os error 11`.
-- Make the MCP text layer say the quiet part out loud: when the code is `PortalApprovalPending`, tell the operator to approve the KDE portal dialog and retry. Do not make her reverse-engineer the next step from a bare diagnostic code.
-- KDE RemoteDesktop preauthorization must seed both the empty app id and `desktop`. The testing VM accepted `""`, while Asgard KDE portal 6.6.4 showed "desktop is asking for privileges" until `desktop` also had `kde-authorized/remote-desktop = yes`.
-- Lifecycle polish should also surface successful portal state transitions, not just failures. A fresh Wayland `get_app_state` now carries `PortalSessionStarted`, and session rebuilds carry `PortalSessionRebuilt` plus the original failure details in both diagnostics and MCP text summaries.
-- When PipeWire does not produce the snapshot image but Screenshot fallback succeeds, do not collapse that into one muddy failure line. Keep the underlying `PipeWireStreamFailed`, add `CaptureBackendDowngraded`, and set `capture.image_backend = portal_screenshot`.
-- `SKY_CUA_FORCE_PIPEWIRE_CAPTURE_FAILURE=1` is now a deliberate operator/debug seam in the service. It forces the PipeWire image step to fail so Screenshot fallback, `CaptureBackendDowngraded`, and the MCP summary text can be proven live without sabotaging the whole portal session.
-- The normal live paths now prove the split too: on Asgard KDE Wayland the smoke reports `backend=portal_pipe_wire` and `image_backend=portal_pipe_wire`, while pure X11 reports both as `x11`.
-- The dedicated live downgrade proof is `python3 /home/bex/projects/sky-cua/scripts/live_portal_downgrade_smoke.py`. It uses both env seams above, proves `backend=portal_pipe_wire` with `image_backend=portal_screenshot`, and expects the MCP summary to mention the downgrade explicitly.
-- App-instruction `index.json` can now carry machine-readable action policy, not just markdown lookup. The first shipped field is `set_value_fallback`, which the Linux backend reads directly.
-- The first live heuristics-driven routing mode is `focus_click_select_all_type`: click the target, send `Ctrl+A`, then type. Keep it tightly scoped to explicitly blessed apps; right now that is Kate only.
-- Kate is a reliable live proof target from this remote project context only when forced onto XWayland with `QT_QPA_PLATFORM=xcb`. Plain `kate` / `kwrite` launches were too slippery through the current discovery path.
-- On XWayland Kate, portal keyboard injection can report success while not editing the document at all. When the focused app has a matched X11 window, prefer the X11/XTest lane for keyboard-driven actions (`type_text`, `press_key`, and the heuristics-backed `set_value` fallback).
-- The X11 text-injection helper needs to translate embedded newlines into explicit `Return` key events. Plain `xdotool type` collapses `\\n` inside multi-line editor replacement.
-- The dedicated Kate regression target is `python3 /home/bex/projects/sky-cua/scripts/live_kate_smoke.py`. It launches `QT_QPA_PLATFORM=xcb kate --new --block <temp file>`, proves the heuristics-backed `set_value` diagnostic, expects `Ctrl+S` to route through the X11 input fallback, and verifies the saved file bytes on disk.
-- On this KDE 6 Wayland desktop, Krita is a better “real graphical workflow” proof target than GIMP or LibreOffice. Krita surfaces as a native app (`krita.desktop`, Qt, non-`x11:` app id), gives a rich AT-SPI tree, and tolerates a hybrid tree-plus-vision workflow.
-- In Krita, semantic `click` on the initial `New Image` button wedges; physical click on the button bounds works. Treat that start-screen affordance as a physical target even though it is visible in the tree.
-- The reliable Krita workflow on Asgard is hybrid: use the tree to find the app, the initial `New Image` button, and the live document frame, then use screenshot-guided physical actions for the `Create` button, canvas mark, and Save As field.
-- The dedicated native-Wayland graphical workflow proof is `python3 /home/bex/projects/sky-cua/scripts/live_krita_smoke.py`. It launches Krita, creates a document, drags a visible mark on the canvas, saves a `.kra` into `~/Pictures`, and verifies `mergedimage.png` inside the archive contains non-white pixels.
-- Ghostty on this machine is a useful warning case for native Wayland AT-SPI bounds: keyboard actions work when routed through `snapshot_id + element_index`, but explicit physical targeting from the reported AT-SPI bounds can miss badly because some returned extents behave like window-local coordinates despite being tagged as screen coordinates.
-- Do not let the IPC accept loop use `?` on per-connection failures. A malformed request or transient `accept()` error should be logged and ignored, not allowed to kill the whole service.
-- Heuristics/policy loaders should not rely on `env!(\"CARGO_MANIFEST_DIR\")` as a runtime fallback. Prefer `SKY_CUA_REPO_ROOT`, then discover the repo root from the current working directory.
-- The PipeWire forced-failure test mutates a global env var and should stay serialized; otherwise parallel test execution can make it lie.
-- The wrapper scripts in `bin/` are part of the real plugin contract. If `.mcp.json` points at `./bin/sky-cua-client`, keep both wrapper scripts executable (`0755`) or Codex will fail before the plugin even gets to be interesting.
-- Approval and portal-token state must never silently fall back to `/tmp`. Require `XDG_STATE_HOME` or `HOME`, and keep the `sky-cua` state directory owner-only (`0700`) because it can hold restore tokens.
-- Shared app-instruction matching logic now lives in `crates/sky-cua-platform/src/app_instructions.rs`. Keep repo-root discovery, key normalization, and focused-app key derivation there so the backend policy resolver and client guidance resolver do not drift apart again.
-- Shared IPC socket-path resolution now lives in `crates/sky-cua-platform/src/paths.rs`. If the socket contract changes, change it once there instead of editing the client and service separately.
-- The shared service socket path must not fall back to a generic `/tmp/sky-cua/service.sock`. Prefer `XDG_RUNTIME_DIR`, then `XDG_CACHE_HOME/sky-cua`, then `HOME/.cache/sky-cua`, then a UID-scoped temp dir, and keep the socket parent directory owner-only (`0700`) before binding.
-- Do not chmod the parent directory for an explicit `SKY_CUA_SERVICE_SOCKET_PATH` override. Creating a missing override parent is fine; rewriting permissions on an arbitrary operator-supplied directory is not.
-- `ApprovalStore` is startup initialization, not meaningful daemon state right now. Keep that explicit; do not reintroduce a stored field just to smuggle directory creation in through constructor side effects.
-- The client still treats heuristics as informational markdown, and that is fine. Unknown JSON fields in `resources/app-instructions/index.json` are ignored by the client loader, so backend-only policy metadata can evolve there without breaking app guidance.
-- From this remote project context on Asgard, launching `kate` or `kwrite` was not enough to make them show up cleanly in the current `list_apps` / focused-app path, even though `kwrite` stayed running. Do not fake a live proof from that; pick a better operator target or fix discovery first.
-- For X11/XWayland correlation, exact title is a ranking hint, not proof of identity. Require some other signal such as PID, executable, desktop stem, class, instance, or app name before treating an AT-SPI root as the same window.
-- Selector matching should be scored, not first-match-wins. For ambiguous `desktop_file_id` selectors, prefer the focused candidate; for multi-window selectors with `window_title`, prefer the exact title match.
-- A naive AT-SPI focus heuristic will happily pick session services like `ksmserver`; prefer roots with real window titles and penalize obvious service executables.
-- On this KDE 6 Wayland desktop, `zenity` is a reliable semantic smoke fixture. `kdialog` can be visibly present without surfacing usefully through AT-SPI from this harness.
-- A fullscreen GTK fixture can be good for physical pointer smoke even when it does not appear in `list_apps`; do not block pointer-smoke progress on AT-SPI visibility for that fixture.
-- For a useful XWayland smoke with `xmessage`, set `-title`. Without it, `WM_NAME` stays the default `xmessage`, which makes title-based matching look more broken than it really is.
-- X11-only windows can now appear in `list_apps`, become the focused app in `get_app_state`, and expose a synthetic root element with bounds, but they may still have no meaningful semantic child elements. Physical targeting is not the same thing as semantic parity.
-- The richer X11 fallback tree is honest if the roles stay blunt. Conservative structural roles plus real bounds are fine; inventing button/text semantics from geometry alone would be flirting with bullshit.
-- For portal-driven scroll on this machine, smooth `NotifyPointerAxis` proved out in the live smoke fixture while discrete wheel injection did not. Keep the tested path unless there is evidence to widen it.
-- Fullscreen GTK windows can report a logical width larger than the portal stream width. Keep explicit-coordinate smoke targets comfortably inside the monitor, not near the far edge.
-- The MCP client’s Unix-socket read timeout now needs to be generous enough for real portal approval UX. Fifteen seconds was too short; the current timeout is sixty seconds, and even that may still need a clearer operator-facing diagnostic if the portal prompt is missed.
-- If the live KDE smoke starts failing mysteriously, kill the stale `sky-cua-service` and re-run before inventing a theory. The fresh-service path plus the current portal reset/retry logic now re-proves cleanly on Asgard.
-- X11/XWayland correlation is now score-based instead of first-match-wins. PID still dominates, but class name, instance name, executable name, desktop-file stem, exact title, and focused-window status all help pick the better match when multiple windows are plausible.
-- After the first score-based pass, KDE service roots like `ksmserver` and `kaccess` were still able to steal an `xmessage` title. The safer rule is: no title-only correlation, ever.
-- For live selector proof, waiting for both windows through `list_apps` is too optimistic in pure X11. Use `xwininfo -root -tree` to confirm the windows exist, then make MCP prove it selected the right one.
-- On Asgard, the `xmessage` fallback probe now returns 5 elements once child regions are recovered from the X11 tree. That is a good regression target for future fallback-tree work.
-- When the XWayland smoke has duplicate candidates for an `xmessage` title, prefer focused X11 candidates and take the newest focused snapshot before descendant-region clicks. Reusing a stale snapshot can make an otherwise-correct element click fail at the service boundary.
+Durable tactical memory: proven commands, pitfalls, patterns, invariants,
+environment quirks. Not transcripts, not stale TODO lists, not artifact
+dumps. Per-feature artifact paths live in
+[`docs/features/<slug>.md`](docs/features/) Verification sections.
 
-- Persisted Wayland approval reuse now lives in `portal-tokens.json` under the per-user state dir (`XDG_STATE_HOME/sky-cua` or `~/.local/state/sky-cua`). The RemoteDesktop lane rotates the restore token on successful session start; `sky-cua-client clear-portal-tokens` and `python3 scripts/reset_portal_tokens.py` are the operator reset paths.
-- The distributable plugin bundle is now built with `python3 scripts/build_plugin.py` into `dist/plugin/sky-cua`. It contains the plugin manifest, `.mcp.json`, release binaries in `bin/`, the bundled `skills/` tree, `resources/app-instructions/`, `README.md`, and `docs/`.
-- The local install path for the debug plugin is `~/.codex/plugins/cache/debug/sky-cua/local`, and the matching config toggle is `[plugins."sky-cua@debug"] enabled = true`. `scripts/install_plugin.py` also ensures `[features] plugins = true` in the target Codex config.
-- `codex mcp list --json` is a good cheap proof that the installed plugin is actually discoverable. After install, it should report a `computer-use` stdio server rooted at the installed bundle path.
-- `.mcp.json` should keep the MCP server name `computer-use`. That matches the installed plugin contract and the transcript-level `mcp_tool_call.server` value the codex-exec harness validates.
-- Do not launch the MCP server from `.mcp.json` with `/bin/sh -lc`. Login-shell startup files can emit junk like `not a tty` to stdout and corrupt the MCP stream before the first JSON-RPC frame. Use `/bin/sh -c "exec ./bin/sky-cua-client mcp"` instead.
-- A direct stdio probe against the installed bundle (`~/.codex/plugins/cache/debug/sky-cua/local/bin/sky-cua-client mcp`) should advertise 9 tools: `list_apps`, `get_app_state`, `click`, `perform_secondary_action`, `scroll`, `drag`, `type_text`, `press_key`, and `set_value`. If that works but `codex exec` still shows no remote-control prompt, the server is not the problem.
-- Codex's current stdio MCP client path on this machine uses newline-delimited JSON-RPC (`rmcp` child-process transport), not `Content-Length` framing. `sky-cua-client mcp` now has to accept both and mirror the framing it saw on input, or `computer-use` will time out during startup even though direct manual probes look fine.
-- For `codex exec` computer-use tests, do not trust the model's final JSON alone. Validate the JSONL transcript for an actual `mcp_tool_call` against server `computer-use`, or the agent may happily fake the workflow with shell commands and process inspection.
-- If a nested `codex exec` run from this agent environment can see `functions.*`, `web.*`, or `mcp__codex_apps__*` tools but no `mcp__computer_use__*` names, it is seeing the host agent tool surface instead of the local installed plugin set. In that state no remote-control prompt will appear, and the useful next step is to rerun the harness from a real external Codex CLI session.
-- A scrubbed Ghostty launch is not detached enough on this machine. Both `/opt/codex-desktop/resources/codex` and the standalone source-built `/home/bex/projects/sky/codex/codex-rs/target/release/codex`, when launched from `env -i ... ghostty -e zsh -lc ...`, still saw the host agent tool surface (`functions.*`, `web.*`, etc.) instead of the installed `computer-use` plugin tools.
-- Explicit `codex app-server` is not a magic escape hatch for the host-tool-surface problem, but it is now a valid startup proof. After fixing the shell wrapper and transport framing, `/opt/codex-desktop/resources/codex app-server` brings `computer-use` to `ready`; see `artifacts/app-server-probe/direct-desktop-v13/summary.json`.
-- The higher-level tool-surface problem still remains after startup. A live turn from the same explicit app-server path still returned the host-agent tool world rather than the installed plugin tools; see:
-  - `artifacts/app-server-probe/direct-desktop-v15/summary.json`
-  - `artifacts/app-server-probe/direct-desktop-v4/agent_message.txt`
-  - `artifacts/app-server-probe/direct-standalone-v1/agent_message.txt`
-  The Desktop-bundled app-server turn still returned tool names like `web.run`, `functions.exec_command`, `tool_search.tool_search_tool`, and `multi_tool_use.parallel`; the older standalone source-built probe returned the same class of host tools under its namespaced forms. None exposed `computer-use`.
-- Do not use a `CODEX_HOME` rooted under `/tmp` for plugin-loading probes. Codex refuses helper/bin setup there, and a temp home under `/tmp` can leave `codex mcp list --json` blind to the locally installed `computer-use` plugin even when `plugins/cache/debug/sky-cua/local` exists.
-- For controlled Codex/plugin visibility probes, use a repo- or home-rooted `CODEX_HOME` with an explicit `config.toml` `openai_base_url` override. Relying on `OPENAI_BASE_URL` alone against an existing real `~/.codex` config can silently miss the intended override and make the run talk to the live backend instead.
-- Under a sane non-`/tmp` `CODEX_HOME`, local request assembly is fine. Both `codex app-server` and `codex exec` send a `namespace` tool named `mcp__computer_use__` in the outbound `/responses` payload, and that namespace contains the expected plugin functions (`list_apps`, `get_app_state`, `click`, `drag`, `scroll`, `type_text`, `press_key`, `set_value`, `perform_secondary_action`).
-- The proving artifacts for that local-request truth are:
-  - `artifacts/app-server-probe/direct-desktop-v24-home-probe-plugin-mention/responses-request.json`
-  - `artifacts/codex-exec-probe/without_plugin_mention/responses-request.json`
-  - `artifacts/codex-exec-probe/with_plugin_mention/responses-request.json`
-- The `core/src/codex.rs` plugin-mention gating around `collect_explicit_plugin_mentions(...)` is **not** the baseline reason `computer-use` disappears from `codex exec`. `built_tools(...)` still pulls all MCP tools from `list_all_tools()` when the server is loaded. If `mcp__computer_use__` is missing from a live turn, suspect runtime attachment / host-harness contamination before blaming mention syntax.
-- For live Codex/plugin probes, `auth_mode` matters more than the env scrub did. With `auth_mode = "chatgpt"` in `auth.json`, detached `codex exec` and `codex app-server` runs from this machine still returned the host harness tool surface even when `computer-use` loaded locally and the outgoing request payload already contained `mcp__computer_use__`.
-- The concrete detached-live proofs for that are:
-  - `artifacts/app-server-probe/live-detached-home-v1.txt`
-  - `artifacts/codex-exec-probe/live-detached-home-v1.json`
-  Those runs used a repo-local `CODEX_HOME`, copied auth, and `env -i`, so the failure class is not “forgot to install the plugin” or “Ghostty inherited the wrong env”.
-- Strace on the detached live app-server probe showed outbound HTTPS connects to `104.18.32.47` and `172.64.155.209`, while local source review in `../sky/codex/codex-rs/core/src/model_provider_info.rs` shows why: ChatGPT auth selects `https://chatgpt.com/backend-api/codex`, while API-key auth selects `https://api.openai.com/v1`.
-- Practical rule: use direct MCP stdio plus the live desktop smokes to prove the `computer-use` backend itself; use mock-backed app-server/exec probes to prove local plugin loading and request assembly; if you need a real installed-plugin E2E, prefer a truly external Codex runtime with API-key auth over a ChatGPT-auth run from this hosted session.
-- The codex-exec harness now classifies this failure mode more honestly. If the visibility probe sees signatures like `web.run`, `image_gen.imagegen`, `functions.exec_command`, or `multi_tool_use.parallel` and `auth_mode = "chatgpt"`, `_codex_exec.py` now calls that out as the host harness tool surface rather than pretending the local plugin simply failed to install.
-- Official Codex plugin docs recommend marketplace-driven local installs, not direct cache surgery. The documented local sources are:
-  - `$REPO_ROOT/.agents/plugins/marketplace.json`
-  - `$REPO_ROOT/.claude-plugin/marketplace.json`
-  - `~/.agents/plugins/marketplace.json`
-  Codex then installs the plugin into `~/.codex/plugins/cache/$MARKETPLACE/$PLUGIN/$VERSION/` itself. Treat the cache as an install artifact, not the primary authoring surface.
-- Marketplace plugin entries should keep the full scaffold contract: `source`, `policy.installation`, `policy.authentication`, and `category`. For the Heliasar `sky-cua` release marketplace, default to `AVAILABLE`, `ON_INSTALL`, and `Coding`.
-- The release marketplace checkout is `~/projects/heliasar-marketplace`; `~/.agents/sky-cua-marketplace` is legacy state and should not receive new release publishes.
-- For local Codex release deploys, `sky-cua@Heliasar` should be enabled, `sky-cua@debug` disabled, and `computer-use@openai-bundled` disabled. If cleaning `~/.codex/config.toml` removes `[marketplaces.Heliasar]`, `scripts/deploy_release_plugin.py` now restores the local marketplace source unless an existing Heliasar source is already configured. Use `codex app-server` `mcpServerStatus/list` as the cheap proof: one `computer-use` server should expose the sky-cua tool set.
-- `scripts/build_plugin.py` should include standard optional plugin roots in its tracked source list, even when they are not currently present. That keeps future `.app.json`, `hooks/`, and `assets/` additions from being silently omitted from the distributable bundle.
-- The practical ChatGPT-auth workaround for local-plugin E2E is now proven: use a dedicated test `CODEX_HOME` with `plugins = true` **and** `features.apps = false`. With `apps = true`, live ChatGPT-auth turns from this machine report only the host harness tool world; with `apps = false`, they expose the real `mcp__computer_use__...` namespace again.
-- The direct proving artifacts for that are:
-  - `artifacts/codex-exec-probe/live-chatgpt-noapps.last.json` for tool visibility
-  - `artifacts/codex-e2e/plugin-smoke/20260423T155634Z/codex-output.jsonl` for an actual smoke turn that reaches real `computer-use:list_apps` and `computer-use:get_app_state` calls
-- `computer-use` does **not** inherit the nice per-app approval knobs from `apps.*` config because it is a generic plugin MCP server, not a `codex_apps` connector. In `codex-rs/core/src/mcp_tool_call.rs`, non-`codex_apps` servers fall back to `AppToolPolicy::default()` and generic MCP approval handling.
-- `codex exec` cannot answer MCP approval prompts interactively. In `codex-rs/exec/src/lib.rs`, `McpServerElicitationRequest` is auto-cancelled and `ToolRequestUserInput` is rejected in exec mode. So if a transcript shows `user cancelled MCP tool call`, the plugin/tool surface is alive and the remaining blocker is exec-mode approval handling, not tool discovery.
-- For ChatGPT-auth desktop E2E, the practical fix is to run the dedicated no-apps test home with `codex exec --dangerously-bypass-approvals-and-sandbox`. That combination gives `AskForApproval::Never` plus `DangerFullAccess`, which makes generic MCP tool calls stop prompting. Live proof: `artifacts/codex-e2e/plugin-smoke-bypass-probe/20260423T161318Z/last-message.json` completed successfully and dismissed the zenity dialog through real `computer-use` calls.
+## Environment quirks (host)
 
-- Observation: the right installed-plugin acceptance harness is a minimal rich client over `codex app-server`, not `codex exec`.
-  Evidence: `scripts/live_app_server_smoke.py` now passes live on Asgard and its transcript shows real `computer-use` MCP elicitation approvals plus `list_apps`, `get_app_state`, and `click` calls; the proving artifact is `artifacts/codex-e2e/app-server-smoke/20260423T163318Z/app-server-output.jsonl`.
-- Observation: when driving `codex app-server` directly, do not read the child `stderr` pipe before terminating the process.
-  Evidence: the first rich-harness run completed the turn successfully but the Python harness hung forever in cleanup until `scripts/_app_server_harness.py` was fixed to close the child first and drain `stderr` second.
-- Historical observation: the rich-client TIDAL workflow was once blocked by app visibility, not harness shape.
-  Evidence: `scripts/live_app_server_tidal_playlist.py` ran through `codex app-server`, but the older live artifact `artifacts/codex-e2e/tidal-playlist-app-server/20260423T163827Z/last-message.json` returned `blocked_app_state` after repeated `list_apps` and `get_app_state` attempts only surfaced Ghostty and system utilities; no TIDAL app appeared to the plugin until the desktop-session env and KWin fallback seams were fixed.
-- Codex-launched plugin MCP servers on this machine do **not** inherit the full desktop session environment unless `.mcp.json` asks for it explicitly. For desktop plugins, keep `env_vars` on the stdio server entry for at least:
-  - `DBUS_SESSION_BUS_ADDRESS`
-  - `XDG_RUNTIME_DIR`
-  - `WAYLAND_DISPLAY`
-  - `DISPLAY`
-  - `XDG_SESSION_TYPE`
-  - `XDG_CURRENT_DESKTOP`
-  - `DESKTOP_SESSION`
-  Without those, `sky-cua-service` can spawn under `~/.cache/sky-cua/service.sock` with no session bus, which makes KWin/portal probing lie in much more interesting ways than you need.
-- Native KDE Wayland background-window discovery is now viable through KWin even when the target window is not focused. The practical path is `org.kde.KWin /WindowsRunner org.kde.krunner1.Match` to recover window UUIDs, then `org.kde.KWin.getWindowInfo` for metadata/bounds. This is the seam that made `tidal-hifi.desktop` show up in `list_apps` while Ghostty still had focus.
-- Do **not** trust `org.kde.KWin.queryWindowInfo` as a required dependency. Under Codex-launched service environments it can return `org.kde.KWin.Error.UserCancel` or just hang long enough to wedge the whole backend call. The active-window hint is currently less important than reliable background-window enumeration, so treating that path as optional is the safer contract.
-- The first real rich-client TIDAL proof on this machine is now `artifacts/codex-e2e/tidal-playlist-app-server/20260423T170741Z/last-message.json`:
-  - `list_apps` includes `kwin:{71afaa3f-26ba-47a3-a07b-abc3ce9a4296}` / `tidal-hifi.desktop` / `TIDAL Hi-Fi`
-  - focused snapshots report `PortalSessionRestored` and `PortalSessionTokenRotated`
-  - the remaining blocker is `AccessibilityCoverageLimited`, not app discovery: once focused, TIDAL still exposes only one fallback Wayland window node and no usable semantic subtree
-- The richer native-Wayland KWin fallback now emits screenshot-oriented anchor regions instead of one dumb root box:
-  - `wayland_header_band`
-  - `wayland_search_candidate`
-  - `wayland_toolbar_candidate`
-  - `wayland_sidebar_region`
-  - `wayland_main_region`
-  - `wayland_list_candidate`
-  Keep the descriptions blunt: these are geometric anchors for visual search, not fake semantics.
-- Screenshot-first rich-client workflows need an image-capable model. On this machine, the app-server harness proved that `gpt-5.3-codex-spark` rejects `view_image` with `view_image is not allowed because you do not support image inputs`; use at least `gpt-5.4` for screenshot-guided proof, and use `gpt-5.5` for the heavier TIDAL workflow.
-- The richer TIDAL run at `artifacts/codex-e2e/tidal-playlist-app-server/20260423T172238Z/` proves the next seam cleanly:
-  - `gpt-5.4` now succeeds at `view_image` inside the rich `codex app-server` turn
-  - the model can use fallback anchors plus the screenshot to highlight a playlist, open a playlist context menu, hit `Add to playlist`, and then right-click a main-content item
-  - the workflow still ends `blocked_app_state`, but no longer because of visibility or missing image support; the blocker is unreliable context-menu / submenu progress on a fallback-only Wayland surface, which makes “added exactly 3 songs to Codex Picks” unverifiable
-- The first passing TIDAL rich-client workflow uses the stronger harness lane: `gpt-5.5`, medium reasoning, and a 420-second app-server turn budget. Live proof: `artifacts/codex-e2e/tidal-playlist-app-server/20260423T190545Z/last-message.json` completed with `Codex Favorites`, five songs, and a fresh verification screenshot at `/run/user/1000/sky-cua/captures/6442c038-9041-4fc2-a959-d835fa9c993d.png`.
-- A 180-second app-server turn budget is too tight for the `gpt-5.5` TIDAL workflow. The earlier `artifacts/codex-e2e/tidal-playlist-app-server/20260423T190158Z/` run timed out even though it had already used the real plugin and made meaningful UI progress.
-- Codex Fast mode is two knobs, not one: use `service_tier = "fast"` and `[features].fast_mode = true` in generated `config.toml`, and do not leave profile-local `service_tier` overrides that can select the slow `flex` lane. For app-server JSON-RPC, send `serviceTier: "fast"` on `thread/start` and `turn/start`. For `codex exec`, keep matching `-c features.fast_mode=true` and `-c service_tier="fast"` overrides. Live proof: `artifacts/codex-e2e/app-server-smoke/20260423T191543Z/thread_start.json` reports `"serviceTier": "fast"`.
-- In fallback-only consumer apps like TIDAL, text entry must be screenshot-confirmed before every `type_text`: identify the exact field, check whether it already contains stale text, clear or select stale contents when replacing, type one deliberate value, then reacquire state before the next action.
-- Do not replace the main `capture.screenshot_path` with a target-window crop unless the action path also gets crop-origin/coordinate-space metadata and maps crop-local points back to desktop/stream coordinates. The current model exposes full screenshot paths plus desktop/stream logical bounds, and pointer actions expect those coordinate spaces.
-- Rich app-server harness latency is now measured through `timing.jsonl` and `timing-summary.json` in each artifact. Use those sidecars before optimizing: compare `mcp_tool_duration_total_ms` to `elapsed_ms`, check `item_wall_time_ms`, inspect `largest_inbound_gaps_ms`, and watch token growth from `last_token_usage`.
-- `get_app_state` accepts `detail: "compact"` for fast screenshot-first loops. Use full state for initial orientation/debugging, then compact state for repeated action verification so the MCP server keeps screenshot metadata, element indices/bounds, diagnostics, and app identity without resending verbose element descriptions and static capability/environment detail every step.
-- The macOS-style screenshot contract passes the rich TIDAL workflow live. `artifacts/codex-e2e/tidal-playlist-app-server/20260424T035836Z/last-message.json` completed `Codex Favorites` with five tracks, and the final proof screenshot is a bounded `1920 x 1080` JPEG with the raw `2560 x 1440` PNG preserved beside it. Timing shows the current bottleneck is model/input churn rather than plugin calls: 35 completed MCP calls took 7.7s out of 251.9s elapsed, with roughly 3.87M total tokens by the final usage update.
-- For screenshot-loop tuning, keep the raw/original capture contract intact and change only the model-facing cap. `SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH` and `SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT` override the default `1440x900` JPEG bounds for A/B runs, while invalid or unsafe values fall back to the default. These variables must be present in `.mcp.json` `env_vars` or the installed plugin process will not see them. Compare the resulting `timing-summary.json` `item_completed_counts`, `last_token_usage_deltas`, and uncached-input estimates against the TIDAL baselines.
-- Full-flow TIDAL A/B after deleting `Codex Favorites` favors `1440x900` strongly. Baseline `1920x1080` (`artifacts/codex-e2e/tidal-playlist-app-server/20260424T041253Z/`) completed in 287.24s with 42 MCP calls, 21 image views, 5.17M total tokens, and avg/max uncached input of 8.6k/60.6k. `1440x900` (`artifacts/codex-e2e/tidal-playlist-app-server/20260424T042117Z/`, actual aspect-preserved JPEG `1440x810`) completed in 246.97s with 37 MCP calls, 19 image views, 3.72M total tokens, and avg/max uncached input of 5.0k/26.9k.
-- OpenAI/app-server function parameter validation rejects top-level `anyOf`/`oneOf`/`allOf`/`enum`/`not` in MCP tool schemas. Keep computer-use action schemas closed with `additionalProperties: false`, but express element-vs-coordinate alternatives in descriptions and runtime validation, not top-level JSON Schema combinators. Live failure proof: `artifacts/codex-e2e/app-server-smoke/20260424T050411Z/`.
-- Mac-style action freshness is now enforced through `snapshot_id`: action tools require `snapshot_id`, the client rejects missing snapshots as `ComputerUseInactive`, and the service rejects non-latest snapshots as `SnapshotStale`. Live proof: `artifacts/codex-e2e/app-server-smoke/20260424T050517Z/` dismissed zenity through the stricter action flow.
-- The model screenshot encoder can now A/B lossy WebP. Use `SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp` plus `SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY`; capture metadata reports `model_image_format`, `model_image_quality`, `model_image_bytes`, and `model_image_encode_ms`. Live WebP proof: `artifacts/codex-e2e/app-server-smoke/20260424T050553Z/` returned `/run/user/1000/sky-cua/captures/a6ef3bdc-6831-44e5-8cf2-0989058c2715.webp` with `model_image_bytes=94664` and `model_image_encode_ms=69`.
-- Rich app-server harnesses should preflight `mcpServerStatus/list` before `thread/start` and write `mcp-server-status.json`. This catches server/tool schema breakage before a long turn and mirrors the observed macOS plugin harness order.
-- For Linux text-entry work, prefer `ElementNode.value` first and `ElementNode.text.content` for detailed proof when present. Empty editable fields are known empty values (`Some("")`), not absence. Reacquire `get_app_state` after `set_value`, `type_text`, or `press_key` before deciding an edit landed.
-- Rich AT-SPI readback is intentionally bounded and privacy-preserving: content caps at 4096 AT-SPI characters, selections cap at 8, and password/protected/name-sensitive controls suppress content and are not text-fetched. Missing Text/EditableText/Value proxies are normal absent metadata, not diagnostics.
-- Compact `get_app_state` keeps `value`, `text`, `numeric_value`, and `supports_editable_text`; do not optimize them out of compact shape or the agent verification loop regresses.
-- The Plasma VM readback smoke artifacts are `/workspace/artifacts/codex-e2e/codex-text-readback-smoke/20260517T041212Z` and `/workspace/artifacts/codex-e2e/app-server-text-readback-smoke/20260517T041242Z`. Both require transcript-level `get_app_state` evidence for `stale-readback` and later `verified-readback`.
-- When avoiding wrong-compositor D-Bus pokes, keep backend probe filtering conservative: skip GNOME/COSMIC/KWin/Hyprland/i3 probes only when desktop/compositor detection positively points somewhere else; if detection is unknown, keep fallback probing.
-- `sky-cua-client` finding `uname` is not itself a bug; the real detached-launch failure class is a scrubbed or narrow `PATH` that makes desktop helper probes fail by lookup. The repair path now normalizes `PATH` with `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin`, and `/bin`, then reports the result through `doctor.session_env.path_changed` / `final_path`.
-- Detached Linux session-env proof lives in three smokes: direct MCP `artifacts/session-env-smoke/20260517T080206Z`, app-server `artifacts/codex-e2e/app-server-session-env-smoke/20260517T060242Z`, and Codex exec `artifacts/codex-e2e/codex-session-env-smoke/20260517T060439Z`. The earlier direct-smoke failure was a harness race: it terminated `zenity` immediately after Enter instead of waiting for the dialog process to exit and emit `session-env-ok`.
+- `XDG_SESSION_TYPE` lies on Asgard: the remote shell reports `tty` while
+  the real stack is KDE 6 Wayland. Corroborate with live compositor and
+  portal processes, not the env var alone.
+- SSH/TTY automation can present a Wayland session as `XDG_SESSION_TYPE=tty`
+  plus a valid `WAYLAND_DISPLAY` and a stale `DISPLAY=:0`. Backend
+  detection must prefer the live Wayland display in that shape.
+- When diffing `virsh screenshot` PNGs, convert to RGB before comparing.
+  RGBA `getbbox()` can hide real changes because the screenshot alpha
+  channel is not a useful proof signal.
+
+## VM session management
+
+- Do not launch Plasma / COSMIC / Hyprland under `dbus-run-session` in
+  the testing-vm. That puts compositor services on a private bus while
+  SSH talks to `/run/user/<uid>/bus`, breaking KWin DBus discovery. Set
+  `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`, import the
+  desktop env, then exec the session.
+- Disable the KDE screen locker and PowerDevil in the test image for
+  framebuffer cursor proofs. A blanked guest looks like a fullscreen-
+  black overlay failure.
+- Launch `virt-viewer` detached:
+  `setsid -f virt-viewer --connect qemu:///session testing-vm >/tmp/sky-cua-virt-viewer.log 2>&1`.
+- VM session switching must stop the inactive display manager and clean
+  stale compositor / sky-cua processes before restarting the selected
+  one. Use `scripts/testing-vm/select-session.sh <session>`. Otherwise
+  GNOME and Plasma can run side by side, or `kwin_wayland` survives a
+  Plasma→Hyprland switch on `wayland-0` while Hyprland uses `wayland-1`.
+- After switching, refresh user portal state before preauthorization /
+  profile startup. The runner imports the target desktop env and stops
+  portal services; virtual input scopes `cosmic-randr` to COSMIC and
+  timeout-protects bounds helpers.
+
+## Compositor and capture gotchas
+
+- Real-session KWin `ScreenShot2` is not a reliable SSH smoke capture
+  path: it returns `NoAuthorized` even with
+  `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1`. Use host-side libvirt
+  framebuffer capture for production KWin pixel proof; nested KWin can
+  still use `ScreenShot2`.
+- Hyprland is stricter than KWin about layer-shell configure state. An
+  overlay host must draw only to layer surfaces that have received a
+  configure event.
+- Hyprland `grim` capture must name the active nonzero output (`grim -o
+  Virtual-1`). `grim` without `-o` fails with `failed to create buffer`
+  when a zero-sized output is present. Smokes derive
+  `HYPRLAND_INSTANCE_SIGNATURE` and pick the focused nonzero monitor
+  from `hyprctl monitors -j`.
+- KWin user-level compiled-effect discovery is blocked on Plasma 6 even
+  with explicit `loadEffect` and reconfigure. Production proof is system
+  install under `/usr` plus Plasma restart. See
+  `docs/research/2026-05-kwin-effect-discovery.md`.
+- Fullscreen GTK windows can report a logical width larger than the
+  portal stream width. Keep explicit-coordinate smoke targets
+  comfortably inside the monitor.
+- GNOME RemoteDesktop accepts smooth portal scroll calls without moving
+  the GTK scroller. Send discrete wheel steps with the sign inverted
+  from the XTest helper.
+- GNOME GTK fullscreen allocations can be taller than the framebuffer
+  (e.g. 1280x973 on 1280x800) with centered / clipped vertical content.
+  Keep that adjustment GNOME-scoped; KDE allocations behave differently.
+- KDE Screenshot portal returns a local `file://` URI; copy it into
+  `/run/user/<uid>/sky-cua/captures/`.
+
+## Input adapters
+
+- `ydotool` is unusable as the precise pointer adapter on COSMIC: its
+  virtual device is relative-only, and `mousemove --absolute` lands at
+  accelerated coordinates. Use direct absolute `/dev/uinput` for
+  pointer, ydotool for keyboard / text. See
+  `docs/research/2026-05-ydotool-vs-direct-uinput.md`.
+- Direct uinput scroll on COSMIC needs both `REL_WHEEL_HI_RES` and
+  `REL_WHEEL`, sign inverted from the portal helper.
+- `ydotool` argv must insert `--` before coordinate, wheel, and text
+  payload arguments. Otherwise negative wheel values and text starting
+  with `-` get parsed as flags. argv has unit-test coverage.
+- `cosmic-randr list` is the preferred COSMIC bounds source for the
+  direct uinput device. `xrandr` is the X11-shaped fallback;
+  `SKY_CUA_VIRTUAL_INPUT_X/Y/WIDTH/HEIGHT` are test overrides.
+- At fractional scale, direct uinput must multiply desktop logical
+  points by output scale before emitting absolute uinput values.
+  Otherwise click success is reported while the target never receives
+  the event.
+- The i3/X11 VM can start Xorg on `:1` even though the user systemd
+  env still says `DISPLAY=:0` and `WAYLAND_DISPLAY=wayland-0` from a
+  previous Plasma session. The i3 profile reconstructs `DISPLAY` and
+  `XAUTHORITY` from the active Xorg command, synthesizes a temporary
+  Xauthority, and unsets Wayland before running the smoke.
+
+## AT-SPI and selectors
+
+- Cache the AT-SPI connection in the Linux backend. Reopening per
+  request can wedge under portal-driven loops.
+- Selector matching is score-based, not first-match-wins. PID dominates;
+  class name, instance name, executable name, desktop-file stem, exact
+  title, and focused-window status all help rank candidates. No
+  title-only correlation, ever — KDE service roots like `ksmserver` and
+  `kaccess` will steal title matches.
+- A naive AT-SPI focus heuristic happily picks session services like
+  `ksmserver`. Penalize obvious service executables; prefer roots with
+  real window titles.
+- KDE background-window discovery without focus uses
+  `org.kde.KWin /WindowsRunner org.kde.krunner1.Match` for UUIDs plus
+  `org.kde.KWin.getWindowInfo` for metadata. Do not depend on
+  `org.kde.KWin.queryWindowInfo`; under Codex-launched service
+  environments it can return `UserCancel` or hang.
+- On KDE 6 Wayland, `zenity` is a reliable semantic smoke fixture.
+  `kdialog` can be visibly present without surfacing through AT-SPI from
+  a remote harness.
+- A fullscreen GTK fixture can be a useful pointer smoke target even
+  when it does not appear in `list_apps`.
+- X11-only windows appear in `list_apps` and expose a synthetic root
+  element with bounds, but may have no semantic children. Physical
+  targeting is not semantic parity. The X11 fallback tree's blunt roles
+  (`x11_container`, `x11_leaf_region`, `x11_action_region`) plus real
+  bounds are honest; inventing widget semantics from geometry is not.
+- For an `xmessage` smoke, set `-title`. Without it, `WM_NAME` stays
+  the default `xmessage` and title-based matching looks more broken than
+  it is.
+
+## Plugin packaging and Codex loading
+
+- The full plugin-loading recipe and historical investigation
+  (ChatGPT-auth + `apps=false` + bypass flag, host-tool-surface
+  contamination, etc.) lives in
+  `docs/research/2026-04-codex-plugin-chatgpt-auth-expedition.md`.
+- `.mcp.json` keeps the MCP server name `computer-use`. Do not launch
+  it via `/bin/sh -lc`; login-shell startup can emit junk like
+  `not a tty` and corrupt the JSON-RPC stream. Use
+  `/bin/sh -c "exec ./bin/sky-cua-client mcp"`.
+- Codex's stdio MCP transport uses newline-delimited JSON-RPC (`rmcp`),
+  not `Content-Length` framing. `sky-cua-client mcp` accepts both and
+  mirrors the framing it saw on input.
+- Codex-launched plugin servers do not inherit the desktop session
+  environment unless `.mcp.json` lists it in `env_vars`. Keep at least
+  `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`,
+  `DISPLAY`, `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`,
+  `DESKTOP_SESSION`. (Runtime repair exists as a fallback; see
+  `docs/features/session-env-repair.md`.)
+- Marketplace plugin entries keep the full scaffold: `source`,
+  `policy.installation`, `policy.authentication`, `category`. For the
+  Heliasar `sky-cua` release marketplace, default to `AVAILABLE`,
+  `ON_INSTALL`, `Coding`.
+- Release marketplace checkout is `~/projects/heliasar-marketplace`.
+  `~/.agents/sky-cua-marketplace` is legacy; do not publish there.
+- Local release deploy expects `sky-cua@Heliasar` enabled, `sky-cua@debug`
+  disabled, `computer-use@openai-bundled` disabled. Cheap proof:
+  `codex app-server` `mcpServerStatus/list` shows one `computer-use`
+  server with the sky-cua tool set.
+
+## Smoke harnesses
+
+- The client Unix-socket read timeout must be generous enough for real
+  portal approval UX. Sixty seconds is the current setting; tighten
+  only with a clearer operator-facing diagnostic when the prompt is
+  missed.
+- For `codex exec` plugin tests, validate the JSONL transcript for an
+  actual `mcp_tool_call` against server `computer-use`. The final JSON
+  blob alone can describe a workflow the model completed with shell
+  hacks.
+- The installed-plugin acceptance harness is
+  `scripts/live_app_server_smoke.py` against `codex app-server`.
+  `codex exec` is a diagnostic probe.
+- When driving `codex app-server` directly, close the child process
+  before draining `stderr`. The reverse order hangs Python harness
+  cleanup forever.
+- `sky-cua-service` must handle SIGTERM through normal teardown.
+  Cleanup must match `sky-cua-service`, the full overlay-host argv (on
+  `sky-cua-overlay-host`), and the truncated Linux comm name
+  `sky-cua-overlay`.
+- If the live KDE smoke starts failing mysteriously, kill stale
+  `sky-cua-service` and re-run before inventing a theory.
+
+## Portal state
+
+- Persisted Wayland approval reuse lives in `portal-tokens.json` under
+  `XDG_STATE_HOME/sky-cua` (or `~/.local/state/sky-cua`). The
+  RemoteDesktop lane rotates the restore token on successful session
+  start. Reset via `sky-cua-client clear-portal-tokens` or
+  `python3 scripts/reset_portal_tokens.py`.

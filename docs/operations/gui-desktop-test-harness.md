@@ -161,7 +161,7 @@ the host OpenCode database, logs, snapshots, or tool-output history.
 
 This prepares the VM for the non-Codex harness lane. Registering the sky-cua
 MCP runtime inside OpenCode still follows the plain MCP host instructions in
-`docs/mcp-runtime.md`; the VM prep here only installs OpenCode itself and
+`docs/runtime/mcp-boundary.md`; the VM prep here only installs OpenCode itself and
 copies the user's OpenCode config/auth safely.
 
 For the current QEMU user-networking VM:

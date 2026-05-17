@@ -273,7 +273,7 @@ opencode run --dir /home/bex/projects/sky-cua \
 ```
 
 For VM-based non-Codex harness work, use the Arch testing VM documented in
-`docs/gui-desktop-test-harness.md`. The provisioner installs OpenCode from npm
+`docs/operations/gui-desktop-test-harness.md`. The provisioner installs OpenCode from npm
 with `OPENCODE_NPM_SPEC` defaulting to `opencode-ai@1.14.51`; then sync host
 OpenCode config/auth into the VM without copying the host DB, logs, snapshots,
 or tool-output history:

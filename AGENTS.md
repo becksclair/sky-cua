@@ -32,6 +32,44 @@ python3 scripts/build_plugin.py
 - Preserve executable wrapper contracts in `bin/` and `.mcp.json`.
 - Branch names normally use `bex/` unless the user asks otherwise.
 
+## Document Hierarchy
+
+The repository uses one curated layout for project knowledge. Do not invent
+parallel structures.
+
+- `README.md` — onboarding, quickstart, current state at a glance.
+- `ROADMAP.md` — phased checklist of active workstreams. Links to feature docs
+  and active ExecPlans. Slow-changing and curated.
+- `CONTINUITY.md` — live working snapshot for the current session: goal,
+  constraints, current state, working set, next step, open questions.
+  Fast-changing, not a permanent record. Trim before adding more if it grows
+  past ~80 lines.
+- `NOTES.md` — durable tactical memory: proven commands, pitfalls, patterns,
+  invariants, environment quirks. Not transcripts, not stale TODO lists, not
+  artifact dumps. Trim before adding more if it grows past ~150 lines.
+- `docs/` — durable project knowledge. Subdivided by purpose:
+  - `docs/runtime/` — stable runtime contracts (MCP boundary, architecture).
+  - `docs/features/` — descriptive docs for shipped features. One per
+    subsystem, written from the feature doc template in `docs/AGENTS.md`.
+  - `docs/operations/` — operator-facing harness, runbook, and procedure docs.
+  - `docs/research/` — dated research findings (`YYYY-MM-<slug>.md`).
+    Self-contained, not living documents.
+- `plans/` — active forward-looking ExecPlans only. See `plans/AGENTS.md`
+  for the lifecycle rule. Should be empty or near-empty when the team is
+  caught up.
+
+Do not create new top-level documentation directories. Do not add `goals/`,
+`specs/`, `prds/`, `rfcs/`, or similar parallel hierarchies; they fragment the
+knowledge tree.
+
+## File Naming
+
+- Use human-readable slugs in lowercase with underscores or hyphens, e.g.
+  `linux_virtual_input.md`, `agent-cursor-overlay.md`.
+- Do not use timestamp-prefixed or auto-generated names like
+  `1778463694899-nimble-knight.md`.
+- Research files are dated: `docs/research/YYYY-MM-<slug>.md`.
+
 ## Security & Secrets
 
 - Never commit tokens, auth files, portal restore tokens, screenshots with sensitive UI, or live request payloads.
@@ -53,7 +91,12 @@ python3 scripts/build_plugin.py
 - Bundled workflow skill: `skills/computer-use-workflows/` -> [skills/computer-use-workflows/AGENTS.md](skills/computer-use-workflows/AGENTS.md)
 - Local VM smoke skill: `.agents/skills/vm-tests/` -> [.agents/skills/vm-tests/SKILL.md](.agents/skills/vm-tests/SKILL.md)
 - Docs: `docs/` -> [docs/AGENTS.md](docs/AGENTS.md)
+  - Runtime contracts: `docs/runtime/`
+  - Feature docs: `docs/features/`
+  - Operator docs: `docs/operations/`
+  - Research extracts: `docs/research/`
 - Plans: `plans/` -> [plans/AGENTS.md](plans/AGENTS.md)
+- Roadmap: `ROADMAP.md`
 
 ### Quick Find Commands
 
@@ -73,4 +116,8 @@ python3 scripts/build_plugin.py
 - For Rust runtime changes: `cargo fmt --check && cargo test`.
 - For Python harness changes: `uv run ruff format --check scripts && uv run ruff check scripts && uv run basedpyright && uv run pytest`.
 - For packaging changes: `python3 scripts/build_plugin.py` and inspect the staged bundle shape.
-- State any live-smoke gates not run, especially desktop/portal/KDE/TIDAL flows.
+- State any live-smoke gates not run, especially desktop/portal/KDE/COSMIC/Hyprland/GNOME flows.
+- For shipped features, update or create `docs/features/<slug>.md` and the
+  matching `ROADMAP.md` entry. See `docs/AGENTS.md` for the feature doc
+  template.
+- For retired ExecPlans, follow the lifecycle rule in `plans/AGENTS.md`.

@@ -141,7 +141,7 @@ python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host
 ```
 
 For production-like Linux GUI and non-Codex harness proof, use the Arch
-`testing-vm` path in `docs/gui-desktop-test-harness.md`. The VM provisioner
+`testing-vm` path in `docs/operations/gui-desktop-test-harness.md`. The VM provisioner
 installs OpenCode, and `scripts/testing-vm/sync-opencode-to-vm.sh` copies the
 host OpenCode config/auth without copying the host OpenCode database, logs, or
 snapshots.
@@ -167,7 +167,7 @@ rebuilding on Linux does not delete Windows `.exe` binaries from the local
 marketplace and vice versa.
 
 If the local Codex config gets stale, the durable reset procedure is documented
-in `docs/mcp-runtime.md` under "Codex release deploy and config reset".
+in `docs/runtime/mcp-boundary.md` under "Codex release deploy and config reset".
 `publish_marketplace_release.py` commits and pushes the marketplace checkout
 before upgrading the Codex Git marketplace.
 
@@ -205,14 +205,14 @@ python3 scripts/live_kdialog_smoke.py
 ```
 
 For the full installed-plugin ChatGPT-auth E2E investigation, see
-`docs/codex-plugin-e2e-expedition.md`.
+`docs/research/2026-04-codex-plugin-chatgpt-auth-expedition.md`.
 
 For the portable runtime boundary and host-adapter expectations, see
-`docs/mcp-runtime.md`.
+`docs/runtime/mcp-boundary.md`.
 
-For the current Codex Desktop compatibility plan, including the exact Browser
-Use/Chrome proof artifacts, see
-`plans/1778463694899-nimble-knight.md`.
+For the current Codex Desktop compatibility surface, including the Browser
+Use / Chrome companion plugin coverage and the native messaging host, see
+`docs/features/codex-desktop-compat.md`.
 
 ## Current Limitations
 
