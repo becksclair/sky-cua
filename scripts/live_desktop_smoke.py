@@ -484,9 +484,7 @@ def semantic_text_smoke(client: McpClient) -> None:
             ),
             "set_value",
         )
-        updated_snapshot = wait_for_app_snapshot(
-            client, ZENITY_TITLE, deadline=time.time() + 10
-        )
+        updated_snapshot = wait_for_app_snapshot(client, ZENITY_TITLE, deadline=time.time() + 10)
         updated_editable = find_editable(updated_snapshot)
         require_editable_readback(
             updated_editable,
