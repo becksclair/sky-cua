@@ -15,12 +15,13 @@ The work is grounded in two repositories available on this machine. The target r
 - [x] (2026-05-17 08:00Z) Compared CDUL against the current `sky-cua` source with three read-only `codex-worker` lanes: windowing/session management, capture/input/AT-SPI, and packaging/host/diagnostics.
 - [x] (2026-05-17 08:00Z) Confirmed the main adoption strategy: do not port CDUL wholesale; implement small fidelity and operator-experience enhancements where `sky-cua` still has a gap.
 - [x] (2026-05-17 08:00Z) Authored this ExecPlan under `plans/`.
+- [x] (2026-05-17 08:09Z) Recorded that desktop-facing validation must use the `$sky-cua:vm-tests` skill and the real Arch `testing-vm` runner documented in `docs/gui-desktop-test-harness.md`.
 - [ ] Implement terminal command-line fidelity in `crates/sky-cua-linux/src/windowing/terminal.rs`.
 - [ ] Improve Linux input diagnostics and readiness text in `crates/sky-cua-linux/src/doctor.rs` and the platform model if needed.
 - [ ] Add portal screenshot/request-handle regression coverage or a lower-level fallback only if the current `ashpd` path proves insufficient under tests.
 - [ ] Add app-root prefiltering for targeted AT-SPI snapshots without weakening the existing rich tree output.
 - [ ] Polish GNOME setup messages and window backend operator notes.
-- [ ] Add or document stable operator probe commands and run focused validation.
+- [ ] Add or document stable operator probe commands and run focused local validation plus the applicable `testing-vm` smoke profiles.
 
 ## Surprises & Discoveries
 
@@ -32,6 +33,9 @@ The work is grounded in two repositories available on this machine. The target r
 
 - Observation: `sky-cua` already has some granular input checks, so the doctor work is likely model/reporting polish rather than a brand-new probe subsystem.
   Evidence: `crates/sky-cua-linux/src/doctor.rs` already contains `ydotool_socket_check`, `ydotool_socket_candidates`, `binary_check`, `process_check`, and `path_check`, but the public readiness summary still mainly reports high-level `input_backend` and `can_send_input` state.
+
+- Observation: Local unit tests are not sufficient acceptance for portal, input, windowing, or AT-SPI behavior that depends on real compositors.
+  Evidence: `docs/gui-desktop-test-harness.md` says the preferred Linux test path is an Arch `testing-vm` running real KWin, GNOME Shell, COSMIC, Hyprland, or i3 sessions, and `.agents/skills/vm-tests/SKILL.md` requires using `scripts/run_gui_testing_vm_smoke.py` against the visible VM desktop session rather than nested Docker, Xvfb, or stale nested compositor paths.
 
 ## Decision Log
 
@@ -45,6 +49,10 @@ The work is grounded in two repositories available on this machine. The target r
 
 - Decision: Keep `set_value` text-first unless live evidence shows role-specific numeric controls need a different policy.
   Rationale: CDUL tries numeric `Value` first when the payload parses as a number. `sky-cua` currently tries `EditableText` first in `crates/sky-cua-linux/src/atspi/actions.rs`, which is safer for text fields containing numeric strings. Any change should be role- or metadata-gated, not global.
+  Date/Author: 2026-05-17 / Codex
+
+- Decision: Validate desktop-facing slices with `$sky-cua:vm-tests` and the Arch `testing-vm` runner.
+  Rationale: The enhancements affect Linux desktop behavior that can depend on real portal backends, compositor process state, Wayland display names, X11 metadata, and AT-SPI roots. The accepted project path for that proof is `scripts/run_gui_testing_vm_smoke.py` as described in `docs/gui-desktop-test-harness.md`, after selecting or confirming the visible guest session.
   Date/Author: 2026-05-17 / Codex
 
 ## Outcomes & Retrospective
@@ -65,6 +73,8 @@ The RemoteDesktop and Screenshot portals are desktop services exposed over D-Bus
 
 The GNOME window-targeting setup path writes a GNOME Shell extension under the user's local extension directory and enables it. In `sky-cua`, the setup code is `crates/sky-cua-linux/src/setup.rs`, and the bundled extension source is under `resources/gnome-shell-extension/codex-window-control@openai.com/`. CDUL has more explicit messages for the case where files are written and enabling is requested, but GNOME Shell has not loaded the DBus API yet.
 
+The accepted VM smoke lane is documented by the repo-local skill `.agents/skills/vm-tests/SKILL.md`, referred to in conversation as `$sky-cua:vm-tests`. Before running or interpreting a VM profile, read `docs/gui-desktop-test-harness.md`, `skills/sky-cua-isolated-daemon/references/testing-vm-desktop-smokes.md`, and `scripts/run_gui_testing_vm_smoke.py --help` or the script source if adding flags or diagnosing runner behavior. The VM lane uses a visible Arch `testing-vm` guest desktop session, not a nested compositor, Docker GUI image, or old nested-Xvfb smoke. When `testing-vm` does not resolve by hostname, use the SSH port-forward form with `--host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts`.
+
 ## Plan of Work
 
 Begin with terminal command-line fidelity. Extend `ProcessInfo` in `crates/sky-cua-linux/src/windowing/terminal.rs` with a `command_line: String` field. When reading `/proc/<pid>`, parse `/proc/<pid>/cmdline` as NUL-separated arguments and join non-empty arguments with spaces. If `cmdline` is empty or unreadable, fall back to the current `command_name`. Update `process_summary` so `TerminalProcessInfo.command_line` receives the full command line. Add unit tests beside the existing terminal enrichment tests to prove both root and active process command lines are preserved. If direct `/proc` fixture injection is awkward, keep the unit tests around `ProcessInfo` values and `enrich_terminal_windows_with_processes`; do not add filesystem-dependent tests for `/proc`.
@@ -78,6 +88,8 @@ Next, add targeted AT-SPI app-root prefiltering. In `crates/sky-cua-linux/src/ap
 Polish operator wording after the behavioral changes. Update `crates/sky-cua-linux/src/setup.rs` so `setup_window_targeting_message` distinguishes these outcomes: files could not be written; files were written but enabling failed; enabling succeeded but the DBus API is not available until GNOME Shell reloads or the user logs out and back in; and exact targeting is live now. Update `crates/sky-cua-linux/src/windowing/registry.rs` descriptors so `list_note` mentions that terminal windows may include terminal process context when the process tree is readable. Do not change backend ordering or aggregation: `sky-cua` should keep aggregating environment-appropriate backends and should not regress to CDUL's first-usable-backend behavior.
 
 Finally, review operator probe commands. `sky-cua-client` already exposes operator commands through `crates/sky-cua-client/src/operator_cli.rs`. Confirm that `doctor`, `list-windows` or `list_windows`, `focused-window` or `focused_window`, and setup commands are stable and documented. If a useful probe exists only as an MCP tool and not as an operator command, add the smallest CLI wrapper through the existing operator CLI parser. The goal is not a new binary; it is a stable set of post-install probes using the existing client binary.
+
+For implementation slices that touch portal, input, windowing, focused-window selection, AT-SPI app-root selection, GNOME setup behavior, or operator proof, validate with `$sky-cua:vm-tests` after local tests. Choose the smallest real-session VM profile that exercises the changed seam. For example, use `wayland-pointer` or `computer-use` on Plasma for portal input and general Computer Use proof, `wayland-pointer` on GNOME for GNOME RemoteDesktop/input behavior, `cosmic-helper` or `wayland-pointer-scaled` on COSMIC for COSMIC helper and virtual-input behavior, `wayland-layer-shell-overlay` on Hyprland only if overlay/layer-shell behavior is affected, and `i3` when X11/i3 window metadata or terminal targeting is changed. Report the selected session, display, exact command, profile, and artifact directory.
 
 ## Concrete Steps
 
@@ -125,6 +137,27 @@ Run all commands from `/home/bex/projects/sky-cua`.
     uv run basedpyright
     uv run pytest
 
+11. For any implementation slice that changes desktop-facing behavior, follow `$sky-cua:vm-tests` and read `docs/gui-desktop-test-harness.md` before choosing a VM profile. First select or confirm the guest session. For Plasma/KWin proof over the forwarded SSH port, use:
+
+    ssh -p 22222 \
+      -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+      skycua@127.0.0.1 'cd /workspace && sudo scripts/testing-vm/select-session.sh plasma'
+
+    ssh -p 22222 \
+      -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+      skycua@127.0.0.1 'pgrep -a "kwin_wayland|gnome-shell|Hyprland|cosmic-session|cosmic-comp|i3|Xorg"; ls -l /run/user/1000/wayland-* 2>/dev/null || true'
+
+    uv run python scripts/run_gui_testing_vm_smoke.py \
+      --host 127.0.0.1 --port 22222 --user skycua \
+      --ssh-option StrictHostKeyChecking=no \
+      --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+      --profile wayland-pointer \
+      --desktop-env KDE --wayland-display wayland-0
+
+    Let the runner build and sync by default. Use `--skip-host-build` or `--skip-sync` only after confirming the VM already has the exact artifacts under test. Do not use `--sync-codex-settings` unless the selected profile needs authenticated Codex state.
+
 ## Validation and Acceptance
 
 The terminal enhancement is accepted when a unit test proves that a terminal process with command name `codex` and command line `codex --dangerously-bypass-approvals-and-sandbox` appears in `TerminalProcessInfo.command_line` exactly as the full command line, while `command_name` remains `codex`. A second test should prove the fallback path still uses `command_name` when the full command line is absent.
@@ -150,11 +183,15 @@ If the implementation touches shared platform model fields, additionally run:
     cargo test -p sky-cua-platform
     cargo test -p sky-cua-client
 
+Desktop-facing acceptance requires a real `testing-vm` proof for the relevant seam, selected through `$sky-cua:vm-tests` and `docs/gui-desktop-test-harness.md`. Local-only tests are enough for pure parser/model edits, but portal, input, windowing, AT-SPI selection, GNOME setup, X11/i3 metadata, or operator smoke changes must be proved in a visible guest session. The closure note must include the selected guest session and display, the exact `scripts/run_gui_testing_vm_smoke.py` command, whether build or sync was skipped, the profile name, the artifact directory or host summary path, and any cleanup residue.
+
 ## Idempotence and Recovery
 
-All planned edits are additive or localized. Re-running `cargo fmt --all` and the focused test commands is safe. If a test creates temporary files or sockets for doctor probes, use temporary directories or environment overrides and clean them up automatically in the test. Do not require a real desktop session for unit tests; keep live portal or VM proof as a separate optional validation step.
+All planned edits are additive or localized. Re-running `cargo fmt --all` and the focused test commands is safe. If a test creates temporary files or sockets for doctor probes, use temporary directories or environment overrides and clean them up automatically in the test. Do not require a real desktop session for unit tests; use the Arch `testing-vm` runner for the live desktop proof instead.
 
 If a model-field change causes downstream serialization failures, revert only the new model field or add `#[serde(default, skip_serializing_if = "Option::is_none")]` so older JSON remains compatible. If an AT-SPI prefilter causes the wrong app to be selected in tests, disable only the new targeted path and keep the existing all-app discovery behavior intact while debugging.
+
+If a VM run fails because `testing-vm` does not resolve, rerun with the `127.0.0.1:22222` port-forward form shown above. If a profile fails on the wrong Wayland socket, switch the guest session with `scripts/testing-vm/select-session.sh`, then confirm compositor processes and `/run/user/1000/wayland-*`. If portal behavior looks wrong after switching desktops, rerun without `--skip-sync` so the runner refreshes the user portal stack and imports the requested desktop environment.
 
 ## Artifacts and Notes
 
@@ -182,6 +219,9 @@ The key `sky-cua` source references for implementation are:
     crates/sky-cua-linux/src/setup.rs
     crates/sky-cua-linux/src/windowing/registry.rs
     crates/sky-cua-client/src/operator_cli.rs
+    docs/gui-desktop-test-harness.md
+    .agents/skills/vm-tests/SKILL.md
+    scripts/run_gui_testing_vm_smoke.py
 
 Do not store raw worker transcripts or large JSON artifacts in this plan. If future implementation produces live proof artifacts, record only the artifact path and the specific observation it proves.
 
@@ -194,3 +234,5 @@ If `DoctorInputReport` needs new detail fields, define them in `crates/sky-cua-p
 Do not introduce new third-party dependencies for these enhancements. The required information comes from `/proc`, existing command probes, existing portal wrappers, existing AT-SPI types, and the current platform model.
 
 Revision note: Created 2026-05-17 by Codex to turn the CDUL comparison proposal into a self-contained implementation plan. The plan records that `sky-cua` should adopt small fidelity and diagnostics improvements, not CDUL's architecture wholesale.
+
+Revision note: Updated 2026-05-17 by Codex to require `$sky-cua:vm-tests` and the Arch `testing-vm` runner from `docs/gui-desktop-test-harness.md` for desktop-facing validation.
