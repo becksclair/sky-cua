@@ -111,4 +111,4 @@ environment.
 - Runtime contract: [`docs/runtime/mcp-boundary.md`](../runtime/mcp-boundary.md)
   describes the desktop environment allowlist host adapters should still
   forward.
-- Originating ExecPlan retired: `plans/detached_session_env_repair.md`
+- Originating ExecPlan (retired into this feature doc; see git history for `plans/detached_session_env_repair.md`).

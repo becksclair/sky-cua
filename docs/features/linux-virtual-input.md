@@ -146,4 +146,4 @@ input smoke, and restores 1280x800 at 100% afterward.
 
 - Research: [`docs/research/2026-05-ydotool-vs-direct-uinput.md`](../research/2026-05-ydotool-vs-direct-uinput.md)
 - ROADMAP entry: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop parity"
-- Originating ExecPlan retired: `plans/linux_virtual_input_backend.md`
+- Originating ExecPlan (retired into this feature doc; see git history for `plans/linux_virtual_input_backend.md`).

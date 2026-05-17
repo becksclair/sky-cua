@@ -94,4 +94,4 @@ message: at least one `get_app_state` tool result must contain
 ## Related
 
 - ROADMAP entry: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop parity"
-- Originating ExecPlan retired: `plans/rich_atspi_readback.md`
+- Originating ExecPlan (retired into this feature doc; see git history for `plans/rich_atspi_readback.md`).

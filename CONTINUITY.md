@@ -22,9 +22,11 @@ enforced for future work.
   `docs/research/`, and `plans/` for active forward-looking design only.
 - All previously shipped Linux plans are retired into feature docs and
   research extracts; `goals/` is removed. Active plans now in
-  `plans/`: `docs_and_plans_cleanup.md`, `cdul_linux_enhancements.md`,
-  `wayland_fallback_vision_anchors.md`, `windows_capture_ladder.md`,
-  and `windows_app_shell_smokes.md`.
+  `plans/`: [`docs_and_plans_cleanup.md`](plans/docs_and_plans_cleanup.md),
+  [`cdul_linux_enhancements.md`](plans/cdul_linux_enhancements.md),
+  [`wayland_fallback_vision_anchors.md`](plans/wayland_fallback_vision_anchors.md),
+  [`windows_capture_ladder.md`](plans/windows_capture_ladder.md), and
+  [`windows_app_shell_smokes.md`](plans/windows_app_shell_smokes.md).
 - AGENTS contract updated at root, `docs/`, and `plans/`. Naming rule
   bans timestamp-prefixed and auto-generated filenames.
 

@@ -95,10 +95,8 @@ other.
 ## Source paths
 
 - `crates/sky-cua-platform/src/model.rs` — public types and serialization
-- `crates/sky-cua-service/src/overlay.rs` — `OverlayController` and state
-  ownership
-- `crates/sky-cua-service/src/cursor_compositor.rs` — synthetic screenshot
-  compositing
+- `crates/sky-cua-service/src/overlay.rs` — `OverlayController`, state
+  ownership, and synthetic screenshot compositing
 - `crates/sky-cua-overlay-host/` — overlay host crate
   - `src/layer_shell.rs` — generic Wayland layer-shell backend (KWin, Hyprland)
   - `src/x11.rs` — X11 shaped-window backend
@@ -180,4 +178,4 @@ Latest accepted artifacts (per `CONTINUITY.md` 2026-05-15):
 - Research: [`docs/research/2026-05-x11-shaped-window-vs-layer-shell.md`](../research/2026-05-x11-shaped-window-vs-layer-shell.md)
 - Companion feature: [`docs/features/compositor-cursor-hiding.md`](compositor-cursor-hiding.md)
 - ROADMAP entry: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop parity"
-- Originating ExecPlan retired: `plans/native_agent_cursor_overlay.md` (replaced by this doc)
+- Originating ExecPlan (retired into this feature doc; see git history for `plans/native_agent_cursor_overlay.md`).

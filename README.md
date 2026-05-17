@@ -210,9 +210,9 @@ For the full installed-plugin ChatGPT-auth E2E investigation, see
 For the portable runtime boundary and host-adapter expectations, see
 `docs/runtime/mcp-boundary.md`.
 
-For the current Codex Desktop compatibility plan, including the exact Browser
-Use/Chrome proof artifacts, see
-`plans/1778463694899-nimble-knight.md`.
+For the current Codex Desktop compatibility surface, including the Browser
+Use / Chrome companion plugin coverage and the native messaging host, see
+`docs/features/codex-desktop-compat.md`.
 
 ## Current Limitations
 

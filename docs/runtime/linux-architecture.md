@@ -100,8 +100,9 @@ for workspace metadata specifics.
 
 The Wayland primary lane is in-process PipeWire frame capture from the
 active ScreenCast session, in
-`crates/sky-cua-linux/src/portal/screen_cast.rs`. The Screenshot portal
-in `crates/sky-cua-linux/src/portal/screenshot.rs` is the fallback when
+`crates/sky-cua-linux/src/portal/screencast.rs` and
+`crates/sky-cua-linux/src/portal/pipewire.rs`. The Screenshot portal in
+`crates/sky-cua-linux/src/portal/screenshot.rs` is the fallback when
 PipeWire fails.
 
 `CaptureInfo` distinguishes:

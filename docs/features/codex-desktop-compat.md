@@ -193,4 +193,4 @@ Latest accepted artifacts:
 - Companion feature: [`docs/features/session-env-repair.md`](session-env-repair.md)
 - ROADMAP entries: [`ROADMAP.md`](../../ROADMAP.md) under "Host
   portability".
-- Originating ExecPlan retired: `plans/1778463694899-nimble-knight.md`
+- Originating ExecPlan (retired into this feature doc; see git history for `plans/1778463694899-nimble-knight.md`).

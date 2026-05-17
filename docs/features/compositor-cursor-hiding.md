@@ -82,19 +82,14 @@ Capability honesty rules:
 - `crates/sky-cua-platform/src/model.rs` — backend variants and capability
   fields
 - `crates/sky-cua-overlay-host/src/system_cursor.rs` — adapter trait and
-  selection
+  selection plus the Hyprland-config, COSMIC bridge, and transparent-
+  Xcursor adapter implementations
 - `crates/sky-cua-overlay-host/src/x11.rs` — XFixes adapter wiring
 - `crates/sky-cua-overlay-host/src/layer_shell.rs` — Wayland adapter
   selection (delegates to compositor-specific adapters or reports
   `wayland_client_unsupported`)
 - `crates/sky-cua-overlay-host/src/gnome_shell.rs` — GNOME extension
   adapter client
-- `crates/sky-cua-overlay-host/src/hyprland_config.rs` — Hyprland
-  `cursor:invisible` adapter
-- `crates/sky-cua-overlay-host/src/cosmic_bridge.rs` — COSMIC bridge
-  adapter
-- `crates/sky-cua-overlay-host/src/cosmic_transparent_xcursor.rs` —
-  no-patch COSMIC fallback adapter
 - `resources/kwin/effects/sky-cua-agent-cursor/systemcursoradapter.cpp` —
   KWin effect adapter
 - `resources/gnome-shell-extension/codex-window-control@openai.com/extension.js`
@@ -167,4 +162,4 @@ clean cleanup.
 - ROADMAP entries: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop
   parity" — both the shipped item and the long-term unpatched-COSMIC
   follow-up.
-- Originating ExecPlan retired: `plans/compositor_cursor_hiding.md`
+- Originating ExecPlan (retired into this feature doc; see git history for `plans/compositor_cursor_hiding.md`).

@@ -72,4 +72,4 @@ the MCP `list_windows` tool) on a real KWin and on a real X11 session with
 ## Related
 
 - ROADMAP entry: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop parity"
-- Originating ExecPlan retired: `plans/1778571910929-proud-mountain.md`
+- Originating ExecPlan (retired into this feature doc; see git history for `plans/1778571910929-proud-mountain.md`).
