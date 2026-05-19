@@ -127,7 +127,8 @@ def main() -> int:
                 if "activate_window" not in tools:
                     raise RuntimeError("MCP server did not advertise activate_window")
 
-                # Discover the fixture window by exact title + PID.
+                # Discover the fixture window by exact title + PID when the
+                # backend exposes PID. COSMIC's toplevel protocol does not.
                 list_result = client.tools_call(
                     99,
                     "list_windows",
@@ -135,15 +136,16 @@ def main() -> int:
                 )
                 write_json(artifact_dir / "pre-activate-windows.json", list_result)
                 windows = (list_result.get("structuredContent") or {}).get("windows") or []
-                fixture_window = None
-                for w in windows:
-                    if w.get("title") == "sky-cua pointer smoke" and w.get("pid") == fixture.pid:
-                        fixture_window = w
-                        break
+                title_matches = [w for w in windows if w.get("title") == "sky-cua pointer smoke"]
+                fixture_window = next(
+                    (w for w in title_matches if w.get("pid") == fixture.pid),
+                    title_matches[0] if len(title_matches) == 1 else None,
+                )
                 if fixture_window is None:
                     raise RuntimeError(
-                        "Did not find fixture window with title 'sky-cua pointer smoke' "
-                        f"and pid {fixture.pid}. windows={json.dumps(windows, indent=2)}"
+                        "Did not find a unique fixture window with title "
+                        f"'sky-cua pointer smoke' and pid {fixture.pid}. "
+                        f"windows={json.dumps(windows, indent=2)}"
                     )
 
                 activate_result = client.tools_call(
