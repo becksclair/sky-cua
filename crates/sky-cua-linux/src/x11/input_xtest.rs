@@ -11,7 +11,12 @@ pub enum X11MouseButton {
 }
 
 pub fn xtest_is_available() -> bool {
-    env::var_os("DISPLAY").is_some() && command_exists("xdotool")
+    env::var("DISPLAY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .is_some()
+        && command_exists("xdotool")
 }
 
 pub fn pointer_move_absolute(x: f64, y: f64) -> Result<(), BackendError> {
@@ -215,7 +220,7 @@ fn command_exists(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{X11MouseButton, normalize_key_name, round_coordinate, xdotool_button};
+    use super::{normalize_key_name, round_coordinate, xdotool_button, X11MouseButton};
 
     #[test]
     fn maps_mouse_buttons() {

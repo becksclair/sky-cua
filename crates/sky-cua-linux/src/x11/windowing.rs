@@ -5,6 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::env_probe::non_empty_env;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{AppInfo, CoordinateSpace, RectF};
 
@@ -29,7 +30,8 @@ pub struct X11WindowRegion {
 }
 
 pub fn x11_server_running() -> bool {
-    env::var_os("DISPLAY").is_some()
+    non_empty_env("DISPLAY")
+        .is_some()
         && command_exists("xdpyinfo")
         && Command::new("xdpyinfo")
             .output()

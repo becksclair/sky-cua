@@ -85,7 +85,7 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
     })
 }
 
-fn non_empty_env(name: &str) -> Option<String> {
+pub(crate) fn non_empty_env(name: &str) -> Option<String> {
     env::var(name)
         .ok()
         .map(|value| value.trim().to_string())
