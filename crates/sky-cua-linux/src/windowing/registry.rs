@@ -184,6 +184,12 @@ pub async fn verify_window_focused(
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1_000);
     let mut last_focused = None;
     loop {
+        if let Some(focused) = focused_window_override() {
+            if same_focus_target(&focused, expected) {
+                return Ok(focused);
+            }
+            last_focused = Some(focused);
+        }
         let windows = discover_windows(environment).await?;
         if let Some(focused) = windows.into_iter().find(|window| window.focused) {
             if same_focus_target(&focused, expected) {

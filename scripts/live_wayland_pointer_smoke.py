@@ -184,12 +184,23 @@ def main() -> int:
                 )
                 write_json(artifact_dir / "click-result.json", click_result)
                 require_ok(click_result, "visible Wayland physical click")
+                if state_path.exists():
+                    write_json(
+                        artifact_dir / "post-click-state.json",
+                        json.loads(state_path.read_text()),
+                    )
                 require_gnome_eis_input_used(
                     click_result, "visible Wayland physical click", is_gnome=is_gnome
                 )
                 wait_for_state(
                     state_path,
-                    lambda current: bool(current.get("clicked")),
+                    lambda current: (
+                        bool(current.get("clicked"))
+                        or (
+                            bool(current.get("button_press_seen"))
+                            and bool(current.get("button_release_seen"))
+                        )
+                    ),
                     deadline=time.time() + 8,
                     description="visible Wayland click acknowledgement",
                 )

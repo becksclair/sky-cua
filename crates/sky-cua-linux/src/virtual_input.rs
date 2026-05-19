@@ -15,6 +15,8 @@ use crate::portal::remote_desktop::MouseButton;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const UINPUT_PATH: &str = "/dev/uinput";
 const UINPUT_SETTLE_DELAY: Duration = Duration::from_millis(650);
+const POINTER_ACTION_SETTLE_DELAY: Duration = Duration::from_millis(180);
+const BUTTON_HOLD_DELAY: Duration = Duration::from_millis(120);
 
 const EV_SYN: i32 = 0x00;
 const EV_KEY: i32 = 0x01;
@@ -196,7 +198,7 @@ impl LinuxVirtualInput {
             VirtualInputAdapterKind::DirectUinput => {
                 let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
                 device.move_absolute(x, y)?;
-                thread::sleep(Duration::from_millis(40));
+                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
                 device.click(button)
             }
             VirtualInputAdapterKind::Ydotool => {
@@ -211,12 +213,12 @@ impl LinuxVirtualInput {
             VirtualInputAdapterKind::DirectUinput => {
                 let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
                 device.move_absolute(from.0, from.1)?;
-                thread::sleep(Duration::from_millis(40));
+                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
                 device.pointer_button(MouseButton::Left, true)?;
-                thread::sleep(Duration::from_millis(40));
+                thread::sleep(BUTTON_HOLD_DELAY);
                 let result = (|| {
                     device.move_absolute(to.0, to.1)?;
-                    thread::sleep(Duration::from_millis(40));
+                    thread::sleep(POINTER_ACTION_SETTLE_DELAY);
                     device.pointer_button(MouseButton::Left, false)
                 })();
                 if result.is_err() {
@@ -259,7 +261,7 @@ impl LinuxVirtualInput {
             VirtualInputAdapterKind::DirectUinput => {
                 let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
                 device.move_absolute(x, y)?;
-                thread::sleep(Duration::from_millis(40));
+                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
                 device.scroll_vertical(steps)
             }
             VirtualInputAdapterKind::Ydotool => {
@@ -414,7 +416,7 @@ impl UinputPointerDevice {
 
     fn click(&mut self, button: MouseButton) -> Result<(), BackendError> {
         self.pointer_button(button, true)?;
-        thread::sleep(Duration::from_millis(45));
+        thread::sleep(BUTTON_HOLD_DELAY);
         self.pointer_button(button, false)
     }
 
