@@ -1,3 +1,4 @@
+pub(crate) mod actions;
 pub mod app_policy;
 pub mod apps;
 pub mod atspi;

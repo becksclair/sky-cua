@@ -2,19 +2,20 @@ use atspi::AccessibilityConnection;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
-    ActionName, ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind,
-    CaptureInfo, CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorReport, ElementNode,
+    ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind, CaptureInfo,
+    CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorReport, ElementNode,
     EnvironmentInfo, FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, RectF,
     SemanticBackendKind, ToolAvailability, ToolCapabilities,
 };
-use sky_cua_platform::{AppInfo, SetValueFallbackMode, SetValueRouting, new_snapshot_id};
+use sky_cua_platform::{AppInfo, new_snapshot_id};
 
+use crate::actions::runtime::{
+    SemanticActionInvocation, SemanticAtspiAction, SemanticSetValueResult,
+};
+use crate::actions::{LinuxActionExecutor, runtime::LinuxActionRuntime};
 use crate::app_policy::{AppActionPolicies, ResolvedSetValueFallbackPolicy};
 use crate::apps::discovery::{DiscoveredApp, discover_apps};
-use crate::atspi::{
-    actions as atspi_actions, connect, normalize_action, snapshot::snapshot_for_app,
-};
-use crate::coords::{center_of, desktop_to_stream, logical_to_pixel};
+use crate::atspi::{actions as atspi_actions, connect, snapshot::snapshot_for_app};
 use crate::env_probe::{probe_environment, require_supported_environment};
 use crate::focus::pick_focused_app;
 use crate::portal::remote_desktop::{
@@ -28,14 +29,9 @@ use crate::x11::capture as x11_capture;
 use crate::x11::input_xtest::{self, X11MouseButton};
 use crate::x11::windowing::{self, X11WindowInfo};
 use sky_cua_platform::model::DoctorSessionEnvReport;
-use std::process::Stdio;
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tokio::sync::Mutex;
 use tracing::warn;
-use zbus::Proxy;
 
 #[derive(Debug, Clone)]
 pub struct LinuxDesktopBackend {
@@ -43,15 +39,7 @@ pub struct LinuxDesktopBackend {
     atspi: Arc<Mutex<Option<AccessibilityConnection>>>,
     app_policies: AppActionPolicies,
     session_env: Arc<StdMutex<DoctorSessionEnvReport>>,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum SemanticAtspiAction {
-    Activate,
-    Select,
-    Expand,
-    Collapse,
-    Toggle,
+    virtual_input: Arc<OnceLock<LinuxVirtualInput>>,
 }
 
 impl Default for LinuxDesktopBackend {
@@ -75,7 +63,22 @@ impl LinuxDesktopBackend {
                 AppActionPolicies::default()
             }),
             session_env: Arc::new(StdMutex::new(session_env_report)),
+            virtual_input: Arc::new(OnceLock::new()),
         }
+    }
+
+    fn cached_virtual_input(&self) -> Result<&LinuxVirtualInput, BackendError> {
+        if let Some(vi) = self.virtual_input.get() {
+            return Ok(vi);
+        }
+        let vi = LinuxVirtualInput::new()?;
+        let _ = self.virtual_input.set(vi);
+        self.virtual_input.get().ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                "virtual_input cache was not set after initialization".to_string(),
+            )
+        })
     }
 
     fn session_env_report(&self) -> DoctorSessionEnvReport {
@@ -117,12 +120,16 @@ impl LinuxDesktopBackend {
         let Some(target) = window_target_from_arguments(&request.arguments)? else {
             return Ok(None);
         };
-        let environment = match request.environment.clone() {
+        let probed_environment;
+        let environment = match request.environment.as_ref() {
             Some(environment) => environment,
-            None => self.probe_environment().await?,
+            None => {
+                probed_environment = self.probe_environment().await?;
+                &probed_environment
+            }
         };
-        require_supported_environment(&environment)?;
-        let windows = linux_windowing::discover_activation_windows(&environment).await?;
+        require_supported_environment(environment)?;
+        let windows = linux_windowing::discover_activation_windows(environment).await?;
         let target_window = linux_windowing::resolve_window_target(&windows, &target.into())?;
 
         if target_window.backend == "x11" {
@@ -147,7 +154,7 @@ impl LinuxDesktopBackend {
         }
 
         linux_windowing::activate_window(target_window).await?;
-        let _ = linux_windowing::verify_window_focused(&environment, target_window).await?;
+        let _ = linux_windowing::verify_window_focused(environment, target_window).await?;
         Ok(Some(target_window.clone()))
     }
 
@@ -553,7 +560,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                 ),
             }
         }
-        let portal_lifecycle_events = self.portal.take_lifecycle_events().await;
+        let mut portal_lifecycle_events = self.portal.take_lifecycle_events().await;
 
         let (connection, mut apps) = match self.discover_accessible_apps().await {
             Ok(result) => result,
@@ -574,7 +581,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                     capture_error.as_ref(),
                     &mut diagnostics,
                 );
-                push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
+                push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
                 if let Some(window) = fallback_window {
                     let app = app_from_linux_window(&window);
                     diagnostics.push(
@@ -625,7 +632,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                 capture_error.as_ref(),
                 &mut diagnostics,
             );
-            push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
+            push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
             if let Some(window) = selector
                 .as_ref()
                 .and_then(|selector| select_linux_window(&registry_windows, selector))
@@ -687,7 +694,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                     capture_error.as_ref(),
                     &mut diagnostics,
                 );
-                push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
+                push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
                 let app = app_from_linux_window(&window);
                 diagnostics.push(
                     BackendErrorCode::AccessibilityCoverageLimited,
@@ -737,7 +744,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                     capture_error.as_ref(),
                     &mut diagnostics,
                 );
-                push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
+                push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
                 return Ok(linux_fallback_snapshot(
                     snapshot_id,
                     environment,
@@ -773,7 +780,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             capture_error.as_ref(),
             &mut diagnostics,
         );
-        push_portal_lifecycle_diagnostics(&portal_lifecycle_events, &mut diagnostics);
+        push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
 
         Ok(AppStateSnapshot {
             snapshot_id,
@@ -794,22 +801,7 @@ impl DesktopBackend for LinuxDesktopBackend {
         let _ = self.portal.take_lifecycle_events().await;
         let environment = self.probe_environment().await?;
         require_supported_environment(&environment)?;
-        match request.action {
-            ActionName::FocusElement => self.focus_element(request).await,
-            ActionName::ActivateElement => self.activate_element(request).await,
-            ActionName::SelectElement => self.select_element(request).await,
-            ActionName::ExpandElement => self.expand_element(request).await,
-            ActionName::CollapseElement => self.collapse_element(request).await,
-            ActionName::ToggleElement => self.toggle_element(request).await,
-            ActionName::Click => self.click(request).await,
-            ActionName::PerformAction => self.perform_action(request).await,
-            ActionName::PerformSecondaryAction => self.secondary_click(request).await,
-            ActionName::Scroll => self.scroll(request).await,
-            ActionName::Drag => self.drag(request).await,
-            ActionName::TypeText => self.type_text(request).await,
-            ActionName::PressKey => self.press_key(request).await,
-            ActionName::SetValue => self.set_value(request).await,
-        }
+        LinuxActionExecutor::new(self).execute(request).await
     }
 
     async fn reset_portal_tokens(
@@ -819,121 +811,20 @@ impl DesktopBackend for LinuxDesktopBackend {
     }
 }
 
-fn semantic_backend_ref<'a>(
-    request: &'a ActionRequest,
-    tool_name: &str,
-) -> Result<&'a str, BackendError> {
-    if let Some(backend_ref) = direct_backend_ref(&request.arguments) {
-        return Ok(backend_ref);
-    }
-    let element = request.resolved_element.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!(
-                "{tool_name} requires element_index, element_identifier, or a semantic selector so the service can resolve a semantic target"
-            ),
-        )
-    })?;
-    element.backend_ref.as_deref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!("{tool_name} target did not include a backend_ref"),
-        )
-    })
-}
-
-fn direct_backend_ref(arguments: &serde_json::Value) -> Option<&str> {
-    arguments
-        .get("element_identifier")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn is_retryable_accessibility_error(error: &BackendError) -> bool {
-    error.code == BackendErrorCode::AccessibilityUnavailable.as_str()
-        && error.message.contains("Resource temporarily unavailable")
-}
-
-impl LinuxDesktopBackend {
-    async fn focus_element(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        let backend_ref = semantic_backend_ref(&request, "focus_element")?;
+#[async_trait::async_trait]
+impl LinuxActionRuntime for LinuxDesktopBackend {
+    async fn semantic_grab_focus(&self, backend_ref: &str) -> Result<bool, BackendError> {
         let connection = self.accessibility_connection().await?;
-        if atspi_actions::grab_focus(&connection, backend_ref).await? {
-            return Ok(success("Focused the element semantically through AT-SPI."));
-        }
-        Err(BackendError::new(
-            BackendErrorCode::ActionRequiresPhysicalInput,
-            format!("AT-SPI focus was unavailable for element {backend_ref}"),
-        ))
+        atspi_actions::grab_focus(&connection, backend_ref).await
     }
 
-    async fn activate_element(
+    async fn semantic_perform(
         &self,
-        request: ActionRequest,
-    ) -> Result<ActionOutcome, BackendError> {
-        self.semantic_atspi_action(
-            &request,
-            "activate_element",
-            "Activated the element semantically through AT-SPI.",
-            SemanticAtspiAction::Activate,
-        )
-        .await
-    }
-
-    async fn select_element(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        self.semantic_atspi_action(
-            &request,
-            "select_element",
-            "Selected the element semantically through AT-SPI.",
-            SemanticAtspiAction::Select,
-        )
-        .await
-    }
-
-    async fn expand_element(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        self.semantic_atspi_action(
-            &request,
-            "expand_element",
-            "Expanded the element semantically through AT-SPI.",
-            SemanticAtspiAction::Expand,
-        )
-        .await
-    }
-
-    async fn collapse_element(
-        &self,
-        request: ActionRequest,
-    ) -> Result<ActionOutcome, BackendError> {
-        self.semantic_atspi_action(
-            &request,
-            "collapse_element",
-            "Collapsed the element semantically through AT-SPI.",
-            SemanticAtspiAction::Collapse,
-        )
-        .await
-    }
-
-    async fn toggle_element(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        self.semantic_atspi_action(
-            &request,
-            "toggle_element",
-            "Toggled the element semantically through AT-SPI.",
-            SemanticAtspiAction::Toggle,
-        )
-        .await
-    }
-
-    async fn semantic_atspi_action(
-        &self,
-        request: &ActionRequest,
-        tool_name: &str,
-        success_message: &str,
+        backend_ref: &str,
         action: SemanticAtspiAction,
-    ) -> Result<ActionOutcome, BackendError> {
-        let backend_ref = semantic_backend_ref(request, tool_name)?;
+    ) -> Result<bool, BackendError> {
         let connection = self.accessibility_connection().await?;
-        let performed = match action {
+        match action {
             SemanticAtspiAction::Activate => {
                 atspi_actions::activate(&connection, backend_ref).await
             }
@@ -943,628 +834,210 @@ impl LinuxDesktopBackend {
                 atspi_actions::collapse(&connection, backend_ref).await
             }
             SemanticAtspiAction::Toggle => atspi_actions::toggle(&connection, backend_ref).await,
-        }?;
-        if performed {
-            return Ok(success(success_message));
-        }
-        Err(BackendError::new(
-            BackendErrorCode::ActionRequiresPhysicalInput,
-            format!("AT-SPI {tool_name} was unavailable for element {backend_ref}"),
-        ))
-    }
-
-    async fn click(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        if let Some(element) = request.resolved_element.as_ref()
-            && let Some(backend_ref) = element.backend_ref.as_deref()
-        {
-            let connection = self.accessibility_connection().await?;
-            if atspi_actions::invoke_default_action(&connection, backend_ref)
-                .await
-                .unwrap_or(false)
-            {
-                return Ok(success("Invoked the element semantically through AT-SPI."));
-            }
-        }
-
-        let input_backend = effective_pointer_input_backend_for_target(&request);
-        let (x, y) = action_point_for_backend(&request, input_backend.clone())?;
-        match input_backend {
-            InputBackendKind::PortalRemoteDesktop => {
-                self.portal.pointer_move_absolute(x, y).await?;
-                self.portal.click(MouseButton::Left).await?;
-                Ok(success_with_diagnostics(
-                    "Clicked the target through the RemoteDesktop portal.",
-                    portal_lifecycle_diagnostics(&self.portal.take_lifecycle_events().await),
-                ))
-            }
-            InputBackendKind::XTest => {
-                let x11_window = matched_x11_window_for_request(&request);
-                activate_x11_window(x11_window.as_ref());
-                input_xtest::pointer_move_absolute(x, y)?;
-                input_xtest::click(X11MouseButton::Left)?;
-                Ok(success(
-                    "Clicked the target through the X11 input fallback.",
-                ))
-            }
-            InputBackendKind::LinuxVirtualInput => {
-                let input = LinuxVirtualInput::new()?;
-                input.click_at(x, y, MouseButton::Left)?;
-                Ok(success(
-                    "Clicked the target through the Linux virtual input fallback.",
-                ))
-            }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("click fallback"))
-            }
-            InputBackendKind::None => Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                "no physical input backend is available for click fallback",
-            )),
         }
     }
 
-    async fn perform_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        let backend_ref = semantic_backend_ref(&request, "perform_action")?;
+    async fn semantic_invoke_default(&self, backend_ref: &str) -> Result<bool, BackendError> {
         let connection = self.accessibility_connection().await?;
-        let action_index = self
-            .resolve_requested_action_index(&connection, backend_ref, &request)
-            .await?;
-        let invocation =
-            atspi_actions::invoke_action_by_index(&connection, backend_ref, action_index).await?;
-        if invocation.ok {
-            Ok(success(format!(
-                "Invoked AT-SPI action {} ({}).",
-                invocation.action_index,
-                invocation
-                    .action_name
-                    .as_deref()
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("unnamed")
-            )))
-        } else {
-            Err(BackendError::new(
-                BackendErrorCode::AccessibilityCoverageLimited,
-                format!(
-                    "AT-SPI action {} ({}) returned false for element {backend_ref}",
-                    invocation.action_index,
-                    invocation
-                        .action_name
-                        .as_deref()
-                        .filter(|name| !name.is_empty())
-                        .unwrap_or("unnamed")
-                ),
-            ))
-        }
+        atspi_actions::invoke_default_action(&connection, backend_ref).await
     }
 
-    async fn secondary_click(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        if let Some(element) = request.resolved_element.as_ref()
-            && let Some(backend_ref) = element.backend_ref.as_deref()
-        {
-            let connection = self.accessibility_connection().await?;
-            if atspi_actions::invoke_secondary_action(&connection, backend_ref)
-                .await
-                .unwrap_or(false)
-            {
-                return Ok(success(
-                    "Performed the secondary action semantically through AT-SPI.",
-                ));
-            }
-        }
-
-        let input_backend = effective_pointer_input_backend_for_target(&request);
-        let (x, y) = action_point_for_backend(&request, input_backend.clone())?;
-        match input_backend {
-            InputBackendKind::PortalRemoteDesktop => {
-                self.portal.pointer_move_absolute(x, y).await?;
-                self.portal.click(MouseButton::Right).await?;
-                Ok(success_with_diagnostics(
-                    "Performed the secondary click through the RemoteDesktop portal.",
-                    portal_lifecycle_diagnostics(&self.portal.take_lifecycle_events().await),
-                ))
-            }
-            InputBackendKind::XTest => {
-                let x11_window = matched_x11_window_for_request(&request);
-                activate_x11_window(x11_window.as_ref());
-                input_xtest::pointer_move_absolute(x, y)?;
-                input_xtest::click(X11MouseButton::Right)?;
-                Ok(success(
-                    "Performed the secondary click through the X11 input fallback.",
-                ))
-            }
-            InputBackendKind::LinuxVirtualInput => {
-                let input = LinuxVirtualInput::new()?;
-                input.click_at(x, y, MouseButton::Right)?;
-                Ok(success(
-                    "Performed the secondary click through the Linux virtual input fallback.",
-                ))
-            }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("secondary click fallback"))
-            }
-            InputBackendKind::None => Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                "no physical input backend is available for secondary click fallback",
-            )),
-        }
-    }
-
-    async fn scroll(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        let input_backend = input_backend_for(&request);
-        if let Ok((x, y)) = action_point_for_backend(&request, input_backend.clone()) {
-            match input_backend {
-                InputBackendKind::PortalRemoteDesktop => {
-                    self.portal.pointer_move_absolute(x, y).await?
-                }
-                InputBackendKind::XTest => input_xtest::pointer_move_absolute(x, y)?,
-                InputBackendKind::LinuxVirtualInput => {}
-                InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {}
-                InputBackendKind::None => {}
-            }
-        }
-
-        let delta_y = request
-            .arguments
-            .get("delta_y")
-            .and_then(serde_json::Value::as_f64);
-        let steps = request
-            .arguments
-            .get("steps")
-            .and_then(serde_json::Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok())
-            .unwrap_or(-1);
-
-        match input_backend {
-            InputBackendKind::PortalRemoteDesktop => {
-                if let Some(delta_y) = delta_y {
-                    self.portal.scroll_vertical_smooth(delta_y).await?;
-                } else {
-                    self.portal.scroll_vertical_discrete(steps).await?;
-                }
-                Ok(success_with_diagnostics(
-                    "Scrolled through the RemoteDesktop portal.",
-                    portal_lifecycle_diagnostics(&self.portal.take_lifecycle_events().await),
-                ))
-            }
-            InputBackendKind::XTest => {
-                input_xtest::scroll_vertical(delta_y, Some(steps))?;
-                Ok(success("Scrolled through the X11 input fallback."))
-            }
-            InputBackendKind::LinuxVirtualInput => {
-                let steps = portal_scroll_steps_from_delta(delta_y).unwrap_or(steps);
-                let input = LinuxVirtualInput::new()?;
-                if let Ok((x, y)) = action_point_for_backend(&request, input_backend) {
-                    input.scroll_vertical_at(x, y, steps)?;
-                } else {
-                    input.scroll_vertical(steps)?;
-                }
-                Ok(success(
-                    "Scrolled through the Linux virtual input fallback.",
-                ))
-            }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("scroll"))
-            }
-            InputBackendKind::None => Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                "no physical input backend is available for scroll",
-            )),
-        }
-    }
-
-    async fn drag(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        let input_backend = effective_pointer_input_backend_for_target(&request);
-        let from = drag_from_point(&request, input_backend.clone())?;
-        let to = if let Some(element) = request.resolved_target_element.as_ref() {
-            point_for_element_for_backend(
-                element,
-                request.resolved_capture.as_ref(),
-                input_backend.clone(),
-            )?
-        } else {
-            drag_to_point(&request, input_backend.clone())?.ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::InvalidRequest,
-                    "drag requires either to_element_index or explicit to_x/to_y coordinates",
-                )
-            })?
-        };
-
-        match input_backend {
-            InputBackendKind::PortalRemoteDesktop => {
-                self.portal.pointer_move_absolute(from.0, from.1).await?;
-                self.portal.pointer_button(MouseButton::Left, true).await?;
-                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                self.portal.pointer_move_absolute(to.0, to.1).await?;
-                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                self.portal.pointer_button(MouseButton::Left, false).await?;
-                Ok(success_with_diagnostics(
-                    "Dragged through the RemoteDesktop portal.",
-                    portal_lifecycle_diagnostics(&self.portal.take_lifecycle_events().await),
-                ))
-            }
-            InputBackendKind::XTest => {
-                input_xtest::pointer_move_absolute(from.0, from.1)?;
-                input_xtest::pointer_button(X11MouseButton::Left, true)?;
-                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                input_xtest::pointer_move_absolute(to.0, to.1)?;
-                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                input_xtest::pointer_button(X11MouseButton::Left, false)?;
-                Ok(success("Dragged through the X11 input fallback."))
-            }
-            InputBackendKind::LinuxVirtualInput => {
-                let input = LinuxVirtualInput::new()?;
-                input.drag(from, to)?;
-                Ok(success("Dragged through the Linux virtual input fallback."))
-            }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("drag"))
-            }
-            InputBackendKind::None => Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                "no physical input backend is available for drag",
-            )),
-        }
-    }
-
-    async fn type_text(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        let text = request
-            .arguments
-            .get("text")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::InvalidRequest,
-                    "type_text requires a text argument",
-                )
-            })?;
-        if let Some(element) = request.resolved_element.as_ref()
-            && let Some(backend_ref) = element.backend_ref.as_deref()
-        {
-            let connection = self.accessibility_connection().await?;
-            let _ = atspi_actions::grab_focus(&connection, backend_ref).await;
-        }
-        let target_window = self.focus_window_target_for_keyboard(&request).await?;
-        let x11_window = if target_window.is_none() {
-            matched_x11_window_for_request(&request)
-        } else {
-            None
-        };
-        let x11_window_id = target_window
-            .as_ref()
-            .filter(|window| window.backend == "x11")
-            .map(|window| window.window_id.as_str())
-            .or_else(|| x11_window.as_ref().map(|window| window.window_id.as_str()));
-        let input_backend = effective_keyboard_input_backend_for_target(
-            &request,
-            x11_window.as_ref(),
-            x11_window_id,
-        );
-        match input_backend {
-            InputBackendKind::PortalRemoteDesktop => {
-                if should_prefer_kde_clipboard_text_backend(&request) {
-                    match run_kde_clipboard_paste_text(&self.portal, &text).await {
-                        Ok(message) => {
-                            return Ok(success_with_diagnostics(
-                                message,
-                                portal_lifecycle_diagnostics(
-                                    &self.portal.take_lifecycle_events().await,
-                                ),
-                            ));
-                        }
-                        Err(error) => {
-                            if error.clear_portal_session {
-                                self.portal.reset_session().await;
-                            }
-                            if !error.can_fallback_to_portal_keysym {
-                                return Err(BackendError::new(
-                                    BackendErrorCode::ActionUnsupportedForEnvironment,
-                                    error.message,
-                                ));
-                            }
-                        }
-                    }
-                }
-                self.portal.send_text(&text).await?;
-                Ok(success_with_diagnostics(
-                    "Typed text through the RemoteDesktop portal.",
-                    portal_lifecycle_diagnostics(&self.portal.take_lifecycle_events().await),
-                ))
-            }
-            InputBackendKind::XTest => {
-                activate_x11_window(x11_window.as_ref());
-                input_xtest::send_text_to_target(x11_window_id, &text)?;
-                Ok(success("Typed text through the X11 input fallback."))
-            }
-            InputBackendKind::LinuxVirtualInput => {
-                LinuxVirtualInput::new()?.type_text(&text)?;
-                Ok(success(
-                    "Typed text through the Linux virtual input fallback.",
-                ))
-            }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("type_text"))
-            }
-            InputBackendKind::None => Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                "no physical input backend is available for type_text",
-            )),
-        }
-    }
-
-    async fn press_key(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        let keys = parse_key_sequence(&request.arguments).ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::InvalidRequest,
-                "press_key requires a key string or keys array",
-            )
-        })?;
-        if let Some(element) = request.resolved_element.as_ref()
-            && let Some(backend_ref) = element.backend_ref.as_deref()
-        {
-            let connection = self.accessibility_connection().await?;
-            let _ = atspi_actions::grab_focus(&connection, backend_ref).await;
-        }
-
-        let target_window = self.focus_window_target_for_keyboard(&request).await?;
-        let x11_window = if target_window.is_none() {
-            matched_x11_window_for_request(&request)
-        } else {
-            None
-        };
-        let x11_window_id = target_window
-            .as_ref()
-            .filter(|window| window.backend == "x11")
-            .map(|window| window.window_id.as_str())
-            .or_else(|| x11_window.as_ref().map(|window| window.window_id.as_str()));
-        match effective_keyboard_input_backend_for_target(
-            &request,
-            x11_window.as_ref(),
-            x11_window_id,
-        ) {
-            InputBackendKind::PortalRemoteDesktop => {
-                self.portal.press_key_sequence(&keys).await?;
-                Ok(success_with_diagnostics(
-                    "Pressed the key sequence through the RemoteDesktop portal.",
-                    portal_lifecycle_diagnostics(&self.portal.take_lifecycle_events().await),
-                ))
-            }
-            InputBackendKind::XTest => {
-                activate_x11_window(x11_window.as_ref());
-                input_xtest::press_key_sequence_to_target(x11_window_id, &keys)?;
-                Ok(success(
-                    "Pressed the key sequence through the X11 input fallback.",
-                ))
-            }
-            InputBackendKind::LinuxVirtualInput => {
-                LinuxVirtualInput::new()?.press_key_sequence(&keys)?;
-                Ok(success(
-                    "Pressed the key sequence through the Linux virtual input fallback.",
-                ))
-            }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("press_key"))
-            }
-            InputBackendKind::None => Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                "no physical input backend is available for press_key",
-            )),
-        }
-    }
-
-    async fn set_value(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
-        let backend_ref = semantic_backend_ref(&request, "set_value")?;
-        let value = request
-            .arguments
-            .get("value")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::InvalidRequest,
-                    "set_value requires a string value argument",
-                )
-            })?;
-
-        let policy = self
-            .app_policies
-            .resolve_set_value_fallback(request.resolved_focused_app.as_ref());
-        if matches!(
-            policy.as_ref().map(|policy| policy.routing),
-            Some(SetValueRouting::PreferPhysicalFallback)
-        ) {
-            return self
-                .set_value_with_fallback_policy(
-                    &request,
-                    value,
-                    policy.as_ref().expect("checked above"),
-                )
-                .await;
-        }
-
+    async fn semantic_invoke_secondary(&self, backend_ref: &str) -> Result<bool, BackendError> {
         let connection = self.accessibility_connection().await?;
-        let _ = atspi_actions::grab_focus(&connection, backend_ref).await;
-        match atspi_actions::set_value(&connection, backend_ref, value).await {
-            Ok(atspi_actions::SetValueResult::EditableText) => {
-                return Ok(success("Set editable text semantically through AT-SPI."));
-            }
-            Ok(atspi_actions::SetValueResult::Numeric { value }) => {
-                return Ok(success(format!(
-                    "Set numeric value to {value} semantically through AT-SPI."
-                )));
-            }
-            Err(error) if error.code == BackendErrorCode::ActionRequiresPhysicalInput.as_str() => {
-                if let Some(policy) = policy.as_ref() {
-                    return self
-                        .set_value_with_fallback_policy(&request, value, policy)
-                        .await;
-                }
-            }
-            Err(error) => return Err(error),
-        }
-
-        Err(BackendError::new(
-            BackendErrorCode::ActionRequiresPhysicalInput,
-            "semantic set_value failed and no physical fallback is enabled for set_value",
-        ))
+        atspi_actions::invoke_secondary_action(&connection, backend_ref).await
     }
 
-    async fn resolve_requested_action_index(
+    async fn semantic_available_actions(
         &self,
-        connection: &AccessibilityConnection,
         backend_ref: &str,
-        request: &ActionRequest,
-    ) -> Result<i32, BackendError> {
-        if let Some(index) = request
-            .arguments
-            .get("action_index")
-            .and_then(serde_json::Value::as_i64)
-            .or_else(|| {
-                request
-                    .arguments
-                    .get("action_index")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|value| value.trim().parse::<i64>().ok())
-            })
-            .or_else(|| {
-                request
-                    .arguments
-                    .get("action")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|value| value.trim().parse::<i64>().ok())
-            })
-        {
-            return i32::try_from(index).map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::InvalidRequest,
-                    format!("action_index {index} is not a valid AT-SPI action index: {error}"),
-                )
-            });
-        }
-
-        let Some(action_name) = request
-            .arguments
-            .get("action_name")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| {
-                request
-                    .arguments
-                    .get("action")
-                    .and_then(serde_json::Value::as_str)
-            })
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return Ok(0);
-        };
-
-        let actions = atspi_actions::available_actions(connection, backend_ref).await?;
-        actions
-            .iter()
-            .position(|candidate| action_name_matches(candidate, action_name))
-            .and_then(|index| i32::try_from(index).ok())
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::InvalidRequest,
-                    format!(
-                        "element {backend_ref} exposes actions [{}], but none matched requested action_name {action_name:?}",
-                        actions.join(", ")
-                    ),
-                )
-            })
+    ) -> Result<Vec<String>, BackendError> {
+        let connection = self.accessibility_connection().await?;
+        atspi_actions::available_actions(&connection, backend_ref).await
     }
 
-    async fn set_value_with_fallback_policy(
+    async fn semantic_invoke_action_by_index(
         &self,
-        request: &ActionRequest,
-        value: &str,
-        policy: &ResolvedSetValueFallbackPolicy,
-    ) -> Result<ActionOutcome, BackendError> {
-        match policy.mode {
-            SetValueFallbackMode::FocusClickSelectAllType => {
-                let x11_window = matched_x11_window_for_request(request);
-                let physical_backend =
-                    effective_keyboard_input_backend(request, x11_window.as_ref());
-                let (x, y) = action_point_for_backend(request, physical_backend.clone())?;
-                let select_all = vec!["Ctrl".to_string(), "A".to_string()];
-                let mut diagnostics = vec![DiagnosticEntry {
-                    code: "HeuristicSetValueFallbackUsed".to_string(),
-                    message: match policy.routing {
-                        SetValueRouting::PreferSemantic =>
-                            "Used a heuristics-backed physical fallback for set_value after semantic editing was unavailable"
-                                .to_string(),
-                        SetValueRouting::PreferPhysicalFallback =>
-                            "Used a heuristics-backed physical set_value path because this app prefers keyboard-driven replacement"
-                                .to_string(),
-                    },
-                    details: Some(format!(
-                        "policy_key={} mode=focus_click_select_all_type routing={}",
-                        policy.key,
-                        match policy.routing {
-                            SetValueRouting::PreferSemantic => "prefer_semantic",
-                            SetValueRouting::PreferPhysicalFallback => "prefer_physical_fallback",
-                        }
-                    )),
-                }];
+        backend_ref: &str,
+        action_index: i32,
+    ) -> Result<SemanticActionInvocation, BackendError> {
+        let connection = self.accessibility_connection().await?;
+        let result =
+            atspi_actions::invoke_action_by_index(&connection, backend_ref, action_index).await?;
+        Ok(SemanticActionInvocation {
+            action_index: result.action_index,
+            action_name: result.action_name,
+            ok: result.ok,
+        })
+    }
 
-                match physical_backend {
-                    InputBackendKind::PortalRemoteDesktop => {
-                        self.portal.pointer_move_absolute(x, y).await?;
-                        self.portal.click(MouseButton::Left).await?;
-                        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                        self.portal.press_key_sequence(&select_all).await?;
-                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                        self.portal.send_text(value).await?;
-                        diagnostics.extend(portal_lifecycle_diagnostics(
-                            &self.portal.take_lifecycle_events().await,
-                        ));
-                        Ok(success_with_diagnostics(
-                            "Set the value through a heuristics-backed physical typing fallback.",
-                            diagnostics,
-                        ))
-                    }
-                    InputBackendKind::XTest => {
-                        activate_x11_window(x11_window.as_ref());
-                        input_xtest::pointer_move_absolute(x, y)?;
-                        input_xtest::click(X11MouseButton::Left)?;
-                        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                        input_xtest::press_key_sequence_to_target(
-                            x11_window.as_ref().map(|window| window.window_id.as_str()),
-                            &select_all,
-                        )?;
-                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                        input_xtest::send_text_to_target(
-                            x11_window.as_ref().map(|window| window.window_id.as_str()),
-                            value,
-                        )?;
-                        Ok(success_with_diagnostics(
-                            "Set the value through a heuristics-backed physical typing fallback.",
-                            diagnostics,
-                        ))
-                    }
-                    InputBackendKind::LinuxVirtualInput => {
-                        let input = LinuxVirtualInput::new()?;
-                        input.click_at(x, y, MouseButton::Left)?;
-                        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                        input.press_key_sequence(&select_all)?;
-                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                        input.type_text(value)?;
-                        Ok(success_with_diagnostics(
-                            "Set the value through a heuristics-backed physical typing fallback.",
-                            diagnostics,
-                        ))
-                    }
-                    InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                        Err(windows_input_backend_error("set_value fallback"))
-                    }
-                    InputBackendKind::None => Err(BackendError::new(
-                        BackendErrorCode::ActionUnsupportedForEnvironment,
-                        "heuristics allowed a physical set_value fallback, but no physical input backend is available",
-                    )),
-                }
+    async fn semantic_set_value(
+        &self,
+        backend_ref: &str,
+        value: &str,
+    ) -> Result<SemanticSetValueResult, BackendError> {
+        let connection = self.accessibility_connection().await?;
+        match atspi_actions::set_value(&connection, backend_ref, value).await? {
+            atspi_actions::SetValueResult::EditableText => Ok(SemanticSetValueResult::EditableText),
+            atspi_actions::SetValueResult::Numeric { value } => {
+                Ok(SemanticSetValueResult::Numeric { value })
             }
         }
     }
+
+    fn resolve_set_value_fallback_policy(
+        &self,
+        app: Option<&FocusedApp>,
+    ) -> Option<ResolvedSetValueFallbackPolicy> {
+        self.app_policies.resolve_set_value_fallback(app)
+    }
+
+    async fn focus_window_target_for_keyboard(
+        &self,
+        request: &ActionRequest,
+    ) -> Result<Option<linux_windowing::LinuxWindowInfo>, BackendError> {
+        self.focus_window_target_for_keyboard(request).await
+    }
+
+    fn matched_x11_window_for_request(&self, request: &ActionRequest) -> Option<X11WindowInfo> {
+        matched_x11_window_for_request(request)
+    }
+
+    fn xtest_is_available(&self) -> bool {
+        input_xtest::xtest_is_available()
+    }
+
+    fn activate_x11_window(&self, window: Option<&X11WindowInfo>) {
+        activate_x11_window(window);
+    }
+
+    async fn portal_click_at(
+        &self,
+        x: f64,
+        y: f64,
+        button: MouseButton,
+    ) -> Result<(), BackendError> {
+        self.portal.click_at(x, y, button).await
+    }
+
+    async fn portal_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
+        self.portal.drag(from, to).await
+    }
+
+    async fn portal_scroll_vertical_at(
+        &self,
+        x: f64,
+        y: f64,
+        delta_y: Option<f64>,
+        steps: i32,
+    ) -> Result<(), BackendError> {
+        self.portal.scroll_vertical_at(x, y, delta_y, steps).await
+    }
+
+    async fn portal_scroll_vertical_smooth(&self, delta_y: f64) -> Result<(), BackendError> {
+        self.portal.scroll_vertical_smooth(delta_y).await
+    }
+
+    async fn portal_scroll_vertical_discrete(&self, steps: i32) -> Result<(), BackendError> {
+        self.portal.scroll_vertical_discrete(steps).await
+    }
+
+    async fn portal_send_text(&self, text: &str) -> Result<(), BackendError> {
+        self.portal.send_text(text).await
+    }
+
+    async fn portal_press_key_sequence(&self, keys: &[String]) -> Result<(), BackendError> {
+        self.portal.press_key_sequence(keys).await
+    }
+
+    async fn portal_press_keycode_chord(
+        &self,
+        modifiers: &[i32],
+        keycode: i32,
+    ) -> Result<(), BackendError> {
+        self.portal.press_keycode_chord(modifiers, keycode).await
+    }
+
+    async fn portal_take_lifecycle_diagnostics(&self) -> Vec<DiagnosticEntry> {
+        let mut events = self.portal.take_lifecycle_events().await;
+        portal_lifecycle_diagnostics(&mut events)
+    }
+
+    async fn portal_reset_session(&self) {
+        self.portal.reset_session().await;
+    }
+
+    fn xtest_pointer_move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
+        input_xtest::pointer_move_absolute(x, y)
+    }
+
+    fn xtest_pointer_button(&self, button: MouseButton, pressed: bool) -> Result<(), BackendError> {
+        input_xtest::pointer_button(x11_mouse_button(button), pressed)
+    }
+
+    fn xtest_click(&self, button: MouseButton) -> Result<(), BackendError> {
+        input_xtest::click(x11_mouse_button(button))
+    }
+
+    fn xtest_scroll_vertical(
+        &self,
+        delta_y: Option<f64>,
+        steps: Option<i32>,
+    ) -> Result<(), BackendError> {
+        input_xtest::scroll_vertical(delta_y, steps)
+    }
+
+    fn xtest_send_text_to_target(
+        &self,
+        window_id: Option<&str>,
+        text: &str,
+    ) -> Result<(), BackendError> {
+        input_xtest::send_text_to_target(window_id, text)
+    }
+
+    fn xtest_press_key_sequence_to_target(
+        &self,
+        window_id: Option<&str>,
+        keys: &[String],
+    ) -> Result<(), BackendError> {
+        input_xtest::press_key_sequence_to_target(window_id, keys)
+    }
+
+    fn virtual_click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
+        self.cached_virtual_input()?.click_at(x, y, button)
+    }
+
+    fn virtual_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
+        self.cached_virtual_input()?.drag(from, to)
+    }
+
+    fn virtual_scroll_vertical(&self, steps: i32) -> Result<(), BackendError> {
+        self.cached_virtual_input()?.scroll_vertical(steps)
+    }
+
+    fn virtual_scroll_vertical_at(&self, x: f64, y: f64, steps: i32) -> Result<(), BackendError> {
+        self.cached_virtual_input()?.scroll_vertical_at(x, y, steps)
+    }
+
+    fn virtual_type_text(&self, text: &str) -> Result<(), BackendError> {
+        self.cached_virtual_input()?.type_text(text)
+    }
+
+    fn virtual_press_key_sequence(&self, keys: &[String]) -> Result<(), BackendError> {
+        self.cached_virtual_input()?.press_key_sequence(keys)
+    }
+}
+
+fn x11_mouse_button(button: MouseButton) -> X11MouseButton {
+    match button {
+        MouseButton::Left => X11MouseButton::Left,
+        MouseButton::Middle => X11MouseButton::Middle,
+        MouseButton::Right => X11MouseButton::Right,
+    }
+}
+
+fn is_retryable_accessibility_error(error: &BackendError) -> bool {
+    error.code == BackendErrorCode::AccessibilityUnavailable.as_str()
+        && error.message.contains("Resource temporarily unavailable")
 }
 
 fn keyboard_input_ready(environment: &EnvironmentInfo) -> bool {
@@ -1587,7 +1060,10 @@ fn keyboard_input_unavailable_reason(environment: &EnvironmentInfo) -> &'static 
             "Windows input backends are unavailable on Linux"
         }
         InputBackendKind::PortalRemoteDesktop | InputBackendKind::XTest => {
-            "No keyboard input backend is available"
+            unreachable!(
+                "keyboard_input_ready returns true for PortalRemoteDesktop and XTest, \
+                 so keyboard_input_unavailable_reason should never be called for them"
+            )
         }
     }
 }
@@ -1600,16 +1076,6 @@ fn should_attempt_x11_capture(
         && environment.capture_backend == CaptureBackendKind::X11
 }
 
-fn success(message: impl Into<String>) -> ActionOutcome {
-    ActionOutcome {
-        success: true,
-        message: message.into(),
-        code: "Ok".to_string(),
-        diagnostics: Vec::new(),
-        agent_cursor: None,
-    }
-}
-
 fn success_with_diagnostics(
     message: impl Into<String>,
     diagnostics: Vec<sky_cua_platform::model::DiagnosticEntry>,
@@ -1620,325 +1086,6 @@ fn success_with_diagnostics(
         code: "Ok".to_string(),
         diagnostics,
         agent_cursor: None,
-    }
-}
-
-fn windows_input_backend_error(action: &str) -> BackendError {
-    BackendError::new(
-        BackendErrorCode::ActionUnsupportedForEnvironment,
-        format!("Windows input backends are unavailable in the Linux backend for {action}"),
-    )
-}
-
-fn input_backend_for(request: &ActionRequest) -> InputBackendKind {
-    request
-        .environment
-        .as_ref()
-        .map(|environment| environment.input_backend.clone())
-        .unwrap_or(InputBackendKind::None)
-}
-
-fn effective_pointer_input_backend_for_target(request: &ActionRequest) -> InputBackendKind {
-    input_backend_for(request)
-}
-
-fn portal_scroll_steps_from_delta(delta_y: Option<f64>) -> Option<i32> {
-    let delta_y = delta_y?;
-    if delta_y == 0.0 {
-        return None;
-    }
-    let magnitude = (delta_y.abs() / 120.0).ceil().max(1.0) as i32;
-    Some(if delta_y.is_sign_positive() {
-        -magnitude
-    } else {
-        magnitude
-    })
-}
-
-fn element_is_x11_fallback(element: &ElementNode) -> bool {
-    element.role.starts_with("x11_")
-        || element
-            .state_flags
-            .iter()
-            .any(|flag| flag == "x11_fallback")
-}
-
-fn effective_keyboard_input_backend(
-    request: &ActionRequest,
-    x11_window: Option<&X11WindowInfo>,
-) -> InputBackendKind {
-    let backend = input_backend_for(request);
-    if backend == InputBackendKind::PortalRemoteDesktop
-        && x11_window.is_some()
-        && input_xtest::xtest_is_available()
-    {
-        return InputBackendKind::XTest;
-    }
-    backend
-}
-
-fn effective_keyboard_input_backend_for_target(
-    request: &ActionRequest,
-    x11_window: Option<&X11WindowInfo>,
-    target_window_id: Option<&str>,
-) -> InputBackendKind {
-    if target_window_id.is_some() {
-        if input_xtest::xtest_is_available() {
-            InputBackendKind::XTest
-        } else {
-            InputBackendKind::None
-        }
-    } else {
-        effective_keyboard_input_backend(request, x11_window)
-    }
-}
-
-const EVDEV_KEY_LEFTCTRL: i32 = 29;
-const EVDEV_KEY_V: i32 = 47;
-const KDE_CLIPBOARD_RESTORE_DELAY_MS: u64 = 500;
-const WL_COPY_STARTUP_GRACE_MS: u64 = 50;
-const WL_COPY_PASTE_ONCE_TIMEOUT_MS: u64 = 2_000;
-const PLAIN_TEXT_CLIPBOARD_MIME_TYPES: &[&str] = &["text/plain", "utf8_string", "string", "text"];
-
-#[derive(Debug)]
-struct KdeClipboardPasteError {
-    message: String,
-    can_fallback_to_portal_keysym: bool,
-    clear_portal_session: bool,
-}
-
-impl KdeClipboardPasteError {
-    fn before_text_input(message: String) -> Self {
-        Self {
-            message,
-            can_fallback_to_portal_keysym: true,
-            clear_portal_session: false,
-        }
-    }
-
-    fn after_portal_input(message: String) -> Self {
-        Self {
-            message,
-            can_fallback_to_portal_keysym: false,
-            clear_portal_session: true,
-        }
-    }
-}
-
-fn should_prefer_kde_clipboard_text_backend(request: &ActionRequest) -> bool {
-    let Some(environment) = request.environment.as_ref() else {
-        return false;
-    };
-    if environment.input_backend != InputBackendKind::PortalRemoteDesktop {
-        return false;
-    }
-    environment
-        .desktop_environment
-        .as_deref()
-        .is_some_and(|desktop| desktop.to_ascii_lowercase().contains("kde"))
-}
-
-async fn run_kde_clipboard_paste_text(
-    portal: &RemoteDesktopSessionManager,
-    text: &str,
-) -> Result<String, KdeClipboardPasteError> {
-    ensure_clipboard_is_plain_text_only()
-        .await
-        .map_err(KdeClipboardPasteError::before_text_input)?;
-    let previous = kde_clipboard_contents()
-        .await
-        .map_err(KdeClipboardPasteError::before_text_input)?;
-    wl_copy_sensitive_paste_once(text)
-        .await
-        .map_err(KdeClipboardPasteError::before_text_input)?;
-
-    let paste_result = portal
-        .press_keycode_chord(&[EVDEV_KEY_LEFTCTRL], EVDEV_KEY_V)
-        .await
-        .map_err(|error| error.message);
-
-    tokio::time::sleep(Duration::from_millis(KDE_CLIPBOARD_RESTORE_DELAY_MS)).await;
-    let restore_result = kde_set_clipboard_contents(&previous).await;
-
-    match (paste_result, restore_result) {
-        (Ok(()), Ok(())) => Ok("Typed text through the KDE clipboard portal fallback.".to_string()),
-        (Err(error), Ok(())) => Err(KdeClipboardPasteError::after_portal_input(error)),
-        (Ok(()), Err(restore_error)) => Ok(format!(
-            "Typed text through the KDE clipboard portal fallback. Warning: previous KDE clipboard contents could not be restored: {restore_error}"
-        )),
-        (Err(error), Err(restore_error)) => {
-            Err(KdeClipboardPasteError::after_portal_input(format!(
-                "{error}; previous KDE clipboard contents could not be restored: {restore_error}"
-            )))
-        }
-    }
-}
-
-async fn ensure_clipboard_is_plain_text_only() -> Result<(), String> {
-    let mime_types = wl_paste_mime_types().await?;
-    if clipboard_mime_types_are_plain_text_only(&mime_types) {
-        return Ok(());
-    }
-    Err(format!(
-        "KDE clipboard paste fallback refused to overwrite non-text clipboard contents: {}",
-        mime_types.join(", ")
-    ))
-}
-
-fn clipboard_mime_types_are_plain_text_only(mime_types: &[String]) -> bool {
-    mime_types.iter().all(|mime_type| {
-        let normalized = mime_type.trim().to_ascii_lowercase();
-        normalized.is_empty()
-            || PLAIN_TEXT_CLIPBOARD_MIME_TYPES
-                .iter()
-                .any(|plain| normalized == *plain || normalized.starts_with(&format!("{plain};")))
-    })
-}
-
-async fn kde_clipboard_contents() -> Result<String, String> {
-    let connection = zbus::Connection::session()
-        .await
-        .map_err(|error| format!("failed to connect to session bus: {error}"))?;
-    let proxy = kde_klipper_proxy(&connection).await?;
-    proxy
-        .call("getClipboardContents", &())
-        .await
-        .map_err(|error| format!("failed to read KDE clipboard contents: {error}"))
-}
-
-async fn kde_set_clipboard_contents(text: &str) -> Result<(), String> {
-    let connection = zbus::Connection::session()
-        .await
-        .map_err(|error| format!("failed to connect to session bus: {error}"))?;
-    let proxy = kde_klipper_proxy(&connection).await?;
-    proxy
-        .call("setClipboardContents", &(text))
-        .await
-        .map_err(|error| format!("failed to set KDE clipboard contents: {error}"))
-}
-
-async fn wl_paste_mime_types() -> Result<Vec<String>, String> {
-    if !command_exists("wl-paste") {
-        return Err(
-            "wl-paste is required to safely inspect current clipboard MIME types".to_string(),
-        );
-    }
-    let output = Command::new("wl-paste")
-        .args(["--list-types"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|error| format!("failed to run wl-paste --list-types: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("wl-paste --list-types exited with {}", output.status)
-        } else {
-            format!(
-                "wl-paste --list-types exited with {}: {stderr}",
-                output.status
-            )
-        });
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
-}
-
-async fn wl_copy_sensitive_paste_once(text: &str) -> Result<(), String> {
-    if !command_exists("wl-copy") {
-        return Err("wl-copy is required for KDE clipboard paste fallback".to_string());
-    }
-    let mut child = Command::new("wl-copy")
-        .args([
-            "--foreground",
-            "--paste-once",
-            "--sensitive",
-            "--type",
-            "text/plain;charset=utf-8",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to run wl-copy: {error}"))?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "failed to open wl-copy stdin".to_string())?;
-    stdin
-        .write_all(text.as_bytes())
-        .await
-        .map_err(|error| format!("failed to write text to wl-copy stdin: {error}"))?;
-    drop(stdin);
-
-    tokio::time::sleep(Duration::from_millis(WL_COPY_STARTUP_GRACE_MS)).await;
-    if let Some(status) = child
-        .try_wait()
-        .map_err(|error| format!("failed to inspect wl-copy status: {error}"))?
-    {
-        return Err(format!(
-            "wl-copy exited before the paste request with {status}"
-        ));
-    }
-
-    tokio::spawn(async move {
-        if tokio::time::timeout(
-            Duration::from_millis(WL_COPY_PASTE_ONCE_TIMEOUT_MS),
-            child.wait(),
-        )
-        .await
-        .is_err()
-        {
-            let _ = child.kill().await;
-        }
-    });
-
-    Ok(())
-}
-
-async fn kde_klipper_proxy(connection: &zbus::Connection) -> Result<Proxy<'_>, String> {
-    Proxy::new(
-        connection,
-        "org.kde.klipper",
-        "/klipper",
-        "org.kde.klipper.klipper",
-    )
-    .await
-    .map_err(|error| format!("failed to create KDE Klipper proxy: {error}"))
-}
-
-fn command_exists(command: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| dir.join(command).is_file())
-}
-
-fn action_name_matches(candidate: &str, requested: &str) -> bool {
-    let candidate = normalize_action(candidate);
-    let requested = normalize_action(requested);
-    if candidate == requested {
-        return true;
-    }
-    canonical_action_aliases(&requested)
-        .iter()
-        .any(|alias| candidate == *alias)
-}
-
-fn canonical_action_aliases(action: &str) -> &'static [&'static str] {
-    match action {
-        "activate" => &["press", "click", "open", "jump", "invoke"],
-        "select" => &["choose"],
-        "expand" => &["open"],
-        "collapse" => &["close"],
-        "toggle" => &["check", "uncheck"],
-        _ => &[],
     }
 }
 
@@ -2014,226 +1161,6 @@ fn value_is_present(value: &serde_json::Value) -> bool {
     }
 }
 
-fn action_point_for_backend(
-    request: &ActionRequest,
-    backend: InputBackendKind,
-) -> Result<(f64, f64), BackendError> {
-    if let Some(point) = explicit_point(&request.arguments) {
-        return point_from_action_pixels(point, request, backend);
-    }
-    let element = request.resolved_element.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            "this action requires either explicit x/y coordinates or a resolved element target",
-        )
-    })?;
-
-    match backend {
-        InputBackendKind::PortalRemoteDesktop if element_is_x11_fallback(element) => {
-            point_for_x11_element_through_portal(element, request.resolved_capture.as_ref())
-        }
-        InputBackendKind::PortalRemoteDesktop => {
-            point_for_element(element, request.resolved_capture.as_ref())
-        }
-        InputBackendKind::XTest => {
-            point_for_x11_element(element, request.resolved_capture.as_ref())
-        }
-        InputBackendKind::LinuxVirtualInput => {
-            point_for_linux_virtual_element(element, request.resolved_capture.as_ref())
-        }
-        InputBackendKind::SendInput
-        | InputBackendKind::WindowsMessages
-        | InputBackendKind::None => point_for_element(element, None),
-    }
-}
-
-fn point_for_element(
-    element: &ElementNode,
-    capture: Option<&sky_cua_platform::model::CaptureInfo>,
-) -> Result<(f64, f64), BackendError> {
-    let bounds = element.bounds.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!(
-                "element {} did not include bounds, so a physical action target cannot be derived",
-                element.element_index
-            ),
-        )
-    })?;
-    let center = center_of(bounds);
-    if let Some(logical_rect) = capture.and_then(|capture| capture.logical_rect.as_ref())
-        && let Some(stream_point) = desktop_to_stream(center, logical_rect)
-    {
-        return Ok(stream_point);
-    }
-    Ok(center)
-}
-
-fn point_for_x11_element(
-    element: &ElementNode,
-    capture: Option<&sky_cua_platform::model::CaptureInfo>,
-) -> Result<(f64, f64), BackendError> {
-    let bounds = element.bounds.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!(
-                "element {} did not include bounds, so a physical action target cannot be derived",
-                element.element_index
-            ),
-        )
-    })?;
-    let center = center_of(bounds);
-    if bounds.space == CoordinateSpace::DesktopLogical
-        && let Some(capture) = capture
-        && let (Some(logical_rect), Some(original_pixel_size)) = (
-            capture.logical_rect.as_ref(),
-            capture.original_pixel_size.as_ref(),
-        )
-        && let Some(pixel_point) = logical_to_pixel(center, logical_rect, original_pixel_size)
-    {
-        return Ok(pixel_point);
-    }
-    Ok(center)
-}
-
-fn point_for_x11_element_through_portal(
-    element: &ElementNode,
-    capture: Option<&sky_cua_platform::model::CaptureInfo>,
-) -> Result<(f64, f64), BackendError> {
-    let bounds = element.bounds.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!(
-                "element {} did not include bounds, so a physical action target cannot be derived",
-                element.element_index
-            ),
-        )
-    })?;
-    let center = center_of(bounds);
-    if let Some(capture) = capture
-        && let (Some(logical_rect), Some(original_pixel_size)) = (
-            capture.logical_rect.as_ref(),
-            capture.original_pixel_size.as_ref(),
-        )
-        && logical_rect.width > 0.0
-        && logical_rect.height > 0.0
-        && original_pixel_size.width > 0
-        && original_pixel_size.height > 0
-    {
-        let rel_x = center.0 / f64::from(original_pixel_size.width);
-        let rel_y = center.1 / f64::from(original_pixel_size.height);
-        return Ok((rel_x * logical_rect.width, rel_y * logical_rect.height));
-    }
-    Ok(center)
-}
-
-fn point_for_linux_virtual_element(
-    element: &ElementNode,
-    capture: Option<&CaptureInfo>,
-) -> Result<(f64, f64), BackendError> {
-    let bounds = element.bounds.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!(
-                "element {} did not include bounds, so a Linux virtual input target cannot be derived",
-                element.element_index
-            ),
-        )
-    })?;
-    let center = center_of(bounds);
-    match bounds.space {
-        CoordinateSpace::DesktopLogical => Ok(center),
-        CoordinateSpace::StreamLogical => {
-            let logical_rect = capture
-                .and_then(|capture| capture.logical_rect.as_ref())
-                .ok_or_else(missing_linux_virtual_logical_rect_error)?;
-            Ok((logical_rect.x + center.0, logical_rect.y + center.1))
-        }
-        CoordinateSpace::StreamPixels => {
-            linux_virtual_point_from_screenshot_pixels(center, capture, true)
-        }
-    }
-}
-
-fn point_for_element_for_backend(
-    element: &ElementNode,
-    capture: Option<&CaptureInfo>,
-    backend: InputBackendKind,
-) -> Result<(f64, f64), BackendError> {
-    match backend {
-        InputBackendKind::PortalRemoteDesktop if element_is_x11_fallback(element) => {
-            point_for_x11_element_through_portal(element, capture)
-        }
-        InputBackendKind::PortalRemoteDesktop => point_for_element(element, capture),
-        InputBackendKind::XTest => point_for_x11_element(element, capture),
-        InputBackendKind::LinuxVirtualInput => point_for_linux_virtual_element(element, capture),
-        InputBackendKind::SendInput
-        | InputBackendKind::WindowsMessages
-        | InputBackendKind::None => point_for_element(element, None),
-    }
-}
-
-fn explicit_point(arguments: &serde_json::Value) -> Option<(f64, f64)> {
-    point_from_fields(arguments, "x", "y")
-}
-
-fn drag_from_point(
-    request: &ActionRequest,
-    backend: InputBackendKind,
-) -> Result<(f64, f64), BackendError> {
-    if let Some(point) = point_from_fields(&request.arguments, "from_x", "from_y")
-        .or_else(|| explicit_point(&request.arguments))
-    {
-        return point_from_action_pixels(point, request, backend);
-    }
-
-    let element = request.resolved_element.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            "drag requires either element_index or explicit from_x/from_y coordinates",
-        )
-    })?;
-    point_for_element_for_backend(element, request.resolved_capture.as_ref(), backend)
-}
-
-fn drag_to_point(
-    request: &ActionRequest,
-    backend: InputBackendKind,
-) -> Result<Option<(f64, f64)>, BackendError> {
-    point_from_fields(&request.arguments, "to_x", "to_y")
-        .map(|point| point_from_action_pixels(point, request, backend))
-        .transpose()
-}
-
-fn point_from_fields(
-    arguments: &serde_json::Value,
-    x_field: &str,
-    y_field: &str,
-) -> Option<(f64, f64)> {
-    let x = arguments.get(x_field).and_then(serde_json::Value::as_f64)?;
-    let y = arguments.get(y_field).and_then(serde_json::Value::as_f64)?;
-    Some((x, y))
-}
-
-fn point_from_action_pixels(
-    point: (f64, f64),
-    request: &ActionRequest,
-    backend: InputBackendKind,
-) -> Result<(f64, f64), BackendError> {
-    if backend == InputBackendKind::LinuxVirtualInput {
-        return linux_virtual_point_from_screenshot_pixels(
-            point,
-            request.resolved_capture.as_ref(),
-            request.snapshot_id.is_some(),
-        );
-    }
-    Ok(point_from_screenshot_pixels(
-        point,
-        request.resolved_capture.as_ref(),
-        backend,
-    ))
-}
-
 fn apply_model_capture(
     capture_info: &mut CaptureInfo,
     snapshot_id: &str,
@@ -2271,166 +1198,26 @@ fn update_model_capture_scale(capture_info: &mut CaptureInfo) {
     }
 }
 
-fn point_from_screenshot_pixels(
-    point: (f64, f64),
-    capture: Option<&CaptureInfo>,
-    backend: InputBackendKind,
-) -> (f64, f64) {
-    let Some(capture) = capture else {
-        return point;
-    };
-    let Some(pixel_size) = capture.pixel_size.as_ref() else {
-        return point;
-    };
-    if pixel_size.width == 0 || pixel_size.height == 0 {
-        return point;
-    }
-
-    let rel_x = point.0 / f64::from(pixel_size.width);
-    let rel_y = point.1 / f64::from(pixel_size.height);
-
-    match backend {
-        InputBackendKind::PortalRemoteDesktop => {
-            if let Some(logical_rect) = capture.logical_rect.as_ref()
-                && logical_rect.width > 0.0
-                && logical_rect.height > 0.0
-            {
-                return (rel_x * logical_rect.width, rel_y * logical_rect.height);
-            }
-            point
-        }
-        InputBackendKind::XTest => {
-            if let Some(original_pixel_size) = capture.original_pixel_size.as_ref() {
-                return (
-                    rel_x * f64::from(original_pixel_size.width),
-                    rel_y * f64::from(original_pixel_size.height),
-                );
-            }
-            point
-        }
-        InputBackendKind::LinuxVirtualInput => {
-            if let Some(logical_rect) = capture.logical_rect.as_ref()
-                && logical_rect.width > 0.0
-                && logical_rect.height > 0.0
-            {
-                return (
-                    logical_rect.x + (rel_x * logical_rect.width),
-                    logical_rect.y + (rel_y * logical_rect.height),
-                );
-            }
-            point
-        }
-        InputBackendKind::SendInput | InputBackendKind::WindowsMessages => point,
-        InputBackendKind::None => point,
-    }
-}
-
-fn linux_virtual_point_from_screenshot_pixels(
-    point: (f64, f64),
-    capture: Option<&CaptureInfo>,
-    snapshot_based: bool,
-) -> Result<(f64, f64), BackendError> {
-    let Some(capture) = capture else {
-        if snapshot_based {
-            return Err(missing_linux_virtual_capture_error());
-        }
-        return Ok(point);
-    };
-    let pixel_size = capture.pixel_size.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            "Linux virtual input requires capture pixel_size to map screenshot pixels to desktop logical coordinates",
-        )
-    })?;
-    if pixel_size.width == 0 || pixel_size.height == 0 {
-        return Err(BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            "Linux virtual input cannot map screenshot pixels from a zero-sized capture",
-        ));
-    }
-    let logical_rect = capture
-        .logical_rect
-        .as_ref()
-        .ok_or_else(missing_linux_virtual_logical_rect_error)?;
-    if logical_rect.space != CoordinateSpace::DesktopLogical
-        || logical_rect.width <= 0.0
-        || logical_rect.height <= 0.0
-    {
-        return Err(BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            "Linux virtual input requires a positive desktop-logical capture logical_rect",
-        ));
-    }
-
-    let rel_x = point.0 / f64::from(pixel_size.width);
-    let rel_y = point.1 / f64::from(pixel_size.height);
-    Ok((
-        logical_rect.x + (rel_x * logical_rect.width),
-        logical_rect.y + (rel_y * logical_rect.height),
-    ))
-}
-
-fn missing_linux_virtual_capture_error() -> BackendError {
-    BackendError::new(
-        BackendErrorCode::InvalidRequest,
-        "Linux virtual input requires capture metadata for snapshot-based screenshot coordinates",
-    )
-}
-
-fn missing_linux_virtual_logical_rect_error() -> BackendError {
-    BackendError::new(
-        BackendErrorCode::InvalidRequest,
-        "Linux virtual input requires capture logical_rect to map screenshot coordinates to desktop logical coordinates",
-    )
-}
-
 fn portal_lifecycle_diagnostics(
-    events: &[PortalLifecycleEvent],
+    events: &mut Vec<PortalLifecycleEvent>,
 ) -> Vec<sky_cua_platform::model::DiagnosticEntry> {
     events
-        .iter()
+        .drain(..)
         .map(|event| sky_cua_platform::model::DiagnosticEntry {
             code: event.code.to_string(),
-            message: event.message.clone(),
-            details: event.details.clone(),
+            message: event.message,
+            details: event.details,
         })
         .collect()
 }
 
 fn push_portal_lifecycle_diagnostics(
-    events: &[PortalLifecycleEvent],
+    events: &mut Vec<PortalLifecycleEvent>,
     diagnostics: &mut DiagnosticBuilder,
 ) {
-    for event in events {
-        diagnostics.push_code(event.code, event.message.clone(), event.details.clone());
+    for event in events.drain(..) {
+        diagnostics.push_code(event.code, event.message, event.details);
     }
-}
-
-fn parse_key_sequence(arguments: &serde_json::Value) -> Option<Vec<String>> {
-    if let Some(keys) = arguments.get("keys").and_then(serde_json::Value::as_array) {
-        let parsed = keys
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if !parsed.is_empty() {
-            return Some(parsed);
-        }
-    }
-
-    if let Some(key) = arguments.get("key").and_then(serde_json::Value::as_str) {
-        let parsed = key
-            .split('+')
-            .map(str::trim)
-            .filter(|segment| !segment.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if !parsed.is_empty() {
-            return Some(parsed);
-        }
-    }
-
-    None
 }
 
 fn select_app(apps: &[DiscoveredApp], selector: &AppSelector) -> Option<DiscoveredApp> {
@@ -3609,27 +2396,19 @@ fn selector_summary(selector: &AppSelector) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::{
-        AppInfo, AppSelector, KdeClipboardPasteError, LinuxDesktopBackend, action_name_matches,
-        app_from_linux_window, best_x11_window_match, clipboard_mime_types_are_plain_text_only,
-        drag_from_point, drag_to_point, effective_pointer_input_backend_for_target, explicit_point,
+        AppInfo, AppSelector, LinuxDesktopBackend, app_from_linux_window, best_x11_window_match,
         fallback_window_elements_with_x11_detail, linux_fallback_snapshot, linux_window_elements,
-        matches_selector, merge_session_env_reports, parse_key_sequence,
-        point_for_x11_element_through_portal, point_from_screenshot_pixels,
-        portal_scroll_steps_from_delta, push_capture_diagnostics, select_x11_window,
-        selector_summary, should_attempt_x11_capture, should_prefer_kde_clipboard_text_backend,
-        x11_window_elements, x11_window_matches_app,
+        matches_selector, merge_session_env_reports, push_capture_diagnostics, select_x11_window,
+        selector_summary, should_attempt_x11_capture, x11_window_elements, x11_window_matches_app,
     };
     use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::{
-        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScreenMode,
-        CoordinateSpace, DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode,
-        EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
-        SemanticBackendKind, SessionKind,
+        CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace,
+        DoctorSessionEnvRepair, DoctorSessionEnvReport, EnvironmentInfo, InputBackendKind,
+        PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
     };
 
     fn wayland_pipewire_environment() -> EnvironmentInfo {
@@ -3683,22 +2462,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_key_chord_string() {
-        assert_eq!(
-            parse_key_sequence(&json!({"key": "Ctrl+L"})),
-            Some(vec!["Ctrl".to_string(), "L".to_string()])
-        );
-    }
-
-    #[test]
-    fn maps_scroll_delta_to_portal_discrete_steps() {
-        assert_eq!(portal_scroll_steps_from_delta(Some(-180.0)), Some(2));
-        assert_eq!(portal_scroll_steps_from_delta(Some(120.0)), Some(-1));
-        assert_eq!(portal_scroll_steps_from_delta(Some(0.0)), None);
-        assert_eq!(portal_scroll_steps_from_delta(None), None);
-    }
-
-    #[test]
     fn capture_never_disables_x11_still_capture() {
         let environment = EnvironmentInfo {
             session_kind: SessionKind::X11,
@@ -3731,117 +2494,6 @@ mod tests {
     }
 
     #[test]
-    fn kde_clipboard_text_backend_is_kde_portal_only() {
-        let request = ActionRequest {
-            action: ActionName::TypeText,
-            snapshot_id: None,
-            element_index: None,
-            arguments: json!({"text": "hello"}),
-            resolved_element: None,
-            resolved_target_element: None,
-            resolved_capture: None,
-            resolved_focused_app: None,
-            environment: Some(wayland_pipewire_environment()),
-        };
-        assert!(should_prefer_kde_clipboard_text_backend(&request));
-
-        let non_kde = ActionRequest {
-            environment: Some(EnvironmentInfo {
-                desktop_environment: Some("GNOME".to_string()),
-                ..wayland_pipewire_environment()
-            }),
-            ..request.clone()
-        };
-        assert!(!should_prefer_kde_clipboard_text_backend(&non_kde));
-
-        let non_portal = ActionRequest {
-            environment: Some(EnvironmentInfo {
-                input_backend: InputBackendKind::XTest,
-                ..wayland_pipewire_environment()
-            }),
-            ..request
-        };
-        assert!(!should_prefer_kde_clipboard_text_backend(&non_portal));
-    }
-
-    #[test]
-    fn kde_clipboard_error_contract_only_falls_back_before_text_input() {
-        let before = KdeClipboardPasteError::before_text_input("missing qdbus".to_string());
-        assert!(before.can_fallback_to_portal_keysym);
-        assert!(!before.clear_portal_session);
-        assert_eq!(before.message, "missing qdbus");
-
-        let after = KdeClipboardPasteError::after_portal_input("paste failed".to_string());
-        assert!(!after.can_fallback_to_portal_keysym);
-        assert!(after.clear_portal_session);
-        assert_eq!(after.message, "paste failed");
-    }
-
-    #[test]
-    fn xwayland_fallback_elements_stay_on_portal_pointer_backend() {
-        let request = ActionRequest {
-            action: ActionName::Click,
-            snapshot_id: Some("snapshot-1".to_string()),
-            element_index: Some(1),
-            arguments: json!({}),
-            resolved_element: Some(ElementNode {
-                element_index: 1,
-                parent_index: Some(0),
-                role: "x11_action_region".to_string(),
-                name: None,
-                description: None,
-                value: None,
-                text: None,
-                numeric_value: None,
-                supports_editable_text: false,
-                state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
-                semantic_actions: Vec::new(),
-                bounds: Some(RectF {
-                    x: 10.0,
-                    y: 20.0,
-                    width: 30.0,
-                    height: 40.0,
-                    space: CoordinateSpace::DesktopLogical,
-                }),
-                backend_ref: None,
-            }),
-            resolved_target_element: None,
-            resolved_capture: None,
-            resolved_focused_app: None,
-            environment: Some(wayland_pipewire_environment()),
-        };
-
-        assert_eq!(
-            effective_pointer_input_backend_for_target(&request),
-            InputBackendKind::PortalRemoteDesktop
-        );
-    }
-
-    #[test]
-    fn kde_clipboard_plain_text_guard_rejects_rich_clipboard_types() {
-        assert!(clipboard_mime_types_are_plain_text_only(&[]));
-        assert!(clipboard_mime_types_are_plain_text_only(&[
-            "text/plain;charset=utf-8".to_string(),
-            "UTF8_STRING".to_string(),
-        ]));
-        assert!(!clipboard_mime_types_are_plain_text_only(&[
-            "text/plain".to_string(),
-            "text/html".to_string(),
-        ]));
-        assert!(!clipboard_mime_types_are_plain_text_only(&[
-            "image/png".to_string()
-        ]));
-    }
-
-    #[test]
-    fn action_name_matching_accepts_advertised_canonical_aliases() {
-        assert!(action_name_matches("Press", "activate"));
-        assert!(action_name_matches("choose", "select"));
-        assert!(action_name_matches("close", "collapse"));
-        assert!(!action_name_matches("scroll", "activate"));
-    }
-
-    #[test]
     fn matches_app_selector_by_window_title() {
         let app = AppInfo {
             app_id: "app-1".to_string(),
@@ -3862,333 +2514,6 @@ mod tests {
             name: None,
         };
         assert!(matches_selector(&app, &selector));
-    }
-
-    #[test]
-    fn parses_explicit_drag_destination_coordinates() {
-        let request = ActionRequest {
-            action: ActionName::Drag,
-            snapshot_id: None,
-            element_index: None,
-            arguments: json!({"to_x": 320.0, "to_y": 240.0}),
-            resolved_element: None,
-            resolved_target_element: None,
-            resolved_capture: None,
-            resolved_focused_app: None,
-            environment: None,
-        };
-        assert_eq!(
-            drag_to_point(&request, InputBackendKind::PortalRemoteDesktop).unwrap(),
-            Some((320.0, 240.0))
-        );
-        let request_without_to = ActionRequest {
-            arguments: json!({"x": 1.0, "y": 2.0}),
-            ..request
-        };
-        assert_eq!(
-            drag_to_point(&request_without_to, InputBackendKind::PortalRemoteDesktop).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn parses_explicit_action_coordinates() {
-        assert_eq!(
-            explicit_point(&json!({"x": 640.0, "y": 360.0})),
-            Some((640.0, 360.0))
-        );
-    }
-
-    #[test]
-    fn maps_screenshot_pixels_to_portal_stream_coordinates() {
-        let capture = CaptureInfo {
-            backend: CaptureBackendKind::PortalPipeWire,
-            image_backend: Some(CaptureBackendKind::PortalPipeWire),
-            coordinate_space: Some(CoordinateSpace::StreamPixels),
-            stream_id: Some("116".to_string()),
-            source_type: Some(1),
-            mapping_id: None,
-            logical_rect: Some(RectF {
-                x: 100.0,
-                y: 50.0,
-                width: 2560.0,
-                height: 1440.0,
-                space: CoordinateSpace::DesktopLogical,
-            }),
-            pixel_size: Some(PixelSize {
-                width: 1920,
-                height: 1080,
-            }),
-            original_pixel_size: Some(PixelSize {
-                width: 2560,
-                height: 1440,
-            }),
-            logical_to_pixel_scale: Some(0.75),
-            screenshot_path: Some("/tmp/capture.jpg".to_string()),
-            original_screenshot_path: Some("/tmp/capture.png".to_string()),
-            model_image_format: Some(ModelImageFormat::Jpeg),
-            model_image_quality: Some(85),
-            model_image_bytes: Some(1234),
-            model_image_encode_ms: Some(7),
-        };
-
-        assert_eq!(
-            point_from_screenshot_pixels(
-                (960.0, 540.0),
-                Some(&capture),
-                InputBackendKind::PortalRemoteDesktop
-            ),
-            (1280.0, 720.0)
-        );
-    }
-
-    #[test]
-    fn maps_screenshot_pixels_to_original_x11_pixels() {
-        let capture = CaptureInfo {
-            backend: CaptureBackendKind::X11,
-            image_backend: Some(CaptureBackendKind::X11),
-            coordinate_space: Some(CoordinateSpace::StreamPixels),
-            stream_id: None,
-            source_type: None,
-            mapping_id: None,
-            logical_rect: None,
-            pixel_size: Some(PixelSize {
-                width: 1920,
-                height: 1080,
-            }),
-            original_pixel_size: Some(PixelSize {
-                width: 2560,
-                height: 1440,
-            }),
-            logical_to_pixel_scale: None,
-            screenshot_path: Some("/tmp/capture.jpg".to_string()),
-            original_screenshot_path: Some("/tmp/capture.png".to_string()),
-            model_image_format: Some(ModelImageFormat::Jpeg),
-            model_image_quality: Some(85),
-            model_image_bytes: Some(1234),
-            model_image_encode_ms: Some(7),
-        };
-
-        assert_eq!(
-            point_from_screenshot_pixels((960.0, 540.0), Some(&capture), InputBackendKind::XTest),
-            (1280.0, 720.0)
-        );
-    }
-
-    #[test]
-    fn maps_screenshot_pixels_to_linux_virtual_desktop_logical_coordinates() {
-        let capture = CaptureInfo {
-            backend: CaptureBackendKind::PortalScreenshot,
-            image_backend: Some(CaptureBackendKind::PortalScreenshot),
-            coordinate_space: Some(CoordinateSpace::StreamPixels),
-            stream_id: None,
-            source_type: None,
-            mapping_id: None,
-            logical_rect: Some(RectF {
-                x: 1920.0,
-                y: 0.0,
-                width: 1280.0,
-                height: 720.0,
-                space: CoordinateSpace::DesktopLogical,
-            }),
-            pixel_size: Some(PixelSize {
-                width: 2560,
-                height: 1440,
-            }),
-            original_pixel_size: Some(PixelSize {
-                width: 2560,
-                height: 1440,
-            }),
-            logical_to_pixel_scale: Some(2.0),
-            screenshot_path: Some("/tmp/capture.jpg".to_string()),
-            original_screenshot_path: Some("/tmp/capture.png".to_string()),
-            model_image_format: Some(ModelImageFormat::Jpeg),
-            model_image_quality: Some(85),
-            model_image_bytes: Some(1234),
-            model_image_encode_ms: Some(7),
-        };
-
-        assert_eq!(
-            point_from_screenshot_pixels(
-                (1280.0, 720.0),
-                Some(&capture),
-                InputBackendKind::LinuxVirtualInput
-            ),
-            (2560.0, 360.0)
-        );
-    }
-
-    #[test]
-    fn linux_virtual_snapshot_coordinates_fail_without_logical_rect() {
-        let request = ActionRequest {
-            action: ActionName::Click,
-            snapshot_id: Some("snapshot-1".to_string()),
-            element_index: None,
-            arguments: json!({"x": 640.0, "y": 360.0}),
-            resolved_element: None,
-            resolved_target_element: None,
-            resolved_capture: Some(CaptureInfo {
-                backend: CaptureBackendKind::PortalScreenshot,
-                image_backend: Some(CaptureBackendKind::PortalScreenshot),
-                coordinate_space: Some(CoordinateSpace::StreamPixels),
-                stream_id: None,
-                source_type: None,
-                mapping_id: None,
-                logical_rect: None,
-                pixel_size: Some(PixelSize {
-                    width: 1280,
-                    height: 720,
-                }),
-                original_pixel_size: None,
-                logical_to_pixel_scale: None,
-                screenshot_path: Some("/tmp/capture.jpg".to_string()),
-                original_screenshot_path: None,
-                model_image_format: Some(ModelImageFormat::Jpeg),
-                model_image_quality: Some(85),
-                model_image_bytes: Some(1234),
-                model_image_encode_ms: Some(7),
-            }),
-            resolved_focused_app: None,
-            environment: Some(EnvironmentInfo {
-                input_backend: InputBackendKind::LinuxVirtualInput,
-                ..wayland_pipewire_environment()
-            }),
-        };
-
-        let error = drag_from_point(&request, InputBackendKind::LinuxVirtualInput).unwrap_err();
-
-        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
-        assert!(error.message.contains("capture logical_rect"));
-    }
-
-    #[test]
-    fn maps_xwayland_x11_pixels_to_portal_logical_coordinates() {
-        let capture = CaptureInfo {
-            backend: CaptureBackendKind::PortalPipeWire,
-            image_backend: Some(CaptureBackendKind::PortalPipeWire),
-            coordinate_space: Some(CoordinateSpace::StreamPixels),
-            stream_id: Some("166".to_string()),
-            source_type: Some(1),
-            mapping_id: None,
-            logical_rect: Some(RectF {
-                x: 100.0,
-                y: 50.0,
-                width: 1536.0,
-                height: 864.0,
-                space: CoordinateSpace::DesktopLogical,
-            }),
-            pixel_size: Some(PixelSize {
-                width: 1440,
-                height: 810,
-            }),
-            original_pixel_size: Some(PixelSize {
-                width: 1920,
-                height: 1080,
-            }),
-            logical_to_pixel_scale: Some(0.9375),
-            screenshot_path: Some("/tmp/capture.jpg".to_string()),
-            original_screenshot_path: Some("/tmp/capture.png".to_string()),
-            model_image_format: Some(ModelImageFormat::Jpeg),
-            model_image_quality: Some(85),
-            model_image_bytes: Some(1234),
-            model_image_encode_ms: Some(7),
-        };
-        let element = ElementNode {
-            element_index: 4,
-            parent_index: Some(1),
-            role: "x11_action_region".to_string(),
-            name: None,
-            description: None,
-            value: None,
-            text: None,
-            numeric_value: None,
-            supports_editable_text: false,
-            state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
-            semantic_actions: Vec::new(),
-            bounds: Some(RectF {
-                x: 896.0,
-                y: 552.0,
-                width: 32.0,
-                height: 24.0,
-                space: CoordinateSpace::DesktopLogical,
-            }),
-            backend_ref: None,
-        };
-
-        let point = point_for_x11_element_through_portal(&element, Some(&capture)).unwrap();
-
-        assert!((point.0 - 729.6).abs() < 0.000_001);
-        assert!((point.1 - 451.2).abs() < 0.000_001);
-    }
-
-    #[test]
-    fn maps_xwayland_drag_element_start_through_same_portal_scaling() {
-        let capture = CaptureInfo {
-            backend: CaptureBackendKind::PortalPipeWire,
-            image_backend: Some(CaptureBackendKind::PortalPipeWire),
-            coordinate_space: Some(CoordinateSpace::StreamPixels),
-            stream_id: Some("166".to_string()),
-            source_type: Some(1),
-            mapping_id: None,
-            logical_rect: Some(RectF {
-                x: 100.0,
-                y: 50.0,
-                width: 1536.0,
-                height: 864.0,
-                space: CoordinateSpace::DesktopLogical,
-            }),
-            pixel_size: Some(PixelSize {
-                width: 1440,
-                height: 810,
-            }),
-            original_pixel_size: Some(PixelSize {
-                width: 1920,
-                height: 1080,
-            }),
-            logical_to_pixel_scale: Some(0.9375),
-            screenshot_path: Some("/tmp/capture.jpg".to_string()),
-            original_screenshot_path: Some("/tmp/capture.png".to_string()),
-            model_image_format: Some(ModelImageFormat::Jpeg),
-            model_image_quality: Some(85),
-            model_image_bytes: Some(1234),
-            model_image_encode_ms: Some(7),
-        };
-        let request = ActionRequest {
-            action: ActionName::Drag,
-            snapshot_id: Some("snapshot-1".to_string()),
-            element_index: Some(4),
-            arguments: json!({"to_x": 640.0, "to_y": 480.0}),
-            resolved_element: Some(ElementNode {
-                element_index: 4,
-                parent_index: Some(1),
-                role: "x11_action_region".to_string(),
-                name: None,
-                description: None,
-                value: None,
-                text: None,
-                numeric_value: None,
-                supports_editable_text: false,
-                state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
-                semantic_actions: Vec::new(),
-                bounds: Some(RectF {
-                    x: 896.0,
-                    y: 552.0,
-                    width: 32.0,
-                    height: 24.0,
-                    space: CoordinateSpace::DesktopLogical,
-                }),
-                backend_ref: None,
-            }),
-            resolved_target_element: None,
-            resolved_capture: Some(capture),
-            resolved_focused_app: None,
-            environment: Some(wayland_pipewire_environment()),
-        };
-
-        let point = drag_from_point(&request, InputBackendKind::PortalRemoteDesktop).unwrap();
-
-        assert!((point.0 - 729.6).abs() < 0.000_001);
-        assert!((point.1 - 451.2).abs() < 0.000_001);
     }
 
     #[test]

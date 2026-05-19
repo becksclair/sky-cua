@@ -28,6 +28,8 @@ from live_desktop_smoke import (  # type: ignore[import-not-found]
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+EIS_INPUT_USED = "PortalEisInputUsed"
+EIS_INPUT_FALLBACK = "PortalEisInputFallback"
 
 
 def require_real_wayland_session() -> None:
@@ -44,6 +46,31 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def action_diagnostic_codes(result: dict[str, Any]) -> set[str]:
+    structured = result.get("structuredContent") or {}
+    diagnostics = structured.get("diagnostics") or []
+    return {
+        code
+        for entry in diagnostics
+        if isinstance(entry, dict) and isinstance(code := entry.get("code"), str)
+    }
+
+
+def require_gnome_eis_input_used(result: dict[str, Any], action: str, *, is_gnome: bool) -> None:
+    if not is_gnome:
+        return
+    codes = action_diagnostic_codes(result)
+    if EIS_INPUT_FALLBACK in codes or EIS_INPUT_USED not in codes:
+        msg = (
+            f"{action} did not use GNOME RemoteDesktop EIS input. "
+            f"diagnostic_codes={sorted(codes)} "
+            f"result={json.dumps(result, indent=2, sort_keys=True)}"
+        )
+        if os.environ.get("SKY_CUA_REQUIRE_EIS") == "1":
+            raise RuntimeError(msg)
+        print(f"WARNING: {msg}", file=sys.stderr)
+
+
 def main() -> int:
     require_real_wayland_session()
 
@@ -53,15 +80,17 @@ def main() -> int:
 
     step_delay = float(os.environ.get("SKY_CUA_VISIBLE_STEP_DELAY_SECONDS", "2.5"))
     final_hold = float(os.environ.get("SKY_CUA_VISIBLE_FINAL_HOLD_SECONDS", "20"))
+    is_gnome = "gnome" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
     fixture_env = {
         "GDK_BACKEND": "wayland",
-        "SKY_CUA_POINTER_FULLSCREEN": "1",
+        "SKY_CUA_POINTER_FULLSCREEN": os.environ.get("SKY_CUA_POINTER_FULLSCREEN", "1"),
     }
+    default_agent_cursor = "0" if is_gnome else "1"
     client_env = {
         "GDK_BACKEND": "wayland",
         "DISPLAY": "",
-        "SKY_CUA_AGENT_CURSOR": os.environ.get("SKY_CUA_AGENT_CURSOR", "1"),
+        "SKY_CUA_AGENT_CURSOR": os.environ.get("SKY_CUA_AGENT_CURSOR", default_agent_cursor),
         "SKY_CUA_SCREENSHOT_CURSOR": os.environ.get("SKY_CUA_SCREENSHOT_CURSOR", "1"),
     }
 
@@ -93,16 +122,69 @@ def main() -> int:
                 if missing:
                     raise RuntimeError(f"MCP server did not advertise required tools: {missing}")
 
+                # Activate the fixture window explicitly on both GNOME and Plasma
+                # to ensure it has focus before EIS input is sent.
+                if "activate_window" not in tools:
+                    raise RuntimeError("MCP server did not advertise activate_window")
+
+                # Discover the fixture window by exact title + PID.
+                list_result = client.tools_call(
+                    99,
+                    "list_windows",
+                    {},
+                )
+                write_json(artifact_dir / "pre-activate-windows.json", list_result)
+                windows = (list_result.get("structuredContent") or {}).get("windows") or []
+                fixture_window = None
+                for w in windows:
+                    if w.get("title") == "sky-cua pointer smoke" and w.get("pid") == fixture.pid:
+                        fixture_window = w
+                        break
+                if fixture_window is None:
+                    raise RuntimeError(
+                        "Did not find fixture window with title 'sky-cua pointer smoke' "
+                        f"and pid {fixture.pid}. windows={json.dumps(windows, indent=2)}"
+                    )
+
+                activate_result = client.tools_call(
+                    100,
+                    "activate_window",
+                    {"window_id": fixture_window["window_id"]},
+                )
+                write_json(artifact_dir / "activate-window-result.json", activate_result)
+                require_ok(activate_result, "pointer fixture window activation")
+
+                # Verify the fixture is actually focused after activation.
+                focused_result = client.tools_call(
+                    101,
+                    "focused_window",
+                    {},
+                )
+                write_json(artifact_dir / "focused-window-after-activate.json", focused_result)
+                focused_window = (focused_result.get("structuredContent") or {}).get("window")
+                if focused_window is None or focused_window.get("title") != "sky-cua pointer smoke":
+                    raise RuntimeError(
+                        "Fixture window did not gain focus after activation. "
+                        f"focused={json.dumps(focused_window, indent=2)}"
+                    )
+
+                state = wait_for_stable_pointer_fixture(state_path, deadline=time.time() + 8)
+                write_json(artifact_dir / "post-activate-state.json", state)
+                print(f"post_activate_points={json.dumps(state['points'], sort_keys=True)}")
+
                 print(f"Waiting {step_delay:.1f}s before click...")
                 time.sleep(step_delay)
                 click_point = state["points"]["click_button"]
                 click_result = client.tools_call(
-                    100,
+                    102,
                     "click",
                     {"x": click_point["x"], "y": click_point["y"]},
                 )
                 write_json(artifact_dir / "click-result.json", click_result)
                 require_ok(click_result, "visible Wayland physical click")
+                require_gnome_eis_input_used(
+                    click_result, "visible Wayland physical click", is_gnome=is_gnome
+                )
                 wait_for_state(
                     state_path,
                     lambda current: bool(current.get("clicked")),
@@ -111,12 +193,33 @@ def main() -> int:
                 )
                 print("Visible Wayland click passed.")
 
+                print(f"Waiting {step_delay:.1f}s before secondary click...")
+                time.sleep(step_delay)
+                secondary_point = state["points"]["secondary"]
+                secondary_result = client.tools_call(
+                    103,
+                    "perform_secondary_action",
+                    {"x": secondary_point["x"], "y": secondary_point["y"]},
+                )
+                write_json(artifact_dir / "secondary-result.json", secondary_result)
+                require_ok(secondary_result, "visible Wayland secondary click")
+                require_gnome_eis_input_used(
+                    secondary_result, "visible Wayland secondary click", is_gnome=is_gnome
+                )
+                wait_for_state(
+                    state_path,
+                    lambda current: bool(current.get("secondary_clicked")),
+                    deadline=time.time() + 8,
+                    description="visible Wayland secondary-click acknowledgement",
+                )
+                print("Visible Wayland secondary click passed.")
+
                 print(f"Waiting {step_delay:.1f}s before drag...")
                 time.sleep(step_delay)
                 drag_from = state["points"]["drag_from"]
                 drag_to = state["points"]["drag_to"]
                 drag_result = client.tools_call(
-                    101,
+                    104,
                     "drag",
                     {
                         "x": drag_from["x"],
@@ -127,6 +230,9 @@ def main() -> int:
                 )
                 write_json(artifact_dir / "drag-result.json", drag_result)
                 require_ok(drag_result, "visible Wayland physical drag")
+                require_gnome_eis_input_used(
+                    drag_result, "visible Wayland physical drag", is_gnome=is_gnome
+                )
                 wait_for_state(
                     state_path,
                     lambda current: bool(current.get("drag_completed")),
@@ -141,12 +247,15 @@ def main() -> int:
                 before_scroll = load_state(state_path) or {}
                 starting_scrolls = int(before_scroll.get("scroll_events", 0))
                 scroll_result = client.tools_call(
-                    102,
+                    105,
                     "scroll",
                     {"x": scroll_point["x"], "y": scroll_point["y"], "delta_y": -180.0},
                 )
                 write_json(artifact_dir / "scroll-result.json", scroll_result)
                 require_ok(scroll_result, "visible Wayland physical scroll")
+                require_gnome_eis_input_used(
+                    scroll_result, "visible Wayland physical scroll", is_gnome=is_gnome
+                )
                 final_state = wait_for_state(
                     state_path,
                     lambda current: int(current.get("scroll_events", 0)) > starting_scrolls,
@@ -161,21 +270,29 @@ def main() -> int:
                 text_point = state["points"]["text_entry"]
                 text_value = "cosmic-text-smoke"
                 focus_result = client.tools_call(
-                    103,
+                    106,
                     "click",
                     {"x": text_point["x"], "y": text_point["y"]},
                 )
                 write_json(artifact_dir / "text-focus-result.json", focus_result)
                 require_ok(focus_result, "visible Wayland text-entry focus click")
+                require_gnome_eis_input_used(
+                    focus_result,
+                    "visible Wayland text-entry focus click",
+                    is_gnome=is_gnome,
+                )
                 time.sleep(0.35)
 
                 type_result = client.tools_call(
-                    104,
+                    107,
                     "type_text",
                     {"text": text_value},
                 )
                 write_json(artifact_dir / "type-result.json", type_result)
                 require_ok(type_result, "visible Wayland type_text")
+                require_gnome_eis_input_used(
+                    type_result, "visible Wayland type_text", is_gnome=is_gnome
+                )
                 wait_for_state(
                     state_path,
                     lambda current: current.get("entry_text") == text_value,
@@ -184,12 +301,15 @@ def main() -> int:
                 )
 
                 key_result = client.tools_call(
-                    105,
+                    108,
                     "press_key",
                     {"key": "Enter"},
                 )
                 write_json(artifact_dir / "press-key-result.json", key_result)
                 require_ok(key_result, "visible Wayland press_key")
+                require_gnome_eis_input_used(
+                    key_result, "visible Wayland press_key", is_gnome=is_gnome
+                )
                 final_state = wait_for_state(
                     state_path,
                     lambda current: current.get("submitted_text") == text_value,
