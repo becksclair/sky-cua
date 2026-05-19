@@ -73,8 +73,10 @@ fn probe_desktop_env_vars() -> Vec<(String, String)> {
 
     let mut found = Vec::new();
 
-    // Helper: only fill if the key is currently unset or empty.
-    let needs = |key: &str| std::env::var_os(key).map(|v| v.is_empty()).unwrap_or(true);
+    // Helper: only fill if the key is currently unset. When a parent
+    // process explicitly clears a variable (e.g. DISPLAY="" to force
+    // Wayland-only), we must not re-probe and override that intent.
+    let needs = |key: &str| std::env::var_os(key).is_none();
 
     if needs("XDG_RUNTIME_DIR") {
         let uid = current_uid();
