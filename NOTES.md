@@ -64,6 +64,19 @@ dumps. Per-feature artifact paths live in
 - GNOME RemoteDesktop accepts smooth portal scroll calls without moving
   the GTK scroller. Send discrete wheel steps with the sign inverted
   from the XTest helper.
+- GNOME RemoteDesktop EIS scroll uses libei direction semantics: positive
+  Y scrolls down. Preserve the tool/action convention where negative
+  `delta_y` scrolls down by inverting at the EIS boundary; the
+  `wayland-pointer` smoke should report `scroll_delta_y=180` for
+  `delta_y=-180`.
+- GNOME RemoteDesktop keyboard text/key injection must use EIS for current
+  sessions, but only after resolving keysyms through the compositor-provided
+  XKB keymap. Hard-coded evdev positions regress non-US layouts and uppercase
+  printable keys.
+- GNOME `wayland-pointer` smoke should require `PortalEisInputUsed` and no
+  fallback for click, secondary-click, drag, scroll, text focus click,
+  `type_text`, and `press_key`; otherwise the run may pass through an
+  unproved legacy portal path.
 - GNOME GTK fullscreen allocations can be taller than the framebuffer
   (e.g. 1280x973 on 1280x800) with centered / clipped vertical content.
   Keep that adjustment GNOME-scoped; KDE allocations behave differently.

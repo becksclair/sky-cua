@@ -23,6 +23,7 @@ import live_agent_cursor_x11_overlay_smoke
 import live_chrome_host_client_smoke
 import live_desktop_smoke
 import live_portal_downgrade_smoke
+import live_wayland_pointer_smoke
 import package_runtime_artifact
 import publish_marketplace_release
 import run_gui_testing_vm_smoke
@@ -558,62 +559,68 @@ def test_testing_vm_provisioner_installs_arch_desktop_packages() -> None:
     )
     content = provisioner.read_text(encoding="utf-8")
 
-    assert "pacman-key --populate archlinux" in content
-    assert "google-chrome-stable_current_amd64.deb" in content
-    assert "google-chrome-stable" in content
-    assert "CODEX_DESKTOP_PACKAGE" in content
-    assert "pacman -U --noconfirm" in content
-    assert "rust" in content
-    assert "rsync" in content
-    assert "openssh" in content
-    assert "greetd" in content
-    assert "seatd" in content
-    assert "ydotool" in content
-    assert "systemctl --global enable ydotool.service" in content
-    assert "80-sky-cua-uinput.rules" in content
-    assert "org.gnome.desktop.session idle-delay 0" in content
-    assert "org.gnome.desktop.screensaver lock-enabled false" in content
-    assert "org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing" in content
-    assert "kwin" in content
-    assert "plasma-desktop" in content
-    assert "gnome-shell" in content
-    assert "cosmic-session" in content
-    assert "hyprland" in content
-    assert "i3-wm" in content
-    assert "gst-plugins-good" in content
-    assert "libxss" in content
-    assert "nss" in content
-    assert "python-dbus" in content
-    assert "python-gobject" in content
-    assert "qt6-tools" in content
-    assert "imagemagick" in content
-    assert "jq" in content
-    assert "libinput" in content
-    assert "slurp" in content
-    assert "socat" in content
-    assert "strace" in content
-    assert "tk" in content
-    assert "wev" in content
-    assert "weston" in content
-    assert "wl-clipboard" in content
-    assert "xorg-server" in content
+    required_tokens = {
+        "pacman-key --populate archlinux",
+        "google-chrome-stable_current_amd64.deb",
+        "google-chrome-stable",
+        "CODEX_DESKTOP_PACKAGE",
+        "pacman -U --noconfirm",
+        "rust",
+        "rsync",
+        "openssh",
+        "greetd",
+        "seatd",
+        "ydotool",
+        "xorg-xrandr",
+        "systemctl --global enable ydotool.service",
+        "80-sky-cua-uinput.rules",
+        "org.gnome.desktop.session idle-delay 0",
+        "org.gnome.desktop.screensaver lock-enabled false",
+        "org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing",
+        "kwin",
+        "plasma-desktop",
+        "gnome-shell",
+        "cosmic-session",
+        "hyprland",
+        "i3-wm",
+        "gst-plugins-good",
+        "libxss",
+        "nss",
+        "python-dbus",
+        "python-gobject",
+        "qt6-tools",
+        "imagemagick",
+        "jq",
+        "libinput",
+        "slurp",
+        "socat",
+        "strace",
+        "tk",
+        "wev",
+        "weston",
+        "wl-clipboard",
+        "xorg-server",
+        "xorg-xev",
+        "xorg-xdpyinfo",
+        "xorg-xwininfo",
+        "libxtst",
+        "xdg-utils",
+        "xdg-desktop-portal-cosmic",
+        "xdg-desktop-portal-gnome",
+        "xdg-desktop-portal-hyprland",
+        "xdg-desktop-portal-kde",
+        "xdg-desktop-portal-wlr",
+        "XDG_CURRENT_DESKTOP=COSMIC",
+        "XDG_CURRENT_DESKTOP=KDE",
+        "XDG_CURRENT_DESKTOP=GNOME",
+        "XDG_CURRENT_DESKTOP=Hyprland",
+        "XDG_CURRENT_DESKTOP=i3",
+        "sky-cua-testing-vm-session",
+    }
+    missing = {token for token in required_tokens if token not in content}
+    assert not missing, f"Provisioner is missing expected tokens: {missing}"
+
     assert "xorg-server-xvfb" not in content
-    assert "xorg-xev" in content
-    assert "xorg-xdpyinfo" in content
-    assert "xorg-xwininfo" in content
-    assert "libxtst" in content
-    assert "xdg-utils" in content
-    assert "xdg-desktop-portal-cosmic" in content
-    assert "xdg-desktop-portal-gnome" in content
-    assert "xdg-desktop-portal-hyprland" in content
-    assert "xdg-desktop-portal-kde" in content
-    assert "xdg-desktop-portal-wlr" in content
-    assert "XDG_CURRENT_DESKTOP=COSMIC" in content
-    assert "XDG_CURRENT_DESKTOP=KDE" in content
-    assert "XDG_CURRENT_DESKTOP=GNOME" in content
-    assert "XDG_CURRENT_DESKTOP=Hyprland" in content
-    assert "XDG_CURRENT_DESKTOP=i3" in content
-    assert "sky-cua-testing-vm-session" in content
 
 
 def test_gui_test_profile_copies_essential_codex_settings() -> None:
@@ -654,6 +661,47 @@ def test_gui_test_profiles_use_host_built_rust_artifacts() -> None:
     assert "SKY_CUA_OVERLAY_HOST_PATH" in kde
     assert "/workspace/target/release/sky-cua-overlay-host" in kde
     assert "${SKY_CUA_COPY_CODEX_SETTINGS:-0}" in run_profile
+
+
+def test_wayland_pointer_smoke_requires_gnome_eis_diagnostics() -> None:
+    success = {
+        "structuredContent": {
+            "diagnostics": [{"code": "PortalEisInputUsed"}],
+        },
+    }
+    live_wayland_pointer_smoke.require_gnome_eis_input_used(success, "click", is_gnome=True)
+    live_wayland_pointer_smoke.require_gnome_eis_input_used(
+        {"structuredContent": {"diagnostics": []}}, "click", is_gnome=False
+    )
+
+    fallback = {
+        "structuredContent": {
+            "diagnostics": [{"code": "PortalEisInputFallback"}],
+        },
+    }
+    import os
+
+    # Without SKY_CUA_REQUIRE_EIS, fallback is a warning, not a hard failure
+    live_wayland_pointer_smoke.require_gnome_eis_input_used(fallback, "click", is_gnome=True)
+
+    # With SKY_CUA_REQUIRE_EIS=1, fallback is a hard failure
+    os.environ["SKY_CUA_REQUIRE_EIS"] = "1"
+    with pytest.raises(RuntimeError, match="PortalEisInputFallback"):
+        live_wayland_pointer_smoke.require_gnome_eis_input_used(fallback, "click", is_gnome=True)
+    del os.environ["SKY_CUA_REQUIRE_EIS"]
+
+    # Without SKY_CUA_REQUIRE_EIS, missing EIS is also a warning
+    live_wayland_pointer_smoke.require_gnome_eis_input_used(
+        {"structuredContent": {"diagnostics": []}}, "click", is_gnome=True
+    )
+
+    # With SKY_CUA_REQUIRE_EIS=1, missing EIS is a hard failure
+    os.environ["SKY_CUA_REQUIRE_EIS"] = "1"
+    with pytest.raises(RuntimeError, match="did not use GNOME RemoteDesktop EIS input"):
+        live_wayland_pointer_smoke.require_gnome_eis_input_used(
+            {"structuredContent": {"diagnostics": []}}, "click", is_gnome=True
+        )
+    del os.environ["SKY_CUA_REQUIRE_EIS"]
 
 
 def test_testing_vm_runner_runs_remote_arch_profile(
@@ -745,6 +793,45 @@ def test_testing_vm_runner_remote_profile_opts_into_codex_settings(
     assert "wayland-pointer" in run_gui_testing_vm_smoke.PROFILES
 
 
+def test_testing_vm_runner_reads_remote_jsons_with_nul_separators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        text: bool,
+        capture_output: bool,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert text is True
+        assert capture_output is True
+        assert check is False
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"first": 1}\x00---FILE_NOT_FOUND---\x00{"third": 3}\x00',
+            stderr="",
+        )
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    assert run_gui_testing_vm_smoke.read_remote_jsons(
+        "skycua@testing-vm",
+        2222,
+        ["StrictHostKeyChecking=no"],
+        [Path("/tmp/one.json"), Path("/tmp/missing.json"), Path("/tmp/three.json")],
+    ) == [{"first": 1}, None, {"third": 3}]
+
+    command_text = " ".join(commands[0])
+    assert "printf '\\0'" in command_text
+    assert "---FILE_NOT_FOUND---" in command_text
+
+
 def test_testing_vm_runner_preauthorizes_kde_remote_desktop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -787,6 +874,49 @@ def test_testing_vm_runner_preauthorizes_kde_remote_desktop(
     assert "--app-id '' --app-id desktop --print-json" in command_text
 
 
+def test_testing_vm_runner_preauthorizes_gnome_remote_desktop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+
+    assert run_gui_testing_vm_smoke.should_preauthorize_gnome_remote_desktop(
+        "computer-use", "GNOME"
+    )
+    assert run_gui_testing_vm_smoke.should_preauthorize_gnome_remote_desktop(
+        "wayland-pointer", "gnome"
+    )
+    assert not run_gui_testing_vm_smoke.should_preauthorize_gnome_remote_desktop(
+        "codex-desktop", "GNOME"
+    )
+    assert not run_gui_testing_vm_smoke.should_preauthorize_gnome_remote_desktop(
+        "computer-use", "KDE"
+    )
+
+    run_gui_testing_vm_smoke.preauthorize_gnome_remote_desktop(
+        "skycua@testing-vm",
+        2222,
+        ["StrictHostKeyChecking=no"],
+        Path("/workspace"),
+        wayland_display="wayland-0",
+        desktop_env="GNOME",
+    )
+
+    command_text = " ".join(commands[0])
+    assert "ssh -p 2222" in command_text
+    assert "-o StrictHostKeyChecking=no" in command_text
+    assert "XDG_CURRENT_DESKTOP=GNOME" in command_text
+    assert 'WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"' in command_text
+    assert "scripts/testing-vm/preauthorize_gnome_remote_desktop.py --print-json" in command_text
+
+
 def test_kde_remote_desktop_preauthorizer_grants_empty_and_desktop_app_ids() -> None:
     helper = (
         Path(__file__).resolve().parents[1]
@@ -824,6 +954,7 @@ def test_testing_vm_runner_resets_overlay_host_processes(
     assert "pkill -x sky-cua-service" in command_text
     assert "pkill -f '(^|/)sky-cua-overlay-host( |$)'" in command_text
     assert "pkill -x sky-cua-overlay" in command_text
+    assert "pkill -f '(^|/)gtk_pointer_smoke_fixture.py( |$)'" in command_text
     assert "pkill -x cosmic-randr" in command_text
     assert "agent-cursor.sock" in command_text
 
@@ -895,7 +1026,12 @@ def test_testing_vm_syncs_checkout_with_excludes(
 
     run_gui_testing_vm_smoke.sync_checkout("skycua@testing-vm", 22, [], Path("/workspace"))
 
-    assert commands[0] == ["ssh", "-p", "22", "skycua@testing-vm", "mkdir", "-p", "/workspace"]
+    assert commands[0][0] == "ssh"
+    assert commands[0][1] == "-p"
+    assert commands[0][2] == "22"
+    assert "ControlMaster=auto" in commands[0]
+    assert "skycua@testing-vm" in commands[0]
+    assert "mkdir" in commands[0]
     command_text = " ".join(commands[1])
     assert commands[1][0] == "rsync"
     assert "--delete" in commands[1]
@@ -967,9 +1103,10 @@ def test_testing_vm_runner_syncs_essential_codex_settings(
     )
 
     command_text = "\n".join(" ".join(command) for command in commands)
-    assert (
-        "ssh -p 2222 -o StrictHostKeyChecking=no skycua@testing-vm mkdir -p .codex" in command_text
-    )
+    assert "ssh -p 2222" in command_text
+    assert "ControlMaster=auto" in command_text
+    assert "StrictHostKeyChecking=no" in command_text
+    assert "skycua@testing-vm mkdir -p .codex" in command_text
     assert "auth.json skycua@testing-vm:.codex/auth.json" in command_text
     assert "config.toml skycua@testing-vm:.codex/config.toml" in command_text
     assert "browser/config.toml" in command_text

@@ -92,8 +92,12 @@ toward X11.
   command construction
 - `crates/sky-cua-linux/src/env_probe.rs` — backend auto-detection
 - `crates/sky-cua-linux/src/coords.rs` — coordinate plane conversions
-- `crates/sky-cua-linux/src/backend.rs` — Linux click, secondary-click,
-  scroll, drag, type_text, press_key, set_value fallback routing
+- `crates/sky-cua-linux/src/actions/targeting.rs` — screenshot-pixel to
+  desktop-logical action coordinate mapping
+- `crates/sky-cua-linux/src/actions/mod.rs` — Linux click, secondary-click,
+  scroll, drag, type_text, press_key, and set_value fallback routing
+- `crates/sky-cua-linux/src/backend.rs` — Linux backend orchestration and
+  runtime adapter for the action executor
 - `scripts/live_wayland_pointer_smoke.py` — fullscreen GTK pointer fixture
 - `scripts/testing-vm/profiles/wayland-pointer.sh` —
   `wayland-pointer-scaled` repeatable VM profile

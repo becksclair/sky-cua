@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::{AppSelector, CaptureScreenMode, ServiceRequest, ServiceResponse};
 
 use crate::heuristics::HeuristicsRegistry;
-use crate::mcp_server::enrich_snapshot;
+use crate::mcp_tools::enrich_snapshot;
 use crate::output_shapes::{
     AppStateDetail, compact_snapshot, list_apps_error_diagnostic, setup_accessibility_is_error,
     setup_window_targeting_is_error,
@@ -785,6 +785,10 @@ mod tests {
             perform_action: available(),
             perform_secondary_action: available(),
             scroll: available(),
+            supported_scroll_directions: vec![
+                sky_cua_platform::model::ScrollDirection::Up,
+                sky_cua_platform::model::ScrollDirection::Down,
+            ],
             drag: available(),
             type_text: available(),
             press_key: available(),

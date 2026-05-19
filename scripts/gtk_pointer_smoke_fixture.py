@@ -12,6 +12,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,9 @@ class PointerSmokeWindow(Gtk.Window):
             "drag_completed": False,
             "entry_text": "",
             "submitted_text": "",
+            "button_press_seen": False,
+            "button_release_seen": False,
+            "last_pointer_event": {},
             "points": {},
             "window_size": {},
             "last_event": "starting",
@@ -78,6 +82,11 @@ class PointerSmokeWindow(Gtk.Window):
         self.text_entry.connect("activate", self.on_entry_activate)
 
         self.click_button = Gtk.Button(label="Physical click target")
+        self.click_button.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK
+        )
+        self.click_button.connect("button-press-event", self.on_click_button_press)
+        self.click_button.connect("button-release-event", self.on_click_button_release)
         self.click_button.connect("clicked", self.on_click_button)
 
         self.secondary_box = self.make_region(
@@ -133,6 +142,14 @@ class PointerSmokeWindow(Gtk.Window):
         self.connect("delete-event", self.on_delete)
         self.connect("destroy", self.on_destroy)
         self.connect("size-allocate", self.on_size_allocate)
+        self.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.POINTER_MOTION_MASK
+        )
+        self.connect("button-press-event", self.on_window_button_press)
+        self.connect("button-release-event", self.on_window_button_release)
+        self.connect("motion-notify-event", self.on_window_motion)
 
         signal.signal(signal.SIGTERM, self.on_signal)
         signal.signal(signal.SIGINT, self.on_signal)
@@ -195,34 +212,46 @@ class PointerSmokeWindow(Gtk.Window):
             return
         self.layout_signature = signature
 
-        margin_x = max(48, width // 20)
-        top = max(48, height // 18)
-        section_gap = max(36, width // 30)
-        region_width = max(360, int(width * 0.32))
-        region_height = max(200, int(height * 0.22))
-        button_width = max(260, int(width * 0.18))
-        button_height = 84
-        entry_width = max(340, int(width * 0.32))
-        entry_height = 48
+        # Debounce rapid successive resize events during window initialization.
+        if hasattr(self, "_size_allocate_timeout_id"):
+            GLib.source_remove(self._size_allocate_timeout_id)
+        self._size_allocate_timeout_id = GLib.timeout_add(
+            50, self._apply_size_allocate, width, height
+        )
+
+    def _apply_size_allocate(self, width: int, height: int) -> bool:
+        visible_width, visible_height = self.visible_monitor_size(width, height)
+        layout_width = min(width, visible_width) if visible_width > 0 else width
+        layout_height = min(height, visible_height) if visible_height > 0 else height
+        compact = layout_height < 820
+        margin_x = max(32, min(64, layout_width // 20))
+        top = max(24, min(48, layout_height // 18))
+        section_gap = max(20, min(40, layout_width // 34))
+        region_width = max(300, int(layout_width * 0.32))
+        region_height = max(128, min(220, int(layout_height * (0.18 if compact else 0.22))))
+        button_width = max(220, int(layout_width * 0.18))
+        button_height = 64 if compact else 84
+        entry_width = max(300, int(layout_width * 0.32))
+        entry_height = 44 if compact else 48
 
         self.fixed.move(self.header, margin_x, top)
-        self.header.set_size_request(width - (margin_x * 2), -1)
+        self.header.set_size_request(layout_width - (margin_x * 2), -1)
 
-        instructions_y = top + 56
+        instructions_y = top + (42 if compact else 56)
         self.fixed.move(self.instructions, margin_x, instructions_y)
-        self.instructions.set_size_request(width - (margin_x * 2), -1)
+        self.instructions.set_size_request(layout_width - (margin_x * 2), -1)
 
         entry_x = margin_x
-        entry_y = instructions_y + 88
+        entry_y = instructions_y + (62 if compact else 88)
         self.fixed.move(self.text_entry, entry_x, entry_y)
         self.text_entry.set_size_request(entry_width, entry_height)
 
         button_x = margin_x
-        button_y = entry_y + entry_height + 24
+        button_y = entry_y + entry_height + (16 if compact else 24)
         self.fixed.move(self.click_button, button_x, button_y)
         self.click_button.set_size_request(button_width, button_height)
 
-        region_top = button_y + button_height + 48
+        region_top = button_y + button_height + (28 if compact else 48)
         drag_x = margin_x
         drag_y = region_top
         self.fixed.move(self.drag_box, drag_x, drag_y)
@@ -238,14 +267,49 @@ class PointerSmokeWindow(Gtk.Window):
         self.fixed.move(self.scroll_box, scroll_x, scroll_y)
         self.scroll_box.set_size_request(region_width, region_height)
 
-        status_y = scroll_y + region_height + 48
+        status_y = scroll_y + region_height + (20 if compact else 48)
         self.fixed.move(self.status, margin_x, status_y)
-        self.status.set_size_request(width - (margin_x * 2), -1)
+        self.status.set_size_request(layout_width - (margin_x * 2), -1)
 
         origin_x, origin_y = self.window_origin(width, height)
         self.state["window_origin"] = {"x": origin_x, "y": origin_y}
         self.state["window_size"] = {"width": width, "height": height}
-        self.state["points"] = {
+        self.state["points"] = self.points_from_requested_layout(
+            origin_x=origin_x,
+            origin_y=origin_y,
+            entry=(entry_x, entry_y, entry_width, entry_height),
+            button=(button_x, button_y, button_width, button_height),
+            drag=(drag_x, drag_y, region_width, region_height),
+            secondary=(secondary_x, secondary_y, region_width, region_height),
+            scroll=(scroll_x, scroll_y, region_width, region_height),
+        )
+        self.state["ready"] = True
+        self.state["last_event"] = f"layout:{width}x{height}"
+        self.update_status()
+        self.write_state()
+        self.refresh_points_from_allocations()
+        return False
+
+    def center(self, x: int, y: int, width: int, height: int) -> dict[str, float]:
+        return {"x": x + (width / 2.0), "y": y + (height / 2.0)}
+
+    def points_from_requested_layout(
+        self,
+        *,
+        origin_x: int,
+        origin_y: int,
+        entry: tuple[int, int, int, int],
+        button: tuple[int, int, int, int],
+        drag: tuple[int, int, int, int],
+        secondary: tuple[int, int, int, int],
+        scroll: tuple[int, int, int, int],
+    ) -> dict[str, dict[str, float]]:
+        entry_x, entry_y, entry_width, entry_height = entry
+        button_x, button_y, button_width, button_height = button
+        drag_x, drag_y, region_width, region_height = drag
+        secondary_x, secondary_y, secondary_width, secondary_height = secondary
+        scroll_x, scroll_y, scroll_width, scroll_height = scroll
+        return {
             "text_entry": self.center(
                 origin_x + entry_x, origin_y + entry_y, entry_width, entry_height
             ),
@@ -267,26 +331,79 @@ class PointerSmokeWindow(Gtk.Window):
             "secondary": self.center(
                 origin_x + secondary_x,
                 origin_y + secondary_y,
-                region_width,
-                region_height,
+                secondary_width,
+                secondary_height,
             ),
             "scroll": self.center(
-                origin_x + scroll_x, origin_y + scroll_y, region_width, region_height
+                origin_x + scroll_x, origin_y + scroll_y, scroll_width, scroll_height
             ),
             "scroll_safe": self.center(
                 origin_x + scroll_x,
                 origin_y + scroll_y,
-                region_width,
-                min(96, region_height),
+                scroll_width,
+                min(96, scroll_height),
             ),
         }
-        self.state["ready"] = True
-        self.state["last_event"] = f"layout:{width}x{height}"
-        self.update_status()
-        self.write_state()
 
-    def center(self, x: int, y: int, width: int, height: int) -> dict[str, float]:
-        return {"x": x + (width / 2.0), "y": y + (height / 2.0)}
+    def refresh_points_from_allocations(self) -> bool:
+        origin_x, origin_y = self.window_origin(
+            self.get_allocated_width(), self.get_allocated_height()
+        )
+        points = {
+            "text_entry": self.widget_point(self.text_entry, origin_x, origin_y),
+            "click_button": self.widget_point(self.click_button, origin_x, origin_y),
+            "drag_from": self.widget_point(self.drag_box, origin_x, origin_y, x_ratio=0.32),
+            "drag_to": self.widget_point(self.drag_box, origin_x, origin_y, x_ratio=0.72),
+            "secondary": self.widget_point(self.secondary_box, origin_x, origin_y),
+            "scroll": self.widget_point(self.scroll_box, origin_x, origin_y),
+            "scroll_safe": self.widget_point(
+                self.scroll_box,
+                origin_x,
+                origin_y,
+                y_pixels=48.0,
+            ),
+        }
+        if all(point is not None for point in points.values()):
+            self.state["window_origin"] = {"x": origin_x, "y": origin_y}
+            self.state["points"] = points
+            self.state["last_event"] = (
+                f"layout:{self.get_allocated_width()}x{self.get_allocated_height()}:allocations"
+            )
+            self.update_status()
+            self.write_state()
+        return False
+
+    def widget_point(
+        self,
+        widget: Gtk.Widget,
+        origin_x: int,
+        origin_y: int,
+        *,
+        x_ratio: float = 0.5,
+        y_ratio: float = 0.5,
+        y_pixels: float | None = None,
+    ) -> dict[str, float] | None:
+        allocation = widget.get_allocation()
+        if allocation.width <= 0 or allocation.height <= 0:
+            return None
+        local_x = allocation.width * x_ratio
+        local_y = y_pixels if y_pixels is not None else allocation.height * y_ratio
+        translated = widget.translate_coordinates(self, int(local_x), int(local_y))
+        if translated is None:
+            return None
+        x, y = translated
+        return {"x": origin_x + float(x), "y": origin_y + float(y)}
+
+    def visible_monitor_size(self, fallback_width: int, fallback_height: int) -> tuple[int, int]:
+        gdk_window = self.get_window()
+        display = Gdk.Display.get_default()
+        if gdk_window is None or display is None:
+            return (fallback_width, fallback_height)
+        monitor = display.get_monitor_at_window(gdk_window)
+        if monitor is None:
+            return (fallback_width, fallback_height)
+        geometry = monitor.get_geometry()
+        return (geometry.width, geometry.height)
 
     def window_origin(self, allocation_width: int, allocation_height: int) -> tuple[int, int]:
         gdk_window = self.get_window()
@@ -307,9 +424,8 @@ class PointerSmokeWindow(Gtk.Window):
                     origin_x = int(x)
                     origin_y = int(y)
             elif len(origin) == 2:
-                x, y = origin
-                origin_x = int(x)
-                origin_y = int(y)
+                origin_x = int(origin[0])
+                origin_y = int(origin[1])
 
         display = Gdk.Display.get_default()
         if display is None:
@@ -349,17 +465,77 @@ class PointerSmokeWindow(Gtk.Window):
             )
         )
 
-    def write_state(self) -> None:
+    def write_state(self, *, force: bool = False) -> None:
+        now = time.time()
+        if not force and hasattr(self, "_last_write_time") and now - self._last_write_time < 0.05:
+            return
+        self._last_write_time = now
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self.state_path.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(self.state, indent=2, sort_keys=True), encoding="utf-8")
         tmp_path.replace(self.state_path)
 
+    def record_pointer_event(
+        self,
+        widget_name: str,
+        kind: str,
+        event: Gdk.EventButton | Gdk.EventMotion,
+        *,
+        force_write: bool = False,
+    ) -> None:
+        self.state["last_pointer_event"] = {
+            "kind": kind,
+            "widget": widget_name,
+            "x": float(getattr(event, "x", 0.0)),
+            "y": float(getattr(event, "y", 0.0)),
+            "x_root": float(getattr(event, "x_root", 0.0)),
+            "y_root": float(getattr(event, "y_root", 0.0)),
+            "time": time.time(),
+        }
+        self.state["last_event"] = f"pointer-{kind}:{widget_name}"
+        self.write_state(force=force_write)
+
+    def on_click_button_press(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
+        self.state["button_press_seen"] = True
+        self.record_pointer_event("click_button", "press", event, force_write=True)
+        return True
+
+    def on_click_button_release(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
+        self.state["button_release_seen"] = True
+        self.record_pointer_event("click_button", "release", event, force_write=True)
+        self.on_click_button()
+        return True
+
+    def on_window_button_press(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
+        self.record_pointer_event("window", "press", event)
+        return False
+
+    def on_window_button_release(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
+        self.record_pointer_event("window", "release", event)
+        return False
+
+    def on_window_motion(self, _widget: Gtk.Widget, event: Gdk.EventMotion) -> bool:
+        last = self.state.get("last_pointer_event", {})
+        last_x = last.get("x", 0.0)
+        last_y = last.get("y", 0.0)
+        last_time = last.get("time", 0.0)
+        now = time.time()
+        if (
+            last.get("kind") == "motion"
+            and last.get("widget") == "window"
+            and abs(last_x - event.x) < 2.0
+            and abs(last_y - event.y) < 2.0
+            and now - last_time < 0.05
+        ):
+            return False
+        self.record_pointer_event("window", "motion", event)
+        return False
+
     def on_click_button(self, *_args: object) -> None:
         self.state["clicked"] = True
         self.state["last_event"] = "click-button"
         self.update_status()
-        self.write_state()
+        self.write_state(force=True)
 
     def on_entry_changed(self, entry: Gtk.Entry) -> None:
         self.state["entry_text"] = entry.get_text()
@@ -378,7 +554,7 @@ class PointerSmokeWindow(Gtk.Window):
             self.state["secondary_clicked"] = True
             self.state["last_event"] = "secondary-click"
             self.update_status()
-            self.write_state()
+            self.write_state(force=True)
         return False
 
     def on_drag_press(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
@@ -405,7 +581,7 @@ class PointerSmokeWindow(Gtk.Window):
             self.state["drag_completed"] = True
             self.state["last_event"] = "drag-release"
             self.update_status()
-            self.write_state()
+            self.write_state(force=True)
         self.drag_origin = None
         self.drag_seen = False
         return False
@@ -416,7 +592,7 @@ class PointerSmokeWindow(Gtk.Window):
         self.state["scroll_events"] += 1
         self.state["last_event"] = f"scroll-adjustment:{adjustment.get_value():.1f}"
         self.update_status()
-        self.write_state()
+        self.write_state(force=True)
 
 
 def main(argv: list[str]) -> int:

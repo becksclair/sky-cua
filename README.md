@@ -34,6 +34,10 @@ packaged adapter around that runtime, not the runtime boundary itself.
   and focus
 - physical Wayland and X11 routing for `click`, `perform_secondary_action`,
   `scroll`, `drag`, `type_text`, and `press_key`
+- crate-local Linux action execution boundary under
+  `crates/sky-cua-linux/src/actions/`, keeping semantic/physical routing
+  fakeable while `LinuxDesktopBackend::execute_action` remains the public
+  backend entrypoint
 - snapshotless physical actions for current-screen targeting, while
   element-index and semantic actions remain scoped to the snapshot that
   supplied their accessibility context

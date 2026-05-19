@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import time
@@ -273,14 +274,36 @@ def build_host_runtime_artifacts() -> None:
 
 
 def ssh_base_command(port: int, ssh_options: list[str]) -> list[str]:
-    command = ["ssh", "-p", str(port)]
+    control_path = f"/tmp/.ssh-sky-cua-{os.getpid()}-{port}"
+    command = [
+        "ssh",
+        "-p",
+        str(port),
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        f"ControlPath={control_path}",
+        "-o",
+        "ControlPersist=60",
+    ]
     for option in ssh_options:
         command.extend(["-o", option])
     return command
 
 
 def rsync_ssh_command(port: int, ssh_options: list[str]) -> str:
-    parts = ["ssh", "-p", str(port)]
+    control_path = f"/tmp/.ssh-sky-cua-{os.getpid()}-{port}"
+    parts = [
+        "ssh",
+        "-p",
+        str(port),
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        f"ControlPath={control_path}",
+        "-o",
+        "ControlPersist=60",
+    ]
     for option in ssh_options:
         parts.extend(["-o", option])
     return " ".join(parts)
@@ -320,8 +343,25 @@ def sync_codex_settings(
     codex_home = codex_home.expanduser().resolve()
     if not codex_home.exists():
         return
+    # Batch all required remote directories into a single mkdir -p call.
+    remote_parents: set[str] = {".codex"}
+    for relative_path in CODEX_SETTING_PATHS:
+        source_path = codex_home / relative_path
+        if source_path.exists():
+            remote_parent = str(Path(".codex") / relative_path).rsplit("/", maxsplit=1)[0]
+            remote_parents.add(remote_parent)
+    for relative_dir in CODEX_SETTING_DIRS:
+        source_dir = codex_home / relative_dir
+        if source_dir.is_dir():
+            remote_parents.add(f".codex/{relative_dir}")
     subprocess.run(
-        [*ssh_base_command(port, ssh_options), ssh_target, "mkdir", "-p", ".codex"],
+        [
+            *ssh_base_command(port, ssh_options),
+            ssh_target,
+            "mkdir",
+            "-p",
+            *sorted(remote_parents),
+        ],
         cwd=REPO_ROOT,
         check=True,
     )
@@ -329,12 +369,6 @@ def sync_codex_settings(
         source_path = codex_home / relative_path
         if source_path.exists():
             remote_path = f"{ssh_target}:.codex/{relative_path}"
-            remote_parent = str(Path(".codex") / relative_path).rsplit("/", maxsplit=1)[0]
-            subprocess.run(
-                [*ssh_base_command(port, ssh_options), ssh_target, "mkdir", "-p", remote_parent],
-                cwd=REPO_ROOT,
-                check=True,
-            )
             subprocess.run(
                 [
                     "rsync",
@@ -375,6 +409,7 @@ def reset_guest_sky_cua_processes(
         "pkill -x sky-cua-service 2>/dev/null || true; "
         "pkill -f '(^|/)sky-cua-overlay-host( |$)' 2>/dev/null || true; "
         "pkill -x sky-cua-overlay 2>/dev/null || true; "
+        "pkill -f '(^|/)gtk_pointer_smoke_fixture.py( |$)' 2>/dev/null || true; "
         "pkill -x cosmic-randr 2>/dev/null || true; "
         'rm -f "$runtime_dir/sky-cua/service.sock" "$runtime_dir/sky-cua/agent-cursor.sock" '
         "/tmp/sky-cua-runtime/sky-cua/service.sock "
@@ -718,11 +753,14 @@ PY
             capture_vm_framebuffer(vm_name, libvirt_uri, hidden_path)
         returncode = remote_process.wait(timeout=30)
 
-    set_reply = read_remote_json(
-        ssh_target, port, ssh_options, remote_artifact_dir / "set-reply.json"
-    )
-    hide_reply = read_remote_json(
-        ssh_target, port, ssh_options, remote_artifact_dir / "hide-reply.json"
+    set_reply, hide_reply = read_remote_jsons(
+        ssh_target,
+        port,
+        ssh_options,
+        [
+            remote_artifact_dir / "set-reply.json",
+            remote_artifact_dir / "hide-reply.json",
+        ],
     )
     agent_probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
     restored_cursor_probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
@@ -953,11 +991,14 @@ PY
             capture_vm_framebuffer(vm_name, libvirt_uri, hidden_path)
         returncode = remote_process.wait(timeout=30)
 
-    set_reply = read_remote_json(
-        ssh_target, port, ssh_options, remote_artifact_dir / "set-reply.json"
-    )
-    hide_reply = read_remote_json(
-        ssh_target, port, ssh_options, remote_artifact_dir / "hide-reply.json"
+    set_reply, hide_reply = read_remote_jsons(
+        ssh_target,
+        port,
+        ssh_options,
+        [
+            remote_artifact_dir / "set-reply.json",
+            remote_artifact_dir / "hide-reply.json",
+        ],
     )
     set_capabilities = json_object_field(set_reply, "capabilities")
     hide_capabilities = json_object_field(hide_reply, "capabilities")
@@ -1165,6 +1206,7 @@ def capture_vm_framebuffer(vm_name: str, libvirt_uri: str, output_path: Path) ->
         ["virsh", "--connect", libvirt_uri, "screenshot", vm_name, str(output_path)],
         cwd=REPO_ROOT,
         check=True,
+        timeout=15,
     )
 
 
@@ -1244,6 +1286,52 @@ def read_remote_json(
     if not isinstance(payload, dict):
         raise RuntimeError(f"remote JSON was not an object: {payload!r}")
     return payload
+
+
+def read_remote_jsons(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_paths: list[Path],
+) -> list[dict[str, object] | None]:
+    """Read multiple remote JSON files in a single SSH call."""
+    if not remote_paths:
+        return []
+    # Build a shell command that cats each file and emits a NUL separator.
+    cat_commands = "; ".join(
+        "(cat {path} 2>/dev/null || printf %s {missing}); printf '\\0'".format(
+            path=shlex.quote(str(p)),
+            missing=shlex.quote("---FILE_NOT_FOUND---"),
+        )
+        for p in remote_paths
+    )
+    completed = subprocess.run(
+        [*ssh_base_command(port, ssh_options), ssh_target, cat_commands],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return [None] * len(remote_paths)
+    raw_parts = completed.stdout.split("\x00")
+    results: list[dict[str, object] | None] = []
+    for raw in raw_parts[: len(remote_paths)]:
+        stripped = raw.strip()
+        if stripped == "---FILE_NOT_FOUND---":
+            results.append(None)
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            results.append(None)
+            continue
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"remote JSON was not an object: {payload!r}")
+        results.append(payload)
+    while len(results) < len(remote_paths):
+        results.append(None)
+    return results
 
 
 def json_object_field(parent: dict[str, object] | None, key: str) -> dict[str, object]:

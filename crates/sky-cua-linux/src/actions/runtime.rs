@@ -60,6 +60,15 @@ pub(crate) trait LinuxActionRuntime {
         value: &str,
     ) -> Result<SemanticSetValueResult, BackendError>;
 
+    async fn semantic_scroll_vertical_at(
+        &self,
+        x: f64,
+        y: f64,
+        delta_y: Option<f64>,
+        steps: i32,
+        app: Option<&FocusedApp>,
+    ) -> Result<bool, BackendError>;
+
     fn resolve_set_value_fallback_policy(
         &self,
         app: Option<&FocusedApp>,
@@ -136,6 +145,12 @@ pub(crate) trait LinuxActionRuntime {
     ) -> Result<(), BackendError>;
 
     fn virtual_click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError>;
+
+    fn virtual_pointer_mapping_diagnostic(
+        &self,
+        x: f64,
+        y: f64,
+    ) -> Result<Option<DiagnosticEntry>, BackendError>;
 
     fn virtual_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError>;
 

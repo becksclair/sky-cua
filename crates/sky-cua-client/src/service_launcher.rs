@@ -53,6 +53,7 @@ const DEFAULT_PATH_DIRS: &[&str] = &[
 pub struct ServiceClient {
     endpoint: ServiceEndpoint,
     child: Arc<Mutex<Option<Child>>>,
+    cached_stream: Arc<Mutex<Option<EitherStream>>>,
 }
 
 /// Probe the active user session for missing desktop environment variables.
@@ -302,13 +303,74 @@ impl ServiceClient {
         }
     }
 
+    fn take_cached_stream(&self) -> Option<EitherStream> {
+        self.cached_stream
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
+
+    fn store_cached_stream(&self, stream: EitherStream) {
+        let _ = self
+            .cached_stream
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(stream);
+    }
+
+    fn clear_cached_stream(&self) {
+        let _ = self
+            .cached_stream
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+    }
+
     fn call_with_timeouts(
         &self,
         request: &ServiceRequest,
         read_timeout: Duration,
         write_timeout: Duration,
     ) -> Result<ServiceResponse> {
-        let mut stream = self.endpoint.connect()?;
+        // Attempt 1: try cached stream if available.
+        let mut cached_response: Option<Result<ServiceResponse>> = None;
+        if let Some(stream) = self.take_cached_stream() {
+            match self.perform_call_on_stream(stream, request, read_timeout, write_timeout) {
+                Ok((response, stream)) => {
+                    self.store_cached_stream(stream);
+                    return Ok(response);
+                }
+                Err(error) if is_stale_stream_error(&error) => {
+                    self.clear_cached_stream();
+                }
+                Err(error) => {
+                    self.clear_cached_stream();
+                    cached_response = Some(Err(error));
+                }
+            }
+        }
+
+        // If we got a non-stale error from the cached stream, return it directly
+        // rather than retrying with a fresh connect.
+        if let Some(Err(error)) = cached_response {
+            return Err(error);
+        }
+
+        // Attempt 2: fresh connection.
+        let stream = self.endpoint.connect()?;
+        let (response, stream) =
+            self.perform_call_on_stream(stream, request, read_timeout, write_timeout)?;
+        self.store_cached_stream(stream);
+        Ok(response)
+    }
+
+    fn perform_call_on_stream(
+        &self,
+        mut stream: EitherStream,
+        request: &ServiceRequest,
+        read_timeout: Duration,
+        write_timeout: Duration,
+    ) -> Result<(ServiceResponse, EitherStream)> {
         stream
             .set_read_timeout(Some(read_timeout))
             .context("failed to set a read timeout on the sky-cua-service socket")?;
@@ -324,15 +386,18 @@ impl ServiceClient {
         let mut line = String::new();
         reader.read_line(&mut line)?;
         if line.trim().is_empty() {
-            return Err(anyhow!("sky-cua-service returned an empty response"));
+            return Err(anyhow!("sky-cua-service connection closed before response"));
         }
-        Ok(serde_json::from_str(line.trim_end())?)
+        let response: ServiceResponse = serde_json::from_str(line.trim_end())?;
+        let stream = reader.into_inner();
+        Ok((response, stream))
     }
 
     fn new() -> Result<Self> {
         Ok(Self {
             endpoint: ServiceEndpoint::new()?,
             child: Arc::new(Mutex::new(None)),
+            cached_stream: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -346,6 +411,10 @@ impl ServiceClient {
         {
             return Ok(());
         }
+
+        // Drop any cached stream from a previous service process before
+        // spawning a new one so we don't write to a dead socket.
+        self.clear_cached_stream();
 
         let service_path = service_path();
         let mut command = Command::new(&service_path);
@@ -516,6 +585,7 @@ impl std::fmt::Display for ServiceEndpoint {
     }
 }
 
+#[derive(Debug)]
 enum EitherStream {
     #[cfg(unix)]
     Unix(UnixStream),
@@ -572,6 +642,16 @@ impl EitherStream {
             Self::Tcp(stream) => stream.set_write_timeout(timeout),
         }
     }
+}
+
+fn is_stale_stream_error(error: &anyhow::Error) -> bool {
+    let error_string = error.to_string().to_lowercase();
+    error_string.contains("broken pipe")
+        || error_string.contains("connection refused")
+        || error_string.contains("connection reset")
+        || error_string.contains("connection closed before response")
+        || error_string.contains("not connected")
+        || error_string.contains("unexpected eof")
 }
 
 fn service_path() -> PathBuf {
@@ -751,6 +831,13 @@ mod tests {
         restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
         let error = result.expect_err("stale service env value should be rejected");
         assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn closed_cached_connection_is_retryable() {
+        let error = anyhow!("sky-cua-service connection closed before response");
+
+        assert!(is_stale_stream_error(&error));
     }
 
     #[test]

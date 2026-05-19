@@ -31,7 +31,7 @@ host (MCP client, e.g. Codex)
   platform backend through a small factory.
 - The Linux backend (`crates/sky-cua-linux`) implements environment
   probing, AT-SPI discovery, portal session management, capture, input,
-  windowing registry, and overlay support.
+  windowing registry, action execution, and overlay support.
 - The shared platform model (`crates/sky-cua-platform`) defines the
   cross-platform contract: snapshot, action, capability, diagnostic,
   and cursor types.
@@ -48,6 +48,8 @@ boundary. See [`docs/runtime/mcp-boundary.md`](mcp-boundary.md).
 - `crates/sky-cua-client` — MCP server, operator CLI, service launcher
   (with detached-launch session-env repair).
 - `crates/sky-cua-linux` — Linux desktop backend.
+  Its public backend entrypoint stays in `src/backend.rs`; Linux action
+  execution policy lives under `src/actions/`.
 - `crates/sky-cua-windows` — Windows desktop backend (UIA inspection,
   GDI capture, SendInput).
 - `crates/sky-cua-overlay-host` — separate process that owns visible
@@ -137,6 +139,18 @@ The runtime does not silently bypass an explicit portal denial. See
 [`docs/features/linux-virtual-input.md`](../features/linux-virtual-input.md)
 for the COSMIC fallback behavior and adapter calibration.
 
+`PortalRemoteDesktop` uses compositor-scoped coordinates for pointer actions.
+On GNOME, current RemoteDesktop sessions require EIS for both pointer and
+keyboard input: keyboard text and key chords are resolved against the
+compositor-provided XKB keymap before the runtime emits EIS key events.
+
+Physical input action routing lives in
+`crates/sky-cua-linux/src/actions/`. `actions/targeting.rs` chooses the
+effective pointer or keyboard backend for a request and maps model-facing
+coordinates into the selected backend's coordinate plane. The backend-specific
+side effects stay behind the crate-local `LinuxActionRuntime` facade so the
+routing policy can be tested without creating portal, XTest, or uinput state.
+
 ### Coordinate spaces
 
 `crates/sky-cua-linux/src/coords.rs` separates three coordinate
@@ -154,6 +168,11 @@ For snapshot-based actions, the runtime maps `StreamPixels` to
 `capture.logical_rect`, including monitor offsets. If `logical_rect`
 is missing, the runtime fails closed with a structured diagnostic
 rather than pretending screenshot pixels are desktop coordinates.
+
+The shared math helpers live in `crates/sky-cua-linux/src/coords.rs`; the
+action-specific decisions about portal stream coordinates, X11 original pixels,
+XWayland fallback elements, and Linux virtual desktop-logical targets live in
+`crates/sky-cua-linux/src/actions/targeting.rs`.
 
 ### Portal session manager
 
@@ -185,7 +204,7 @@ per-app policy. The first shipped use is the Kate-scoped
 `set_value_fallback`, which lets the heuristics-backed physical
 `set_value` path replace text when semantic AT-SPI editing is
 unavailable. The platform model exposes the policy through
-`SemanticBackendKind` and the action router consults it before
+`SemanticBackendKind` and `LinuxActionExecutor` consults it before
 falling back.
 
 ## Trait surface
@@ -207,10 +226,15 @@ The service's `enrich_action_request` populates `resolved_element`,
 snapshot before calling the backend, so backends do not re-resolve
 selectors per call.
 
-## Action routing summary
+## Linux action execution boundary
 
-The action router is responsible for choosing between semantic
-(AT-SPI) and physical (portal / XTest / virtual input) lanes. Order:
+`LinuxDesktopBackend::execute_action` is the public Linux backend entrypoint.
+It clears stale portal lifecycle events, probes and validates the current
+environment, then delegates the request to `LinuxActionExecutor`.
+
+`LinuxActionExecutor` in `crates/sky-cua-linux/src/actions/mod.rs` owns the
+Linux-only action policy for choosing between semantic (AT-SPI) and physical
+(portal / XTest / virtual input) lanes. Order:
 
 1. If the action is element-targeted and the element has a usable
    semantic backend reference, invoke the semantic action.
@@ -225,6 +249,10 @@ Semantic action tools (`focus_element`, `activate_element`,
 (`click`, `perform_secondary_action`, `scroll`, `drag`, `type_text`,
 `press_key`, `set_value`) are exposed through the MCP tool surface
 documented in [`docs/runtime/mcp-boundary.md`](mcp-boundary.md).
+
+The executor is crate-local. It does not introduce a shared Linux/Windows
+action abstraction, and it does not change the MCP, service, or platform model
+contracts.
 
 ## Definitions
 

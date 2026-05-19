@@ -260,11 +260,13 @@ def wait_for_state(
     deadline: float,
     description: str,
 ) -> dict[str, Any]:
+    sleep_seconds = 0.05
     while time.time() < deadline:
         state = load_state(state_path)
         if state is not None and predicate(state):
             return state
-        time.sleep(0.15)
+        time.sleep(sleep_seconds)
+        sleep_seconds = min(sleep_seconds * 1.5, 0.5)
     raise RuntimeError(f"timed out waiting for fixture state: {description}")
 
 

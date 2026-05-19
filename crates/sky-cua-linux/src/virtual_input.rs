@@ -208,6 +208,29 @@ impl LinuxVirtualInput {
         }
     }
 
+    pub fn pointer_mapping_details(&self, x: f64, y: f64) -> String {
+        match self.probe.adapter {
+            VirtualInputAdapterKind::DirectUinput => {
+                if let Some(bounds) = self.probe.desktop_bounds {
+                    let (absolute_x, absolute_y) = bounds.logical_to_absolute(x, y);
+                    format!(
+                        "adapter=direct_uinput coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) emitted_absolute=({absolute_x},{absolute_y}) bounds=x:{} y:{} width:{} height:{} scale_milli:{}",
+                        bounds.x, bounds.y, bounds.width, bounds.height, bounds.scale_milli
+                    )
+                } else {
+                    format!(
+                        "adapter=direct_uinput coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) bounds=missing"
+                    )
+                }
+            }
+            VirtualInputAdapterKind::Ydotool => format!(
+                "adapter=ydotool coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) emitted_absolute=({},{})",
+                round_coordinate(x),
+                round_coordinate(y)
+            ),
+        }
+    }
+
     pub fn drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
         match self.probe.adapter {
             VirtualInputAdapterKind::DirectUinput => {
@@ -329,7 +352,7 @@ pub struct DesktopBounds {
 }
 
 impl DesktopBounds {
-    fn logical_to_absolute(&self, x: f64, y: f64) -> (i32, i32) {
+    pub fn logical_to_absolute(&self, x: f64, y: f64) -> (i32, i32) {
         let scale = f64::from(self.scale_milli) / 1000.0;
         let max_x = i32::try_from(self.width.saturating_sub(1)).unwrap_or(i32::MAX);
         let max_y = i32::try_from(self.height.saturating_sub(1)).unwrap_or(i32::MAX);

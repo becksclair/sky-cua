@@ -252,8 +252,12 @@ where
                 Ok(success(xtest_message))
             }
             InputBackendKind::LinuxVirtualInput => {
+                let diagnostic = self.runtime.virtual_pointer_mapping_diagnostic(x, y)?;
                 self.runtime.virtual_click_at(x, y, button)?;
-                Ok(success(virtual_message))
+                Ok(success_with_optional_diagnostic(
+                    virtual_message,
+                    diagnostic,
+                ))
             }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
                 Err(windows_input_backend_error(action_name))
@@ -277,15 +281,13 @@ where
             }
         }
 
-        let delta_y = request
-            .arguments
-            .get("delta_y")
-            .and_then(serde_json::Value::as_f64);
+        let delta_y = scroll_delta_y(&request.arguments)?;
         let steps = request
             .arguments
             .get("steps")
             .and_then(serde_json::Value::as_i64)
             .and_then(|value| i32::try_from(value).ok())
+            .or_else(|| virtual_scroll_steps_from_delta(delta_y))
             .unwrap_or(-1);
 
         match input_backend {
@@ -311,6 +313,22 @@ where
             InputBackendKind::LinuxVirtualInput => {
                 let steps = virtual_scroll_steps_from_delta(delta_y).unwrap_or(steps);
                 if let Ok((x, y)) = action_point_for_backend(&request, input_backend) {
+                    if self
+                        .runtime
+                        .semantic_scroll_vertical_at(
+                            x,
+                            y,
+                            delta_y,
+                            steps,
+                            request.resolved_focused_app.as_ref(),
+                        )
+                        .await
+                        .unwrap_or(false)
+                    {
+                        return Ok(success(
+                            "Scrolled through the AT-SPI value fallback for Linux virtual input.",
+                        ));
+                    }
                     self.runtime.virtual_scroll_vertical_at(x, y, steps)?;
                 } else {
                     self.runtime.virtual_scroll_vertical(steps)?;
@@ -839,6 +857,39 @@ fn success_with_diagnostics(
     }
 }
 
+fn success_with_optional_diagnostic(
+    message: impl Into<String>,
+    diagnostic: Option<DiagnosticEntry>,
+) -> ActionOutcome {
+    success_with_diagnostics(message, diagnostic.into_iter().collect())
+}
+
+fn scroll_delta_y(arguments: &serde_json::Value) -> Result<Option<f64>, BackendError> {
+    if let Some(delta_y) = arguments.get("delta_y").and_then(serde_json::Value::as_f64) {
+        return Ok(Some(delta_y));
+    }
+
+    let pages = arguments
+        .get("pages")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|pages| *pages > 0.0)
+        .unwrap_or(1.0);
+    let delta_y = match arguments
+        .get("direction")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("up") => 120.0 * pages,
+        Some("down") | None => -120.0 * pages,
+        Some(direction) => {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                format!("unsupported vertical scroll direction: {direction}"),
+            ));
+        }
+    };
+    Ok(Some(delta_y))
+}
+
 const EVDEV_KEY_LEFTCTRL: i32 = 29;
 const EVDEV_KEY_V: i32 = 47;
 const KDE_CLIPBOARD_RESTORE_DELAY_MS: u64 = 500;
@@ -1158,6 +1209,18 @@ mod tests {
             Ok(SemanticSetValueResult::EditableText)
         }
 
+        async fn semantic_scroll_vertical_at(
+            &self,
+            x: f64,
+            y: f64,
+            delta_y: Option<f64>,
+            steps: i32,
+            _app: Option<&FocusedApp>,
+        ) -> Result<bool, BackendError> {
+            self.push_event(format!("semantic_scroll_at:{x},{y}:{delta_y:?}:{steps}"));
+            Ok(false)
+        }
+
         fn resolve_set_value_fallback_policy(
             &self,
             _app: Option<&FocusedApp>,
@@ -1303,6 +1366,18 @@ mod tests {
         ) -> Result<(), BackendError> {
             self.push_event(format!("virtual_click:{x},{y}:{button:?}"));
             Ok(())
+        }
+
+        fn virtual_pointer_mapping_diagnostic(
+            &self,
+            x: f64,
+            y: f64,
+        ) -> Result<Option<DiagnosticEntry>, BackendError> {
+            Ok(Some(DiagnosticEntry {
+                code: "LinuxVirtualInputPointerMapping".to_string(),
+                message: "Linux virtual input pointer coordinate mapping.".to_string(),
+                details: Some(format!("requested=({x:.1},{y:.1})")),
+            }))
         }
 
         fn virtual_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
@@ -1552,6 +1627,23 @@ mod tests {
             "Scrolled through the RemoteDesktop portal."
         );
         assert_eq!(runtime.take_events(), vec!["portal_scroll_smooth:-180"]);
+    }
+
+    #[tokio::test]
+    async fn executor_scroll_maps_direction_and_pages_to_portal_delta() {
+        let runtime = FakeRuntime::default();
+        let request = action_request(ActionName::Scroll, json!({"direction": "up", "pages": 2}));
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("scroll should succeed");
+
+        assert_eq!(
+            outcome.message,
+            "Scrolled through the RemoteDesktop portal."
+        );
+        assert_eq!(runtime.take_events(), vec!["portal_scroll_smooth:240"]);
     }
 
     #[tokio::test]

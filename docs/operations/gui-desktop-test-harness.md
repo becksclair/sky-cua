@@ -232,7 +232,7 @@ Profiles live under `scripts/testing-vm/profiles/`.
 
 - `computer-use`: real-session visible pointer smoke for the installed Computer
   Use plugin path. It opens the fullscreen GTK pointer fixture on the VM's
-  active Wayland session and drives click, drag, and scroll through
+  active Wayland session and drives click, secondary-click, drag, and scroll through
   `sky-cua-client mcp`.
 - `wayland-pointer`: explicit name for the same visible real-session pointer
   smoke used by `computer-use`.
@@ -421,13 +421,20 @@ python3 scripts/run_gui_testing_vm_smoke.py \
 ```
 
 The accepted GNOME artifact is
-`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T084643Z`.
-It proves click, drag, and scroll through the GNOME RemoteDesktop portal
-(`clicked=true`, `drag_completed=true`, `scroll_events=2`). This run depends on
-two GNOME-specific fixes: session switching must stop the inactive display
-manager so Plasma and GNOME do not run together, and the GTK fixture adjusts
-GNOME fullscreen coordinates when the reported allocation is taller than the
-visible framebuffer.
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260518T025611Z`.
+This artifact was produced during initial development of the EIS GNOME path;
+re-run the automated VM profile to confirm it independently before relying on it.
+It proves click, secondary-click, drag, scroll, `type_text`, and `press_key`
+through the GNOME RemoteDesktop portal EIS path, with keyboard injection backed
+by the compositor-provided XKB keymap
+(`clicked=true`, `secondary_clicked=true`, `drag_completed=true`, `scroll_events=1`, and
+`submitted_text="cosmic-text-smoke"`). This run depends on GNOME-specific
+automation fixes: session switching must stop the inactive display manager so
+Plasma and GNOME do not run together, stale pointer fixtures must be cleaned
+before each profile run, the GTK fixture must publish points from realized
+allocations inside the visible framebuffer, and the EIS adapter must keep
+pointer emulation session-scoped while translating the tool convention
+`delta_y=-180` into libei's positive-down `scroll_delta_y=180`.
 
 Fresh i3/X11 VM proof:
 
@@ -476,7 +483,7 @@ Progress ledger:
 | Text readback | Direct MCP plus agent harness accepted on Plasma | In the Plasma `testing-vm`, `scripts/live_desktop_smoke.py` proved initial `zenity` entry value readback, post-`set_value` readback, and post-`type_text` readback through fresh `get_app_state` snapshots. `scripts/live_codex_exec_text_readback_smoke.py` produced `/workspace/artifacts/codex-e2e/codex-text-readback-smoke/20260517T041212Z`, and `scripts/live_app_server_text_readback_smoke.py` produced `/workspace/artifacts/codex-e2e/app-server-text-readback-smoke/20260517T041242Z`; both transcript checks require one `get_app_state` result with `stale-readback` and a later one with `verified-readback`. | Add this lane to the automated VM runner when the broader pre-merge profile set is curated; extend native readback proof to Windows/UIA only after that backend extracts equivalent metadata. |
 | COSMIC | Helper, app launch, pointer, text/key, patched cursor bridge, and transparent no-patch mode accepted | Real COSMIC Wayland guest session was active with `cosmic-session`, `cosmic-comp`, and `/run/user/1000/wayland-1`; `cosmic-helper` proved helper listing, activation, and focused-window readback at `/workspace/artifacts/gui-desktop-smoke/cosmic-helper/20260515T034206Z/`. Full input artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T092606Z` proves `LinuxVirtualInput` direct uinput click, drag, scroll plus ydotool-backed `type_text`/`press_key`; repeatable scaled profile artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T093737Z` proves the same path at 125%. Patched compositor proof `artifacts/cosmic-framebuffer-cursor-proof/20260515T142538562074Z/host-summary.json` reports `ok=true` with `system_cursor_backend=cosmic_comp_bridge`. No-patch transparent session proof `artifacts/cosmic-transparent-xcursor-cursor-proof/20260516T073232164704Z/host-summary.json` reports `ok=true` with `system_cursor_backend=cosmic_transparent_xcursor`. | Keep this in the session-matrix gate; broaden later to multi-output and richer list/focus coverage when the VM exposes more than one real output. |
 | KDE/KWin | Layer-shell, pointer input, and KWin effect system path accepted | Real Plasma Wayland VM proofs: clean cursor sequence `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100302670580-syn`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100303845615-vis`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100305142807-hide`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click`, full pointer `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T100113Z/`, user-level effect discovery blocker `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515075621741796-kwin`, and automated system-install proof `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T132649888064Z/host-summary.json`. | Keep this profile in the pre-merge/live-smoke gate for future KWin effect changes; broader registry/list/focus proof is still a separate seam. |
-| GNOME | Pointer input and Shell-extension cursor proof accepted | Real GNOME Wayland VM pointer artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T084643Z` proves click, drag, and scroll through GNOME RemoteDesktop. The GNOME Shell extension cursor artifact `artifacts/gnome-framebuffer-cursor-proof/20260515T140437893805720Z/host-summary.json` reports `ok=true` with `backend=gnome_shell_extension` and `system_cursor_backend=gnome_shell_extension`. | Broaden GNOME registry/listing/focus proof beyond the current cursor and pointer seams, and re-run after Shell or session-launch changes. |
+| GNOME | Pointer/text input and Shell-extension cursor proof accepted | Real GNOME Wayland VM pointer artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260518T025611Z` proves click, secondary-click, drag, scroll, `type_text`, and `press_key` through GNOME RemoteDesktop EIS, with keyboard input backed by the compositor-provided XKB keymap. The GNOME Shell extension cursor artifact `artifacts/gnome-framebuffer-cursor-proof/20260515T140437893805720Z/host-summary.json` reports `ok=true` with `backend=gnome_shell_extension` and `system_cursor_backend=gnome_shell_extension`. | Broaden GNOME registry/listing/focus proof beyond the current cursor and pointer seams, and re-run after Shell or session-launch changes. |
 | Hyprland | Layer-shell overlay and compositor cursor hide accepted | Real Hyprland VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-wayland-layer-shell/20260515T142710878162Z` proves `wayland_layer_shell`, `system_cursor_backend=hyprland_config`, visible overlay capture, click-through capability, hide-for-capture, and restore of `cursor:invisible`. The same slice fixed the unconfigured layer-surface buffer attach protocol bug. | Broaden Hyprland registry/list/focus/terminal-enrichment proof and full pointer-input matrix as those paths mature. |
 | i3/X11 | X11 overlay and XFixes system cursor hide accepted | Real i3/X11 VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T142731049499Z` proves visible overlay capture, hide, re-show, click-through, and XFixes system cursor hide/show. | Broaden the i3 profile later for `i3-msg -t get_tree`, app focus activation, terminal enrichment, and X11/XTest input beyond the cursor overlay proof. |
 

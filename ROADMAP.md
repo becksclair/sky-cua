@@ -60,5 +60,6 @@ Open boxes link to the active ExecPlan that owns the work.
 - First-class `browser_*` MCP tools (currently Browser Use is companion-only)
 - Compositor cursor hiding upstream integrations (Hyprland plugin, COSMIC accepted patch)
 - Stronger Windows capture lane: WGC vs DXGI Desktop Duplication tradeoff once one is live
-- KWin/EIS support for broader pointer/scroll parity once RemoteDesktop `Notify*` is stable
+- KWin EIS support for broader pointer/scroll parity; GNOME RemoteDesktop EIS
+  pointer and keyboard input is proved in the VM matrix
 - Decide whether the X11-targeted keyboard override should also cover XWayland pointer actions

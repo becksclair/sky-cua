@@ -17,7 +17,8 @@ cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen i
 
 ## Patterns & Conventions
 
-- MCP protocol handling belongs in `src/mcp_server.rs`.
+- MCP JSON-RPC framing, session initialization, and message read/write belong in `src/mcp_server.rs`.
+- MCP tool definitions, schema construction, argument parsing, and tool handler mapping belong in `src/mcp_tools.rs`.
 - Operator/debug CLI parsing and JSON response rendering belong in `src/operator_cli.rs`.
 - App guidance lookup belongs in `src/heuristics.rs`.
 - Service startup and Unix-socket client behavior belong in `src/service_launcher.rs`.
@@ -32,7 +33,8 @@ cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen i
 
 ## Touch Points / Key Files
 
-- MCP server and tool definitions: `src/mcp_server.rs`
+- MCP protocol framing and session init: `src/mcp_server.rs`
+- MCP tool registry, schema, and handlers: `src/mcp_tools.rs`
 - Operator/debug CLI: `src/operator_cli.rs`
 - App-guidance registry: `src/heuristics.rs`
 - Service launcher/client: `src/service_launcher.rs`
@@ -41,9 +43,9 @@ cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen i
 
 ## JIT Index Hints
 
-- Find MCP tools: `rg -n "tool_definitions|handle_tool_call|tool_error" src/mcp_server.rs`
-- Find `get_app_state` output shaping: `rg -n "AppStateDetail|compact_snapshot|snapshot_summary" src/mcp_server.rs`
-- Find action calls: `rg -n "handle_action_call|ActionName" src/mcp_server.rs`
+- Find MCP tools: `rg -n "tool_definitions|handle_tool_call|tool_error" src/mcp_tools.rs`
+- Find `get_app_state` output shaping: `rg -n "AppStateDetail|compact_snapshot|snapshot_summary" src/mcp_tools.rs`
+- Find action calls: `rg -n "handle_action_call|ActionName" src/mcp_tools.rs`
 - Find framing support: `rg -n "ContentLength|JsonLine|read_message|write_message" src/mcp_server.rs`
 - Find heuristic loading: `rg -n "HeuristicsRegistry|app_guidance|markdown" src`
 

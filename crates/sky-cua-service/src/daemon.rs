@@ -46,6 +46,17 @@ impl ServiceDaemon {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_for_tests() -> std::io::Result<Self> {
+        Ok(Self {
+            backend: crate::backend_factory::create_backend(),
+            sessions: SessionStore::new(),
+            snapshots: SnapshotManager::new(8),
+            overlay: OverlayController::new_for_tests(),
+            socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
+        })
+    }
+
     pub async fn handle(&mut self, request: ServiceRequest) -> ServiceResponse {
         self.sessions.touch().await;
         match request {
@@ -234,6 +245,12 @@ impl ServiceDaemon {
                 ServiceResponse::ExecuteAction { outcome }
             }
         }
+    }
+
+    pub fn hide_agent_cursor_after_last_client(&mut self) {
+        let _ = self
+            .overlay
+            .hide(Some("last IPC client disconnected".to_string()));
     }
 
     pub async fn idle_for(&self) -> std::time::Duration {
@@ -619,6 +636,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn last_client_cleanup_hides_agent_cursor_state() {
+        let mut daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
+        let state = AgentCursorState {
+            visible: true,
+            sequence: 99,
+            model_point: Some(AgentCursorPoint {
+                x: 12.0,
+                y: 34.0,
+                coordinate_space: CoordinateSpace::StreamPixels,
+                mapping_id: Some("stream".to_string()),
+            }),
+            native_point: None,
+            snapshot_id: Some("snap".to_string()),
+            source_action: Some(ActionName::Click),
+            updated_at_ms: 0,
+        };
+
+        let _ = daemon
+            .handle(ServiceRequest::SetAgentCursor { state })
+            .await;
+        daemon.hide_agent_cursor_after_last_client();
+
+        match daemon.handle(ServiceRequest::AgentCursorStatus).await {
+            ServiceResponse::AgentCursorStatus {
+                state: Some(state), ..
+            } => assert!(!state.visible),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn get_app_state_attaches_cursor_state_and_synthetic_screenshot() {
         let dir = unique_temp_dir("daemon-get-state");
         let source = dir.join("capture.png");
@@ -866,6 +914,10 @@ mod tests {
             perform_action: available(),
             perform_secondary_action: available(),
             scroll: available(),
+            supported_scroll_directions: vec![
+                sky_cua_platform::model::ScrollDirection::Up,
+                sky_cua_platform::model::ScrollDirection::Down,
+            ],
             drag: available(),
             type_text: available(),
             press_key: available(),

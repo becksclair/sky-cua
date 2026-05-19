@@ -10,7 +10,7 @@ use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
     CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, ElementNode,
     EnvironmentInfo, FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities,
-    RectF, SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
+    RectF, ScrollDirection, SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
 };
 use sky_cua_platform::{new_snapshot_id, sky_cua_state_dir};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, WPARAM};
@@ -121,6 +121,7 @@ impl WindowsDesktopBackend {
             perform_action: availability(semantic_ready, "UI Automation is unavailable"),
             perform_secondary_action: availability(physical_ready, input_reason),
             scroll: availability(physical_ready, input_reason),
+            supported_scroll_directions: vec![ScrollDirection::Up, ScrollDirection::Down],
             drag: availability(physical_ready, input_reason),
             type_text: availability(physical_ready, input_reason),
             press_key: availability(physical_ready, input_reason),

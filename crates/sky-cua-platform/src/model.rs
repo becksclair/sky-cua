@@ -165,6 +165,15 @@ pub struct ToolAvailability {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCapabilities {
     pub list_apps: ToolAvailability,
@@ -179,6 +188,8 @@ pub struct ToolCapabilities {
     pub perform_action: ToolAvailability,
     pub perform_secondary_action: ToolAvailability,
     pub scroll: ToolAvailability,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_scroll_directions: Vec<ScrollDirection>,
     pub drag: ToolAvailability,
     pub type_text: ToolAvailability,
     pub press_key: ToolAvailability,
@@ -823,7 +834,7 @@ mod tests {
         AppStateSnapshot, CaptureBackendKind, CaptureInfo, CoordinateSpace, DoctorCheck,
         DoctorReadiness, DoctorReport, DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode,
         ElementNumericValueReadback, ElementTextReadback, ElementTextSelection, EnvironmentInfo,
-        InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
+        InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF, ScrollDirection,
         SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport,
         ToolAvailability, ToolCapabilities, WindowInfo, WindowTargetingSetupReport,
     };
@@ -1415,6 +1426,7 @@ mod tests {
             perform_action: available(),
             perform_secondary_action: available(),
             scroll: available(),
+            supported_scroll_directions: vec![ScrollDirection::Up, ScrollDirection::Down],
             drag: available(),
             type_text: available(),
             press_key: available(),

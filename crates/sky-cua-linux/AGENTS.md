@@ -17,7 +17,9 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer
 
 ## Patterns & Conventions
 
-- `src/backend.rs` is the orchestration layer; keep low-level portal/X11/KWin details in their modules.
+- `src/backend.rs` is the orchestration layer; action execution lives under `src/actions/`.
+- `src/actions/mod.rs` owns `LinuxActionExecutor`; `src/actions/runtime.rs` owns the fakeable runtime facade; `src/actions/targeting.rs` owns physical backend selection and coordinate planning.
+- Keep low-level portal/X11/KWin details in their modules.
 - Environment detection belongs in `src/env_probe.rs`; do not infer from one env var only.
 - Portal session/capture/input behavior belongs under `src/portal/**`.
 - X11 discovery/input/capture belongs under `src/x11/**`.
@@ -33,7 +35,8 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer
 
 ## Touch Points / Key Files
 
-- Backend orchestration and action routing: `src/backend.rs`
+- Backend orchestration: `src/backend.rs`
+- Action execution and routing: `src/actions/`
 - Portal RemoteDesktop/ScreenCast session manager: `src/portal/remote_desktop.rs`
 - PipeWire frame capture: `src/portal/pipewire.rs`
 - X11 metadata fallback: `src/x11/windowing.rs`
@@ -43,7 +46,8 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer
 
 ## JIT Index Hints
 
-- Find backend action cases: `rg -n "ActionName|execute_action|SetValue|XTest|portal" src/backend.rs`
+- Find backend action entrypoint: `rg -n "execute_action|LinuxActionExecutor" src/backend.rs src/actions`
+- Find action routing cases: `rg -n "ActionName|SetValue|XTest|portal|LinuxVirtualInput" src/actions`
 - Find portal lifecycle: `rg -n "PortalSession|restore|token|ensure_started" src/portal`
 - Find PipeWire downgrade path: `rg -n "capture_frame|CaptureBackendDowngraded|portal_screenshot" src`
 - Find X11 fallback roles: `rg -n "x11_container|x11_leaf_region|x11_action_region" src`

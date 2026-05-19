@@ -5,7 +5,7 @@ use sky_cua_platform::model::{
     ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind, CaptureInfo,
     CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorReport, ElementNode,
     EnvironmentInfo, FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, RectF,
-    SemanticBackendKind, ToolAvailability, ToolCapabilities,
+    ScrollDirection, SemanticBackendKind, ToolAvailability, ToolCapabilities,
 };
 use sky_cua_platform::{AppInfo, new_snapshot_id};
 
@@ -236,6 +236,7 @@ impl LinuxDesktopBackend {
                 reason: (!physical_ready)
                     .then(|| "No physical input backend is available".to_string()),
             },
+            supported_scroll_directions: vec![ScrollDirection::Up, ScrollDirection::Down],
             drag: ToolAvailability {
                 available: physical_ready,
                 reason: (!physical_ready)
@@ -884,6 +885,49 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
         }
     }
 
+    async fn semantic_scroll_vertical_at(
+        &self,
+        x: f64,
+        y: f64,
+        delta_y: Option<f64>,
+        steps: i32,
+        app: Option<&FocusedApp>,
+    ) -> Result<bool, BackendError> {
+        let (connection, apps) = self.discover_accessible_apps().await?;
+        let preferred_selector = app.map(selector_from_focused_app);
+        let mut selected: Option<(f64, String, f64)> = None;
+
+        for candidate_app in apps.iter().filter(|candidate_app| {
+            preferred_selector.as_ref().is_none_or(|selector| {
+                selector_match_score(&candidate_app.info, selector).is_some()
+            })
+        }) {
+            let (elements, _) = snapshot_for_app(&connection, candidate_app).await?;
+            let Some((area, scrollbar)) = vertical_scrollbar_for_point(&elements, x, y) else {
+                continue;
+            };
+            let (Some(backend_ref), Some(target_value)) = (
+                scrollbar.backend_ref.as_ref(),
+                scroll_target_value(scrollbar, delta_y, steps),
+            ) else {
+                continue;
+            };
+            if selected
+                .as_ref()
+                .is_none_or(|(selected_area, _, _)| area < *selected_area)
+            {
+                selected = Some((area, backend_ref.clone(), target_value));
+            }
+        }
+
+        let Some((_, backend_ref, target_value)) = selected else {
+            return Ok(false);
+        };
+
+        atspi_actions::set_value(&connection, &backend_ref, &target_value.to_string()).await?;
+        Ok(true)
+    }
+
     fn resolve_set_value_fallback_policy(
         &self,
         app: Option<&FocusedApp>,
@@ -1004,6 +1048,19 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
 
     fn virtual_click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
         self.cached_virtual_input()?.click_at(x, y, button)
+    }
+
+    fn virtual_pointer_mapping_diagnostic(
+        &self,
+        x: f64,
+        y: f64,
+    ) -> Result<Option<DiagnosticEntry>, BackendError> {
+        let virtual_input = self.cached_virtual_input()?;
+        Ok(Some(DiagnosticEntry {
+            code: "LinuxVirtualInputPointerMapping".to_string(),
+            message: "Linux virtual input pointer coordinate mapping.".to_string(),
+            details: Some(virtual_input.pointer_mapping_details(x, y)),
+        }))
     }
 
     fn virtual_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
@@ -1225,6 +1282,88 @@ fn select_app(apps: &[DiscoveredApp], selector: &AppSelector) -> Option<Discover
         .filter_map(|app| selector_match_score(&app.info, selector).map(|score| (score, app)))
         .max_by_key(|(score, app)| (*score, app.info.is_focused_candidate))
         .map(|(_, app)| app.clone())
+}
+
+fn selector_from_focused_app(app: &FocusedApp) -> AppSelector {
+    AppSelector {
+        app_id: Some(app.app_id.clone()),
+        desktop_file_id: app.desktop_file_id.clone(),
+        window_title: app.window_title.clone(),
+        name: Some(app.name.clone()),
+    }
+}
+
+fn vertical_scrollbar_for_point(
+    elements: &[ElementNode],
+    x: f64,
+    y: f64,
+) -> Option<(f64, &ElementNode)> {
+    elements
+        .iter()
+        .filter(|node| is_vertical_value_scrollbar(node))
+        .filter_map(|node| {
+            scroll_ancestor_area_containing_point(elements, node, x, y).map(|area| (area, node))
+        })
+        .min_by(|(left, _), (right, _)| left.total_cmp(right))
+}
+
+fn is_vertical_value_scrollbar(node: &ElementNode) -> bool {
+    node.role == "scroll bar"
+        && node
+            .numeric_value
+            .as_ref()
+            .is_some_and(|value| value.maximum > value.minimum)
+        && node.state_flags.iter().any(|state| state == "vertical")
+        && node
+            .semantic_actions
+            .iter()
+            .any(|action| action == "set_value")
+}
+
+fn scroll_ancestor_area_containing_point(
+    elements: &[ElementNode],
+    node: &ElementNode,
+    x: f64,
+    y: f64,
+) -> Option<f64> {
+    let mut parent_index = node.parent_index;
+    while let Some(index) = parent_index {
+        let parent = elements.get(index)?;
+        if let Some(bounds) = parent.bounds.as_ref()
+            && bounds_contains(bounds, x, y)
+        {
+            return Some(bounds.width * bounds.height);
+        }
+        parent_index = parent.parent_index;
+    }
+    node.bounds
+        .as_ref()
+        .filter(|bounds| bounds_contains(bounds, x, y))
+        .map(|bounds| bounds.width * bounds.height)
+}
+
+fn bounds_contains(bounds: &RectF, x: f64, y: f64) -> bool {
+    bounds.width > 0.0
+        && bounds.height > 0.0
+        && x >= bounds.x
+        && x <= bounds.x + bounds.width
+        && y >= bounds.y
+        && y <= bounds.y + bounds.height
+}
+
+fn scroll_target_value(node: &ElementNode, delta_y: Option<f64>, steps: i32) -> Option<f64> {
+    let value = node.numeric_value.as_ref()?;
+    let steps =
+        crate::actions::targeting::virtual_scroll_steps_from_delta(delta_y).unwrap_or(steps);
+    if steps == 0 {
+        return None;
+    }
+    let increment = if value.minimum_increment > 0.0 {
+        value.minimum_increment
+    } else {
+        ((value.maximum - value.minimum) / 10.0).max(1.0)
+    };
+    Some((value.current + f64::from(steps) * increment).clamp(value.minimum, value.maximum))
 }
 
 fn select_linux_window(
@@ -2399,16 +2538,18 @@ mod tests {
     use super::{
         AppInfo, AppSelector, LinuxDesktopBackend, app_from_linux_window, best_x11_window_match,
         fallback_window_elements_with_x11_detail, linux_fallback_snapshot, linux_window_elements,
-        matches_selector, merge_session_env_reports, push_capture_diagnostics, select_x11_window,
-        selector_summary, should_attempt_x11_capture, x11_window_elements, x11_window_matches_app,
+        matches_selector, merge_session_env_reports, push_capture_diagnostics, scroll_target_value,
+        select_x11_window, selector_summary, should_attempt_x11_capture,
+        vertical_scrollbar_for_point, x11_window_elements, x11_window_matches_app,
     };
     use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::{
         CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace,
-        DoctorSessionEnvRepair, DoctorSessionEnvReport, EnvironmentInfo, InputBackendKind,
-        PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
+        DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback,
+        EnvironmentInfo, InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind,
+        SessionKind,
     };
 
     fn wayland_pipewire_environment() -> EnvironmentInfo {
@@ -2431,6 +2572,86 @@ mod tests {
             display: None,
             wayland_display: Some("wayland-0".to_string()),
         }
+    }
+
+    fn test_element(
+        element_index: usize,
+        parent_index: Option<usize>,
+        role: &str,
+        bounds: Option<RectF>,
+    ) -> ElementNode {
+        ElementNode {
+            element_index,
+            parent_index,
+            role: role.to_string(),
+            name: None,
+            description: None,
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
+            state_flags: Vec::new(),
+            semantic_actions: Vec::new(),
+            bounds,
+            backend_ref: None,
+        }
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> RectF {
+        RectF {
+            x,
+            y,
+            width,
+            height,
+            space: CoordinateSpace::DesktopLogical,
+        }
+    }
+
+    fn vertical_scrollbar(index: usize, parent_index: usize, current: f64) -> ElementNode {
+        let mut node = test_element(
+            index,
+            Some(parent_index),
+            "scroll bar",
+            Some(rect(95.0, 0.0, 5.0, 100.0)),
+        );
+        node.state_flags.push("vertical".to_string());
+        node.semantic_actions.push("set_value".to_string());
+        node.backend_ref = Some(format!(":1.1:/scrollbar/{index}"));
+        node.numeric_value = Some(ElementNumericValueReadback {
+            current,
+            minimum: 0.0,
+            maximum: 100.0,
+            minimum_increment: 10.0,
+            text: None,
+        });
+        node
+    }
+
+    #[test]
+    fn vertical_scrollbar_for_point_uses_containing_scroll_ancestor() {
+        let elements = vec![
+            test_element(0, None, "application", Some(rect(0.0, 0.0, 200.0, 200.0))),
+            test_element(
+                1,
+                Some(0),
+                "scroll pane",
+                Some(rect(10.0, 20.0, 90.0, 80.0)),
+            ),
+            vertical_scrollbar(2, 1, 0.0),
+        ];
+
+        let (_, node) = vertical_scrollbar_for_point(&elements, 40.0, 50.0)
+            .expect("point inside scroll pane should resolve scrollbar");
+
+        assert_eq!(node.element_index, 2);
+    }
+
+    #[test]
+    fn scroll_target_value_maps_downward_delta_to_larger_value() {
+        let node = vertical_scrollbar(0, 0, 20.0);
+
+        assert_eq!(scroll_target_value(&node, Some(-180.0), -1), Some(40.0));
+        assert_eq!(scroll_target_value(&node, Some(120.0), -1), Some(10.0));
     }
 
     #[test]

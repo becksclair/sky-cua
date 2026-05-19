@@ -2,8 +2,8 @@
 set -euo pipefail
 
 if [[ "${EUID}" -ne 0 ]]; then
-  printf 'run this provisioner as root inside the Arch testing VM\n' >&2
-  exit 77
+	printf 'run this provisioner as root inside the Arch testing VM\n' >&2
+	exit 77
 fi
 
 vm_user="${SKY_CUA_TESTING_VM_USER:-skycua}"
@@ -18,118 +18,119 @@ pacman-key --populate archlinux
 pacman -Syu --noconfirm
 
 pacman -S --noconfirm --needed \
-  alsa-lib \
-  alacritty \
-  at-spi2-core \
-  base-devel \
-  bash \
-  cairo \
-  clang \
-  cmake \
-  cosmic-session \
-  cosmic-terminal \
-  dbus \
-  evolution-data-server \
-  extra-cmake-modules \
-  foot \
-  gcc \
-  git \
-  glib2 \
-  ghostty \
-  gdm \
-  gnome-console \
-  gnome-shell \
-  gnome-terminal \
-  greetd \
-  grep \
-  grim \
-  gst-plugin-pipewire \
-  gst-plugins-good \
-  gtk3 \
-  hyprland \
-  i3-wm \
-  imagemagick \
-  jq \
-  kconfig \
-  kcoreaddons \
-  kitty \
-  konsole \
-  kwin \
-  kwindowsystem \
-  libcups \
-  libdrm \
-  libepoxy \
-  libglvnd \
-  libinput \
-  libx11 \
-  libxcb \
-  libxcomposite \
-  libxdamage \
-  libxext \
-  libxfixes \
-  libxrandr \
-  libxss \
-  libxtst \
-  malcontent \
-  mesa \
-  ninja \
-  nodejs \
-  npm \
-  nss \
-  openbox \
-  openssh \
-  pipewire \
-  pipewire-jack \
-  pkgconf \
-  plasma-desktop \
-  python \
-  python-dbus \
-  python-gobject \
-  python-pillow \
-  qt6-base \
-  qt6-declarative \
-  qt6-multimedia-ffmpeg \
-  qt6-tools \
-  rsync \
-  rust \
-  seatd \
-  slurp \
-  socat \
-  strace \
-  sudo \
-  tk \
-  vulkan-swrast \
-  vulkan-virtio \
-  wayland \
-  wev \
-  weston \
-  wireplumber \
-  wl-clipboard \
-  wmctrl \
-  xdg-desktop-portal \
-  xdg-desktop-portal-cosmic \
-  xdg-desktop-portal-gnome \
-  xdg-desktop-portal-gtk \
-  xdg-desktop-portal-hyprland \
-  xdg-desktop-portal-kde \
-  xdg-desktop-portal-wlr \
-  xdg-utils \
-  xdotool \
-  xterm \
-  ydotool \
-  wezterm \
-  xorg-xev \
-  xorg-server \
-  xorg-xauth \
-  xorg-xcursorgen \
-  xorg-xdpyinfo \
-  xorg-xinit \
-  xorg-xmessage \
-  xorg-xwayland \
-  xorg-xwininfo
+	alsa-lib \
+	alacritty \
+	at-spi2-core \
+	base-devel \
+	bash \
+	cairo \
+	clang \
+	cmake \
+	cosmic-session \
+	cosmic-terminal \
+	dbus \
+	evolution-data-server \
+	extra-cmake-modules \
+	foot \
+	gcc \
+	git \
+	glib2 \
+	ghostty \
+	gdm \
+	gnome-console \
+	gnome-shell \
+	gnome-terminal \
+	greetd \
+	grep \
+	grim \
+	gst-plugin-pipewire \
+	gst-plugins-good \
+	gtk3 \
+	hyprland \
+	i3-wm \
+	imagemagick \
+	jq \
+	kconfig \
+	kcoreaddons \
+	kitty \
+	konsole \
+	kwin \
+	kwindowsystem \
+	libcups \
+	libdrm \
+	libepoxy \
+	libglvnd \
+	libinput \
+	libx11 \
+	libxcb \
+	libxcomposite \
+	libxdamage \
+	libxext \
+	libxfixes \
+	libxrandr \
+	libxss \
+	libxtst \
+	malcontent \
+	mesa \
+	ninja \
+	nodejs \
+	npm \
+	nss \
+	openbox \
+	openssh \
+	pipewire \
+	pipewire-jack \
+	pkgconf \
+	plasma-desktop \
+	python \
+	python-dbus \
+	python-gobject \
+	python-pillow \
+	qt6-base \
+	qt6-declarative \
+	qt6-multimedia-ffmpeg \
+	qt6-tools \
+	rsync \
+	rust \
+	seatd \
+	slurp \
+	socat \
+	strace \
+	sudo \
+	tk \
+	vulkan-swrast \
+	vulkan-virtio \
+	wayland \
+	wev \
+	weston \
+	wireplumber \
+	wl-clipboard \
+	wmctrl \
+	xdg-desktop-portal \
+	xdg-desktop-portal-cosmic \
+	xdg-desktop-portal-gnome \
+	xdg-desktop-portal-gtk \
+	xdg-desktop-portal-hyprland \
+	xdg-desktop-portal-kde \
+	xdg-desktop-portal-wlr \
+	xdg-utils \
+	xdotool \
+	xterm \
+	ydotool \
+	wezterm \
+	xorg-xev \
+	xorg-xrandr \
+	xorg-server \
+	xorg-xauth \
+	xorg-xcursorgen \
+	xorg-xdpyinfo \
+	xorg-xinit \
+	xorg-xmessage \
+	xorg-xwayland \
+	xorg-xwininfo
 
 if ! id -u "${vm_user}" >/dev/null 2>&1; then
-  useradd --create-home --shell /bin/bash --groups wheel,video,render,seat,input "${vm_user}"
+	useradd --create-home --shell /bin/bash --groups wheel,video,render,seat,input "${vm_user}"
 fi
 usermod -aG wheel,video,render,seat,input "${vm_user}"
 
@@ -154,12 +155,12 @@ udevadm control --reload-rules || true
 udevadm trigger --subsystem-match=misc --sysname-match=uinput || true
 udevadm trigger --subsystem-match=input || true
 if [[ -e /dev/uinput ]]; then
-  chgrp input /dev/uinput || true
-  chmod 0660 /dev/uinput || true
+	chgrp input /dev/uinput || true
+	chmod 0660 /dev/uinput || true
 fi
 
 if [[ -f /etc/ssh/sshd_config.d/20-systemd-userdb.conf ]]; then
-  mv -f /etc/ssh/sshd_config.d/20-systemd-userdb.conf /etc/ssh/sshd_config.d/20-systemd-userdb.conf.disabled
+	mv -f /etc/ssh/sshd_config.d/20-systemd-userdb.conf /etc/ssh/sshd_config.d/20-systemd-userdb.conf.disabled
 fi
 
 cat >/etc/ssh/sshd_config.d/20-sky-cua-authorized-keys.conf <<'EOF'
@@ -170,23 +171,26 @@ chown root:root /etc/ssh/sshd_config.d/20-sky-cua-authorized-keys.conf
 chmod 0644 /etc/ssh/sshd_config.d/20-sky-cua-authorized-keys.conf
 
 if [[ -n "${codex_desktop_package}" ]]; then
-  if [[ ! -f "${codex_desktop_package}" ]]; then
-    printf 'CODEX_DESKTOP_PACKAGE does not exist: %s\n' "${codex_desktop_package}" >&2
-    exit 66
-  fi
-  pacman -U --noconfirm "${codex_desktop_package}"
+	if [[ ! -f "${codex_desktop_package}" ]]; then
+		printf 'CODEX_DESKTOP_PACKAGE does not exist: %s\n' "${codex_desktop_package}" >&2
+		exit 66
+	fi
+	pacman -U --noconfirm "${codex_desktop_package}"
 fi
 
-chrome_deb=/tmp/google-chrome-stable_current_amd64.deb
-chrome_tmp="$(mktemp -d)"
-python -c "from urllib.request import urlretrieve; urlretrieve('https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb', '${chrome_deb}')"
-bsdtar -xf "${chrome_deb}" -C "${chrome_tmp}"
-chrome_data="$(find "${chrome_tmp}" -maxdepth 1 -name 'data.tar.*' -print -quit)"
-test -n "${chrome_data}"
-bsdtar -xf "${chrome_data}" -C /
-ln -sf /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable
-ln -sf /usr/bin/google-chrome-stable /usr/bin/google-chrome
-rm -rf "${chrome_tmp}" "${chrome_deb}"
+# Cache Chrome installation: skip download if the binary already exists.
+if [[ ! -x /opt/google/chrome/google-chrome ]]; then
+	chrome_deb=/tmp/google-chrome-stable_current_amd64.deb
+	chrome_tmp="$(mktemp -d)"
+	python -c "from urllib.request import urlretrieve; urlretrieve('https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb', '${chrome_deb}')"
+	bsdtar -xf "${chrome_deb}" -C "${chrome_tmp}"
+	chrome_data="$(find "${chrome_tmp}" -maxdepth 1 -name 'data.tar.*' -print -quit)"
+	test -n "${chrome_data}"
+	bsdtar -xf "${chrome_data}" -C /
+	ln -sf /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable
+	ln -sf /usr/bin/google-chrome-stable /usr/bin/google-chrome
+	rm -rf "${chrome_tmp}" "${chrome_deb}"
+fi
 
 npm install -g "${opencode_npm_spec}"
 
@@ -332,11 +336,11 @@ EOF
 
 systemctl enable sshd.service
 if [[ "${autologin_session}" == "gnome" ]]; then
-  systemctl disable greetd.service >/dev/null 2>&1 || true
-  systemctl enable gdm.service
+	systemctl disable greetd.service >/dev/null 2>&1 || true
+	systemctl enable gdm.service
 else
-  systemctl disable gdm.service >/dev/null 2>&1 || true
-  systemctl enable greetd.service
+	systemctl disable gdm.service >/dev/null 2>&1 || true
+	systemctl enable greetd.service
 fi
 systemctl enable seatd.service
 systemctl --global enable ydotool.service

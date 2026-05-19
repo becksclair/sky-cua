@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = REPO_ROOT / "artifacts" / "codex-e2e" / "agent-cursor-kde"
@@ -1797,16 +1797,24 @@ def probe_marker(before_path: Path, after_path: Path, point: tuple[float, float]
     top = max(0, hotspot_y - CURSOR_ASSET_HOTSPOT_Y)
     right = min(after.width, left + CURSOR_ASSET_WIDTH)
     bottom = min(after.height, top + CURSOR_ASSET_HEIGHT)
-    changed = 0
+    before_crop = before.crop((left, top, right, bottom))
+    after_crop = after.crop((left, top, right, bottom))
+    diff = ImageChops.difference(before_crop, after_crop)
+    # Per-pixel max channel delta using lighter(r, g) then lighter(rg, b)
+    diff_r, diff_g, diff_b = diff.split()
+    max_rg = ImageChops.lighter(diff_r, diff_g)
+    max_rgb = ImageChops.lighter(max_rg, diff_b)
+    # Count pixels with max delta >= 40 using histogram of thresholded image
+    threshold_map = [0] * 40 + [255] * 216
+    thresholded = max_rgb.point(threshold_map, mode="1")
+    hist = thresholded.histogram()
+    changed = hist[-1] if len(hist) >= 2 else 0
+    # Find max delta from histogram (avoids imprecise getextrema type stubs)
     max_delta = 0
-    for y in range(top, bottom):
-        for x in range(left, right):
-            before_pixel = rgb_pixel(before, x, y)
-            after_pixel = rgb_pixel(after, x, y)
-            delta = max(abs(a - b) for a, b in zip(after_pixel, before_pixel, strict=True))
-            if delta >= 40:
-                changed += 1
-            max_delta = max(max_delta, delta)
+    for value, count in enumerate(max_rgb.histogram()[::-1], start=0):
+        if count > 0:
+            max_delta = 255 - value
+            break
     return MarkerProbe(
         found=changed >= 24 and max_delta >= 40,
         changed_pixels_near_hotspot=changed,

@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +47,69 @@ def require_real_wayland_session() -> None:
 
 def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def hide_agent_cursor(service_socket_path: Path) -> dict[str, Any] | None:
+    if not service_socket_path.exists():
+        return None
+    payload = {
+        "type": "hide_agent_cursor",
+        "reason": "live_wayland_pointer_smoke cleanup",
+    }
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(2.0)
+        client.connect(str(service_socket_path))
+        client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+        chunks: list[bytes] = []
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if b"\n" in chunk:
+                break
+    if not chunks:
+        return None
+    return json.loads(b"".join(chunks).split(b"\n", 1)[0])
+
+
+def terminate_processes_for_temp_socket(service_socket_path: Path) -> None:
+    overlay_socket_path = service_socket_path.parent / "agent-cursor.sock"
+    current_pid = os.getpid()
+    targets: set[int] = set()
+    for proc_dir in Path("/proc").iterdir():
+        if not proc_dir.name.isdecimal():
+            continue
+        pid = int(proc_dir.name)
+        if pid == current_pid:
+            continue
+        try:
+            environ = (proc_dir / "environ").read_bytes()
+            cmdline = (proc_dir / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if (
+            b"sky-cua-service" in cmdline
+            and f"SKY_CUA_SERVICE_SOCKET_PATH={service_socket_path}".encode() in environ
+        ) or (b"sky-cua-overlay-host" in cmdline and str(overlay_socket_path).encode() in cmdline):
+            targets.add(pid)
+
+    for pid in targets:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+    deadline = time.time() + 2.0
+    remaining = set(targets)
+    while remaining and time.time() < deadline:
+        for pid in list(remaining):
+            if not Path(f"/proc/{pid}").exists():
+                remaining.remove(pid)
+        if remaining:
+            time.sleep(0.05)
+    for pid in remaining:
+        with suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
 
 
 def action_diagnostic_codes(result: dict[str, Any]) -> set[str]:
@@ -334,7 +400,17 @@ def main() -> int:
                 print(f"Holding final fixture state for {final_hold:.1f}s...")
                 time.sleep(final_hold)
             finally:
+                try:
+                    hide_result = hide_agent_cursor(service_socket_path)
+                    if hide_result is not None:
+                        write_json(artifact_dir / "hide-agent-cursor-result.json", hide_result)
+                except Exception as error:
+                    write_json(
+                        artifact_dir / "hide-agent-cursor-error.json",
+                        {"error": f"{type(error).__name__}: {error}"},
+                    )
                 client.close()
+                terminate_processes_for_temp_socket(service_socket_path)
         finally:
             if fixture.poll() is None:
                 fixture.terminate()

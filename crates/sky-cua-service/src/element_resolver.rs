@@ -383,6 +383,7 @@ mod tests {
                 perform_action: unavailable(),
                 perform_secondary_action: unavailable(),
                 scroll: unavailable(),
+                supported_scroll_directions: Vec::new(),
                 drag: unavailable(),
                 type_text: unavailable(),
                 press_key: unavailable(),
