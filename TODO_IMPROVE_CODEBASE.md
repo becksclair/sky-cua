@@ -4,9 +4,9 @@ This file tracks architecture improvement candidates found during codebase revie
 
 <!-- improve-codebase-architecture:start -->
 
-Generated: 2026-05-17  
-Scope: repository root on `main`, with emphasis on Rust runtime boundaries and Python smoke harnesses  
-Analysis notes: Read-only architecture pass plus this triage artifact. No source refactors were made; live desktop or VM smokes were not run.
+Generated: 2026-05-19  
+Scope: repository root on current checkout, with emphasis on Rust runtime boundaries, service/MCP concurrency, and Python smoke harnesses  
+Analysis notes: Refreshed against current source after recent MCP concurrency and Linux input updates. `ICA-007` is implemented, review-work hardened, and verified with service/client/Linux tests plus final Plasma/KWin `wayland-pointer` VM smoke `pty_298de25e` (`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260519T183144Z`).
 
 ## Triage Summary
 
@@ -18,7 +18,7 @@ Analysis notes: Read-only architecture pass plus this triage artifact. No source
 | ICA-004 | P2 | M | Medium | High | candidate | `scripts/run_gui_testing_vm_smoke.py` GUI VM profile runner |
 | ICA-005 | P3 | S | Low | High | needs-validation | `crates/sky-cua-windows/src/backend.rs` Windows backend monolith |
 | ICA-006 | P2 | L | Medium | High | candidate | `crates/sky-cua-linux/src/backend.rs` app-state capture/snapshot pipeline |
-| ICA-007 | P2 | L | Medium | High | candidate | `crates/sky-cua-service/src/` service request concurrency boundary |
+| ICA-007 | P2 | L | Medium | High | implemented | `crates/sky-cua-service/src/` service request concurrency boundary |
 
 ## Tasks
 
@@ -185,36 +185,40 @@ Analysis notes: Read-only architecture pass plus this triage artifact. No source
   - [ ] Keep app/window selection behavior unchanged while moving capture planning.
   - [ ] Remove redundant old helper tests only after replacement boundary tests pass.
 
-- [ ] **ICA-007: Split service state and introduce an explicit desktop request lane**  
-  Priority: P2; Effort: L; Risk: Medium; Confidence: High; Status: candidate  
-  Cluster: `crates/sky-cua-service/src/ipc_server.rs`, `crates/sky-cua-service/src/daemon.rs`, `crates/sky-cua-service/src/snapshot_manager.rs`, `crates/sky-cua-service/src/overlay.rs`  
+- [x] **ICA-007: Split service state and introduce an explicit desktop request lane**  
+  Priority: P2; Effort: L; Risk: Medium; Confidence: High; Status: implemented  
+  Cluster: `crates/sky-cua-service/src/ipc_server.rs`, `crates/sky-cua-service/src/daemon.rs`, `crates/sky-cua-service/src/snapshot_manager.rs`, `crates/sky-cua-service/src/overlay.rs`, with pressure from `crates/sky-cua-client/src/mcp_server.rs` concurrent tool calls  
   Dependency category: Global, nondeterministic, or platform dependency; Remote but owned, using ports and adapters  
-  Problem: The IPC server wraps the whole `ServiceDaemon` in one async mutex and request handling awaits while holding that daemon-wide lock, so a slow desktop request such as capture, portal setup, or action execution serializes unrelated requests like health, doctor, window listing, or cursor status.  
+  Problem addressed: The MCP server can now keep reading and spawn concurrent `tools/call` work, but the daemon wrapped the whole `ServiceDaemon` in one async mutex and request handling awaited while holding that daemon-wide lock. A slow desktop request such as capture, portal setup, or action execution serialized unrelated requests like health once they reached the service.  
   Evidence:
-  - `crates/sky-cua-service/src/ipc_server.rs`: `handle_stream` calls `daemon.lock().await.handle(request).await`, holding the daemon lock across request-specific awaits.
-  - `crates/sky-cua-service/src/ipc_server.rs`: active IPC connection tracking and last-client cursor cleanup now sit around the daemon mutex, proving connection lifecycle and daemon request state are separate concerns.
-  - `crates/sky-cua-service/src/daemon.rs`: `ServiceDaemon::handle` mixes request routing with shared state access to backend, sessions, snapshots, and overlay state.
-  - `crates/sky-cua-client/src/service_launcher.rs`: the client keeps a cached service stream for process lifetime, so the service can have multiple active streams and should not rely on one global request lock as the concurrency boundary.
-  Why coupled: Desktop-mutating requests do need sequencing because capture hide/restore, action-derived cursor state, snapshot resolution, portal token resets, and latest-snapshot semantics can interact. But health, readiness, listing/status, and some diagnostic requests do not need to wait behind an unrelated long-running action if their backend semantics are read-only or independently safe.  
-  Recommended design: Replace `Arc<Mutex<ServiceDaemon>>` with an `Arc<ServiceRuntime>` whose fields have narrow ownership: shared backend handle, `SessionStore`, snapshot store, overlay controller, and a deliberate `desktop_lane: tokio::sync::Mutex<()>`. Make request handling take `&self`. Route desktop-mutating or ordering-sensitive requests through the desktop lane, while safe requests bypass it. Do not hold snapshot or overlay sub-locks across backend awaits; use the desktop lane for long-running ordering instead.  
+  - `crates/sky-cua-service/src/ipc_server.rs`: `handle_stream` now calls `daemon.handle(request).await` on `Arc<ServiceDaemon>` instead of holding `Arc<Mutex<ServiceDaemon>>` across request awaits.
+  - `crates/sky-cua-service/src/ipc_server.rs`: `ConnectionTracker` serializes active IPC connection count changes with final cursor cleanup, preserving last-client cursor hide behavior without a daemon-wide request mutex.
+  - `crates/sky-cua-service/src/daemon.rs`: `ServiceDaemon::handle` now takes `&self`; `Health` bypasses the desktop lane, while desktop-sensitive requests are conservatively serialized behind `desktop_lane`.
+  - `crates/sky-cua-service/src/daemon.rs`: `SnapshotManager` and `OverlayController` are behind narrow async mutexes instead of relying on one outer daemon mutex.
+  - Review-work follow-up hardened the VM proof path and related Linux contracts: KWin activation is represented as best-effort `WindowActivationSent` rather than fake focus verification, KWin-targeted keyboard input is rejected without mutating focus, and KDE clipboard fallback avoids cancelling GTK's in-flight Wayland selection read.
+  - `crates/sky-cua-client/src/mcp_server.rs`: `serve` now spawns `tools/call` handling through `tokio::spawn` and `spawn_blocking`, with a dedicated serialized stdout writer so long service calls do not block the MCP read loop.
+  - `crates/sky-cua-client/src/service_launcher.rs`: cloned `ServiceClient`s share a cached stream but take it only for the duration of one call and open fresh connections when needed, so concurrent MCP tool calls can create multiple active IPC streams.
+  Why coupled: Desktop-mutating requests do need sequencing because capture hide/restore, action-derived cursor state, snapshot resolution, portal token resets, and latest-snapshot semantics can interact. Health does not touch desktop backend, snapshot, or overlay state and can safely bypass the lane; other possible bypasses remain intentionally serialized until their backend and overlay interactions are proved safe.  
+  Recommended design: Replace `Arc<Mutex<ServiceDaemon>>` with an `Arc<ServiceRuntime>` whose fields have narrow ownership: shared backend handle, `SessionStore`, snapshot store, overlay controller, and a deliberate `desktop_lane: tokio::sync::Mutex<()>`. Make request handling take `&self`. Route desktop-mutating or ordering-sensitive requests through the desktop lane, while safe requests bypass it. Do not hold snapshot or overlay sub-locks across backend awaits; use the desktop lane for long-running ordering instead. Keep the MCP concurrent-read behavior intact; the service should become the explicit concurrency boundary instead of relying on client-side request serialization.  
   Suggested first move: Add characterization tests with a fake backend proving a blocked `ExecuteAction` does not block `Health` or another safe request, while a second action or `GetAppState` still queues behind the desktop lane. Then introduce `ServiceRuntime` without changing the wire protocol.  
   Testing impact: Add service-level concurrency tests for safe request bypass, desktop-lane serialization, last-client cursor cleanup, and idle timeout with active connections. Existing snapshot resolution and overlay hide/show tests should remain green.  
-  Needs human decision: Decide which requests are allowed to bypass the desktop lane. Recommended initial conservative set: `Health`, maybe `Doctor`, `ListWindows`, `FocusedWindow`, and `AgentCursorStatus` only after confirming their backend calls are read-only and cannot race portal/session state.  
+  Needs human decision: Resolved by conservative implementation. Only `Health` bypasses the desktop lane for this slice; `Doctor`, `ListWindows`, `FocusedWindow`, and `AgentCursorStatus` remain candidates for later evidence-backed bypasses.  
   Acceptance criteria:
-  - [ ] `ServiceDaemon` or replacement runtime no longer requires a daemon-wide async mutex held across every request await.
-  - [ ] An explicit desktop lane serializes `GetAppState`, `ExecuteAction`, `ActivateWindow`, cursor mutators, portal token reset, and setup requests unless proven safe.
-  - [ ] Safe requests can complete while a fake long-running desktop-lane request is blocked.
-  - [ ] Two desktop-lane requests preserve order and do not interleave capture hide/restore, snapshot mutation, or overlay mutation.
-  - [ ] Last-client cursor cleanup and idle shutdown still respect active IPC connections.
-  - [ ] No serialized service request/response wire shape changes.
+  - [x] `ServiceDaemon` or replacement runtime no longer requires a daemon-wide async mutex held across every request await.
+  - [x] An explicit desktop lane serializes `GetAppState`, `ExecuteAction`, `ActivateWindow`, cursor mutators, portal token reset, and setup requests unless proven safe.
+  - [x] Safe requests can complete while a fake long-running desktop-lane request is blocked.
+  - [x] Concurrent MCP `tools/call` requests can reach the service without stdout response interleaving, and safe service requests are not blocked by an unrelated fake long-running desktop-lane request.
+  - [x] Two desktop-lane requests preserve order and do not interleave capture hide/restore, snapshot mutation, or overlay mutation.
+  - [x] Last-client cursor cleanup and idle shutdown still respect active IPC connections.
+  - [x] No serialized service request/response wire shape changes.
   Work checklist:
-  - [ ] Validate and classify every `ServiceRequest` as safe-bypass or desktop-lane.
-  - [ ] Add concurrency characterization tests before refactoring.
-  - [ ] Introduce `ServiceRuntime` or equivalent with narrow state holders.
-  - [ ] Move snapshot storage behind a narrow lock that is not held across backend awaits.
-  - [ ] Move overlay state behind a narrow lock and preserve capture hide/restore ordering through the desktop lane.
-  - [ ] Update IPC server to hold `Arc<ServiceRuntime>` instead of `Arc<Mutex<ServiceDaemon>>`.
-  - [ ] Re-run service, client, Linux backend, and smoke-level validations relevant to cursor and snapshot behavior.
+  - [x] Validate and classify every `ServiceRequest` as safe-bypass or desktop-lane.
+  - [x] Add concurrency characterization tests before refactoring.
+  - [x] Introduce `ServiceRuntime` or equivalent with narrow state holders.
+  - [x] Move snapshot storage behind a narrow lock that is not held across backend awaits.
+  - [x] Move overlay state behind a narrow lock and preserve capture hide/restore ordering through the desktop lane.
+  - [x] Update IPC server to hold `Arc<ServiceRuntime>` instead of `Arc<Mutex<ServiceDaemon>>`.
+  - [x] Re-run service, client, Linux backend, and smoke-level validations relevant to cursor and snapshot behavior. Final accepted smoke proof: `pty_298de25e`, artifacts `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260519T183144Z`.
 
 ## Parking Lot
 

@@ -110,10 +110,9 @@ pub(crate) trait LinuxActionRuntime {
 
     async fn portal_press_key_sequence(&self, keys: &[String]) -> Result<(), BackendError>;
 
-    async fn portal_press_keycode_chord(
+    async fn portal_press_key_sequence_portal_only(
         &self,
-        modifiers: &[i32],
-        keycode: i32,
+        keys: &[String],
     ) -> Result<(), BackendError>;
 
     async fn portal_take_lifecycle_diagnostics(&self) -> Vec<DiagnosticEntry>;

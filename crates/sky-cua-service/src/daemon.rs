@@ -21,8 +21,9 @@ use tracing::debug;
 pub struct ServiceDaemon {
     backend: Box<dyn DesktopBackend>,
     sessions: SessionStore,
-    snapshots: SnapshotManager,
-    overlay: OverlayController,
+    snapshots: tokio::sync::Mutex<SnapshotManager>,
+    overlay: tokio::sync::Mutex<OverlayController>,
+    desktop_lane: tokio::sync::Mutex<()>,
     socket_path: PathBuf,
 }
 
@@ -40,8 +41,9 @@ impl ServiceDaemon {
         Ok(Self {
             backend,
             sessions: SessionStore::new(),
-            snapshots: SnapshotManager::new(8),
-            overlay: OverlayController::new(&socket_path),
+            snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
+            overlay: tokio::sync::Mutex::new(OverlayController::new(&socket_path)),
+            desktop_lane: tokio::sync::Mutex::new(()),
             socket_path,
         })
     }
@@ -51,13 +53,14 @@ impl ServiceDaemon {
         Ok(Self {
             backend: crate::backend_factory::create_backend(),
             sessions: SessionStore::new(),
-            snapshots: SnapshotManager::new(8),
-            overlay: OverlayController::new_for_tests(),
+            snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
+            overlay: tokio::sync::Mutex::new(OverlayController::new_for_tests()),
+            desktop_lane: tokio::sync::Mutex::new(()),
             socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
         })
     }
 
-    pub async fn handle(&mut self, request: ServiceRequest) -> ServiceResponse {
+    pub async fn handle(&self, request: ServiceRequest) -> ServiceResponse {
         self.sessions.touch().await;
         match request {
             ServiceRequest::Health => ServiceResponse::Health {
@@ -65,6 +68,16 @@ impl ServiceDaemon {
                 service_socket: self.socket_path.display().to_string(),
                 desktop_env: desktop_env_values_present(),
             },
+            request => {
+                let _desktop_lane = self.desktop_lane.lock().await;
+                self.handle_desktop_request(request).await
+            }
+        }
+    }
+
+    async fn handle_desktop_request(&self, request: ServiceRequest) -> ServiceResponse {
+        match request {
+            ServiceRequest::Health => unreachable!("health bypasses the desktop request lane"),
             ServiceRequest::Doctor => match self.backend.doctor().await {
                 Ok(report) => ServiceResponse::Doctor {
                     report: Box::new(report),
@@ -172,13 +185,20 @@ impl ServiceDaemon {
                 capture_screen,
             } => {
                 debug!(selector = ?selector, ?capture_screen, "handling get_app_state request");
-                let capture_guard = (capture_screen != CaptureScreenMode::Never)
-                    .then(|| self.overlay.prepare_for_capture());
+                let capture_guard = if capture_screen != CaptureScreenMode::Never {
+                    Some(self.overlay.lock().await.prepare_for_capture())
+                } else {
+                    None
+                };
                 match self.backend.get_app_state(selector, capture_screen).await {
                     Ok(mut snapshot) => {
-                        if capture_screen == CaptureScreenMode::IfChanged
-                            && reuse_unchanged_capture(&mut snapshot, self.snapshots.latest())
-                        {
+                        let reused_capture = if capture_screen == CaptureScreenMode::IfChanged {
+                            let snapshots = self.snapshots.lock().await;
+                            reuse_unchanged_capture(&mut snapshot, snapshots.latest())
+                        } else {
+                            false
+                        };
+                        if reused_capture {
                             snapshot.diagnostics.push(DiagnosticEntry {
                                 code: "CaptureScreenUnchanged".to_string(),
                                 message: "Screen capture matched the previous model-facing image; reusing the previous screenshot path.".to_string(),
@@ -190,38 +210,47 @@ impl ServiceDaemon {
                                 .diagnostics
                                 .extend(capture_guard.diagnostics.iter().cloned());
                         }
-                        self.overlay.apply_to_snapshot(&mut snapshot);
-                        if let Some(capture_guard) = capture_guard {
-                            snapshot
-                                .diagnostics
-                                .extend(self.overlay.restore_after_capture(capture_guard));
+                        {
+                            let mut overlay = self.overlay.lock().await;
+                            overlay.apply_to_snapshot(&mut snapshot);
+                            if let Some(capture_guard) = capture_guard {
+                                snapshot
+                                    .diagnostics
+                                    .extend(overlay.restore_after_capture(capture_guard));
+                            }
                         }
-                        self.snapshots.store(snapshot.clone());
+                        self.snapshots.lock().await.store(snapshot.clone());
                         ServiceResponse::GetAppState {
                             snapshot: Box::new(snapshot),
                         }
                     }
                     Err(error) => {
                         if let Some(capture_guard) = capture_guard {
-                            let _ = self.overlay.restore_after_capture(capture_guard);
+                            let _ = self
+                                .overlay
+                                .lock()
+                                .await
+                                .restore_after_capture(capture_guard);
                         }
                         error_response(error.code, error.message)
                     }
                 }
             }
             ServiceRequest::AgentCursorStatus => {
-                agent_cursor_status_response(self.overlay.status(), AgentCursorResponseKind::Status)
+                let status = self.overlay.lock().await.status();
+                agent_cursor_status_response(status, AgentCursorResponseKind::Status)
             }
-            ServiceRequest::SetAgentCursor { state } => agent_cursor_status_response(
-                self.overlay.set_state(state),
-                AgentCursorResponseKind::Set,
-            ),
-            ServiceRequest::HideAgentCursor { reason } => agent_cursor_status_response(
-                self.overlay.hide(reason),
-                AgentCursorResponseKind::Hide,
-            ),
+            ServiceRequest::SetAgentCursor { state } => {
+                let status = self.overlay.lock().await.set_state(state);
+                agent_cursor_status_response(status, AgentCursorResponseKind::Set)
+            }
+            ServiceRequest::HideAgentCursor { reason } => {
+                let status = self.overlay.lock().await.hide(reason);
+                agent_cursor_status_response(status, AgentCursorResponseKind::Hide)
+            }
             ServiceRequest::ShowAgentCursor => {
-                agent_cursor_status_response(self.overlay.show(), AgentCursorResponseKind::Show)
+                let status = self.overlay.lock().await.show();
+                agent_cursor_status_response(status, AgentCursorResponseKind::Show)
             }
             ServiceRequest::ResetPortalTokens => {
                 debug!("handling reset_portal_tokens request");
@@ -240,17 +269,20 @@ impl ServiceDaemon {
                     Err((code, message)) => return error_response(code, message),
                 };
                 let mut outcome = route_action(self.backend.as_ref(), request.clone()).await;
-                let cursor_diagnostics = self.overlay.update_from_action(&request, &mut outcome);
+                let cursor_diagnostics = self
+                    .overlay
+                    .lock()
+                    .await
+                    .update_from_action(&request, &mut outcome);
                 outcome.diagnostics.extend(cursor_diagnostics);
                 ServiceResponse::ExecuteAction { outcome }
             }
         }
     }
 
-    pub fn hide_agent_cursor_after_last_client(&mut self) {
-        let _ = self
-            .overlay
-            .hide(Some("last IPC client disconnected".to_string()));
+    pub async fn hide_agent_cursor_after_last_client(&self) {
+        let mut overlay = self.overlay.lock().await;
+        let _ = overlay.hide(Some("last IPC client disconnected".to_string()));
     }
 
     pub async fn idle_for(&self) -> std::time::Duration {
@@ -277,33 +309,36 @@ impl ServiceDaemon {
             );
             return Ok(request);
         };
-        let snapshot = self.snapshots.get_if_latest(snapshot_id).ok_or_else(|| {
-            if self.snapshots.get(snapshot_id).is_some() {
-                (
+        let snapshot = {
+            let snapshots = self.snapshots.lock().await;
+            if let Some(snapshot) = snapshots.get_if_latest(snapshot_id) {
+                snapshot.clone()
+            } else if snapshots.get(snapshot_id).is_some() {
+                return Err((
                     "SnapshotStale",
                     format!(
                         "snapshot {snapshot_id} is no longer the latest app state. Re-run get_app_state and retry with the current snapshot_id."
                     ),
-                )
+                ));
             } else {
-                (
+                return Err((
                     "SnapshotStale",
                     format!("snapshot {snapshot_id} is not present in the service cache"),
-                )
+                ));
             }
-        })?;
+        };
 
         request.environment = Some(snapshot.environment.clone());
         request.resolved_capture = snapshot.capture.clone();
         request.resolved_focused_app = snapshot.focused_app.clone();
 
         request.resolved_element = resolve_action_element(
-            snapshot,
+            &snapshot,
             &request.action,
             request.element_index,
             &request.arguments,
         )?;
-        request.resolved_target_element = resolve_target_element(snapshot, &request.arguments)?;
+        request.resolved_target_element = resolve_target_element(&snapshot, &request.arguments)?;
 
         Ok(request)
     }
@@ -465,11 +500,25 @@ mod tests {
         SessionKind, ToolAvailability, ToolCapabilities,
     };
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::sync::Notify;
 
     #[derive(Debug, Clone)]
     struct FakeBackend {
         snapshot: AppStateSnapshot,
         outcome: ActionOutcome,
+    }
+
+    #[derive(Debug, Clone)]
+    struct BlockingBackend {
+        snapshot: AppStateSnapshot,
+        outcome: ActionOutcome,
+        execute_calls: Arc<AtomicUsize>,
+        first_execute_started: Arc<Notify>,
+        second_execute_started: Arc<Notify>,
+        release_first_execute: Arc<Notify>,
     }
 
     #[async_trait::async_trait]
@@ -494,6 +543,39 @@ mod tests {
             &self,
             _request: ActionRequest,
         ) -> Result<ActionOutcome, BackendError> {
+            Ok(self.outcome.clone())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DesktopBackend for BlockingBackend {
+        async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+            Ok(self.snapshot.environment.clone())
+        }
+
+        async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_app_state(
+            &self,
+            _selector: Option<AppSelector>,
+            _capture_screen: CaptureScreenMode,
+        ) -> Result<AppStateSnapshot, BackendError> {
+            Ok(self.snapshot.clone())
+        }
+
+        async fn execute_action(
+            &self,
+            _request: ActionRequest,
+        ) -> Result<ActionOutcome, BackendError> {
+            let call = self.execute_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 1 {
+                self.first_execute_started.notify_one();
+                self.release_first_execute.notified().await;
+            } else if call == 2 {
+                self.second_execute_started.notify_one();
+            }
             Ok(self.outcome.clone())
         }
     }
@@ -562,7 +644,7 @@ mod tests {
 
     #[tokio::test]
     async fn cursor_status_requests_round_trip_through_daemon_handle() {
-        let mut daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
+        let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
         let state = AgentCursorState {
             visible: true,
             sequence: 99,
@@ -637,7 +719,7 @@ mod tests {
 
     #[tokio::test]
     async fn last_client_cleanup_hides_agent_cursor_state() {
-        let mut daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
+        let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
         let state = AgentCursorState {
             visible: true,
             sequence: 99,
@@ -656,7 +738,7 @@ mod tests {
         let _ = daemon
             .handle(ServiceRequest::SetAgentCursor { state })
             .await;
-        daemon.hide_agent_cursor_after_last_client();
+        daemon.hide_agent_cursor_after_last_client().await;
 
         match daemon.handle(ServiceRequest::AgentCursorStatus).await {
             ServiceResponse::AgentCursorStatus {
@@ -673,7 +755,7 @@ mod tests {
         ImageBuffer::from_pixel(96, 96, Rgba([240u8, 240, 240, 255]))
             .save(&source)
             .expect("write source image");
-        let mut daemon = daemon_with(
+        let daemon = daemon_with(
             snapshot(Some(capture_with_path(&source)), Vec::new()),
             success_outcome(),
         );
@@ -720,7 +802,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_action_updates_cursor_state_for_explicit_click() {
-        let mut daemon = daemon_with(
+        let daemon = daemon_with(
             snapshot(Some(capture_with_rect()), Vec::new()),
             success_outcome(),
         );
@@ -753,6 +835,90 @@ mod tests {
             ServiceResponse::AgentCursorStatus {
                 state: Some(state), ..
             } => assert_eq!(state.sequence, 1),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn service_runtime_health_bypasses_blocked_desktop_request() {
+        let backend = BlockingBackend::new(snapshot(Some(capture_with_rect()), Vec::new()));
+        let first_started = backend.first_execute_started.clone();
+        let release_first = backend.release_first_execute.clone();
+        let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+
+        let action_daemon = daemon.clone();
+        let action_task = tokio::spawn(async move {
+            let action = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
+            action_daemon
+                .handle(ServiceRequest::ExecuteAction {
+                    request: Box::new(action),
+                })
+                .await
+        });
+
+        first_started.notified().await;
+        let health = tokio::time::timeout(Duration::from_millis(100), async {
+            daemon.handle(ServiceRequest::Health).await
+        })
+        .await;
+        assert!(
+            health.is_ok(),
+            "health should bypass the blocked desktop lane"
+        );
+
+        release_first.notify_one();
+        match action_task.await.expect("action task") {
+            ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn service_runtime_serializes_desktop_lane_requests() {
+        let backend = BlockingBackend::new(snapshot(Some(capture_with_rect()), Vec::new()));
+        let first_started = backend.first_execute_started.clone();
+        let second_started = backend.second_execute_started.clone();
+        let release_first = backend.release_first_execute.clone();
+        let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+
+        let first_daemon = daemon.clone();
+        let first_task = tokio::spawn(async move {
+            let action = request(ActionName::Click, json!({"x": 1.0, "y": 2.0}));
+            first_daemon
+                .handle(ServiceRequest::ExecuteAction {
+                    request: Box::new(action),
+                })
+                .await
+        });
+        first_started.notified().await;
+
+        let second_daemon = daemon.clone();
+        let second_task = tokio::spawn(async move {
+            let action = request(ActionName::Click, json!({"x": 3.0, "y": 4.0}));
+            second_daemon
+                .handle(ServiceRequest::ExecuteAction {
+                    request: Box::new(action),
+                })
+                .await
+        });
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), second_started.notified())
+                .await
+                .is_err(),
+            "second desktop request should wait for the first desktop request"
+        );
+        release_first.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), second_started.notified())
+            .await
+            .expect("second request should enter after first is released");
+
+        match first_task.await.expect("first task") {
+            ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
+            other => panic!("unexpected response: {other:?}"),
+        }
+        match second_task.await.expect("second task") {
+            ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
             other => panic!("unexpected response: {other:?}"),
         }
     }
@@ -802,12 +968,30 @@ mod tests {
     }
 
     fn daemon_with(snapshot: AppStateSnapshot, outcome: ActionOutcome) -> ServiceDaemon {
+        daemon_with_backend(Box::new(FakeBackend { snapshot, outcome }))
+    }
+
+    fn daemon_with_backend(backend: Box<dyn DesktopBackend>) -> ServiceDaemon {
         ServiceDaemon {
-            backend: Box::new(FakeBackend { snapshot, outcome }),
+            backend,
             sessions: SessionStore::new(),
-            snapshots: SnapshotManager::new(8),
-            overlay: OverlayController::new_for_tests(),
+            snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
+            overlay: tokio::sync::Mutex::new(OverlayController::new_for_tests()),
+            desktop_lane: tokio::sync::Mutex::new(()),
             socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
+        }
+    }
+
+    impl BlockingBackend {
+        fn new(snapshot: AppStateSnapshot) -> Self {
+            Self {
+                snapshot,
+                outcome: success_outcome(),
+                execute_calls: Arc::new(AtomicUsize::new(0)),
+                first_execute_started: Arc::new(Notify::new()),
+                second_execute_started: Arc::new(Notify::new()),
+                release_first_execute: Arc::new(Notify::new()),
+            }
         }
     }
 

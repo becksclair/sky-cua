@@ -153,6 +153,15 @@ impl LinuxDesktopBackend {
             ));
         }
 
+        if !linux_windowing::focus_verification_available(target_window) {
+            return Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                format!(
+                    "matched {} window {}, but targeted keyboard input requires focused-window verification that this backend does not expose",
+                    target_window.backend, target_window.window_id
+                ),
+            ));
+        }
         linux_windowing::activate_window(target_window).await?;
         let _ = linux_windowing::verify_window_focused(environment, target_window).await?;
         Ok(Some(target_window.clone()))
@@ -371,11 +380,22 @@ impl DesktopBackend for LinuxDesktopBackend {
         if let Some(window) = linux_windowing::focused_window_override() {
             return Ok(Some(window.into()));
         }
-        Ok(self
-            .list_windows()
-            .await?
-            .into_iter()
-            .find(|window| window.focused))
+        let environment = self.probe_environment().await?;
+        require_supported_environment(&environment)?;
+        let windows = linux_windowing::discover_windows(&environment).await?;
+        if let Some(window) = windows.iter().find(|window| window.focused) {
+            return Ok(Some(window.clone().into()));
+        }
+        if windows
+            .iter()
+            .any(|window| !linux_windowing::focus_verification_available(window))
+        {
+            return Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                "focused_window is unavailable for KWin because this backend does not expose reliable active-window readback",
+            ));
+        }
+        Ok(None)
     }
 
     async fn activate_window(
@@ -393,6 +413,19 @@ impl DesktopBackend for LinuxDesktopBackend {
         let windows = linux_windowing::discover_activation_windows(&environment).await?;
         let window = linux_windowing::resolve_window_target(&windows, &target.into())?;
         linux_windowing::activate_window(window).await?;
+        if !linux_windowing::focus_verification_available(window) {
+            return Ok(success_with_diagnostics(
+                format!("Activated {} window {}.", window.backend, window.window_id),
+                vec![DiagnosticEntry {
+                    code: "WindowActivationSent".to_string(),
+                    message: format!(
+                        "Activation was sent for {} window {}; this backend does not expose reliable focused-window verification.",
+                        window.backend, window.window_id
+                    ),
+                    details: None,
+                }],
+            ));
+        }
         let focused = linux_windowing::verify_window_focused(&environment, window).await?;
         Ok(success_with_diagnostics(
             format!("Activated {} window {}.", window.backend, window.window_id),
@@ -993,12 +1026,11 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
         self.portal.press_key_sequence(keys).await
     }
 
-    async fn portal_press_keycode_chord(
+    async fn portal_press_key_sequence_portal_only(
         &self,
-        modifiers: &[i32],
-        keycode: i32,
+        keys: &[String],
     ) -> Result<(), BackendError> {
-        self.portal.press_keycode_chord(modifiers, keycode).await
+        self.portal.press_key_sequence_portal_only(keys).await
     }
 
     async fn portal_take_lifecycle_diagnostics(&self) -> Vec<DiagnosticEntry> {

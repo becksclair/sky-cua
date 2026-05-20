@@ -268,6 +268,10 @@ pub async fn activate_window(window: &LinuxWindowInfo) -> Result<(), BackendErro
     }
 }
 
+pub fn focus_verification_available(window: &LinuxWindowInfo) -> bool {
+    window.backend != KWIN_BACKEND
+}
+
 fn ensure_backend_can_exact_focus(window: &LinuxWindowInfo) -> Result<(), BackendError> {
     if backend_can_exact_focus(&window.backend) {
         return Ok(());
@@ -377,15 +381,15 @@ fn skipped_probe(backend: BackendKind) -> BackendProbe {
 
 fn probe_kwin(environment: &EnvironmentInfo) -> BackendProbe {
     let can_list = kwin::kwin_window_query_available(environment);
-    let can_focus = kwin::kwin_exact_activation_available(environment);
+    let can_activate = kwin::kwin_exact_activation_available(environment);
     BackendProbe {
         id: KWIN_BACKEND,
         ok: can_list,
         can_list_windows: can_list,
-        can_focus_apps: can_focus,
-        can_focus_windows: can_focus,
-        detail: if can_focus {
-            "KWin window query and exact activation appear available".to_string()
+        can_focus_apps: can_activate,
+        can_focus_windows: false,
+        detail: if can_activate {
+            "KWin window query and exact activation appear available; focused-window verification is unavailable".to_string()
         } else if can_list {
             "KWin window query is available, but exact activation requires qdbus6 or qdbus"
                 .to_string()
@@ -765,6 +769,7 @@ mod tests {
         let kwin_probe = probe_backend(BackendKind::Kwin, &environment);
         assert_eq!(kwin_probe.id, KWIN_BACKEND);
         assert!(!kwin_probe.detail.contains("Skipped"));
+        assert!(!kwin_probe.can_focus_windows);
     }
 
     #[test]

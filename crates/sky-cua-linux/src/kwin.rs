@@ -8,6 +8,8 @@ use std::process::Command;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{AppInfo, CoordinateSpace, EnvironmentInfo, RectF, SessionKind};
 
+const ACTIVATION_SCRIPT_PLUGIN: &str = "sky-cua-activate-window";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct KWinWindowInfo {
     pub window_id: String,
@@ -88,6 +90,12 @@ pub fn query_active_window(
 
 pub fn activate_window(window_id: &str) -> Result<(), BackendError> {
     let uuid = kwin_uuid_from_window_id(window_id)?;
+    if query_window_by_uuid(&uuid)?.is_none() {
+        return Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            format!("KWin activation target {uuid} is no longer present"),
+        ));
+    }
     let Some(qdbus) = qdbus_command() else {
         return Err(BackendError::new(
             BackendErrorCode::ActionUnsupportedForEnvironment,
@@ -97,6 +105,7 @@ pub fn activate_window(window_id: &str) -> Result<(), BackendError> {
 
     let script_path = write_activation_script(&uuid)?;
     let script_path_string = script_path.display().to_string();
+    let _ = unload_activation_script(&qdbus);
     let load = run_qdbus(
         &qdbus,
         &[
@@ -104,7 +113,7 @@ pub fn activate_window(window_id: &str) -> Result<(), BackendError> {
             "/Scripting",
             "org.kde.kwin.Scripting.loadScript",
             &script_path_string,
-            "sky-cua-activate-window",
+            ACTIVATION_SCRIPT_PLUGIN,
         ],
     );
     let script_id = match load.and_then(|output| {
@@ -129,17 +138,32 @@ pub fn activate_window(window_id: &str) -> Result<(), BackendError> {
         &qdbus,
         &["org.kde.KWin", &script_object, "org.kde.kwin.Script.run"],
     );
-    let _ = run_qdbus(
-        &qdbus,
+    let _ = unload_activation_script(&qdbus);
+    let _ = fs::remove_file(&script_path);
+    run_result.and_then(|output| verify_activation_dispatched(&uuid, &output))
+}
+
+fn verify_activation_dispatched(uuid: &str, output: &str) -> Result<(), BackendError> {
+    let no_match = format!("sky-cua: no KWin window matched {uuid}");
+    if output.contains(&no_match) {
+        return Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            format!("KWin activation script did not find window {uuid}"),
+        ));
+    }
+    Ok(())
+}
+
+fn unload_activation_script(qdbus: &str) -> Result<String, BackendError> {
+    run_qdbus(
+        qdbus,
         &[
             "org.kde.KWin",
             "/Scripting",
             "org.kde.kwin.Scripting.unloadScript",
-            &script_path_string,
+            ACTIVATION_SCRIPT_PLUGIN,
         ],
-    );
-    let _ = fs::remove_file(&script_path);
-    run_result.map(|_| ())
+    )
 }
 
 fn kwin_uuid_from_window_id(window_id: &str) -> Result<String, BackendError> {
@@ -206,6 +230,7 @@ for (let i = 0; i < windows.length; i++) {{
 }}
 if (matched === null) {{
     print("sky-cua: no KWin window matched " + target);
+    throw new Error("sky-cua: no KWin window matched " + target);
 }} else {{
     if (typeof workspace.activateWindow === "function") {{
         workspace.activateWindow(matched);
@@ -226,6 +251,11 @@ fn qdbus_command() -> Option<String> {
         .into_iter()
         .find(|binary| command_exists(binary))
         .map(str::to_string)
+}
+
+#[cfg(test)]
+fn activation_script_plugin_name() -> &'static str {
+    ACTIVATION_SCRIPT_PLUGIN
 }
 
 fn run_qdbus(binary: &str, args: &[&str]) -> Result<String, BackendError> {
@@ -674,7 +704,29 @@ fn normalize_match_key(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_window_ids, parse_window_info};
+    use super::{
+        activation_script_plugin_name, extract_window_ids, parse_window_info,
+        verify_activation_dispatched,
+    };
+
+    #[test]
+    fn activation_script_unload_uses_plugin_name_contract() {
+        assert_eq!(activation_script_plugin_name(), "sky-cua-activate-window");
+    }
+
+    #[test]
+    fn activation_dispatch_rejects_script_no_match_output() {
+        let uuid = "503e2ed7-832f-4e52-b74a-8edcfac72bc8";
+
+        assert!(verify_activation_dispatched(uuid, "").is_ok());
+        assert!(
+            verify_activation_dispatched(
+                uuid,
+                "sky-cua: no KWin window matched 503e2ed7-832f-4e52-b74a-8edcfac72bc8"
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn parses_kwin_window_info() {

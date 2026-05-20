@@ -16,6 +16,12 @@ pub fn build_doctor_report(
     let window_probes = windowing::probe_backends(&environment);
     let can_list_windows = window_probes.iter().any(|probe| probe.can_list_windows);
     let can_target_windows = window_probes.iter().any(|probe| probe.can_focus_windows);
+    let kwin_can_list = window_probes
+        .iter()
+        .any(|probe| probe.id == "kwin" && probe.ok);
+    let kwin_can_activate = window_probes
+        .iter()
+        .any(|probe| probe.id == "kwin" && probe.can_focus_apps);
     let accessibility = accessibility_report();
     let input = input_report(environment.input_backend.clone());
     let portal = portal_report(&environment);
@@ -72,6 +78,12 @@ pub fn build_doctor_report(
         "Computer Use desktop integrations are ready.".to_string()
     } else if !can_build_accessibility_tree {
         "Run setup_accessibility, then restart target applications.".to_string()
+    } else if kwin_can_list && !can_target_windows {
+        if kwin_can_activate {
+            "KWin/Plasma can list windows and send best-effort activate_window, but focused_window and verified targeted keyboard input are not supported on this backend today.".to_string()
+        } else {
+            "KWin/Plasma can list windows, but best-effort activate_window requires qdbus6 or qdbus; focused_window and verified targeted keyboard input are not supported on this backend today.".to_string()
+        }
     } else if !can_target_windows {
         "Run setup_window_targeting on GNOME or install the session-specific window backend tools."
             .to_string()
@@ -82,8 +94,10 @@ pub fn build_doctor_report(
     let note = if can_list_windows {
         if window_probes.iter().any(|p| p.id == "cosmic" && p.ok) {
             "A COSMIC Wayland window backend is available for list_windows, focused_window, and targeted input verification.".to_string()
-        } else if window_probes.iter().any(|p| p.id == "kwin" && p.ok) {
-            "A KWin/Plasma window backend is available for list_windows, focused_window, and targeted input verification.".to_string()
+        } else if kwin_can_list && kwin_can_activate {
+            "A KWin/Plasma window backend is available for list_windows and best-effort activate_window; focused_window and targeted input verification are unavailable on this backend.".to_string()
+        } else if kwin_can_list {
+            "A KWin/Plasma window backend is available for list_windows; best-effort activate_window requires qdbus6 or qdbus, and focused_window plus targeted input verification are unavailable on this backend.".to_string()
         } else if window_probes.iter().any(|p| p.id == "hyprland" && p.ok) {
             "A Hyprland window backend is available for list_windows, focused_window, and targeted input verification.".to_string()
         } else {

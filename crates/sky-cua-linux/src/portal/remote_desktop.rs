@@ -10,10 +10,9 @@ use std::time::{Duration, Instant};
 
 use ashpd::desktop::PersistMode;
 use ashpd::desktop::remote_desktop::{
-    Axis, ConnectToEISOptions, DeviceType, KeyState, NotifyKeyboardKeycodeOptions,
-    NotifyKeyboardKeysymOptions, NotifyPointerAxisDiscreteOptions, NotifyPointerAxisOptions,
-    NotifyPointerButtonOptions, NotifyPointerMotionAbsoluteOptions, RemoteDesktop,
-    SelectDevicesOptions,
+    Axis, ConnectToEISOptions, DeviceType, KeyState, NotifyKeyboardKeysymOptions,
+    NotifyPointerAxisDiscreteOptions, NotifyPointerAxisOptions, NotifyPointerButtonOptions,
+    NotifyPointerMotionAbsoluteOptions, RemoteDesktop, SelectDevicesOptions,
 };
 use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
 use chrono::Utc;
@@ -559,12 +558,7 @@ impl EisWorker {
             strokes.push(resolve_eis_keystroke(&device, keysym)?);
         }
         for stroke in &strokes {
-            self.send_eis_key_state(&device, *stroke, ei::keyboard::KeyState::Press)?;
-        }
-        self.input.flush()?;
-        thread::sleep(EIS_BUTTON_HOLD_DELAY);
-        for stroke in &strokes {
-            self.send_eis_key_state(&device, *stroke, ei::keyboard::KeyState::Released)?;
+            self.send_eis_key_stroke(&device, *stroke)?;
         }
         self.input.flush()?;
         thread::sleep(EIS_FINAL_FLUSH_DELAY);
@@ -1130,6 +1124,21 @@ impl RemoteDesktopSessionManager {
     }
 
     pub async fn press_key_sequence(&self, keys: &[String]) -> Result<(), BackendError> {
+        self.press_key_sequence_with_fallbacks(keys, true).await
+    }
+
+    pub async fn press_key_sequence_portal_only(
+        &self,
+        keys: &[String],
+    ) -> Result<(), BackendError> {
+        self.press_key_sequence_with_fallbacks(keys, false).await
+    }
+
+    async fn press_key_sequence_with_fallbacks(
+        &self,
+        keys: &[String],
+        allow_native_fallbacks: bool,
+    ) -> Result<(), BackendError> {
         if keys.is_empty() {
             return Err(BackendError::new(
                 BackendErrorCode::InvalidRequest,
@@ -1167,8 +1176,9 @@ impl RemoteDesktopSessionManager {
                 })
                 .await;
 
-                // Prefer X11/XTest or LinuxVirtualInput over per-keysym D-Bus round-trips.
-                if input_xtest::xtest_is_available() {
+                // Prefer native fallbacks for ordinary key presses, but KDE clipboard paste must
+                // stay inside the portal path so Wayland apps receive the paste chord.
+                if allow_native_fallbacks && input_xtest::xtest_is_available() {
                     match input_xtest::press_key_sequence(keys) {
                         Ok(()) => {
                             self.push_lifecycle_event(PortalLifecycleEvent {
@@ -1184,7 +1194,7 @@ impl RemoteDesktopSessionManager {
                         }
                     }
                 }
-                if virtual_input_keyboard_available() {
+                if allow_native_fallbacks && virtual_input_keyboard_available() {
                     match LinuxVirtualInput::new() {
                         Ok(vi) => match vi.press_key_sequence(keys) {
                             Ok(()) => {
@@ -1225,32 +1235,22 @@ impl RemoteDesktopSessionManager {
             return self.send_keysym_raw(resolved[0]).await;
         }
 
+        let mut pressed_modifiers = Vec::with_capacity(resolved.len() - 1);
         for keysym in &resolved[..resolved.len() - 1] {
-            self.send_keysym_state(*keysym, KeyState::Pressed).await?;
-        }
-        self.send_keysym_raw(*resolved.last().expect("chord has a last key"))
-            .await?;
-        for keysym in resolved[..resolved.len() - 1].iter().rev() {
-            self.send_keysym_state(*keysym, KeyState::Released).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn press_keycode_chord(
-        &self,
-        modifiers: &[i32],
-        keycode: i32,
-    ) -> Result<(), BackendError> {
-        let mut pressed_modifiers = Vec::with_capacity(modifiers.len());
-        for modifier in modifiers {
-            self.send_keycode_state(*modifier, KeyState::Pressed)
-                .await?;
-            pressed_modifiers.push(*modifier);
+            if let Err(error) = self.send_keysym_state(*keysym, KeyState::Pressed).await {
+                for pressed in pressed_modifiers.iter().rev() {
+                    let _ = self.send_keysym_state(*pressed, KeyState::Released).await;
+                }
+                return Err(error);
+            }
+            pressed_modifiers.push(*keysym);
         }
 
-        let mut result = self.send_keycode_raw(keycode).await;
-        for modifier in pressed_modifiers.iter().rev() {
-            if let Err(error) = self.send_keycode_state(*modifier, KeyState::Released).await
+        let mut result = self
+            .send_keysym_raw(*resolved.last().expect("chord has a last key"))
+            .await;
+        for keysym in pressed_modifiers.iter().rev() {
+            if let Err(error) = self.send_keysym_state(*keysym, KeyState::Released).await
                 && result.is_ok()
             {
                 result = Err(error);
@@ -1332,36 +1332,6 @@ impl RemoteDesktopSessionManager {
     async fn send_keysym_raw(&self, keysym: i32) -> Result<(), BackendError> {
         self.send_keysym_state(keysym, KeyState::Pressed).await?;
         self.send_keysym_state(keysym, KeyState::Released).await
-    }
-
-    async fn send_keycode_raw(&self, keycode: i32) -> Result<(), BackendError> {
-        self.send_keycode_state(keycode, KeyState::Pressed).await?;
-        tokio::time::sleep(Duration::from_millis(35)).await;
-        self.send_keycode_state(keycode, KeyState::Released).await
-    }
-
-    async fn send_keycode_state(&self, keycode: i32, state: KeyState) -> Result<(), BackendError> {
-        self.ensure_session_started().await?;
-        let manager_state = self.inner.read().await;
-        let session = manager_state
-            .session
-            .as_ref()
-            .expect("portal session should exist");
-        session
-            .remote_desktop
-            .notify_keyboard_keycode(
-                &session.session,
-                keycode,
-                state,
-                NotifyKeyboardKeycodeOptions::default(),
-            )
-            .await
-            .map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::ActionUnsupportedForEnvironment,
-                    format!("failed to inject keyboard keycode through the portal: {error}"),
-                )
-            })
     }
 
     async fn send_keysym_state(&self, keysym: i32, state: KeyState) -> Result<(), BackendError> {

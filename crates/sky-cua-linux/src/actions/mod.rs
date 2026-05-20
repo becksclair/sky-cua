@@ -890,9 +890,6 @@ fn scroll_delta_y(arguments: &serde_json::Value) -> Result<Option<f64>, BackendE
     Ok(Some(delta_y))
 }
 
-const EVDEV_KEY_LEFTCTRL: i32 = 29;
-const EVDEV_KEY_V: i32 = 47;
-const KDE_CLIPBOARD_RESTORE_DELAY_MS: u64 = 500;
 const WL_COPY_STARTUP_GRACE_MS: u64 = 50;
 const WL_COPY_PASTE_ONCE_TIMEOUT_MS: u64 = 2_000;
 const PLAIN_TEXT_CLIPBOARD_MIME_TYPES: &[&str] = &["text/plain", "utf8_string", "string", "text"];
@@ -948,29 +945,29 @@ where
     let previous = kde_clipboard_contents()
         .await
         .map_err(KdeClipboardPasteError::before_text_input)?;
-    wl_copy_sensitive_paste_once(text)
+    let mut paste_once = wl_copy_sensitive_paste_once(text)
         .await
         .map_err(KdeClipboardPasteError::before_text_input)?;
 
+    let paste_chord = ["Ctrl".to_string(), "v".to_string()];
     let paste_result = runtime
-        .portal_press_keycode_chord(&[EVDEV_KEY_LEFTCTRL], EVDEV_KEY_V)
+        .portal_press_key_sequence_portal_only(&paste_chord)
         .await
         .map_err(|error| error.message);
 
-    tokio::time::sleep(Duration::from_millis(KDE_CLIPBOARD_RESTORE_DELAY_MS)).await;
-    let restore_result = kde_set_clipboard_contents(&previous).await;
-
-    match (paste_result, restore_result) {
-        (Ok(()), Ok(())) => Ok("Typed text through the KDE clipboard portal fallback.".to_string()),
-        (Err(error), Ok(())) => Err(KdeClipboardPasteError::after_portal_input(error)),
-        (Ok(()), Err(restore_error)) => Ok(format!(
-            "Typed text through the KDE clipboard portal fallback. Warning: previous KDE clipboard contents could not be restored: {restore_error}"
-        )),
-        (Err(error), Err(restore_error)) => {
-            Err(KdeClipboardPasteError::after_portal_input(format!(
+    match paste_result.and(paste_once.wait_for_consumption().await.map(|_| ())) {
+        Ok(()) => match kde_set_clipboard_contents(&previous).await {
+            Ok(()) => Ok("Typed text through the KDE clipboard portal fallback.".to_string()),
+            Err(restore_error) => Ok(format!(
+                "Typed text through the KDE clipboard portal fallback. Warning: previous KDE clipboard contents could not be restored: {restore_error}"
+            )),
+        },
+        Err(error) => match kde_set_clipboard_contents(&previous).await {
+            Ok(()) => Err(KdeClipboardPasteError::after_portal_input(error)),
+            Err(restore_error) => Err(KdeClipboardPasteError::after_portal_input(format!(
                 "{error}; previous KDE clipboard contents could not be restored: {restore_error}"
-            )))
-        }
+            ))),
+        },
     }
 }
 
@@ -1032,6 +1029,10 @@ async fn wl_paste_mime_types() -> Result<Vec<String>, String> {
         .map_err(|error| format!("failed to run wl-paste --list-types: {error}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if wl_paste_reports_empty_clipboard(&stderr) || wl_paste_reports_empty_clipboard(&stdout) {
+            return Ok(Vec::new());
+        }
         return Err(if stderr.is_empty() {
             format!("wl-paste --list-types exited with {}", output.status)
         } else {
@@ -1049,7 +1050,34 @@ async fn wl_paste_mime_types() -> Result<Vec<String>, String> {
         .collect())
 }
 
-async fn wl_copy_sensitive_paste_once(text: &str) -> Result<(), String> {
+fn wl_paste_reports_empty_clipboard(output: &str) -> bool {
+    output.trim().eq_ignore_ascii_case("Nothing is copied")
+}
+
+struct WlCopyPasteOnce {
+    child: tokio::process::Child,
+}
+
+impl WlCopyPasteOnce {
+    async fn wait_for_consumption(&mut self) -> Result<(), String> {
+        match tokio::time::timeout(
+            Duration::from_millis(WL_COPY_PASTE_ONCE_TIMEOUT_MS),
+            self.child.wait(),
+        )
+        .await
+        {
+            Ok(Ok(status)) if status.success() => Ok(()),
+            Ok(Ok(status)) => Err(format!("wl-copy exited with {status}")),
+            Ok(Err(error)) => Err(format!("failed to wait for wl-copy paste request: {error}")),
+            Err(_) => {
+                let _ = self.child.kill().await;
+                Err("timed out waiting for wl-copy paste request".to_string())
+            }
+        }
+    }
+}
+
+async fn wl_copy_sensitive_paste_once(text: &str) -> Result<WlCopyPasteOnce, String> {
     if !command_exists("wl-copy") {
         return Err("wl-copy is required for KDE clipboard paste fallback".to_string());
     }
@@ -1087,19 +1115,7 @@ async fn wl_copy_sensitive_paste_once(text: &str) -> Result<(), String> {
         ));
     }
 
-    tokio::spawn(async move {
-        if tokio::time::timeout(
-            Duration::from_millis(WL_COPY_PASTE_ONCE_TIMEOUT_MS),
-            child.wait(),
-        )
-        .await
-        .is_err()
-        {
-            let _ = child.kill().await;
-        }
-    });
-
-    Ok(())
+    Ok(WlCopyPasteOnce { child })
 }
 
 async fn kde_klipper_proxy(connection: &zbus::Connection) -> Result<Proxy<'_>, String> {
@@ -1118,7 +1134,7 @@ mod tests {
     use super::{
         KdeClipboardPasteError, LinuxActionExecutor, action_name_matches,
         clipboard_mime_types_are_plain_text_only, parse_key_sequence,
-        should_prefer_kde_clipboard_text_backend,
+        should_prefer_kde_clipboard_text_backend, wl_paste_reports_empty_clipboard,
     };
     use crate::actions::runtime::{
         LinuxActionRuntime, SemanticActionInvocation, SemanticAtspiAction, SemanticSetValueResult,
@@ -1297,12 +1313,11 @@ mod tests {
             Ok(())
         }
 
-        async fn portal_press_keycode_chord(
+        async fn portal_press_key_sequence_portal_only(
             &self,
-            _modifiers: &[i32],
-            keycode: i32,
+            keys: &[String],
         ) -> Result<(), BackendError> {
-            self.push_event(format!("portal_keycode:{keycode}"));
+            self.push_event(format!("portal_key_portal_only:{}", keys.join("+")));
             Ok(())
         }
 
@@ -1769,6 +1784,13 @@ mod tests {
         assert!(!clipboard_mime_types_are_plain_text_only(&[
             "image/png".to_string()
         ]));
+    }
+
+    #[test]
+    fn wl_paste_empty_clipboard_message_is_safe_for_kde_fallback() {
+        assert!(wl_paste_reports_empty_clipboard("Nothing is copied"));
+        assert!(wl_paste_reports_empty_clipboard(" nothing is copied \n"));
+        assert!(!wl_paste_reports_empty_clipboard("compositor unavailable"));
     }
 
     #[test]

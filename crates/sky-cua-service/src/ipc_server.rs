@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -19,6 +18,39 @@ use crate::daemon::ServiceDaemon;
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[derive(Debug, Default)]
+struct ConnectionTracker {
+    active_connections: tokio::sync::Mutex<usize>,
+}
+
+impl ConnectionTracker {
+    async fn register(&self) {
+        let mut active_connections = self.active_connections.lock().await;
+        *active_connections += 1;
+    }
+
+    async fn unregister_and_cleanup_if_idle(&self, daemon: &ServiceDaemon) {
+        self.unregister_and_cleanup_with(|| daemon.hide_agent_cursor_after_last_client())
+            .await;
+    }
+
+    async fn unregister_and_cleanup_with<F, Fut>(&self, cleanup: F)
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let mut active_connections = self.active_connections.lock().await;
+        *active_connections = active_connections.saturating_sub(1);
+        if *active_connections == 0 {
+            cleanup().await;
+        }
+    }
+
+    async fn is_idle(&self) -> bool {
+        *self.active_connections.lock().await == 0
+    }
+}
+
 #[cfg(unix)]
 pub async fn run_service() -> Result<()> {
     let socket_path = service_socket_path();
@@ -34,10 +66,8 @@ pub async fn run_service() -> Result<()> {
     }
 
     let listener = UnixListener::bind(&socket_path)?;
-    let daemon = Arc::new(tokio::sync::Mutex::new(
-        ServiceDaemon::new(socket_path.clone()).await?,
-    ));
-    let active_connections = Arc::new(AtomicUsize::new(0));
+    let daemon = Arc::new(ServiceDaemon::new(socket_path.clone()).await?);
+    let connections = Arc::new(ConnectionTracker::default());
     info!("sky-cua-service listening on {}", socket_path.display());
 
     loop {
@@ -46,15 +76,13 @@ pub async fn run_service() -> Result<()> {
                 match accept_result {
                     Ok((stream, _)) => {
                         let daemon = daemon.clone();
-                        let active_connections = active_connections.clone();
-                        active_connections.fetch_add(1, Ordering::SeqCst);
+                        connections.register().await;
+                        let connections = connections.clone();
                         tokio::spawn(async move {
                             if let Err(error) = handle_connection(stream, daemon.clone()).await {
                                 warn!("sky-cua IPC connection error: {error}");
                             }
-                            if active_connections.fetch_sub(1, Ordering::SeqCst) == 1 {
-                                hide_agent_cursor_if_idle(daemon, active_connections).await;
-                            }
+                            connections.unregister_and_cleanup_if_idle(&daemon).await;
                         });
                     }
                     Err(error) => {
@@ -63,7 +91,7 @@ pub async fn run_service() -> Result<()> {
                 }
             }
             _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                if service_idle_timed_out(&daemon, &active_connections).await {
+                if service_idle_timed_out(&daemon, &connections).await {
                     info!("sky-cua-service idle timeout reached; exiting");
                     break;
                 }
@@ -99,10 +127,8 @@ pub async fn run_service() -> Result<()> {
     let bind_addr = service_tcp_addr();
     let listener = TcpListener::bind(&bind_addr).await?;
     let local_addr = listener.local_addr()?.to_string();
-    let daemon = Arc::new(tokio::sync::Mutex::new(
-        ServiceDaemon::new(local_addr.clone().into()).await?,
-    ));
-    let active_connections = Arc::new(AtomicUsize::new(0));
+    let daemon = Arc::new(ServiceDaemon::new(local_addr.clone().into()).await?);
+    let connections = Arc::new(ConnectionTracker::default());
     info!("sky-cua-service listening on {}", local_addr);
 
     loop {
@@ -111,15 +137,13 @@ pub async fn run_service() -> Result<()> {
                 match accept_result {
                     Ok((stream, _)) => {
                         let daemon = daemon.clone();
-                        let active_connections = active_connections.clone();
-                        active_connections.fetch_add(1, Ordering::SeqCst);
+                        connections.register().await;
+                        let connections = connections.clone();
                         tokio::spawn(async move {
                             if let Err(error) = handle_connection(stream, daemon.clone()).await {
                                 warn!("sky-cua IPC connection error: {error}");
                             }
-                            if active_connections.fetch_sub(1, Ordering::SeqCst) == 1 {
-                                hide_agent_cursor_if_idle(daemon, active_connections).await;
-                            }
+                            connections.unregister_and_cleanup_if_idle(&daemon).await;
                         });
                     }
                     Err(error) => {
@@ -128,7 +152,7 @@ pub async fn run_service() -> Result<()> {
                 }
             }
             _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                if service_idle_timed_out(&daemon, &active_connections).await {
+                if service_idle_timed_out(&daemon, &connections).await {
                     info!("sky-cua-service idle timeout reached; exiting");
                     break;
                 }
@@ -139,26 +163,8 @@ pub async fn run_service() -> Result<()> {
     Ok(())
 }
 
-async fn hide_agent_cursor_if_idle(
-    daemon: Arc<tokio::sync::Mutex<ServiceDaemon>>,
-    active_connections: Arc<AtomicUsize>,
-) {
-    if active_connections.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    let mut daemon = daemon.lock().await;
-    if active_connections.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    daemon.hide_agent_cursor_after_last_client();
-}
-
-async fn service_idle_timed_out(
-    daemon: &tokio::sync::Mutex<ServiceDaemon>,
-    active_connections: &AtomicUsize,
-) -> bool {
-    active_connections.load(Ordering::SeqCst) == 0
-        && daemon.lock().await.idle_for().await >= IDLE_TIMEOUT
+async fn service_idle_timed_out(daemon: &ServiceDaemon, connections: &ConnectionTracker) -> bool {
+    connections.is_idle().await && daemon.idle_for().await >= IDLE_TIMEOUT
 }
 
 #[cfg(test)]
@@ -175,22 +181,16 @@ fn set_owner_only_permissions(path: &std::path::Path) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-async fn handle_connection(
-    stream: UnixStream,
-    daemon: Arc<tokio::sync::Mutex<ServiceDaemon>>,
-) -> Result<()> {
+async fn handle_connection(stream: UnixStream, daemon: Arc<ServiceDaemon>) -> Result<()> {
     handle_stream(stream, daemon).await
 }
 
 #[cfg(windows)]
-async fn handle_connection(
-    stream: TcpStream,
-    daemon: Arc<tokio::sync::Mutex<ServiceDaemon>>,
-) -> Result<()> {
+async fn handle_connection(stream: TcpStream, daemon: Arc<ServiceDaemon>) -> Result<()> {
     handle_stream(stream, daemon).await
 }
 
-async fn handle_stream<S>(stream: S, daemon: Arc<tokio::sync::Mutex<ServiceDaemon>>) -> Result<()>
+async fn handle_stream<S>(stream: S, daemon: Arc<ServiceDaemon>) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -205,7 +205,7 @@ where
         let request: ServiceRequest = serde_json::from_str(line.trim_end()).map_err(|error| {
             anyhow::anyhow!("failed to parse sky-cua IPC request as JSON: {error}")
         })?;
-        let response = daemon.lock().await.handle(request).await;
+        let response = daemon.handle(request).await;
         let encoded = serde_json::to_vec(&response)?;
         writer.write_all(&encoded).await?;
         writer.write_all(b"\n").await?;
@@ -224,11 +224,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cursor_hide_rechecks_active_connections_after_lock() {
-        let daemon = Arc::new(tokio::sync::Mutex::new(
-            ServiceDaemon::new_for_tests().expect("daemon"),
-        ));
-        let active_connections = Arc::new(AtomicUsize::new(0));
+    async fn cursor_cleanup_keeps_cursor_visible_while_another_connection_is_active() {
+        let daemon = ServiceDaemon::new_for_tests().expect("daemon");
+        let connections = ConnectionTracker::default();
         let state = sky_cua_platform::model::AgentCursorState {
             visible: true,
             sequence: 0,
@@ -244,31 +242,70 @@ mod tests {
             updated_at_ms: 0,
         };
         let _ = daemon
-            .lock()
-            .await
             .handle(ServiceRequest::SetAgentCursor { state })
             .await;
-        let lock = daemon.lock().await;
+        connections.register().await;
+        connections.register().await;
+        connections.unregister_and_cleanup_if_idle(&daemon).await;
 
-        let hide_task = tokio::spawn(hide_agent_cursor_if_idle(
-            daemon.clone(),
-            active_connections.clone(),
-        ));
-        active_connections.store(1, Ordering::SeqCst);
-        drop(lock);
-        hide_task.await.expect("hide task");
-
-        match daemon
-            .lock()
-            .await
-            .handle(ServiceRequest::AgentCursorStatus)
-            .await
-        {
+        match daemon.handle(ServiceRequest::AgentCursorStatus).await {
             sky_cua_platform::model::ServiceResponse::AgentCursorStatus {
                 state: Some(state),
                 ..
             } => assert!(state.visible),
             other => panic!("unexpected response: {other:?}"),
         }
+
+        connections.unregister_and_cleanup_if_idle(&daemon).await;
+        match daemon.handle(ServiceRequest::AgentCursorStatus).await {
+            sky_cua_platform::model::ServiceResponse::AgentCursorStatus {
+                state: Some(state),
+                ..
+            } => assert!(!state.visible),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn connection_registration_waits_for_final_cleanup() {
+        let connections = Arc::new(ConnectionTracker::default());
+        connections.register().await;
+        let cleanup_started = Arc::new(tokio::sync::Notify::new());
+        let release_cleanup = Arc::new(tokio::sync::Notify::new());
+
+        let cleanup_connections = connections.clone();
+        let cleanup_started_signal = cleanup_started.clone();
+        let release_cleanup_signal = release_cleanup.clone();
+        let cleanup_task = tokio::spawn(async move {
+            cleanup_connections
+                .unregister_and_cleanup_with(|| async {
+                    cleanup_started_signal.notify_one();
+                    release_cleanup_signal.notified().await;
+                })
+                .await;
+        });
+        cleanup_started.notified().await;
+
+        let register_connections = connections.clone();
+        let register_completed = Arc::new(tokio::sync::Notify::new());
+        let register_completed_signal = register_completed.clone();
+        let register_task = tokio::spawn(async move {
+            register_connections.register().await;
+            register_completed_signal.notify_one();
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), register_completed.notified())
+                .await
+                .is_err(),
+            "register must wait while final cleanup holds the connection lock"
+        );
+
+        release_cleanup.notify_one();
+        cleanup_task.await.expect("cleanup task");
+        tokio::time::timeout(Duration::from_secs(1), register_completed.notified())
+            .await
+            .expect("register after cleanup");
+        register_task.await.expect("register task");
+        assert!(!connections.is_idle().await);
     }
 }

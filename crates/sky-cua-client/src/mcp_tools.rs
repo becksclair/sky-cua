@@ -702,7 +702,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
                 "element_index": { "type": "integer", "minimum": 0 },
                 "direction": {
                     "type": "string",
-                    "enum": ["up", "down", "left", "right"]
+                    "enum": ["up", "down"]
                 },
                 "pages": { "type": "integer", "minimum": 1 }
             }),

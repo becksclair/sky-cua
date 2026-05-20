@@ -44,6 +44,7 @@ class PointerSmokeWindow(Gtk.Window):
             "scroll_events": 0,
             "drag_completed": False,
             "entry_text": "",
+            "entry_focused": False,
             "submitted_text": "",
             "button_press_seen": False,
             "button_release_seen": False,
@@ -78,6 +79,8 @@ class PointerSmokeWindow(Gtk.Window):
 
         self.text_entry = Gtk.Entry()
         self.text_entry.set_placeholder_text("type_text + press_key target")
+        self.text_entry.connect("focus-in-event", self.on_entry_focus_in)
+        self.text_entry.connect("focus-out-event", self.on_entry_focus_out)
         self.text_entry.connect("changed", self.on_entry_changed)
         self.text_entry.connect("activate", self.on_entry_activate)
 
@@ -286,8 +289,9 @@ class PointerSmokeWindow(Gtk.Window):
         self.state["ready"] = True
         self.state["last_event"] = f"layout:{width}x{height}"
         self.update_status()
+        # Keep the requested layout points; GTK allocation translation can report local widget
+        # coordinates after activation, which makes the harness click the wrong targets.
         self.write_state()
-        self.refresh_points_from_allocations()
         return False
 
     def center(self, x: int, y: int, width: int, height: int) -> dict[str, float]:
@@ -453,12 +457,13 @@ class PointerSmokeWindow(Gtk.Window):
         self.status.set_text(
             "clicked={clicked}  secondary_clicked={secondary_clicked}  "
             "drag_completed={drag_completed}  scroll_events={scroll_events}  "
-            "entry_text={entry_text!r}  submitted_text={submitted_text!r}\n"
+            "entry_focused={entry_focused}  entry_text={entry_text!r}  submitted_text={submitted_text!r}\n"
             "points={points}".format(
                 clicked=self.state["clicked"],
                 secondary_clicked=self.state["secondary_clicked"],
                 drag_completed=self.state["drag_completed"],
                 scroll_events=self.state["scroll_events"],
+                entry_focused=self.state["entry_focused"],
                 entry_text=self.state["entry_text"],
                 submitted_text=self.state["submitted_text"],
                 points=json.dumps(points, sort_keys=True),
@@ -536,6 +541,20 @@ class PointerSmokeWindow(Gtk.Window):
         self.state["last_event"] = "click-button"
         self.update_status()
         self.write_state(force=True)
+
+    def on_entry_focus_in(self, _entry: Gtk.Entry, _event: Gdk.EventFocus) -> bool:
+        self.state["entry_focused"] = True
+        self.state["last_event"] = "entry-focus-in"
+        self.update_status()
+        self.write_state(force=True)
+        return False
+
+    def on_entry_focus_out(self, _entry: Gtk.Entry, _event: Gdk.EventFocus) -> bool:
+        self.state["entry_focused"] = False
+        self.state["last_event"] = "entry-focus-out"
+        self.update_status()
+        self.write_state(force=True)
+        return False
 
     def on_entry_changed(self, entry: Gtk.Entry) -> None:
         self.state["entry_text"] = entry.get_text()
