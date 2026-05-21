@@ -30,8 +30,7 @@ pub struct X11WindowRegion {
 }
 
 pub fn x11_server_running() -> bool {
-    non_empty_env("DISPLAY")
-        .is_some()
+    non_empty_env("DISPLAY").is_some()
         && command_exists("xdpyinfo")
         && Command::new("xdpyinfo")
             .output()

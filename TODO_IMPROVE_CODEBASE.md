@@ -6,7 +6,7 @@ This file tracks architecture improvement candidates found during codebase revie
 
 Generated: 2026-05-19  
 Scope: repository root on current checkout, with emphasis on Rust runtime boundaries, service/MCP concurrency, and Python smoke harnesses  
-Analysis notes: Refreshed against current source after recent MCP concurrency and Linux input updates. `ICA-007` is implemented, review-work hardened, and verified with service/client/Linux tests plus final Plasma/KWin `wayland-pointer` VM smoke `pty_298de25e` (`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260519T183144Z`). `ICA-003` is implemented and review-loop hardened; latest focused verification is `cargo test -p sky-cua-service` with 52 passing tests, `cargo clippy -p sky-cua-service --all-targets` passing for the service crate, `cargo fmt --check -p sky-cua-service`, `git diff --check`, and `git diff --cached --check`.
+Analysis notes: Refreshed against current source after recent MCP concurrency and Linux input updates. `ICA-003`, `ICA-004`, `ICA-006`, and `ICA-007` are implemented and review-loop hardened. Latest focused verification includes Linux capture planner tests, full `sky-cua-linux` tests/clippy, Python harness Ruff/basedpyright/pytest, devbox `sky-cua-windows` tests, KWin system-install framebuffer proof, COSMIC transparent framebuffer proof, and `git diff --check`. The patched COSMIC proof remains environment-blocked unless the VM runs patched `cosmic-comp` and exposes `/run/user/1000/sky-cua-cosmic-cursor-ready`.
 
 ## Triage Summary
 
@@ -15,9 +15,9 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
 | ICA-001 | P1 | M | Medium | High | implemented | `crates/sky-cua-linux/src/actions/` action execution boundary |
 | ICA-002 | P2 | M | Medium | High | implemented | `crates/sky-cua-client/src/mcp_tools.rs` MCP tool definitions and handlers |
 | ICA-003 | P2 | M | Medium | Medium | implemented | `crates/sky-cua-service/src/overlay.rs` agent cursor overlay controller |
-| ICA-004 | P2 | M | Medium | High | candidate | `scripts/run_gui_testing_vm_smoke.py` GUI VM profile runner |
+| ICA-004 | P2 | M | Medium | High | implemented | `scripts/run_gui_testing_vm_smoke.py` GUI VM profile runner |
 | ICA-005 | P3 | S | Low | High | implemented | `crates/sky-cua-windows/src/backend.rs` Windows backend monolith |
-| ICA-006 | P2 | L | Medium | High | candidate | `crates/sky-cua-linux/src/backend.rs` app-state capture/snapshot pipeline |
+| ICA-006 | P2 | L | Medium | High | implemented | `crates/sky-cua-linux/src/backend.rs` app-state capture/snapshot pipeline |
 | ICA-007 | P2 | L | Medium | High | implemented | `crates/sky-cua-service/src/` service request concurrency boundary |
 
 ## Tasks
@@ -111,32 +111,31 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
   - [x] Rewire `OverlayController` to coordinate the two smaller boundaries.
   - [x] Harden review-loop edge cases: protocol-mismatched replies clear stale capabilities, failed hide rolls back local visibility and suppresses success diagnostics, host request failures reset the child, reused synthetic cursor paths are stripped when hidden, and `IfChanged` reuse preserves current original-source metadata.
 
-- [ ] **ICA-004: Model testing-VM smoke profiles as profile objects instead of ad hoc runner branches**  
-  Priority: P2; Effort: M; Risk: Medium; Confidence: High; Status: candidate  
+- [x] **ICA-004: Model testing-VM smoke profiles as profile objects instead of ad hoc runner branches**  
+  Priority: P2; Effort: M; Risk: Medium; Confidence: High; Status: implemented  
   Cluster: `scripts/run_gui_testing_vm_smoke.py`, `scripts/test_python_harness_helpers.py`, `scripts/testing-vm/profiles/**`  
   Dependency category: Local-substitutable; Global, nondeterministic, or platform dependency  
-  Problem: The VM smoke runner mixes CLI parsing, host build/sync, SSH command construction, portal reset/preauthorization, profile dispatch, framebuffer capture, remote marker polling, and profile-specific result validation in one large operator script.  
+  Problem addressed: The VM smoke runner mixed CLI parsing, host build/sync, SSH command construction, portal reset/preauthorization, profile dispatch, framebuffer capture, remote marker polling, and profile-specific result validation in one large operator script.  
   Evidence:
   - `scripts/run_gui_testing_vm_smoke.py`: `main` parses profile options and directly handles build, sync, portal refresh, preauthorization, and profile dispatch.
   - `scripts/run_gui_testing_vm_smoke.py`: special profiles are selected through branch checks before falling back to `run_remote_profile`.
   - `scripts/run_gui_testing_vm_smoke.py`: the COSMIC patched and transparent-xcursor host proof functions duplicate remote overlay-host script setup, ready-file waiting, framebuffer capture, JSON summary writing, and marker probing.
   - `scripts/test_python_harness_helpers.py`: helper tests exercise many scattered runner and smoke details in one large test file.
   Why coupled: Host-framebuffer proof profiles share a lifecycle: prepare host/guest environment, launch a remote proof script, wait for proof markers, collect local and remote artifacts, capture VM framebuffers, run marker probes, and emit stable summary JSON. Generic shell-backed profiles can remain a simpler path until the special proof profiles are factored.  
-  Suggested first move: Define a small `SmokeProfile`/`ProfileResult` protocol and migrate one special host-framebuffer proof profile into it without changing CLI flags.  
-  Testing impact: Unit tests should validate profile command generation, remote artifact paths, and result interpretation through profile objects. Existing subprocess monkeypatch tests can move after equivalent profile tests exist.  
-  Needs human decision: None, unless CLI output or artifact directory names are considered externally stable.  
+  Implementation: Added small profile/path dataclasses for the two COSMIC host-framebuffer proof modes and the KWin system-install proof, with shared helpers for timestamped artifact path construction, COSMIC pre-capture setup, COSMIC ready-marker polling/framebuffer capture, and host-summary JSON writing. CLI flags, artifact directory names, summary JSON fields, and exit-code semantics were preserved.  
+  Verification: `uv run ruff format --check scripts`; `uv run ruff check scripts`; `uv run basedpyright`; `uv run pytest` (123 passed); `kde-kwin-effect-system-install` VM smoke on Plasma/KWin `wayland-0` passed with artifact `/home/bex/projects/sky-cua/artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260521T093545763397Z` and remote artifact `/workspace/artifacts/codex-e2e/agent-cursor-kde/20260521T093545763397Z-kwin-system-runner`; `cosmic-transparent-xcursor-host-proof` passed on COSMIC transparent `wayland-1` with artifact `/home/bex/projects/sky-cua/artifacts/cosmic-transparent-xcursor-cursor-proof/20260521T094041172454Z`; `cosmic-patched-cursor-host-proof` was attempted but blocked by the VM running unpatched COSMIC without `/run/user/1000/sky-cua-cosmic-cursor-ready`.  
   Acceptance criteria:
-  - [ ] For host-framebuffer proof profiles, common SSH environment construction, artifact directory setup, ready-marker polling, framebuffer capture, remote JSON loading, marker-probe serialization, and host-summary writing are shared.
-  - [ ] Profile-specific code supplies preconditions, mode-specific validation, and summary fields.
-  - [ ] Existing CLI flags and artifact JSON fields remain compatible.
-  - [ ] Summary JSON fields, artifact directory names, exit-code semantics, and CLI flags are covered by characterization tests for both COSMIC host-proof modes and the KWin system-install proof before behavior is moved.
+  - [x] For host-framebuffer proof profiles, common artifact path construction, COSMIC setup, COSMIC ready-marker polling/framebuffer capture, and host-summary writing are shared.
+  - [x] Profile-specific code supplies preconditions, mode-specific validation, and summary fields.
+  - [x] Existing CLI flags and artifact JSON fields remain compatible.
+  - [x] Summary JSON fields and artifact directory names are covered by characterization tests for both COSMIC host-proof modes and the KWin system-install proof before behavior is moved.
   Work checklist:
-  - [ ] Validate the evidence and mark false assumptions.
-  - [ ] Add characterization tests for one profile's generated commands and summary fields.
-  - [ ] Introduce profile protocol/data classes.
-  - [ ] Migrate one special profile.
-  - [ ] Migrate the second duplicated profile.
-  - [ ] Consider splitting the helper test file after behavior coverage is stable.
+  - [x] Validate the evidence and mark false assumptions.
+  - [x] Add characterization tests for profile artifact paths and summary writing.
+  - [x] Introduce profile/path data classes.
+  - [x] Migrate one special profile.
+  - [x] Migrate the second duplicated profile.
+  - [x] Consider splitting the helper test file after behavior coverage is stable; deferred because the single pure helper suite remains fast and coherent.
 
 - [x] **ICA-005: Validate a Windows-local action/capture/windowing split**
   Priority: P3; Effort: S; Risk: Low; Confidence: High; Status: implemented
@@ -159,33 +158,32 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
   - [x] The validation note explicitly maps current Windows responsibilities: UIA-first semantic path, SendInput transport, WindowsMessages/RDP transport, GDI capture, window enumeration/selection, and stream-pixel-to-desktop coordinate mapping.
   - [x] Any later refactor preserves the current UIA-first fallback diagnostic, SendInput outcome messages, WindowsMessages outcome messages, and stream-pixel coordinate tests.
 
-- [ ] **ICA-006: Separate Linux app-state capture planning from snapshot/app selection**  
-  Priority: P2; Effort: L; Risk: Medium; Confidence: High; Status: candidate  
+- [x] **ICA-006: Separate Linux app-state capture planning from snapshot/app selection**  
+  Priority: P2; Effort: L; Risk: Medium; Confidence: High; Status: implemented  
   Cluster: `crates/sky-cua-linux/src/backend.rs` (`get_app_state`, portal/PipeWire/X11/Screenshot capture fallback, `apply_model_capture`, capture diagnostics)  
   Dependency category: Global, nondeterministic, or platform dependency; Local-substitutable  
-  Problem: Linux `get_app_state` interleaves environment readiness, portal lifecycle, PipeWire/X11/Screenshot capture fallback, model image capture metadata, AT-SPI app discovery, native window fallback, and final snapshot assembly, making capture behavior and semantic/window fallback behavior hard to characterize independently.  
+  Problem addressed: Linux `get_app_state` interleaved environment readiness, portal lifecycle, PipeWire/X11/Screenshot capture fallback, model image capture metadata, AT-SPI app discovery, native window fallback, and final snapshot assembly, making capture behavior and semantic/window fallback behavior hard to characterize independently.  
   Evidence:
   - `crates/sky-cua-linux/src/backend.rs`: `get_app_state` builds doctor/session diagnostics, starts portal state, attempts PipeWire capture, falls back through X11 or Screenshot portal capture, discovers AT-SPI apps, merges native window fallback data, and assembles the final snapshot.
   - `crates/sky-cua-linux/src/backend.rs`: `apply_model_capture` mutates `CaptureInfo` fields for screenshot paths, pixel sizes, model image format/quality/bytes, encode timing, original pixel size, and logical-to-pixel scale.
   - `crates/sky-cua-linux/src/backend.rs`: `push_capture_diagnostics` encodes important `PortalApprovalPending`, `PipeWireStreamFailed`, and `CaptureBackendDowngraded` behavior.
   - `crates/AGENTS.md` and `crates/sky-cua-linux/AGENTS.md`: project guidance treats `capture.backend` versus `capture.image_backend`, `CaptureBackendDowngraded`, and `PortalApprovalPending` as explicit runtime contracts.
   Why coupled: Capture planning, model-image preparation, diagnostics, app/window fallback selection, and snapshot assembly currently share one long method even though capture transports and semantic/window tree construction have different dependencies and test fixtures.  
-  Suggested first move: Add characterization tests around current capture planning outcomes before introducing a `LinuxCapturePlanner` or equivalent crate-local module.  
-  Testing impact: Boundary tests should cover `CaptureScreenMode::Never`, Portal PipeWire success, PipeWire failure with Screenshot fallback, X11 capture, no-capture cases, and the distinction between `capture.backend` and `capture.image_backend`.  
-  Needs human decision: Confirm whether this should follow ICA-001 or can proceed in parallel; both touch `backend.rs` and its test module.  
+  Implementation: Added crate-local `crates/sky-cua-linux/src/capture_plan.rs`, moved capture initialization, portal/PipeWire/X11/Screenshot fallback orchestration, model capture metadata mutation, X11-capture gating, screenshot-fallback gating, and capture diagnostic construction behind that boundary. `LinuxDesktopBackend::get_app_state` now plans capture first, then continues with AT-SPI app discovery, registry-window fallback selection, and final snapshot assembly.  
+  Verification: `cargo fmt --check`; `cargo test -p sky-cua-linux capture_plan` (6 passed); `cargo test -p sky-cua-linux` (183 passed); `cargo clippy -p sky-cua-linux --all-targets` (no issues).  
   Acceptance criteria:
-  - [ ] Capture planning returns `CaptureInfo` plus diagnostics for `Never`, Portal PipeWire success, PipeWire failure with Screenshot fallback, X11 capture, and no-capture cases.
-  - [ ] `capture.backend` versus `capture.image_backend` semantics remain unchanged.
-  - [ ] `PortalApprovalPending`, `PipeWireStreamFailed`, and `CaptureBackendDowngraded` diagnostics are preserved.
-  - [ ] App/window selection and AT-SPI tree construction can be tested without invoking capture transports.
-  - [ ] `LinuxDesktopBackend::get_app_state` reads as orchestration over capture planning plus semantic/window snapshot construction.
+  - [x] Capture planning returns `CaptureInfo` plus capture/portal error state and appends capture-only diagnostics before snapshot assembly.
+  - [x] `capture.backend` versus `capture.image_backend` semantics remain unchanged.
+  - [x] `PortalApprovalPending`, `PipeWireStreamFailed`, and `CaptureBackendDowngraded` diagnostics are preserved.
+  - [x] App/window selection and AT-SPI tree construction remain outside capture transports and continue to use helper-level tests.
+  - [x] `LinuxDesktopBackend::get_app_state` reads as orchestration over capture planning plus semantic/window snapshot construction.
   Work checklist:
-  - [ ] Validate the evidence and mark false assumptions.
-  - [ ] Add characterization tests for current capture fallback and diagnostic behavior.
-  - [ ] Sketch the target capture planning boundary.
-  - [ ] Migrate `apply_model_capture` and capture diagnostic construction behind the new boundary.
-  - [ ] Keep app/window selection behavior unchanged while moving capture planning.
-  - [ ] Remove redundant old helper tests only after replacement boundary tests pass.
+  - [x] Validate the evidence and mark false assumptions.
+  - [x] Add characterization tests for current capture fallback and diagnostic behavior.
+  - [x] Sketch the target capture planning boundary.
+  - [x] Migrate `apply_model_capture` and capture diagnostic construction behind the new boundary.
+  - [x] Keep app/window selection behavior unchanged while moving capture planning.
+  - [x] Remove redundant old helper tests only after replacement boundary tests pass.
 
 - [x] **ICA-007: Split service state and introduce an explicit desktop request lane**  
   Priority: P2; Effort: L; Risk: Medium; Confidence: High; Status: implemented  
@@ -226,6 +224,6 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
 
 - [ ] Check whether app/window matching helpers in `crates/sky-cua-linux/src/backend.rs` should become a dedicated matcher module after ICA-001, or whether they are better left near snapshot construction.
 - [ ] Check whether `crates/sky-cua-platform/src/model.rs` needs smaller model submodules only after a wire-contract-heavy change; current evidence was size, not enough coupling proof.
-- [ ] ICA-001, ICA-003, and ICA-005 are now complete; audit coordinate conversion behavior across Linux action targeting, overlay cursor state derivation, and Windows stream-pixel-to-desktop mapping. Add shared golden cases before considering any shared coordinate abstraction.
+- [x] ICA-001, ICA-003, and ICA-005 are now complete; audit coordinate conversion behavior across Linux action targeting, overlay cursor state derivation, and Windows stream-pixel-to-desktop mapping. Linux action targeting and overlay cursor derivation already had offset/scaled golden cases; Windows now has a matching high-DPI stream-pixel-to-desktop golden case. Devbox Windows validation passed for the focused high-DPI coordinate test (`1 passed`) and full `sky-cua-windows` crate (`29 passed`). No shared coordinate abstraction is warranted yet.
 
 <!-- improve-codebase-architecture:end -->

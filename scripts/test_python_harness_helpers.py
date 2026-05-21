@@ -793,6 +793,331 @@ def test_testing_vm_runner_remote_profile_opts_into_codex_settings(
     assert "wayland-pointer" in run_gui_testing_vm_smoke.PROFILES
 
 
+def test_testing_vm_runner_main_dispatches_kwin_system_install_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_gui_testing_vm_smoke.py",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "22222",
+            "--user",
+            "skycua",
+            "--profile",
+            "kde-kwin-effect-system-install",
+            "--desktop-env",
+            "KDE",
+            "--wayland-display",
+            "wayland-0",
+            "--vm-name",
+            "testing-vm",
+            "--libvirt-uri",
+            "qemu:///session",
+            "--sync-codex-settings",
+        ],
+    )
+    monkeypatch.setattr(run_gui_testing_vm_smoke, "build_host_runtime_artifacts", lambda: None)
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "sync_checkout",
+        lambda ssh_target, port, ssh_options, remote_root: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "sync_codex_settings",
+        lambda ssh_target, port, ssh_options, codex_home: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "reset_guest_sky_cua_processes",
+        lambda ssh_target, port, ssh_options: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "wake_guest_display",
+        lambda ssh_target, port, ssh_options: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "refresh_guest_portal_stack",
+        lambda ssh_target, port, ssh_options, *, wayland_display, desktop_env: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "refresh_guest_portal_stack",
+        lambda ssh_target, port, ssh_options, *, wayland_display, desktop_env: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "preauthorize_kde_remote_desktop",
+        lambda ssh_target, port, ssh_options, remote_root, *, wayland_display, desktop_env: None,
+    )
+
+    def fake_kwin_profile(
+        ssh_target: str,
+        port: int,
+        ssh_options: list[str],
+        remote_root: Path,
+        *,
+        wayland_display: str,
+        desktop_env: str,
+        sync_codex_settings: bool,
+        vm_name: str,
+        libvirt_uri: str,
+    ) -> int:
+        calls.append(
+            {
+                "ssh_target": ssh_target,
+                "port": port,
+                "ssh_options": ssh_options,
+                "remote_root": remote_root,
+                "wayland_display": wayland_display,
+                "desktop_env": desktop_env,
+                "sync_codex_settings": sync_codex_settings,
+                "vm_name": vm_name,
+                "libvirt_uri": libvirt_uri,
+            }
+        )
+        return 17
+
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "run_remote_kwin_effect_system_install_profile",
+        fake_kwin_profile,
+    )
+
+    assert run_gui_testing_vm_smoke.main() == 17
+    assert calls == [
+        {
+            "ssh_target": "skycua@127.0.0.1",
+            "port": 22222,
+            "ssh_options": [],
+            "remote_root": Path("/workspace"),
+            "wayland_display": "wayland-0",
+            "desktop_env": "KDE",
+            "sync_codex_settings": True,
+            "vm_name": "testing-vm",
+            "libvirt_uri": "qemu:///session",
+        }
+    ]
+
+
+def test_testing_vm_runner_main_dispatches_cosmic_host_proof_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke, "build_host_runtime_artifacts", lambda: None)
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "sync_checkout",
+        lambda ssh_target, port, ssh_options, remote_root: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "reset_guest_sky_cua_processes",
+        lambda ssh_target, port, ssh_options: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "wake_guest_display",
+        lambda ssh_target, port, ssh_options: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "refresh_guest_portal_stack",
+        lambda ssh_target, port, ssh_options, *, wayland_display, desktop_env: None,
+    )
+
+    def fake_patched_profile(
+        ssh_target: str,
+        port: int,
+        ssh_options: list[str],
+        remote_root: Path,
+        *,
+        wayland_display: str,
+        desktop_env: str,
+        vm_name: str,
+        libvirt_uri: str,
+    ) -> int:
+        calls.append(("patched", wayland_display, desktop_env))
+        return 0
+
+    def fake_transparent_profile(
+        ssh_target: str,
+        port: int,
+        ssh_options: list[str],
+        remote_root: Path,
+        *,
+        wayland_display: str,
+        desktop_env: str,
+        vm_name: str,
+        libvirt_uri: str,
+    ) -> int:
+        calls.append(("transparent", wayland_display, desktop_env))
+        return 0
+
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "run_remote_cosmic_patched_cursor_host_proof_profile",
+        fake_patched_profile,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "run_remote_cosmic_transparent_xcursor_host_proof_profile",
+        fake_transparent_profile,
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_gui_testing_vm_smoke.py",
+            "--host",
+            "127.0.0.1",
+            "--profile",
+            "cosmic-patched-cursor-host-proof",
+            "--wayland-display",
+            "wayland-1",
+        ],
+    )
+    assert run_gui_testing_vm_smoke.main() == 0
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_gui_testing_vm_smoke.py",
+            "--host",
+            "127.0.0.1",
+            "--profile",
+            "cosmic-transparent-xcursor-host-proof",
+            "--desktop-env",
+            "cosmic",
+            "--wayland-display",
+            "wayland-2",
+        ],
+    )
+    assert run_gui_testing_vm_smoke.main() == 0
+
+    assert calls == [
+        ("patched", "wayland-1", "COSMIC"),
+        ("transparent", "wayland-2", "cosmic"),
+    ]
+
+
+def test_testing_vm_cosmic_host_framebuffer_profile_paths_are_stable() -> None:
+    patched_paths = run_gui_testing_vm_smoke.cosmic_host_framebuffer_proof_paths(
+        run_gui_testing_vm_smoke.COSMIC_PATCHED_CURSOR_HOST_PROOF,
+        Path("/workspace"),
+        "20260521T123456Z",
+    )
+    transparent_paths = run_gui_testing_vm_smoke.cosmic_host_framebuffer_proof_paths(
+        run_gui_testing_vm_smoke.COSMIC_TRANSPARENT_XCURSOR_HOST_PROOF,
+        Path("/workspace"),
+        "20260521T123456Z",
+    )
+
+    assert patched_paths.remote_artifact_dir == Path(
+        "/workspace/artifacts/codex-e2e/agent-cursor-cosmic-patched-host-proof/20260521T123456Z"
+    )
+    assert patched_paths.local_artifact_dir == (
+        run_gui_testing_vm_smoke.REPO_ROOT
+        / "artifacts"
+        / "cosmic-framebuffer-cursor-proof"
+        / "20260521T123456Z"
+    )
+    assert patched_paths.before_path == patched_paths.local_artifact_dir / "before.png"
+    assert patched_paths.visible_path == patched_paths.local_artifact_dir / "visible.png"
+    assert patched_paths.hidden_path == patched_paths.local_artifact_dir / "hidden.png"
+    assert patched_paths.stdout_path == patched_paths.local_artifact_dir / "remote.stdout.log"
+    assert patched_paths.stderr_path == patched_paths.local_artifact_dir / "remote.stderr.log"
+    assert patched_paths.host_summary_path == patched_paths.local_artifact_dir / "host-summary.json"
+    assert transparent_paths.remote_artifact_dir == Path(
+        "/workspace/artifacts/codex-e2e/agent-cursor-cosmic-transparent-xcursor-host-proof/20260521T123456Z"
+    )
+    assert transparent_paths.local_artifact_dir == (
+        run_gui_testing_vm_smoke.REPO_ROOT
+        / "artifacts"
+        / "cosmic-transparent-xcursor-cursor-proof"
+        / "20260521T123456Z"
+    )
+
+
+def test_testing_vm_kwin_host_framebuffer_profile_paths_are_stable() -> None:
+    paths = run_gui_testing_vm_smoke.kwin_host_framebuffer_proof_paths(
+        run_gui_testing_vm_smoke.KWIN_EFFECT_SYSTEM_INSTALL_HOST_PROOF,
+        Path("/workspace"),
+        "20260521T123456Z",
+    )
+
+    assert paths.remote_artifact_dir == Path(
+        "/workspace/artifacts/codex-e2e/agent-cursor-kde/20260521T123456Z-kwin-system-runner"
+    )
+    assert paths.local_artifact_dir == (
+        run_gui_testing_vm_smoke.REPO_ROOT
+        / "artifacts"
+        / "kde-framebuffer-cursor-proof"
+        / "kwin-system-install"
+        / "20260521T123456Z"
+    )
+    assert paths.before_path == paths.local_artifact_dir / "before.png"
+    assert paths.after_path == paths.local_artifact_dir / "after.png"
+    assert paths.stdout_path == paths.local_artifact_dir / "remote.stdout.log"
+    assert paths.stderr_path == paths.local_artifact_dir / "remote.stderr.log"
+    assert paths.host_summary_path == paths.local_artifact_dir / "host-summary.json"
+
+
+def test_testing_vm_cosmic_host_framebuffer_summary_writer_preserves_json_shape(
+    tmp_path: Path,
+) -> None:
+    summary_path = tmp_path / "host-summary.json"
+
+    run_gui_testing_vm_smoke.write_host_summary(
+        summary_path,
+        {"mode": "cosmic-patched-cursor-host-framebuffer", "ok": True},
+    )
+
+    assert json.loads(summary_path.read_text(encoding="utf-8")) == {
+        "mode": "cosmic-patched-cursor-host-framebuffer",
+        "ok": True,
+    }
+    assert summary_path.read_text(encoding="utf-8").endswith("\n")
+
+
+def test_testing_vm_remote_process_wait_returns_success() -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "raise SystemExit(7)"],
+        text=True,
+    )
+
+    returncode, timeout_error = run_gui_testing_vm_smoke.wait_for_remote_process(process, timeout=5)
+
+    assert returncode == 7
+    assert timeout_error is None
+
+
+def test_testing_vm_remote_process_wait_kills_timed_out_process() -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        text=True,
+    )
+
+    returncode, timeout_error = run_gui_testing_vm_smoke.wait_for_remote_process(
+        process, timeout=0.01
+    )
+
+    assert returncode != 0
+    assert timeout_error == "remote process timed out after 0.01s"
+    assert process.poll() is not None
+
+
 def test_testing_vm_runner_reads_remote_jsons_with_nul_separators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

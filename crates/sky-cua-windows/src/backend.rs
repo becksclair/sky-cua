@@ -1675,6 +1675,17 @@ mod tests {
     }
 
     #[test]
+    fn maps_scaled_stream_pixel_action_coordinates_to_desktop_coordinates() {
+        let request = action_request(
+            serde_json::json!({ "x": 1280.0, "y": 720.0 }),
+            Some(capture_with_rect(1920.0, 0.0, 1280.0, 720.0, 2.0)),
+            None,
+        );
+
+        assert_eq!(desktop_action_point(&request).unwrap(), (2560.0, 360.0));
+    }
+
+    #[test]
     fn maps_element_center_from_stream_pixels_to_desktop_coordinates() {
         let request = action_request(
             serde_json::json!({}),
@@ -1867,8 +1878,8 @@ mod tests {
                 space: CoordinateSpace::DesktopLogical,
             }),
             pixel_size: Some(PixelSize {
-                width: width as u32,
-                height: height as u32,
+                width: (width * scale) as u32,
+                height: (height * scale) as u32,
             }),
             original_pixel_size: None,
             logical_to_pixel_scale: Some(scale),

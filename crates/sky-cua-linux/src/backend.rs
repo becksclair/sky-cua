@@ -2,10 +2,9 @@ use atspi::AccessibilityConnection;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
-    ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind, CaptureInfo,
-    CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorReport, ElementNode,
-    EnvironmentInfo, FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, RectF,
-    ScrollDirection, SemanticBackendKind, ToolAvailability, ToolCapabilities,
+    ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureScreenMode,
+    DiagnosticEntry, DoctorReport, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind,
+    RectF, ScrollDirection, SemanticBackendKind, ToolAvailability, ToolCapabilities,
 };
 use sky_cua_platform::{AppInfo, new_snapshot_id};
 
@@ -21,11 +20,9 @@ use crate::focus::pick_focused_app;
 use crate::portal::remote_desktop::{
     MouseButton, PortalLifecycleEvent, RemoteDesktopSessionManager,
 };
-use crate::portal::screenshot;
 use crate::session_env;
 use crate::virtual_input::{LinuxVirtualInput, virtual_input_keyboard_available};
 use crate::windowing as linux_windowing;
-use crate::x11::capture as x11_capture;
 use crate::x11::input_xtest::{self, X11MouseButton};
 use crate::x11::windowing::{self, X11WindowInfo};
 use sky_cua_platform::model::DoctorSessionEnvReport;
@@ -467,133 +464,21 @@ impl DesktopBackend for LinuxDesktopBackend {
                 Some(doctor_report.readiness.recommended_next_step.clone()),
             );
         }
-        let mut portal_session_error: Option<BackendError> = None;
-        let mut capture_error: Option<BackendError> = None;
         let registry_windows = linux_windowing::discover_app_windows(&environment)
             .await
             .unwrap_or_default();
 
-        let should_capture_screen = capture_screen != CaptureScreenMode::Never;
-        let mut capture = (should_capture_screen
-            && environment.capture_backend != CaptureBackendKind::None)
-            .then_some(sky_cua_platform::model::CaptureInfo {
-                backend: environment.capture_backend.clone(),
-                image_backend: None,
-                coordinate_space: None,
-                stream_id: None,
-                source_type: None,
-                mapping_id: None,
-                logical_rect: None,
-                pixel_size: None,
-                original_pixel_size: None,
-                logical_to_pixel_scale: None,
-                screenshot_path: None,
-                original_screenshot_path: None,
-                model_image_format: None,
-                model_image_quality: None,
-                model_image_bytes: None,
-                model_image_encode_ms: None,
-            });
-
-        if should_capture_screen
-            && environment.input_backend == InputBackendKind::PortalRemoteDesktop
-        {
-            match self.portal.ensure_started().await {
-                Ok(Some(stream)) => {
-                    if let Some(capture_info) = capture.as_mut() {
-                        capture_info.stream_id = Some(
-                            stream
-                                .stream_id
-                                .unwrap_or_else(|| stream.node_id.to_string()),
-                        );
-                        capture_info.source_type = stream.source_type;
-                        capture_info.mapping_id = stream.mapping_id;
-                        capture_info.logical_rect = stream.logical_rect;
-                    }
-                }
-                Ok(None) => diagnostics.push(
-                    BackendErrorCode::PortalCapabilityMissing,
-                    "RemoteDesktop started without an associated screencast stream",
-                    None,
-                ),
-                Err(error) => portal_session_error = Some(error),
-            }
-        }
-
-        if should_capture_screen
-            && environment.capture_backend == CaptureBackendKind::PortalPipeWire
-            && environment.input_backend == InputBackendKind::PortalRemoteDesktop
-            && portal_session_error.is_none()
-        {
-            match self.portal.capture_frame(&snapshot_id).await {
-                Ok(frame) => {
-                    if let Some(capture_info) = capture.as_mut() {
-                        capture_info.image_backend = Some(CaptureBackendKind::PortalPipeWire);
-                        apply_model_capture(
-                            capture_info,
-                            &snapshot_id,
-                            &frame.path,
-                            frame.pixel_size,
-                        )?;
-                    }
-                }
-                Err(error) => {
-                    capture_error = Some(error);
-                }
-            }
-        } else if should_attempt_x11_capture(capture_screen, &environment) {
-            match x11_capture::capture_still(&snapshot_id).await {
-                Ok(frame) => {
-                    if let Some(capture_info) = capture.as_mut() {
-                        capture_info.image_backend = Some(CaptureBackendKind::X11);
-                        apply_model_capture(
-                            capture_info,
-                            &snapshot_id,
-                            &frame.path,
-                            frame.pixel_size,
-                        )?;
-                    }
-                }
-                Err(error) => diagnostics.push(
-                    BackendErrorCode::Internal,
-                    "X11 capture failed while building the app-state snapshot",
-                    Some(error.message),
-                ),
-            }
-        }
-
-        let should_fallback_to_screenshot = capture
-            .as_ref()
-            .is_some_and(|capture_info| capture_info.screenshot_path.is_none())
-            && environment.portal_capabilities.screenshot_version.is_some()
-            && !portal_approval_pending(portal_session_error.as_ref())
-            && !portal_approval_pending(capture_error.as_ref())
-            && matches!(
-                environment.session_kind,
-                sky_cua_platform::model::SessionKind::Wayland
-            );
-
-        if should_fallback_to_screenshot {
-            match screenshot::capture_still(&snapshot_id).await {
-                Ok(path) => {
-                    if let Some(capture_info) = capture.as_mut() {
-                        capture_info.image_backend = Some(CaptureBackendKind::PortalScreenshot);
-                        let original_pixel_size = screenshot::pixel_size_from_path(&path);
-                        apply_model_capture(
-                            capture_info,
-                            &snapshot_id,
-                            &path,
-                            original_pixel_size,
-                        )?;
-                    }
-                }
-                Err(error) => diagnostics.push(
-                    BackendErrorCode::PortalRequestDenied,
-                    "Still capture fallback through the Screenshot portal failed",
-                    Some(error.message),
-                ),
-            }
-        }
+        let capture_plan = crate::capture_plan::plan_capture(
+            &self.portal,
+            &snapshot_id,
+            capture_screen,
+            &environment,
+            &mut diagnostics,
+        )
+        .await?;
+        let capture = capture_plan.capture;
+        let portal_session_error = capture_plan.portal_session_error;
+        let capture_error = capture_plan.capture_error;
         let mut portal_lifecycle_events = self.portal.take_lifecycle_events().await;
 
         let (connection, mut apps) = match self.discover_accessible_apps().await {
@@ -608,7 +493,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                     .as_ref()
                     .and_then(|selector| select_linux_window(&registry_windows, selector))
                     .or_else(|| preferred_linux_window(&registry_windows));
-                push_capture_diagnostics(
+                crate::capture_plan::push_diagnostics(
                     &environment,
                     capture.as_ref(),
                     portal_session_error.as_ref(),
@@ -659,7 +544,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                 "AT-SPI returned no accessible applications",
                 None,
             );
-            push_capture_diagnostics(
+            crate::capture_plan::push_diagnostics(
                 &environment,
                 capture.as_ref(),
                 portal_session_error.as_ref(),
@@ -721,7 +606,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             if let Some(app) = select_app(&apps, selector) {
                 app
             } else if let Some(window) = select_linux_window(&registry_windows, selector) {
-                push_capture_diagnostics(
+                crate::capture_plan::push_diagnostics(
                     &environment,
                     capture.as_ref(),
                     portal_session_error.as_ref(),
@@ -771,7 +656,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                     ),
                     Some(window_summary(&app)),
                 );
-                push_capture_diagnostics(
+                crate::capture_plan::push_diagnostics(
                     &environment,
                     capture.as_ref(),
                     portal_session_error.as_ref(),
@@ -807,7 +692,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             );
         }
 
-        push_capture_diagnostics(
+        crate::capture_plan::push_diagnostics(
             &environment,
             capture.as_ref(),
             portal_session_error.as_ref(),
@@ -1157,14 +1042,6 @@ fn keyboard_input_unavailable_reason(environment: &EnvironmentInfo) -> &'static 
     }
 }
 
-fn should_attempt_x11_capture(
-    capture_screen: CaptureScreenMode,
-    environment: &EnvironmentInfo,
-) -> bool {
-    capture_screen != CaptureScreenMode::Never
-        && environment.capture_backend == CaptureBackendKind::X11
-}
-
 fn success_with_diagnostics(
     message: impl Into<String>,
     diagnostics: Vec<sky_cua_platform::model::DiagnosticEntry>,
@@ -1247,43 +1124,6 @@ fn value_is_present(value: &serde_json::Value) -> bool {
         serde_json::Value::Null => false,
         serde_json::Value::String(value) => !value.trim().is_empty(),
         _ => true,
-    }
-}
-
-fn apply_model_capture(
-    capture_info: &mut CaptureInfo,
-    snapshot_id: &str,
-    raw_path: &std::path::Path,
-    raw_pixel_size: Option<PixelSize>,
-) -> Result<(), BackendError> {
-    let model_capture = screenshot::prepare_model_capture(snapshot_id, raw_path)?;
-    capture_info.coordinate_space = Some(CoordinateSpace::StreamPixels);
-    capture_info.screenshot_path = Some(model_capture.path.display().to_string());
-    capture_info.pixel_size = model_capture.pixel_size;
-    capture_info.original_screenshot_path = model_capture
-        .original_path
-        .map(|path| path.display().to_string());
-    capture_info.original_pixel_size = model_capture.original_pixel_size.or(raw_pixel_size);
-    capture_info.model_image_format = Some(match model_capture.format {
-        screenshot::ModelScreenshotFormat::Jpeg => ModelImageFormat::Jpeg,
-        screenshot::ModelScreenshotFormat::Webp => ModelImageFormat::Webp,
-    });
-    capture_info.model_image_quality = Some(model_capture.quality);
-    capture_info.model_image_bytes = model_capture.bytes;
-    capture_info.model_image_encode_ms = Some(model_capture.encode_ms);
-    update_model_capture_scale(capture_info);
-    Ok(())
-}
-
-fn update_model_capture_scale(capture_info: &mut CaptureInfo) {
-    capture_info.logical_to_pixel_scale = None;
-    if let (Some(pixel_size), Some(logical_rect)) = (
-        capture_info.pixel_size.as_ref(),
-        capture_info.logical_rect.as_ref(),
-    ) && logical_rect.width > 0.0
-    {
-        capture_info.logical_to_pixel_scale =
-            Some(f64::from(pixel_size.width) / logical_rect.width);
     }
 }
 
@@ -1813,90 +1653,6 @@ fn normalize_match_key(value: &str) -> String {
 
 fn normalize_desktop_id_stem(value: &str) -> String {
     normalize_match_key(value.trim_end_matches(".desktop"))
-}
-
-fn push_capture_diagnostics(
-    environment: &EnvironmentInfo,
-    capture: Option<&sky_cua_platform::model::CaptureInfo>,
-    portal_session_error: Option<&BackendError>,
-    capture_error: Option<&BackendError>,
-    diagnostics: &mut DiagnosticBuilder,
-) {
-    if let Some(error) = portal_session_error {
-        if portal_approval_pending(Some(error)) {
-            diagnostics.push_code(
-                error.code,
-                "Waiting on portal approval before live screen control can start",
-                Some(error.message.clone()),
-            );
-        } else {
-            diagnostics.push_code(
-                error.code,
-                "Combined RemoteDesktop and ScreenCast session could not be started",
-                Some(error.message.clone()),
-            );
-        }
-    }
-
-    if let Some(error) = capture_error {
-        if portal_approval_pending(Some(error)) {
-            diagnostics.push_code(
-                error.code,
-                "Waiting on portal approval before a live frame can be captured for this snapshot",
-                Some(error.message.clone()),
-            );
-            return;
-        }
-        let used_screenshot_fallback = capture.is_some_and(|capture_info| {
-            capture_info.image_backend == Some(CaptureBackendKind::PortalScreenshot)
-        });
-        diagnostics.push(
-            BackendErrorCode::PipeWireStreamFailed,
-            if used_screenshot_fallback {
-                "Live PipeWire frame capture failed before the snapshot image was produced"
-            } else {
-                "Live PipeWire frame capture failed and no fallback image was produced"
-            },
-            Some(error.message.clone()),
-        );
-        if used_screenshot_fallback {
-            diagnostics.push(
-                BackendErrorCode::CaptureBackendDowngraded,
-                "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback",
-                Some(
-                    "primary_backend=portal_pipe_wire image_backend=portal_screenshot".to_string(),
-                ),
-            );
-        }
-    } else if portal_session_error.is_none()
-        && environment.capture_backend == CaptureBackendKind::PortalPipeWire
-    {
-        let image_backend = capture.and_then(|capture_info| capture_info.image_backend.as_ref());
-        if image_backend == Some(&CaptureBackendKind::PortalScreenshot) {
-            diagnostics.push(
-                BackendErrorCode::PipeWireStreamFailed,
-                "Live PipeWire frame capture did not produce the snapshot image",
-                Some("no PipeWire frame image was available for this snapshot".to_string()),
-            );
-            diagnostics.push(
-                BackendErrorCode::CaptureBackendDowngraded,
-                "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback",
-                Some(
-                    "primary_backend=portal_pipe_wire image_backend=portal_screenshot".to_string(),
-                ),
-            );
-        } else if capture.is_some_and(|capture_info| capture_info.screenshot_path.is_none()) {
-            diagnostics.push(
-                BackendErrorCode::PipeWireStreamFailed,
-                "ScreenCast metadata is live, but no frame image could be produced for this snapshot",
-                None,
-            );
-        }
-    }
-}
-
-fn portal_approval_pending(error: Option<&BackendError>) -> bool {
-    error.is_some_and(|error| error.code == BackendErrorCode::PortalApprovalPending.as_str())
 }
 
 fn linux_fallback_snapshot(
@@ -2570,18 +2326,18 @@ mod tests {
     use super::{
         AppInfo, AppSelector, LinuxDesktopBackend, app_from_linux_window, best_x11_window_match,
         fallback_window_elements_with_x11_detail, linux_fallback_snapshot, linux_window_elements,
-        matches_selector, merge_session_env_reports, push_capture_diagnostics, scroll_target_value,
-        select_x11_window, selector_summary, should_attempt_x11_capture,
-        vertical_scrollbar_for_point, x11_window_elements, x11_window_matches_app,
+        matches_selector, merge_session_env_reports, scroll_target_value, select_x11_window,
+        selector_summary, vertical_scrollbar_for_point, x11_window_elements,
+        x11_window_matches_app,
     };
+    use crate::capture_plan::should_attempt_x11_capture;
     use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
-    use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
+    use sky_cua_platform::diagnostics::DiagnosticBuilder;
     use sky_cua_platform::model::{
-        CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace,
-        DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback,
-        EnvironmentInfo, InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind,
-        SessionKind,
+        CaptureBackendKind, CaptureScreenMode, CoordinateSpace, DoctorSessionEnvRepair,
+        DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback, EnvironmentInfo,
+        InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
     };
 
     fn wayland_pipewire_environment() -> EnvironmentInfo {
@@ -3127,106 +2883,6 @@ mod tests {
 
         assert_eq!(app.desktop_file_id.as_deref(), Some("tidal-hifi.desktop"));
         assert_eq!(app.executable, None);
-    }
-
-    #[test]
-    fn capture_diagnostics_surface_downgrade_when_screenshot_fallback_is_used() {
-        let environment = wayland_pipewire_environment();
-        let capture = CaptureInfo {
-            backend: CaptureBackendKind::PortalPipeWire,
-            image_backend: Some(CaptureBackendKind::PortalScreenshot),
-            coordinate_space: Some(CoordinateSpace::StreamPixels),
-            stream_id: Some("116".to_string()),
-            source_type: Some(1),
-            mapping_id: None,
-            logical_rect: None,
-            pixel_size: None,
-            original_pixel_size: None,
-            logical_to_pixel_scale: None,
-            screenshot_path: Some("/tmp/fallback.png".to_string()),
-            original_screenshot_path: None,
-            model_image_format: None,
-            model_image_quality: None,
-            model_image_bytes: None,
-            model_image_encode_ms: None,
-        };
-        let error = BackendError::new(
-            BackendErrorCode::PipeWireStreamFailed,
-            "remote fd closed unexpectedly",
-        );
-        let mut diagnostics = DiagnosticBuilder::new();
-
-        push_capture_diagnostics(
-            &environment,
-            Some(&capture),
-            None,
-            Some(&error),
-            &mut diagnostics,
-        );
-
-        let entries = diagnostics.finish();
-        assert!(
-            entries
-                .iter()
-                .any(|entry| entry.code == "PipeWireStreamFailed")
-        );
-        let downgrade = entries
-            .iter()
-            .find(|entry| entry.code == "CaptureBackendDowngraded")
-            .expect("expected a capture downgrade diagnostic");
-        assert!(downgrade.message.contains("downgraded from PipeWire"));
-        assert_eq!(
-            downgrade.details.as_deref(),
-            Some("primary_backend=portal_pipe_wire image_backend=portal_screenshot")
-        );
-    }
-
-    #[test]
-    fn capture_diagnostics_do_not_claim_downgrade_without_a_fallback_image() {
-        let environment = wayland_pipewire_environment();
-        let capture = CaptureInfo {
-            backend: CaptureBackendKind::PortalPipeWire,
-            image_backend: None,
-            coordinate_space: None,
-            stream_id: Some("116".to_string()),
-            source_type: Some(1),
-            mapping_id: None,
-            logical_rect: None,
-            pixel_size: None,
-            original_pixel_size: None,
-            logical_to_pixel_scale: None,
-            screenshot_path: None,
-            original_screenshot_path: None,
-            model_image_format: None,
-            model_image_quality: None,
-            model_image_bytes: None,
-            model_image_encode_ms: None,
-        };
-        let error = BackendError::new(
-            BackendErrorCode::PipeWireStreamFailed,
-            "capture timed out on cached stream",
-        );
-        let mut diagnostics = DiagnosticBuilder::new();
-
-        push_capture_diagnostics(
-            &environment,
-            Some(&capture),
-            None,
-            Some(&error),
-            &mut diagnostics,
-        );
-
-        let entries = diagnostics.finish();
-        let pipewire = entries
-            .iter()
-            .find(|entry| entry.code == "PipeWireStreamFailed")
-            .expect("expected a PipeWire failure diagnostic");
-        assert!(pipewire.message.contains("no fallback image was produced"));
-        assert!(
-            !entries
-                .iter()
-                .any(|entry| entry.code == "CaptureBackendDowngraded")
-        );
     }
 
     #[test]

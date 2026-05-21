@@ -220,7 +220,7 @@ fn command_exists(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_key_name, round_coordinate, xdotool_button, X11MouseButton};
+    use super::{X11MouseButton, normalize_key_name, round_coordinate, xdotool_button};
 
     #[test]
     fn maps_mouse_buttons() {
