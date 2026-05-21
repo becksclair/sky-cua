@@ -16,7 +16,7 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
 | ICA-002 | P2 | M | Medium | High | implemented | `crates/sky-cua-client/src/mcp_tools.rs` MCP tool definitions and handlers |
 | ICA-003 | P2 | M | Medium | Medium | needs-validation | `crates/sky-cua-service/src/overlay.rs` agent cursor overlay controller |
 | ICA-004 | P2 | M | Medium | High | candidate | `scripts/run_gui_testing_vm_smoke.py` GUI VM profile runner |
-| ICA-005 | P3 | S | Low | High | needs-validation | `crates/sky-cua-windows/src/backend.rs` Windows backend monolith |
+| ICA-005 | P3 | S | Low | High | implemented | `crates/sky-cua-windows/src/backend.rs` Windows backend monolith |
 | ICA-006 | P2 | L | Medium | High | candidate | `crates/sky-cua-linux/src/backend.rs` app-state capture/snapshot pipeline |
 | ICA-007 | P2 | L | Medium | High | implemented | `crates/sky-cua-service/src/` service request concurrency boundary |
 
@@ -136,8 +136,8 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
   - [ ] Migrate the second duplicated profile.
   - [ ] Consider splitting the helper test file after behavior coverage is stable.
 
-- [ ] **ICA-005: Validate a Windows-local action/capture/windowing split**  
-  Priority: P3; Effort: S; Risk: Low; Confidence: High; Status: needs-validation  
+- [x] **ICA-005: Validate a Windows-local action/capture/windowing split**
+  Priority: P3; Effort: S; Risk: Low; Confidence: High; Status: implemented
   Cluster: `crates/sky-cua-windows/src/backend.rs`, `crates/sky-cua-windows/src/uia.rs`  
   Dependency category: Global, nondeterministic, or platform dependency  
   Problem: The Windows backend is a large v1 module combining environment probing, window enumeration, UIA fallback, GDI capture, SendInput, RDP-safe window-message input, coordinate mapping, and Win32 error handling.  
@@ -149,13 +149,13 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
   Why coupled: Windows app-state and action execution share selected window identity, capture coordinate mapping, and transport availability, but the code is newer and may still be changing quickly.  
   Suggested first move: Write a short validation note that maps current Windows responsibilities and decides whether to refactor now, defer, or only split mechanical modules such as `capture`, `input`, and `windowing`.  
   Testing impact: Characterize SendInput vs window-message routing and capture coordinate mapping before any later code movement.  
-  Needs human decision: Decide whether Windows v1 is stable enough to refactor now or should remain easy to edit while behavior is still being proved.  
+  Decision: Validated in `docs/research/2026-05-windows-backend-split-validation.md`. Defer behavior-changing refactors; allow only Windows-local mechanical `capture`, `windowing`, or `input` module splits after preserving current wire shapes, diagnostics, outcome messages, and coordinate tests. Do not impose a Linux-derived abstraction.
   Acceptance criteria:
-  - [ ] A short validation note decides whether to refactor now, defer, or only split mechanical modules.
-  - [ ] No Linux-derived abstraction is imposed unless it reduces Windows-specific complexity.
-  - [ ] Any split preserves current Windows wire shapes and fallback diagnostics.
-  - [ ] The validation note explicitly maps current Windows responsibilities: UIA-first semantic path, SendInput transport, WindowsMessages/RDP transport, GDI capture, window enumeration/selection, and stream-pixel-to-desktop coordinate mapping.
-  - [ ] Any later refactor preserves the current UIA-first fallback diagnostic, SendInput outcome messages, WindowsMessages outcome messages, and stream-pixel coordinate tests.
+  - [x] A short validation note decides whether to refactor now, defer, or only split mechanical modules.
+  - [x] No Linux-derived abstraction is imposed unless it reduces Windows-specific complexity.
+  - [x] Any split preserves current Windows wire shapes and fallback diagnostics.
+  - [x] The validation note explicitly maps current Windows responsibilities: UIA-first semantic path, SendInput transport, WindowsMessages/RDP transport, GDI capture, window enumeration/selection, and stream-pixel-to-desktop coordinate mapping.
+  - [x] Any later refactor preserves the current UIA-first fallback diagnostic, SendInput outcome messages, WindowsMessages outcome messages, and stream-pixel coordinate tests.
 
 - [ ] **ICA-006: Separate Linux app-state capture planning from snapshot/app selection**  
   Priority: P2; Effort: L; Risk: Medium; Confidence: High; Status: candidate  
