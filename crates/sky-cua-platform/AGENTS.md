@@ -15,7 +15,7 @@ cargo clippy -p sky-cua-platform --all-targets
 
 ## Patterns & Conventions
 
-- Put serde-facing structs/enums in `src/model.rs`; this is the structured MCP/service contract.
+- Put serde-facing structs/enums in `src/model.rs` or focused `src/model/` submodules; this is the structured MCP/service contract. Preserve `sky_cua_platform::model::*` compatibility with re-exports when splitting.
 - Keep trait seams in `src/backend.rs` so platform backends can implement behavior without leaking details.
 - Put user-facing backend failures in `src/diagnostics.rs`, then map them to `DiagnosticEntry`.
 - Keep path resolution in `src/paths.rs`; this is the one source for socket/state/token paths.
@@ -28,7 +28,7 @@ cargo clippy -p sky-cua-platform --all-targets
 
 ## Touch Points / Key Files
 
-- Shared model: `src/model.rs`
+- Shared model: `src/model.rs` and focused `src/model/` submodules
 - Backend traits: `src/backend.rs`
 - Diagnostic builder: `src/diagnostics.rs`
 - App instruction key normalization: `src/app_instructions.rs`

@@ -24,6 +24,7 @@ python3 scripts/build_plugin.py
 
 - Prefer current source, `CONTINUITY.md`, and `NOTES.md` over memory or old artifacts.
 - Keep runtime contracts explicit: structured diagnostics, concrete backend names, and honest fallback states.
+- Prevent god files. When a source file grows past roughly 800 lines, do not keep adding unrelated responsibilities by default; first look for a cohesive boundary, such as contract families, transport adapters, planning policy, matching policy, or testable helpers. Keep public compatibility with re-exports when splitting shared contracts.
 - Rust uses workspace-managed dependencies in `Cargo.toml`; do not add crate-local versions unless needed.
 - Python harnesses are typed enough for basedpyright `standard`; do not weaken checks to hide real issues.
 - Validate Python file changes with Ruff and basedpyright (`uv run ruff format --check scripts`, `uv run ruff check scripts`, and `uv run basedpyright`).
