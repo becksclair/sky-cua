@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{
@@ -359,10 +359,10 @@ fn reuse_unchanged_capture(
     if !capture_metadata_compatible_for_reuse(current_capture, previous_capture) {
         return false;
     }
-    let (Some(current_path), Some(previous_path)) = (
-        current_capture.screenshot_path.as_deref(),
-        previous_capture.screenshot_path.as_deref(),
-    ) else {
+    let Some(current_path) = current_capture.screenshot_path.as_deref() else {
+        return false;
+    };
+    let Some(previous_path) = comparable_previous_screenshot_path(previous_capture) else {
         return false;
     };
     let Ok(current_bytes) = fs::read(current_path) else {
@@ -376,10 +376,27 @@ fn reuse_unchanged_capture(
     }
 
     current_capture.screenshot_path = previous_capture.screenshot_path.clone();
-    current_capture.original_screenshot_path = previous_capture.original_screenshot_path.clone();
     current_capture.model_image_bytes = previous_capture.model_image_bytes;
     current_capture.model_image_encode_ms = previous_capture.model_image_encode_ms;
     true
+}
+
+fn comparable_previous_screenshot_path(capture: &CaptureInfo) -> Option<String> {
+    let screenshot_path = capture.screenshot_path.as_deref()?;
+    let path = Path::new(screenshot_path);
+    if let Some(raw_path) = decomposited_screenshot_path(path)
+        && raw_path.is_file()
+    {
+        return Some(raw_path.display().to_string());
+    }
+    Some(screenshot_path.to_string())
+}
+
+fn decomposited_screenshot_path(path: &Path) -> Option<PathBuf> {
+    let stem = path.file_stem()?.to_str()?;
+    let raw_stem = stem.strip_suffix(".agent-cursor")?;
+    let extension = path.extension()?;
+    Some(path.with_file_name(Path::new(raw_stem).with_extension(extension)))
 }
 
 fn capture_metadata_compatible_for_reuse(current: &CaptureInfo, previous: &CaptureInfo) -> bool {
@@ -942,6 +959,62 @@ mod tests {
                 .screenshot_path
                 .expect("path"),
             previous_path.display().to_string()
+        );
+    }
+
+    #[test]
+    fn if_changed_reuses_previous_cursor_capture_when_raw_sibling_matches() {
+        let dir = unique_temp_dir("if-changed-agent-cursor");
+        let raw_previous_path = dir.join("capture.png");
+        let previous_path = dir.join("capture.agent-cursor.png");
+        let current_path = dir.join("current.png");
+        std::fs::write(&raw_previous_path, b"same raw model image").expect("write raw previous");
+        std::fs::write(&previous_path, b"same raw model image plus cursor")
+            .expect("write previous");
+        std::fs::write(&current_path, b"same raw model image").expect("write current");
+
+        let previous = snapshot(Some(capture_with_path(&previous_path)), Vec::new());
+        let mut current = snapshot(Some(capture_with_path(&current_path)), Vec::new());
+
+        assert!(reuse_unchanged_capture(&mut current, Some(&previous)));
+        assert_eq!(
+            current
+                .capture
+                .expect("capture")
+                .screenshot_path
+                .expect("path"),
+            previous_path.display().to_string()
+        );
+    }
+
+    #[test]
+    fn if_changed_reuse_keeps_current_original_screenshot_path() {
+        let dir = unique_temp_dir("if-changed-original-path");
+        let previous_path = dir.join("previous.jpg");
+        let previous_original_path = dir.join("previous-original.jpg");
+        let current_path = dir.join("current.jpg");
+        let current_original_path = dir.join("current-original.jpg");
+        std::fs::write(&previous_path, b"same model image").expect("write previous");
+        std::fs::write(&current_path, b"same model image").expect("write current");
+        let mut previous_capture = capture_with_path(&previous_path);
+        previous_capture.original_screenshot_path =
+            Some(previous_original_path.display().to_string());
+        let mut current_capture = capture_with_path(&current_path);
+        current_capture.original_screenshot_path =
+            Some(current_original_path.display().to_string());
+        let previous = snapshot(Some(previous_capture), Vec::new());
+        let mut current = snapshot(Some(current_capture), Vec::new());
+
+        assert!(reuse_unchanged_capture(&mut current, Some(&previous)));
+
+        let capture = current.capture.expect("capture");
+        assert_eq!(
+            capture.screenshot_path.as_deref(),
+            Some(previous_path.to_str().expect("utf-8 previous path"))
+        );
+        assert_eq!(
+            capture.original_screenshot_path.as_deref(),
+            Some(current_original_path.to_str().expect("utf-8 current path"))
         );
     }
 

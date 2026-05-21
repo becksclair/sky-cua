@@ -6,7 +6,7 @@ This file tracks architecture improvement candidates found during codebase revie
 
 Generated: 2026-05-19  
 Scope: repository root on current checkout, with emphasis on Rust runtime boundaries, service/MCP concurrency, and Python smoke harnesses  
-Analysis notes: Refreshed against current source after recent MCP concurrency and Linux input updates. `ICA-007` is implemented, review-work hardened, and verified with service/client/Linux tests plus final Plasma/KWin `wayland-pointer` VM smoke `pty_298de25e` (`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260519T183144Z`).
+Analysis notes: Refreshed against current source after recent MCP concurrency and Linux input updates. `ICA-007` is implemented, review-work hardened, and verified with service/client/Linux tests plus final Plasma/KWin `wayland-pointer` VM smoke `pty_298de25e` (`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260519T183144Z`). `ICA-003` is implemented and review-loop hardened; latest focused verification is `cargo test -p sky-cua-service` with 52 passing tests, `cargo clippy -p sky-cua-service --all-targets` passing for the service crate, `cargo fmt --check -p sky-cua-service`, `git diff --check`, and `git diff --cached --check`.
 
 ## Triage Summary
 
@@ -14,7 +14,7 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
 | --- | --- | --- | --- | --- | --- | --- |
 | ICA-001 | P1 | M | Medium | High | implemented | `crates/sky-cua-linux/src/actions/` action execution boundary |
 | ICA-002 | P2 | M | Medium | High | implemented | `crates/sky-cua-client/src/mcp_tools.rs` MCP tool definitions and handlers |
-| ICA-003 | P2 | M | Medium | Medium | needs-validation | `crates/sky-cua-service/src/overlay.rs` agent cursor overlay controller |
+| ICA-003 | P2 | M | Medium | Medium | implemented | `crates/sky-cua-service/src/overlay.rs` agent cursor overlay controller |
 | ICA-004 | P2 | M | Medium | High | candidate | `scripts/run_gui_testing_vm_smoke.py` GUI VM profile runner |
 | ICA-005 | P3 | S | Low | High | implemented | `crates/sky-cua-windows/src/backend.rs` Windows backend monolith |
 | ICA-006 | P2 | L | Medium | High | candidate | `crates/sky-cua-linux/src/backend.rs` app-state capture/snapshot pipeline |
@@ -82,32 +82,34 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
   - [x] Preserve model image capability gating for `get_app_state`.
   - [x] Keep JSON-RPC framing tests in the protocol module.
 
-- [ ] **ICA-003: Separate overlay state, host IPC, and synthetic cursor composition**  
-  Priority: P2; Effort: M; Risk: Medium; Confidence: Medium; Status: needs-validation  
-  Cluster: `crates/sky-cua-service/src/overlay.rs` visible-overlay host IPC and synthetic screenshot cursor composition  
+- [x] **ICA-003: Separate overlay state, host IPC, and synthetic cursor composition**
+  Priority: P2; Effort: M; Risk: Medium; Confidence: Medium; Status: implemented
+  Cluster: `crates/sky-cua-service/src/overlay.rs`, `crates/sky-cua-service/src/overlay/host.rs`, `crates/sky-cua-service/src/overlay/synthetic_cursor.rs` visible-overlay host IPC and synthetic screenshot cursor composition
   Dependency category: Remote but owned, using ports and adapters; Local-substitutable  
   Problem: `OverlayController` owns service-visible cursor state, overlay host process lifecycle, host protocol replies, capture hide/restore policy, action-to-cursor mapping, and screenshot cursor composition in one large module.  
   Evidence:
-  - `crates/sky-cua-service/src/overlay.rs`: `OverlayController` mutates state and sends host messages from methods such as `set_state`, `hide`, `show`, `update_from_action`, `prepare_for_capture`, and `restore_after_capture`.
-  - `crates/sky-cua-service/src/overlay.rs`: `OverlayHostConnection` and `ProcessOverlayHostClient` implement host process IPC and diagnostics in the same file as service state.
-  - `crates/sky-cua-service/src/overlay.rs`: `compose_synthetic_cursor` opens and rewrites screenshot images in the same module as host IPC.
-  - `crates/sky-cua-service/src/overlay.rs`: tests cover host process round trips, state updates, action-derived cursor points, and image composition from the same private module.
+  - `crates/sky-cua-service/src/overlay.rs`: `OverlayController` now keeps service cursor policy, state normalization, action-derived cursor updates, capture hide/restore policy, and snapshot application in the service-level coordinator.
+  - `crates/sky-cua-service/src/overlay/host.rs`: `OverlayHostConnection` and `ProcessOverlayHostClient` now own host process IPC, disabled-host behavior, request diagnostics, socket startup, and child cleanup.
+  - `crates/sky-cua-service/src/overlay/synthetic_cursor.rs`: `compose_synthetic_cursor` now owns screenshot image open/rewrite, cursor asset blending, output encoding, and synthetic cursor diagnostics.
+  - `crates/sky-cua-service/src/daemon.rs`: `IfChanged` capture reuse now understands prior `*.agent-cursor.*` outputs by comparing against the raw sibling while preserving current `original_screenshot_path` metadata.
+  - Focused module tests cover host disabled diagnostics, protocol mismatch behavior, visible-overlay host round trips, failed-hide rollback, host request failure child reset, state updates, action-derived cursor points, synthetic image composition, synthetic cursor stripping, and unchanged-capture reuse.
   Why coupled: Cursor state, host capabilities, capture exclusion, and synthetic fallback share one user-facing status, but their dependencies differ: process IPC, action metadata, image I/O, and time.  
   Suggested first move: Extract screenshot cursor composition first because `compose_synthetic_cursor` is already focused and independently image-testable, then split host IPC behind an `OverlayHost` port once controller-level behavior is preserved.  
   Testing impact: Boundary tests should assert host-unavailable diagnostics, capture hide/restore behavior, and synthetic cursor composition separately.  
-  Needs human decision: Confirm whether visible overlay host behavior and screenshot synthetic cursor should remain one service-level feature contract.  
+  Decision: Keep visible overlay host behavior and screenshot synthetic cursor under one service-level agent cursor feature contract, with separate host IPC and synthetic composition modules coordinated by `OverlayController`. Host request failures reset the host process for respawn while `OverlayController` keeps last-known visible-overlay capabilities for conservative capture-hide behavior; failed hide requests roll local visibility back so later captures retry hiding instead of trusting unacknowledged local state.
   Acceptance criteria:
-  - [ ] Host IPC can be tested with a fake host without constructing the full controller.
-  - [ ] Synthetic cursor composition has focused image tests independent of host process state.
-  - [ ] `OverlayController` reads like service policy rather than transport and image plumbing.
-  - [ ] Existing controller-level integration tests remain for visible-overlay host round trip, hide/show, capture guard restore, and host-unavailable-is-diagnostic-not-action-failure behavior.
-  - [ ] The extracted synthetic cursor module has no dependency on host process state and preserves `AgentCursorSyntheticFailed` and `AgentCursorSyntheticOutOfBounds` diagnostics.
+  - [x] Host IPC can be tested with a fake host without constructing the full controller.
+  - [x] Synthetic cursor composition has focused image tests independent of host process state.
+  - [x] `OverlayController` reads like service policy rather than transport and image plumbing.
+  - [x] Existing controller-level integration tests remain for visible-overlay host round trip, hide/show, capture guard restore, and host-unavailable-is-diagnostic-not-action-failure behavior.
+  - [x] The extracted synthetic cursor module has no dependency on host process state and preserves `AgentCursorSyntheticFailed` and `AgentCursorSyntheticOutOfBounds` diagnostics.
   Work checklist:
-  - [ ] Validate the evidence and mark false assumptions.
-  - [ ] Add or preserve characterization tests for host unavailable, protocol mismatch, capture hide/restore, and synthetic out-of-bounds diagnostics.
-  - [ ] Extract host IPC behind a narrow port.
-  - [ ] Extract screenshot cursor composition into a pure/local-I/O module.
-  - [ ] Rewire `OverlayController` to coordinate the two smaller boundaries.
+  - [x] Validate the evidence and mark false assumptions.
+  - [x] Add or preserve characterization tests for host unavailable, protocol mismatch, capture hide/restore, and synthetic out-of-bounds diagnostics.
+  - [x] Extract host IPC behind a narrow port.
+  - [x] Extract screenshot cursor composition into a pure/local-I/O module.
+  - [x] Rewire `OverlayController` to coordinate the two smaller boundaries.
+  - [x] Harden review-loop edge cases: protocol-mismatched replies clear stale capabilities, failed hide rolls back local visibility and suppresses success diagnostics, host request failures reset the child, reused synthetic cursor paths are stripped when hidden, and `IfChanged` reuse preserves current original-source metadata.
 
 - [ ] **ICA-004: Model testing-VM smoke profiles as profile objects instead of ad hoc runner branches**  
   Priority: P2; Effort: M; Risk: Medium; Confidence: High; Status: candidate  
@@ -224,6 +226,6 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
 
 - [ ] Check whether app/window matching helpers in `crates/sky-cua-linux/src/backend.rs` should become a dedicated matcher module after ICA-001, or whether they are better left near snapshot construction.
 - [ ] Check whether `crates/sky-cua-platform/src/model.rs` needs smaller model submodules only after a wire-contract-heavy change; current evidence was size, not enough coupling proof.
-- [ ] After ICA-001, ICA-003, and ICA-005, audit coordinate conversion behavior across Linux action targeting, overlay cursor state derivation, and Windows stream-pixel-to-desktop mapping. Add shared golden cases before considering any shared coordinate abstraction.
+- [ ] ICA-001, ICA-003, and ICA-005 are now complete; audit coordinate conversion behavior across Linux action targeting, overlay cursor state derivation, and Windows stream-pixel-to-desktop mapping. Add shared golden cases before considering any shared coordinate abstraction.
 
 <!-- improve-codebase-architecture:end -->

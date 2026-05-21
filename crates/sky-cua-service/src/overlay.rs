@@ -1,60 +1,24 @@
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::path::Path;
 
-use image::codecs::jpeg::JpegEncoder;
-use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView, ImageFormat, Rgba, RgbaImage};
 use sky_cua_overlay_host::{
     OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
-    cursor_asset,
 };
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
     AgentCursorPoint, AgentCursorState, AgentCursorSystemCursorBackendKind, AppStateSnapshot,
-    CaptureBackendKind, CaptureInfo, CoordinateSpace, DiagnosticEntry, ElementNode,
-    ModelImageFormat, PixelSize, RectF,
+    CaptureBackendKind, CaptureInfo, CoordinateSpace, DiagnosticEntry, ElementNode, PixelSize,
+    RectF,
 };
 
 const AGENT_CURSOR_ENV: &str = "SKY_CUA_AGENT_CURSOR";
-const OVERLAY_BACKEND_ENV: &str = "SKY_CUA_OVERLAY_BACKEND";
 const OVERLAY_HIDE_FOR_CAPTURE_ENV: &str = "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE";
-const OVERLAY_HOST_PATH_ENV: &str = "SKY_CUA_OVERLAY_HOST_PATH";
 const SCREENSHOT_CURSOR_ENV: &str = "SKY_CUA_SCREENSHOT_CURSOR";
-const DEFAULT_JPEG_QUALITY: u8 = 85;
-const DEFAULT_WEBP_QUALITY: u8 = 75;
-const HOST_START_TIMEOUT: Duration = Duration::from_secs(2);
-const HOST_CONNECT_INTERVAL: Duration = Duration::from_millis(25);
-const HOST_READ_TIMEOUT: Duration = Duration::from_secs(2);
-const HOST_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
-const HOST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
-static AGENT_CURSOR_IMAGE: LazyLock<Result<RgbaImage, String>> = LazyLock::new(|| {
-    let image = image::load_from_memory(cursor_asset::AGENT_CURSOR_PNG)
-        .map_err(|error| error.to_string())?
-        .to_rgba8();
-    if image.width() != cursor_asset::AGENT_CURSOR_SOURCE_WIDTH
-        || image.height() != cursor_asset::AGENT_CURSOR_SOURCE_HEIGHT
-    {
-        return Err(format!(
-            "expected {}x{} cursor asset, got {}x{}",
-            cursor_asset::AGENT_CURSOR_SOURCE_WIDTH,
-            cursor_asset::AGENT_CURSOR_SOURCE_HEIGHT,
-            image.width(),
-            image.height()
-        ));
-    }
-    Ok(image::imageops::resize(
-        &image,
-        cursor_asset::AGENT_CURSOR_WIDTH,
-        cursor_asset::AGENT_CURSOR_HEIGHT,
-        FilterType::Lanczos3,
-    ))
-});
+
+mod host;
+mod synthetic_cursor;
+
+use host::OverlayHostConnection;
+use synthetic_cursor::{compose_synthetic_cursor, remove_synthetic_cursor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CursorMode {
@@ -108,8 +72,24 @@ impl OverlayController {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_for_tests_with_failing_host(code: &str) -> Self {
+        Self {
+            state: None,
+            next_sequence: 1,
+            agent_cursor_mode: CursorMode::Auto,
+            hide_for_capture_mode: CursorMode::Auto,
+            screenshot_cursor_mode: CursorMode::Auto,
+            host: OverlayHostConnection::failing_for_tests(code),
+            host_capabilities: None,
+        }
+    }
+
     #[cfg(all(test, unix))]
-    pub(crate) fn new_for_tests_with_host(host_path: PathBuf, socket_path: PathBuf) -> Self {
+    pub(crate) fn new_for_tests_with_host(
+        host_path: std::path::PathBuf,
+        socket_path: std::path::PathBuf,
+    ) -> Self {
         Self {
             state: None,
             next_sequence: 1,
@@ -162,15 +142,21 @@ impl OverlayController {
     }
 
     pub fn hide(&mut self, reason: Option<String>) -> AgentCursorStatus {
-        if let Some(mut state) = self.state.clone() {
-            state.visible = false;
-            state.sequence = self.allocate_sequence();
-            state.updated_at_ms = now_ms();
-            self.state = Some(state);
-        }
+        let previous_state = self.state.clone();
+        self.set_local_visibility(false);
 
         let mut status = self.send_host_message(OverlayHostMessageKind::Hide, None, reason.clone());
-        if let Some(reason) = reason.filter(|value| !value.trim().is_empty()) {
+        let host_request_failed = status
+            .diagnostics
+            .iter()
+            .any(|entry| entry.code == "AgentCursorHostRequestFailed");
+        if host_request_failed {
+            self.state = previous_state;
+            status.state = self.state();
+        }
+        if !host_request_failed
+            && let Some(reason) = reason.filter(|value| !value.trim().is_empty())
+        {
             status.diagnostics.push(diagnostic(
                 "AgentCursorHidden",
                 "Agent cursor was hidden.",
@@ -181,12 +167,7 @@ impl OverlayController {
     }
 
     pub fn show(&mut self) -> AgentCursorStatus {
-        if let Some(mut state) = self.state.clone() {
-            state.visible = true;
-            state.sequence = self.allocate_sequence();
-            state.updated_at_ms = now_ms();
-            self.state = Some(state);
-        }
+        self.set_local_visibility(true);
         self.send_host_message(OverlayHostMessageKind::Show, self.state.clone(), None)
     }
 
@@ -246,13 +227,16 @@ impl OverlayController {
     pub fn apply_to_snapshot(&mut self, snapshot: &mut AppStateSnapshot) {
         snapshot.agent_cursor = self.state();
         if !self.should_synthesize_cursor() {
+            remove_synthetic_cursor_from_snapshot(snapshot);
             return;
         }
 
         let Some(state) = self.state.as_ref().filter(|state| state.visible) else {
+            remove_synthetic_cursor_from_snapshot(snapshot);
             return;
         };
         let Some(model_point) = state.model_point.as_ref() else {
+            remove_synthetic_cursor_from_snapshot(snapshot);
             return;
         };
         let Some(capture) = snapshot.capture.as_ref() else {
@@ -307,7 +291,12 @@ impl OverlayController {
                 Ok(reply) => {
                     diagnostics.extend(self.apply_host_reply(reply));
                 }
-                Err(diagnostic) => diagnostics.push(diagnostic),
+                Err(diagnostic) => {
+                    if diagnostic.code == "AgentCursorHostUnavailable" {
+                        self.host_capabilities = None;
+                    }
+                    diagnostics.push(diagnostic);
+                }
             }
         }
 
@@ -320,10 +309,8 @@ impl OverlayController {
 
     fn apply_host_reply(&mut self, reply: OverlayHostReply) -> Vec<DiagnosticEntry> {
         let mut diagnostics = reply.diagnostics;
-        if let Some(capabilities) = reply.capabilities {
-            self.host_capabilities = Some(capabilities);
-        }
         if reply.version != OVERLAY_HOST_PROTOCOL_VERSION {
+            self.host_capabilities = None;
             diagnostics.push(diagnostic(
                 "AgentCursorHostProtocolMismatch",
                 "Overlay host replied with an incompatible protocol version.",
@@ -332,6 +319,10 @@ impl OverlayController {
                     OVERLAY_HOST_PROTOCOL_VERSION, reply.version
                 )),
             ));
+            return diagnostics;
+        }
+        if let Some(capabilities) = reply.capabilities {
+            self.host_capabilities = Some(capabilities);
         }
         if !reply.ok && diagnostics.is_empty() {
             diagnostics.push(diagnostic(
@@ -378,6 +369,15 @@ impl OverlayController {
         state
     }
 
+    fn set_local_visibility(&mut self, visible: bool) {
+        if let Some(mut state) = self.state.clone() {
+            state.visible = visible;
+            state.sequence = self.allocate_sequence();
+            state.updated_at_ms = now_ms();
+            self.state = Some(state);
+        }
+    }
+
     fn allocate_sequence(&mut self) -> u64 {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
@@ -390,296 +390,6 @@ impl OverlayController {
             state: self.state(),
             diagnostics: vec![diagnostic],
         }
-    }
-}
-
-#[derive(Debug)]
-enum OverlayHostConnection {
-    Disabled {
-        reason: String,
-        report_diagnostic: bool,
-    },
-    #[cfg(unix)]
-    Process(ProcessOverlayHostClient),
-}
-
-impl OverlayHostConnection {
-    fn from_service_socket(service_socket_path: &Path) -> Self {
-        if overlay_backend_disabled() {
-            return Self::Disabled {
-                reason: format!("{OVERLAY_BACKEND_ENV}=none"),
-                report_diagnostic: false,
-            };
-        }
-
-        #[cfg(unix)]
-        {
-            let Some(socket_path) = overlay_socket_path(service_socket_path) else {
-                return Self::Disabled {
-                    reason: "service socket path has no parent directory".to_string(),
-                    report_diagnostic: true,
-                };
-            };
-            Self::Process(ProcessOverlayHostClient::new(
-                overlay_host_path(),
-                socket_path,
-            ))
-        }
-
-        #[cfg(not(unix))]
-        {
-            let _ = service_socket_path;
-            Self::Disabled {
-                reason: "overlay host process IPC is not implemented on this platform yet"
-                    .to_string(),
-                report_diagnostic: true,
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn disabled_for_tests() -> Self {
-        Self::Disabled {
-            reason: "test overlay host disabled".to_string(),
-            report_diagnostic: false,
-        }
-    }
-
-    #[cfg(all(test, unix))]
-    fn process_for_tests(host_path: PathBuf, socket_path: PathBuf) -> Self {
-        Self::Process(ProcessOverlayHostClient::new(host_path, socket_path))
-    }
-
-    fn send(&mut self, message: OverlayHostMessage) -> Result<OverlayHostReply, DiagnosticEntry> {
-        match self {
-            Self::Disabled {
-                reason,
-                report_diagnostic,
-            } => {
-                if *report_diagnostic {
-                    Err(diagnostic(
-                        "AgentCursorHostUnavailable",
-                        "Overlay host is not available.",
-                        Some(reason.clone()),
-                    ))
-                } else {
-                    Ok(OverlayHostReply {
-                        version: OVERLAY_HOST_PROTOCOL_VERSION,
-                        ok: true,
-                        capabilities: None,
-                        state: None,
-                        diagnostics: Vec::new(),
-                    })
-                }
-            }
-            #[cfg(unix)]
-            Self::Process(client) => client.send(message),
-        }
-    }
-
-    fn default_reason(&self) -> String {
-        match self {
-            Self::Disabled { reason, .. } => reason.clone(),
-            #[cfg(unix)]
-            Self::Process(client) => client
-                .last_error
-                .clone()
-                .unwrap_or_else(|| "native visible overlay host has not reported yet".to_string()),
-        }
-    }
-}
-
-#[cfg(unix)]
-#[derive(Debug)]
-struct ProcessOverlayHostClient {
-    host_path: PathBuf,
-    socket_path: PathBuf,
-    child: Option<Child>,
-    last_error: Option<String>,
-}
-
-#[cfg(unix)]
-impl ProcessOverlayHostClient {
-    fn new(host_path: PathBuf, socket_path: PathBuf) -> Self {
-        Self {
-            host_path,
-            socket_path,
-            child: None,
-            last_error: None,
-        }
-    }
-
-    fn send(&mut self, message: OverlayHostMessage) -> Result<OverlayHostReply, DiagnosticEntry> {
-        if let Err(error) = self.ensure_running() {
-            self.last_error = Some(error.clone());
-            return Err(diagnostic(
-                "AgentCursorHostUnavailable",
-                "Overlay host process is unavailable.",
-                Some(error),
-            ));
-        }
-
-        match self.send_once(&message) {
-            Ok(reply) => {
-                self.last_error = None;
-                Ok(reply)
-            }
-            Err(error) => {
-                self.last_error = Some(error.clone());
-                self.reap_or_reset_child();
-                Err(diagnostic(
-                    "AgentCursorHostRequestFailed",
-                    "Overlay host request failed.",
-                    Some(error),
-                ))
-            }
-        }
-    }
-
-    fn ensure_running(&mut self) -> Result<(), String> {
-        if let Some(child) = self.child.as_mut() {
-            match child.try_wait() {
-                Ok(None) => return Ok(()),
-                Ok(Some(status)) => {
-                    self.child = None;
-                    let _ = fs::remove_file(&self.socket_path);
-                    return Err(format!("overlay host exited early with status {status}"));
-                }
-                Err(error) => return Err(format!("failed to inspect overlay host: {error}")),
-            }
-        }
-
-        if !self.host_path.is_file() {
-            return Err(format!(
-                "overlay host binary not found: {}",
-                self.host_path.display()
-            ));
-        }
-        if let Some(parent) = self.socket_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("failed to create overlay socket directory: {error}"))?;
-        }
-        let _ = fs::remove_file(&self.socket_path);
-        let child = Command::new(&self.host_path)
-            .arg("serve")
-            .arg("--socket")
-            .arg(&self.socket_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                format!(
-                    "failed to spawn overlay host {}: {error}",
-                    self.host_path.display()
-                )
-            })?;
-        self.child = Some(child);
-        self.wait_for_socket()
-    }
-
-    fn wait_for_socket(&mut self) -> Result<(), String> {
-        let started = Instant::now();
-        let mut last_error = None;
-        while started.elapsed() < HOST_START_TIMEOUT {
-            if let Some(child) = self.child.as_mut() {
-                match child.try_wait() {
-                    Ok(None) => {}
-                    Ok(Some(status)) => {
-                        self.child = None;
-                        return Err(format!("overlay host exited during startup with {status}"));
-                    }
-                    Err(error) => {
-                        return Err(format!(
-                            "failed to inspect overlay host during startup: {error}"
-                        ));
-                    }
-                }
-            }
-
-            match UnixStream::connect(&self.socket_path) {
-                Ok(_) => return Ok(()),
-                Err(error) => last_error = Some(error),
-            }
-            std::thread::sleep(HOST_CONNECT_INTERVAL);
-        }
-
-        Err(format!(
-            "overlay host socket did not become ready at {}{}",
-            self.socket_path.display(),
-            last_error
-                .map(|error| format!(": {error}"))
-                .unwrap_or_default()
-        ))
-    }
-
-    fn send_once(&self, message: &OverlayHostMessage) -> Result<OverlayHostReply, String> {
-        let mut stream = UnixStream::connect(&self.socket_path).map_err(|error| {
-            format!(
-                "failed to connect to overlay host socket {}: {error}",
-                self.socket_path.display()
-            )
-        })?;
-        stream
-            .set_read_timeout(Some(HOST_READ_TIMEOUT))
-            .map_err(|error| format!("failed to set overlay host read timeout: {error}"))?;
-        stream
-            .set_write_timeout(Some(HOST_WRITE_TIMEOUT))
-            .map_err(|error| format!("failed to set overlay host write timeout: {error}"))?;
-        let payload = serde_json::to_vec(message)
-            .map_err(|error| format!("failed to serialize overlay host request: {error}"))?;
-        stream
-            .write_all(&payload)
-            .and_then(|()| stream.write_all(b"\n"))
-            .and_then(|()| stream.flush())
-            .map_err(|error| format!("failed to write overlay host request: {error}"))?;
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .map_err(|error| format!("failed to read overlay host reply: {error}"))?;
-        if line.trim().is_empty() {
-            return Err("overlay host returned an empty reply".to_string());
-        }
-        serde_json::from_str(line.trim_end())
-            .map_err(|error| format!("invalid overlay host reply JSON: {error}"))
-    }
-
-    fn reap_or_reset_child(&mut self) {
-        if let Some(child) = self.child.as_mut()
-            && child.try_wait().ok().flatten().is_some()
-        {
-            self.child = None;
-            let _ = fs::remove_file(&self.socket_path);
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for ProcessOverlayHostClient {
-    fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-        let _ = self.send_once(&OverlayHostMessage {
-            version: OVERLAY_HOST_PROTOCOL_VERSION,
-            kind: OverlayHostMessageKind::Shutdown,
-            state: None,
-            reason: None,
-        });
-        let deadline = Instant::now() + HOST_STOP_TIMEOUT;
-        while Instant::now() < deadline {
-            if child.try_wait().ok().flatten().is_some() {
-                let _ = fs::remove_file(&self.socket_path);
-                return;
-            }
-            std::thread::sleep(HOST_CONNECT_INTERVAL);
-        }
-        if child.try_wait().ok().flatten().is_none() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        let _ = fs::remove_file(&self.socket_path);
     }
 }
 
@@ -708,50 +418,10 @@ fn mode_from_env(name: &str) -> CursorMode {
     }
 }
 
-fn overlay_backend_disabled() -> bool {
-    matches!(
-        std::env::var(OVERLAY_BACKEND_ENV)
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "none" | "never" | "off" | "false" | "0"
-    )
-}
-
-#[cfg(unix)]
-fn overlay_socket_path(service_socket_path: &Path) -> Option<PathBuf> {
-    service_socket_path.parent().map(|parent| {
-        if parent.as_os_str().is_empty() {
-            PathBuf::from("agent-cursor.sock")
-        } else {
-            parent.join("agent-cursor.sock")
-        }
-    })
-}
-
-#[cfg(unix)]
-fn overlay_host_path() -> PathBuf {
-    if let Some(path) = std::env::var_os(OVERLAY_HOST_PATH_ENV).filter(|value| !value.is_empty()) {
-        return PathBuf::from(path);
+fn remove_synthetic_cursor_from_snapshot(snapshot: &mut AppStateSnapshot) {
+    if let Some(capture) = snapshot.capture.as_mut() {
+        remove_synthetic_cursor(capture);
     }
-    if let Ok(exe_path) = std::env::current_exe()
-        && let Some(sibling) = exe_path
-            .parent()
-            .map(|parent| parent.join(overlay_host_binary_name()))
-        && sibling.is_file()
-    {
-        return sibling;
-    }
-    let repo_root = std::env::var_os("SKY_CUA_REPO_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    repo_root.join("bin").join(overlay_host_binary_name())
-}
-
-#[cfg(unix)]
-fn overlay_host_binary_name() -> &'static str {
-    "sky-cua-overlay-host"
 }
 
 fn state_from_action_request(request: &ActionRequest) -> Option<AgentCursorState> {
@@ -1005,197 +675,6 @@ fn point_to_pixels_through_rect(
     ))
 }
 
-fn compose_synthetic_cursor(
-    capture: &CaptureInfo,
-    point: &AgentCursorPoint,
-) -> Result<Option<CaptureInfo>, DiagnosticEntry> {
-    if point.coordinate_space != CoordinateSpace::StreamPixels {
-        return Ok(None);
-    }
-
-    let Some(screenshot_path) = capture.screenshot_path.as_ref() else {
-        return Ok(None);
-    };
-    let screenshot_path = Path::new(screenshot_path);
-    let started = Instant::now();
-    let image = image::open(screenshot_path).map_err(|error| {
-        diagnostic(
-            "AgentCursorSyntheticFailed",
-            "Failed to open screenshot for agent cursor compositing.",
-            Some(format!("path={} error={error}", screenshot_path.display())),
-        )
-    })?;
-    let (width, height) = image.dimensions();
-    let mut rgba = image.to_rgba8();
-    let cursor = agent_cursor_image().map_err(|error| {
-        diagnostic(
-            "AgentCursorSyntheticFailed",
-            "Failed to decode bundled agent cursor image.",
-            Some(error),
-        )
-    })?;
-    if !draw_cursor_image(&mut rgba, cursor, point.x, point.y) {
-        return Err(diagnostic(
-            "AgentCursorSyntheticOutOfBounds",
-            "Agent cursor point did not overlap the screenshot.",
-            Some(format!(
-                "point=({}, {}) image={}x{} path={}",
-                point.x,
-                point.y,
-                width,
-                height,
-                screenshot_path.display()
-            )),
-        ));
-    }
-
-    let format = output_format(capture, screenshot_path);
-    let output_path = cursor_output_path(screenshot_path, format.extension());
-    encode_cursor_image(&rgba, &output_path, format, capture).map_err(|error| {
-        diagnostic(
-            "AgentCursorSyntheticFailed",
-            "Failed to write agent cursor screenshot.",
-            Some(format!("path={} error={error}", output_path.display())),
-        )
-    })?;
-
-    let mut updated = capture.clone();
-    updated.screenshot_path = Some(output_path.display().to_string());
-    updated.model_image_bytes = fs::metadata(&output_path)
-        .ok()
-        .map(|metadata| metadata.len());
-    updated.model_image_encode_ms =
-        Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
-    if format == CursorImageFormat::Jpeg {
-        updated.model_image_format = Some(ModelImageFormat::Jpeg);
-    } else if format == CursorImageFormat::Webp {
-        updated.model_image_format = Some(ModelImageFormat::Webp);
-    }
-    Ok(Some(updated))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CursorImageFormat {
-    Jpeg,
-    Png,
-    Webp,
-}
-
-impl CursorImageFormat {
-    fn extension(self) -> &'static str {
-        match self {
-            Self::Jpeg => "jpg",
-            Self::Png => "png",
-            Self::Webp => "webp",
-        }
-    }
-}
-
-fn output_format(capture: &CaptureInfo, path: &Path) -> CursorImageFormat {
-    match capture.model_image_format {
-        Some(ModelImageFormat::Jpeg) => CursorImageFormat::Jpeg,
-        Some(ModelImageFormat::Webp) => CursorImageFormat::Webp,
-        None => match path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("png") => CursorImageFormat::Png,
-            Some("webp") => CursorImageFormat::Webp,
-            _ => CursorImageFormat::Jpeg,
-        },
-    }
-}
-
-fn cursor_output_path(path: &Path, extension: &str) -> PathBuf {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or("screenshot");
-    parent.join(format!("{stem}.agent-cursor.{extension}"))
-}
-
-fn encode_cursor_image(
-    rgba: &RgbaImage,
-    path: &Path,
-    format: CursorImageFormat,
-    capture: &CaptureInfo,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    match format {
-        CursorImageFormat::Jpeg => {
-            let rgb = DynamicImage::ImageRgba8(rgba.clone()).to_rgb8();
-            let quality = capture.model_image_quality.unwrap_or(DEFAULT_JPEG_QUALITY);
-            JpegEncoder::new_with_quality(&mut writer, quality).encode_image(&rgb)?;
-        }
-        CursorImageFormat::Png => {
-            DynamicImage::ImageRgba8(rgba.clone()).write_to(&mut writer, ImageFormat::Png)?;
-        }
-        CursorImageFormat::Webp => {
-            let rgb = DynamicImage::ImageRgba8(rgba.clone()).to_rgb8();
-            let quality = f32::from(capture.model_image_quality.unwrap_or(DEFAULT_WEBP_QUALITY));
-            let encoded =
-                webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height()).encode(quality);
-            writer.write_all(&encoded)?;
-        }
-    }
-    writer.flush()?;
-    Ok(())
-}
-
-fn agent_cursor_image() -> Result<&'static RgbaImage, String> {
-    match AGENT_CURSOR_IMAGE.as_ref() {
-        Ok(image) => Ok(image),
-        Err(error) => Err(error.clone()),
-    }
-}
-
-fn draw_cursor_image(destination: &mut RgbaImage, cursor: &RgbaImage, x: f64, y: f64) -> bool {
-    if !x.is_finite() || !y.is_finite() {
-        return false;
-    }
-
-    let left = x.round() as i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_X;
-    let top = y.round() as i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_Y;
-    let width = i32::try_from(destination.width()).unwrap_or(i32::MAX);
-    let height = i32::try_from(destination.height()).unwrap_or(i32::MAX);
-    let mut changed = false;
-
-    for source_y in 0..cursor.height() {
-        for source_x in 0..cursor.width() {
-            let source = *cursor.get_pixel(source_x, source_y);
-            if source[3] == 0 {
-                continue;
-            }
-            let px = left + source_x as i32;
-            let py = top + source_y as i32;
-            if px < 0 || py < 0 || px >= width || py >= height {
-                continue;
-            }
-
-            blend_pixel(destination.get_pixel_mut(px as u32, py as u32), source);
-            changed = true;
-        }
-    }
-
-    changed
-}
-
-fn blend_pixel(destination: &mut Rgba<u8>, source: Rgba<u8>) {
-    let alpha = f32::from(source[3]) / 255.0;
-    for channel in 0..3 {
-        destination[channel] = ((f32::from(source[channel]) * alpha)
-            + (f32::from(destination[channel]) * (1.0 - alpha)))
-            .round()
-            .clamp(0.0, 255.0) as u8;
-    }
-    destination[3] = 255;
-}
-
 fn diagnostic(code: &str, message: &str, details: Option<String>) -> DiagnosticEntry {
     DiagnosticEntry {
         code: code.to_string(),
@@ -1213,9 +692,9 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{OverlayController, compose_synthetic_cursor, state_from_action_request};
+    use super::{OverlayController, state_from_action_request};
     use image::{ImageBuffer, Rgba};
-    use sky_cua_overlay_host::cursor_asset;
+    use sky_cua_overlay_host::{OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostReply};
     use sky_cua_platform::model::{
         ActionName, ActionOutcome, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace,
         ElementNode, ModelImageFormat, PixelSize, RectF,
@@ -1328,6 +807,175 @@ mod tests {
                 .any(|entry| entry.code == "AgentCursorHostUnavailable")
         );
         assert!(status.capabilities.screenshot_synthetic_cursor);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_process_failure_clears_stale_cached_capabilities() {
+        let dir = unique_temp_dir("host-stale-capabilities");
+        let host_path = dir.join("missing-overlay-host");
+        let socket_path = dir.join("agent-cursor.sock");
+        let mut controller = OverlayController::new_for_tests_with_host(host_path, socket_path);
+        controller.apply_host_reply(OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            ok: true,
+            capabilities: Some(visible_overlay_capabilities("healthy host")),
+            state: None,
+            diagnostics: Vec::new(),
+        });
+        assert!(controller.capabilities().visible_overlay);
+
+        let status = controller.set_state(synthetic_state(1, 2));
+
+        assert!(
+            status
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorHostUnavailable")
+        );
+        assert!(!status.capabilities.visible_overlay);
+        assert!(status.capabilities.screenshot_synthetic_cursor);
+    }
+
+    #[test]
+    fn transient_host_request_failure_keeps_visible_overlay_capabilities() {
+        let mut controller =
+            OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
+        controller.apply_host_reply(OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            ok: true,
+            capabilities: Some(visible_overlay_capabilities("healthy host")),
+            state: None,
+            diagnostics: Vec::new(),
+        });
+        assert!(controller.capabilities().visible_overlay);
+
+        let status = controller.set_state(synthetic_state(1, 2));
+
+        assert!(
+            status
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorHostRequestFailed")
+        );
+        assert!(status.capabilities.visible_overlay);
+    }
+
+    #[test]
+    fn failed_hide_keeps_local_state_visible_so_capture_hide_retries() {
+        let mut controller =
+            OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
+        controller.apply_host_reply(OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            ok: true,
+            capabilities: Some(visible_overlay_capabilities("healthy host")),
+            state: None,
+            diagnostics: Vec::new(),
+        });
+        controller.set_state(synthetic_state(1, 2));
+
+        let status = controller.hide(Some("test hide".to_string()));
+
+        assert!(
+            status
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorHostRequestFailed")
+        );
+        assert!(
+            !status
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorHidden")
+        );
+        assert!(status.state.expect("state").visible);
+        assert!(controller.state().expect("state").visible);
+        let guard = controller.prepare_for_capture();
+        assert!(guard.restore_visible_overlay);
+        assert!(
+            guard
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorHostRequestFailed")
+        );
+    }
+
+    #[test]
+    fn host_protocol_mismatch_is_reported_as_diagnostic() {
+        let mut controller = OverlayController::new_for_tests();
+        let diagnostics = controller.apply_host_reply(OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
+            ok: true,
+            capabilities: None,
+            state: None,
+            diagnostics: Vec::new(),
+        });
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorHostProtocolMismatch")
+        );
+    }
+
+    #[test]
+    fn host_protocol_mismatch_does_not_update_cached_capabilities() {
+        let mut controller = OverlayController::new_for_tests();
+        controller.apply_host_reply(OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
+            ok: true,
+            capabilities: Some(sky_cua_platform::model::AgentCursorCapabilities {
+                backend: sky_cua_platform::model::AgentCursorBackendKind::WaylandLayerShell,
+                visible_overlay: true,
+                screenshot_synthetic_cursor: false,
+                click_through: true,
+                capture_exclusion: true,
+                system_cursor_hide_supported: true,
+                system_cursor_hidden: true,
+                system_cursor_backend:
+                    sky_cua_platform::model::AgentCursorSystemCursorBackendKind::HyprlandConfig,
+                needs_user_install: false,
+                reason: Some("mismatched host".to_string()),
+            }),
+            state: None,
+            diagnostics: Vec::new(),
+        });
+
+        let capabilities = controller.capabilities();
+        assert!(!capabilities.visible_overlay);
+        assert!(capabilities.screenshot_synthetic_cursor);
+        assert_eq!(
+            capabilities.backend,
+            sky_cua_platform::model::AgentCursorBackendKind::ScreenshotSynthetic
+        );
+    }
+
+    #[test]
+    fn host_protocol_mismatch_clears_stale_cached_capabilities() {
+        let mut controller = OverlayController::new_for_tests();
+        controller.apply_host_reply(OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            ok: true,
+            capabilities: Some(visible_overlay_capabilities("healthy host")),
+            state: None,
+            diagnostics: Vec::new(),
+        });
+        assert!(controller.capabilities().visible_overlay);
+
+        controller.apply_host_reply(OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
+            ok: true,
+            capabilities: None,
+            state: None,
+            diagnostics: Vec::new(),
+        });
+
+        let capabilities = controller.capabilities();
+        assert!(!capabilities.visible_overlay);
+        assert_eq!(
+            capabilities.backend,
+            sky_cua_platform::model::AgentCursorBackendKind::ScreenshotSynthetic
+        );
     }
 
     #[test]
@@ -1542,95 +1190,78 @@ mod tests {
     }
 
     #[test]
-    fn composites_chrome_cursor_asset_into_png_screenshot_near_requested_point() {
-        let dir = unique_temp_dir("compose-center");
+    fn apply_to_snapshot_synthesizes_visible_cursor_into_capture() {
+        let dir = unique_temp_dir("snapshot-compose");
         let path = dir.join("capture.png");
-        let image = ImageBuffer::from_pixel(96, 96, Rgba([240u8, 240, 240, 255]));
-        image.save(&path).expect("write source image");
-        let capture = capture_with_path(&path, None);
-        let point = synthetic_point(48.0, 48.0);
-
-        let updated = compose_synthetic_cursor(&capture, &point)
-            .expect("composite should succeed")
-            .expect("capture should update");
-
-        let output_path = updated.screenshot_path.expect("updated path");
-        assert!(output_path.ends_with("capture.agent-cursor.png"));
-        let rendered = image::open(&output_path).expect("open output").to_rgba8();
-        let black_source_x = 8_i32;
-        let black_source_y = 8_i32;
-        let black_dest_x = 48_i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_X + black_source_x;
-        let black_dest_y = 48_i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_Y + black_source_y;
-        assert_eq!(
-            rendered.get_pixel(black_dest_x as u32, black_dest_y as u32),
-            &Rgba([0u8, 0, 0, 255])
-        );
-        assert_eq!(rendered.get_pixel(95, 95), &Rgba([240u8, 240, 240, 255]));
-        assert!(updated.model_image_bytes.unwrap_or_default() > 0);
-    }
-
-    #[test]
-    fn composites_chrome_cursor_asset_when_hotspot_is_on_image_edge() {
-        let dir = unique_temp_dir("compose-edge");
-        let path = dir.join("capture.png");
-        ImageBuffer::from_pixel(16, 16, Rgba([240u8, 240, 240, 255]))
+        ImageBuffer::from_pixel(32, 32, Rgba([240u8, 240, 240, 255]))
             .save(&path)
             .expect("write source image");
-        let capture = capture_with_path(&path, None);
-        let point = synthetic_point(0.0, 0.0);
+        let mut controller = OverlayController::new_for_tests();
+        controller.set_state(synthetic_state(16, 16));
+        let mut snapshot = snapshot_with_capture(capture_with_path(&path, None));
 
-        let updated = compose_synthetic_cursor(&capture, &point)
-            .expect("edge composite should not fail")
-            .expect("capture should update");
+        controller.apply_to_snapshot(&mut snapshot);
 
-        let rendered = image::open(updated.screenshot_path.expect("path"))
-            .expect("open output")
-            .to_rgba8();
+        assert!(snapshot.agent_cursor.is_some());
+        assert!(snapshot.diagnostics.is_empty());
         assert!(
-            rendered
-                .pixels()
-                .any(|pixel| pixel != &Rgba([240u8, 240, 240, 255]))
-        );
-    }
-
-    #[test]
-    fn out_of_bounds_synthetic_point_returns_diagnostic() {
-        let dir = unique_temp_dir("compose-oob");
-        let path = dir.join("capture.png");
-        ImageBuffer::from_pixel(8, 8, Rgba([0u8, 0, 0, 255]))
-            .save(&path)
-            .expect("write source image");
-        let capture = capture_with_path(&path, None);
-        let point = synthetic_point(100.0, 100.0);
-
-        let diagnostic = compose_synthetic_cursor(&capture, &point)
-            .expect_err("out-of-bounds cursor should produce diagnostic");
-
-        assert_eq!(diagnostic.code, "AgentCursorSyntheticOutOfBounds");
-    }
-
-    #[test]
-    fn webp_capture_keeps_webp_format_for_cursor_output() {
-        let dir = unique_temp_dir("compose-webp");
-        let path = dir.join("capture.webp");
-        let rgba = ImageBuffer::from_pixel(16, 16, Rgba([0u8, 0, 0, 255]));
-        let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
-        let encoded = webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height()).encode(75.0);
-        std::fs::write(&path, &*encoded).expect("write source webp");
-        let capture = capture_with_path(&path, Some(ModelImageFormat::Webp));
-        let point = synthetic_point(8.0, 8.0);
-
-        let updated = compose_synthetic_cursor(&capture, &point)
-            .expect("webp composite should succeed")
-            .expect("capture should update");
-
-        assert!(
-            updated
+            snapshot
+                .capture
+                .expect("updated capture")
                 .screenshot_path
-                .expect("path")
-                .ends_with("capture.agent-cursor.webp")
+                .expect("updated path")
+                .ends_with("capture.agent-cursor.png")
         );
-        assert_eq!(updated.model_image_format, Some(ModelImageFormat::Webp));
+    }
+
+    #[test]
+    fn apply_to_snapshot_reports_synthetic_cursor_diagnostics() {
+        let dir = unique_temp_dir("snapshot-compose-oob");
+        let path = dir.join("capture.png");
+        ImageBuffer::from_pixel(8, 8, Rgba([240u8, 240, 240, 255]))
+            .save(&path)
+            .expect("write source image");
+        let mut controller = OverlayController::new_for_tests();
+        controller.set_state(synthetic_state(100, 100));
+        let mut snapshot = snapshot_with_capture(capture_with_path(&path, None));
+
+        controller.apply_to_snapshot(&mut snapshot);
+
+        assert!(snapshot.agent_cursor.is_some());
+        assert!(
+            snapshot
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorSyntheticOutOfBounds")
+        );
+    }
+
+    #[test]
+    fn apply_to_snapshot_removes_reused_synthetic_cursor_when_cursor_hidden() {
+        let dir = unique_temp_dir("snapshot-hidden-reused-cursor");
+        let raw_path = dir.join("capture.png");
+        let synthetic_path = dir.join("capture.agent-cursor.png");
+        ImageBuffer::from_pixel(16, 16, Rgba([240u8, 240, 240, 255]))
+            .save(&raw_path)
+            .expect("write raw image");
+        ImageBuffer::from_pixel(16, 16, Rgba([0u8, 0, 0, 255]))
+            .save(&synthetic_path)
+            .expect("write synthetic image");
+        let mut controller = OverlayController::new_for_tests();
+        controller.set_state(synthetic_state(8, 8));
+        controller.hide(Some("test".to_string()));
+        let mut snapshot = snapshot_with_capture(capture_with_path(&synthetic_path, None));
+
+        controller.apply_to_snapshot(&mut snapshot);
+
+        assert_eq!(
+            snapshot
+                .capture
+                .expect("capture")
+                .screenshot_path
+                .as_deref(),
+            Some(raw_path.to_str().expect("utf-8 path"))
+        );
     }
 
     fn synthetic_state(x: u64, y: u64) -> sky_cua_platform::model::AgentCursorState {
@@ -1696,6 +1327,30 @@ mod tests {
         capture_with_rect_and_scale(logical_rect, None)
     }
 
+    fn capture_with_path(path: &std::path::Path, format: Option<ModelImageFormat>) -> CaptureInfo {
+        CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: None,
+            source_type: None,
+            mapping_id: Some("mapping".to_string()),
+            logical_rect: None,
+            pixel_size: Some(PixelSize {
+                width: 31,
+                height: 31,
+            }),
+            original_pixel_size: None,
+            logical_to_pixel_scale: None,
+            screenshot_path: Some(path.display().to_string()),
+            original_screenshot_path: None,
+            model_image_format: format,
+            model_image_quality: Some(85),
+            model_image_bytes: None,
+            model_image_encode_ms: None,
+        }
+    }
+
     fn capture_with_rect_and_scale(
         logical_rect: RectF,
         logical_to_pixel_scale: Option<f64>,
@@ -1717,30 +1372,6 @@ mod tests {
             screenshot_path: None,
             original_screenshot_path: None,
             model_image_format: Some(ModelImageFormat::Jpeg),
-            model_image_quality: Some(85),
-            model_image_bytes: None,
-            model_image_encode_ms: None,
-        }
-    }
-
-    fn capture_with_path(path: &std::path::Path, format: Option<ModelImageFormat>) -> CaptureInfo {
-        CaptureInfo {
-            backend: CaptureBackendKind::PortalPipeWire,
-            image_backend: Some(CaptureBackendKind::PortalPipeWire),
-            coordinate_space: Some(CoordinateSpace::StreamPixels),
-            stream_id: None,
-            source_type: None,
-            mapping_id: Some("mapping".to_string()),
-            logical_rect: None,
-            pixel_size: Some(PixelSize {
-                width: 31,
-                height: 31,
-            }),
-            original_pixel_size: None,
-            logical_to_pixel_scale: None,
-            screenshot_path: Some(path.display().to_string()),
-            original_screenshot_path: None,
-            model_image_format: format,
             model_image_quality: Some(85),
             model_image_bytes: None,
             model_image_encode_ms: None,
@@ -1782,6 +1413,88 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    fn visible_overlay_capabilities(
+        reason: &str,
+    ) -> sky_cua_platform::model::AgentCursorCapabilities {
+        sky_cua_platform::model::AgentCursorCapabilities {
+            backend: sky_cua_platform::model::AgentCursorBackendKind::WaylandLayerShell,
+            visible_overlay: true,
+            screenshot_synthetic_cursor: false,
+            click_through: true,
+            capture_exclusion: true,
+            system_cursor_hide_supported: true,
+            system_cursor_hidden: true,
+            system_cursor_backend:
+                sky_cua_platform::model::AgentCursorSystemCursorBackendKind::HyprlandConfig,
+            needs_user_install: false,
+            reason: Some(reason.to_string()),
+        }
+    }
+
+    fn snapshot_with_capture(capture: CaptureInfo) -> sky_cua_platform::model::AppStateSnapshot {
+        sky_cua_platform::model::AppStateSnapshot {
+            snapshot_id: "snapshot".to_string(),
+            created_at: chrono::Utc::now(),
+            environment: environment(),
+            capabilities: tool_capabilities(),
+            focused_app: None,
+            capture: Some(capture),
+            elements: Vec::new(),
+            diagnostics: Vec::new(),
+            app_guidance: None,
+            doctor_report: None,
+            agent_cursor: None,
+        }
+    }
+
+    fn environment() -> sky_cua_platform::model::EnvironmentInfo {
+        sky_cua_platform::model::EnvironmentInfo {
+            session_kind: sky_cua_platform::model::SessionKind::Wayland,
+            compositor: None,
+            desktop_environment: None,
+            capture_backend: CaptureBackendKind::PortalPipeWire,
+            input_backend: sky_cua_platform::model::InputBackendKind::PortalRemoteDesktop,
+            semantic_backend: sky_cua_platform::model::SemanticBackendKind::Atspi,
+            portal_capabilities: sky_cua_platform::model::PortalCapabilities {
+                screencast_version: None,
+                remote_desktop_version: None,
+                screenshot_version: None,
+                available_source_types: None,
+                available_cursor_modes: None,
+                available_device_types: None,
+            },
+            xdg_session_type: None,
+            display: None,
+            wayland_display: None,
+        }
+    }
+
+    fn tool_capabilities() -> sky_cua_platform::model::ToolCapabilities {
+        let available = sky_cua_platform::model::ToolAvailability {
+            available: true,
+            reason: None,
+        };
+        sky_cua_platform::model::ToolCapabilities {
+            list_apps: available.clone(),
+            get_app_state: available.clone(),
+            focus_element: available.clone(),
+            activate_element: available.clone(),
+            select_element: available.clone(),
+            expand_element: available.clone(),
+            collapse_element: available.clone(),
+            toggle_element: available.clone(),
+            click: available.clone(),
+            perform_action: available.clone(),
+            perform_secondary_action: available.clone(),
+            scroll: available.clone(),
+            supported_scroll_directions: vec![sky_cua_platform::model::ScrollDirection::Up],
+            drag: available.clone(),
+            type_text: available.clone(),
+            press_key: available.clone(),
+            set_value: available,
+        }
     }
 
     #[cfg(unix)]
