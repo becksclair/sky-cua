@@ -32,7 +32,7 @@ cargo test -p sky-cua-client
 - DO: Keep socket/path rules in `crates/sky-cua-platform/src/paths.rs`.
 - DON'T: Add Linux-only types to `crates/sky-cua-platform/src/model.rs` unless they are part of the public structured contract.
 - DON'T: Make the client infer backend state from text; structured fields should carry the truth.
-- DON'T: Treat title-only window matches as identity proof; see X11/KWin matching in `crates/sky-cua-linux/src/backend.rs`.
+- DON'T: Treat title-only window matches as identity proof; see X11/KWin matching in `crates/sky-cua-linux/src/app_match.rs`.
 
 ## Touch Points / Key Files
 

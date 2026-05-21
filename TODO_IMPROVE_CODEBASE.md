@@ -222,7 +222,7 @@ Analysis notes: Refreshed against current source after recent MCP concurrency an
 
 ## Parking Lot
 
-- [ ] Check whether app/window matching helpers in `crates/sky-cua-linux/src/backend.rs` should become a dedicated matcher module after ICA-001, or whether they are better left near snapshot construction.
+- [x] Check whether app/window matching helpers in `crates/sky-cua-linux/src/backend.rs` should become a dedicated matcher module after ICA-001, or whether they are better left near snapshot construction. Decision: extracted selector scoring, Linux registry-window matching/enrichment/merge, X11 matching, and app-from-window conversion into `crates/sky-cua-linux/src/app_match.rs`; left fallback element/snapshot construction in `backend.rs` because blunt geometry roles are snapshot construction, not matching policy. Verification: `cargo fmt --check`; `cargo test -p sky-cua-linux app_match` (7 passed); `cargo test -p sky-cua-linux --lib` (190 passed); `cargo clippy -p sky-cua-linux --all-targets -- -D warnings`.
 - [ ] Check whether `crates/sky-cua-platform/src/model.rs` needs smaller model submodules only after a wire-contract-heavy change; current evidence was size, not enough coupling proof.
 - [x] ICA-001, ICA-003, and ICA-005 are now complete; audit coordinate conversion behavior across Linux action targeting, overlay cursor state derivation, and Windows stream-pixel-to-desktop mapping. Linux action targeting and overlay cursor derivation already had offset/scaled golden cases; Windows now has a matching high-DPI stream-pixel-to-desktop golden case. Devbox Windows validation passed for the focused high-DPI coordinate test (`1 passed`) and full `sky-cua-windows` crate (`29 passed`). No shared coordinate abstraction is warranted yet.
 

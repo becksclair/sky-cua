@@ -25,6 +25,7 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer
 - X11 discovery/input/capture belongs under `src/x11/**`.
 - KWin native Wayland background-window discovery belongs in `src/kwin.rs`.
 - AT-SPI discovery/tree/actions belong under `src/atspi/**`.
+- App/window matching policy belongs in `src/app_match.rs`; fallback snapshot geometry remains in `src/backend.rs`.
 - DO: Use blunt fallback roles like existing `x11_container`, `x11_leaf_region`, and `x11_action_region` in `src/backend.rs`.
 - DO: Preserve `CaptureBackendDowngraded` and `PortalApprovalPending` diagnostic honesty.
 - DO: Cache expensive connections following `LinuxDesktopBackend::accessibility_connection` in `src/backend.rs`.
@@ -36,6 +37,7 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer
 ## Touch Points / Key Files
 
 - Backend orchestration: `src/backend.rs`
+- App/window matching policy: `src/app_match.rs`
 - Action execution and routing: `src/actions/`
 - Portal RemoteDesktop/ScreenCast session manager: `src/portal/remote_desktop.rs`
 - PipeWire frame capture: `src/portal/pipewire.rs`
@@ -52,6 +54,7 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer
 - Find PipeWire downgrade path: `rg -n "capture_frame|CaptureBackendDowngraded|portal_screenshot" src`
 - Find X11 fallback roles: `rg -n "x11_container|x11_leaf_region|x11_action_region" src`
 - Find KWin queries: `rg -n "WindowsRunner|getWindowInfo|query_active_window|gdbus" src/kwin.rs`
+- Find app/window matching: `rg -n "selector_match_score|linux_window_matches_app|best_x11_window_match" src/app_match.rs`
 
 ## Common Gotchas
 
