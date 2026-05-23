@@ -1,5 +1,10 @@
-pub mod pipewire;
-pub mod preauthorize;
+pub(crate) mod eis_fallback;
+pub(crate) mod eis_input;
+pub(crate) mod eis_keymap;
+pub(crate) mod legacy_input;
+pub(crate) mod pipewire;
+pub(crate) mod portal_session;
+pub(crate) mod preauthorize;
 pub mod remote_desktop;
 pub mod screencast;
 pub mod screenshot;

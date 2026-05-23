@@ -5,6 +5,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -68,6 +69,215 @@ pub struct VirtualInputUnavailable {
 #[derive(Debug, Clone)]
 pub struct LinuxVirtualInput {
     probe: VirtualInputProbe,
+    uinput_device: Arc<std::sync::Mutex<Option<UinputPointerDevice>>>,
+}
+
+impl LinuxVirtualInput {
+    pub fn new() -> Result<Self, BackendError> {
+        let probe = probe_virtual_input().map_err(|unavailable| {
+            BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                format!("Linux virtual input is unavailable: {}", unavailable.reason),
+            )
+        })?;
+        Ok(Self {
+            probe,
+            uinput_device: Arc::new(std::sync::Mutex::new(None)),
+        })
+    }
+
+    fn with_uinput_device<F, R>(&self, f: F) -> Result<R, BackendError>
+    where
+        F: FnOnce(&mut UinputPointerDevice) -> Result<R, BackendError>,
+    {
+        let bounds = self.desktop_bounds()?;
+        let mut guard = self.uinput_device.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if guard.as_ref().is_none_or(|d| d.bounds != bounds) {
+            *guard = Some(UinputPointerDevice::create(bounds)?);
+        }
+        f(guard.as_mut().expect("uinput device was just created"))
+    }
+
+    pub fn move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
+        match self.probe.adapter {
+            VirtualInputAdapterKind::DirectUinput => {
+                self.with_uinput_device(|device| device.move_absolute(x, y))
+            }
+            VirtualInputAdapterKind::Ydotool => self.run_ydotool(move_absolute_args(x, y)),
+        }
+    }
+
+    pub fn click(&self, button: MouseButton) -> Result<(), BackendError> {
+        match self.probe.adapter {
+            VirtualInputAdapterKind::DirectUinput => {
+                self.with_uinput_device(|device| device.click(button))
+            }
+            VirtualInputAdapterKind::Ydotool => {
+                self.run_ydotool(["click".to_string(), click_code(button, ClickAction::Click)])
+            }
+        }
+    }
+
+    pub fn pointer_button(&self, button: MouseButton, pressed: bool) -> Result<(), BackendError> {
+        match self.probe.adapter {
+            VirtualInputAdapterKind::DirectUinput => {
+                self.with_uinput_device(|device| device.pointer_button(button, pressed))
+            }
+            VirtualInputAdapterKind::Ydotool => self.run_ydotool([
+                "click".to_string(),
+                click_code(
+                    button,
+                    if pressed {
+                        ClickAction::Down
+                    } else {
+                        ClickAction::Up
+                    },
+                ),
+            ]),
+        }
+    }
+
+    pub fn click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
+        match self.probe.adapter {
+            VirtualInputAdapterKind::DirectUinput => {
+                self.with_uinput_device(|device| {
+                    device.move_absolute(x, y)?;
+                    thread::sleep(POINTER_ACTION_SETTLE_DELAY);
+                    device.click(button)
+                })
+            }
+            VirtualInputAdapterKind::Ydotool => {
+                self.move_absolute(x, y)?;
+                self.click(button)
+            }
+        }
+    }
+
+    pub fn pointer_mapping_details(&self, x: f64, y: f64) -> String {
+        match self.probe.adapter {
+            VirtualInputAdapterKind::DirectUinput => {
+                if let Some(bounds) = self.probe.desktop_bounds {
+                    let (absolute_x, absolute_y) = bounds.logical_to_absolute(x, y);
+                    format!(
+                        "adapter=direct_uinput coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) emitted_absolute=({absolute_x},{absolute_y}) bounds=x:{} y:{} width:{} height:{} scale_milli:{}",
+                        bounds.x, bounds.y, bounds.width, bounds.height, bounds.scale_milli
+                    )
+                } else {
+                    format!(
+                        "adapter=direct_uinput coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) bounds=missing"
+                    )
+                }
+            }
+            VirtualInputAdapterKind::Ydotool => format!(
+                "adapter=ydotool coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) emitted_absolute=({},{})",
+                round_coordinate(x),
+                round_coordinate(y)
+            ),
+        }
+    }
+
+    pub fn drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
+        match self.probe.adapter {
+            VirtualInputAdapterKind::DirectUinput => {
+                self.with_uinput_device(|device| {
+                    device.move_absolute(from.0, from.1)?;
+                    thread::sleep(POINTER_ACTION_SETTLE_DELAY);
+                    device.move_absolute(to.0, to.1)?;
+                    thread::sleep(Duration::from_millis(40));
+                    device.pointer_button(MouseButton::Left, true)?;
+                    thread::sleep(Duration::from_millis(40));
+                    device.pointer_button(MouseButton::Left, false)
+                })
+            }
+            VirtualInputAdapterKind::Ydotool => {
+                self.move_absolute(from.0, from.1)?;
+                self.pointer_button(MouseButton::Left, true)?;
+                thread::sleep(Duration::from_millis(40));
+                let result = self.move_absolute(to.0, to.1);
+                if result.is_err() {
+                    let _ = self.pointer_button(MouseButton::Left, false);
+                }
+                result?;
+                thread::sleep(Duration::from_millis(40));
+                self.pointer_button(MouseButton::Left, false)
+            }
+        }
+    }
+
+    pub fn scroll_vertical(&self, steps: i32) -> Result<(), BackendError> {
+        if steps == 0 {
+            return Ok(());
+        }
+        match self.probe.adapter {
+            VirtualInputAdapterKind::DirectUinput => {
+                self.with_uinput_device(|device| device.scroll_vertical(steps))
+            }
+            VirtualInputAdapterKind::Ydotool => self.run_ydotool(scroll_vertical_args(steps)),
+        }
+    }
+
+    pub fn scroll_vertical_at(&self, x: f64, y: f64, steps: i32) -> Result<(), BackendError> {
+        match self.probe.adapter {
+            VirtualInputAdapterKind::DirectUinput => {
+                self.with_uinput_device(|device| {
+                    device.move_absolute(x, y)?;
+                    thread::sleep(POINTER_ACTION_SETTLE_DELAY);
+                    device.scroll_vertical(steps)
+                })
+            }
+            VirtualInputAdapterKind::Ydotool => {
+                self.move_absolute(x, y)?;
+                self.scroll_vertical(steps)
+            }
+        }
+    }
+
+    pub fn type_text(&self, text: &str) -> Result<(), BackendError> {
+        self.require_keyboard_adapter()?;
+        self.run_ydotool(type_text_args(text))
+    }
+
+    pub fn press_key_sequence(&self, keys: &[String]) -> Result<(), BackendError> {
+        self.require_keyboard_adapter()?;
+        let events = key_sequence_events(keys)?;
+        let mut args = vec!["key".to_string()];
+        args.extend(events);
+        self.run_ydotool(args)
+    }
+
+    fn run_ydotool<I>(&self, args: I) -> Result<(), BackendError>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        run_ydotool_command(&self.probe, args)
+    }
+
+    fn desktop_bounds(&self) -> Result<DesktopBounds, BackendError> {
+        self.probe.desktop_bounds.ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                "Linux direct uinput requires detected desktop bounds",
+            )
+        })
+    }
+
+    fn require_keyboard_adapter(&self) -> Result<(), BackendError> {
+        if self.probe.supports_keyboard() {
+            return Ok(());
+        }
+        let socket_detail = self
+            .probe
+            .socket_path
+            .as_ref()
+            .map(|path| format!(" socket={}", path.display()))
+            .unwrap_or_default();
+        Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            format!(
+                "Linux virtual input keyboard actions require a usable ydotool daemon; direct uinput only supports pointer actions.{socket_detail}"
+            ),
+        ))
+    }
 }
 
 pub fn probe_virtual_input() -> Result<VirtualInputProbe, VirtualInputUnavailable> {
@@ -140,208 +350,6 @@ impl VirtualInputProbe {
     }
 }
 
-impl LinuxVirtualInput {
-    pub fn new() -> Result<Self, BackendError> {
-        let probe = probe_virtual_input().map_err(|unavailable| {
-            BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                format!("Linux virtual input is unavailable: {}", unavailable.reason),
-            )
-        })?;
-        Ok(Self { probe })
-    }
-
-    pub fn move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
-        match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
-                device.move_absolute(x, y)
-            }
-            VirtualInputAdapterKind::Ydotool => self.run_ydotool(move_absolute_args(x, y)),
-        }
-    }
-
-    pub fn click(&self, button: MouseButton) -> Result<(), BackendError> {
-        match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
-                device.click(button)
-            }
-            VirtualInputAdapterKind::Ydotool => {
-                self.run_ydotool(["click".to_string(), click_code(button, ClickAction::Click)])
-            }
-        }
-    }
-
-    pub fn pointer_button(&self, button: MouseButton, pressed: bool) -> Result<(), BackendError> {
-        match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
-                device.pointer_button(button, pressed)
-            }
-            VirtualInputAdapterKind::Ydotool => self.run_ydotool([
-                "click".to_string(),
-                click_code(
-                    button,
-                    if pressed {
-                        ClickAction::Down
-                    } else {
-                        ClickAction::Up
-                    },
-                ),
-            ]),
-        }
-    }
-
-    pub fn click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
-        match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
-                device.move_absolute(x, y)?;
-                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                device.click(button)
-            }
-            VirtualInputAdapterKind::Ydotool => {
-                self.move_absolute(x, y)?;
-                self.click(button)
-            }
-        }
-    }
-
-    pub fn pointer_mapping_details(&self, x: f64, y: f64) -> String {
-        match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                if let Some(bounds) = self.probe.desktop_bounds {
-                    let (absolute_x, absolute_y) = bounds.logical_to_absolute(x, y);
-                    format!(
-                        "adapter=direct_uinput coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) emitted_absolute=({absolute_x},{absolute_y}) bounds=x:{} y:{} width:{} height:{} scale_milli:{}",
-                        bounds.x, bounds.y, bounds.width, bounds.height, bounds.scale_milli
-                    )
-                } else {
-                    format!(
-                        "adapter=direct_uinput coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) bounds=missing"
-                    )
-                }
-            }
-            VirtualInputAdapterKind::Ydotool => format!(
-                "adapter=ydotool coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) emitted_absolute=({},{})",
-                round_coordinate(x),
-                round_coordinate(y)
-            ),
-        }
-    }
-
-    pub fn drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
-        match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
-                device.move_absolute(from.0, from.1)?;
-                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                device.pointer_button(MouseButton::Left, true)?;
-                thread::sleep(BUTTON_HOLD_DELAY);
-                let result = (|| {
-                    device.move_absolute(to.0, to.1)?;
-                    thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                    device.pointer_button(MouseButton::Left, false)
-                })();
-                if result.is_err() {
-                    let _ = device.pointer_button(MouseButton::Left, false);
-                }
-                result
-            }
-            VirtualInputAdapterKind::Ydotool => {
-                self.move_absolute(from.0, from.1)?;
-                self.pointer_button(MouseButton::Left, true)?;
-                thread::sleep(Duration::from_millis(40));
-                let result = (|| {
-                    self.move_absolute(to.0, to.1)?;
-                    thread::sleep(Duration::from_millis(40));
-                    self.pointer_button(MouseButton::Left, false)
-                })();
-                if result.is_err() {
-                    let _ = self.pointer_button(MouseButton::Left, false);
-                }
-                result
-            }
-        }
-    }
-
-    pub fn scroll_vertical(&self, steps: i32) -> Result<(), BackendError> {
-        if steps == 0 {
-            return Ok(());
-        }
-        match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
-                device.scroll_vertical(steps)
-            }
-            VirtualInputAdapterKind::Ydotool => self.run_ydotool(scroll_vertical_args(steps)),
-        }
-    }
-
-    pub fn scroll_vertical_at(&self, x: f64, y: f64, steps: i32) -> Result<(), BackendError> {
-        match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                let mut device = UinputPointerDevice::create(self.desktop_bounds()?)?;
-                device.move_absolute(x, y)?;
-                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                device.scroll_vertical(steps)
-            }
-            VirtualInputAdapterKind::Ydotool => {
-                self.move_absolute(x, y)?;
-                self.scroll_vertical(steps)
-            }
-        }
-    }
-
-    pub fn type_text(&self, text: &str) -> Result<(), BackendError> {
-        self.require_keyboard_adapter()?;
-        self.run_ydotool(type_text_args(text))
-    }
-
-    pub fn press_key_sequence(&self, keys: &[String]) -> Result<(), BackendError> {
-        self.require_keyboard_adapter()?;
-        let events = key_sequence_events(keys)?;
-        let mut args = vec!["key".to_string()];
-        args.extend(events);
-        self.run_ydotool(args)
-    }
-
-    fn run_ydotool<I>(&self, args: I) -> Result<(), BackendError>
-    where
-        I: IntoIterator<Item = String>,
-    {
-        run_ydotool_command(&self.probe, args)
-    }
-
-    fn desktop_bounds(&self) -> Result<DesktopBounds, BackendError> {
-        self.probe.desktop_bounds.ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                "Linux direct uinput requires detected desktop bounds",
-            )
-        })
-    }
-
-    fn require_keyboard_adapter(&self) -> Result<(), BackendError> {
-        if self.probe.supports_keyboard() {
-            return Ok(());
-        }
-        let socket_detail = self
-            .probe
-            .socket_path
-            .as_ref()
-            .map(|path| format!(" socket={}", path.display()))
-            .unwrap_or_default();
-        Err(BackendError::new(
-            BackendErrorCode::ActionUnsupportedForEnvironment,
-            format!(
-                "Linux virtual input keyboard actions require a usable ydotool daemon; direct uinput only supports pointer actions.{socket_detail}"
-            ),
-        ))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DesktopBounds {
     pub x: i32,
@@ -363,6 +371,7 @@ impl DesktopBounds {
     }
 }
 
+#[derive(Debug)]
 struct UinputPointerDevice {
     file: File,
     bounds: DesktopBounds,
@@ -1078,6 +1087,7 @@ fn round_coordinate(value: f64) -> String {
 mod tests {
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use super::{
         ClickAction, DesktopBounds, LinuxVirtualInput, VirtualInputAdapterKind,
@@ -1162,6 +1172,7 @@ mod tests {
                     scale_milli: 1000,
                 }),
             },
+            uinput_device: Arc::new(std::sync::Mutex::new(None)),
         };
 
         let error = input

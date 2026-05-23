@@ -1,4 +1,4 @@
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 
 use gstreamer as gst;
@@ -231,6 +231,22 @@ fn pipewire_sample_timeout_error(
             "timed out waiting for an in-process PipeWire sample from appsink",
         )
     }
+}
+
+pub(crate) fn duplicate_remote_fd(remote_fd: &OwnedFd) -> Result<OwnedFd, BackendError> {
+    let duplicated = unsafe { libc::dup(remote_fd.as_raw_fd()) };
+    if duplicated < 0 {
+        return Err(BackendError::new(
+            BackendErrorCode::PipeWireUnavailable,
+            format!(
+                "failed to duplicate the cached PipeWire remote fd: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+
+    let duplicated = unsafe { OwnedFd::from_raw_fd(duplicated) };
+    Ok(duplicated)
 }
 
 #[cfg(test)]
