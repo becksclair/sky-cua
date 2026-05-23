@@ -397,8 +397,9 @@ mod tests {
     use xkbcommon::xkb;
 
     use super::{
-        clear_modifiers_already_present_in_chord, find_eis_keycode_for_keysym, keysym_for_char,
-        keysym_for_key_name, required_modifier_keycodes, EisKeyModifiers, EisKeyStroke,
+        EisKeyModifiers, EisKeyStroke, clear_modifiers_already_present_in_chord,
+        find_eis_keycode_for_keysym, keysym_for_char, keysym_for_key_name,
+        required_modifier_keycodes,
     };
 
     #[test]

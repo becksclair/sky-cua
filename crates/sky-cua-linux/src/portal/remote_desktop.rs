@@ -288,8 +288,7 @@ impl RemoteDesktopSessionManager {
                     )
                 })?
         };
-        pipewire::duplicate_remote_fd(&cached_fd)
-            .map(|dup| (node_id, dup))
+        pipewire::duplicate_remote_fd(&cached_fd).map(|dup| (node_id, dup))
     }
 
     pub async fn take_lifecycle_events(&self) -> Vec<PortalLifecycleEvent> {

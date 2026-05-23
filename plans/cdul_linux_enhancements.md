@@ -16,12 +16,12 @@ The work is grounded in two repositories available on this machine. The target r
 - [x] (2026-05-17 08:00Z) Confirmed the main adoption strategy: do not port CDUL wholesale; implement small fidelity and operator-experience enhancements where `sky-cua` still has a gap.
 - [x] (2026-05-17 08:00Z) Authored this ExecPlan under `plans/`.
 - [x] (2026-05-17 08:09Z) Recorded that desktop-facing validation must use the `$sky-cua:vm-tests` skill and the real Arch `testing-vm` runner documented in `docs/operations/gui-desktop-test-harness.md`.
-- [ ] Implement terminal command-line fidelity in `crates/sky-cua-linux/src/windowing/terminal.rs`.
-- [ ] Improve Linux input diagnostics and readiness text in `crates/sky-cua-linux/src/doctor.rs` and the platform model if needed.
-- [ ] Add portal screenshot/request-handle regression coverage or a lower-level fallback only if the current `ashpd` path proves insufficient under tests.
-- [ ] Add app-root prefiltering for targeted AT-SPI snapshots without weakening the existing rich tree output.
-- [ ] Polish GNOME setup messages and window backend operator notes.
-- [ ] Add or document stable operator probe commands and run focused local validation plus the applicable `testing-vm` smoke profiles.
+- [x] Implement terminal command-line fidelity in `crates/sky-cua-linux/src/windowing/terminal.rs`.
+- [x] Improve Linux input diagnostics and readiness text in `crates/sky-cua-linux/src/doctor.rs` and the platform model if needed.
+- [x] Add portal screenshot/request-handle regression coverage or a lower-level fallback only if the current `ashpd` path proves insufficient under tests.
+- [x] Add app-root prefiltering for targeted AT-SPI snapshots without weakening the existing rich tree output.
+- [x] Polish GNOME setup messages and window backend operator notes.
+- [x] Add or document stable operator probe commands and run focused local validation plus the applicable `testing-vm` smoke profiles.
 
 ## Surprises & Discoveries
 

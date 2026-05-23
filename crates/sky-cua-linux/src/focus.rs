@@ -1,9 +1,11 @@
 use atspi::AccessibilityConnection;
 use atspi::State;
 use atspi::proxy::accessible::ObjectRefExt;
-use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 
+use crate::app_match::{apps_matching_window_or_all, preferred_linux_window};
 use crate::apps::discovery::DiscoveredApp;
+use crate::windowing as linux_windowing;
 
 pub async fn pick_focused_app(
     connection: &AccessibilityConnection,
@@ -93,4 +95,37 @@ fn app_preference_score(app: &DiscoveredApp) -> i32 {
         score += 2;
     }
     score
+}
+
+/// When no selector is provided, pick the focused accessible app if available,
+/// falling back to the first app. Narrows the candidate list to apps matching the
+/// preferred window when window evidence is available.
+pub(crate) async fn pick_focused_app_with_fallback(
+    connection: &AccessibilityConnection,
+    apps: Vec<DiscoveredApp>,
+    registry_windows: &[linux_windowing::LinuxWindowInfo],
+    diagnostics: &mut DiagnosticBuilder,
+) -> DiscoveredApp {
+    let window = preferred_linux_window(registry_windows);
+    let apps = window
+        .as_ref()
+        .map(|w| apps_matching_window_or_all(&apps, w))
+        .unwrap_or(apps);
+
+    let focused = pick_focused_app(connection, &apps)
+        .await
+        .unwrap_or_else(|error| {
+            diagnostics.push(
+                BackendErrorCode::AccessibilityCoverageLimited,
+                error.message.clone(),
+                None,
+            );
+            None
+        });
+
+    focused.unwrap_or_else(|| {
+        apps.first()
+            .cloned()
+            .expect("apps should not be empty at this point")
+    })
 }

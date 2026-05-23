@@ -73,6 +73,26 @@ setsid -f virt-viewer --connect qemu:///session testing-vm \
   >/tmp/sky-cua-virt-viewer.log 2>&1
 ```
 
+For a persistent background viewer that auto-restarts and survives the agent
+session, use the systemd user service:
+
+```bash
+# Install the service
+cp scripts/testing-vm/virt-viewer-testing-vm.service \
+  ~/.config/systemd/user/virt-viewer-testing-vm.service
+systemctl --user daemon-reload
+systemctl --user enable virt-viewer-testing-vm.service
+systemctl --user start virt-viewer-testing-vm.service
+```
+
+Control it later with:
+
+```bash
+systemctl --user status virt-viewer-testing-vm.service
+systemctl --user stop virt-viewer-testing-vm.service
+systemctl --user start virt-viewer-testing-vm.service
+```
+
 If the viewer appears blank, first capture the libvirt framebuffer with
 `virsh --connect qemu:///session screenshot testing-vm <path>.png` and check
 the guest session processes over SSH. A blanked or locked guest display can
@@ -83,7 +103,12 @@ look like an overlay failure even when the overlay is not drawing anything.
 Run profiles from the host with:
 
 ```bash
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-helper --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-patched-cursor-host-proof --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-transparent-xcursor-host-proof --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile opencode-mcp --sync-opencode-settings
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile pi-mcp --sync-pi-settings
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all
 ```
 
 The runner:
@@ -156,21 +181,30 @@ deliberately synced from the host as a separate operator step because they
 contain live credentials. The sync copies `~/.config/opencode` into
 `~/.agents/opencode` on the VM, recreates `~/.config/opencode` as a symlink,
 copies only `~/.local/share/opencode/auth.json` from OpenCode's data directory,
-and then runs `npm install --omit=dev` inside the VM config. It does not copy
+and then updates OpenCode to the latest version via npm. It does not copy
 the host OpenCode database, logs, snapshots, or tool-output history.
 
-This prepares the VM for the non-Codex harness lane. Registering the sky-cua
-MCP runtime inside OpenCode still follows the plain MCP host instructions in
-`docs/runtime/mcp-boundary.md`; the VM prep here only installs OpenCode itself and
-copies the user's OpenCode config/auth safely.
-
-For the current QEMU user-networking VM:
+This prepares the VM for the non-Codex harness lane. The runner can then
+install sky-cua as an MCP server and exercise it through OpenCode:
 
 ```bash
+# Sync config and update to latest
 scripts/testing-vm/sync-opencode-to-vm.sh
+
+# Run OpenCode MCP smoke tests
+python3 scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 --port 22222 --user skycua \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  --profile opencode-mcp \
+  --sync-opencode-settings
 ```
 
-Then verify:
+The `opencode-mcp` profile installs sky-cua as an MCP server for OpenCode,
+deploys the `computer-use-workflows` skill, and runs dialog dismissal smokes
+through OpenCode's tool-calling loop.
+
+Verify OpenCode is functional before the smoke:
 
 ```bash
 ssh -p 22222 \
@@ -178,6 +212,30 @@ ssh -p 22222 \
   -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
   skycua@127.0.0.1 'opencode --version && opencode models openai | head'
 ```
+
+## Pi Harness Prep
+
+Pi (`pi.dev`) is supported through the `pi-mcp-adapter` extension. The sync
+copies the host's `~/.pi` directory into the VM, excluding runtime state
+(sessions, cache, memory), then updates Pi and `pi-mcp-adapter` to latest via npm.
+
+```bash
+# Sync config and update to latest
+scripts/testing-vm/sync-pi-to-vm.sh
+
+# Run Pi MCP smoke tests
+python3 scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 --port 22222 --user skycua \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  --profile pi-mcp \
+  --sync-pi-settings
+```
+
+The `pi-mcp` profile installs sky-cua as an MCP server for Pi, merges the
+`sky_cua` entry into Pi's `~/.pi/agent/mcp.json`, deploys the
+`computer-use-workflows` skill to `~/.pi/agent/skills/`, and runs dialog
+dismissal smokes through Pi's tool-calling loop.
 
 ## Portal Selection
 
@@ -241,6 +299,12 @@ Profiles live under `scripts/testing-vm/profiles/`.
   copied Chrome cursor asset through `sky-cua-overlay-host`, captures with the
   compositor screenshot tool (`grim -o <output>` on Hyprland), and proves visible
   then hidden cursor pixels.
+- `opencode-mcp`: real-session OpenCode MCP smoke. Installs sky-cua as an MCP
+  server for OpenCode, deploys skills, and exercises dialog dismissal through
+  OpenCode's tool-calling loop against visible desktop fixtures.
+- `pi-mcp`: real-session Pi MCP smoke. Installs sky-cua as an MCP server for Pi
+  via `pi-mcp-adapter`, deploys skills, and exercises dialog dismissal through
+  Pi's tool-calling loop.
 - `codex-desktop`: real-session launch smoke for the installed
   CodexDesktop-Rebuild package. It requires a visible Codex window on the VM's
   active desktop session and records Codex and Chrome versions.

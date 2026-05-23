@@ -315,7 +315,11 @@ impl RemoteDesktopSessionManager {
                 // stay inside the portal path so Wayland apps receive the paste chord.
                 if allow_native_fallbacks && input_xtest::xtest_is_available() {
                     let keys = keys.to_vec();
-                    match tokio::task::spawn_blocking(move || input_xtest::press_key_sequence(&keys)).await {
+                    match tokio::task::spawn_blocking(move || {
+                        input_xtest::press_key_sequence(&keys)
+                    })
+                    .await
+                    {
                         Ok(Ok(())) => {
                             self.push_lifecycle_event(PortalLifecycleEvent {
                                 code: PORTAL_EIS_INPUT_FALLBACK,

@@ -13,7 +13,7 @@ Open boxes link to the active ExecPlan that owns the work.
 - [x] AT-SPI rich readback — [`docs/features/atspi-rich-readback.md`](docs/features/atspi-rich-readback.md)
 - [x] Detached session-env repair — [`docs/features/session-env-repair.md`](docs/features/session-env-repair.md)
   - [ ] Add stripped-env repair to the curated VM runner profile set
-  - [ ] Non-Codex host smoke (OpenCode/Pi) once VM lane is live
+  - [x] Non-Codex host smoke (OpenCode/Pi) once VM lane is live
 - [x] KWin and X11 workspace metadata — [`docs/features/kwin-x11-workspace-metadata.md`](docs/features/kwin-x11-workspace-metadata.md)
   - [ ] Capture a dedicated `list_windows` workspace artifact on real KWin and X11
 - [x] Linux virtual input (`LinuxVirtualInput` backend) — [`docs/features/linux-virtual-input.md`](docs/features/linux-virtual-input.md)
@@ -42,7 +42,7 @@ Open boxes link to the active ExecPlan that owns the work.
 ## Phase: Host portability
 
 - [x] Codex Desktop compatibility (one active `computer-use` server, Browser Use companion, native-host preflight) — [`docs/features/codex-desktop-compat.md`](docs/features/codex-desktop-compat.md)
-- [ ] OpenCode/Pi MCP host smoke parity
+- [x] OpenCode/Pi MCP host smoke parity
 - [ ] Detached launch breadth across more desktop/session launchers
 
 ## Phase: Performance and runtime tuning

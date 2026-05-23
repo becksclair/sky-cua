@@ -1,7 +1,7 @@
 use std::process::Command;
 use std::sync::Mutex;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use tracing::warn;
 

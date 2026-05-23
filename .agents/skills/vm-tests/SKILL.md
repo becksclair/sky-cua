@@ -66,6 +66,8 @@ Known real-session display defaults:
 - Use `cosmic-helper` for the COSMIC protocol helper lane.
 - Use `cosmic-patched-cursor-host-proof` or `cosmic-transparent-xcursor-host-proof` only when the VM was booted into the matching COSMIC mode described in the docs.
 - Use `codex-desktop` for Codex Desktop launch smoke. Add `--sync-codex-settings` only when the test needs authenticated Codex state.
+- Use `opencode-mcp` for OpenCode MCP smoke tests. Add `--sync-opencode-settings` to copy host config/auth and update to latest.
+- Use `pi-mcp` for Pi MCP smoke tests. Add `--sync-pi-settings` to copy host config and update to latest.
 - Use `all` only for the fast non-session-specific set; do not report it as complete cross-desktop coverage.
 
 ## Command Templates
@@ -117,6 +119,28 @@ uv run python scripts/run_gui_testing_vm_smoke.py \
   --desktop-env COSMIC --wayland-display wayland-1
 ```
 
+OpenCode MCP smoke:
+
+```bash
+uv run python scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 --port 22222 --user skycua \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  --profile opencode-mcp \
+  --sync-opencode-settings
+```
+
+Pi MCP smoke:
+
+```bash
+uv run python scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 --port 22222 --user skycua \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  --profile pi-mcp \
+  --sync-pi-settings
+```
+
 ## Failure Triage
 
 - If SSH says `Could not resolve hostname testing-vm`, rerun with the `127.0.0.1:22222` port-forward form.
@@ -125,13 +149,27 @@ uv run python scripts/run_gui_testing_vm_smoke.py \
 - If cleanup looks contaminated, remember the active cleanup target is `sky-cua-overlay-host` plus `service.sock` and `agent-cursor.sock`; stale `sky-cua-overlay` references are historical.
 - If a local smoke points at nested X11/Xvfb, Docker GUI, or retired TIDAL flows, treat it as stale guidance unless the user explicitly asks for historical archaeology.
 
+## VM Viewer
+
+For a persistent background viewer that auto-restarts:
+
+```bash
+cp scripts/testing-vm/virt-viewer-testing-vm.service \
+  ~/.config/systemd/user/virt-viewer-testing-vm.service
+systemctl --user daemon-reload
+systemctl --user enable virt-viewer-testing-vm.service
+systemctl --user start virt-viewer-testing-vm.service
+```
+
+Control later with `systemctl --user {start,stop,status} virt-viewer-testing-vm.service`.
+
 ## Reporting
 
 For a useful closure note, include:
 
 - the selected guest session and display, such as Plasma `wayland-0` or Hyprland `wayland-1`
-- the exact runner command and whether build, sync, or Codex settings sync was skipped
+- the exact runner command and whether build, sync, or Codex/OpenCode/Pi settings sync was skipped
 - the profile name
 - the artifact directory or host summary path
 - any cleanup residue, especially for KWin system-install proof
-- any live-smoke gates not run
+- any live-smoke gates not run, including whether OpenCode or Pi smokes were exercised

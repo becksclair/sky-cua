@@ -118,6 +118,7 @@ knowledge tree.
 - For Python harness changes: `uv run ruff format --check scripts && uv run ruff check scripts && uv run basedpyright && uv run pytest`.
 - For packaging changes: `python3 scripts/build_plugin.py` and inspect the staged bundle shape.
 - State any live-smoke gates not run, especially desktop/portal/KDE/COSMIC/Hyprland/GNOME flows.
+- When the user says "run all the smoke tests", run the `all` profile (`python3 scripts/run_gui_testing_vm_smoke.py --profile all`). This exercises every desktop environment and agent harness in sequence. Do not run a subset unless explicitly asked.
 - For shipped features, update or create `docs/features/<slug>.md` and the
   matching `ROADMAP.md` entry. See `docs/AGENTS.md` for the feature doc
   template.

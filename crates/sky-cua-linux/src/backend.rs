@@ -21,7 +21,7 @@ use crate::app_policy::{AppActionPolicies, ResolvedSetValueFallbackPolicy};
 use crate::apps::discovery::{DiscoveredApp, discover_apps};
 use crate::atspi::{actions as atspi_actions, connect, snapshot::snapshot_for_app};
 use crate::env_probe::{probe_environment, require_supported_environment};
-use crate::focus::pick_focused_app;
+use crate::focus::pick_focused_app_with_fallback;
 use crate::portal::remote_desktop::{
     MouseButton, PortalLifecycleEvent, RemoteDesktopSessionManager,
 };
@@ -596,17 +596,6 @@ impl DesktopBackend for LinuxDesktopBackend {
             });
         }
 
-        let focused = pick_focused_app(&connection, &apps)
-            .await
-            .unwrap_or_else(|error| {
-                diagnostics.push(
-                    BackendErrorCode::AccessibilityCoverageLimited,
-                    error.message.clone(),
-                    None,
-                );
-                None
-            });
-
         let chosen_app: DiscoveredApp = if let Some(selector) = selector.as_ref() {
             if let Some(app) = select_app(&apps, selector) {
                 app
@@ -680,11 +669,8 @@ impl DesktopBackend for LinuxDesktopBackend {
                 ));
             }
 
-            focused.unwrap_or_else(|| {
-                apps.first()
-                    .cloned()
-                    .expect("apps should not be empty at this point")
-            })
+            pick_focused_app_with_fallback(&connection, apps, &registry_windows, &mut diagnostics)
+                .await
         };
         let focused_app = Some(Self::focused_from_app(&chosen_app.info));
 

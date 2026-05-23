@@ -7,6 +7,7 @@ and emits a host-ready MCP server configuration with absolute paths.
 Supported host targets:
   - opencode        OpenCode via opencode.json
   - claude-desktop  Claude Desktop via claude_desktop_config.json
+  - pi              Pi via mcp.json
   - generic         Raw .mcp.json for manual wiring (default)
 
 Usage:
@@ -16,9 +17,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import shlex
 import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -62,6 +66,17 @@ def copy_executable(src: Path, dst: Path) -> None:
         dst.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def kill_running_binaries() -> None:
+    """Kill any running sky-cua processes so binaries can be overwritten."""
+    for name in ("sky-cua-client", "sky-cua-service"):
+        with contextlib.suppress(FileNotFoundError):
+            subprocess.run(
+                ["pkill", "-x", name],
+                capture_output=True,
+                check=False,
+            )
+
+
 def find_built_binary(name: str) -> Path | None:
     candidate = source_binary_path(runtime_binary_source_name(current_platform(), name))
     if candidate.exists():
@@ -71,6 +86,7 @@ def find_built_binary(name: str) -> Path | None:
 
 def install_binaries(target_dir: Path) -> Path:
     """Copy runtime binaries into target_dir and return the client entrypoint path."""
+    kill_running_binaries()
     platform_id = current_platform()
     installed_client: Path | None = None
 
@@ -162,7 +178,7 @@ def install_opencode(target_dir: Path, client_path: Path) -> Path:
             "sky_cua": {
                 "type": "local",
                 "command": [str(client_path), "mcp"],
-                "environment": {},
+                "environment": {"SKY_CUA_REPO_ROOT": str(REPO_ROOT)},
                 "enabled": True,
                 "timeout": 30000,
             }
@@ -184,12 +200,43 @@ def install_claude_desktop(target_dir: Path, client_path: Path) -> Path:
             "computer-use": {
                 "command": str(client_path),
                 "args": ["mcp"],
-                "env": {},
+                "env": {"SKY_CUA_REPO_ROOT": str(REPO_ROOT)},
             }
         }
     }
 
     path = target_dir / "claude_desktop_config.json"
+    path.write_text(json.dumps(snippet, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def install_pi(target_dir: Path, client_path: Path) -> Path:
+    """Emit a Pi mcp.json config snippet for merging into ~/.pi/agent/mcp.json.
+
+    Pi does not support the ``env`` field in MCP server configs, so we generate a
+    small wrapper script that sets ``SKY_CUA_REPO_ROOT`` and then execs the real
+    client binary.
+    """
+    wrapper_path = target_dir / "pi_mcp_wrapper.sh"
+    wrapper_content = (
+        "#!/usr/bin/env bash\n"
+        f"export SKY_CUA_REPO_ROOT={shlex.quote(str(REPO_ROOT))}\n"
+        f'exec {shlex.quote(str(client_path))} mcp "$@"\n'
+    )
+    wrapper_path.write_text(wrapper_content, encoding="utf-8")
+    wrapper_path.chmod(0o755)
+
+    snippet = {
+        "mcpServers": {
+            "sky_cua": {
+                "command": str(wrapper_path),
+                "lifecycle": "lazy",
+                "directTools": True,
+            }
+        }
+    }
+
+    path = target_dir / "pi_mcp.json"
     path.write_text(json.dumps(snippet, indent=2) + "\n", encoding="utf-8")
     return path
 
@@ -232,6 +279,12 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
         else:
             print("     %APPDATA%\\Claude\\claude_desktop_config.json")
         print("  2. Restart Claude Desktop")
+    elif host == "pi":
+        print("\nNext steps for Pi:")
+        print(f"  1. Merge {config_path} into your Pi MCP config:")
+        print("     ~/.pi/agent/mcp.json")
+        print("  2. Ensure pi-mcp-adapter is installed: npm install -g pi-mcp-adapter")
+        print("  3. Restart Pi or run /reload")
     else:
         print("\nNext steps for generic MCP hosts:")
         print(f"  1. Reference {config_path} in your host's MCP server registry")
@@ -251,7 +304,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--host",
-        choices=("generic", "opencode", "claude-desktop"),
+        choices=("generic", "opencode", "claude-desktop", "pi"),
         default="generic",
         help="Host-specific MCP config format to emit.",
     )
@@ -272,6 +325,8 @@ def main() -> int:
         config_path = install_opencode(target_dir, client_path)
     elif args.host == "claude-desktop":
         config_path = install_claude_desktop(target_dir, client_path)
+    elif args.host == "pi":
+        config_path = install_pi(target_dir, client_path)
     else:
         config = generate_mcp_config(client_path, target_dir)
         config_path = write_mcp_json(target_dir, config)

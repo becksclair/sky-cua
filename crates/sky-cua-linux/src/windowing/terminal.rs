@@ -9,6 +9,7 @@ struct ProcessInfo {
     ppid: u32,
     start_ticks: u64,
     command_name: String,
+    command_line: String,
     cwd: Option<String>,
     tty_paths: Vec<String>,
 }
@@ -154,7 +155,7 @@ fn process_summary(process: &ProcessInfo) -> TerminalProcess {
     TerminalProcess {
         pid: process.pid,
         command_name: process.command_name.clone(),
-        command_line: process.command_name.clone(),
+        command_line: process.command_line.clone(),
         cwd: process.cwd.clone(),
     }
 }
@@ -247,6 +248,7 @@ fn read_process_info(pid: u32) -> Option<ProcessInfo> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| pid.to_string());
+    let command_line = read_command_line(pid).unwrap_or_else(|| command_name.clone());
     let cwd = fs::read_link(format!("/proc/{pid}/cwd"))
         .ok()
         .map(path_to_string);
@@ -257,9 +259,23 @@ fn read_process_info(pid: u32) -> Option<ProcessInfo> {
         ppid,
         start_ticks,
         command_name,
+        command_line,
         cwd,
         tty_paths,
     })
+}
+
+fn read_command_line(pid: u32) -> Option<String> {
+    let bytes = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let args: Vec<String> = bytes
+        .split(|&b| b == 0)
+        .filter(|slice| !slice.is_empty())
+        .filter_map(|slice| String::from_utf8(slice.to_vec()).ok())
+        .collect();
+    if args.is_empty() {
+        return None;
+    }
+    Some(args.join(" "))
 }
 
 fn parse_stat(pid: u32) -> Option<(u32, u64)> {
@@ -339,6 +355,26 @@ mod tests {
             ppid,
             start_ticks,
             command_name: command_name.to_string(),
+            command_line: command_name.to_string(),
+            cwd: Some("/home/user".to_string()),
+            tty_paths: tty.into_iter().map(ToOwned::to_owned).collect(),
+        }
+    }
+
+    fn process_with_cmdline(
+        pid: u32,
+        ppid: u32,
+        start_ticks: u64,
+        command_name: &str,
+        command_line: &str,
+        tty: Option<&str>,
+    ) -> ProcessInfo {
+        ProcessInfo {
+            pid,
+            ppid,
+            start_ticks,
+            command_name: command_name.to_string(),
+            command_line: command_line.to_string(),
             cwd: Some("/home/user".to_string()),
             tty_paths: tty.into_iter().map(ToOwned::to_owned).collect(),
         }
@@ -398,12 +434,58 @@ mod tests {
     }
 
     #[test]
-    fn process_summary_redacts_command_arguments() {
+    fn process_summary_preserves_full_command_line() {
+        let process = process_with_cmdline(
+            42,
+            1,
+            10,
+            "codex",
+            "codex --dangerously-bypass-approvals-and-sandbox",
+            Some("/dev/pts/0"),
+        );
+
+        let summary = process_summary(&process);
+
+        assert_eq!(summary.command_name, "codex");
+        assert_eq!(
+            summary.command_line,
+            "codex --dangerously-bypass-approvals-and-sandbox"
+        );
+    }
+
+    #[test]
+    fn process_summary_falls_back_to_command_name_when_command_line_empty() {
         let process = process(42, 1, 10, "codex", Some("/dev/pts/0"));
 
         let summary = process_summary(&process);
 
         assert_eq!(summary.command_name, "codex");
         assert_eq!(summary.command_line, "codex");
+    }
+
+    #[test]
+    fn command_line_passes_through_terminal_enrichment() {
+        let mut windows = vec![terminal_window("11", 100)];
+        let processes = vec![
+            process(100, 1, 1, "ghostty", None),
+            process_with_cmdline(200, 100, 10, "sh", "sh -c 'echo hello'", Some("/dev/pts/0")),
+            process_with_cmdline(
+                201,
+                200,
+                11,
+                "node",
+                "node /home/user/app.js --port 3000",
+                Some("/dev/pts/0"),
+            ),
+        ];
+
+        enrich_terminal_windows_with_processes(&mut windows, &processes);
+
+        let terminal = windows[0].terminal.as_ref().unwrap();
+        assert_eq!(terminal.root_process.command_line, "sh -c 'echo hello'");
+        assert_eq!(
+            terminal.active_process.as_ref().unwrap().command_line,
+            "node /home/user/app.js --port 3000"
+        );
     }
 }

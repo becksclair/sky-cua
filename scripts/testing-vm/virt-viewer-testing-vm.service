@@ -1,0 +1,12 @@
+[Unit]
+Description=Virt-Viewer for sky-cua testing VM
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/virt-viewer --connect qemu:///session testing-vm --attach
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

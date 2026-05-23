@@ -514,7 +514,32 @@ fn doctor_summary(report: &sky_cua_platform::model::DoctorReport) -> String {
     {
         summary.push_str(" SessionEnvRepaired: detached desktop session environment was repaired.");
     }
+
+    if let Some(input) = &report.input {
+        push_input_diagnostics(input, &mut summary);
+    }
+
     summary
+}
+
+fn push_input_diagnostics(
+    input: &sky_cua_platform::model::DoctorInputReport,
+    summary: &mut String,
+) {
+    let checks = [
+        (&input.ydotool, "ydotool binary"),
+        (&input.ydotoold, "ydotoold process"),
+        (&input.ydotool_socket, "ydotool socket"),
+        (&input.uinput, "/dev/uinput"),
+    ];
+    let details: Vec<String> = checks
+        .iter()
+        .filter(|(check, _)| !check.ok)
+        .map(|(check, label)| format!("{}: {}", label, check.detail))
+        .collect();
+    if !details.is_empty() {
+        summary.push_str(&format!(" Input details: {}.", details.join("; ")));
+    }
 }
 
 pub(crate) fn tool_definitions(model: &ModelSessionInfo) -> Value {

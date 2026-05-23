@@ -14,46 +14,46 @@ opencode_auth="${OPENCODE_AUTH_JSON:-${HOME}/.local/share/opencode/auth.json}"
 opencode_desktop_config="${OPENCODE_DESKTOP_CONFIG_HOME:-${HOME}/.config/@opencode-ai}"
 
 ssh_options=(
-  -p "${port}"
-  -o BatchMode=yes
-  -o ConnectTimeout=8
-  -o StrictHostKeyChecking=no
-  -o "UserKnownHostsFile=${known_hosts}"
+	-p "${port}"
+	-o BatchMode=yes
+	-o ConnectTimeout=8
+	-o StrictHostKeyChecking=no
+	-o "UserKnownHostsFile=${known_hosts}"
 )
 rsync_ssh="ssh -p ${port} -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o UserKnownHostsFile=${known_hosts}"
 target="${user}@${host}"
 
 if [[ ! -d "${opencode_config}" ]]; then
-  printf 'OpenCode config directory not found: %s\n' "${opencode_config}" >&2
-  exit 66
+	printf 'OpenCode config directory not found: %s\n' "${opencode_config}" >&2
+	exit 66
 fi
 
 if [[ ! -f "${opencode_auth}" ]]; then
-  printf 'OpenCode auth file not found: %s\n' "${opencode_auth}" >&2
-  exit 66
+	printf 'OpenCode auth file not found: %s\n' "${opencode_auth}" >&2
+	exit 66
 fi
 
 ssh "${ssh_options[@]}" "${target}" \
-  'set -euo pipefail; mkdir -p ~/.agents ~/.config ~/.local/share/opencode ~/.config/@opencode-ai'
+	'set -euo pipefail; mkdir -p ~/.agents ~/.config ~/.local/share/opencode ~/.config/@opencode-ai'
 
 rsync -aL --delete \
-  --exclude node_modules \
-  --exclude .ruff_cache \
-  --exclude opencode-notifier-state.json \
-  -e "${rsync_ssh}" \
-  "${opencode_config}/" \
-  "${target}:.agents/opencode/"
+	--exclude node_modules \
+	--exclude .ruff_cache \
+	--exclude opencode-notifier-state.json \
+	-e "${rsync_ssh}" \
+	"${opencode_config}/" \
+	"${target}:.agents/opencode/"
 
 rsync -aL \
-  -e "${rsync_ssh}" \
-  "${opencode_auth}" \
-  "${target}:.local/share/opencode/auth.json"
+	-e "${rsync_ssh}" \
+	"${opencode_auth}" \
+	"${target}:.local/share/opencode/auth.json"
 
 if [[ -d "${opencode_desktop_config}" ]]; then
-  rsync -aL --delete \
-    -e "${rsync_ssh}" \
-    "${opencode_desktop_config}/" \
-    "${target}:.config/@opencode-ai/"
+	rsync -aL --delete \
+		-e "${rsync_ssh}" \
+		"${opencode_desktop_config}/" \
+		"${target}:.config/@opencode-ai/"
 fi
 
 ssh "${ssh_options[@]}" "${target}" 'set -euo pipefail
@@ -61,6 +61,9 @@ rm -rf ~/.config/opencode
 ln -s "$HOME/.agents/opencode" "$HOME/.config/opencode"
 chmod 700 ~/.local/share/opencode ~/.config/@opencode-ai || true
 chmod 600 ~/.local/share/opencode/auth.json
+# Update OpenCode to latest version (best-effort; may require root for global npm)
+npm install -g opencode-ai@latest || printf "warning: global npm update failed; continuing with existing install\n" >&2
+
 if [[ -f ~/.agents/opencode/package.json ]]; then
   cd ~/.agents/opencode
   npm install --omit=dev

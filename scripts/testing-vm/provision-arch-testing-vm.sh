@@ -194,6 +194,11 @@ fi
 
 npm install -g "${opencode_npm_spec}"
 
+# Install Pi and its MCP adapter for integration smoke lanes.
+npm install -g @earendil-works/pi-coding-agent pi-mcp-adapter || {
+	printf 'warning: Pi global install failed; smoke tests will need local fallback\n' >&2
+}
+
 runuser -u "${vm_user}" -- dbus-run-session -- bash -lc '
 set -euo pipefail
 gsettings set org.gnome.desktop.session idle-delay 0 || true

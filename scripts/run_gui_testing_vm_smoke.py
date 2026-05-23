@@ -38,6 +38,8 @@ PROFILES = (
     "gnome",
     "cosmic",
     "hyprland",
+    "opencode-mcp",
+    "pi-mcp",
     "all",
 )
 RUNTIME_PACKAGES = (
@@ -149,6 +151,41 @@ KWIN_EFFECT_SYSTEM_INSTALL_HOST_PROOF = KwinHostFramebufferProofProfile(
 )
 
 
+def _sync_host_settings(
+    ssh_target: str,
+    port: int,
+    script_name: str,
+) -> None:
+    """Run a testing-vm sync script with the standard environment."""
+    script_path = REPO_ROOT / "scripts" / "testing-vm" / script_name
+    env = os.environ.copy()
+    env["SKY_CUA_TESTING_VM_HOST"] = ssh_target.split("@")[1]
+    env["SKY_CUA_TESTING_VM_PORT"] = str(port)
+    env["SKY_CUA_TESTING_VM_USER"] = ssh_target.split("@")[0]
+    subprocess.run(
+        [str(script_path)],
+        cwd=REPO_ROOT,
+        check=True,
+        env=env,
+    )
+
+
+def sync_opencode_settings(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+) -> None:
+    _sync_host_settings(ssh_target, port, "sync-opencode-to-vm.sh")
+
+
+def sync_pi_settings(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+) -> None:
+    _sync_host_settings(ssh_target, port, "sync-pi-to-vm.sh")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run sky-cua GUI desktop smoke profiles on the Arch testing VM."
@@ -193,6 +230,16 @@ def main() -> int:
         type=Path,
         default=DEFAULT_CODEX_HOME,
         help="Host Codex settings directory to sync into the VM.",
+    )
+    parser.add_argument(
+        "--sync-opencode-settings",
+        action="store_true",
+        help="Copy host ~/.config/opencode settings into the VM for OpenCode smokes.",
+    )
+    parser.add_argument(
+        "--sync-pi-settings",
+        action="store_true",
+        help="Copy host ~/.pi settings into the VM for Pi smokes.",
     )
     parser.add_argument(
         "--headed",
@@ -248,6 +295,10 @@ def main() -> int:
         sync_checkout(ssh_target, args.port, args.ssh_option, remote_root)
     if args.sync_codex_settings and not args.skip_codex_settings:
         sync_codex_settings(ssh_target, args.port, args.ssh_option, args.codex_home)
+    if args.sync_opencode_settings:
+        sync_opencode_settings(ssh_target, args.port, args.ssh_option)
+    if args.sync_pi_settings:
+        sync_pi_settings(ssh_target, args.port, args.ssh_option)
     reset_guest_sky_cua_processes(ssh_target, args.port, args.ssh_option)
     wake_guest_display(ssh_target, args.port, args.ssh_option)
     if args.desktop_env:
@@ -283,6 +334,13 @@ def main() -> int:
             remote_root,
             wayland_display=args.wayland_display,
             desktop_env=args.desktop_env,
+        )
+    if args.profile in ("opencode-mcp", "pi-mcp"):
+        preauthorize_screenshot_portal(
+            ssh_target,
+            args.port,
+            args.ssh_option,
+            remote_root,
         )
     if args.profile == "kde-kwin-effect-system-install":
         return run_remote_kwin_effect_system_install_profile(
@@ -622,6 +680,26 @@ def preauthorize_kde_remote_desktop(
     )
 
 
+def preauthorize_screenshot_portal(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+) -> None:
+    remote_script = (
+        f"cd {shlex.quote(str(remote_root))} && "
+        'runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" && '
+        'if [ ! -d "$runtime_dir" ]; then runtime_dir=/tmp/sky-cua-runtime; mkdir -p "$runtime_dir"; chmod 700 "$runtime_dir"; fi && '
+        'export XDG_RUNTIME_DIR="$runtime_dir" && '
+        "python3 scripts/testing-vm/preauthorize_screenshot_portal.py"
+    )
+    subprocess.run(
+        [*ssh_base_command(port, ssh_options), ssh_target, remote_script],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+
+
 def desktop_environment_exports(desktop_env: str) -> str:
     if not desktop_env:
         return ""
@@ -656,10 +734,19 @@ def run_remote_profile(
         f"SKY_CUA_DEBUG_OVERLAY_HOST_PATH={remote_root}/target/debug/sky-cua-overlay-host",
         f"SKY_CUA_COSMIC_HELPER={remote_root}/target/release/sky-cua-cosmic-helper",
         f"PATH={remote_root}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "bash",
-        str(remote_root / "scripts" / "testing-vm" / "profiles" / "run-profile.sh"),
-        profile,
     ]
+    # Forward API keys for OpenCode/Pi harnesses when available on the host
+    for key in ("FIREWORKS_API_KEY", "OPENAI_API_KEY", "MOONSHOT_API_KEY", "CONTEXT7_API_KEY"):
+        value = os.environ.get(key)
+        if value:
+            profile_command.append(f"{key}={value}")
+    profile_command.extend(
+        [
+            "bash",
+            str(remote_root / "scripts" / "testing-vm" / "profiles" / "run-profile.sh"),
+            profile,
+        ]
+    )
     if headed:
         profile_command.append("--headed")
     desktop_exports = desktop_environment_exports(desktop_env)

@@ -23,8 +23,10 @@ const GNOME_DISPLAY_CONFIG_INTERFACE: &str = "org.gnome.Mutter.DisplayConfig";
 const KDE_AUTHORIZED_TABLE: &str = "kde-authorized";
 const REMOTE_DESKTOP_TABLE: &str = "remote-desktop";
 const REMOTE_DESKTOP_ID: &str = "remote-desktop";
+const SCREENSHOT_TABLE: &str = "screenshot";
+const SCREENSHOT_ID: &str = "screenshot";
 const ALLOW_PERMISSION: &str = "yes";
-const KDE_REMOTE_DESKTOP_APP_IDS: &[&str] = &["", "desktop"];
+const GENERIC_APP_IDS: &[&str] = &["", "desktop"];
 const GNOME_RESTORE_BACKEND_NAME: &str = "GNOME";
 const GNOME_RESTORE_VERSION: u32 = 1;
 const GNOME_DEFAULT_DEVICE_TYPES: u32 = 3;
@@ -95,12 +97,45 @@ pub(crate) async fn preauthorize_remote_desktop(token_store: Option<&PortalToken
             "skipping GNOME RemoteDesktop portal preauthorization on a non-GNOME compositor"
         );
     }
+
+    match preauthorize_screenshot(&connection).await {
+        Ok(()) => tracing::info!("preauthorized screenshot portal permission"),
+        Err(error) => tracing::debug!(
+            message = %error,
+            "skipping screenshot portal preauthorization"
+        ),
+    }
+}
+
+async fn preauthorize_screenshot(connection: &zbus::Connection) -> Result<()> {
+    let proxy = permission_store_proxy(connection).await?;
+    let permissions = HashMap::from([
+        (String::new(), vec![ALLOW_PERMISSION.to_string()]),
+        ("desktop".to_string(), vec![ALLOW_PERMISSION.to_string()]),
+    ]);
+    let _: () = proxy
+        .call(
+            "Set",
+            &(
+                SCREENSHOT_TABLE,
+                true,
+                SCREENSHOT_ID,
+                permissions,
+                Value::from(""),
+            ),
+        )
+        .await
+        .context("failed to seed screenshot portal authorization")?;
+
+    verify_permission_roundtrip(&proxy, SCREENSHOT_TABLE, SCREENSHOT_ID, GENERIC_APP_IDS)
+        .await
+        .context("screenshot portal authorization round-trip failed")
 }
 
 async fn preauthorize_kde_remote_desktop(connection: &zbus::Connection) -> Result<()> {
     let proxy = permission_store_proxy(connection).await?;
     let permissions = vec![ALLOW_PERMISSION.to_string()];
-    for app_id in KDE_REMOTE_DESKTOP_APP_IDS {
+    for app_id in GENERIC_APP_IDS {
         let _: () = proxy
             .call(
                 "SetPermission",
@@ -118,11 +153,27 @@ async fn preauthorize_kde_remote_desktop(connection: &zbus::Connection) -> Resul
             })?;
     }
 
+    verify_permission_roundtrip(
+        &proxy,
+        KDE_AUTHORIZED_TABLE,
+        REMOTE_DESKTOP_ID,
+        GENERIC_APP_IDS,
+    )
+    .await
+    .context("KDE RemoteDesktop authorization round-trip failed")
+}
+
+async fn verify_permission_roundtrip(
+    proxy: &Proxy<'_>,
+    table: &str,
+    id: &str,
+    app_ids: &[&str],
+) -> Result<()> {
     let (roundtrip_permissions, _data): (PortalPermissions, OwnedValue) = proxy
-        .call("Lookup", &(KDE_AUTHORIZED_TABLE, REMOTE_DESKTOP_ID))
+        .call("Lookup", &(table, id))
         .await
-        .context("failed to verify KDE RemoteDesktop authorization")?;
-    let missing_app_ids = KDE_REMOTE_DESKTOP_APP_IDS
+        .with_context(|| format!("failed to verify {table} portal authorization"))?;
+    let missing_app_ids = app_ids
         .iter()
         .copied()
         .filter(|app_id| {
@@ -137,10 +188,9 @@ async fn preauthorize_kde_remote_desktop(connection: &zbus::Connection) -> Resul
         .collect::<Vec<_>>();
     if !missing_app_ids.is_empty() {
         return Err(anyhow!(
-            "KDE RemoteDesktop authorization did not round-trip for app ids {missing_app_ids:?}: {roundtrip_permissions:?}"
+            "{table} authorization did not round-trip for app ids {missing_app_ids:?}: {roundtrip_permissions:?}"
         ));
     }
-
     Ok(())
 }
 

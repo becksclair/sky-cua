@@ -91,7 +91,10 @@ impl LinuxVirtualInput {
         F: FnOnce(&mut UinputPointerDevice) -> Result<R, BackendError>,
     {
         let bounds = self.desktop_bounds()?;
-        let mut guard = self.uinput_device.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = self
+            .uinput_device
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if guard.as_ref().is_none_or(|d| d.bounds != bounds) {
             *guard = Some(UinputPointerDevice::create(bounds)?);
         }
@@ -139,13 +142,11 @@ impl LinuxVirtualInput {
 
     pub fn click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                self.with_uinput_device(|device| {
-                    device.move_absolute(x, y)?;
-                    thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                    device.click(button)
-                })
-            }
+            VirtualInputAdapterKind::DirectUinput => self.with_uinput_device(|device| {
+                device.move_absolute(x, y)?;
+                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
+                device.click(button)
+            }),
             VirtualInputAdapterKind::Ydotool => {
                 self.move_absolute(x, y)?;
                 self.click(button)
@@ -178,17 +179,15 @@ impl LinuxVirtualInput {
 
     pub fn drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                self.with_uinput_device(|device| {
-                    device.move_absolute(from.0, from.1)?;
-                    thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                    device.move_absolute(to.0, to.1)?;
-                    thread::sleep(Duration::from_millis(40));
-                    device.pointer_button(MouseButton::Left, true)?;
-                    thread::sleep(Duration::from_millis(40));
-                    device.pointer_button(MouseButton::Left, false)
-                })
-            }
+            VirtualInputAdapterKind::DirectUinput => self.with_uinput_device(|device| {
+                device.move_absolute(from.0, from.1)?;
+                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
+                device.pointer_button(MouseButton::Left, true)?;
+                thread::sleep(Duration::from_millis(40));
+                device.move_absolute(to.0, to.1)?;
+                thread::sleep(Duration::from_millis(40));
+                device.pointer_button(MouseButton::Left, false)
+            }),
             VirtualInputAdapterKind::Ydotool => {
                 self.move_absolute(from.0, from.1)?;
                 self.pointer_button(MouseButton::Left, true)?;
@@ -218,13 +217,11 @@ impl LinuxVirtualInput {
 
     pub fn scroll_vertical_at(&self, x: f64, y: f64, steps: i32) -> Result<(), BackendError> {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                self.with_uinput_device(|device| {
-                    device.move_absolute(x, y)?;
-                    thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                    device.scroll_vertical(steps)
-                })
-            }
+            VirtualInputAdapterKind::DirectUinput => self.with_uinput_device(|device| {
+                device.move_absolute(x, y)?;
+                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
+                device.scroll_vertical(steps)
+            }),
             VirtualInputAdapterKind::Ydotool => {
                 self.move_absolute(x, y)?;
                 self.scroll_vertical(steps)

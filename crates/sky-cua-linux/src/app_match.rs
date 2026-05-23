@@ -208,6 +208,27 @@ fn linux_window_match_score(
     (identity_signals > 0 && score > 0).then_some(score)
 }
 
+/// Returns apps that match the given window. If none match, falls back to the
+/// original list so the caller can still proceed with the full set.
+pub(crate) fn apps_matching_window_or_all(
+    apps: &[DiscoveredApp],
+    window: &linux_windowing::LinuxWindowInfo,
+) -> Vec<DiscoveredApp> {
+    if apps.is_empty() {
+        return Vec::new();
+    }
+    let filtered: Vec<DiscoveredApp> = apps
+        .iter()
+        .filter(|app| linux_window_matches_app(window, &app.info))
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        apps.to_vec()
+    } else {
+        filtered
+    }
+}
+
 pub(crate) fn app_from_linux_window(window: &linux_windowing::LinuxWindowInfo) -> AppInfo {
     let name = window
         .app_id
@@ -540,8 +561,9 @@ pub(crate) fn selector_summary(selector: &AppSelector) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        app_from_linux_window, enrich_accessible_apps_from_windows, linux_window_matches_app,
-        merge_app_lists, preferred_linux_window, select_app, select_linux_window,
+        app_from_linux_window, apps_matching_window_or_all, enrich_accessible_apps_from_windows,
+        linux_window_matches_app, merge_app_lists, preferred_linux_window, select_app,
+        select_linux_window,
     };
     use crate::apps::discovery::DiscoveredApp;
     use crate::windowing::LinuxWindowInfo;
@@ -720,5 +742,20 @@ mod tests {
         app.window_title = Some("Shared Project".to_string());
 
         assert!(!linux_window_matches_app(&window, &app));
+    }
+
+    #[test]
+    fn apps_matching_window_or_all_keeps_matching_apps_and_falls_back_when_none_match() {
+        let matching = discovered_app("accessible-1", "Demo", "/org/a11y/demo/app");
+        let unrelated = discovered_app("accessible-2", "Other", "/org/a11y/other/app");
+        let window = linux_window("kwin:{demo}", "demo.desktop", true);
+
+        let filtered = apps_matching_window_or_all(&[matching.clone(), unrelated.clone()], &window);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].info.app_id, matching.info.app_id);
+
+        let fallback = apps_matching_window_or_all(std::slice::from_ref(&unrelated), &window);
+        assert_eq!(fallback.len(), 1);
+        assert_eq!(fallback[0].info.app_id, unrelated.info.app_id);
     }
 }
