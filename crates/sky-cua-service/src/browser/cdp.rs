@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use serde_json::{Value, json};
-use sky_cua_platform::model::{BrowserTargetKind, DiagnosticEntry};
+use sky_cua_platform::model::DiagnosticEntry;
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
@@ -9,15 +9,12 @@ use super::coordinates::{
     browser_coordinate_scale_until, device_pixels_to_css_pixels,
     screenshot_point_to_css_point_until,
 };
-use super::probe::run_on_responsive_bridge_socket_until;
 use super::protocol::{
     CLICK_DOWN_REQUEST_ID, CLICK_MOVE_REQUEST_ID, CLICK_UP_REQUEST_ID, KEY_DOWN_REQUEST_ID,
     KEY_UP_REQUEST_ID, NAVIGATE_REQUEST_ID, SCREENSHOT_REQUEST_ID, SCROLL_REQUEST_ID,
     SNAPSHOT_REQUEST_ID, TYPE_TEXT_REQUEST_ID,
 };
-use super::session::{is_recoverable_cdp_session_diagnostic, recover_cdp_session_until};
 use super::snapshot;
-use super::tabs::tab_id_value;
 use super::transport::execute_cdp_until;
 
 #[derive(Debug)]
@@ -60,40 +57,7 @@ pub(super) enum BrowserCdpResult {
     Action,
 }
 
-pub(super) async fn cdp_action_from_sockets(
-    sockets: Vec<std::path::PathBuf>,
-    target: BrowserTargetKind,
-    tab_id: &str,
-    action: &BrowserCdpAction,
-    deadline: TokioInstant,
-) -> Result<BrowserCdpResult, DiagnosticEntry> {
-    run_on_responsive_bridge_socket_until(sockets, deadline, |socket, stream| async move {
-        cdp_action_from_socket(&socket, target, tab_id, action, deadline, stream).await
-    })
-    .await
-}
-
-async fn cdp_action_from_socket(
-    socket: &Path,
-    _target: BrowserTargetKind,
-    tab_id: &str,
-    action: &BrowserCdpAction,
-    deadline: TokioInstant,
-    mut stream: UnixStream,
-) -> Result<BrowserCdpResult, DiagnosticEntry> {
-    let tab_id_value = tab_id_value(tab_id);
-    let result = cdp_action_on_stream(&mut stream, socket, &tab_id_value, action, deadline).await;
-    match result {
-        Ok(result) => Ok(result),
-        Err(diagnostic) if is_recoverable_cdp_session_diagnostic(&diagnostic) => {
-            recover_cdp_session_until(&mut stream, socket, &tab_id_value, deadline).await?;
-            cdp_action_on_stream(&mut stream, socket, &tab_id_value, action, deadline).await
-        }
-        Err(diagnostic) => Err(diagnostic),
-    }
-}
-
-async fn cdp_action_on_stream(
+pub(super) async fn cdp_action_on_stream(
     stream: &mut UnixStream,
     socket: &Path,
     tab_id_value: &Value,

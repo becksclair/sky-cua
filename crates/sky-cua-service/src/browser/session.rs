@@ -2,14 +2,12 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    BrowserClaimTabResponse, BrowserMoveMouseResponse, BrowserOpenResponse, BrowserTab,
-    BrowserTargetKind, DiagnosticEntry,
+    BrowserClaimTabResponse, BrowserOpenResponse, BrowserTab, BrowserTargetKind, DiagnosticEntry,
 };
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
 use super::coordinates::screenshot_point_to_css_point_until;
-use super::probe::run_on_responsive_bridge_socket_until;
 use super::protocol::{
     ATTACH_TAB_REQUEST_ID, ATTACH_TAB_RETRY_REQUEST_ID, CLAIM_TAB_REQUEST_ID,
     CLAIM_TAB_RETRY_REQUEST_ID, DETACH_TAB_FOR_RETRY_REQUEST_ID, ENABLE_PAGE_REQUEST_ID,
@@ -22,53 +20,7 @@ use super::transport::{
     browser_session_params, execute_cdp_until, merge_json, send_bridge_request_until,
 };
 
-pub(super) async fn open_tab_from_sockets(
-    sockets: Vec<std::path::PathBuf>,
-    target: BrowserTargetKind,
-    url: Option<&str>,
-    deadline: TokioInstant,
-) -> Result<BrowserOpenResponse, DiagnosticEntry> {
-    run_on_responsive_bridge_socket_until(sockets, deadline, |socket, stream| async move {
-        open_tab_from_socket(&socket, target, url, deadline, stream).await
-    })
-    .await
-}
-
-pub(super) async fn claim_tab_from_sockets(
-    sockets: Vec<std::path::PathBuf>,
-    target: BrowserTargetKind,
-    tab_id: &str,
-    deadline: TokioInstant,
-) -> Result<BrowserClaimTabResponse, DiagnosticEntry> {
-    run_on_responsive_bridge_socket_until(sockets, deadline, |socket, stream| async move {
-        claim_tab_from_socket(&socket, target, tab_id, deadline, stream).await
-    })
-    .await
-}
-
-pub(super) async fn move_mouse_from_sockets(
-    sockets: Vec<std::path::PathBuf>,
-    target: BrowserTargetKind,
-    tab_id: &str,
-    x: f64,
-    y: f64,
-    wait_for_arrival: bool,
-    deadline: TokioInstant,
-) -> Result<BrowserMoveMouseResponse, DiagnosticEntry> {
-    run_on_responsive_bridge_socket_until(sockets, deadline, |socket, stream| async move {
-        let request = MoveMouseInvocation {
-            target,
-            tab_id,
-            x,
-            y,
-            wait_for_arrival,
-        };
-        move_mouse_from_socket(&socket, request, deadline, stream).await
-    })
-    .await
-}
-
-async fn open_tab_from_socket(
+pub(super) async fn open_tab_from_socket(
     socket: &Path,
     target: BrowserTargetKind,
     url: Option<&str>,
@@ -145,7 +97,7 @@ async fn open_tab_from_socket(
     })
 }
 
-async fn claim_tab_from_socket(
+pub(super) async fn claim_tab_from_socket(
     socket: &Path,
     target: BrowserTargetKind,
     tab_id: &str,
@@ -417,60 +369,7 @@ pub(super) async fn recover_cdp_session_until(
     .await
 }
 
-struct MoveMouseInvocation<'a> {
-    target: BrowserTargetKind,
-    tab_id: &'a str,
-    x: f64,
-    y: f64,
-    wait_for_arrival: bool,
-}
-
-async fn move_mouse_from_socket(
-    socket: &Path,
-    request: MoveMouseInvocation<'_>,
-    deadline: TokioInstant,
-    mut stream: UnixStream,
-) -> Result<BrowserMoveMouseResponse, DiagnosticEntry> {
-    let tab_id_value = tab_id_value(request.tab_id);
-    let result = move_mouse_on_stream(
-        &mut stream,
-        socket,
-        &tab_id_value,
-        request.x,
-        request.y,
-        request.wait_for_arrival,
-        deadline,
-    )
-    .await;
-    match result {
-        Ok(()) => {}
-        Err(diagnostic) if is_recoverable_cdp_session_diagnostic(&diagnostic) => {
-            recover_cdp_session_until(&mut stream, socket, &tab_id_value, deadline).await?;
-            move_mouse_on_stream(
-                &mut stream,
-                socket,
-                &tab_id_value,
-                request.x,
-                request.y,
-                request.wait_for_arrival,
-                deadline,
-            )
-            .await?;
-        }
-        Err(diagnostic) => return Err(diagnostic),
-    }
-
-    Ok(BrowserMoveMouseResponse {
-        target: request.target,
-        tab_id: request.tab_id.to_string(),
-        x: request.x,
-        y: request.y,
-        wait_for_arrival: request.wait_for_arrival,
-        diagnostics: Vec::new(),
-    })
-}
-
-async fn move_mouse_on_stream(
+pub(super) async fn move_mouse_on_stream(
     stream: &mut UnixStream,
     socket: &Path,
     tab_id_value: &Value,

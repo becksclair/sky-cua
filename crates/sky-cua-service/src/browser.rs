@@ -2,6 +2,7 @@ mod bridge;
 mod cdp;
 mod coordinates;
 mod diagnostics;
+mod executor;
 mod probe;
 mod protocol;
 mod session;

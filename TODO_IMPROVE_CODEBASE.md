@@ -27,7 +27,7 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 
 | ID | Priority | Effort | Risk | Confidence | Status | Roadmap alignment | Cluster |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| ICA-008 | P1 | M | Medium | High | ready-for-design | Host portability: Browser MCP managed lifecycle | `crates/sky-cua-service/src/browser/{bridge,session,cdp}.rs` |
+| ICA-008 | P1 | M | Medium | High | complete | Host portability: Browser MCP managed lifecycle | `crates/sky-cua-service/src/browser/{bridge,session,cdp,executor}.rs` |
 | ICA-014 | P1 | M | Medium | High | ready-for-design | Windows parity: Windows agent cursor overlay and host IPC | overlay host platform modules and service overlay transport |
 | ICA-010 | P2 | M | Medium | High | candidate | Linux desktop parity / Host portability: detached launch breadth | `crates/sky-cua-client/src/service_launcher.rs`, service health env contracts |
 | ICA-011 | P2 | M | Medium | High | candidate | Diagnostics and operator UX: curated VM runner profile set | `scripts/run_gui_testing_vm_smoke.py` |
@@ -44,13 +44,14 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 - [x] `ICA-005` Windows backend split validation note.
 - [x] `ICA-006` Linux app-state capture planning boundary.
 - [x] `ICA-007` service desktop request lane.
+- [x] `ICA-008` browser bridge operation boundary.
 
 ## Tasks
 
-- [ ] **ICA-008: Introduce a browser bridge operation boundary**
-  Priority: P1. Effort: M. Risk: Medium. Confidence: High. Status: ready-for-design
+- [x] **ICA-008: Introduce a browser bridge operation boundary**
+  Priority: P1. Effort: M. Risk: Medium. Confidence: High. Status: complete
   Roadmap alignment: Host portability -> Browser MCP managed lifecycle.
-  Cluster: `crates/sky-cua-service/src/browser/bridge.rs`, `crates/sky-cua-service/src/browser/session.rs`, `crates/sky-cua-service/src/browser/cdp.rs`, `crates/sky-cua-service/src/browser/tests.rs`
+  Cluster: `crates/sky-cua-service/src/browser/bridge.rs`, `crates/sky-cua-service/src/browser/executor.rs`, `crates/sky-cua-service/src/browser/session.rs`, `crates/sky-cua-service/src/browser/cdp.rs`, `crates/sky-cua-service/src/browser/tests.rs`
   Dependency category: Remote but owned, using ports and adapters; Evented or asynchronous boundary
   Problem: Browser operations repeatedly expose socket selection, bridge readiness diagnostics, deadlines, attach/enable, stale-session recovery, and action retry sequencing to individual operation families.
   Evidence:
@@ -61,21 +62,23 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - `crates/sky-cua-service/src/browser/tests.rs`: one large module covers socket inventory, protocol framing, tab operations, session recovery, coordinate conversion, action retries, snapshot behavior, and fake-server helpers.
   Why coupled: The current `user_chrome` bridge and the planned managed-browser bridge will need the same operation contract: resolve a target, pick or create a controllable endpoint, bind a tab/session, execute CDP or extension actions, retry recoverable stale state, and report stable diagnostics.
   Suggested first move: Add characterization tests around a small `BrowserBridgeExecutor` that resolves selection/sockets/deadline once, then proves open, claim, CDP action, and extension move-mouse paths preserve current diagnostics and retry behavior.
+  Completion note: Implemented `BrowserBridgeExecutor` and `BrowserSessionBinding` in `crates/sky-cua-service/src/browser/executor.rs`. Browser operations now resolve socket selection and deadline ownership through the executor; bound-tab CDP and extension move-mouse operations share one stale-session recovery path while preserving existing service and MCP wire shapes.
+  Verification: `cargo fmt --check`; `cargo test -p sky-cua-service browser`; `cargo test -p sky-cua-service`; `cargo clippy -p sky-cua-service --all-targets -- -D warnings`; `cargo test`; release build `cargo build --release -p sky-cua-service -p sky-cua-client -p sky-cua-chrome-host`; isolated native-host smoke `scripts/live_chrome_host_client_smoke.py --browser brave --install-temp-native-manifest --host-path target/release/sky-cua-chrome-host --mcp-client-path target/release/sky-cua-client --mcp-list-tabs-proof --skip-turn-ended-proof` with artifact `artifacts/chrome-host-smoke/20260609T150136Z/result.json`; Pi tmux live MCP run using a temporary repo-local MCP config at `/tmp/sky-cua-ica008-pi.6waLvk/mcp.json` and session log `~/.pi/agent/sessions/--home-bex-projects-sky-cua--/2026-06-09T15-04-12-300Z_019eace9-9f0c-7a7d-b796-87fd179386b9.jsonl`.
   Testing impact: New boundary tests should assert empty socket diagnostics, first-responsive-socket behavior, stale owner reclaim, debugger detach/reattach, CDP retry, and extension move-mouse retry. Existing operation-specific tests can be moved or reduced only after the executor tests cover the same behavior.
   Needs human decision: None for a service-internal boundary; keep public browser tool names and service wire shapes unchanged.
   Acceptance criteria:
-  - [ ] A crate-local browser operation boundary owns socket selection, deadline construction, and disconnected/unsupported diagnostics.
-  - [ ] Tab attach/enable/reclaim/retry policy is reusable by CDP actions and extension-only move-mouse.
-  - [ ] The boundary can accept the future managed-browser endpoint without duplicating operation policy.
-  - [ ] Existing `BrowserRequest`/`BrowserResponse` serde shapes remain unchanged.
-  - [ ] Focused service tests cover the boundary before redundant lower-level tests are removed.
+  - [x] A crate-local browser operation boundary owns socket selection, deadline construction, and disconnected/unsupported diagnostics.
+  - [x] Tab attach/enable/reclaim/retry policy is reusable by CDP actions and extension-only move-mouse.
+  - [x] The boundary can accept the future managed-browser endpoint without duplicating operation policy.
+  - [x] Existing `BrowserRequest`/`BrowserResponse` serde shapes remain unchanged.
+  - [x] Focused service tests cover the boundary before redundant lower-level tests are removed.
   Work checklist:
-  - [ ] Validate the evidence and mark false assumptions.
-  - [ ] Add characterization tests for current bridge selection and recovery behavior.
-  - [ ] Sketch the target public interface.
-  - [ ] Migrate one representative flow, preferably `browser_snapshot` or `browser_move_mouse`.
-  - [ ] Expand migration to open/claim/navigate/click/type/key/scroll/screenshot.
-  - [ ] Split shared fake-server fixtures from `browser/tests.rs` after replacement coverage passes.
+  - [x] Validate the evidence and mark false assumptions.
+  - [x] Add characterization tests for current bridge selection and recovery behavior.
+  - [x] Sketch the target public interface.
+  - [x] Migrate one representative flow, preferably `browser_snapshot` or `browser_move_mouse`.
+  - [x] Expand migration to open/claim/navigate/click/type/key/scroll/screenshot.
+  - [x] Split shared fake-server fixtures from `browser/tests.rs` after replacement coverage passes.
 
 - [ ] **ICA-014: Split overlay host platform transport for Windows overlay work**
   Priority: P1. Effort: M. Risk: Medium. Confidence: High. Status: ready-for-design
