@@ -6,7 +6,7 @@ use sky_cua_platform::model::{
     BrowserActionResponse, BrowserClaimTabResponse, BrowserListTabsResponse,
     BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
     BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport, BrowserTab,
-    BrowserTargetKind, DiagnosticEntry,
+    BrowserTargetKind, DiagnosticEntry, browser_diagnostic_is_error_code,
 };
 
 use super::args::BrowserTabTextFilter;
@@ -235,19 +235,7 @@ pub(crate) fn browser_list_tabs_is_error(response: &BrowserListTabsResponse) -> 
         && response
             .diagnostics
             .iter()
-            .any(|diagnostic| is_fatal_browser_diagnostic(&diagnostic.code))
-}
-
-fn is_fatal_browser_diagnostic(code: &str) -> bool {
-    matches!(
-        code,
-        "BrowserBridgeDisconnected"
-            | "BrowserBridgeUnsupported"
-            | "BrowserBridgeRequestFailed"
-            | "BrowserBridgeRequestTimedOut"
-            | "BrowserSelectionInvalid"
-            | "BrowserTargetUnsupported"
-    )
+            .any(|diagnostic| browser_diagnostic_is_error_code(&diagnostic.code))
 }
 
 pub(crate) fn browser_open_summary(response: &BrowserOpenResponse) -> String {
@@ -271,11 +259,7 @@ pub(crate) fn browser_open_summary(response: &BrowserOpenResponse) -> String {
 }
 
 pub(crate) fn browser_open_is_error(response: &BrowserOpenResponse) -> bool {
-    response.tab.is_none()
-        || response
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "BrowserOpenPartial")
+    response.tab.is_none() || browser_diagnostics_are_error(&response.diagnostics)
 }
 
 pub(crate) fn browser_claim_tab_summary(response: &BrowserClaimTabResponse) -> String {
@@ -291,14 +275,7 @@ pub(crate) fn browser_claim_tab_summary(response: &BrowserClaimTabResponse) -> S
 }
 
 pub(crate) fn browser_claim_tab_is_error(response: &BrowserClaimTabResponse) -> bool {
-    response.tab.is_none()
-        || response.diagnostics.iter().any(|diagnostic| {
-            is_fatal_browser_diagnostic(&diagnostic.code)
-                || matches!(
-                    diagnostic.code.as_str(),
-                    "BrowserTabIdInvalid" | "BrowserClaimPartial"
-                )
-        })
+    response.tab.is_none() || browser_diagnostics_are_error(&response.diagnostics)
 }
 
 pub(crate) fn browser_move_mouse_summary(response: &BrowserMoveMouseResponse) -> String {
@@ -321,13 +298,7 @@ pub(crate) fn browser_move_mouse_summary(response: &BrowserMoveMouseResponse) ->
 }
 
 pub(crate) fn browser_move_mouse_is_error(response: &BrowserMoveMouseResponse) -> bool {
-    response.diagnostics.iter().any(|diagnostic| {
-        is_fatal_browser_diagnostic(&diagnostic.code)
-            || matches!(
-                diagnostic.code.as_str(),
-                "BrowserTabIdInvalid" | "BrowserMouseCoordinateInvalid"
-            )
-    })
+    browser_diagnostics_are_error(&response.diagnostics)
 }
 
 pub(crate) fn browser_navigate_result(response: BrowserNavigateResponse) -> Result<Value> {
@@ -546,19 +517,9 @@ pub(crate) fn browser_action_result(response: BrowserActionResponse) -> Result<V
 }
 
 fn browser_diagnostics_are_error(diagnostics: &[DiagnosticEntry]) -> bool {
-    diagnostics.iter().any(|diagnostic| {
-        is_fatal_browser_diagnostic(&diagnostic.code)
-            || matches!(
-                diagnostic.code.as_str(),
-                "BrowserTabIdInvalid"
-                    | "BrowserMouseCoordinateInvalid"
-                    | "BrowserTextInvalid"
-                    | "BrowserKeyInvalid"
-                    | "BrowserScrollInvalid"
-                    | "BrowserOpenUrlUnsupported"
-                    | "BrowserNavigationFailed"
-            )
-    })
+    diagnostics
+        .iter()
+        .any(|diagnostic| browser_diagnostic_is_error_code(&diagnostic.code))
 }
 
 fn append_first_diagnostic(summary: &mut String, diagnostics: &[DiagnosticEntry]) {

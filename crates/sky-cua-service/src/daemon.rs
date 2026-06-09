@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use sky_cua_platform::DESKTOP_ENV_KEYS;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppStateSnapshot, BrowserRequest, BrowserResponse, CaptureInfo,
@@ -622,24 +623,16 @@ fn agent_cursor_status_response(
 }
 
 fn desktop_env_values_present() -> BTreeMap<String, String> {
-    [
-        "DBUS_SESSION_BUS_ADDRESS",
-        "DESKTOP_SESSION",
-        "DISPLAY",
-        "PATH",
-        "WAYLAND_DISPLAY",
-        "XDG_CURRENT_DESKTOP",
-        "XDG_RUNTIME_DIR",
-        "XDG_SESSION_TYPE",
-    ]
-    .into_iter()
-    .filter_map(|key| {
-        std::env::var(key)
-            .ok()
-            .filter(|value| !value.is_empty())
-            .map(|value| (key.to_string(), value))
-    })
-    .collect()
+    DESKTOP_ENV_KEYS
+        .iter()
+        .copied()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| (key.to_string(), value))
+        })
+        .collect()
 }
 
 fn action_requires_snapshot_context(request: &ActionRequest) -> bool {

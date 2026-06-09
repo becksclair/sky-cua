@@ -196,6 +196,79 @@ pub struct BrowserSnapshotResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserPageSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<BrowserViewport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub elements: Vec<BrowserElementSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserViewport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_pixel_ratio: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserElementSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<BrowserElementBounds>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserElementBounds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+}
+
+pub fn browser_diagnostic_is_error_code(code: &str) -> bool {
+    matches!(
+        code,
+        "BrowserBridgeDisconnected"
+            | "BrowserBridgeUnsupported"
+            | "BrowserBridgeRequestFailed"
+            | "BrowserBridgeRequestTimedOut"
+            | "BrowserSelectionInvalid"
+            | "BrowserTargetUnsupported"
+            | "BrowserTabIdInvalid"
+            | "BrowserMouseCoordinateInvalid"
+            | "BrowserTextInvalid"
+            | "BrowserKeyInvalid"
+            | "BrowserScrollInvalid"
+            | "BrowserOpenUrlUnsupported"
+            | "BrowserNavigationFailed"
+            | "BrowserOpenPartial"
+            | "BrowserClaimPartial"
+    )
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BrowserScreenshotResponse {
     pub target: BrowserTargetKind,
     pub tab_id: String,

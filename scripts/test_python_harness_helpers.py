@@ -858,6 +858,41 @@ def test_testing_vm_runner_remote_profile_opts_into_codex_settings(
     assert "wayland-pointer" in run_gui_testing_vm_smoke.PROFILES
 
 
+def test_testing_vm_profile_descriptors_carry_dispatch_and_curated_metadata() -> None:
+    descriptors = run_gui_testing_vm_smoke.VM_PROFILE_DESCRIPTORS
+
+    assert tuple(descriptors) == run_gui_testing_vm_smoke.PROFILES
+    assert descriptors["kde-kwin-effect-system-install"].dispatch == "kwin-system-install"
+    assert descriptors["kde-kwin-effect-system-install"].host_framebuffer_proof
+    assert descriptors["kde-kwin-effect-system-install"].runner_profile() == "agent-cursor-kde"
+    assert descriptors["cosmic-patched-cursor-host-proof"].dispatch == "cosmic-patched-host-proof"
+    assert descriptors["cosmic-patched-cursor-host-proof"].host_framebuffer_proof
+    assert descriptors["opencode-mcp"].preauthorize_screenshot_portal
+    curated = {name for name, descriptor in descriptors.items() if descriptor.curated}
+    assert {"computer-use", "codex-desktop", "wayland-pointer", "all"} <= curated
+
+
+def test_testing_vm_remote_runner_builds_shared_runtime_script() -> None:
+    runner = run_gui_testing_vm_smoke.RemoteRunner(
+        ssh_target="skycua@testing-vm",
+        port=2222,
+        ssh_options=["StrictHostKeyChecking=no"],
+        remote_root=Path("/workspace"),
+        wayland_display="wayland-1",
+        desktop_env="KDE",
+    )
+
+    script = runner.runtime_script(
+        ["bash", "/workspace/scripts/testing-vm/profiles/run-profile.sh", "computer-use"]
+    )
+
+    assert "cd /workspace" in script
+    assert 'runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"' in script
+    assert 'WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"' in script
+    assert "XDG_CURRENT_DESKTOP=KDE" in script
+    assert "run-profile.sh computer-use" in script
+
+
 def test_testing_vm_runner_main_dispatches_kwin_system_install_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1235,15 +1270,17 @@ def test_testing_vm_runner_preauthorizes_kde_remote_desktop(
 
     monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
 
-    assert run_gui_testing_vm_smoke.should_preauthorize_kde_remote_desktop("computer-use", "KDE")
     assert run_gui_testing_vm_smoke.should_preauthorize_kde_remote_desktop(
-        "wayland-pointer", "plasma"
+        run_gui_testing_vm_smoke.profile_descriptor("computer-use"), "KDE"
+    )
+    assert run_gui_testing_vm_smoke.should_preauthorize_kde_remote_desktop(
+        run_gui_testing_vm_smoke.profile_descriptor("wayland-pointer"), "plasma"
     )
     assert not run_gui_testing_vm_smoke.should_preauthorize_kde_remote_desktop(
-        "codex-desktop", "KDE"
+        run_gui_testing_vm_smoke.profile_descriptor("codex-desktop"), "KDE"
     )
     assert not run_gui_testing_vm_smoke.should_preauthorize_kde_remote_desktop(
-        "computer-use", "GNOME"
+        run_gui_testing_vm_smoke.profile_descriptor("computer-use"), "GNOME"
     )
 
     run_gui_testing_vm_smoke.preauthorize_kde_remote_desktop(
@@ -1278,16 +1315,16 @@ def test_testing_vm_runner_preauthorizes_gnome_remote_desktop(
     monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
 
     assert run_gui_testing_vm_smoke.should_preauthorize_gnome_remote_desktop(
-        "computer-use", "GNOME"
+        run_gui_testing_vm_smoke.profile_descriptor("computer-use"), "GNOME"
     )
     assert run_gui_testing_vm_smoke.should_preauthorize_gnome_remote_desktop(
-        "wayland-pointer", "gnome"
+        run_gui_testing_vm_smoke.profile_descriptor("wayland-pointer"), "gnome"
     )
     assert not run_gui_testing_vm_smoke.should_preauthorize_gnome_remote_desktop(
-        "codex-desktop", "GNOME"
+        run_gui_testing_vm_smoke.profile_descriptor("codex-desktop"), "GNOME"
     )
     assert not run_gui_testing_vm_smoke.should_preauthorize_gnome_remote_desktop(
-        "computer-use", "KDE"
+        run_gui_testing_vm_smoke.profile_descriptor("computer-use"), "KDE"
     )
 
     run_gui_testing_vm_smoke.preauthorize_gnome_remote_desktop(
@@ -3117,6 +3154,7 @@ def test_mcp_config_allows_runtime_override_env_vars() -> None:
     assert "SKY_CUA_INPUT_BACKEND" in env_vars
     assert "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE" in env_vars
     assert "SKY_CUA_OVERLAY_HOST_PATH" in env_vars
+    assert "SKY_CUA_OVERLAY_HOST_TCP_ADDR" in env_vars
     assert "SKY_CUA_SCREENSHOT_CURSOR" in env_vars
     assert "SKY_CUA_REPO_ROOT" in env_vars
     assert "SKY_CUA_SERVICE_PATH" in env_vars

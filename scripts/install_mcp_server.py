@@ -200,6 +200,7 @@ def generate_mcp_config(client_path: Path, target_dir: Path) -> dict[str, object
                     "SKY_CUA_OVERLAY_BACKEND",
                     "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE",
                     "SKY_CUA_OVERLAY_HOST_PATH",
+                    "SKY_CUA_OVERLAY_HOST_TCP_ADDR",
                     "SKY_CUA_REPO_ROOT",
                     "SKY_CUA_SCREENSHOT_CURSOR",
                     "SKY_CUA_SERVICE_PATH",

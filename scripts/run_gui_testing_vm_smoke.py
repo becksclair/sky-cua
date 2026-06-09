@@ -22,26 +22,6 @@ KWIN_EFFECT_SYSTEM_POINT = (420.0, 260.0)
 COSMIC_HOST_AGENT_POINT = (360.0, 260.0)
 COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT = (360.0, 295.0)
 COSMIC_HOST_RESTORED_CURSOR_POINT = (160.0, 171.0)
-PROFILES = (
-    "kde-kwin-effect",
-    "kde-kwin-effect-system-install",
-    "kde-plasma",
-    "i3",
-    "computer-use",
-    "codex-desktop",
-    "cosmic-helper",
-    "cosmic-patched-cursor-host-proof",
-    "cosmic-transparent-xcursor-host-proof",
-    "wayland-layer-shell-overlay",
-    "wayland-pointer",
-    "wayland-pointer-scaled",
-    "gnome",
-    "cosmic",
-    "hyprland",
-    "opencode-mcp",
-    "pi-mcp",
-    "all",
-)
 RUNTIME_PACKAGES = (
     "sky-cua-client",
     "sky-cua-service",
@@ -74,6 +54,109 @@ CODEX_SETTING_PATHS = (
     "browser/config.toml",
 )
 CODEX_SETTING_DIRS = ("plugins", "skills")
+
+
+@dataclass(frozen=True)
+class VmProfileDescriptor:
+    name: str
+    dispatch: str = "remote"
+    remote_profile: str | None = None
+    curated: bool = False
+    host_framebuffer_proof: bool = False
+    preauthorize_gnome_remote_desktop: bool = False
+    preauthorize_kde_remote_desktop: bool = False
+    preauthorize_screenshot_portal: bool = False
+
+    def runner_profile(self) -> str:
+        return self.remote_profile or self.name
+
+
+VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
+    profile.name: profile
+    for profile in (
+        VmProfileDescriptor("kde-kwin-effect"),
+        VmProfileDescriptor(
+            "kde-kwin-effect-system-install",
+            dispatch="kwin-system-install",
+            remote_profile="agent-cursor-kde",
+            curated=True,
+            host_framebuffer_proof=True,
+        ),
+        VmProfileDescriptor("kde-plasma"),
+        VmProfileDescriptor("i3"),
+        VmProfileDescriptor(
+            "computer-use",
+            curated=True,
+            preauthorize_gnome_remote_desktop=True,
+            preauthorize_kde_remote_desktop=True,
+        ),
+        VmProfileDescriptor("codex-desktop", curated=True),
+        VmProfileDescriptor("cosmic-helper"),
+        VmProfileDescriptor(
+            "cosmic-patched-cursor-host-proof",
+            dispatch="cosmic-patched-host-proof",
+            remote_profile="agent-cursor-cosmic-patched-host-proof",
+            host_framebuffer_proof=True,
+        ),
+        VmProfileDescriptor(
+            "cosmic-transparent-xcursor-host-proof",
+            dispatch="cosmic-transparent-xcursor-host-proof",
+            remote_profile="agent-cursor-cosmic-transparent-xcursor-host-proof",
+            host_framebuffer_proof=True,
+        ),
+        VmProfileDescriptor("wayland-layer-shell-overlay", curated=True),
+        VmProfileDescriptor(
+            "wayland-pointer",
+            curated=True,
+            preauthorize_gnome_remote_desktop=True,
+            preauthorize_kde_remote_desktop=True,
+        ),
+        VmProfileDescriptor("wayland-pointer-scaled", curated=True),
+        VmProfileDescriptor("gnome"),
+        VmProfileDescriptor("cosmic"),
+        VmProfileDescriptor("hyprland"),
+        VmProfileDescriptor("opencode-mcp", preauthorize_screenshot_portal=True),
+        VmProfileDescriptor("pi-mcp", preauthorize_screenshot_portal=True),
+        VmProfileDescriptor(
+            "all",
+            curated=True,
+            preauthorize_gnome_remote_desktop=True,
+            preauthorize_kde_remote_desktop=True,
+        ),
+    )
+}
+
+PROFILES = tuple(VM_PROFILE_DESCRIPTORS)
+
+
+@dataclass(frozen=True)
+class RemoteRunner:
+    ssh_target: str
+    port: int
+    ssh_options: list[str]
+    remote_root: Path
+    wayland_display: str = "wayland-0"
+    desktop_env: str = ""
+
+    def run(self, script: str, *, check: bool = False) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [*ssh_base_command(self.port, self.ssh_options), self.ssh_target, script],
+            cwd=REPO_ROOT,
+            check=check,
+        )
+
+    def runtime_script(self, command: list[str]) -> str:
+        desktop_exports = desktop_environment_exports(self.desktop_env)
+        return (
+            f"cd {shlex.quote(str(self.remote_root))} && "
+            'runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" && '
+            'if [ ! -d "$runtime_dir" ]; then runtime_dir=/tmp/sky-cua-runtime; mkdir -p "$runtime_dir"; chmod 700 "$runtime_dir"; fi && '
+            'export XDG_RUNTIME_DIR="$runtime_dir" && '
+            f'export WAYLAND_DISPLAY="${{WAYLAND_DISPLAY:-{shlex.quote(self.wayland_display)}}}" && '
+            "export XDG_SESSION_TYPE=wayland && "
+            f"{desktop_exports}"
+            f"{shlex.join(command)}"
+        )
 
 
 @dataclass(frozen=True)
@@ -287,6 +370,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    profile = VM_PROFILE_DESCRIPTORS[args.profile]
     ssh_target = f"{args.user}@{args.host}"
     remote_root = args.remote_root
     if not args.skip_host_build:
@@ -311,11 +395,11 @@ def main() -> int:
         )
     preauthorized_gnome_remote_desktop = (
         not args.skip_gnome_remote_desktop_preauth
-        and should_preauthorize_gnome_remote_desktop(args.profile, args.desktop_env)
+        and should_preauthorize_gnome_remote_desktop(profile, args.desktop_env)
     )
     preauthorized_kde_remote_desktop = (
         not args.skip_kde_remote_desktop_preauth
-        and should_preauthorize_kde_remote_desktop(args.profile, args.desktop_env)
+        and should_preauthorize_kde_remote_desktop(profile, args.desktop_env)
     )
     if preauthorized_gnome_remote_desktop:
         preauthorize_gnome_remote_desktop(
@@ -335,14 +419,14 @@ def main() -> int:
             wayland_display=args.wayland_display,
             desktop_env=args.desktop_env,
         )
-    if args.profile in ("opencode-mcp", "pi-mcp"):
+    if profile.preauthorize_screenshot_portal:
         preauthorize_screenshot_portal(
             ssh_target,
             args.port,
             args.ssh_option,
             remote_root,
         )
-    if args.profile == "kde-kwin-effect-system-install":
+    if profile.dispatch == "kwin-system-install":
         return run_remote_kwin_effect_system_install_profile(
             ssh_target,
             args.port,
@@ -354,7 +438,7 @@ def main() -> int:
             vm_name=args.vm_name,
             libvirt_uri=args.libvirt_uri,
         )
-    if args.profile == "cosmic-patched-cursor-host-proof":
+    if profile.dispatch == "cosmic-patched-host-proof":
         return run_remote_cosmic_patched_cursor_host_proof_profile(
             ssh_target,
             args.port,
@@ -365,7 +449,7 @@ def main() -> int:
             vm_name=args.vm_name,
             libvirt_uri=args.libvirt_uri,
         )
-    if args.profile == "cosmic-transparent-xcursor-host-proof":
+    if profile.dispatch == "cosmic-transparent-xcursor-host-proof":
         return run_remote_cosmic_transparent_xcursor_host_proof_profile(
             ssh_target,
             args.port,
@@ -381,7 +465,7 @@ def main() -> int:
         args.port,
         args.ssh_option,
         remote_root,
-        args.profile,
+        profile.runner_profile(),
         headed=args.headed,
         wayland_display=args.wayland_display,
         desktop_env=args.desktop_env,
@@ -614,13 +698,19 @@ def refresh_guest_portal_stack(
     )
 
 
-def should_preauthorize_gnome_remote_desktop(profile: str, desktop_env: str) -> bool:
-    return profile in {"all", "computer-use", "wayland-pointer"} and "gnome" in desktop_env.lower()
+def profile_descriptor(name: str) -> VmProfileDescriptor:
+    return VM_PROFILE_DESCRIPTORS[name]
 
 
-def should_preauthorize_kde_remote_desktop(profile: str, desktop_env: str) -> bool:
+def should_preauthorize_gnome_remote_desktop(
+    profile: VmProfileDescriptor, desktop_env: str
+) -> bool:
+    return profile.preauthorize_gnome_remote_desktop and "gnome" in desktop_env.lower()
+
+
+def should_preauthorize_kde_remote_desktop(profile: VmProfileDescriptor, desktop_env: str) -> bool:
     normalized_desktop = desktop_env.lower()
-    return profile in {"all", "computer-use", "wayland-pointer"} and (
+    return profile.preauthorize_kde_remote_desktop and (
         "kde" in normalized_desktop or "plasma" in normalized_desktop
     )
 
@@ -726,6 +816,14 @@ def run_remote_profile(
     desktop_env: str = "",
     sync_codex_settings: bool = False,
 ) -> int:
+    runner = RemoteRunner(
+        ssh_target=ssh_target,
+        port=port,
+        ssh_options=ssh_options,
+        remote_root=remote_root,
+        wayland_display=wayland_display,
+        desktop_env=desktop_env,
+    )
     profile_command = [
         "env",
         "SKY_CUA_USE_PREBUILT_RUNTIMES=1",
@@ -749,22 +847,7 @@ def run_remote_profile(
     )
     if headed:
         profile_command.append("--headed")
-    desktop_exports = desktop_environment_exports(desktop_env)
-    remote_script = (
-        f"cd {shlex.quote(str(remote_root))} && "
-        'runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" && '
-        'if [ ! -d "$runtime_dir" ]; then runtime_dir=/tmp/sky-cua-runtime; mkdir -p "$runtime_dir"; chmod 700 "$runtime_dir"; fi && '
-        'export XDG_RUNTIME_DIR="$runtime_dir" && '
-        f'export WAYLAND_DISPLAY="${{WAYLAND_DISPLAY:-{shlex.quote(wayland_display)}}}" && '
-        "export XDG_SESSION_TYPE=wayland && "
-        f"{desktop_exports}"
-        f"{shlex.join(profile_command)}"
-    )
-    completed = subprocess.run(
-        [*ssh_base_command(port, ssh_options), ssh_target, remote_script],
-        cwd=REPO_ROOT,
-        check=False,
-    )
+    completed = runner.run(runner.runtime_script(profile_command), check=False)
     return completed.returncode
 
 

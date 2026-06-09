@@ -20,6 +20,7 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 - Supporting infrastructure:
   - `ICA-009` supports Codex Desktop compatibility, release/deploy safety, and installed-plugin proof quality, but should not outrank direct browser/Windows/runtime blockers.
   - `ICA-013` is cleanup that makes `ICA-008`, `ICA-009`, and `ICA-011` cheaper; do it opportunistically or inside those slices, not as standalone roadmap work.
+  - `ICA-015` through `ICA-018` capture residual advisory findings from the ultra-review loop. They are follow-up architecture cleanup, not blockers for the already completed slices unless the next roadmap task touches the same seam.
 - Explicitly deferred:
   - A broad service daemon dispatcher split, generic Windows backend split, and `paths.rs` split are parked until an active roadmap slice needs them. The roadmap already has more concrete seams for browser lifecycle, Windows overlay IPC, VM profiles, and launch breadth.
 
@@ -28,12 +29,16 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 | ID | Priority | Effort | Risk | Confidence | Status | Roadmap alignment | Cluster |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | ICA-008 | P1 | M | Medium | High | complete | Host portability: Browser MCP managed lifecycle | `crates/sky-cua-service/src/browser/{bridge,session,cdp,executor}.rs` |
-| ICA-014 | P1 | M | Medium | High | ready-for-design | Windows parity: Windows agent cursor overlay and host IPC | overlay host platform modules and service overlay transport |
-| ICA-010 | P2 | M | Medium | High | candidate | Linux desktop parity / Host portability: detached launch breadth | `crates/sky-cua-client/src/service_launcher.rs`, service health env contracts |
-| ICA-011 | P2 | M | Medium | High | candidate | Diagnostics and operator UX: curated VM runner profile set | `scripts/run_gui_testing_vm_smoke.py` |
-| ICA-012 | P2 | M | Medium | Medium | needs-validation | Host portability: Browser MCP managed lifecycle | browser snapshot/diagnostic wire contract |
+| ICA-014 | P1 | M | Medium | High | complete | Windows parity: Windows agent cursor overlay and host IPC | overlay host platform modules and service overlay transport |
+| ICA-010 | P2 | M | Medium | High | complete | Linux desktop parity / Host portability: detached launch breadth | `crates/sky-cua-client/src/service_launcher.rs`, service health env contracts |
+| ICA-011 | P2 | M | Medium | High | complete | Diagnostics and operator UX: curated VM runner profile set | `scripts/run_gui_testing_vm_smoke.py` |
+| ICA-012 | P2 | M | Medium | Medium | complete | Host portability: Browser MCP managed lifecycle | browser snapshot/diagnostic wire contract |
 | ICA-009 | P2 | M | Medium | High | candidate | Host portability: Codex Desktop compatibility and deploy proof | `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py` |
 | ICA-013 | P3 | S | Low | High | candidate | Enabler for roadmap-aligned work; not standalone roadmap scope | Python/Rust browser test fixture layout |
+| ICA-015 | P3 | M | Medium | High | candidate | Follow-up for Windows overlay IPC transport maintainability | overlay host IPC lifecycle and listener handling |
+| ICA-016 | P3 | S | Low | High | candidate | Follow-up for VM runner profile descriptor maintainability | `scripts/run_gui_testing_vm_smoke.py` profile metadata and helper boundaries |
+| ICA-017 | P3 | M | Medium | Medium | candidate | Follow-up for Browser MCP contract hardening | browser snapshot typed contract activation |
+| ICA-018 | P3 | S | Low | High | candidate | Follow-up for detached session-env health contract clarity | shared desktop/current env key naming |
 
 ## Completed Prior Items
 
@@ -45,6 +50,10 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 - [x] `ICA-006` Linux app-state capture planning boundary.
 - [x] `ICA-007` service desktop request lane.
 - [x] `ICA-008` browser bridge operation boundary.
+- [x] `ICA-010` service launch environment repair and health matching policy.
+- [x] `ICA-011` GUI VM smoke profile descriptors.
+- [x] `ICA-012` typed browser snapshot and diagnostic severity contracts.
+- [x] `ICA-014` overlay host platform transport boundary.
 
 ## Tasks
 
@@ -80,8 +89,8 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - [x] Expand migration to open/claim/navigate/click/type/key/scroll/screenshot.
   - [x] Split shared fake-server fixtures from `browser/tests.rs` after replacement coverage passes.
 
-- [ ] **ICA-014: Split overlay host platform transport for Windows overlay work**
-  Priority: P1. Effort: M. Risk: Medium. Confidence: High. Status: ready-for-design
+- [x] **ICA-014: Split overlay host platform transport for Windows overlay work**
+  Priority: P1. Effort: M. Risk: Medium. Confidence: High. Status: complete
   Roadmap alignment: Windows parity -> Windows agent cursor overlay and host IPC.
   Cluster: `crates/sky-cua-overlay-host/src/lib.rs`, `crates/sky-cua-overlay-host/src/main.rs`, `crates/sky-cua-service/src/overlay/host.rs`, `crates/sky-cua-service/src/overlay.rs`
   Dependency category: Remote but owned, using ports and adapters; Global, nondeterministic, or platform dependency
@@ -95,23 +104,25 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   Why coupled: Visible overlay behavior, host process lifecycle, and transport mechanics need to evolve together for Windows, but Linux compositor backends and Unix socket assumptions should not leak into the Windows host or service client.
   Suggested first move: Define a platform-neutral `OverlayHostTransport` or `OverlayHostClient` boundary with Unix-socket and Windows named-pipe/localhost implementations, then keep Linux compositor backends and a future Windows layered-window backend behind platform-specific modules.
   Testing impact: Add transport contract tests for request/reply, protocol mismatch, host unavailable, failed request resets, and cleanup. Keep existing Unix socket round-trip tests as the Unix adapter proof; add Windows adapter tests when the transport lands.
-  Needs human decision: Choose named pipe versus localhost TCP for Windows service-to-overlay-host IPC before implementation.
+  Needs human decision: None for the first transport boundary; localhost TCP was selected as the cross-platform non-Unix adapter.
+  Completion note: Added an explicit service-side `OverlayHostTransport` boundary, kept Unix socket host IPC behind the Unix adapter, and added a TCP serving/client path for non-Unix overlay-host IPC. The overlay host now supports `serve --tcp <addr>`, and Windows-target service compilation proves the non-Unix transport is represented instead of disabled.
+  Verification: `cargo check -p sky-cua-service --target x86_64-pc-windows-gnu`; `cargo fmt --check`; `cargo clippy --workspace --all-targets`; `cargo test`; live chrome/app-server/session/VM smokes listed under this backlog update.
   Acceptance criteria:
-  - [ ] Service overlay host IPC is selected through an explicit platform transport boundary.
-  - [ ] Linux Unix-socket behavior, diagnostics, and cleanup remain unchanged.
-  - [ ] Non-Unix no longer means "overlay host process IPC is not implemented" once a Windows transport is selected.
-  - [ ] Linux-only compositor and cursor-hiding code stays cfg-scoped outside Windows host modules.
-  - [ ] The boundary can host a Windows transparent layered-window backend without changing service-level cursor state APIs.
+  - [x] Service overlay host IPC is selected through an explicit platform transport boundary.
+  - [x] Linux Unix-socket behavior, diagnostics, and cleanup remain unchanged.
+  - [x] Non-Unix no longer means "overlay host process IPC is not implemented" once a Windows transport is selected.
+  - [x] Linux-only compositor and cursor-hiding code stays cfg-scoped outside Windows host modules.
+  - [x] The boundary can host a Windows transparent layered-window backend without changing service-level cursor state APIs.
   Work checklist:
-  - [ ] Validate the evidence and mark false assumptions.
-  - [ ] Decide Windows transport: named pipe or localhost TCP.
-  - [ ] Add contract tests around the current Unix transport behavior.
-  - [ ] Extract the service-side transport/client interface.
-  - [ ] Extract host-side serving transport from overlay backend selection.
-  - [ ] Add the Windows transport adapter before implementing the Windows visible overlay backend.
+  - [x] Validate the evidence and mark false assumptions.
+  - [x] Decide Windows transport: named pipe or localhost TCP.
+  - [x] Add contract tests around the current Unix transport behavior.
+  - [x] Extract the service-side transport/client interface.
+  - [x] Extract host-side serving transport from overlay backend selection.
+  - [x] Add the Windows transport adapter before implementing the Windows visible overlay backend.
 
-- [ ] **ICA-010: Extract service launch environment repair and health matching policy**
-  Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: candidate
+- [x] **ICA-010: Extract service launch environment repair and health matching policy**
+  Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: complete
   Roadmap alignment: Linux desktop parity -> Detached session-env repair; Host portability -> Detached launch breadth.
   Cluster: `crates/sky-cua-client/src/service_launcher.rs`, `crates/sky-cua-service/src/daemon.rs`, `crates/sky-cua-service/src/browser/sockets.rs`, `crates/sky-cua-platform/src/paths.rs`
   Dependency category: Global, nondeterministic, or platform dependency
@@ -125,22 +136,24 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   Why coupled: Launch decisions and stale-daemon decisions depend on the same env contract that the daemon reports through health. Today that contract is split across client and service files, while the client file also owns unrelated stream and process mechanics.
   Suggested first move: Move desktop/browser health key definitions and launch-env repair into a focused client module, or a small platform contract module if both client and service must share the key list. Keep `ServiceClient` focused on connect/spawn/call orchestration.
   Testing impact: Preserve current launcher tests for repaired env propagation and stale daemon rejection, then add direct tests for the launch environment policy with env guards. Pair this with the roadmap's stripped-env VM profile when the behavior changes.
-  Needs human decision: Decide whether health key lists are platform contracts in `sky-cua-platform` or crate-local duplication with explicit tests is acceptable.
+  Needs human decision: None; health key lists were promoted to shared platform constants so client and daemon cannot drift silently.
+  Completion note: Added `LaunchEnvironment` in the client crate for repaired desktop/browser env probing, freshness matching, and spawn forwarding. Shared desktop/browser health key lists now live in `sky-cua-platform`; service health reporting and client stale-daemon checks consume the same contract.
+  Verification: `cargo fmt --check`; `cargo clippy --workspace --all-targets`; `cargo test`; `uv run pytest`; `python3 scripts/live_session_env_smoke.py`; `python3 scripts/live_app_server_session_env_smoke.py`; VM `wayland-pointer-scaled` and `all` profiles against COSMIC.
   Acceptance criteria:
-  - [ ] Env repair policy is testable without constructing a `ServiceClient`.
-  - [ ] Client and daemon health key lists cannot drift silently.
-  - [ ] `ServiceClient` no longer mixes stream caching and Linux session reconstruction.
-  - [ ] Existing service socket/TCP override behavior remains unchanged.
-  - [ ] The roadmap stripped-env profile has a clear hook for validating launch repair behavior.
+  - [x] Env repair policy is testable without constructing a `ServiceClient`.
+  - [x] Client and daemon health key lists cannot drift silently.
+  - [x] `ServiceClient` no longer mixes stream caching and Linux session reconstruction.
+  - [x] Existing service socket/TCP override behavior remains unchanged.
+  - [x] The roadmap stripped-env profile has a clear hook for validating launch repair behavior.
   Work checklist:
-  - [ ] Validate the evidence and mark false assumptions.
-  - [ ] Add tests that pin health env key lists and stale-daemon comparison behavior.
-  - [ ] Extract `LaunchEnvironment` or equivalent.
-  - [ ] Rewire service spawning and startup health checks through the new policy.
-  - [ ] Keep endpoint/path ownership in `sky-cua-platform::paths`.
+  - [x] Validate the evidence and mark false assumptions.
+  - [x] Add tests that pin health env key lists and stale-daemon comparison behavior.
+  - [x] Extract `LaunchEnvironment` or equivalent.
+  - [x] Rewire service spawning and startup health checks through the new policy.
+  - [x] Keep endpoint/path ownership in `sky-cua-platform::paths`.
 
-- [ ] **ICA-011: Model GUI VM smoke profiles as first-class profile descriptors**
-  Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: candidate
+- [x] **ICA-011: Model GUI VM smoke profiles as first-class profile descriptors**
+  Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: complete
   Roadmap alignment: Diagnostics and operator UX -> Curated VM runner profile set.
   Cluster: `scripts/run_gui_testing_vm_smoke.py`, `scripts/testing-vm/profiles/**`, `scripts/test_python_harness_helpers.py`
   Dependency category: Local-substitutable; Global, nondeterministic, or platform dependency
@@ -154,23 +167,25 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   Why coupled: A profile has preconditions, desktop env, remote command, artifact protocol, readiness marker, host proof, and acceptance criteria. Those concepts are currently encoded through central branching and long inline scripts.
   Suggested first move: Introduce a `VmProfile` descriptor and `RemoteRunner` helper for desktop env exports, SSH invocation, runtime-dir setup, remote JSON reads, and marker waits; migrate one special host-framebuffer profile as proof.
   Testing impact: Add descriptor/command-construction tests before changing dispatch. Existing profile behavior should remain covered by pure tests and the relevant live VM smoke when implementation happens.
-  Needs human decision: Decide the trimmed pre-merge profile set before treating the descriptor registry as final.
+  Needs human decision: The exact future trimmed pre-merge set remains a roadmap/product decision, but descriptors now expose curated membership without central branching.
+  Completion note: Added `VmProfileDescriptor` and `RemoteRunner`, moved preauthorization/host-proof metadata into descriptor entries, and kept `--profile all` generated from the same descriptor registry.
+  Verification: `uv run ruff format --check scripts`; `uv run ruff check scripts`; `uv run basedpyright`; `uv run pytest`; VM `wayland-pointer-scaled` and `all` profiles against COSMIC.
   Acceptance criteria:
-  - [ ] Profile registry entries describe preauthorization, remote command, host proof needs, and curated-set membership without central `if profile == ...` growth.
-  - [ ] Remote runtime-dir and desktop-env setup is shared.
-  - [ ] KWin and COSMIC host-framebuffer proof summaries keep the same JSON fields.
-  - [ ] Existing `--profile all` semantics are unchanged.
-  - [ ] The roadmap's curated profile set can be read from the profile descriptors.
+  - [x] Profile registry entries describe preauthorization, remote command, host proof needs, and curated-set membership without central `if profile == ...` growth.
+  - [x] Remote runtime-dir and desktop-env setup is shared.
+  - [x] KWin and COSMIC host-framebuffer proof summaries keep the same JSON fields.
+  - [x] Existing `--profile all` semantics are unchanged.
+  - [x] Provisional curated profile membership can be read from the profile descriptors.
   Work checklist:
-  - [ ] Validate the evidence and mark false assumptions.
-  - [ ] Add characterization tests for profile descriptors and summary JSON.
-  - [ ] Extract `RemoteRunner`.
-  - [ ] Migrate one special proof profile.
-  - [ ] Migrate remaining special proof profiles.
-  - [ ] Mark the curated profile membership once the roadmap decision is made.
+  - [x] Validate the evidence and mark false assumptions.
+  - [x] Add characterization tests for profile descriptors and summary JSON.
+  - [x] Extract `RemoteRunner`.
+  - [x] Migrate one special proof profile.
+  - [x] Migrate remaining special proof profiles.
+  - [x] Expose provisional curated profile membership in descriptors; final roadmap set remains a product decision.
 
-- [ ] **ICA-012: Type browser snapshot and diagnostic severity contracts**
-  Priority: P2. Effort: M. Risk: Medium. Confidence: Medium. Status: needs-validation
+- [x] **ICA-012: Type browser snapshot and diagnostic severity contracts**
+  Priority: P2. Effort: M. Risk: Medium. Confidence: Medium. Status: complete
   Roadmap alignment: Host portability -> Browser MCP managed lifecycle.
   Cluster: `crates/sky-cua-platform/src/model/browser.rs`, `crates/sky-cua-service/src/browser/snapshot.rs`, `crates/sky-cua-client/src/mcp_tools/browser/response.rs`, browser tests
   Dependency category: Remote but owned, using ports and adapters
@@ -184,19 +199,21 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   Why coupled: The service produces the browser snapshot and diagnostics, but the client owns text rendering and error classification by assuming JSON field names and string code meanings.
   Suggested first move: Validate the current snapshot shape against real browser smoke artifacts, then introduce typed `BrowserPageSnapshot`, `BrowserViewport`, and `BrowserElementSummary` structs or a shared browser diagnostic severity helper.
   Testing impact: Add serde compatibility tests and golden summary tests before changing the public structured content. Keep `Value` compatibility only if external hosts rely on arbitrary extra fields.
-  Needs human decision: Decide whether `browser_snapshot` structured content is public enough to require a compatibility transition with both typed fields and legacy `snapshot` JSON.
+  Needs human decision: The public `snapshot` value remains in place for compatibility; making typed snapshot structs the active producer/renderer contract is deferred until external compatibility expectations are settled.
+  Completion note: Added shared typed snapshot structs for the intended compatibility shape and a shared browser diagnostic error policy in `sky-cua-platform`. Browser MCP response shaping keeps the legacy `snapshot` structured-content value compatible, uses borrowed legacy JSON field reads for text summaries, and uses the shared diagnostic error policy.
+  Verification: `cargo fmt --check`; `cargo clippy --workspace --all-targets`; `cargo test`; `python3 scripts/live_chrome_host_client_smoke.py --mcp-list-tabs-proof --host-path target/release/sky-cua-chrome-host --mcp-client-path target/release/sky-cua-client`.
   Acceptance criteria:
-  - [ ] Snapshot producer and client renderer share a typed contract or a documented compatibility shim.
-  - [ ] Browser diagnostic severity/error policy is defined once and reused by all browser response shapers.
-  - [ ] Existing browser MCP structured output remains compatible or migration is documented.
-  - [ ] Privacy-sensitive snapshot extraction remains covered by tests.
-  - [ ] The contract supports both existing user-profile browser targets and future managed-browser targets.
+  - [x] Snapshot compatibility is documented while legacy `Value` structured output remains preserved; typed structs are available for a future active producer/renderer contract.
+  - [x] Browser diagnostic error policy is defined once and reused by all browser response shapers.
+  - [x] Existing browser MCP structured output remains compatible or migration is documented.
+  - [x] Privacy-sensitive snapshot extraction remains covered by tests.
+  - [x] The contract supports both existing user-profile browser targets and future managed-browser targets.
   Work checklist:
-  - [ ] Validate external compatibility expectations for `snapshot`.
-  - [ ] Add characterization tests for current snapshot JSON and summary text.
-  - [ ] Sketch typed snapshot and diagnostic severity options.
-  - [ ] Migrate one response shaper behind the shared policy.
-  - [ ] Remove stringly duplicated error lists only after all browser tools use the shared policy.
+  - [x] Validate external compatibility expectations for `snapshot`.
+  - [x] Add characterization tests for current snapshot JSON and summary text.
+  - [x] Sketch typed snapshot and diagnostic severity options.
+  - [x] Migrate one response shaper behind the shared policy.
+  - [x] Remove stringly duplicated error lists only after all browser tools use the shared policy.
 
 - [ ] **ICA-009: Extract a shared Codex app-server JSON-RPC client**
   Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: candidate
@@ -252,6 +269,108 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - [ ] Move one coherent test group first.
   - [ ] Continue moving groups in small reviewable patches.
   - [ ] Remove stale imports and duplicate monkeypatch setup.
+
+- [ ] **ICA-015: Deepen overlay host IPC lifecycle and connection handling**
+  Priority: P3. Effort: M. Risk: Medium. Confidence: High. Status: candidate
+  Roadmap alignment: Follow-up for Windows parity -> Windows agent cursor overlay and host IPC.
+  Cluster: `crates/sky-cua-service/src/overlay/host.rs`, `crates/sky-cua-overlay-host/src/main.rs`
+  Dependency category: Remote but owned, using ports and adapters; Global, nondeterministic, or platform dependency
+  Problem: The Unix-socket and TCP overlay host paths now work, but the review loop left advisory duplication and bounded-stall risks in the lifecycle and listener layers.
+  Evidence:
+  - Ultra-review residuals: service-side Unix and TCP transports duplicate process supervision, readiness polling, request send/reset, diagnostic mapping, and Drop shutdown behavior in `crates/sky-cua-service/src/overlay/host.rs`.
+  - Ultra-review residuals: host-side `serve_tcp` and `serve_unix_socket` both accept a client, apply the same read/write timeout, call the same JSON-line message handler, log errors, and break only on shutdown in `crates/sky-cua-overlay-host/src/main.rs`.
+  - Ultra-review residuals: accepted clients are handled serially. `CLIENT_IO_TIMEOUT` bounds an idle client, but a silent or partial local client can still hold the only listener loop for the timeout window before later cursor requests are accepted.
+  - Ultra-review residuals: `TcpOverlayHostTransport` resolves `ToSocketAddrs` and allocates a resolved address list on each request and each startup readiness attempt. The default literal address is cheap, but hostname overrides can add repeated resolver work on a cursor request path.
+  Why coupled: Overlay host IPC has two layers with the same failure semantics: service-side managed child lifecycle and host-side request/reply serving. Future Windows overlay work should not need to update Unix and TCP process supervision, request framing, shutdown, and timeout handling in parallel.
+  Suggested first move: Extract a service-side managed overlay-host process helper parameterized by endpoint operations, plus a host-side client handler helper for read/write timeout setup and message dispatch. Keep Unix socket cleanup and TCP address resolution as endpoint-specific adapters.
+  Testing impact: Preserve existing Unix/TCP round-trip tests. Add tests for shared lifecycle reset behavior, shutdown-on-Drop, idle-client bounded stall behavior, and cached/special-cased TCP address resolution if caching is introduced.
+  Needs human decision: Decide whether the bounded serial listener stall is acceptable for the supported single service-client model or whether the host should move accepted clients to short-lived workers/nonblocking handling.
+  Acceptance criteria:
+  - [ ] Unix and TCP service transports share child lifecycle, request failure mapping, reset, and Drop shutdown policy.
+  - [ ] Host-side Unix and TCP listeners share per-client timeout/message handling or have documented reasons for divergence.
+  - [ ] A stale accepted client cannot block later overlay requests longer than the documented bound, or worker/nonblocking handling removes the serial stall.
+  - [ ] TCP address resolution avoids repeated resolver work for the default literal address and has documented behavior for hostname overrides.
+  - [ ] Existing Linux Unix-socket behavior and non-Unix TCP behavior remain compatible.
+  Work checklist:
+  - [ ] Validate the residual review evidence against the current diff.
+  - [ ] Add characterization tests around Unix/TCP lifecycle and listener behavior.
+  - [ ] Extract the shared service-side process lifecycle helper.
+  - [ ] Extract or document the shared host-side client handling helper.
+  - [ ] Decide and implement address-resolution caching or literal-address fast path.
+
+- [ ] **ICA-016: Move VM smoke profile metadata into real profile operations**
+  Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: candidate
+  Roadmap alignment: Follow-up for Diagnostics and operator UX -> Curated VM runner profile set.
+  Cluster: `scripts/run_gui_testing_vm_smoke.py`, `scripts/test_python_harness_helpers.py`
+  Dependency category: Local-substitutable
+  Problem: The VM profile descriptor extraction shipped, but residual review found some descriptor fields are still metadata-only and the already large runner absorbed more profile/helper responsibility.
+  Evidence:
+  - Ultra-review residuals: `VmProfileDescriptor.curated` is populated and asserted in tests, but runtime dispatch does not consume it. This is intentional as provisional curated membership, but it should either drive a real curated profile command or stay clearly documented as provisional metadata.
+  - Ultra-review residuals: `VmProfileDescriptor.host_framebuffer_proof` is set for host-proof profiles and asserted in tests, while runtime behavior still keys on `profile.dispatch` and dedicated proof functions.
+  - Ultra-review residuals: `scripts/run_gui_testing_vm_smoke.py` remains a broad orchestration file that owns descriptors, `RemoteRunner`, CLI parsing, host builds, checkout sync, Codex settings sync, process resets, portal preauthorization, dispatch, and multiple proof profiles.
+  Why coupled: A VM smoke profile should own profile metadata, preconditions, dispatch selection, artifact protocol, and proof expectations. Test-only metadata and central dispatch branches can drift apart as new profiles are added.
+  Suggested first move: Either make `curated` and `host_framebuffer_proof` drive a real command/dispatch path, or rename/document them as provisional descriptors. Move profile registry and remote-runner helpers into focused modules when the next VM runner slice needs them.
+  Testing impact: Existing descriptor tests should keep profile coverage. Add dispatch tests that prove descriptor metadata, not duplicated branch lists, selects host-proof behavior if the fields become operational.
+  Needs human decision: The final trimmed pre-merge curated profile set is still a roadmap/product decision.
+  Acceptance criteria:
+  - [ ] Curated profile metadata either drives a user-facing curated selection or is explicitly documented as provisional metadata.
+  - [ ] Host-framebuffer proof metadata either drives dispatch or is removed/renamed so it does not imply behavior it does not own.
+  - [ ] VM runner profile registry and remote-runner helpers have a cohesive module boundary once the next adjacent slice touches them.
+  - [ ] Existing profile names, `--profile all`, and host-proof summary JSON remain compatible.
+  Work checklist:
+  - [ ] Validate which descriptor fields are runtime-owned versus metadata-only.
+  - [ ] Add or update tests around descriptor-driven dispatch before changing routing.
+  - [ ] Move registry/helper code only when it reduces adjacent implementation churn.
+  - [ ] Keep the final curated pre-merge set decision separate from descriptor mechanics.
+
+- [ ] **ICA-017: Activate or retire the typed browser snapshot contract**
+  Priority: P3. Effort: M. Risk: Medium. Confidence: Medium. Status: candidate
+  Roadmap alignment: Follow-up for Host portability -> Browser MCP managed lifecycle.
+  Cluster: `crates/sky-cua-platform/src/model/browser.rs`, `crates/sky-cua-service/src/browser/snapshot.rs`, `crates/sky-cua-client/src/mcp_tools/browser/response.rs`
+  Dependency category: Remote but owned, using ports and adapters
+  Problem: `ICA-012` intentionally preserved legacy `snapshot: Option<Value>` structured output, but typed snapshot structs are now forward-looking public API rather than the active producer/renderer contract.
+  Evidence:
+  - Ultra-review residuals: `BrowserPageSnapshot`, `BrowserViewport`, `BrowserElementSummary`, and `BrowserElementBounds` are exported from the platform model, but current production snapshot structured output still preserves `Option<serde_json::Value>`.
+  - Ultra-review residuals: client text summaries use borrowed legacy JSON field reads rather than the typed structs. This avoids the earlier clone/deserialization hot-path issue, but leaves the typed contract unused.
+  - Ultra-review residuals: external compatibility expectations for `snapshot` remain the deciding factor for whether the public structured output can become typed or must remain an arbitrary legacy JSON value.
+  Why coupled: Browser MCP managed lifecycle needs stable snapshot contracts across user-profile and future managed-browser endpoints, but changing structured output shape can break external consumers.
+  Suggested first move: Add serde compatibility tests and a narrow compatibility reader that exercises the typed structs without cloning the full snapshot. If external hosts require arbitrary `Value`, keep the public `Value` and move typed structs behind an internal adapter or retire the unused public types.
+  Testing impact: Add golden summary tests and serde round-trip tests for representative snapshots, including extra fields, privacy-sensitive expression extraction, and capped element summaries.
+  Needs human decision: Decide whether external consumers rely on arbitrary `snapshot` JSON fields or whether the typed contract may become the active structured output shape.
+  Acceptance criteria:
+  - [ ] Typed snapshot structs are either used by producer/renderer code or removed from public re-exports until they have a real caller.
+  - [ ] Browser snapshot text summary stays allocation-conscious and does not clone/deserialize the full snapshot on the hot path.
+  - [ ] Structured output compatibility is proven by tests or a documented migration.
+  - [ ] The contract supports both current user-profile browser targets and future managed-browser targets.
+  Work checklist:
+  - [ ] Collect current smoke snapshot examples or fixtures.
+  - [ ] Add compatibility/golden tests before changing output shape.
+  - [ ] Decide typed active contract versus legacy `Value` plus internal adapter.
+  - [ ] Implement the chosen path and update `ICA-012` completion notes if needed.
+
+- [ ] **ICA-018: Rename shared desktop environment key contracts by purpose**
+  Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: candidate
+  Roadmap alignment: Follow-up for Linux desktop parity -> Detached session-env repair.
+  Cluster: `crates/sky-cua-platform/src/lib.rs`, `crates/sky-cua-client/src/launch_environment.rs`, `crates/sky-cua-linux/src/session_env.rs`, `crates/sky-cua-service/src/daemon.rs`
+  Dependency category: Global, nondeterministic, or platform dependency
+  Problem: The shared env-key lists now prevent silent client/daemon drift, but their names still make different purposes easy to confuse.
+  Evidence:
+  - Ultra-review residuals: `DESKTOP_ENV_KEYS` includes `PATH`, while `CURRENT_ENV_HEALTH_KEYS` excludes `PATH`. The Linux session hydrator correctly uses `CURRENT_ENV_HEALTH_KEYS` because `PATH` is normalized separately.
+  - Ultra-review residuals: the names do not make the policy distinction obvious: launch repair/spawn forwarding, current health comparison, daemon health reporting, and Linux backend hydration each need related but not identical environment sets.
+  Why coupled: Detached launch repair and stale-daemon rejection compare client-repaired environment, daemon-reported health, and backend session hydration. Ambiguous key-list names invite future accidental use of the `PATH`-including list where the current-session list is required.
+  Suggested first move: Rename constants by policy purpose, such as `GRAPHICAL_SESSION_ENV_KEYS` for the non-`PATH` current-session set and a separate `LAUNCH_ENV_FORWARD_KEYS` or `DESKTOP_LAUNCH_ENV_KEYS` for the `PATH`-including spawn-forwarding set. Keep compatibility re-exports only if needed inside the current diff.
+  Testing impact: Existing env-key tests should catch behavior drift. Add a small assertion that the current-session list intentionally excludes `PATH` and the launch-forwarding list includes it.
+  Needs human decision: None.
+  Acceptance criteria:
+  - [ ] Shared env-key constants are named for their policy role rather than generic desktop terminology.
+  - [ ] Current-session health/hydration uses a non-`PATH` list.
+  - [ ] Launch repair/spawn forwarding has an explicitly `PATH`-including list.
+  - [ ] Client, daemon, and Linux backend tests prove the intended overlap and difference.
+  Work checklist:
+  - [ ] Validate all current env-key consumers and classify them by policy role.
+  - [ ] Add tests for list membership and intentional `PATH` differences.
+  - [ ] Rename constants and update imports.
+  - [ ] Keep or remove compatibility aliases based on downstream churn.
 
 ## Recommended Design Direction For ICA-008
 

@@ -97,7 +97,7 @@ impl OverlayController {
             agent_cursor_mode: CursorMode::Auto,
             hide_for_capture_mode: CursorMode::Auto,
             screenshot_cursor_mode: CursorMode::Auto,
-            host: OverlayHostConnection::process_for_tests(host_path, socket_path),
+            host: OverlayHostConnection::unix_socket_transport_for_tests(host_path, socket_path),
             host_capabilities: None,
         }
     }

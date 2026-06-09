@@ -1,3 +1,5 @@
+#![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
+
 use std::{
     env, fs,
     io::{Read, Write},
@@ -739,7 +741,9 @@ impl X11SystemCursorAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::{SystemCursorAdapter, environ_has_xcursor_theme, parse_hyprland_cursor_invisible};
+    use super::SystemCursorAdapter;
+    #[cfg(target_os = "linux")]
+    use super::{environ_has_xcursor_theme, parse_hyprland_cursor_invisible};
     use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
 
     #[test]

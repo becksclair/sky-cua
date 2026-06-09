@@ -1,7 +1,9 @@
 use std::io::{self, BufRead, Write};
+use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use sky_cua_overlay_host::{
@@ -9,6 +11,11 @@ use sky_cua_overlay_host::{
     probe_environment_reply,
 };
 use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpace};
+
+#[cfg(not(test))]
+const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(100);
 
 fn main() -> Result<()> {
     let command = std::env::args()
@@ -52,10 +59,67 @@ fn set_cursor_from_args(args: Vec<String>) -> Result<()> {
 }
 
 fn serve_from_args(args: Vec<String>) -> Result<()> {
-    match args.as_slice() {
-        [] => serve_json_lines(),
-        [flag, path] if flag == "--socket" => serve_unix_socket(PathBuf::from(path)),
-        _ => anyhow::bail!("usage: sky-cua-overlay-host serve [--socket <path>]"),
+    match OverlayHostServeMode::from_args(args)? {
+        OverlayHostServeMode::JsonLines => serve_json_lines(),
+        OverlayHostServeMode::UnixSocket(path) => serve_unix_socket(path),
+        OverlayHostServeMode::Tcp(addr) => serve_tcp(addr),
+    }
+}
+
+enum OverlayHostServeMode {
+    JsonLines,
+    UnixSocket(PathBuf),
+    Tcp(String),
+}
+
+impl OverlayHostServeMode {
+    fn from_args(args: Vec<String>) -> Result<Self> {
+        match args.as_slice() {
+            [] => Ok(Self::JsonLines),
+            [flag, path] if flag == "--socket" => Ok(Self::UnixSocket(PathBuf::from(path))),
+            [flag, addr] if flag == "--tcp" => Ok(Self::Tcp(addr.to_string())),
+            _ => {
+                anyhow::bail!("usage: sky-cua-overlay-host serve [--socket <path> | --tcp <addr>]")
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod serve_mode_tests {
+    use super::OverlayHostServeMode;
+
+    #[test]
+    fn serve_mode_parses_json_lines_and_socket_modes() {
+        assert!(matches!(
+            OverlayHostServeMode::from_args(Vec::new()).expect("json-lines mode"),
+            OverlayHostServeMode::JsonLines
+        ));
+        match OverlayHostServeMode::from_args(vec![
+            "--socket".to_string(),
+            "/tmp/agent-cursor.sock".to_string(),
+        ])
+        .expect("socket mode")
+        {
+            OverlayHostServeMode::UnixSocket(path) => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/agent-cursor.sock"));
+            }
+            OverlayHostServeMode::JsonLines | OverlayHostServeMode::Tcp(_) => {
+                panic!("expected socket mode")
+            }
+        }
+        match OverlayHostServeMode::from_args(vec![
+            "--tcp".to_string(),
+            "127.0.0.1:48932".to_string(),
+        ])
+        .expect("tcp mode")
+        {
+            OverlayHostServeMode::Tcp(addr) => assert_eq!(addr, "127.0.0.1:48932"),
+            OverlayHostServeMode::JsonLines | OverlayHostServeMode::UnixSocket(_) => {
+                panic!("expected tcp mode")
+            }
+        }
+        assert!(OverlayHostServeMode::from_args(vec!["--pipe".to_string()]).is_err());
     }
 }
 
@@ -78,6 +142,32 @@ fn serve_json_lines() -> Result<()> {
             .write_all(b"\n")
             .context("failed to write reply newline")?;
         stdout.flush().context("failed to flush reply")?;
+        if shutdown {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn serve_tcp(addr: String) -> Result<()> {
+    let listener = TcpListener::bind(&addr)
+        .with_context(|| format!("failed to bind overlay host TCP listener {addr}"))?;
+    let mut backend = OverlayHostBackend::from_env();
+    for stream in listener.incoming() {
+        let mut stream = stream.context("failed to accept overlay host TCP connection")?;
+        stream
+            .set_read_timeout(Some(CLIENT_IO_TIMEOUT))
+            .context("failed to set overlay host TCP read timeout")?;
+        stream
+            .set_write_timeout(Some(CLIENT_IO_TIMEOUT))
+            .context("failed to set overlay host TCP write timeout")?;
+        let shutdown = match handle_socket_message(&mut backend, &mut stream) {
+            Ok(shutdown) => shutdown,
+            Err(error) => {
+                eprintln!("overlay host TCP connection failed: {error:#}");
+                false
+            }
+        };
         if shutdown {
             break;
         }
@@ -108,7 +198,19 @@ fn serve_unix_socket(path: PathBuf) -> Result<()> {
     let mut backend = OverlayHostBackend::from_env();
     for stream in listener.incoming() {
         let mut stream = stream.context("failed to accept overlay host socket connection")?;
-        let shutdown = handle_socket_message(&mut backend, &mut stream)?;
+        stream
+            .set_read_timeout(Some(CLIENT_IO_TIMEOUT))
+            .context("failed to set overlay host socket read timeout")?;
+        stream
+            .set_write_timeout(Some(CLIENT_IO_TIMEOUT))
+            .context("failed to set overlay host socket write timeout")?;
+        let shutdown = match handle_socket_message(&mut backend, &mut stream) {
+            Ok(shutdown) => shutdown,
+            Err(error) => {
+                eprintln!("overlay host socket connection failed: {error:#}");
+                false
+            }
+        };
         if shutdown {
             break;
         }
@@ -154,6 +256,7 @@ impl<T: io::Read + io::Write> ReadWrite for T {}
 #[cfg(all(test, unix))]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
+    use std::net::{TcpListener, TcpStream};
     use std::os::unix::net::UnixStream;
     use std::path::{Path, PathBuf};
     use std::thread;
@@ -164,7 +267,7 @@ mod tests {
     };
     use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpace};
 
-    use super::serve_unix_socket;
+    use super::{CLIENT_IO_TIMEOUT, serve_tcp, serve_unix_socket};
 
     #[test]
     fn unix_socket_serve_round_trips_json_lines() {
@@ -220,8 +323,136 @@ mod tests {
         assert!(!socket_path.exists());
     }
 
+    #[test]
+    fn tcp_serve_round_trips_json_lines() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("reserve tcp port");
+        let addr = listener.local_addr().expect("read tcp addr").to_string();
+        drop(listener);
+        let server_addr = addr.clone();
+        let server = thread::spawn(move || serve_tcp(server_addr));
+        wait_for_tcp(&addr);
+
+        let set = send_tcp(
+            &addr,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::SetCursor,
+                state: Some(cursor_state()),
+                reason: None,
+            },
+        );
+        assert!(set.ok);
+        assert!(set.state.as_ref().expect("state").visible);
+
+        let shutdown = send_tcp(
+            &addr,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::Shutdown,
+                state: None,
+                reason: None,
+            },
+        );
+        assert!(shutdown.ok);
+        server
+            .join()
+            .expect("join overlay host TCP server")
+            .expect("server should exit cleanly");
+    }
+
+    #[test]
+    fn unix_socket_serve_drops_idle_client_and_serves_next_request() {
+        let dir = unique_temp_dir("socket-idle-client");
+        let socket_path = dir.join("agent-cursor.sock");
+        let server_path = socket_path.clone();
+        let server = thread::spawn(move || serve_unix_socket(server_path));
+        wait_for_socket(&socket_path);
+
+        let idle = UnixStream::connect(&socket_path).expect("connect idle socket client");
+        thread::sleep(CLIENT_IO_TIMEOUT + Duration::from_millis(50));
+
+        let set = send(
+            &socket_path,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::SetCursor,
+                state: Some(cursor_state()),
+                reason: None,
+            },
+        );
+        assert!(set.ok);
+        drop(idle);
+
+        let shutdown = send(
+            &socket_path,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::Shutdown,
+                state: None,
+                reason: None,
+            },
+        );
+        assert!(shutdown.ok);
+        server
+            .join()
+            .expect("join overlay host socket server")
+            .expect("server should exit cleanly");
+    }
+
+    #[test]
+    fn tcp_serve_drops_idle_client_and_serves_next_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("reserve tcp port");
+        let addr = listener.local_addr().expect("read tcp addr").to_string();
+        drop(listener);
+        let server_addr = addr.clone();
+        let server = thread::spawn(move || serve_tcp(server_addr));
+        wait_for_tcp(&addr);
+
+        let idle = TcpStream::connect(&addr).expect("connect idle client");
+        thread::sleep(CLIENT_IO_TIMEOUT + Duration::from_millis(50));
+
+        let set = send_tcp(
+            &addr,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::SetCursor,
+                state: Some(cursor_state()),
+                reason: None,
+            },
+        );
+        assert!(set.ok);
+        drop(idle);
+
+        let shutdown = send_tcp(
+            &addr,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::Shutdown,
+                state: None,
+                reason: None,
+            },
+        );
+        assert!(shutdown.ok);
+        server
+            .join()
+            .expect("join overlay host TCP server")
+            .expect("server should exit cleanly");
+    }
+
     fn send(path: &Path, message: OverlayHostMessage) -> OverlayHostReply {
         let mut stream = UnixStream::connect(path).expect("connect overlay host socket");
+        let payload = serde_json::to_vec(&message).expect("serialize request");
+        stream.write_all(&payload).expect("write payload");
+        stream.write_all(b"\n").expect("write newline");
+        stream.flush().expect("flush payload");
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read reply");
+        serde_json::from_str(line.trim_end()).expect("parse reply")
+    }
+
+    fn send_tcp(addr: &str, message: OverlayHostMessage) -> OverlayHostReply {
+        let mut stream = TcpStream::connect(addr).expect("connect overlay host TCP listener");
         let payload = serde_json::to_vec(&message).expect("serialize request");
         stream.write_all(&payload).expect("write payload");
         stream.write_all(b"\n").expect("write newline");
@@ -241,6 +472,17 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         panic!("socket did not appear: {}", path.display());
+    }
+
+    fn wait_for_tcp(addr: &str) {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(2) {
+            if TcpStream::connect(addr).is_ok() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("TCP listener did not become ready: {addr}");
     }
 
     fn cursor_state() -> AgentCursorState {

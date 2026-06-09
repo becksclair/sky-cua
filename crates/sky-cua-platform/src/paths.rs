@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 pub const SERVICE_SOCKET_PATH_ENV: &str = "SKY_CUA_SERVICE_SOCKET_PATH";
 pub const SERVICE_TCP_ADDR_ENV: &str = "SKY_CUA_SERVICE_TCP_ADDR";
+pub const OVERLAY_HOST_TCP_ADDR_ENV: &str = "SKY_CUA_OVERLAY_HOST_TCP_ADDR";
 const APP_STATE_DIR_NAME: &str = "sky-cua";
 const DEFAULT_WINDOWS_SERVICE_ADDR: &str = "127.0.0.1:48931";
 
@@ -35,6 +36,25 @@ pub fn service_tcp_addr() -> String {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_WINDOWS_SERVICE_ADDR.to_string())
+}
+
+#[must_use]
+pub fn overlay_host_tcp_addr() -> String {
+    std::env::var(OVERLAY_HOST_TCP_ADDR_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(default_overlay_host_tcp_addr)
+}
+
+fn default_overlay_host_tcp_addr() -> String {
+    let service_addr = service_tcp_addr();
+    if let Some((host, port)) = service_addr.rsplit_once(':')
+        && let Ok(port) = port.parse::<u16>()
+        && let Some(overlay_port) = port.checked_add(1)
+    {
+        return format!("{host}:{overlay_port}");
+    }
+    "127.0.0.1:48932".to_string()
 }
 
 pub fn sky_cua_state_dir() -> io::Result<PathBuf> {
@@ -92,7 +112,10 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    use super::{SERVICE_SOCKET_PATH_ENV, service_socket_path};
+    use super::{
+        OVERLAY_HOST_TCP_ADDR_ENV, SERVICE_SOCKET_PATH_ENV, SERVICE_TCP_ADDR_ENV,
+        overlay_host_tcp_addr, service_socket_path,
+    };
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -141,5 +164,38 @@ mod tests {
         restore_env(SERVICE_SOCKET_PATH_ENV, old_override);
 
         assert_eq!(path, PathBuf::from("/tmp/sky-cua-custom.sock"));
+    }
+
+    #[test]
+    fn overlay_host_tcp_addr_defaults_to_service_port_plus_one() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_service_addr = std::env::var_os(SERVICE_TCP_ADDR_ENV);
+        let old_overlay_addr = std::env::var_os(OVERLAY_HOST_TCP_ADDR_ENV);
+        unsafe {
+            std::env::set_var(SERVICE_TCP_ADDR_ENV, "127.0.0.1:50000");
+            std::env::remove_var(OVERLAY_HOST_TCP_ADDR_ENV);
+        }
+
+        let addr = overlay_host_tcp_addr();
+
+        restore_env(SERVICE_TCP_ADDR_ENV, old_service_addr);
+        restore_env(OVERLAY_HOST_TCP_ADDR_ENV, old_overlay_addr);
+
+        assert_eq!(addr, "127.0.0.1:50001");
+    }
+
+    #[test]
+    fn overlay_host_tcp_addr_env_override_wins() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_overlay_addr = std::env::var_os(OVERLAY_HOST_TCP_ADDR_ENV);
+        unsafe {
+            std::env::set_var(OVERLAY_HOST_TCP_ADDR_ENV, "127.0.0.1:50123");
+        }
+
+        let addr = overlay_host_tcp_addr();
+
+        restore_env(OVERLAY_HOST_TCP_ADDR_ENV, old_overlay_addr);
+
+        assert_eq!(addr, "127.0.0.1:50123");
     }
 }

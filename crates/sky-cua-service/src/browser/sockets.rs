@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use sky_cua_platform::BROWSER_ENV_HEALTH_KEYS;
 use sky_cua_platform::model::DiagnosticEntry;
 
 use super::diagnostics::browser_bridge_disconnected_diagnostic;
@@ -12,11 +13,6 @@ use super::diagnostics::browser_bridge_disconnected_diagnostic;
 pub(super) const SKY_CUA_SOCKET_DIR_ENV: &str = "SKY_CUA_BROWSER_USE_SOCKET_DIR";
 pub(super) const CODEX_SOCKET_DIR_ENV: &str = "CODEX_BROWSER_USE_SOCKET_DIR";
 pub(super) const SKY_CUA_BROWSER_ENV: &str = "SKY_CUA_BROWSER";
-const BROWSER_ENV_KEYS: &[&str] = &[
-    SKY_CUA_SOCKET_DIR_ENV,
-    CODEX_SOCKET_DIR_ENV,
-    SKY_CUA_BROWSER_ENV,
-];
 const DEFAULT_SOCKET_DIR: &str = "/tmp/codex-browser-use";
 pub(super) const MAX_BRIDGE_SOCKET_CANDIDATES: usize = 32;
 const SOCKET_FAMILY_CACHE_TTL: Duration = Duration::from_secs(10);
@@ -265,7 +261,7 @@ pub(super) fn browser_socket_selection_from_value(
 }
 
 pub(super) fn browser_env_values_present() -> BTreeMap<String, String> {
-    BROWSER_ENV_KEYS
+    BROWSER_ENV_HEALTH_KEYS
         .iter()
         .filter_map(|key| {
             std::env::var(key)

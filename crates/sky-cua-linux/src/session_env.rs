@@ -5,17 +5,10 @@ use std::{
     process::Command,
 };
 
-use sky_cua_platform::model::{DoctorSessionEnvRepair, DoctorSessionEnvReport};
-
-const DESKTOP_ENV_KEYS: &[&str] = &[
-    "DBUS_SESSION_BUS_ADDRESS",
-    "DESKTOP_SESSION",
-    "DISPLAY",
-    "WAYLAND_DISPLAY",
-    "XDG_CURRENT_DESKTOP",
-    "XDG_RUNTIME_DIR",
-    "XDG_SESSION_TYPE",
-];
+use sky_cua_platform::{
+    CURRENT_ENV_HEALTH_KEYS,
+    model::{DoctorSessionEnvRepair, DoctorSessionEnvReport},
+};
 const DEFAULT_PATH_DIRS: &[&str] = &[
     "/usr/local/sbin",
     "/usr/local/bin",
@@ -72,7 +65,7 @@ pub fn hydrate_session_bus_env() {
 
 fn hydrate_desktop_env_from_process_tree(report: &mut DoctorSessionEnvReport) {
     for process_env in desktop_process_environments() {
-        for key in DESKTOP_ENV_KEYS {
+        for key in CURRENT_ENV_HEALTH_KEYS {
             if env_var(key).is_some() {
                 continue;
             }
@@ -85,7 +78,10 @@ fn hydrate_desktop_env_from_process_tree(report: &mut DoctorSessionEnvReport) {
             }
         }
 
-        if DESKTOP_ENV_KEYS.iter().all(|key| env_var(key).is_some()) {
+        if CURRENT_ENV_HEALTH_KEYS
+            .iter()
+            .all(|key| env_var(key).is_some())
+        {
             break;
         }
     }
@@ -103,7 +99,7 @@ fn hydrate_desktop_env_from_map(
     source: &str,
     values: &HashMap<String, String>,
 ) {
-    for key in DESKTOP_ENV_KEYS {
+    for key in CURRENT_ENV_HEALTH_KEYS {
         if env_var(key).is_some() {
             continue;
         }

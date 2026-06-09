@@ -1,4 +1,5 @@
 mod heuristics;
+mod launch_environment;
 mod mcp_server;
 mod mcp_tools;
 mod operator_cli;
