@@ -4,226 +4,331 @@ This file tracks architecture improvement candidates found during codebase revie
 
 <!-- improve-codebase-architecture:start -->
 
-Generated: 2026-05-19  
-Scope: repository root on current checkout, with emphasis on Rust runtime boundaries, service/MCP concurrency, and Python smoke harnesses  
-Analysis notes: Refreshed against current source after recent MCP concurrency and Linux input updates. `ICA-003`, `ICA-004`, `ICA-006`, and `ICA-007` are implemented and review-loop hardened. Latest focused verification includes Linux capture planner tests, full `sky-cua-linux` tests/clippy, Python harness Ruff/basedpyright/pytest, devbox `sky-cua-windows` tests, KWin system-install framebuffer proof, COSMIC transparent framebuffer proof, platform model split validation, and `git diff --check`. The patched COSMIC proof remains environment-blocked unless the VM runs patched `cosmic-comp` and exposes `/run/user/1000/sky-cua-cosmic-cursor-ready`.
+Generated: 2026-06-09
+Scope: repository root on current checkout, reconciled against `ROADMAP.md`
+Analysis notes: This backlog is architecture support for roadmap work, not a parallel product roadmap. Direct roadmap blockers are prioritized over general cleanup. The worktree was already dirty; this file is the only intended local artifact from this reconciliation pass. Prior implemented items `ICA-001` through `ICA-007` are preserved as completed history.
+
+## Roadmap Alignment
+
+Architecture work should serve the roadmap phases in `ROADMAP.md`:
+
+- Direct roadmap blockers:
+  - `ICA-008` and `ICA-012` support Host portability -> Browser MCP managed lifecycle.
+  - `ICA-014` supports Windows parity -> Windows agent cursor overlay and host IPC.
+  - `ICA-010` supports Linux desktop parity -> Detached session-env repair and Host portability -> Detached launch breadth.
+  - `ICA-011` supports Diagnostics and operator UX -> Curated VM runner profile set.
+- Supporting infrastructure:
+  - `ICA-009` supports Codex Desktop compatibility, release/deploy safety, and installed-plugin proof quality, but should not outrank direct browser/Windows/runtime blockers.
+  - `ICA-013` is cleanup that makes `ICA-008`, `ICA-009`, and `ICA-011` cheaper; do it opportunistically or inside those slices, not as standalone roadmap work.
+- Explicitly deferred:
+  - A broad service daemon dispatcher split, generic Windows backend split, and `paths.rs` split are parked until an active roadmap slice needs them. The roadmap already has more concrete seams for browser lifecycle, Windows overlay IPC, VM profiles, and launch breadth.
 
 ## Triage Summary
 
-| ID | Priority | Effort | Risk | Confidence | Status | Cluster |
-| --- | --- | --- | --- | --- | --- | --- |
-| ICA-001 | P1 | M | Medium | High | implemented | `crates/sky-cua-linux/src/actions/` action execution boundary |
-| ICA-002 | P2 | M | Medium | High | implemented | `crates/sky-cua-client/src/mcp_tools.rs` MCP tool definitions and handlers |
-| ICA-003 | P2 | M | Medium | Medium | implemented | `crates/sky-cua-service/src/overlay.rs` agent cursor overlay controller |
-| ICA-004 | P2 | M | Medium | High | implemented | `scripts/run_gui_testing_vm_smoke.py` GUI VM profile runner |
-| ICA-005 | P3 | S | Low | High | implemented | `crates/sky-cua-windows/src/backend.rs` Windows backend monolith |
-| ICA-006 | P2 | L | Medium | High | implemented | `crates/sky-cua-linux/src/backend.rs` app-state capture/snapshot pipeline |
-| ICA-007 | P2 | L | Medium | High | implemented | `crates/sky-cua-service/src/` service request concurrency boundary |
+| ID | Priority | Effort | Risk | Confidence | Status | Roadmap alignment | Cluster |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ICA-008 | P1 | M | Medium | High | ready-for-design | Host portability: Browser MCP managed lifecycle | `crates/sky-cua-service/src/browser/{bridge,session,cdp}.rs` |
+| ICA-014 | P1 | M | Medium | High | ready-for-design | Windows parity: Windows agent cursor overlay and host IPC | overlay host platform modules and service overlay transport |
+| ICA-010 | P2 | M | Medium | High | candidate | Linux desktop parity / Host portability: detached launch breadth | `crates/sky-cua-client/src/service_launcher.rs`, service health env contracts |
+| ICA-011 | P2 | M | Medium | High | candidate | Diagnostics and operator UX: curated VM runner profile set | `scripts/run_gui_testing_vm_smoke.py` |
+| ICA-012 | P2 | M | Medium | Medium | needs-validation | Host portability: Browser MCP managed lifecycle | browser snapshot/diagnostic wire contract |
+| ICA-009 | P2 | M | Medium | High | candidate | Host portability: Codex Desktop compatibility and deploy proof | `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py` |
+| ICA-013 | P3 | S | Low | High | candidate | Enabler for roadmap-aligned work; not standalone roadmap scope | Python/Rust browser test fixture layout |
+
+## Completed Prior Items
+
+- [x] `ICA-001` Linux input action execution boundary.
+- [x] `ICA-002` MCP tool specification/execution split.
+- [x] `ICA-003` overlay state, host IPC, and synthetic cursor composition split.
+- [x] `ICA-004` testing-VM smoke profile object extraction.
+- [x] `ICA-005` Windows backend split validation note.
+- [x] `ICA-006` Linux app-state capture planning boundary.
+- [x] `ICA-007` service desktop request lane.
 
 ## Tasks
 
-- [x] **ICA-001: Introduce a Linux input action execution boundary**
-  Priority: P1; Effort: M; Risk: Medium; Confidence: High; Status: implemented
-  Cluster: `crates/sky-cua-linux/src/actions/` (`LinuxActionExecutor`, `LinuxActionRuntime`, targeting helpers) plus `crates/sky-cua-linux/src/backend.rs` runtime adapter
-  Dependency category: Global, nondeterministic, or platform dependency  
-  Problem addressed: Linux action execution and coordinate planning were concentrated in one backend orchestration file, so maintainers and unit tests had to reason about semantic AT-SPI attempts, physical backend selection, X11 activation, portal lifecycle diagnostics, KDE clipboard fallback, backend-specific coordinate conversion, and user-facing outcome text as one large surface.
+- [ ] **ICA-008: Introduce a browser bridge operation boundary**
+  Priority: P1. Effort: M. Risk: Medium. Confidence: High. Status: ready-for-design
+  Roadmap alignment: Host portability -> Browser MCP managed lifecycle.
+  Cluster: `crates/sky-cua-service/src/browser/bridge.rs`, `crates/sky-cua-service/src/browser/session.rs`, `crates/sky-cua-service/src/browser/cdp.rs`, `crates/sky-cua-service/src/browser/tests.rs`
+  Dependency category: Remote but owned, using ports and adapters; Evented or asynchronous boundary
+  Problem: Browser operations repeatedly expose socket selection, bridge readiness diagnostics, deadlines, attach/enable, stale-session recovery, and action retry sequencing to individual operation families.
   Evidence:
-  - `crates/sky-cua-linux/src/backend.rs`: `execute_action` now clears portal lifecycle events, probes/validates the environment, and delegates to `LinuxActionExecutor`.
-  - `crates/sky-cua-linux/src/actions/mod.rs`: `LinuxActionExecutor` owns semantic-first click/secondary-click behavior, physical click/scroll/drag/type/key routing, KDE clipboard fallback, `perform_action`, and `set_value` policy routing.
-  - `crates/sky-cua-linux/src/actions/targeting.rs`: backend selection and coordinate helpers such as `effective_keyboard_input_backend_for_target`, `point_for_element_for_backend`, `point_from_screenshot_pixels`, and `linux_virtual_point_from_screenshot_pixels` now sit with the action policy that depends on them.
-  - `crates/sky-cua-linux/src/actions/runtime.rs`: `LinuxActionRuntime` keeps portal, XTest, Linux virtual input, AT-SPI, and window focus side effects behind a crate-local fakeable facade.
-  Why coupled: Physical action behavior depends on shared state and sequencing: resolved snapshot elements, capture metadata, input backend selection, X11 window focus, portal lifecycle diagnostics, KDE clipboard fallback, and backend-specific coordinate spaces.  
-  Recommended design: Introduce a crate-local, Linux-only, plan-first `LinuxActionExecutor` under `crates/sky-cua-linux/src/actions/`. Keep route planning and coordinate mapping in the executor, and keep portal, XTest, Linux virtual input, and window activation as thin fakeable ports/adapters. Do not create a shared Windows/Linux action abstraction in the first pass.  
-  Suggested first move: Add characterization tests around the proposed executor using fake input adapters for portal, XTest, and Linux virtual input; move only point planning plus `click` first.  
-  Testing impact: New boundary tests should assert action plans/outcomes for snapshot coordinates, explicit screen coordinates, portal diagnostics, and backend-unavailable errors. Existing private-helper tests should move only after replacement coverage proves the same observable behavior.  
-  Needs human decision: Resolved by default assumption; action execution stayed entirely inside `sky-cua-linux` and did not become a platform-neutral trait shared with Windows.
+  - `ROADMAP.md`: Browser MCP managed lifecycle needs isolated browser/profile launch, shipped snapshot/screenshot/action proof, deterministic cleanup, and later Codex Desktop delegation through the shared runtime.
+  - `crates/sky-cua-service/src/browser/bridge.rs`: `list_tabs_from_bridge`, `open_tab_from_bridge`, `claim_tab_from_bridge`, `move_mouse_from_bridge`, and `run_cdp_action_from_bridge` each rebuild env selection, socket discovery, empty-socket diagnostics, and deadline setup.
+  - `crates/sky-cua-service/src/browser/session.rs`: `attach_and_enable_tab_until`, stale-session reclaim, recovery diagnostics, and `move_mouse_from_socket` encode browser-session lifecycle policy.
+  - `crates/sky-cua-service/src/browser/cdp.rs`: `cdp_action_from_socket` has its own recover-and-retry wrapper for CDP actions.
+  - `crates/sky-cua-service/src/browser/tests.rs`: one large module covers socket inventory, protocol framing, tab operations, session recovery, coordinate conversion, action retries, snapshot behavior, and fake-server helpers.
+  Why coupled: The current `user_chrome` bridge and the planned managed-browser bridge will need the same operation contract: resolve a target, pick or create a controllable endpoint, bind a tab/session, execute CDP or extension actions, retry recoverable stale state, and report stable diagnostics.
+  Suggested first move: Add characterization tests around a small `BrowserBridgeExecutor` that resolves selection/sockets/deadline once, then proves open, claim, CDP action, and extension move-mouse paths preserve current diagnostics and retry behavior.
+  Testing impact: New boundary tests should assert empty socket diagnostics, first-responsive-socket behavior, stale owner reclaim, debugger detach/reattach, CDP retry, and extension move-mouse retry. Existing operation-specific tests can be moved or reduced only after the executor tests cover the same behavior.
+  Needs human decision: None for a service-internal boundary; keep public browser tool names and service wire shapes unchanged.
   Acceptance criteria:
-  - [x] A small action boundary exists with one crate-local `pub(crate)` entry point for Linux `ActionRequest` execution.
-  - [x] Portal, XTest, and Linux virtual input decisions are tested through the boundary with fake adapters or explicit local substitutes.
-  - [x] `LinuxDesktopBackend::execute_action` becomes mostly environment preparation plus a boundary call.
-  - [x] No user-facing `ActionOutcome` messages, diagnostic codes, or coordinate semantics change without explicit tests.
-  - [x] Semantic-first behavior is preserved and tested: AT-SPI default action for click, semantic action tools, and semantic `set_value` still run before physical fallback where current behavior does so.
-  - [x] KDE clipboard text fallback, `perform_secondary_action`, heuristics-backed `set_value` fallback, and portal lifecycle diagnostics are covered by boundary tests or explicit local substitutes.
+  - [ ] A crate-local browser operation boundary owns socket selection, deadline construction, and disconnected/unsupported diagnostics.
+  - [ ] Tab attach/enable/reclaim/retry policy is reusable by CDP actions and extension-only move-mouse.
+  - [ ] The boundary can accept the future managed-browser endpoint without duplicating operation policy.
+  - [ ] Existing `BrowserRequest`/`BrowserResponse` serde shapes remain unchanged.
+  - [ ] Focused service tests cover the boundary before redundant lower-level tests are removed.
   Work checklist:
-  - [x] Validate the evidence and mark false assumptions.
-  - [x] Add characterization tests for current click, drag, scroll, type, key, and set-value routing.
-  - [x] Sketch the target public interface and dependency injection shape.
-  - [x] Migrate point planning plus `click` as the first proof flow.
-  - [x] Migrate remaining physical input actions.
-  - [x] Move backend-specific helpers into the new module once tests pass.
-  - [x] Remove redundant private-helper tests only after replacement boundary tests pass.
-  - [x] Update `crates/sky-cua-linux/AGENTS.md` if the orchestration contract changes.
+  - [ ] Validate the evidence and mark false assumptions.
+  - [ ] Add characterization tests for current bridge selection and recovery behavior.
+  - [ ] Sketch the target public interface.
+  - [ ] Migrate one representative flow, preferably `browser_snapshot` or `browser_move_mouse`.
+  - [ ] Expand migration to open/claim/navigate/click/type/key/scroll/screenshot.
+  - [ ] Split shared fake-server fixtures from `browser/tests.rs` after replacement coverage passes.
 
-- [x] **ICA-002: Split MCP tool specification from MCP tool execution**
-  Priority: P2; Effort: M; Risk: Medium; Confidence: High; Status: implemented
-  Cluster: `crates/sky-cua-client/src/mcp_tools.rs` (`handle_tool_call`, `tool_definitions`, schema helpers, parsers, summaries) plus `crates/sky-cua-client/src/mcp_server.rs` protocol framing/session entrypoint
-  Dependency category: Remote but owned, using ports and adapters  
-  Problem: MCP schema construction, argument parsing, service request mapping, service response rendering, and JSON-RPC framing live in one large protocol module, making tool surface changes harder to review for wire compatibility.  
+- [ ] **ICA-014: Split overlay host platform transport for Windows overlay work**
+  Priority: P1. Effort: M. Risk: Medium. Confidence: High. Status: ready-for-design
+  Roadmap alignment: Windows parity -> Windows agent cursor overlay and host IPC.
+  Cluster: `crates/sky-cua-overlay-host/src/lib.rs`, `crates/sky-cua-overlay-host/src/main.rs`, `crates/sky-cua-service/src/overlay/host.rs`, `crates/sky-cua-service/src/overlay.rs`
+  Dependency category: Remote but owned, using ports and adapters; Global, nondeterministic, or platform dependency
+  Problem: The roadmap's Windows overlay work needs platform-specific visible-overlay backends and IPC transports, but current overlay host process serving and service-side host client are Unix-socket centered, with non-Unix disabled rather than represented as a transport option.
   Evidence:
-  - `crates/sky-cua-client/src/mcp_tools.rs`: `handle_tool_call` maps tool names to service calls and renders `structuredContent`/`content` behind a crate-local `McpService` port.
-  - `crates/sky-cua-client/src/mcp_tools.rs`: `tool_definitions` builds the full tool list and embeds model-capability-dependent schema text.
-  - `crates/sky-cua-client/src/mcp_tools.rs`: schema helpers, argument parsers, summaries, and registry-level fake-service tests now sit away from framing helpers.
-  - `crates/sky-cua-client/src/mcp_server.rs`: JSON-RPC initialization, initialized-session checks, `read_message`, `write_message`, and framing tests remain in the protocol module.
-  Why coupled: Tool names, schemas, argument parsing, service requests, and response rendering must evolve together, while JSON-RPC framing is a separate protocol concern.  
-  Suggested first move: Create an internal `tool_registry` module that owns tool specs and maps parsed calls to `ServiceRequest`; keep framing in `mcp_server.rs`.  
-  Testing impact: Add registry tests that cover each tool's schema, parsed request, and response rendering. Keep framing tests in `mcp_server.rs`.  
-  Needs human decision: Confirm that the existing convention "MCP JSON-RPC behavior and tool text/structured output live in `mcp_server.rs`" permits a sibling internal `tool_registry` or `mcp_tools` module, with `mcp_server.rs` remaining the protocol entrypoint.  
+  - `ROADMAP.md`: Windows agent cursor overlay explicitly calls for cfg-scoping Linux-only cursor/compositor code, splitting service overlay transport by platform, adding a Windows visible overlay host, and proving Windows overlay behavior in a VM.
+  - `crates/sky-cua-overlay-host/src/lib.rs`: Linux backend modules are cfg-scoped, while the top-level `OverlayHostBackend` selection still owns cross-platform backend selection in one enum.
+  - `crates/sky-cua-overlay-host/src/main.rs`: `serve --socket <path>` uses `UnixListener` on Unix and reports socket mode as not implemented on non-Unix.
+  - `crates/sky-cua-service/src/overlay/host.rs`: `OverlayHostConnection::from_service_socket` creates a Unix socket process client on Unix and disables host IPC on non-Unix.
+  - `crates/sky-cua-service/src/overlay.rs`: `OverlayController` already coordinates host IPC separately from synthetic screenshot cursor composition, so the next boundary can stay transport-focused.
+  Why coupled: Visible overlay behavior, host process lifecycle, and transport mechanics need to evolve together for Windows, but Linux compositor backends and Unix socket assumptions should not leak into the Windows host or service client.
+  Suggested first move: Define a platform-neutral `OverlayHostTransport` or `OverlayHostClient` boundary with Unix-socket and Windows named-pipe/localhost implementations, then keep Linux compositor backends and a future Windows layered-window backend behind platform-specific modules.
+  Testing impact: Add transport contract tests for request/reply, protocol mismatch, host unavailable, failed request resets, and cleanup. Keep existing Unix socket round-trip tests as the Unix adapter proof; add Windows adapter tests when the transport lands.
+  Needs human decision: Choose named pipe versus localhost TCP for Windows service-to-overlay-host IPC before implementation.
   Acceptance criteria:
-  - [x] Tool definitions and handler mapping are generated from one registry source of truth.
-  - [x] `mcp_server.rs` no longer needs to know each tool's schema details.
-  - [x] Existing tool names and schema compatibility tests remain green.
-  - [x] Registry or golden tests cover `tools/list` for both image-capable and text-only model sessions, including omission of `capture_screen` when images are disabled.
-  - [x] The registry does not depend on `MessageFraming`, `read_message`, or `write_message`; framing and session initialization tests remain in the protocol module.
+  - [ ] Service overlay host IPC is selected through an explicit platform transport boundary.
+  - [ ] Linux Unix-socket behavior, diagnostics, and cleanup remain unchanged.
+  - [ ] Non-Unix no longer means "overlay host process IPC is not implemented" once a Windows transport is selected.
+  - [ ] Linux-only compositor and cursor-hiding code stays cfg-scoped outside Windows host modules.
+  - [ ] The boundary can host a Windows transparent layered-window backend without changing service-level cursor state APIs.
   Work checklist:
-  - [x] Validate the evidence and mark false assumptions.
-  - [x] Add a registry-level characterization test for current `tools/list`.
-  - [x] Move one non-action tool, such as `doctor`, behind the registry.
-  - [x] Move action tools as a grouped family.
-  - [x] Preserve model image capability gating for `get_app_state`.
-  - [x] Keep JSON-RPC framing tests in the protocol module.
+  - [ ] Validate the evidence and mark false assumptions.
+  - [ ] Decide Windows transport: named pipe or localhost TCP.
+  - [ ] Add contract tests around the current Unix transport behavior.
+  - [ ] Extract the service-side transport/client interface.
+  - [ ] Extract host-side serving transport from overlay backend selection.
+  - [ ] Add the Windows transport adapter before implementing the Windows visible overlay backend.
 
-- [x] **ICA-003: Separate overlay state, host IPC, and synthetic cursor composition**
-  Priority: P2; Effort: M; Risk: Medium; Confidence: Medium; Status: implemented
-  Cluster: `crates/sky-cua-service/src/overlay.rs`, `crates/sky-cua-service/src/overlay/host.rs`, `crates/sky-cua-service/src/overlay/synthetic_cursor.rs` visible-overlay host IPC and synthetic screenshot cursor composition
-  Dependency category: Remote but owned, using ports and adapters; Local-substitutable  
-  Problem: `OverlayController` owns service-visible cursor state, overlay host process lifecycle, host protocol replies, capture hide/restore policy, action-to-cursor mapping, and screenshot cursor composition in one large module.  
+- [ ] **ICA-010: Extract service launch environment repair and health matching policy**
+  Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: candidate
+  Roadmap alignment: Linux desktop parity -> Detached session-env repair; Host portability -> Detached launch breadth.
+  Cluster: `crates/sky-cua-client/src/service_launcher.rs`, `crates/sky-cua-service/src/daemon.rs`, `crates/sky-cua-service/src/browser/sockets.rs`, `crates/sky-cua-platform/src/paths.rs`
+  Dependency category: Global, nondeterministic, or platform dependency
+  Problem: `service_launcher.rs` owns IPC client caching, child process lifecycle, endpoint resolution, Linux desktop env reconstruction, browser env freshness checks, stale-daemon rejection, and health response comparison in one large file.
   Evidence:
-  - `crates/sky-cua-service/src/overlay.rs`: `OverlayController` now keeps service cursor policy, state normalization, action-derived cursor updates, capture hide/restore policy, and snapshot application in the service-level coordinator.
-  - `crates/sky-cua-service/src/overlay/host.rs`: `OverlayHostConnection` and `ProcessOverlayHostClient` now own host process IPC, disabled-host behavior, request diagnostics, socket startup, and child cleanup.
-  - `crates/sky-cua-service/src/overlay/synthetic_cursor.rs`: `compose_synthetic_cursor` now owns screenshot image open/rewrite, cursor asset blending, output encoding, and synthetic cursor diagnostics.
-  - `crates/sky-cua-service/src/daemon.rs`: `IfChanged` capture reuse now understands prior `*.agent-cursor.*` outputs by comparing against the raw sibling while preserving current `original_screenshot_path` metadata.
-  - Focused module tests cover host disabled diagnostics, protocol mismatch behavior, visible-overlay host round trips, failed-hide rollback, host request failure child reset, state updates, action-derived cursor points, synthetic image composition, synthetic cursor stripping, and unchanged-capture reuse.
-  Why coupled: Cursor state, host capabilities, capture exclusion, and synthetic fallback share one user-facing status, but their dependencies differ: process IPC, action metadata, image I/O, and time.  
-  Suggested first move: Extract screenshot cursor composition first because `compose_synthetic_cursor` is already focused and independently image-testable, then split host IPC behind an `OverlayHost` port once controller-level behavior is preserved.  
-  Testing impact: Boundary tests should assert host-unavailable diagnostics, capture hide/restore behavior, and synthetic cursor composition separately.  
-  Decision: Keep visible overlay host behavior and screenshot synthetic cursor under one service-level agent cursor feature contract, with separate host IPC and synthetic composition modules coordinated by `OverlayController`. Host request failures reset the host process for respawn while `OverlayController` keeps last-known visible-overlay capabilities for conservative capture-hide behavior; failed hide requests roll local visibility back so later captures retry hiding instead of trusting unacknowledged local state.
+  - `ROADMAP.md`: Detached session-env repair still needs a stripped-env VM runner profile, and Host portability still calls for detached launch breadth across more desktop/session launchers.
+  - `crates/sky-cua-client/src/service_launcher.rs`: desktop and browser health env keys are local constants beside socket I/O and child process state.
+  - `crates/sky-cua-client/src/service_launcher.rs`: `probe_desktop_env_vars` reconstructs XDG runtime, DBus, Wayland, X11, logind desktop metadata, systemd user env, and PATH.
+  - `crates/sky-cua-service/src/daemon.rs`: `desktop_env_values_present` independently enumerates desktop health env keys.
+  - `crates/sky-cua-service/src/browser/sockets.rs`: browser socket env keys and browser selection are daemon-side constants also mirrored by client health matching.
+  Why coupled: Launch decisions and stale-daemon decisions depend on the same env contract that the daemon reports through health. Today that contract is split across client and service files, while the client file also owns unrelated stream and process mechanics.
+  Suggested first move: Move desktop/browser health key definitions and launch-env repair into a focused client module, or a small platform contract module if both client and service must share the key list. Keep `ServiceClient` focused on connect/spawn/call orchestration.
+  Testing impact: Preserve current launcher tests for repaired env propagation and stale daemon rejection, then add direct tests for the launch environment policy with env guards. Pair this with the roadmap's stripped-env VM profile when the behavior changes.
+  Needs human decision: Decide whether health key lists are platform contracts in `sky-cua-platform` or crate-local duplication with explicit tests is acceptable.
   Acceptance criteria:
-  - [x] Host IPC can be tested with a fake host without constructing the full controller.
-  - [x] Synthetic cursor composition has focused image tests independent of host process state.
-  - [x] `OverlayController` reads like service policy rather than transport and image plumbing.
-  - [x] Existing controller-level integration tests remain for visible-overlay host round trip, hide/show, capture guard restore, and host-unavailable-is-diagnostic-not-action-failure behavior.
-  - [x] The extracted synthetic cursor module has no dependency on host process state and preserves `AgentCursorSyntheticFailed` and `AgentCursorSyntheticOutOfBounds` diagnostics.
+  - [ ] Env repair policy is testable without constructing a `ServiceClient`.
+  - [ ] Client and daemon health key lists cannot drift silently.
+  - [ ] `ServiceClient` no longer mixes stream caching and Linux session reconstruction.
+  - [ ] Existing service socket/TCP override behavior remains unchanged.
+  - [ ] The roadmap stripped-env profile has a clear hook for validating launch repair behavior.
   Work checklist:
-  - [x] Validate the evidence and mark false assumptions.
-  - [x] Add or preserve characterization tests for host unavailable, protocol mismatch, capture hide/restore, and synthetic out-of-bounds diagnostics.
-  - [x] Extract host IPC behind a narrow port.
-  - [x] Extract screenshot cursor composition into a pure/local-I/O module.
-  - [x] Rewire `OverlayController` to coordinate the two smaller boundaries.
-  - [x] Harden review-loop edge cases: protocol-mismatched replies clear stale capabilities, failed hide rolls back local visibility and suppresses success diagnostics, host request failures reset the child, reused synthetic cursor paths are stripped when hidden, and `IfChanged` reuse preserves current original-source metadata.
+  - [ ] Validate the evidence and mark false assumptions.
+  - [ ] Add tests that pin health env key lists and stale-daemon comparison behavior.
+  - [ ] Extract `LaunchEnvironment` or equivalent.
+  - [ ] Rewire service spawning and startup health checks through the new policy.
+  - [ ] Keep endpoint/path ownership in `sky-cua-platform::paths`.
 
-- [x] **ICA-004: Model testing-VM smoke profiles as profile objects instead of ad hoc runner branches**  
-  Priority: P2; Effort: M; Risk: Medium; Confidence: High; Status: implemented  
-  Cluster: `scripts/run_gui_testing_vm_smoke.py`, `scripts/test_python_harness_helpers.py`, `scripts/testing-vm/profiles/**`  
-  Dependency category: Local-substitutable; Global, nondeterministic, or platform dependency  
-  Problem addressed: The VM smoke runner mixed CLI parsing, host build/sync, SSH command construction, portal reset/preauthorization, profile dispatch, framebuffer capture, remote marker polling, and profile-specific result validation in one large operator script.  
+- [ ] **ICA-011: Model GUI VM smoke profiles as first-class profile descriptors**
+  Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: candidate
+  Roadmap alignment: Diagnostics and operator UX -> Curated VM runner profile set.
+  Cluster: `scripts/run_gui_testing_vm_smoke.py`, `scripts/testing-vm/profiles/**`, `scripts/test_python_harness_helpers.py`
+  Dependency category: Local-substitutable; Global, nondeterministic, or platform dependency
+  Problem: The VM runner still centralizes profile registry, host build/sync, remote shell construction, portal reset/preauthorization, special profile dispatch, libvirt framebuffer capture, marker polling, remote JSON reads, and host summary writing.
   Evidence:
-  - `scripts/run_gui_testing_vm_smoke.py`: `main` parses profile options and directly handles build, sync, portal refresh, preauthorization, and profile dispatch.
-  - `scripts/run_gui_testing_vm_smoke.py`: special profiles are selected through branch checks before falling back to `run_remote_profile`.
-  - `scripts/run_gui_testing_vm_smoke.py`: the COSMIC patched and transparent-xcursor host proof functions duplicate remote overlay-host script setup, ready-file waiting, framebuffer capture, JSON summary writing, and marker probing.
-  - `scripts/test_python_harness_helpers.py`: helper tests exercise many scattered runner and smoke details in one large test file.
-  Why coupled: Host-framebuffer proof profiles share a lifecycle: prepare host/guest environment, launch a remote proof script, wait for proof markers, collect local and remote artifacts, capture VM framebuffers, run marker probes, and emit stable summary JSON. Generic shell-backed profiles can remain a simpler path until the special proof profiles are factored.  
-  Implementation: Added small profile/path dataclasses for the two COSMIC host-framebuffer proof modes and the KWin system-install proof, with shared helpers for timestamped artifact path construction, COSMIC pre-capture setup, COSMIC ready-marker polling/framebuffer capture, and host-summary JSON writing. CLI flags, artifact directory names, summary JSON fields, and exit-code semantics were preserved.  
-  Verification: `uv run ruff format --check scripts`; `uv run ruff check scripts`; `uv run basedpyright`; `uv run pytest` (123 passed); `kde-kwin-effect-system-install` VM smoke on Plasma/KWin `wayland-0` passed with artifact `/home/bex/projects/sky-cua/artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260521T093545763397Z` and remote artifact `/workspace/artifacts/codex-e2e/agent-cursor-kde/20260521T093545763397Z-kwin-system-runner`; `cosmic-transparent-xcursor-host-proof` passed on COSMIC transparent `wayland-1` with artifact `/home/bex/projects/sky-cua/artifacts/cosmic-transparent-xcursor-cursor-proof/20260521T094041172454Z`; `cosmic-patched-cursor-host-proof` was attempted but blocked by the VM running unpatched COSMIC without `/run/user/1000/sky-cua-cosmic-cursor-ready`.  
+  - `ROADMAP.md`: Diagnostics and operator UX calls for a curated VM runner profile set covering text-readback smokes, detached session-env, and the current cursor matrix.
+  - `scripts/run_gui_testing_vm_smoke.py`: `PROFILES` is a flat tuple, while `main` branches for preauthorization and special profiles before falling back to `run_remote_profile`.
+  - `scripts/run_gui_testing_vm_smoke.py`: remote shell strings for process reset, display wake, portal refresh, preauthorization, and generic profile execution repeat runtime-dir and desktop-env setup.
+  - `scripts/run_gui_testing_vm_smoke.py`: COSMIC and KWin host-framebuffer proof functions embed remote scripts, marker waits, VM screenshots, remote JSON reads, marker probes, and summary writing.
+  - `scripts/test_python_harness_helpers.py`: VM runner tests monkeypatch many central `main` dependencies, which is a sign the profile boundary is not explicit enough.
+  Why coupled: A profile has preconditions, desktop env, remote command, artifact protocol, readiness marker, host proof, and acceptance criteria. Those concepts are currently encoded through central branching and long inline scripts.
+  Suggested first move: Introduce a `VmProfile` descriptor and `RemoteRunner` helper for desktop env exports, SSH invocation, runtime-dir setup, remote JSON reads, and marker waits; migrate one special host-framebuffer profile as proof.
+  Testing impact: Add descriptor/command-construction tests before changing dispatch. Existing profile behavior should remain covered by pure tests and the relevant live VM smoke when implementation happens.
+  Needs human decision: Decide the trimmed pre-merge profile set before treating the descriptor registry as final.
   Acceptance criteria:
-  - [x] For host-framebuffer proof profiles, common artifact path construction, COSMIC setup, COSMIC ready-marker polling/framebuffer capture, and host-summary writing are shared.
-  - [x] Profile-specific code supplies preconditions, mode-specific validation, and summary fields.
-  - [x] Existing CLI flags and artifact JSON fields remain compatible.
-  - [x] Summary JSON fields and artifact directory names are covered by characterization tests for both COSMIC host-proof modes and the KWin system-install proof before behavior is moved.
+  - [ ] Profile registry entries describe preauthorization, remote command, host proof needs, and curated-set membership without central `if profile == ...` growth.
+  - [ ] Remote runtime-dir and desktop-env setup is shared.
+  - [ ] KWin and COSMIC host-framebuffer proof summaries keep the same JSON fields.
+  - [ ] Existing `--profile all` semantics are unchanged.
+  - [ ] The roadmap's curated profile set can be read from the profile descriptors.
   Work checklist:
-  - [x] Validate the evidence and mark false assumptions.
-  - [x] Add characterization tests for profile artifact paths and summary writing.
-  - [x] Introduce profile/path data classes.
-  - [x] Migrate one special profile.
-  - [x] Migrate the second duplicated profile.
-  - [x] Consider splitting the helper test file after behavior coverage is stable; deferred because the single pure helper suite remains fast and coherent.
+  - [ ] Validate the evidence and mark false assumptions.
+  - [ ] Add characterization tests for profile descriptors and summary JSON.
+  - [ ] Extract `RemoteRunner`.
+  - [ ] Migrate one special proof profile.
+  - [ ] Migrate remaining special proof profiles.
+  - [ ] Mark the curated profile membership once the roadmap decision is made.
 
-- [x] **ICA-005: Validate a Windows-local action/capture/windowing split**
-  Priority: P3; Effort: S; Risk: Low; Confidence: High; Status: implemented
-  Cluster: `crates/sky-cua-windows/src/backend.rs`, `crates/sky-cua-windows/src/uia.rs`  
-  Dependency category: Global, nondeterministic, or platform dependency  
-  Problem: The Windows backend is a large v1 module combining environment probing, window enumeration, UIA fallback, GDI capture, SendInput, RDP-safe window-message input, coordinate mapping, and Win32 error handling.  
+- [ ] **ICA-012: Type browser snapshot and diagnostic severity contracts**
+  Priority: P2. Effort: M. Risk: Medium. Confidence: Medium. Status: needs-validation
+  Roadmap alignment: Host portability -> Browser MCP managed lifecycle.
+  Cluster: `crates/sky-cua-platform/src/model/browser.rs`, `crates/sky-cua-service/src/browser/snapshot.rs`, `crates/sky-cua-client/src/mcp_tools/browser/response.rs`, browser tests
+  Dependency category: Remote but owned, using ports and adapters
+  Problem: Browser snapshot summaries and MCP error decisions depend on raw JSON keys and string diagnostic codes rather than typed snapshot fields or shared diagnostic severity.
   Evidence:
-  - `crates/sky-cua-windows/src/backend.rs`: `get_app_state` probes input/semantic availability, selects windows, captures screenshots, builds fallback trees, and reports diagnostics.
-  - `crates/sky-cua-windows/src/backend.rs`: `execute_action` chooses UIA, SendInput, or window-message fallbacks.
-  - `crates/sky-cua-windows/src/backend.rs`: `execute_send_input_action` and `execute_window_message_action` duplicate the action surface for two input transports.
-  - `crates/sky-cua-windows/src/backend.rs`: capture helpers and raw input helpers live below the same file-level boundary.
-  Why coupled: Windows app-state and action execution share selected window identity, capture coordinate mapping, and transport availability, but the code is newer and may still be changing quickly.  
-  Suggested first move: Write a short validation note that maps current Windows responsibilities and decides whether to refactor now, defer, or only split mechanical modules such as `capture`, `input`, and `windowing`.  
-  Testing impact: Characterize SendInput vs window-message routing and capture coordinate mapping before any later code movement.  
-  Decision: Validated in `docs/research/2026-05-windows-backend-split-validation.md`. Defer behavior-changing refactors; allow only Windows-local mechanical `capture`, `windowing`, or `input` module splits after preserving current wire shapes, diagnostics, outcome messages, and coordinate tests. Do not impose a Linux-derived abstraction.
+  - `ROADMAP.md`: Browser MCP managed lifecycle requires the shipped snapshot/screenshot/action tool sequence to run in a managed context; snapshot and diagnostic contracts need to survive both user-profile and managed-profile targets.
+  - `crates/sky-cua-platform/src/model/browser.rs`: `BrowserSnapshotResponse.snapshot` is `Option<serde_json::Value>`.
+  - `crates/sky-cua-client/src/mcp_tools/browser/response.rs`: snapshot summary code manually probes `viewport`, `text`, `elements`, `index`, `role`, `name`, `href`, and `bounds` JSON keys.
+  - `crates/sky-cua-client/src/mcp_tools/browser/response.rs`: fatal/error policy is split across `is_fatal_browser_diagnostic`, per-response `*_is_error` functions, and `browser_diagnostics_are_error`.
+  - `crates/sky-cua-service/src/browser/diagnostics.rs` and `crates/sky-cua-service/src/browser/bridge.rs`: service-side validation emits string-coded diagnostics that the client reinterprets for MCP `isError`.
+  Why coupled: The service produces the browser snapshot and diagnostics, but the client owns text rendering and error classification by assuming JSON field names and string code meanings.
+  Suggested first move: Validate the current snapshot shape against real browser smoke artifacts, then introduce typed `BrowserPageSnapshot`, `BrowserViewport`, and `BrowserElementSummary` structs or a shared browser diagnostic severity helper.
+  Testing impact: Add serde compatibility tests and golden summary tests before changing the public structured content. Keep `Value` compatibility only if external hosts rely on arbitrary extra fields.
+  Needs human decision: Decide whether `browser_snapshot` structured content is public enough to require a compatibility transition with both typed fields and legacy `snapshot` JSON.
   Acceptance criteria:
-  - [x] A short validation note decides whether to refactor now, defer, or only split mechanical modules.
-  - [x] No Linux-derived abstraction is imposed unless it reduces Windows-specific complexity.
-  - [x] Any split preserves current Windows wire shapes and fallback diagnostics.
-  - [x] The validation note explicitly maps current Windows responsibilities: UIA-first semantic path, SendInput transport, WindowsMessages/RDP transport, GDI capture, window enumeration/selection, and stream-pixel-to-desktop coordinate mapping.
-  - [x] Any later refactor preserves the current UIA-first fallback diagnostic, SendInput outcome messages, WindowsMessages outcome messages, and stream-pixel coordinate tests.
-
-- [x] **ICA-006: Separate Linux app-state capture planning from snapshot/app selection**  
-  Priority: P2; Effort: L; Risk: Medium; Confidence: High; Status: implemented  
-  Cluster: `crates/sky-cua-linux/src/backend.rs` (`get_app_state`, portal/PipeWire/X11/Screenshot capture fallback, `apply_model_capture`, capture diagnostics)  
-  Dependency category: Global, nondeterministic, or platform dependency; Local-substitutable  
-  Problem addressed: Linux `get_app_state` interleaved environment readiness, portal lifecycle, PipeWire/X11/Screenshot capture fallback, model image capture metadata, AT-SPI app discovery, native window fallback, and final snapshot assembly, making capture behavior and semantic/window fallback behavior hard to characterize independently.  
-  Evidence:
-  - `crates/sky-cua-linux/src/backend.rs`: `get_app_state` builds doctor/session diagnostics, starts portal state, attempts PipeWire capture, falls back through X11 or Screenshot portal capture, discovers AT-SPI apps, merges native window fallback data, and assembles the final snapshot.
-  - `crates/sky-cua-linux/src/backend.rs`: `apply_model_capture` mutates `CaptureInfo` fields for screenshot paths, pixel sizes, model image format/quality/bytes, encode timing, original pixel size, and logical-to-pixel scale.
-  - `crates/sky-cua-linux/src/backend.rs`: `push_capture_diagnostics` encodes important `PortalApprovalPending`, `PipeWireStreamFailed`, and `CaptureBackendDowngraded` behavior.
-  - `crates/AGENTS.md` and `crates/sky-cua-linux/AGENTS.md`: project guidance treats `capture.backend` versus `capture.image_backend`, `CaptureBackendDowngraded`, and `PortalApprovalPending` as explicit runtime contracts.
-  Why coupled: Capture planning, model-image preparation, diagnostics, app/window fallback selection, and snapshot assembly currently share one long method even though capture transports and semantic/window tree construction have different dependencies and test fixtures.  
-  Implementation: Added crate-local `crates/sky-cua-linux/src/capture_plan.rs`, moved capture initialization, portal/PipeWire/X11/Screenshot fallback orchestration, model capture metadata mutation, X11-capture gating, screenshot-fallback gating, and capture diagnostic construction behind that boundary. `LinuxDesktopBackend::get_app_state` now plans capture first, then continues with AT-SPI app discovery, registry-window fallback selection, and final snapshot assembly.  
-  Verification: `cargo fmt --check`; `cargo test -p sky-cua-linux capture_plan` (6 passed); `cargo test -p sky-cua-linux` (183 passed); `cargo clippy -p sky-cua-linux --all-targets` (no issues).  
-  Acceptance criteria:
-  - [x] Capture planning returns `CaptureInfo` plus capture/portal error state and appends capture-only diagnostics before snapshot assembly.
-  - [x] `capture.backend` versus `capture.image_backend` semantics remain unchanged.
-  - [x] `PortalApprovalPending`, `PipeWireStreamFailed`, and `CaptureBackendDowngraded` diagnostics are preserved.
-  - [x] App/window selection and AT-SPI tree construction remain outside capture transports and continue to use helper-level tests.
-  - [x] `LinuxDesktopBackend::get_app_state` reads as orchestration over capture planning plus semantic/window snapshot construction.
+  - [ ] Snapshot producer and client renderer share a typed contract or a documented compatibility shim.
+  - [ ] Browser diagnostic severity/error policy is defined once and reused by all browser response shapers.
+  - [ ] Existing browser MCP structured output remains compatible or migration is documented.
+  - [ ] Privacy-sensitive snapshot extraction remains covered by tests.
+  - [ ] The contract supports both existing user-profile browser targets and future managed-browser targets.
   Work checklist:
-  - [x] Validate the evidence and mark false assumptions.
-  - [x] Add characterization tests for current capture fallback and diagnostic behavior.
-  - [x] Sketch the target capture planning boundary.
-  - [x] Migrate `apply_model_capture` and capture diagnostic construction behind the new boundary.
-  - [x] Keep app/window selection behavior unchanged while moving capture planning.
-  - [x] Remove redundant old helper tests only after replacement boundary tests pass.
+  - [ ] Validate external compatibility expectations for `snapshot`.
+  - [ ] Add characterization tests for current snapshot JSON and summary text.
+  - [ ] Sketch typed snapshot and diagnostic severity options.
+  - [ ] Migrate one response shaper behind the shared policy.
+  - [ ] Remove stringly duplicated error lists only after all browser tools use the shared policy.
 
-- [x] **ICA-007: Split service state and introduce an explicit desktop request lane**  
-  Priority: P2; Effort: L; Risk: Medium; Confidence: High; Status: implemented  
-  Cluster: `crates/sky-cua-service/src/ipc_server.rs`, `crates/sky-cua-service/src/daemon.rs`, `crates/sky-cua-service/src/snapshot_manager.rs`, `crates/sky-cua-service/src/overlay.rs`, with pressure from `crates/sky-cua-client/src/mcp_server.rs` concurrent tool calls  
-  Dependency category: Global, nondeterministic, or platform dependency; Remote but owned, using ports and adapters  
-  Problem addressed: The MCP server can now keep reading and spawn concurrent `tools/call` work, but the daemon wrapped the whole `ServiceDaemon` in one async mutex and request handling awaited while holding that daemon-wide lock. A slow desktop request such as capture, portal setup, or action execution serialized unrelated requests like health once they reached the service.  
+- [ ] **ICA-009: Extract a shared Codex app-server JSON-RPC client**
+  Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: candidate
+  Roadmap alignment: Host portability -> Codex Desktop compatibility; Diagnostics and operator UX proof quality.
+  Cluster: `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py`, `scripts/test_python_harness_helpers.py`
+  Dependency category: Evented or asynchronous boundary; Local-substitutable
+  Problem: Rich smokes and release deploy both drive `codex app-server` over stdio JSON-RPC, but they implement separate process readers, request id handling, initialization sequencing, timeout behavior, stderr capture, and shutdown policy.
   Evidence:
-  - `crates/sky-cua-service/src/ipc_server.rs`: `handle_stream` now calls `daemon.handle(request).await` on `Arc<ServiceDaemon>` instead of holding `Arc<Mutex<ServiceDaemon>>` across request awaits.
-  - `crates/sky-cua-service/src/ipc_server.rs`: `ConnectionTracker` serializes active IPC connection count changes with final cursor cleanup, preserving last-client cursor hide behavior without a daemon-wide request mutex.
-  - `crates/sky-cua-service/src/daemon.rs`: `ServiceDaemon::handle` now takes `&self`; `Health` bypasses the desktop lane, while desktop-sensitive requests are conservatively serialized behind `desktop_lane`.
-  - `crates/sky-cua-service/src/daemon.rs`: `SnapshotManager` and `OverlayController` are behind narrow async mutexes instead of relying on one outer daemon mutex.
-  - Review-work follow-up hardened the VM proof path and related Linux contracts: KWin activation is represented as best-effort `WindowActivationSent` rather than fake focus verification, KWin-targeted keyboard input is rejected without mutating focus, and KDE clipboard fallback avoids cancelling GTK's in-flight Wayland selection read.
-  - `crates/sky-cua-client/src/mcp_server.rs`: `serve` now spawns `tools/call` handling through `tokio::spawn` and `spawn_blocking`, with a dedicated serialized stdout writer so long service calls do not block the MCP read loop.
-  - `crates/sky-cua-client/src/service_launcher.rs`: cloned `ServiceClient`s share a cached stream but take it only for the duration of one call and open fresh connections when needed, so concurrent MCP tool calls can create multiple active IPC streams.
-  Why coupled: Desktop-mutating requests do need sequencing because capture hide/restore, action-derived cursor state, snapshot resolution, portal token resets, and latest-snapshot semantics can interact. Health does not touch desktop backend, snapshot, or overlay state and can safely bypass the lane; other possible bypasses remain intentionally serialized until their backend and overlay interactions are proved safe.  
-  Recommended design: Replace `Arc<Mutex<ServiceDaemon>>` with an `Arc<ServiceRuntime>` whose fields have narrow ownership: shared backend handle, `SessionStore`, snapshot store, overlay controller, and a deliberate `desktop_lane: tokio::sync::Mutex<()>`. Make request handling take `&self`. Route desktop-mutating or ordering-sensitive requests through the desktop lane, while safe requests bypass it. Do not hold snapshot or overlay sub-locks across backend awaits; use the desktop lane for long-running ordering instead. Keep the MCP concurrent-read behavior intact; the service should become the explicit concurrency boundary instead of relying on client-side request serialization.  
-  Suggested first move: Add characterization tests with a fake backend proving a blocked `ExecuteAction` does not block `Health` or another safe request, while a second action or `GetAppState` still queues behind the desktop lane. Then introduce `ServiceRuntime` without changing the wire protocol.  
-  Testing impact: Add service-level concurrency tests for safe request bypass, desktop-lane serialization, last-client cursor cleanup, and idle timeout with active connections. Existing snapshot resolution and overlay hide/show tests should remain green.  
-  Needs human decision: Resolved by conservative implementation. Only `Health` bypasses the desktop lane for this slice; `Doctor`, `ListWindows`, `FocusedWindow`, and `AgentCursorStatus` remain candidates for later evidence-backed bypasses.  
+  - `ROADMAP.md`: Codex Desktop compatibility is shipped, and remaining diagnostics/operator UX work depends on honest proof harnesses rather than process-only checks.
+  - `scripts/_app_server_harness.py`: `JsonRpcProcess` owns line-oriented app-server stdio, while `run_rich_app_server_turn` builds env, starts the server, records transcripts/timing, handles server requests, and performs initialize/status/thread/turn sequencing.
+  - `scripts/deploy_release_plugin.py`: `AppServerClient` independently starts `codex app-server --listen stdio://`, spawns stdout/stderr reader threads, tracks notifications, sends initialize/initialized, and performs plugin install/reload requests.
+  - `scripts/AGENTS.md`: rich `codex app-server` is the current installed-plugin acceptance lane, so protocol drift here affects both deploy and proof harnesses.
+  Why coupled: Both flows share the same transport lifecycle and failure modes, but only the smoke harness has transcript/timing artifacts and only release deploy has queue-backed stderr handling.
+  Suggested first move: Create `_codex_app_server.py` with request/notify, initialize/initialized, timeout/error handling, stderr capture, transcript hooks, and clean shutdown; keep turn policy in `_app_server_harness.py` and release operations in `deploy_release_plugin.py`.
+  Testing impact: Add pure tests for request id matching, notification buffering, server-request handling hooks, timeout stderr reporting, and close/kill behavior with fake subprocess streams. Existing deploy and rich-smoke helper tests should migrate to the shared client.
+  Needs human decision: None unless release deploy intentionally needs different `--listen` arguments than the rich harness.
   Acceptance criteria:
-  - [x] `ServiceDaemon` or replacement runtime no longer requires a daemon-wide async mutex held across every request await.
-  - [x] An explicit desktop lane serializes `GetAppState`, `ExecuteAction`, `ActivateWindow`, cursor mutators, portal token reset, and setup requests unless proven safe.
-  - [x] Safe requests can complete while a fake long-running desktop-lane request is blocked.
-  - [x] Concurrent MCP `tools/call` requests can reach the service without stdout response interleaving, and safe service requests are not blocked by an unrelated fake long-running desktop-lane request.
-  - [x] Two desktop-lane requests preserve order and do not interleave capture hide/restore, snapshot mutation, or overlay mutation.
-  - [x] Last-client cursor cleanup and idle shutdown still respect active IPC connections.
-  - [x] No serialized service request/response wire shape changes.
+  - [ ] Rich smokes and release deploy use one app-server transport/client implementation.
+  - [ ] Release deploy keeps plugin install and MCP reload behavior unchanged.
+  - [ ] Rich smokes keep transcript, request log, timing, and elicitation/approval handling unchanged.
+  - [ ] The client never blocks indefinitely on stderr or stdout during process exit.
+  - [ ] This refactor does not delay direct Browser MCP managed lifecycle or Windows overlay work.
   Work checklist:
-  - [x] Validate and classify every `ServiceRequest` as safe-bypass or desktop-lane.
-  - [x] Add concurrency characterization tests before refactoring.
-  - [x] Introduce `ServiceRuntime` or equivalent with narrow state holders.
-  - [x] Move snapshot storage behind a narrow lock that is not held across backend awaits.
-  - [x] Move overlay state behind a narrow lock and preserve capture hide/restore ordering through the desktop lane.
-  - [x] Update IPC server to hold `Arc<ServiceRuntime>` instead of `Arc<Mutex<ServiceDaemon>>`.
-  - [x] Re-run service, client, Linux backend, and smoke-level validations relevant to cursor and snapshot behavior. Final accepted smoke proof: `pty_298de25e`, artifacts `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260519T183144Z`.
+  - [ ] Validate the evidence and mark false assumptions.
+  - [ ] Add fake-process tests for current app-server request/notification behavior.
+  - [ ] Introduce the shared transport with compatibility wrappers.
+  - [ ] Migrate release deploy first because its operation set is smaller.
+  - [ ] Migrate rich smokes and preserve artifact file outputs.
+  - [ ] Remove duplicated client classes after both paths pass Python checks.
+
+- [ ] **ICA-013: Split broad helper tests into subsystem fixtures**
+  Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: candidate
+  Roadmap alignment: Enabler for `ICA-008`, `ICA-009`, and `ICA-011`; not standalone roadmap scope.
+  Cluster: `scripts/test_python_harness_helpers.py`, `crates/sky-cua-service/src/browser/tests.rs`
+  Dependency category: In-process; Local-substitutable
+  Problem: The largest test modules import and exercise many unrelated harness/runtime helpers, so refactors have to navigate broad import-time dependencies and mixed monkeypatch fixtures.
+  Evidence:
+  - `scripts/test_python_harness_helpers.py`: imports plugin bundle helpers, deploy scripts, install scripts, live desktop smokes, Chrome host smokes, VM runner, marketplace tools, and MCP stdio helpers in one module.
+  - `scripts/test_python_harness_helpers.py`: one file covers VM provisioning, remote profile command construction, MCP install behavior, build/release deploy behavior, cursor geometry, Chrome native-host helpers, and smoke config.
+  - `crates/sky-cua-service/src/browser/tests.rs`: one large module mixes sockets, protocol frame I/O, bridge operations, session recovery, snapshot expression privacy, coordinate conversion, and fake server helpers.
+  Why coupled: The tests have become fixture libraries plus many subsystem suites, which makes boundary refactors noisier and hides which behavior belongs to which module.
+  Suggested first move: Split tests only when doing an adjacent roadmap-aligned slice, or when a focused refactor first needs shared fixtures. Do not lead with this as independent cleanup.
+  Testing impact: This is mostly test architecture. The acceptance check is that the same focused test commands pass and test names remain discoverable by subsystem.
+  Needs human decision: None.
+  Acceptance criteria:
+  - [ ] Python helper tests are split into focused modules as part of the relevant implementation slices.
+  - [ ] Browser service Rust tests have shared fake-server fixtures plus focused modules for sockets, session, actions, snapshot, and coordinates.
+  - [ ] No production behavior changes are mixed into a pure test split.
+  - [ ] Existing narrow test commands still pass.
+  Work checklist:
+  - [ ] Validate import dependencies and fixture sharing.
+  - [ ] Add shared test support modules when a roadmap-aligned slice needs them.
+  - [ ] Move one coherent test group first.
+  - [ ] Continue moving groups in small reviewable patches.
+  - [ ] Remove stale imports and duplicate monkeypatch setup.
+
+## Recommended Design Direction For ICA-008
+
+Recommended option: a service-internal `BrowserBridgeExecutor` plus a `BrowserSessionBinding` helper.
+
+Minimal interface:
+
+```rust
+let executor = BrowserBridgeExecutor::from_env(timeout)?;
+executor.run_cdp(target, tab_id, BrowserCdpAction::Snapshot).await
+```
+
+This hides socket selection and deadline setup, but session recovery may still leak into CDP and extension action modules.
+
+Flexible interface:
+
+```rust
+let executor = BrowserBridgeExecutor::from_env(timeout)?;
+executor.with_bound_tab(target, tab_id, |tab| async move {
+    tab.run_cdp(BrowserCdpAction::Snapshot).await
+}).await
+```
+
+This best matches the current coupling: the executor owns bridge selection, while the bound tab owns claim/attach/enable/recover/retry. It supports CDP actions, extension-only operations like `moveMouse`, and the planned managed-browser endpoint without making every caller know stale-session recovery.
+
+Default-case interface:
+
+```rust
+browser_ops::snapshot(target, tab_id).await
+```
+
+This is simplest for callers, but risks keeping the implementation as many shallow wrapper functions unless the operation module still uses a deeper executor internally.
+
+Ports/adapters interface:
+
+```rust
+trait BrowserBridgeTransport {
+    async fn request(&mut self, method: &str, params: Value, deadline: Instant) -> Result<Value, DiagnosticEntry>;
+}
+```
+
+This is useful for tests and future managed-browser transports, but it should stay below the executor. Starting with a transport trait alone would not remove the exposed session policy.
+
+Chosen shape: use the flexible interface internally, with fakeable transport/socket adapters beneath it. It keeps the public service wire unchanged, gives stale-session behavior one owner, and matches the roadmap's managed lifecycle by allowing `user_chrome` and managed browser endpoints to share operation policy.
+
+## RFC Draft For ICA-008
+
+Title: Refactor browser bridge operations behind a `BrowserBridgeExecutor`
+
+Problem: Browser MCP service operations have a clean module split on disk, but important runtime policy is still repeated across operations: socket family selection, bridge readiness diagnostics, deadlines, tab attach/enable, stale-session reclaim, and recoverable CDP retry. This makes the roadmap's managed browser lifecycle more error-prone because a new managed endpoint could duplicate the current `user_chrome` policy.
+
+Evidence:
+- `ROADMAP.md` calls for browser managed lifecycle: launch/own an isolated browser/profile, run the shipped snapshot/screenshot/action sequence, clean up deterministically, and eventually delegate Codex Desktop's companion Browser Use adapter through the shared runtime.
+- `crates/sky-cua-service/src/browser/bridge.rs` repeats socket selection and deadline setup across bridge entrypoints.
+- `crates/sky-cua-service/src/browser/session.rs` owns attach/enable/reclaim policy but `move_mouse_from_socket` still wraps recovery separately.
+- `crates/sky-cua-service/src/browser/cdp.rs` wraps CDP action recovery separately.
+- `crates/sky-cua-service/src/browser/tests.rs` mixes fixture support and tests for many behavior layers.
+
+Proposed interface: introduce a crate-local `BrowserBridgeExecutor` that resolves selection, sockets, diagnostics, and deadlines once. Add a `BrowserSessionBinding` or equivalent that owns claim/attach/enable/recover/retry and exposes `run_cdp` plus `run_extension_action` for move-mouse. Later managed-browser work should provide another endpoint/transport adapter to the same operation boundary.
+
+Dependency strategy: Remote but owned, using ports and adapters. Production uses the current Unix socket/native-host bridge transport for `user_chrome`. Managed-browser work can add a process/profile owner and transport adapter. Tests use fake socket/transport fixtures and keep contract-style tests for frame protocol and request IDs.
+
+Testing strategy: Add boundary tests for empty socket diagnostics, first responsive socket selection, stale-owner reclaim, debugger detach/reattach, CDP retry, and extension move-mouse retry. Add managed-endpoint characterization when `plans/browser_use_mcp.md` is implemented. Only then split or delete redundant operation-level tests.
+
+Migration plan: Introduce the executor behind existing functions, migrate `snapshot` or `move_mouse` first, migrate remaining browser operations, then split shared test fixtures from the monolithic browser test module.
+
+Risks and non-goals: Do not change MCP tool names, service wire shapes, diagnostic codes, or browser target semantics. Do not implement the managed-browser lifecycle in this refactor; the boundary should make that roadmap work smaller.
+
+Acceptance criteria:
+- Existing browser MCP tests pass.
+- Existing browser live smoke commands remain the proof gate for behavior changes.
+- Browser operation functions no longer duplicate socket/deadline/recovery setup.
+- Public structured content and diagnostics remain compatible.
+- `plans/browser_use_mcp.md` can plug its managed endpoint into the operation boundary without reimplementing current session recovery.
 
 ## Parking Lot
 
-- [x] Check whether app/window matching helpers in `crates/sky-cua-linux/src/backend.rs` should become a dedicated matcher module after ICA-001, or whether they are better left near snapshot construction. Decision: extracted selector scoring, Linux registry-window matching/enrichment/merge, X11 matching, and app-from-window conversion into `crates/sky-cua-linux/src/app_match.rs`; left fallback element/snapshot construction in `backend.rs` because blunt geometry roles are snapshot construction, not matching policy. Verification: `cargo fmt --check`; `cargo test -p sky-cua-linux app_match` (7 passed); `cargo test -p sky-cua-linux --lib` (190 passed); `cargo clippy -p sky-cua-linux --all-targets -- -D warnings`.
-- [x] Checked whether `crates/sky-cua-platform/src/model.rs` needs smaller model submodules. Decision: implemented a conservative first split around real seams. `model.rs` remains the platform-neutral serde contract surface, but service IPC envelopes now live in `crates/sky-cua-platform/src/model/service.rs` and existing characterization tests live in `crates/sky-cua-platform/src/model/tests.rs`. `sky_cua_platform::model::*` and `sky_cua_platform::model::{ServiceRequest, ServiceResponse}` compatibility are preserved through re-exports. Further splits should wait for cohesive wire-contract seams such as doctor/setup reports, agent-cursor contracts, or app/window/capture snapshot contracts.
-- [x] ICA-001, ICA-003, and ICA-005 are now complete; audit coordinate conversion behavior across Linux action targeting, overlay cursor state derivation, and Windows stream-pixel-to-desktop mapping. Linux action targeting and overlay cursor derivation already had offset/scaled golden cases; Windows now has a matching high-DPI stream-pixel-to-desktop golden case. Devbox Windows validation passed for the focused high-DPI coordinate test (`1 passed`) and full `sky-cua-windows` crate (`29 passed`). No shared coordinate abstraction is warranted yet.
+- [ ] Revisit `crates/sky-cua-service/src/daemon.rs` after browser lifecycle settles; a request dispatcher split may be useful, but `ICA-007` already removed the daemon-wide lock and the browser route is changing quickly.
+- [ ] Revisit a broad Windows backend split only after active Windows capture-ladder or Windows overlay work needs it; avoid imposing a Linux-derived boundary too early.
+- [ ] Revisit `crates/sky-cua-platform/src/paths.rs` if more transport/state policy lands there; today it is high impact but still small enough to review.
+- [ ] Keep Wayland fallback vision anchors and CDUL Linux enhancements in their ExecPlans unless implementation exposes a deeper architectural seam; they are product/runtime feature work first, not standalone architecture backlog items.
 
 <!-- improve-codebase-architecture:end -->
