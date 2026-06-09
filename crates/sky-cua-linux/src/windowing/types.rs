@@ -61,7 +61,7 @@ pub struct TerminalProcess {
 impl WindowTarget {
     pub fn has_target(&self) -> bool {
         self.window_id.as_deref().is_some_and(non_empty)
-            || self.pid.is_some()
+            || self.pid.is_some_and(non_zero)
             || self.has_terminal_target()
             || self.app_id.as_deref().is_some_and(non_empty)
             || self.wm_class.as_deref().is_some_and(non_empty)
@@ -69,7 +69,7 @@ impl WindowTarget {
     }
 
     pub fn has_terminal_target(&self) -> bool {
-        self.terminal_pid.is_some()
+        self.terminal_pid.is_some_and(non_zero)
             || self.tty.as_deref().is_some_and(non_empty)
             || self.terminal_command.as_deref().is_some_and(non_empty)
             || self.terminal_cwd.as_deref().is_some_and(non_empty)
@@ -120,7 +120,8 @@ impl From<LinuxWindowInfo> for WindowInfo {
 }
 
 impl From<sky_cua_platform::model::WindowTarget> for WindowTarget {
-    fn from(target: sky_cua_platform::model::WindowTarget) -> Self {
+    fn from(mut target: sky_cua_platform::model::WindowTarget) -> Self {
+        target.normalize_empty_fields();
         Self {
             window_id: target.window_id,
             pid: target.pid,
@@ -137,4 +138,47 @@ impl From<sky_cua_platform::model::WindowTarget> for WindowTarget {
 
 fn non_empty(value: &str) -> bool {
     !value.trim().is_empty()
+}
+
+fn non_zero(value: u32) -> bool {
+    value != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WindowTarget;
+
+    #[test]
+    fn platform_window_target_conversion_normalizes_empty_defaults() {
+        let target = sky_cua_platform::model::WindowTarget {
+            window_id: Some(" ".to_string()),
+            pid: Some(0),
+            tty: Some("".to_string()),
+            terminal_pid: Some(0),
+            terminal_command: Some("\t".to_string()),
+            terminal_cwd: Some("".to_string()),
+            app_id: Some(" chromium.desktop ".to_string()),
+            wm_class: Some("".to_string()),
+            title: Some("".to_string()),
+        };
+
+        let target = WindowTarget::from(target);
+
+        assert_eq!(target.app_id.as_deref(), Some("chromium.desktop"));
+        assert_eq!(target.pid, None);
+        assert_eq!(target.terminal_pid, None);
+        assert!(!target.has_terminal_target());
+    }
+
+    #[test]
+    fn zero_process_ids_do_not_count_as_local_targets() {
+        let target = WindowTarget {
+            pid: Some(0),
+            terminal_pid: Some(0),
+            ..WindowTarget::default()
+        };
+
+        assert!(!target.has_target());
+        assert!(!target.has_terminal_target());
+    }
 }

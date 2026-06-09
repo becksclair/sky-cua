@@ -45,7 +45,7 @@ packaged adapter around that runtime, not the runtime boundary itself.
   descendant bounds
 - app-action policy in `resources/app-instructions/index.json`, including the
   Kate-scoped `set_value` fallback
-- host-portable workflow guidance in `skills/computer-use-workflows/`
+- host-portable workflow guidance in `skills/computer-use/` and `skills/browser-use/`
 - Windows compile/runtime foundation through `sky-cua-windows`, including
   top-level window fallback snapshots, GDI screenshots, and SendInput actions
 - Linux window targeting through a registry of KWin, X11, GNOME, COSMIC,
@@ -142,7 +142,24 @@ Install the runtime as a plain MCP server for non-Codex hosts:
 cargo build --release
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host generic
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw
 ```
+
+During local sky-cua development, add `--restart-runtime` after rebuilding and
+installing so OpenCode, Pi, or another MCP host stops any already-running
+installed `sky-cua-service`/helper processes and respawns from the new binaries
+on the next tool call:
+
+```bash
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode --bin-dir ~/.local/bin --restart-runtime
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host pi --bin-dir ~/.local/bin --restart-runtime
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw --bin-dir ~/.local/bin --restart-runtime
+```
+
+If the host does not reconnect automatically after the runtime is stopped,
+restart or reload the host session. For Pi, run `/reload` or restart Pi.
+OpenClaw installs through `openclaw mcp set sky_cua <config>` and copies skills
+into `~/.openclaw/workspace/skills`.
 
 For production-like Linux GUI and non-Codex harness proof, use the Arch
 `testing-vm` path in `docs/operations/gui-desktop-test-harness.md`. The VM provisioner

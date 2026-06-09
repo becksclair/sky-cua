@@ -41,13 +41,23 @@ BUNDLE_SOURCE_PATHS = [
 OPENAI_BUNDLED_PLUGIN_NAMES = ("browser-use", "chrome")
 OPENAI_BUNDLED_MARKETPLACE_PLUGIN_NAMES = ("browser-use", "chrome", "computer-use")
 NODE_REPL_NAME = "node_repl"
-WORKTREE_BUNDLE_FILES = (Path("resources") / "chrome_preflight.py",)
+WORKTREE_BUNDLE_FILES = (
+    Path("resources") / "chrome_preflight.py",
+    Path("docs") / "operations" / "isolated-daemon-smokes.md",
+    Path("docs") / "operations" / "plugin-release.md",
+    Path("docs") / "operations" / "testing-vm-desktop-smokes.md",
+)
 WORKTREE_BUNDLE_DIRS = (
     Path("resources") / "chrome-extension",
     Path("resources") / "cosmic",
     Path("resources") / "kwin",
-    Path("skills") / "computer-use-workflows" / "references" / "apps",
-    Path("skills") / "sky-cua-isolated-daemon" / "references",
+    Path("skills") / "computer-use",
+    Path("skills") / "browser-use",
+)
+RETIRED_BUNDLE_SOURCE_PREFIXES = (
+    Path("skills") / "computer-use-workflows",
+    Path("skills") / "sky-cua-isolated-daemon",
+    Path("skills") / "sky-cua-plugin-release",
 )
 
 CARGO_BUILD_PACKAGES = [
@@ -140,6 +150,12 @@ def tracked_bundle_files(source_paths: list[Path] | None = None) -> list[Path]:
 def copy_tracked_bundle_sources(temp_root: Path) -> None:
     for relative_path in tracked_bundle_files():
         source = REPO_ROOT / relative_path
+        if not source.exists():
+            if any(
+                relative_path.is_relative_to(prefix) for prefix in RETIRED_BUNDLE_SOURCE_PREFIXES
+            ):
+                continue
+            raise FileNotFoundError(f"tracked bundle source is missing: {source}")
         destination = temp_root / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)

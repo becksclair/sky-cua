@@ -1,3 +1,4 @@
+mod key_sequence;
 pub(crate) mod runtime;
 pub(crate) mod targeting;
 
@@ -24,6 +25,7 @@ use crate::atspi::normalize_action;
 use crate::portal::remote_desktop::MouseButton;
 use crate::windowing::common::command_exists;
 use crate::x11::windowing::X11WindowInfo;
+use key_sequence::parse_key_sequence;
 
 pub(crate) struct LinuxActionExecutor<'a, R> {
     runtime: &'a R,
@@ -665,7 +667,7 @@ where
                     self.runtime.xtest_is_available(),
                 );
                 let (x, y) = action_point_for_backend(request, physical_backend.clone())?;
-                let select_all = vec!["Ctrl".to_string(), "A".to_string()];
+                let select_all = vec!["Ctrl".to_string(), "a".to_string()];
                 let mut diagnostics = vec![DiagnosticEntry {
                     code: "HeuristicSetValueFallbackUsed".to_string(),
                     message: match policy.routing {
@@ -773,33 +775,6 @@ fn direct_backend_ref(arguments: &serde_json::Value) -> Option<&str> {
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-fn parse_key_sequence(arguments: &serde_json::Value) -> Option<Vec<String>> {
-    if let Some(keys) = arguments.get("keys").and_then(serde_json::Value::as_array) {
-        let parsed = keys
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if !parsed.is_empty() {
-            return Some(parsed);
-        }
-    }
-
-    if let Some(key) = arguments.get("key").and_then(serde_json::Value::as_str) {
-        let parsed = key
-            .split('+')
-            .map(str::trim)
-            .filter(|segment| !segment.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if !parsed.is_empty() {
-            return Some(parsed);
-        }
-    }
-
-    None
 }
 
 fn action_name_matches(candidate: &str, requested: &str) -> bool {
@@ -1133,8 +1108,8 @@ async fn kde_klipper_proxy(connection: &zbus::Connection) -> Result<Proxy<'_>, S
 mod tests {
     use super::{
         KdeClipboardPasteError, LinuxActionExecutor, action_name_matches,
-        clipboard_mime_types_are_plain_text_only, parse_key_sequence,
-        should_prefer_kde_clipboard_text_backend, wl_paste_reports_empty_clipboard,
+        clipboard_mime_types_are_plain_text_only, should_prefer_kde_clipboard_text_backend,
+        wl_paste_reports_empty_clipboard,
     };
     use crate::actions::runtime::{
         LinuxActionRuntime, SemanticActionInvocation, SemanticAtspiAction, SemanticSetValueResult,
@@ -1608,6 +1583,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn executor_press_key_normalizes_shortcut_letters() {
+        let runtime = FakeRuntime::default();
+        let request = action_request(ActionName::PressKey, json!({"key": "Ctrl+L"}));
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("press_key should succeed");
+
+        assert_eq!(
+            outcome.message,
+            "Pressed the key sequence through the RemoteDesktop portal."
+        );
+        assert_eq!(runtime.take_events(), vec!["portal_key:Ctrl+l"]);
+    }
+
+    #[tokio::test]
     async fn executor_secondary_click_uses_portal_physical_fallback() {
         let runtime = FakeRuntime::default();
         let request = action_request(
@@ -1708,19 +1700,11 @@ mod tests {
             runtime.take_events(),
             vec![
                 "portal_click_at:25,40:Left",
-                "portal_key:Ctrl+A",
+                "portal_key:Ctrl+a",
                 "portal_text:replacement"
             ]
         );
         assert_eq!(outcome.diagnostics[0].code, "HeuristicSetValueFallbackUsed");
-    }
-
-    #[test]
-    fn parses_key_chord_string() {
-        assert_eq!(
-            parse_key_sequence(&json!({"key": "Ctrl+L"})),
-            Some(vec!["Ctrl".to_string(), "L".to_string()])
-        );
     }
 
     #[test]

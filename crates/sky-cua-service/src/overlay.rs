@@ -13,6 +13,7 @@ use sky_cua_platform::model::{
 const AGENT_CURSOR_ENV: &str = "SKY_CUA_AGENT_CURSOR";
 const OVERLAY_HIDE_FOR_CAPTURE_ENV: &str = "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE";
 const SCREENSHOT_CURSOR_ENV: &str = "SKY_CUA_SCREENSHOT_CURSOR";
+const AGENT_CURSOR_IDLE_HIDE_MS: u64 = 1_500;
 
 mod host;
 mod synthetic_cursor;
@@ -225,6 +226,7 @@ impl OverlayController {
     }
 
     pub fn apply_to_snapshot(&mut self, snapshot: &mut AppStateSnapshot) {
+        snapshot.diagnostics.extend(self.hide_idle_cursor());
         snapshot.agent_cursor = self.state();
         if !self.should_synthesize_cursor() {
             remove_synthetic_cursor_from_snapshot(snapshot);
@@ -256,6 +258,18 @@ impl OverlayController {
                 self.screenshot_cursor_mode,
                 CursorMode::Auto | CursorMode::Always
             )
+    }
+
+    fn hide_idle_cursor(&mut self) -> Vec<DiagnosticEntry> {
+        let Some(state) = self.state.as_ref().filter(|state| state.visible) else {
+            return Vec::new();
+        };
+        if now_ms().saturating_sub(state.updated_at_ms) < AGENT_CURSOR_IDLE_HIDE_MS {
+            return Vec::new();
+        }
+
+        self.hide(Some("agent cursor idle timeout".to_string()))
+            .diagnostics
     }
 
     fn should_hide_visible_overlay_for_capture(&self) -> bool {
@@ -692,7 +706,7 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{OverlayController, state_from_action_request};
+    use super::{AGENT_CURSOR_IDLE_HIDE_MS, OverlayController, now_ms, state_from_action_request};
     use image::{ImageBuffer, Rgba};
     use sky_cua_overlay_host::{OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostReply};
     use sky_cua_platform::model::{
@@ -1211,6 +1225,33 @@ mod tests {
                 .screenshot_path
                 .expect("updated path")
                 .ends_with("capture.agent-cursor.png")
+        );
+    }
+
+    #[test]
+    fn apply_to_snapshot_hides_idle_cursor_before_synthesizing() {
+        let dir = unique_temp_dir("snapshot-idle-cursor");
+        let path = dir.join("capture.png");
+        ImageBuffer::from_pixel(32, 32, Rgba([240u8, 240, 240, 255]))
+            .save(&path)
+            .expect("write source image");
+        let mut controller = OverlayController::new_for_tests();
+        controller.set_state(synthetic_state(16, 16));
+        if let Some(state) = controller.state.as_mut() {
+            state.updated_at_ms = now_ms().saturating_sub(AGENT_CURSOR_IDLE_HIDE_MS + 1);
+        }
+        let mut snapshot = snapshot_with_capture(capture_with_path(&path, None));
+
+        controller.apply_to_snapshot(&mut snapshot);
+
+        assert!(!snapshot.agent_cursor.expect("cursor state").visible);
+        assert_eq!(
+            snapshot
+                .capture
+                .expect("capture")
+                .screenshot_path
+                .as_deref(),
+            Some(path.to_str().expect("utf-8 path"))
         );
     }
 

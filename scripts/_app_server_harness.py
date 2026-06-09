@@ -22,7 +22,7 @@ from _plugin_bundle import REPO_ROOT
 
 def with_plugin_mention(prompt: str) -> str:
     return (
-        f"Use {PLUGIN_MENTION} and its bundled computer-use-workflows skill.\n"
+        f"Use {PLUGIN_MENTION} and its bundled computer-use skill.\n"
         "When `get_app_state` returns a `screenshot_path`, inspect that image with `view_image` and"
         " treat it as the visual source of truth. If the control tree is sparse or fallback-only,"
         " you may still act by confirmed on-screen coordinates through the computer-use tools."

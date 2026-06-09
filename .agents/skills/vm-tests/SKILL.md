@@ -12,7 +12,7 @@ Use this skill for the Arch `testing-vm` smoke lane. It is for real guest deskto
 Before running or interpreting a VM profile, read the current project sources of truth:
 
 - `docs/operations/gui-desktop-test-harness.md` for provisioning, runner behavior, profiles, session switching, current proof status, and artifact expectations.
-- `skills/sky-cua-isolated-daemon/references/testing-vm-desktop-smokes.md` for the current SSH port-forward form, session/display names, known-good commands, and false trails.
+- `docs/operations/testing-vm-desktop-smokes.md` for the current SSH port-forward form, session/display names, known-good commands, and false trails.
 - `scripts/run_gui_testing_vm_smoke.py --help` or the script source when adding flags, choosing a profile, or investigating runner behavior.
 
 Treat those files as authoritative over this skill if they drift.

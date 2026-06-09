@@ -1,6 +1,11 @@
 mod action_router;
 mod approval_store;
 mod backend_factory;
+#[cfg(unix)]
+mod browser;
+#[cfg(not(unix))]
+#[path = "browser/unsupported.rs"]
+mod browser;
 mod daemon;
 mod diagnostics;
 mod element_resolver;

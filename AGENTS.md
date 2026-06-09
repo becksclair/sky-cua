@@ -89,7 +89,8 @@ knowledge tree.
 - MCP client: `crates/sky-cua-client/` -> [crates/sky-cua-client/AGENTS.md](crates/sky-cua-client/AGENTS.md)
 - Python harnesses: `scripts/` -> [scripts/AGENTS.md](scripts/AGENTS.md)
 - App-specific guidance: `resources/app-instructions/` -> [resources/app-instructions/AGENTS.md](resources/app-instructions/AGENTS.md)
-- Bundled workflow skill: `skills/computer-use-workflows/` -> [skills/computer-use-workflows/AGENTS.md](skills/computer-use-workflows/AGENTS.md)
+- Bundled computer-use skill: `skills/computer-use/` -> [skills/computer-use/AGENTS.md](skills/computer-use/AGENTS.md)
+- Bundled browser-use skill: `skills/browser-use/` -> [skills/browser-use/AGENTS.md](skills/browser-use/AGENTS.md)
 - Local VM smoke skill: `.agents/skills/vm-tests/` -> [.agents/skills/vm-tests/SKILL.md](.agents/skills/vm-tests/SKILL.md)
 - Docs: `docs/` -> [docs/AGENTS.md](docs/AGENTS.md)
   - Runtime contracts: `docs/runtime/`

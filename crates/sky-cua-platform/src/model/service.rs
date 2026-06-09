@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AgentCursorCapabilities,
-    AgentCursorState, AppInfo, AppSelector, AppStateSnapshot, CaptureScreenMode, DiagnosticEntry,
-    DoctorReport, EnvironmentInfo, WindowInfo, WindowTarget, WindowTargetingSetupReport,
+    AgentCursorState, AppInfo, AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse,
+    CaptureScreenMode, DiagnosticEntry, DoctorReport, EnvironmentInfo, WindowInfo, WindowTarget,
+    WindowTargetingSetupReport,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -38,6 +39,9 @@ pub enum ServiceRequest {
         reason: Option<String>,
     },
     ShowAgentCursor,
+    Browser {
+        request: BrowserRequest,
+    },
     ExecuteAction {
         request: Box<ActionRequest>,
     },
@@ -55,6 +59,8 @@ pub enum ServiceResponse {
         service_socket: String,
         #[serde(default)]
         desktop_env: BTreeMap<String, String>,
+        #[serde(default)]
+        browser_env: BTreeMap<String, String>,
     },
     Doctor {
         report: Box<DoctorReport>,
@@ -115,6 +121,9 @@ pub enum ServiceResponse {
         state: Option<AgentCursorState>,
         diagnostics: Vec<DiagnosticEntry>,
     },
+    Browser {
+        response: BrowserResponse,
+    },
     ExecuteAction {
         outcome: ActionOutcome,
     },
@@ -131,7 +140,12 @@ mod tests {
         environment_info, setup_command_report, window_info,
     };
     use super::*;
-    use crate::{AccessibilitySetupReport, ActionName, WindowTargetingSetupReport};
+    use crate::{
+        AccessibilitySetupReport, ActionName, BrowserClaimTabResponse, BrowserListTabsResponse,
+        BrowserMoveMouseResponse, BrowserOpenResponse, BrowserRequest, BrowserResponse,
+        BrowserStatusReport, BrowserTab, BrowserTargetAvailability, BrowserTargetKind,
+        WindowTargetingSetupReport,
+    };
     use serde_json::json;
 
     #[test]
@@ -179,6 +193,50 @@ mod tests {
             ),
             (ServiceRequest::ShowAgentCursor, "show_agent_cursor"),
             (
+                ServiceRequest::Browser {
+                    request: BrowserRequest::Status,
+                },
+                "browser",
+            ),
+            (
+                ServiceRequest::Browser {
+                    request: BrowserRequest::ListTabs {
+                        target: Some(BrowserTargetKind::Managed),
+                    },
+                },
+                "browser",
+            ),
+            (
+                ServiceRequest::Browser {
+                    request: BrowserRequest::Open {
+                        target: Some(BrowserTargetKind::UserChrome),
+                        url: Some("https://example.test/".to_string()),
+                    },
+                },
+                "browser",
+            ),
+            (
+                ServiceRequest::Browser {
+                    request: BrowserRequest::ClaimTab {
+                        target: Some(BrowserTargetKind::UserChrome),
+                        tab_id: "123".to_string(),
+                    },
+                },
+                "browser",
+            ),
+            (
+                ServiceRequest::Browser {
+                    request: BrowserRequest::MoveMouse {
+                        target: Some(BrowserTargetKind::UserChrome),
+                        tab_id: "123".to_string(),
+                        x: 240.0,
+                        y: 160.0,
+                        wait_for_arrival: true,
+                    },
+                },
+                "browser",
+            ),
+            (
                 ServiceRequest::ExecuteAction {
                     request: Box::new(ActionRequest {
                         action: ActionName::Click,
@@ -203,6 +261,22 @@ mod tests {
     }
 
     #[test]
+    fn browser_service_request_uses_nested_type_tag() {
+        let rendered = serde_json::to_value(ServiceRequest::Browser {
+            request: BrowserRequest::Open {
+                target: Some(BrowserTargetKind::UserChrome),
+                url: Some("https://example.test/".to_string()),
+            },
+        })
+        .expect("browser request should serialize");
+
+        assert_eq!(rendered["type"], "browser");
+        assert_eq!(rendered["request"]["type"], "open");
+        assert_eq!(rendered["request"]["target"], "user_chrome");
+        assert_eq!(rendered["request"]["url"], "https://example.test/");
+    }
+
+    #[test]
     fn service_response_variants_preserve_type_tags() {
         let environment = environment_info();
         let diagnostics = Vec::new();
@@ -214,6 +288,7 @@ mod tests {
                     ok: true,
                     service_socket: "/tmp/socket".to_string(),
                     desktop_env: Default::default(),
+                    browser_env: Default::default(),
                 },
                 "health",
             ),
@@ -326,6 +401,58 @@ mod tests {
                 },
                 "show_agent_cursor",
             ),
+            (browser_status_response(), "browser"),
+            (
+                ServiceResponse::Browser {
+                    response: BrowserResponse::ListTabs {
+                        response: BrowserListTabsResponse {
+                            target: None,
+                            tabs: Vec::new(),
+                            diagnostics: Vec::new(),
+                        },
+                    },
+                },
+                "browser",
+            ),
+            (
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Open {
+                        response: BrowserOpenResponse {
+                            target: BrowserTargetKind::UserChrome,
+                            tab: Some(browser_tab()),
+                            diagnostics: Vec::new(),
+                        },
+                    },
+                },
+                "browser",
+            ),
+            (
+                ServiceResponse::Browser {
+                    response: BrowserResponse::ClaimTab {
+                        response: BrowserClaimTabResponse {
+                            target: BrowserTargetKind::UserChrome,
+                            tab: Some(browser_tab()),
+                            diagnostics: Vec::new(),
+                        },
+                    },
+                },
+                "browser",
+            ),
+            (
+                ServiceResponse::Browser {
+                    response: BrowserResponse::MoveMouse {
+                        response: BrowserMoveMouseResponse {
+                            target: BrowserTargetKind::UserChrome,
+                            tab_id: "tab-1".to_string(),
+                            x: 240.0,
+                            y: 160.0,
+                            wait_for_arrival: true,
+                            diagnostics: Vec::new(),
+                        },
+                    },
+                },
+                "browser",
+            ),
             (
                 ServiceResponse::ExecuteAction {
                     outcome: action_outcome(),
@@ -344,6 +471,44 @@ mod tests {
         for (response, expected_type) in responses {
             let rendered = serde_json::to_value(response).expect("response should serialize");
             assert_eq!(rendered["type"], expected_type);
+        }
+    }
+
+    #[test]
+    fn browser_service_response_uses_nested_type_tag() {
+        let rendered = serde_json::to_value(browser_status_response())
+            .expect("browser response should serialize");
+
+        assert_eq!(rendered["type"], "browser");
+        assert_eq!(rendered["response"]["type"], "status");
+        assert_eq!(rendered["response"]["report"]["enabled"], true);
+    }
+
+    fn browser_status_response() -> ServiceResponse {
+        ServiceResponse::Browser {
+            response: BrowserResponse::Status {
+                report: BrowserStatusReport {
+                    enabled: true,
+                    available_targets: vec![BrowserTargetAvailability {
+                        target: BrowserTargetKind::Managed,
+                        available: true,
+                        detail: "ok".to_string(),
+                    }],
+                    tabs_known: Some(0),
+                    browser_integration: None,
+                    diagnostics: Vec::new(),
+                },
+            },
+        }
+    }
+
+    fn browser_tab() -> BrowserTab {
+        BrowserTab {
+            tab_id: "tab-1".to_string(),
+            target: BrowserTargetKind::UserChrome,
+            title: Some("Example".to_string()),
+            url: Some("https://example.test/".to_string()),
+            active: true,
         }
     }
 }

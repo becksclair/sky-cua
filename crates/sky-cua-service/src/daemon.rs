@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{
-    ActionName, ActionRequest, AppStateSnapshot, CaptureInfo, CaptureScreenMode, DiagnosticEntry,
-    ServiceRequest, ServiceResponse,
+    ActionName, ActionRequest, AppStateSnapshot, BrowserRequest, BrowserResponse, CaptureInfo,
+    CaptureScreenMode, DiagnosticEntry, ServiceRequest, ServiceResponse,
 };
 
 use crate::action_router::route_action;
@@ -67,7 +67,9 @@ impl ServiceDaemon {
                 ok: true,
                 service_socket: self.socket_path.display().to_string(),
                 desktop_env: desktop_env_values_present(),
+                browser_env: crate::browser::browser_env_values_present(),
             },
+            ServiceRequest::Browser { request } => self.handle_browser_request(request).await,
             request => {
                 let _desktop_lane = self.desktop_lane.lock().await;
                 self.handle_desktop_request(request).await
@@ -75,9 +77,159 @@ impl ServiceDaemon {
         }
     }
 
+    async fn handle_browser_request(&self, request: BrowserRequest) -> ServiceResponse {
+        match request {
+            BrowserRequest::ListTabs { target } => {
+                debug!(?target, "handling browser_list_tabs request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::ListTabs {
+                        response: crate::browser::list_tabs(target).await,
+                    },
+                }
+            }
+            BrowserRequest::Open { target, url } => {
+                debug!(?target, ?url, "handling browser_open request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Open {
+                        response: crate::browser::open_tab(target, url).await,
+                    },
+                }
+            }
+            BrowserRequest::ClaimTab { target, tab_id } => {
+                debug!(?target, ?tab_id, "handling browser_claim_tab request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::ClaimTab {
+                        response: crate::browser::claim_tab(target, tab_id).await,
+                    },
+                }
+            }
+            BrowserRequest::MoveMouse {
+                target,
+                tab_id,
+                x,
+                y,
+                wait_for_arrival,
+            } => {
+                debug!(
+                    ?target,
+                    ?tab_id,
+                    x,
+                    y,
+                    wait_for_arrival,
+                    "handling browser_move_mouse request"
+                );
+                ServiceResponse::Browser {
+                    response: BrowserResponse::MoveMouse {
+                        response: crate::browser::move_mouse(
+                            target,
+                            tab_id,
+                            x,
+                            y,
+                            wait_for_arrival,
+                        )
+                        .await,
+                    },
+                }
+            }
+            BrowserRequest::Navigate {
+                target,
+                tab_id,
+                url,
+            } => {
+                debug!(?target, ?tab_id, ?url, "handling browser_navigate request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Navigate {
+                        response: crate::browser::navigate(target, tab_id, url).await,
+                    },
+                }
+            }
+            BrowserRequest::Snapshot { target, tab_id } => {
+                debug!(?target, ?tab_id, "handling browser_snapshot request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Snapshot {
+                        response: crate::browser::snapshot(target, tab_id).await,
+                    },
+                }
+            }
+            BrowserRequest::Screenshot { target, tab_id } => {
+                debug!(?target, ?tab_id, "handling browser_screenshot request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Screenshot {
+                        response: crate::browser::screenshot(target, tab_id).await,
+                    },
+                }
+            }
+            BrowserRequest::Click {
+                target,
+                tab_id,
+                x,
+                y,
+            } => {
+                debug!(?target, ?tab_id, x, y, "handling browser_click request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Click {
+                        response: crate::browser::click(target, tab_id, x, y).await,
+                    },
+                }
+            }
+            BrowserRequest::TypeText {
+                target,
+                tab_id,
+                text,
+            } => {
+                debug!(?target, ?tab_id, "handling browser_type_text request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::TypeText {
+                        response: crate::browser::type_text(target, tab_id, text).await,
+                    },
+                }
+            }
+            BrowserRequest::PressKey {
+                target,
+                tab_id,
+                key,
+            } => {
+                debug!(?target, ?tab_id, ?key, "handling browser_press_key request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::PressKey {
+                        response: crate::browser::press_key(target, tab_id, key).await,
+                    },
+                }
+            }
+            BrowserRequest::Scroll {
+                target,
+                tab_id,
+                delta_x,
+                delta_y,
+                x,
+                y,
+            } => {
+                debug!(
+                    ?target,
+                    ?tab_id,
+                    delta_x,
+                    delta_y,
+                    x,
+                    y,
+                    "handling browser_scroll request"
+                );
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Scroll {
+                        response: crate::browser::scroll(target, tab_id, delta_x, delta_y, x, y)
+                            .await,
+                    },
+                }
+            }
+            BrowserRequest::Status => self.handle_browser_status_request().await,
+        }
+    }
+
     async fn handle_desktop_request(&self, request: ServiceRequest) -> ServiceResponse {
         match request {
             ServiceRequest::Health => unreachable!("health bypasses the desktop request lane"),
+            ServiceRequest::Browser { .. } => {
+                unreachable!("browser requests bypass the desktop request lane")
+            }
             ServiceRequest::Doctor => match self.backend.doctor().await {
                 Ok(report) => ServiceResponse::Doctor {
                     report: Box::new(report),
@@ -342,6 +494,29 @@ impl ServiceDaemon {
 
         Ok(request)
     }
+
+    async fn handle_browser_status_request(&self) -> ServiceResponse {
+        debug!("handling browser_status request");
+        let integration = {
+            let Ok(_desktop_lane) = self.desktop_lane.try_lock() else {
+                return ServiceResponse::Browser {
+                    response: BrowserResponse::Status {
+                        report: crate::browser::browser_status_from_deferred_doctor().await,
+                    },
+                };
+            };
+            match self.backend.doctor().await {
+                Ok(report) => report.browser_integration,
+                Err(error) => return error_response(error.code, error.message),
+            }
+        };
+
+        ServiceResponse::Browser {
+            response: BrowserResponse::Status {
+                report: crate::browser::browser_status_from_doctor(integration).await,
+            },
+        }
+    }
 }
 
 fn reuse_unchanged_capture(
@@ -511,10 +686,11 @@ mod tests {
     use sky_cua_platform::diagnostics::BackendError;
     use sky_cua_platform::model::{
         ActionName, ActionOutcome, ActionRequest, AgentCursorPoint, AgentCursorState, AppInfo,
-        AppSelector, AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScreenMode,
-        CoordinateSpace, ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat,
-        PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
-        SessionKind, ToolAvailability, ToolCapabilities,
+        AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse, BrowserTargetKind,
+        CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, ElementNode,
+        EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
+        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, ToolAvailability,
+        ToolCapabilities,
     };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -882,6 +1058,103 @@ mod tests {
             health.is_ok(),
             "health should bypass the blocked desktop lane"
         );
+
+        release_first.notify_one();
+        match action_task.await.expect("action task") {
+            ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn service_runtime_browser_open_bypasses_blocked_desktop_request() {
+        let backend = BlockingBackend::new(snapshot(Some(capture_with_rect()), Vec::new()));
+        let first_started = backend.first_execute_started.clone();
+        let release_first = backend.release_first_execute.clone();
+        let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+
+        let action_daemon = daemon.clone();
+        let action_task = tokio::spawn(async move {
+            let action = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
+            action_daemon
+                .handle(ServiceRequest::ExecuteAction {
+                    request: Box::new(action),
+                })
+                .await
+        });
+
+        first_started.notified().await;
+        let browser_open = tokio::time::timeout(Duration::from_millis(100), async {
+            daemon
+                .handle(ServiceRequest::Browser {
+                    request: BrowserRequest::Open {
+                        target: Some(BrowserTargetKind::UserChrome),
+                        url: Some("file:///etc/passwd".to_string()),
+                    },
+                })
+                .await
+        })
+        .await
+        .expect("browser_open should bypass the blocked desktop lane");
+        match browser_open {
+            ServiceResponse::Browser {
+                response: BrowserResponse::Open { response },
+            } => {
+                assert!(response.tab.is_none());
+                assert_eq!(response.diagnostics.len(), 1);
+                assert_eq!(response.diagnostics[0].code, "BrowserOpenUrlUnsupported");
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        release_first.notify_one();
+        match action_task.await.expect("action task") {
+            ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn service_runtime_browser_status_bypasses_blocked_desktop_request() {
+        let backend = BlockingBackend::new(snapshot(Some(capture_with_rect()), Vec::new()));
+        let first_started = backend.first_execute_started.clone();
+        let release_first = backend.release_first_execute.clone();
+        let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+
+        let action_daemon = daemon.clone();
+        let action_task = tokio::spawn(async move {
+            let action = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
+            action_daemon
+                .handle(ServiceRequest::ExecuteAction {
+                    request: Box::new(action),
+                })
+                .await
+        });
+
+        first_started.notified().await;
+        let browser_status = tokio::time::timeout(Duration::from_millis(500), async {
+            daemon
+                .handle(ServiceRequest::Browser {
+                    request: BrowserRequest::Status,
+                })
+                .await
+        })
+        .await
+        .expect("browser_status should bypass the blocked desktop lane");
+        match browser_status {
+            ServiceResponse::Browser {
+                response: BrowserResponse::Status { report },
+            } => {
+                assert_eq!(report.browser_integration, None);
+                assert!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.code == "BrowserIntegrationDeferred")
+                );
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
 
         release_first.notify_one();
         match action_task.await.expect("action task") {

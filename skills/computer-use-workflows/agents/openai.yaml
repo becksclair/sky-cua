@@ -1,4 +1,0 @@
-interface:
-  display_name: "Computer Use Workflows"
-  short_description: "Hybrid tree-plus-vision desktop control"
-  default_prompt: "Use the installed sky-cua computer-use runtime with a hybrid tree-plus-vision workflow to operate the desktop app safely and verify the result."

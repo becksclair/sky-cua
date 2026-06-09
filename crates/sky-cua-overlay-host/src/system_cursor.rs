@@ -507,16 +507,10 @@ pub struct HyprlandSystemCursorAdapter {
 impl HyprlandSystemCursorAdapter {
     #[must_use]
     pub fn probe() -> Option<Self> {
-        if env::var("HYPRLAND_INSTANCE_SIGNATURE")
+        env::var("HYPRLAND_INSTANCE_SIGNATURE")
             .ok()
-            .filter(|value| !value.trim().is_empty())
-            .is_none()
-        {
-            return None;
-        }
-        if command_path("hyprctl").is_none() {
-            return None;
-        }
+            .filter(|value| !value.trim().is_empty())?;
+        command_path("hyprctl")?;
         Some(Self {
             previous: None,
             hidden: false,

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(windows)]
 use std::net::TcpStream;
@@ -40,6 +41,11 @@ const CURRENT_ENV_HEALTH_KEYS: &[&str] = &[
     "XDG_CURRENT_DESKTOP",
     "XDG_RUNTIME_DIR",
     "XDG_SESSION_TYPE",
+];
+const BROWSER_ENV_HEALTH_KEYS: &[&str] = &[
+    "SKY_CUA_BROWSER_USE_SOCKET_DIR",
+    "CODEX_BROWSER_USE_SOCKET_DIR",
+    "SKY_CUA_BROWSER",
 ];
 const DEFAULT_PATH_DIRS: &[&str] = &[
     "/usr/local/sbin",
@@ -282,6 +288,7 @@ impl ServiceClient {
             STARTUP_HEALTH_WRITE_TIMEOUT,
         )?;
         ensure_health_satisfies_desktop_env(&response, &desktop_vars)?;
+        ensure_health_satisfies_browser_env(&response)?;
         Ok(response)
     }
 
@@ -520,6 +527,43 @@ fn ensure_health_satisfies_desktop_env(
     ))
 }
 
+fn ensure_health_satisfies_browser_env(response: &ServiceResponse) -> Result<()> {
+    if !cfg!(unix) {
+        return Ok(());
+    }
+
+    let desired = browser_env_values_present();
+    let ServiceResponse::Health { browser_env, .. } = response else {
+        return Ok(());
+    };
+
+    let stale = BROWSER_ENV_HEALTH_KEYS
+        .iter()
+        .copied()
+        .filter(|key| browser_env.get(*key) != desired.get(*key))
+        .collect::<Vec<_>>();
+    if stale.is_empty() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "existing sky-cua-service has stale browser environment keys: {}",
+        stale.join(", ")
+    ))
+}
+
+fn browser_env_values_present() -> BTreeMap<String, String> {
+    BROWSER_ENV_HEALTH_KEYS
+        .iter()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| ((*key).to_string(), value))
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 enum ServiceEndpoint {
     #[cfg(unix)]
@@ -739,6 +783,7 @@ mod tests {
             ok: true,
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env: BTreeMap::from([("DISPLAY".to_string(), ":0".to_string())]),
+            browser_env: BTreeMap::new(),
         };
         let desktop_vars = vec![
             ("DISPLAY".to_string(), ":0".to_string()),
@@ -757,6 +802,7 @@ mod tests {
             ok: true,
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env: BTreeMap::new(),
+            browser_env: BTreeMap::new(),
         };
         let desktop_vars = vec![("PATH".to_string(), "/tmp:/usr/bin".to_string())];
 
@@ -801,6 +847,7 @@ mod tests {
             ok: true,
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env: BTreeMap::new(),
+            browser_env: BTreeMap::new(),
         };
 
         let result = ensure_health_satisfies_desktop_env(&response, &[]);
@@ -824,6 +871,7 @@ mod tests {
                 "XDG_RUNTIME_DIR".to_string(),
                 "/run/user/9999".to_string(),
             )]),
+            browser_env: BTreeMap::new(),
         };
 
         let result = ensure_health_satisfies_desktop_env(&response, &[]);
@@ -831,6 +879,72 @@ mod tests {
         restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
         let error = result.expect_err("stale service env value should be rejected");
         assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn startup_health_rejects_service_with_stale_browser_selection() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_selection = std::env::var_os("SKY_CUA_BROWSER");
+        unsafe {
+            std::env::set_var("SKY_CUA_BROWSER", "brave");
+        }
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::new(),
+            browser_env: BTreeMap::new(),
+        };
+
+        let result = ensure_health_satisfies_browser_env(&response);
+
+        restore_env("SKY_CUA_BROWSER", old_selection);
+        let error = result.expect_err("stale service browser env should be rejected");
+        assert!(error.to_string().contains("SKY_CUA_BROWSER"));
+    }
+
+    #[test]
+    fn startup_health_rejects_browser_env_mismatch_without_enable_flag() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_selection = std::env::var_os("SKY_CUA_BROWSER");
+        unsafe {
+            std::env::set_var("SKY_CUA_BROWSER", "brave");
+        }
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::new(),
+            browser_env: BTreeMap::new(),
+        };
+
+        let result = ensure_health_satisfies_browser_env(&response);
+
+        restore_env("SKY_CUA_BROWSER", old_selection);
+        let error = result.expect_err("browser env mismatch should be rejected");
+        assert!(error.to_string().contains("SKY_CUA_BROWSER"));
+    }
+
+    #[test]
+    fn startup_health_rejects_service_with_extra_browser_socket_dir() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_socket_dir = std::env::var_os("SKY_CUA_BROWSER_USE_SOCKET_DIR");
+        unsafe {
+            std::env::remove_var("SKY_CUA_BROWSER_USE_SOCKET_DIR");
+        }
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::new(),
+            browser_env: BTreeMap::from([(
+                "SKY_CUA_BROWSER_USE_SOCKET_DIR".to_string(),
+                "/tmp/old-browser-use".to_string(),
+            )]),
+        };
+
+        let result = ensure_health_satisfies_browser_env(&response);
+
+        restore_env("SKY_CUA_BROWSER_USE_SOCKET_DIR", old_socket_dir);
+        let error = result.expect_err("stale service browser socket dir should be rejected");
+        assert!(error.to_string().contains("SKY_CUA_BROWSER_USE_SOCKET_DIR"));
     }
 
     #[test]
@@ -999,6 +1113,14 @@ while True:
                         "XDG_CURRENT_DESKTOP",
                         "XDG_RUNTIME_DIR",
                         "XDG_SESSION_TYPE",
+                    ]
+                    if os.environ.get(key)
+                },
+                "browser_env": {
+                    key: os.environ[key] for key in [
+                        "SKY_CUA_BROWSER_USE_SOCKET_DIR",
+                        "CODEX_BROWSER_USE_SOCKET_DIR",
+                        "SKY_CUA_BROWSER",
                     ]
                     if os.environ.get(key)
                 },

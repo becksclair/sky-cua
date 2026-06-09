@@ -1,4 +1,0 @@
-interface:
-  display_name: "Sky CUA Isolated Daemon"
-  short_description: "Run sky-cua smokes against the current local daemon build"
-  default_prompt: "Use $sky-cua-isolated-daemon to run sky-cua live tests with a fresh build and isolated service socket."

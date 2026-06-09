@@ -1,0 +1,575 @@
+use std::fmt::Write as _;
+
+use anyhow::Result;
+use serde_json::{Value, json};
+use sky_cua_platform::model::{
+    BrowserActionResponse, BrowserClaimTabResponse, BrowserListTabsResponse,
+    BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
+    BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport, BrowserTab,
+    BrowserTargetKind, DiagnosticEntry,
+};
+
+use super::args::BrowserTabTextFilter;
+use crate::output_shapes::compact_text_field;
+
+pub(crate) fn browser_status_summary(report: &BrowserStatusReport) -> String {
+    let mut summary = String::from(if report.enabled {
+        "Browser MCP tools are available."
+    } else {
+        "Browser MCP tools are unavailable."
+    });
+    if !report.available_targets.is_empty() {
+        summary.push_str(" Targets: ");
+        for (index, target) in report.available_targets.iter().enumerate() {
+            if index > 0 {
+                summary.push_str("; ");
+            }
+            let _ = write!(
+                &mut summary,
+                "{}={} ({})",
+                browser_target_label(target.target),
+                if target.available {
+                    "available"
+                } else {
+                    "unavailable"
+                },
+                target.detail
+            );
+        }
+        summary.push('.');
+    }
+    match report.tabs_known {
+        Some(count) => {
+            let _ = write!(&mut summary, " Tabs known: {count}.");
+        }
+        None => summary.push_str(" Tabs known: unknown."),
+    }
+    if let Some(diagnostic) = report.diagnostics.first() {
+        let _ = write!(&mut summary, " Diagnostic: {}", diagnostic.message);
+    }
+    summary
+}
+
+#[cfg(test)]
+pub(crate) fn browser_list_tabs_summary(
+    response: &BrowserListTabsResponse,
+    filter: &BrowserTabTextFilter,
+) -> String {
+    let matching_tab_indexes = browser_tab_match_indexes(response, filter);
+    browser_list_tabs_summary_with_matches(response, filter, matching_tab_indexes.as_deref())
+}
+
+pub(crate) fn browser_list_tabs_summary_with_matches(
+    response: &BrowserListTabsResponse,
+    filter: &BrowserTabTextFilter,
+    matching_tab_indexes: Option<&[usize]>,
+) -> String {
+    let target = response
+        .target
+        .map(browser_target_label)
+        .unwrap_or(browser_target_label(BrowserTargetKind::UserChrome));
+    let mut summary = if filter.is_empty() {
+        format!(
+            "Discovered {} browser tabs for {target}.",
+            response.tabs.len()
+        )
+    } else {
+        format!(
+            "Discovered {} browser tabs for {target}; {} matched the text filters.",
+            response.tabs.len(),
+            matching_tab_indexes.map_or(response.tabs.len(), <[usize]>::len)
+        )
+    };
+    append_browser_tab_matches(&mut summary, response, matching_tab_indexes, filter);
+    if let Some(diagnostic) = response.diagnostics.first() {
+        let _ = write!(&mut summary, " Diagnostic: {}", diagnostic.message);
+    }
+    summary
+}
+
+pub(crate) fn browser_tab_match_indexes(
+    response: &BrowserListTabsResponse,
+    filter: &BrowserTabTextFilter,
+) -> Option<Vec<usize>> {
+    if filter.is_empty() {
+        return None;
+    }
+
+    let title_contains = filter.title_contains.as_deref().map(str::to_lowercase);
+    let url_contains = filter.url_contains.as_deref().map(str::to_lowercase);
+    Some(
+        response
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| {
+                let title_matches = title_contains
+                    .as_deref()
+                    .is_none_or(|needle| browser_text_contains(tab.title.as_deref(), needle));
+                let url_matches = url_contains
+                    .as_deref()
+                    .is_none_or(|needle| browser_text_contains(tab.url.as_deref(), needle));
+                (title_matches && url_matches).then_some(index)
+            })
+            .collect(),
+    )
+}
+
+fn browser_text_contains(value: Option<&str>, normalized_needle: &str) -> bool {
+    value
+        .map(|value| value.to_lowercase().contains(normalized_needle))
+        .unwrap_or(false)
+}
+
+fn browser_matching_tab_count(
+    response: &BrowserListTabsResponse,
+    matching_tab_indexes: Option<&[usize]>,
+) -> usize {
+    matching_tab_indexes.map_or(response.tabs.len(), <[usize]>::len)
+}
+
+fn browser_tab_matches_is_empty(
+    response: &BrowserListTabsResponse,
+    matching_tab_indexes: Option<&[usize]>,
+) -> bool {
+    browser_matching_tab_count(response, matching_tab_indexes) == 0
+}
+
+fn filter_browser_tabs_by_indexes(
+    tabs: Vec<BrowserTab>,
+    matching_tab_indexes: Vec<usize>,
+) -> Vec<BrowserTab> {
+    let mut next_match = matching_tab_indexes.into_iter().peekable();
+    tabs.into_iter()
+        .enumerate()
+        .filter_map(|(index, tab)| {
+            if next_match.peek().copied() == Some(index) {
+                next_match.next();
+                Some(tab)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn append_browser_tab_matches(
+    summary: &mut String,
+    response: &BrowserListTabsResponse,
+    matching_tab_indexes: Option<&[usize]>,
+    filter: &BrowserTabTextFilter,
+) {
+    if browser_tab_matches_is_empty(response, matching_tab_indexes) {
+        if !filter.is_empty() {
+            summary.push_str(" No matching tabs were found; try browser_open for a new controllable tab or loosen the filters.");
+        }
+        return;
+    }
+
+    let shown_limit = 12;
+    let matching_tab_count = browser_matching_tab_count(response, matching_tab_indexes);
+    let shown_count = matching_tab_count.min(shown_limit);
+    if filter.is_empty() {
+        let _ = write!(
+            summary,
+            " Showing first {shown_count} tab{}; pass url_contains or title_contains to narrow results.",
+            if shown_count == 1 { "" } else { "s" }
+        );
+    } else {
+        let _ = write!(
+            summary,
+            " Matching tab{}:",
+            if shown_count == 1 { "" } else { "s" }
+        );
+    }
+    match matching_tab_indexes {
+        Some(indexes) => {
+            for tab in indexes
+                .iter()
+                .take(shown_limit)
+                .filter_map(|index| response.tabs.get(*index))
+            {
+                append_browser_tab_match(summary, tab);
+            }
+        }
+        None => {
+            for tab in response.tabs.iter().take(shown_limit) {
+                append_browser_tab_match(summary, tab);
+            }
+        }
+    }
+    if matching_tab_count > shown_limit {
+        let _ = write!(
+            summary,
+            " ... {} more not shown.",
+            matching_tab_count - shown_limit
+        );
+    }
+}
+
+fn append_browser_tab_match(summary: &mut String, tab: &BrowserTab) {
+    let title = tab.title.as_deref().unwrap_or("<untitled>");
+    let url = tab.url.as_deref().unwrap_or("<unknown-url>");
+    let _ = write!(
+        summary,
+        " [{}] title=\"{}\" url=\"{}\" active={}",
+        tab.tab_id,
+        compact_text_field(title, 80),
+        compact_text_field(url, 160),
+        tab.active
+    );
+}
+
+pub(crate) fn browser_list_tabs_structured_response(
+    mut response: BrowserListTabsResponse,
+    matching_tab_indexes: Option<Vec<usize>>,
+) -> BrowserListTabsResponse {
+    if let Some(matching_tab_indexes) = matching_tab_indexes {
+        response.tabs = filter_browser_tabs_by_indexes(response.tabs, matching_tab_indexes);
+    }
+    response
+}
+
+pub(crate) fn browser_list_tabs_is_error(response: &BrowserListTabsResponse) -> bool {
+    response.tabs.is_empty()
+        && response
+            .diagnostics
+            .iter()
+            .any(|diagnostic| is_fatal_browser_diagnostic(&diagnostic.code))
+}
+
+fn is_fatal_browser_diagnostic(code: &str) -> bool {
+    matches!(
+        code,
+        "BrowserBridgeDisconnected"
+            | "BrowserBridgeUnsupported"
+            | "BrowserBridgeRequestFailed"
+            | "BrowserBridgeRequestTimedOut"
+            | "BrowserSelectionInvalid"
+            | "BrowserTargetUnsupported"
+    )
+}
+
+pub(crate) fn browser_open_summary(response: &BrowserOpenResponse) -> String {
+    let target = browser_target_label(response.target);
+    let is_partial = response
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "BrowserOpenPartial");
+    let mut summary = match (&response.tab, is_partial) {
+        (Some(tab), true) => format!(
+            "Created browser tab {} for {target}, but browser_open did not complete.",
+            tab.tab_id
+        ),
+        (Some(tab), false) => format!("Opened browser tab {} for {target}.", tab.tab_id),
+        (None, _) => format!("Could not open browser tab for {target}."),
+    };
+    if let Some(diagnostic) = response.diagnostics.first() {
+        let _ = write!(&mut summary, " Diagnostic: {}", diagnostic.message);
+    }
+    summary
+}
+
+pub(crate) fn browser_open_is_error(response: &BrowserOpenResponse) -> bool {
+    response.tab.is_none()
+        || response
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "BrowserOpenPartial")
+}
+
+pub(crate) fn browser_claim_tab_summary(response: &BrowserClaimTabResponse) -> String {
+    let target = browser_target_label(response.target);
+    let mut summary = match &response.tab {
+        Some(tab) => format!("Claimed browser tab {} for {target}.", tab.tab_id),
+        None => format!("Could not claim browser tab for {target}."),
+    };
+    if let Some(diagnostic) = response.diagnostics.first() {
+        let _ = write!(&mut summary, " Diagnostic: {}", diagnostic.message);
+    }
+    summary
+}
+
+pub(crate) fn browser_claim_tab_is_error(response: &BrowserClaimTabResponse) -> bool {
+    response.tab.is_none()
+        || response.diagnostics.iter().any(|diagnostic| {
+            is_fatal_browser_diagnostic(&diagnostic.code)
+                || matches!(
+                    diagnostic.code.as_str(),
+                    "BrowserTabIdInvalid" | "BrowserClaimPartial"
+                )
+        })
+}
+
+pub(crate) fn browser_move_mouse_summary(response: &BrowserMoveMouseResponse) -> String {
+    let target = browser_target_label(response.target);
+    let mut summary = if response.diagnostics.is_empty() {
+        format!(
+            "Moved browser cursor in tab {} for {target} to browser screenshot pixel ({}, {}).",
+            response.tab_id, response.x, response.y
+        )
+    } else {
+        format!(
+            "Could not move browser cursor in tab {} for {target}.",
+            response.tab_id
+        )
+    };
+    if let Some(diagnostic) = response.diagnostics.first() {
+        let _ = write!(&mut summary, " Diagnostic: {}", diagnostic.message);
+    }
+    summary
+}
+
+pub(crate) fn browser_move_mouse_is_error(response: &BrowserMoveMouseResponse) -> bool {
+    response.diagnostics.iter().any(|diagnostic| {
+        is_fatal_browser_diagnostic(&diagnostic.code)
+            || matches!(
+                diagnostic.code.as_str(),
+                "BrowserTabIdInvalid" | "BrowserMouseCoordinateInvalid"
+            )
+    })
+}
+
+pub(crate) fn browser_navigate_result(response: BrowserNavigateResponse) -> Result<Value> {
+    let is_error = browser_diagnostics_are_error(&response.diagnostics);
+    let mut text = if is_error {
+        format!("Could not navigate browser tab {}.", response.tab_id)
+    } else {
+        format!(
+            "Navigated browser tab {} to {}.",
+            response.tab_id, response.url
+        )
+    };
+    append_first_diagnostic(&mut text, &response.diagnostics);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
+pub(crate) fn browser_snapshot_result(response: BrowserSnapshotResponse) -> Result<Value> {
+    let is_error =
+        response.snapshot.is_none() || browser_diagnostics_are_error(&response.diagnostics);
+    let mut text = if is_error {
+        format!("Could not snapshot browser tab {}.", response.tab_id)
+    } else {
+        browser_snapshot_summary(&response)
+    };
+    append_first_diagnostic(&mut text, &response.diagnostics);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
+pub(crate) fn browser_snapshot_summary(response: &BrowserSnapshotResponse) -> String {
+    let mut text = format!("Captured browser snapshot for tab {}.", response.tab_id);
+    if let Some(title) = response.title.as_deref().filter(|title| !title.is_empty()) {
+        let _ = write!(&mut text, " Title: \"{}\".", compact_text_field(title, 160));
+    }
+    if let Some(url) = response.url.as_deref().filter(|url| !url.is_empty()) {
+        let _ = write!(&mut text, " URL: {}.", compact_text_field(url, 240));
+    }
+    if let Some(snapshot) = response.snapshot.as_ref() {
+        append_browser_snapshot_viewport(&mut text, snapshot);
+        append_browser_snapshot_visible_text(&mut text, snapshot);
+        append_browser_snapshot_elements(&mut text, snapshot);
+    }
+    text
+}
+
+fn append_browser_snapshot_viewport(text: &mut String, snapshot: &Value) {
+    let Some(viewport) = snapshot.get("viewport") else {
+        return;
+    };
+    let width = viewport.get("width").and_then(Value::as_f64);
+    let height = viewport.get("height").and_then(Value::as_f64);
+    let dpr = viewport.get("devicePixelRatio").and_then(Value::as_f64);
+    if width.is_some() || height.is_some() || dpr.is_some() {
+        let _ = write!(
+            text,
+            " Viewport: width={} height={} devicePixelRatio={}.",
+            width
+                .map(format_browser_number)
+                .unwrap_or_else(|| "unknown".to_string()),
+            height
+                .map(format_browser_number)
+                .unwrap_or_else(|| "unknown".to_string()),
+            dpr.map(format_browser_number)
+                .unwrap_or_else(|| "unknown".to_string())
+        );
+    }
+}
+
+fn append_browser_snapshot_visible_text(text: &mut String, snapshot: &Value) {
+    let Some(page_text) = snapshot
+        .get("text")
+        .and_then(Value::as_str)
+        .map(|value| compact_text_field(value, 800))
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let _ = write!(text, " Visible text: \"{page_text}\".");
+}
+
+fn append_browser_snapshot_elements(text: &mut String, snapshot: &Value) {
+    let Some(elements) = snapshot.get("elements").and_then(Value::as_array) else {
+        return;
+    };
+    if elements.is_empty() {
+        text.push_str(" Actionable elements: none detected.");
+        return;
+    }
+    let shown_limit = 12;
+    let shown_count = elements.len().min(shown_limit);
+    let _ = write!(
+        text,
+        " Actionable elements (showing {shown_count}/{}):",
+        elements.len()
+    );
+    for element in elements.iter().take(shown_limit) {
+        append_browser_snapshot_element(text, element);
+    }
+    if elements.len() > shown_limit {
+        let _ = write!(
+            text,
+            " ... {} more not shown.",
+            elements.len() - shown_limit
+        );
+    }
+}
+
+fn append_browser_snapshot_element(text: &mut String, element: &Value) {
+    let index = element
+        .get("index")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let tag = element.get("tag").and_then(Value::as_str).unwrap_or("?");
+    let role = element.get("role").and_then(Value::as_str).unwrap_or("");
+    let name = element
+        .get("name")
+        .and_then(Value::as_str)
+        .map(|value| compact_text_field(value, 120))
+        .unwrap_or_default();
+    let href = element
+        .get("href")
+        .and_then(Value::as_str)
+        .map(|value| compact_text_field(value, 160));
+    let bounds = element.get("bounds").map(browser_bounds_summary);
+    let _ = write!(text, " [{index}] tag={tag}");
+    if !role.is_empty() {
+        let _ = write!(text, " role={role}");
+    }
+    if !name.is_empty() {
+        let _ = write!(text, " name=\"{name}\"");
+    }
+    if let Some(href) = href.filter(|value| !value.is_empty()) {
+        let _ = write!(text, " href=\"{href}\"");
+    }
+    if let Some(bounds) = bounds {
+        let _ = write!(text, " bounds={bounds}");
+    }
+}
+
+fn browser_bounds_summary(bounds: &Value) -> String {
+    let number = |name: &str| {
+        bounds
+            .get(name)
+            .and_then(Value::as_f64)
+            .map(format_browser_number)
+            .unwrap_or_else(|| "?".to_string())
+    };
+    format!(
+        "x:{} y:{} w:{} h:{}",
+        number("x"),
+        number("y"),
+        number("width"),
+        number("height")
+    )
+}
+
+fn format_browser_number(value: f64) -> String {
+    if value.fract().abs() < f64::EPSILON {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.2}")
+    }
+}
+
+pub(crate) fn browser_screenshot_result(response: BrowserScreenshotResponse) -> Result<Value> {
+    let is_error =
+        response.data_base64.is_empty() || browser_diagnostics_are_error(&response.diagnostics);
+    let mut text = if is_error {
+        format!(
+            "Could not capture browser screenshot for tab {}.",
+            response.tab_id
+        )
+    } else {
+        format!(
+            "Captured {} browser screenshot for tab {} ({} base64 bytes). Use this image's pixels directly with browser_click/browser_move_mouse/browser_scroll; text-only agents should prefer browser_snapshot for page details.",
+            response.mime_type,
+            response.tab_id,
+            response.data_base64.len()
+        )
+    };
+    append_first_diagnostic(&mut text, &response.diagnostics);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
+pub(crate) fn browser_action_result(response: BrowserActionResponse) -> Result<Value> {
+    let is_error = browser_diagnostics_are_error(&response.diagnostics);
+    let mut text = if is_error {
+        format!(
+            "Could not perform browser action {} in tab {}.",
+            response.action, response.tab_id
+        )
+    } else {
+        format!(
+            "Performed browser action {} in tab {}.",
+            response.action, response.tab_id
+        )
+    };
+    append_first_diagnostic(&mut text, &response.diagnostics);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
+fn browser_diagnostics_are_error(diagnostics: &[DiagnosticEntry]) -> bool {
+    diagnostics.iter().any(|diagnostic| {
+        is_fatal_browser_diagnostic(&diagnostic.code)
+            || matches!(
+                diagnostic.code.as_str(),
+                "BrowserTabIdInvalid"
+                    | "BrowserMouseCoordinateInvalid"
+                    | "BrowserTextInvalid"
+                    | "BrowserKeyInvalid"
+                    | "BrowserScrollInvalid"
+                    | "BrowserOpenUrlUnsupported"
+                    | "BrowserNavigationFailed"
+            )
+    })
+}
+
+fn append_first_diagnostic(summary: &mut String, diagnostics: &[DiagnosticEntry]) {
+    if let Some(diagnostic) = diagnostics.first() {
+        let _ = write!(summary, " Diagnostic: {}", diagnostic.message);
+    }
+}
+
+fn browser_target_label(target: BrowserTargetKind) -> &'static str {
+    match target {
+        BrowserTargetKind::Managed => "managed",
+        BrowserTargetKind::UserChrome => "user_chrome",
+    }
+}

@@ -28,6 +28,8 @@ const DEFAULT_SOCKET_DIR: &str = "/tmp/codex-browser-use";
 const ROLLOUT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const OBSERVED_TURN_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const ROLLOUT_SEARCH_MAX_DEPTH: usize = 5;
+const SKY_CUA_MCP_SESSION_ID: &str = "sky-cua-mcp";
+const MAX_NON_PRIMARY_CLIENTS: usize = 16;
 
 type SharedState = Arc<Mutex<HostState>>;
 type SharedClientWriter = Arc<Mutex<UnixStream>>;
@@ -35,6 +37,15 @@ type SharedClientWriter = Arc<Mutex<UnixStream>>;
 #[derive(Clone)]
 struct Client {
     writer: SharedClientWriter,
+    role: ClientRole,
+    connected_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientRole {
+    Unknown,
+    Primary,
+    Ephemeral,
 }
 
 struct PendingChromeRequest {
@@ -59,9 +70,9 @@ enum ChromeClientRouteError {
 impl ChromeClientRouteError {
     fn message(&self) -> &'static str {
         match self {
-            Self::NoClients => "No Codex browser client is connected",
+            Self::NoClients => "No primary Codex browser client is connected",
             Self::MultipleClients => {
-                "Multiple Codex browser clients are connected; Chrome requests require exactly one"
+                "Multiple primary Codex browser clients are connected; Chrome requests require exactly one"
             }
         }
     }
@@ -98,17 +109,73 @@ impl HostState {
         }
     }
 
-    fn replace_with_client(&mut self, writer: SharedClientWriter) -> (usize, Vec<(usize, Client)>) {
-        let evicted_clients = self.clients.drain().collect::<Vec<_>>();
-        if !evicted_clients.is_empty() {
-            self.pending_chrome_requests.clear();
-            self.pending_client_requests.clear();
-        }
-
+    fn add_client(&mut self, writer: SharedClientWriter) -> usize {
         let id = self.next_client_id;
         self.next_client_id += 1;
-        self.clients.insert(id, Client { writer });
+        self.clients.insert(
+            id,
+            Client {
+                writer,
+                role: ClientRole::Unknown,
+                connected_at: Instant::now(),
+            },
+        );
+        id
+    }
+
+    fn accept_client(&mut self, writer: SharedClientWriter) -> (usize, Vec<(usize, Client)>) {
+        let id = self.add_client(writer);
+        let evicted_clients = self.prune_excess_non_primary_clients();
         (id, evicted_clients)
+    }
+
+    fn update_client_role_for_message(
+        &mut self,
+        client_id: usize,
+        message: &Value,
+    ) -> Vec<(usize, Client)> {
+        let Some(client) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+
+        let role = client_role_for_message(message);
+        match (client.role, role) {
+            (ClientRole::Primary | ClientRole::Ephemeral, _) => Vec::new(),
+            (ClientRole::Unknown, ClientRole::Ephemeral) => {
+                self.clients
+                    .get_mut(&client_id)
+                    .expect("client exists")
+                    .role = ClientRole::Ephemeral;
+                Vec::new()
+            }
+            (ClientRole::Unknown, ClientRole::Primary) => self.promote_primary_client(client_id),
+            (ClientRole::Unknown, ClientRole::Unknown) => Vec::new(),
+        }
+    }
+
+    fn promote_primary_client(&mut self, client_id: usize) -> Vec<(usize, Client)> {
+        let evict_ids = self
+            .clients
+            .iter()
+            .filter_map(|(id, client)| {
+                (*id != client_id && client.role == ClientRole::Primary).then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        let mut evicted_clients = Vec::new();
+        for evict_id in evict_ids {
+            if let Some(client) = self.clients.remove(&evict_id) {
+                remove_pending_requests_for_client(
+                    &mut self.pending_chrome_requests,
+                    &mut self.pending_client_requests,
+                    evict_id,
+                );
+                evicted_clients.push((evict_id, client));
+            }
+        }
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.role = ClientRole::Primary;
+        }
+        evicted_clients
     }
 
     fn remove_client(&mut self, client_id: usize) {
@@ -118,6 +185,36 @@ impl HostState {
             &mut self.pending_client_requests,
             client_id,
         );
+    }
+
+    fn prune_excess_non_primary_clients(&mut self) -> Vec<(usize, Client)> {
+        let mut evicted_clients = Vec::new();
+        while self
+            .clients
+            .values()
+            .filter(|client| client.role != ClientRole::Primary)
+            .count()
+            > MAX_NON_PRIMARY_CLIENTS
+        {
+            let Some(oldest_id) = self
+                .clients
+                .iter()
+                .filter(|(_, client)| client.role != ClientRole::Primary)
+                .min_by_key(|(id, client)| (client.connected_at, *id))
+                .map(|(id, _)| *id)
+            else {
+                break;
+            };
+            if let Some(client) = self.clients.remove(&oldest_id) {
+                remove_pending_requests_for_client(
+                    &mut self.pending_chrome_requests,
+                    &mut self.pending_client_requests,
+                    oldest_id,
+                );
+                evicted_clients.push((oldest_id, client));
+            }
+        }
+        evicted_clients
     }
 
     fn cleanup_old_requests(&mut self) {
@@ -172,8 +269,13 @@ impl HostState {
         }
     }
 
-    fn broadcast_clients(&self, message: &Value) {
-        for client_id in self.clients.keys().copied().collect::<Vec<_>>() {
+    fn broadcast_primary_clients(&self, message: &Value) {
+        for client_id in self
+            .clients
+            .iter()
+            .filter_map(|(id, client)| (client.role == ClientRole::Primary).then_some(*id))
+            .collect::<Vec<_>>()
+        {
             self.send_client(client_id, message);
         }
     }
@@ -491,14 +593,12 @@ fn accept_clients(listener: UnixListener, state: SharedState) {
 
         let (client_id, evicted_clients) = {
             let mut state = state.lock().expect("host state mutex poisoned");
-            state.replace_with_client(writer)
+            state.accept_client(writer)
         };
         for (evicted_id, evicted_client) in evicted_clients {
             log(
                 &get_host_name(&state),
-                &format!(
-                    "evicting stale browser client {evicted_id} after a newer client connected"
-                ),
+                &format!("evicting non-primary browser client {evicted_id} after the client cap"),
             );
             close_client_socket(&evicted_client);
         }
@@ -611,6 +711,23 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         return;
     }
 
+    let evicted_clients = {
+        let mut state = state.lock().expect("host state mutex poisoned");
+        if !state.clients.contains_key(&client_id) {
+            return;
+        }
+        state.update_client_role_for_message(client_id, &message)
+    };
+    for (evicted_id, evicted_client) in evicted_clients {
+        log(
+            &get_host_name(state),
+            &format!(
+                "evicting stale primary browser client {evicted_id} after a newer primary connected"
+            ),
+        );
+        close_client_socket(&evicted_client);
+    }
+
     if !is_request(&message) {
         let state = state.lock().expect("host state mutex poisoned");
         if state.clients.contains_key(&client_id) {
@@ -636,14 +753,17 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
     };
 
     let observed_turn = session_turn_from_message(&message);
-    let tracker = {
+    let (tracker, observes_rollout_turns) = {
         let state = state.lock().expect("host state mutex poisoned");
-        if !state.clients.contains_key(&client_id) {
+        let Some(client) = state.clients.get(&client_id) else {
             return;
-        }
-        state.rollout_tracker.clone()
+        };
+        (
+            state.rollout_tracker.clone(),
+            client_observes_rollout_turns(client.role),
+        )
     };
-    if let Some((session_id, turn_id)) = observed_turn {
+    if observes_rollout_turns && let Some((session_id, turn_id)) = observed_turn {
         tracker.observe_turn(session_id, turn_id);
     }
 
@@ -690,13 +810,13 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
 
     if !is_request(&message) {
         let state = state.lock().expect("host state mutex poisoned");
-        state.broadcast_clients(&message);
+        state.broadcast_primary_clients(&message);
         return;
     }
 
     let chrome_request_id = message.get("id").cloned().unwrap_or(Value::Null);
     let mut state = state.lock().expect("host state mutex poisoned");
-    let client_id = match select_single_client_id(&state.clients) {
+    let client_id = match select_primary_client_id(&state.clients) {
         Ok(client_id) => client_id,
         Err(error) => {
             state.send_chrome(&json!({
@@ -728,14 +848,53 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
     );
 }
 
-fn select_single_client_id(
+fn select_primary_client_id(
     clients: &HashMap<usize, Client>,
 ) -> std::result::Result<usize, ChromeClientRouteError> {
-    match clients.len() {
-        0 => Err(ChromeClientRouteError::NoClients),
-        1 => Ok(*clients.keys().next().expect("one client id")),
-        _ => Err(ChromeClientRouteError::MultipleClients),
+    let mut primary_client_id = None;
+    let mut unknown_client_id = None;
+    let mut unknown_count = 0;
+    for (id, client) in clients {
+        match client.role {
+            ClientRole::Primary => {
+                if primary_client_id.is_some() {
+                    return Err(ChromeClientRouteError::MultipleClients);
+                }
+                primary_client_id = Some(*id);
+            }
+            ClientRole::Unknown => {
+                unknown_count += 1;
+                unknown_client_id = Some(*id);
+            }
+            ClientRole::Ephemeral => {}
+        }
     }
+    if let Some(primary_client_id) = primary_client_id {
+        return Ok(primary_client_id);
+    }
+    if unknown_count > 1 {
+        return Err(ChromeClientRouteError::MultipleClients);
+    }
+    unknown_client_id.ok_or(ChromeClientRouteError::NoClients)
+}
+
+fn client_role_for_message(message: &Value) -> ClientRole {
+    if session_id_from_message(message) == Some(SKY_CUA_MCP_SESSION_ID) {
+        ClientRole::Ephemeral
+    } else {
+        ClientRole::Primary
+    }
+}
+
+fn client_observes_rollout_turns(role: ClientRole) -> bool {
+    role == ClientRole::Primary
+}
+
+fn session_id_from_message(message: &Value) -> Option<&str> {
+    message
+        .get("params")
+        .and_then(|params| params.get("session_id"))
+        .and_then(Value::as_str)
 }
 
 fn remove_pending_requests_for_client(
@@ -1095,33 +1254,217 @@ mod tests {
     }
 
     #[test]
-    fn rejects_chrome_request_routing_without_exactly_one_client() {
-        let clients = HashMap::new();
+    fn chrome_request_routing_uses_primary_client_only() {
+        let mut clients = HashMap::new();
         assert_eq!(
-            select_single_client_id(&clients),
+            select_primary_client_id(&clients),
             Err(ChromeClientRouteError::NoClients)
         );
 
-        let mut clients = HashMap::new();
-        clients.insert(7, test_client());
-        assert_eq!(select_single_client_id(&clients), Ok(7));
+        clients.insert(6, test_client_with_role(ClientRole::Unknown));
+        assert_eq!(select_primary_client_id(&clients), Ok(6));
 
-        clients.insert(8, test_client());
+        clients.insert(8, test_client_with_role(ClientRole::Ephemeral));
+        assert_eq!(select_primary_client_id(&clients), Ok(6));
+
+        clients.insert(7, test_client_with_role(ClientRole::Primary));
+        assert_eq!(select_primary_client_id(&clients), Ok(7));
+
+        clients.insert(9, test_client_with_role(ClientRole::Primary));
         assert_eq!(
-            select_single_client_id(&clients),
+            select_primary_client_id(&clients),
             Err(ChromeClientRouteError::MultipleClients)
         );
     }
 
     #[test]
-    fn replacing_browser_client_evicts_stale_clients_and_pending_requests() {
+    fn chrome_request_routing_rejects_multiple_unknown_clients() {
+        let mut clients = HashMap::new();
+        clients.insert(7, test_client_with_role(ClientRole::Unknown));
+        clients.insert(8, test_client_with_role(ClientRole::Unknown));
+
+        assert_eq!(
+            select_primary_client_id(&clients),
+            Err(ChromeClientRouteError::MultipleClients)
+        );
+    }
+
+    #[test]
+    fn sky_cua_mcp_client_does_not_evict_primary_client_or_pending_requests() {
         let mut state = test_host_state();
 
-        let (first_client_id, evicted_clients) =
-            state.replace_with_client(test_client().writer.clone());
+        let primary_client_id = state.add_client(test_client().writer.clone());
+        let evicted_clients = state.update_client_role_for_message(
+            primary_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getInfo",
+                "params": { "session_id": "codex-session", "turn_id": "turn-1" }
+            }),
+        );
         assert!(evicted_clients.is_empty());
-        assert!(state.clients.contains_key(&first_client_id));
+        assert_eq!(state.clients[&primary_client_id].role, ClientRole::Primary);
 
+        state.pending_chrome_requests.insert(
+            "chrome-request".to_string(),
+            PendingChromeRequest {
+                client_id: primary_client_id,
+                client_request_id: json!("client-request-1"),
+                created_at: Instant::now(),
+            },
+        );
+        state.pending_client_requests.insert(
+            "client-request".to_string(),
+            PendingClientRequest {
+                client_id: primary_client_id,
+                chrome_request_id: json!("chrome-request-1"),
+                created_at: Instant::now(),
+            },
+        );
+
+        let mcp_client_id = state.add_client(test_client().writer.clone());
+        let evicted_clients = state.update_client_role_for_message(
+            mcp_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "sky-cua-browser-info",
+                "method": "getInfo",
+                "params": { "session_id": "sky-cua-mcp", "turn_id": "browser-list-tabs" }
+            }),
+        );
+
+        assert!(evicted_clients.is_empty());
+        assert!(state.clients.contains_key(&primary_client_id));
+        assert!(state.clients.contains_key(&mcp_client_id));
+        assert_eq!(state.clients[&primary_client_id].role, ClientRole::Primary);
+        assert_eq!(state.clients[&mcp_client_id].role, ClientRole::Ephemeral);
+        assert!(state.pending_chrome_requests.contains_key("chrome-request"));
+        assert!(state.pending_client_requests.contains_key("client-request"));
+        assert_eq!(
+            select_primary_client_id(&state.clients),
+            Ok(primary_client_id)
+        );
+    }
+
+    #[test]
+    fn sky_cua_mcp_client_does_not_observe_rollout_turns() {
+        let mut state = test_host_state();
+        let mcp_client_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            mcp_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "sky-cua-browser-info",
+                "method": "getInfo",
+                "params": { "session_id": "sky-cua-mcp", "turn_id": "browser-list-tabs" }
+            }),
+        );
+
+        assert_eq!(state.clients[&mcp_client_id].role, ClientRole::Ephemeral);
+        assert!(!client_observes_rollout_turns(
+            state.clients[&mcp_client_id].role
+        ));
+        assert!(client_observes_rollout_turns(ClientRole::Primary));
+    }
+
+    #[test]
+    fn sky_cua_mcp_client_stays_ephemeral_for_stale_session_maintenance() {
+        let mut state = test_host_state();
+        let primary_client_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            primary_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getInfo",
+                "params": { "session_id": "codex-session", "turn_id": "turn-1" }
+            }),
+        );
+        let mcp_client_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            mcp_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "sky-cua-browser-info",
+                "method": "getInfo",
+                "params": { "session_id": "sky-cua-mcp", "turn_id": "browser-list-tabs" }
+            }),
+        );
+
+        let evicted_clients = state.update_client_role_for_message(
+            mcp_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "finalize-stale-session",
+                "method": "finalizeTabs",
+                "params": { "session_id": "sky-cua-cursor-proof", "turn_id": "browser-list-tabs" }
+            }),
+        );
+
+        assert!(evicted_clients.is_empty());
+        assert_eq!(state.clients[&primary_client_id].role, ClientRole::Primary);
+        assert_eq!(state.clients[&mcp_client_id].role, ClientRole::Ephemeral);
+        assert_eq!(
+            select_primary_client_id(&state.clients),
+            Ok(primary_client_id)
+        );
+    }
+
+    #[test]
+    fn accept_client_caps_non_primary_clients_without_evicting_primary() {
+        let mut state = test_host_state();
+        let primary_client_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            primary_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getInfo",
+                "params": { "session_id": "codex-session", "turn_id": "turn-1" }
+            }),
+        );
+
+        let mut evicted_clients = Vec::new();
+        for _ in 0..(MAX_NON_PRIMARY_CLIENTS + 2) {
+            let (_client_id, evicted) = state.accept_client(test_client().writer.clone());
+            evicted_clients.extend(evicted);
+        }
+
+        assert_eq!(state.clients[&primary_client_id].role, ClientRole::Primary);
+        assert_eq!(
+            state
+                .clients
+                .values()
+                .filter(|client| client.role != ClientRole::Primary)
+                .count(),
+            MAX_NON_PRIMARY_CLIENTS
+        );
+        assert_eq!(evicted_clients.len(), 2);
+        assert!(
+            evicted_clients
+                .iter()
+                .all(|(_, client)| client.role != ClientRole::Primary)
+        );
+        assert_eq!(
+            select_primary_client_id(&state.clients),
+            Ok(primary_client_id)
+        );
+    }
+
+    #[test]
+    fn new_primary_client_evicts_previous_primary_and_pending_requests() {
+        let mut state = test_host_state();
+        let first_client_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            first_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getInfo",
+                "params": { "session_id": "codex-session", "turn_id": "turn-1" }
+            }),
+        );
         state.pending_chrome_requests.insert(
             "chrome-request".to_string(),
             PendingChromeRequest {
@@ -1130,25 +1473,24 @@ mod tests {
                 created_at: Instant::now(),
             },
         );
-        state.pending_client_requests.insert(
-            "client-request".to_string(),
-            PendingClientRequest {
-                client_id: first_client_id,
-                chrome_request_id: json!("chrome-request-1"),
-                created_at: Instant::now(),
-            },
-        );
 
-        let (second_client_id, evicted_clients) =
-            state.replace_with_client(test_client().writer.clone());
+        let second_client_id = state.add_client(test_client().writer.clone());
+        let evicted_clients = state.update_client_role_for_message(
+            second_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "getInfo",
+                "params": { "session_id": "codex-session-2", "turn_id": "turn-2" }
+            }),
+        );
 
         assert_ne!(first_client_id, second_client_id);
         assert_eq!(evicted_clients.len(), 1);
         assert_eq!(evicted_clients[0].0, first_client_id);
         assert!(!state.clients.contains_key(&first_client_id));
-        assert!(state.clients.contains_key(&second_client_id));
+        assert_eq!(state.clients[&second_client_id].role, ClientRole::Primary);
         assert!(state.pending_chrome_requests.is_empty());
-        assert!(state.pending_client_requests.is_empty());
     }
 
     #[test]
@@ -1269,9 +1611,15 @@ mod tests {
     }
 
     fn test_client() -> Client {
+        test_client_with_role(ClientRole::Unknown)
+    }
+
+    fn test_client_with_role(role: ClientRole) -> Client {
         let (stream, _peer) = UnixStream::pair().unwrap();
         Client {
             writer: Arc::new(Mutex::new(stream)),
+            role,
+            connected_at: Instant::now(),
         }
     }
 

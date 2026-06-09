@@ -122,7 +122,7 @@ def main() -> int:
     try:
         prompt = (
             f"Use the sky_cua MCP tools. "
-            f"Load the computer-use-workflows skill if available. "
+            f"Load the computer-use skill if available. "
             f"Find the dialog titled '{fixture['title']}', "
             f"read its text, {fixture['prompt_suffix']}, and confirm it is gone. "
             f"Return a JSON object with keys: dialog_text (string), dismissed (boolean)."

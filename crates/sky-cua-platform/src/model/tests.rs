@@ -6,7 +6,7 @@ use super::{
     DoctorReadiness, DoctorReport, DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode,
     ElementNumericValueReadback, ElementTextReadback, ElementTextSelection, EnvironmentInfo,
     InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF, SemanticBackendKind,
-    ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport, WindowInfo,
+    ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport, WindowInfo, WindowTarget,
     WindowTargetingSetupReport,
 };
 use chrono::Utc;
@@ -41,6 +41,81 @@ fn boxed_execute_action_preserves_wire_shape() {
             }
         })
     );
+}
+
+#[test]
+fn window_target_normalizes_host_default_empty_values() {
+    let mut target = WindowTarget {
+        window_id: Some("  ".to_string()),
+        pid: Some(0),
+        tty: Some("".to_string()),
+        terminal_pid: Some(0),
+        terminal_command: Some("\t".to_string()),
+        terminal_cwd: Some("".to_string()),
+        app_id: Some(" chromium.desktop ".to_string()),
+        wm_class: Some("".to_string()),
+        title: Some("".to_string()),
+    };
+
+    target.normalize_empty_fields();
+
+    assert_eq!(target.app_id.as_deref(), Some("chromium.desktop"));
+    assert_eq!(target.pid, None);
+    assert_eq!(target.terminal_pid, None);
+    assert!(target.has_target());
+}
+
+#[test]
+fn window_target_zero_process_ids_do_not_count_as_targets() {
+    let mut target = WindowTarget {
+        pid: Some(0),
+        terminal_pid: Some(0),
+        ..WindowTarget::default()
+    };
+
+    assert!(!target.has_target());
+    target.normalize_empty_fields();
+    assert_eq!(target.pid, None);
+    assert_eq!(target.terminal_pid, None);
+}
+
+#[test]
+fn window_target_extracts_present_argument_fields_only() {
+    let target = WindowTarget::from_argument_fields(&json!({
+        "window_id": "",
+        "pid": 0,
+        "tty": "",
+        "terminal_pid": 0,
+        "terminal_command": "",
+        "terminal_cwd": "",
+        "app_id": " chromium.desktop ",
+        "wm_class": "",
+        "title": "",
+        "text": "large untargeted keyboard payload"
+    }))
+    .expect("target arguments parse")
+    .expect("app_id remains a target");
+
+    assert_eq!(target.app_id.as_deref(), Some("chromium.desktop"));
+    assert_eq!(target.pid, None);
+    assert_eq!(target.terminal_pid, None);
+}
+
+#[test]
+fn window_target_argument_extraction_ignores_empty_defaults() {
+    let target = WindowTarget::from_argument_fields(&json!({
+        "window_id": "",
+        "pid": 0,
+        "tty": null,
+        "terminal_pid": 0,
+        "terminal_command": " ",
+        "terminal_cwd": "",
+        "wm_class": "",
+        "title": ""
+    }))
+    .expect("target arguments parse");
+
+    assert_eq!(target, None);
 }
 
 #[test]

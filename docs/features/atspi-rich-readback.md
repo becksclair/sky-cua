@@ -50,7 +50,7 @@ requesting full snapshots every loop.
 - `crates/sky-cua-platform/src/model.rs` — public fields
 - `crates/sky-cua-linux/src/atspi/tree.rs` — extraction logic
 - `crates/sky-cua-client/src/mcp_server.rs` — compact-snapshot preservation
-- `skills/computer-use-workflows/SKILL.md` — agent guidance to inspect
+- `skills/computer-use/SKILL.md` — agent guidance to inspect
   readback before replacing text and reacquire state afterward
 - `scripts/_text_readback_smoke.py`,
   `scripts/live_app_server_text_readback_smoke.py`,

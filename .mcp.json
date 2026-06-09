@@ -9,6 +9,7 @@
         "DESKTOP_SESSION",
         "DISPLAY",
         "SKY_CUA_AGENT_CURSOR",
+        "SKY_CUA_BROWSER",
         "SKY_CUA_COSMIC_HELPER",
         "SKY_CUA_INPUT_BACKEND",
         "SKY_CUA_MODEL_SCREENSHOT_FORMAT",

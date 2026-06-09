@@ -61,7 +61,7 @@ A host adapter should provide:
   `XDG_CURRENT_DESKTOP`, `XDG_RUNTIME_DIR`, and `XDG_SESSION_TYPE` when present
 - on Windows, a direct `.exe` launch is preferred; `SKY_CUA_SERVICE_TCP_ADDR`
   may be set to isolate the service loopback endpoint for tests
-- access to the workflow guidance in `skills/computer-use-workflows/`
+- access to the workflow guidance in `skills/computer-use/` and `skills/browser-use/`
 - access to app-specific guidance packaged from `resources/app-instructions/`
 
 Codex satisfies this through `.codex-plugin/plugin.json` plus `.mcp.json`.
@@ -163,11 +163,34 @@ cargo build --release
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host generic
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host claude-desktop
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw
 ```
 
 The generated generic config keeps the MCP server name `computer-use`, uses
 absolute paths, and preserves the same desktop-session environment allowlist as
 the Codex plugin config.
+
+For local development updates, use the installer's opt-in runtime restart after
+building and copying fresh binaries:
+
+```bash
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode --bin-dir ~/.local/bin --restart-runtime
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host pi --bin-dir ~/.local/bin --restart-runtime
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw --bin-dir ~/.local/bin --restart-runtime
+```
+
+`--restart-runtime` stops installed sky-cua runtime processes rooted under the
+target directory, including `sky-cua-client`, `sky-cua-service`,
+`sky-cua-overlay-host`, `sky-cua-chrome-host`, and `sky-cua-cosmic-helper`. This
+is deliberately opt-in so an install does not interrupt an active MCP session by
+surprise. OpenCode and Pi usually respawn the lazy MCP process on the next tool
+call; if they do not, reload the host session. For Pi, run `/reload` or restart
+Pi.
+
+`--host openclaw` registers `sky_cua` through `openclaw mcp set`, targeting
+`~/.openclaw/openclaw.json` by default, and copies the packaged `computer-use`
+and `browser-use` skills into `~/.openclaw/workspace/skills`. Use
+`--openclaw-dir` only for profile/test state directories.
 
 ## MCP tool surface
 
@@ -183,6 +206,44 @@ The host-facing tools are the portable product contract. Current tools:
   and `perform_action`
 - physical or hybrid actions: `click`, `perform_secondary_action`, `scroll`,
   `drag`, `type_text`, `press_key`, and `set_value`
+- browser readiness, tab lifecycle, page state, screenshots, and tab-scoped
+  actions through the always-advertised browser tools: `browser_status`,
+  `browser_list_tabs`, `browser_open`, `browser_claim_tab`,
+  `browser_move_mouse`, `browser_navigate`, `browser_snapshot`,
+  `browser_screenshot`, `browser_click`, `browser_type_text`,
+  `browser_press_key`, and `browser_scroll`
+
+Browser tools do not require a host-specific enable flag. Codex Desktop may
+still use the companion Browser Use/Chrome plugin path until its adapter
+delegates to this shared browser surface, while host-specific configs emitted by
+`scripts/install_mcp_server.py` can pass browser-selection environment such as
+`SKY_CUA_BROWSER`.
+
+Browser target names are not interchangeable. `user_chrome` is the user's
+already-running Chrome-family browser, reached through the extension/native-host
+bridge. `managed` is reserved for a future sky-cua-owned isolated browser
+context. Until sky-cua can launch and own that isolated context, browser tools
+accept `user_chrome` only and reject `managed` honestly. `browser_open(user_chrome)`
+creates a new session-owned tab and may navigate it to `http://`, `https://`, or
+`about:blank`. Existing tabs returned by `browser_list_tabs(user_chrome)` must be
+adopted with `browser_claim_tab` before browser actions can target them, and the
+extension may reject tabs already claimed by another browser session. For stale
+owners whose session id starts with `sky-cua-`, `browser_claim_tab` finalizes the
+stale session with `keep=[]`, retries the claim once, then attaches and enables
+Page CDP so action tools can use the tab. It does not reclaim tabs owned by
+non-sky-cua sessions.
+
+Browser action coordinates are browser screenshot pixels from
+`browser_screenshot`. They are not desktop screen coordinates and they are not
+coordinates from `get_app_state` screenshots. The service converts browser
+screenshot pixels through `window.devicePixelRatio` before sending CDP or
+extension input, so callers should not divide coordinates by DPR manually.
+`browser_screenshot` returns a base64 PNG from the browser page, not a desktop
+capture. `browser_scroll` currently scrolls the page viewport through
+`window.scrollBy(...)` because CDP mouse-wheel dispatch timed out through the
+live extension bridge. `browser_snapshot` returns page title, URL, viewport,
+body text, and common actionable element summaries; it is not an accessibility
+tree and should not be treated as a replacement for desktop `get_app_state`.
 
 `doctor` includes Linux `session_env` repair details when the runtime had to
 recover detached desktop state. `repaired` records which keys were filled and
@@ -315,8 +376,8 @@ possible. Avoid putting core behavior in Codex-only prompts, app-server
 harnesses, or plugin metadata. If host-specific wording is needed, put it under
 an adapter-specific file and keep the shared workflow guidance neutral.
 
-Do not make Chrome/Browser Use behavior a dependency of the core MCP runtime.
-The native-host and bundled-plugin cache work is an adapter layer for Codex
-Desktop's existing Browser Use flow. First-class `browser_*` MCP tools should
-wait for an isolated host/client or extension smoke that proves the protocol
-outside Codex Desktop.
+Do not make Chrome/Browser Use packaging behavior a dependency of the core MCP
+runtime. The native-host and bundled-plugin cache work is an adapter layer for
+Chrome-family browser access. First-class browser MCP behavior is exposed
+through the shared browser tool contract; `user_chrome` is implemented today,
+while managed browser lifecycle remains future work.

@@ -42,7 +42,7 @@ NESTED_CODEX_ENV_VARS = (
 
 def with_plugin_mention(prompt: str) -> str:
     return (
-        f"Use {PLUGIN_MENTION} and its bundled computer-use-workflows skill.\n"
+        f"Use {PLUGIN_MENTION} and its bundled computer-use skill.\n"
         "Start from a fresh `get_app_state`, inspect any returned `screenshot_path` with `view_image`,"
         " and treat the screenshot as the visual source of truth. When the tree is sparse or fallback-only,"
         ' use full `get_app_state` for initial orientation, then prefer `detail: "compact"` for repeated'

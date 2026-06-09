@@ -1082,40 +1082,12 @@ fn matched_x11_window_for_request(request: &ActionRequest) -> Option<X11WindowIn
 fn window_target_from_arguments(
     arguments: &serde_json::Value,
 ) -> Result<Option<sky_cua_platform::model::WindowTarget>, BackendError> {
-    const TARGET_FIELDS: &[&str] = &[
-        "window_id",
-        "pid",
-        "tty",
-        "terminal_pid",
-        "terminal_command",
-        "terminal_cwd",
-        "app_id",
-        "wm_class",
-        "title",
-    ];
-    let has_target = TARGET_FIELDS
-        .iter()
-        .any(|field| arguments.get(*field).is_some_and(value_is_present));
-    if !has_target {
-        return Ok(None);
-    }
-
-    serde_json::from_value(arguments.clone())
-        .map(Some)
-        .map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::InvalidRequest,
-                format!("invalid window target arguments: {error}"),
-            )
-        })
-}
-
-fn value_is_present(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Null => false,
-        serde_json::Value::String(value) => !value.trim().is_empty(),
-        _ => true,
-    }
+    sky_cua_platform::model::WindowTarget::from_argument_fields(arguments).map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("invalid window target arguments: {error}"),
+        )
+    })
 }
 
 fn portal_lifecycle_diagnostics(

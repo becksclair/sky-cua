@@ -10,10 +10,15 @@ use std::sync::LazyLock;
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::ModelSessionInfo;
 use crate::output_shapes::{
-    AppStateDetail, compact_snapshot, list_apps_error_diagnostic, setup_accessibility_is_error,
-    setup_window_targeting_is_error,
+    AppStateDetail, compact_snapshot, compact_snapshot_text_content, informational_runtime_summary,
+    list_apps_error_diagnostic, portal_approval_summary, setup_accessibility_is_error,
+    setup_window_targeting_is_error, snapshot_text_content,
 };
 use crate::service_launcher::ServiceClient;
+
+mod browser;
+#[cfg(test)]
+mod browser_tests;
 
 pub(crate) trait McpService {
     fn call(&self, request: &ServiceRequest) -> Result<ServiceResponse>;
@@ -201,10 +206,16 @@ pub(crate) fn handle_tool_call(
                         AppStateDetail::Full => serde_json::to_value(&snapshot)?,
                         AppStateDetail::Compact => compact_snapshot(&snapshot),
                     };
+                    let text_content =
+                        if detail == AppStateDetail::Compact && model.can_receive_images() {
+                            compact_snapshot_text_content(&snapshot)
+                        } else {
+                            snapshot_text_content(&snapshot)
+                        };
                     Ok(json!({
                         "content": [{
                             "type": "text",
-                            "text": snapshot_summary(&snapshot)
+                            "text": text_content
                         }],
                         "structuredContent": structured_content,
                         "isError": false
@@ -213,6 +224,9 @@ pub(crate) fn handle_tool_call(
                 ServiceResponse::Error { code, message } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for get_app_state: {other:?}")),
             }
+        }
+        name if browser::is_browser_tool(name) => {
+            browser::handle_tool_call(service, name, arguments)
         }
         "focus_element" => handle_action_call(service, ActionName::FocusElement, arguments),
         "activate_element" => handle_action_call(service, ActionName::ActivateElement, arguments),
@@ -237,16 +251,16 @@ pub(crate) fn handle_tool_call(
 fn handle_action_call(
     service: &impl McpService,
     action: ActionName,
-    arguments: Value,
+    mut arguments: Value,
 ) -> Result<Value> {
     let snapshot_id = arguments
         .get("snapshot_id")
         .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let element_index = arguments
-        .get("element_index")
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok());
+        .and_then(optional_non_empty_string);
+    normalize_action_coordinate_targets(&action, snapshot_id.is_some(), &mut arguments);
+    normalize_action_selector_targets(&action, snapshot_id.is_some(), &mut arguments);
+    let element_index = element_index_from_arguments(&arguments)
+        .filter(|index| snapshot_id.is_some() || *index != 0);
     let request = ActionRequest {
         action,
         snapshot_id,
@@ -274,37 +288,129 @@ fn handle_action_call(
     }
 }
 
+fn normalize_action_coordinate_targets(
+    action: &ActionName,
+    has_snapshot: bool,
+    arguments: &mut Value,
+) {
+    let Some(arguments) = arguments.as_object_mut() else {
+        return;
+    };
+
+    match action {
+        ActionName::Click | ActionName::PerformSecondaryAction
+            if has_point(arguments, "x", "y") =>
+        {
+            normalize_point_target(arguments, has_snapshot, "element_index", "x", "y");
+        }
+        ActionName::Drag => {
+            if has_point(arguments, "from_x", "from_y") {
+                normalize_point_target(
+                    arguments,
+                    has_snapshot,
+                    "element_index",
+                    "from_x",
+                    "from_y",
+                );
+            }
+            if !has_point(arguments, "from_x", "from_y") && has_point(arguments, "x", "y") {
+                normalize_point_target(arguments, has_snapshot, "element_index", "x", "y");
+            }
+            if has_point(arguments, "to_x", "to_y") {
+                normalize_point_target(arguments, has_snapshot, "to_element_index", "to_x", "to_y");
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_point_target(
+    arguments: &mut serde_json::Map<String, Value>,
+    has_snapshot: bool,
+    index_field: &str,
+    x: &str,
+    y: &str,
+) {
+    if has_snapshot && arguments.contains_key(index_field) && point_is_host_default(arguments, x, y)
+    {
+        arguments.remove(x);
+        arguments.remove(y);
+    } else {
+        remove_host_default_index(arguments, index_field);
+    }
+}
+
+fn remove_host_default_index(arguments: &mut serde_json::Map<String, Value>, field: &str) {
+    if arguments.get(field).and_then(Value::as_u64) == Some(0) {
+        arguments.remove(field);
+    }
+}
+
+fn point_is_host_default(arguments: &serde_json::Map<String, Value>, x: &str, y: &str) -> bool {
+    arguments.get(x).and_then(Value::as_f64) == Some(0.0)
+        && arguments.get(y).and_then(Value::as_f64) == Some(0.0)
+}
+
+fn has_point(arguments: &serde_json::Map<String, Value>, x: &str, y: &str) -> bool {
+    arguments.get(x).and_then(Value::as_f64).is_some()
+        && arguments.get(y).and_then(Value::as_f64).is_some()
+}
+
+fn element_index_from_arguments(arguments: &Value) -> Option<usize> {
+    arguments
+        .get("element_index")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+}
+
+fn normalize_action_selector_targets(
+    action: &ActionName,
+    has_snapshot: bool,
+    arguments: &mut Value,
+) {
+    let Some(arguments) = arguments.as_object_mut() else {
+        return;
+    };
+
+    if has_snapshot
+        && arguments.get("element_index").and_then(Value::as_u64) == Some(0)
+        && has_semantic_selector(action, arguments)
+    {
+        arguments.remove("element_index");
+    }
+}
+
+fn has_semantic_selector(action: &ActionName, arguments: &serde_json::Map<String, Value>) -> bool {
+    has_non_empty_string(arguments, "role")
+        || has_non_empty_string(arguments, "name")
+        || (action != &ActionName::TypeText && has_non_empty_string(arguments, "text"))
+        || arguments
+            .get("states")
+            .and_then(Value::as_array)
+            .is_some_and(|states| {
+                states.iter().any(|state| {
+                    state
+                        .as_str()
+                        .map(str::trim)
+                        .is_some_and(|state| !state.is_empty())
+                })
+            })
+}
+
+fn has_non_empty_string(arguments: &serde_json::Map<String, Value>, field: &str) -> bool {
+    arguments
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
 pub(crate) fn enrich_snapshot(heuristics: &HeuristicsRegistry, snapshot: &mut AppStateSnapshot) {
     if snapshot.app_guidance.is_none()
         && let Some(focused_app) = snapshot.focused_app.as_ref()
     {
         snapshot.app_guidance = heuristics.resolve_for_focused_app(focused_app);
     }
-}
-
-pub(crate) fn snapshot_summary(snapshot: &AppStateSnapshot) -> String {
-    let app_name = snapshot
-        .focused_app
-        .as_ref()
-        .map(|app| app.name.as_str())
-        .unwrap_or("no focused app");
-    let mut summary = String::with_capacity(128);
-    let _ = write!(
-        &mut summary,
-        "Snapshot {} captured {} elements for {}.",
-        snapshot.snapshot_id,
-        snapshot.elements.len(),
-        app_name
-    );
-    if let Some(diag) = portal_approval_pending_diagnostic(&snapshot.diagnostics) {
-        summary.push(' ');
-        summary.push_str(&portal_approval_summary(diag.message.as_str()));
-    }
-    if let Some(summary_suffix) = informational_runtime_summary(&snapshot.diagnostics) {
-        summary.push(' ');
-        summary.push_str(&summary_suffix);
-    }
-    summary
 }
 
 pub(crate) fn list_apps_summary(apps: &[AppInfo]) -> String {
@@ -412,14 +518,13 @@ fn focused_window_summary(window: Option<&WindowInfo>) -> String {
 pub(crate) fn parse_window_target(
     arguments: Value,
 ) -> Result<sky_cua_platform::model::WindowTarget> {
-    let target: sky_cua_platform::model::WindowTarget =
-        serde_json::from_value(arguments).context("invalid activate_window target arguments")?;
-    if !target.has_target() {
-        return Err(anyhow!(
+    sky_cua_platform::model::WindowTarget::from_argument_fields(&arguments)
+        .context("invalid activate_window target arguments")?
+        .ok_or_else(|| {
+            anyhow!(
             "activate_window requires one of window_id, pid, app_id, wm_class, title, tty, terminal_pid, terminal_command, or terminal_cwd"
-        ));
-    }
-    Ok(target)
+            )
+        })
 }
 
 pub(crate) fn action_summary(outcome: &sky_cua_platform::model::ActionOutcome) -> String {
@@ -461,50 +566,6 @@ pub(crate) fn invalid_request_tool_error(message: impl Into<String>) -> Result<V
     tool_error("InvalidRequest", message)
 }
 
-fn portal_approval_pending_diagnostic(
-    diagnostics: &[sky_cua_platform::model::DiagnosticEntry],
-) -> Option<&sky_cua_platform::model::DiagnosticEntry> {
-    diagnostics
-        .iter()
-        .find(|diag| diag.code == "PortalApprovalPending")
-}
-
-fn portal_approval_summary(message: &str) -> String {
-    format!("{message} Approve the KDE portal dialog for screen control, then retry the request.")
-}
-
-fn informational_runtime_summary(
-    diagnostics: &[sky_cua_platform::model::DiagnosticEntry],
-) -> Option<String> {
-    let mut parts = Vec::new();
-    for diagnostic in diagnostics {
-        match diagnostic.code.as_str() {
-            "PortalSessionStarted" | "PortalSessionRestored" => {
-                parts.push(diagnostic.message.clone());
-            }
-            "PortalSessionRestoreMiss"
-            | "PortalSessionRebuilt"
-            | "PortalSessionTokenRotated"
-            | "CaptureBackendDowngraded"
-            | "CaptureFrameBlank" => {
-                parts.push(match diagnostic.details.as_ref() {
-                    Some(details) => {
-                        format!("{} Details: {}", diagnostic.message, details)
-                    }
-                    None => diagnostic.message.clone(),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(" "))
-    }
-}
-
 fn doctor_summary(report: &sky_cua_platform::model::DoctorReport) -> String {
     let mut summary = report.readiness.recommended_next_step.clone();
     if report
@@ -543,7 +604,7 @@ fn push_input_diagnostics(
 }
 
 pub(crate) fn tool_definitions(model: &ModelSessionInfo) -> Value {
-    let index = if model.can_receive_images() { 1 } else { 0 };
+    let index = usize::from(model.can_receive_images());
     TOOL_DEFINITIONS_CACHE[index].clone()
 }
 
@@ -567,7 +628,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
     } else {
         "Use current screen coordinates for the active input backend. This session's model does not support image input, so screenshot-coordinate targeting is disabled."
     };
-    json!([
+    let mut tools = json!([
         {
             "name": "doctor",
             "description": "Report Computer Use desktop integration readiness, including environment, detached session-env repair diagnostics, semantic, capture, and input backend checks.",
@@ -784,7 +845,14 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
             }),
             json!(["value"]),
         )
-    ])
+    ]);
+
+    let tool_array = tools
+        .as_array_mut()
+        .expect("tool definition registry should be a JSON array");
+    browser::push_tool_definitions(tool_array);
+
+    tools
 }
 
 fn get_app_state_properties(can_receive_images: bool) -> Value {
@@ -827,12 +895,20 @@ fn window_target_schema() -> Value {
             "type": "string",
             "description": "Exact window_id from list_windows."
         },
-        "pid": { "type": "integer", "minimum": 0 },
+        "pid": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process ID from list_windows. Omit unless known; 0 is ignored."
+        },
         "tty": {
             "type": "string",
             "description": "Terminal tty such as /dev/pts/7 or pts/7."
         },
-        "terminal_pid": { "type": "integer", "minimum": 0 },
+        "terminal_pid": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Terminal process ID from list_windows terminal metadata. Omit unless known; 0 is ignored."
+        },
         "terminal_command": { "type": "string" },
         "terminal_cwd": { "type": "string" },
         "app_id": { "type": "string" },
@@ -943,19 +1019,19 @@ fn parse_app_selector(arguments: &Value) -> Option<AppSelector> {
         app_id: arguments
             .get("app_id")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+            .and_then(optional_non_empty_string),
         desktop_file_id: arguments
             .get("desktop_file_id")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+            .and_then(optional_non_empty_string),
         window_title: arguments
             .get("window_title")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+            .and_then(optional_non_empty_string),
         name: arguments
             .get("name")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+            .and_then(optional_non_empty_string),
     };
 
     if selector.app_id.is_none()
@@ -969,6 +1045,11 @@ fn parse_app_selector(arguments: &Value) -> Option<AppSelector> {
     }
 }
 
+fn optional_non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -978,9 +1059,9 @@ mod tests {
 
     use serde_json::json;
     use sky_cua_platform::model::{
-        AccessibilitySetupReport, ActionName, ActionOutcome, AgentCursorPoint, AgentCursorState,
-        AppInfo, AppStateSnapshot, CaptureBackendKind, CaptureScreenMode, CoordinateSpace,
-        DiagnosticEntry, DoctorCheck, DoctorReadiness, DoctorReport, ElementNode,
+        AccessibilitySetupReport, ActionName, ActionOutcome, ActionRequest, AgentCursorPoint,
+        AgentCursorState, AppInfo, AppStateSnapshot, CaptureBackendKind, CaptureScreenMode,
+        CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorReadiness, DoctorReport, ElementNode,
         ElementTextReadback, EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities,
         RectF, SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind,
         SetupCommandReport, ToolAvailability, ToolCapabilities, WindowTargetingSetupReport,
@@ -991,13 +1072,15 @@ mod tests {
 
     use crate::output_shapes::{
         AppStateDetail, compact_element, compact_snapshot, list_apps_error_diagnostic,
-        setup_accessibility_is_error, setup_window_targeting_is_error,
+        setup_accessibility_is_error, setup_window_targeting_is_error, snapshot_summary,
+        snapshot_text_content,
     };
 
     use super::{
-        McpService, action_summary, effective_capture_screen, handle_tool_call,
-        invalid_request_tool_error, list_apps_summary, parse_app_state_detail, parse_window_target,
-        snapshot_summary, tool_definitions, tools_list_result,
+        McpService, action_summary, build_tool_definitions, effective_capture_screen,
+        handle_action_call, handle_tool_call, invalid_request_tool_error, list_apps_summary,
+        parse_app_selector, parse_app_state_detail, parse_window_target, tool_definitions,
+        tools_list_result,
     };
 
     #[derive(Default)]
@@ -1029,6 +1112,27 @@ mod tests {
         }
     }
 
+    fn captured_action_request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
+        let service = FakeService::with_response(ServiceResponse::ExecuteAction {
+            outcome: ActionOutcome {
+                success: true,
+                message: "action performed".to_string(),
+                code: "ActionPerformed".to_string(),
+                diagnostics: Vec::new(),
+                agent_cursor: None,
+            },
+        });
+
+        handle_action_call(&service, action, arguments).unwrap();
+
+        let mut requests = service.take_requests();
+        assert_eq!(requests.len(), 1, "expected one ExecuteAction request");
+        match requests.remove(0) {
+            ServiceRequest::ExecuteAction { request } => *request,
+            other => panic!("expected one ExecuteAction request: {other:?}"),
+        }
+    }
+
     #[test]
     fn parses_compact_app_state_detail() {
         assert_eq!(
@@ -1040,6 +1144,22 @@ mod tests {
             AppStateDetail::Full
         );
         assert_eq!(parse_app_state_detail(&json!({})), AppStateDetail::Full);
+    }
+
+    #[test]
+    fn app_selector_ignores_opencode_blank_default_fields() {
+        let selector = parse_app_selector(&json!({
+            "app_id": "",
+            "desktop_file_id": " chrome.desktop ",
+            "window_title": "",
+            "name": ""
+        }))
+        .expect("non-empty desktop_file_id should produce a selector");
+
+        assert_eq!(selector.app_id, None);
+        assert_eq!(selector.desktop_file_id.as_deref(), Some("chrome.desktop"));
+        assert_eq!(selector.window_title, None);
+        assert_eq!(selector.name, None);
     }
 
     #[test]
@@ -1297,6 +1417,26 @@ mod tests {
     }
 
     #[test]
+    fn activate_window_parser_ignores_host_default_zero_and_blank_values() {
+        let target = parse_window_target(json!({
+            "window_id": "",
+            "pid": 0,
+            "tty": "",
+            "terminal_pid": 0,
+            "terminal_command": "",
+            "terminal_cwd": "",
+            "app_id": "chromium.desktop",
+            "wm_class": "",
+            "title": ""
+        }))
+        .expect("app_id should remain a target");
+
+        assert_eq!(target.app_id.as_deref(), Some("chromium.desktop"));
+        assert_eq!(target.pid, None);
+        assert_eq!(target.terminal_pid, None);
+    }
+
+    #[test]
     fn activate_window_validation_returns_tool_error() {
         let result =
             invalid_request_tool_error(parse_window_target(json!({})).unwrap_err().to_string())
@@ -1506,6 +1646,123 @@ mod tests {
         assert!(summary.contains("Approve the KDE portal dialog"));
         assert!(
             summary.contains("timed out waiting for the RemoteDesktop portal session to start")
+        );
+    }
+
+    #[test]
+    fn snapshot_text_content_includes_element_readback_for_text_only_hosts() {
+        let snapshot = AppStateSnapshot {
+            snapshot_id: "snap-text".to_string(),
+            created_at: Utc::now(),
+            environment: EnvironmentInfo {
+                session_kind: SessionKind::Wayland,
+                compositor: Some("kde-kwin-wayland".to_string()),
+                desktop_environment: Some("KDE".to_string()),
+                capture_backend: CaptureBackendKind::PortalPipeWire,
+                input_backend: InputBackendKind::PortalRemoteDesktop,
+                semantic_backend: SemanticBackendKind::Atspi,
+                portal_capabilities: PortalCapabilities {
+                    screencast_version: Some(5),
+                    remote_desktop_version: Some(2),
+                    screenshot_version: Some(2),
+                    available_source_types: None,
+                    available_cursor_modes: None,
+                    available_device_types: None,
+                },
+                xdg_session_type: Some("wayland".to_string()),
+                display: None,
+                wayland_display: Some("wayland-0".to_string()),
+            },
+            capabilities: available_capabilities(),
+            focused_app: Some(FocusedApp {
+                app_id: "brave-browser.desktop".to_string(),
+                name: "Brave Browser".to_string(),
+                pid: Some(1234),
+                desktop_file_id: Some("brave-browser.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
+                toolkit_guess: Some("Chromium".to_string()),
+                window_title: Some("Certificate Manager".to_string()),
+            }),
+            capture: None,
+            elements: vec![ElementNode {
+                element_index: 7,
+                parent_index: Some(3),
+                role: "button".to_string(),
+                name: Some("Imported from Linux".to_string()),
+                description: Some("Local user certificates".to_string()),
+                value: None,
+                text: Some(ElementTextReadback {
+                    character_count: 18,
+                    caret_offset: None,
+                    content: Some("Example certificate".to_string()),
+                    content_suppressed: false,
+                    truncated: false,
+                    selections: Vec::new(),
+                }),
+                numeric_value: None,
+                supports_editable_text: false,
+                state_flags: vec!["enabled".to_string(), "visible".to_string()],
+                semantic_actions: vec!["click".to_string()],
+                bounds: Some(RectF {
+                    x: 1.0,
+                    y: 2.0,
+                    width: 300.0,
+                    height: 40.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                backend_ref: Some("atspi:/7".to_string()),
+            }],
+            diagnostics: Vec::new(),
+            app_guidance: None,
+            doctor_report: None,
+            agent_cursor: None,
+        };
+
+        let content = snapshot_text_content(&snapshot);
+
+        assert!(content.contains("Snapshot snap-text captured 1 elements"));
+        assert!(content.contains("Focused app: name=Brave Browser app_id=brave-browser.desktop"));
+        assert!(content.contains("Elements (1):"));
+        assert!(content.contains("[7] role=button parent=3"));
+        assert!(content.contains("name=\"Imported from Linux\""));
+        assert!(content.contains("description=\"Local user certificates\""));
+        assert!(content.contains("text=\"Example certificate\""));
+        assert!(content.contains("states=enabled,visible"));
+        assert!(content.contains("actions=click"));
+        assert!(content.contains("backend_ref=\"atspi:/7\""));
+    }
+
+    #[test]
+    fn compact_get_app_state_text_omits_verbose_elements_for_image_hosts() {
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot_with_verbose_element()),
+        });
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({"detail": "compact", "capture_screen": "never"}),
+        )
+        .unwrap();
+
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        assert!(text.contains("Snapshot snap-compact captured 1 elements"));
+        assert!(text.contains("Elements: 1 total."));
+        assert!(!text.contains("description=\"Verbose element description\""));
+        assert!(!text.contains("backend_ref=\"atspi:/7\""));
+        assert_eq!(result["structuredContent"]["detail"], "compact");
+        assert!(
+            result["structuredContent"]["elements"][0]
+                .get("description")
+                .is_none()
+        );
+        assert_eq!(
+            result["structuredContent"]["elements"][0]["backend_ref"],
+            "atspi:/7"
         );
     }
 
@@ -1765,6 +2022,76 @@ mod tests {
         }
     }
 
+    fn snapshot_with_verbose_element() -> AppStateSnapshot {
+        AppStateSnapshot {
+            snapshot_id: "snap-compact".to_string(),
+            created_at: Utc::now(),
+            environment: EnvironmentInfo {
+                session_kind: SessionKind::Wayland,
+                compositor: Some("kde-kwin-wayland".to_string()),
+                desktop_environment: Some("KDE".to_string()),
+                capture_backend: CaptureBackendKind::PortalPipeWire,
+                input_backend: InputBackendKind::PortalRemoteDesktop,
+                semantic_backend: SemanticBackendKind::Atspi,
+                portal_capabilities: PortalCapabilities {
+                    screencast_version: Some(5),
+                    remote_desktop_version: Some(2),
+                    screenshot_version: Some(2),
+                    available_source_types: None,
+                    available_cursor_modes: None,
+                    available_device_types: None,
+                },
+                xdg_session_type: Some("wayland".to_string()),
+                display: None,
+                wayland_display: Some("wayland-0".to_string()),
+            },
+            capabilities: available_capabilities(),
+            focused_app: Some(FocusedApp {
+                app_id: "brave-browser.desktop".to_string(),
+                name: "Brave Browser".to_string(),
+                pid: Some(1234),
+                desktop_file_id: Some("brave-browser.desktop".to_string()),
+                app_user_model_id: None,
+                window_handle: None,
+                toolkit_guess: Some("Chromium".to_string()),
+                window_title: Some("Certificate Manager".to_string()),
+            }),
+            capture: None,
+            elements: vec![ElementNode {
+                element_index: 7,
+                parent_index: Some(3),
+                role: "button".to_string(),
+                name: Some("Imported from Linux".to_string()),
+                description: Some("Verbose element description".to_string()),
+                value: None,
+                text: Some(ElementTextReadback {
+                    character_count: 18,
+                    caret_offset: None,
+                    content: Some("Example certificate".to_string()),
+                    content_suppressed: false,
+                    truncated: false,
+                    selections: Vec::new(),
+                }),
+                numeric_value: None,
+                supports_editable_text: false,
+                state_flags: vec!["enabled".to_string(), "visible".to_string()],
+                semantic_actions: vec!["click".to_string()],
+                bounds: Some(RectF {
+                    x: 1.0,
+                    y: 2.0,
+                    width: 300.0,
+                    height: 40.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                backend_ref: Some("atspi:/7".to_string()),
+            }],
+            diagnostics: Vec::new(),
+            app_guidance: None,
+            doctor_report: None,
+            agent_cursor: None,
+        }
+    }
+
     fn doctor_report(can_build_accessibility_tree: bool) -> DoctorReport {
         DoctorReport {
             environment: EnvironmentInfo {
@@ -1808,15 +2135,8 @@ mod tests {
     }
     #[test]
     fn tools_list_registry_preserves_names_and_image_schema_gate() {
-        let vision_model = ModelSessionInfo {
-            supports_images: Some(true),
-        };
-        let text_only_model = ModelSessionInfo {
-            supports_images: Some(false),
-        };
-
-        let result = tools_list_result(&vision_model);
-        let tools = result["tools"].as_array().expect("tools array");
+        let tools_value = build_tool_definitions(true);
+        let tools = tools_value.as_array().expect("tools array");
         let names = tools
             .iter()
             .map(|tool| tool["name"].as_str().expect("tool name"))
@@ -1846,6 +2166,18 @@ mod tests {
                 "type_text",
                 "press_key",
                 "set_value",
+                "browser_status",
+                "browser_list_tabs",
+                "browser_open",
+                "browser_claim_tab",
+                "browser_move_mouse",
+                "browser_navigate",
+                "browser_snapshot",
+                "browser_screenshot",
+                "browser_click",
+                "browser_type_text",
+                "browser_press_key",
+                "browser_scroll",
             ]
         );
 
@@ -1859,8 +2191,8 @@ mod tests {
                 .is_some()
         );
 
-        let text_only_result = tools_list_result(&text_only_model);
-        let text_only_get_app_state = text_only_result["tools"]
+        let text_only_tools = build_tool_definitions(false);
+        let text_only_get_app_state = text_only_tools
             .as_array()
             .expect("tools array")
             .iter()
@@ -1952,8 +2284,237 @@ mod tests {
         assert_eq!(request.action, ActionName::Click);
         assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
         assert_eq!(request.element_index, Some(3));
+        assert_eq!(request.arguments["element_index"], 3);
         assert_eq!(request.arguments["x"], 12.5);
         assert_eq!(request.arguments["y"], 42.0);
+    }
+
+    #[test]
+    fn click_element_target_ignores_host_default_coordinates() {
+        let request = captured_action_request(
+            ActionName::Click,
+            json!({"snapshot_id": "snap-1", "element_index": 3, "x": 0.0, "y": 0.0}),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, Some(3));
+        assert_eq!(request.arguments["element_index"], 3);
+        assert!(request.arguments.get("x").is_none());
+        assert!(request.arguments.get("y").is_none());
+    }
+
+    #[test]
+    fn first_click_element_target_ignores_host_default_coordinates() {
+        let request = captured_action_request(
+            ActionName::Click,
+            json!({"snapshot_id": "snap-1", "element_index": 0, "x": 0.0, "y": 0.0}),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, Some(0));
+        assert_eq!(request.arguments["element_index"], 0);
+        assert!(request.arguments.get("x").is_none());
+        assert!(request.arguments.get("y").is_none());
+    }
+
+    #[test]
+    fn click_coordinates_ignore_host_default_element_index() {
+        let request = captured_action_request(
+            ActionName::Click,
+            json!({"snapshot_id": "snap-1", "element_index": 0, "x": 12.5, "y": 42.0}),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, None);
+        assert!(request.arguments.get("element_index").is_none());
+        assert_eq!(request.arguments["x"], 12.5);
+        assert_eq!(request.arguments["y"], 42.0);
+    }
+
+    #[test]
+    fn secondary_action_coordinates_ignore_host_default_element_index() {
+        let request = captured_action_request(
+            ActionName::PerformSecondaryAction,
+            json!({"snapshot_id": "snap-1", "element_index": 0, "x": 12.5, "y": 42.0}),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, None);
+        assert!(request.arguments.get("element_index").is_none());
+        assert_eq!(request.arguments["x"], 12.5);
+        assert_eq!(request.arguments["y"], 42.0);
+    }
+
+    #[test]
+    fn click_tool_ignores_host_default_element_index_without_snapshot() {
+        let request = captured_action_request(
+            ActionName::Click,
+            json!({"snapshot_id": "", "element_index": 0, "x": 12.5, "y": 42.0}),
+        );
+
+        assert_eq!(request.snapshot_id, None);
+        assert_eq!(request.element_index, None);
+        assert!(request.arguments.get("element_index").is_none());
+        assert_eq!(request.arguments["x"], 12.5);
+        assert_eq!(request.arguments["y"], 42.0);
+    }
+
+    #[test]
+    fn nonzero_element_index_without_snapshot_is_preserved_for_service_validation() {
+        let request = captured_action_request(
+            ActionName::Click,
+            json!({"snapshot_id": "", "element_index": 3}),
+        );
+
+        assert_eq!(request.snapshot_id, None);
+        assert_eq!(request.element_index, Some(3));
+    }
+
+    #[test]
+    fn semantic_selector_ignores_host_default_element_index() {
+        let request = captured_action_request(
+            ActionName::ActivateElement,
+            json!({"snapshot_id": "snap-1", "element_index": 0, "name": "Save", "role": "button"}),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, None);
+        assert!(request.arguments.get("element_index").is_none());
+        assert_eq!(request.arguments["name"], "Save");
+        assert_eq!(request.arguments["role"], "button");
+    }
+
+    #[test]
+    fn set_value_selector_ignores_host_default_element_index_but_preserves_value() {
+        let request = captured_action_request(
+            ActionName::SetValue,
+            json!({"snapshot_id": "snap-1", "element_index": 0, "text": "Search", "value": "needle"}),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, None);
+        assert!(request.arguments.get("element_index").is_none());
+        assert_eq!(request.arguments["text"], "Search");
+        assert_eq!(request.arguments["value"], "needle");
+    }
+
+    #[test]
+    fn type_text_payload_does_not_make_element_index_look_like_host_default() {
+        let request = captured_action_request(
+            ActionName::TypeText,
+            json!({"snapshot_id": "snap-1", "element_index": 0, "text": "hello"}),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, Some(0));
+        assert_eq!(request.arguments["element_index"], 0);
+        assert_eq!(request.arguments["text"], "hello");
+    }
+
+    #[test]
+    fn drag_coordinates_ignore_host_default_element_indexes() {
+        let request = captured_action_request(
+            ActionName::Drag,
+            json!({
+                "snapshot_id": "snap-1",
+                "element_index": 0,
+                "from_x": 1.0,
+                "from_y": 2.0,
+                "to_element_index": 0,
+                "to_x": 3.0,
+                "to_y": 4.0
+            }),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, None);
+        assert!(request.arguments.get("element_index").is_none());
+        assert!(request.arguments.get("to_element_index").is_none());
+        assert_eq!(request.arguments["from_x"], 1.0);
+        assert_eq!(request.arguments["from_y"], 2.0);
+        assert_eq!(request.arguments["to_x"], 3.0);
+        assert_eq!(request.arguments["to_y"], 4.0);
+    }
+
+    #[test]
+    fn drag_coordinates_ignore_host_default_from_alias_when_xy_is_present() {
+        let request = captured_action_request(
+            ActionName::Drag,
+            json!({
+                "snapshot_id": "snap-1",
+                "element_index": 0,
+                "x": 120.0,
+                "y": 200.0,
+                "from_x": 0.0,
+                "from_y": 0.0,
+                "to_x": 3.0,
+                "to_y": 4.0
+            }),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, None);
+        assert!(request.arguments.get("element_index").is_none());
+        assert!(request.arguments.get("from_x").is_none());
+        assert!(request.arguments.get("from_y").is_none());
+        assert_eq!(request.arguments["x"], 120.0);
+        assert_eq!(request.arguments["y"], 200.0);
+        assert_eq!(request.arguments["to_x"], 3.0);
+        assert_eq!(request.arguments["to_y"], 4.0);
+    }
+
+    #[test]
+    fn drag_coordinates_preserve_nonzero_element_indexes() {
+        let request = captured_action_request(
+            ActionName::Drag,
+            json!({
+                "snapshot_id": "snap-1",
+                "element_index": 3,
+                "from_x": 1.0,
+                "from_y": 2.0,
+                "to_element_index": 4,
+                "to_x": 3.0,
+                "to_y": 4.0
+            }),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, Some(3));
+        assert_eq!(request.arguments["element_index"], 3);
+        assert_eq!(request.arguments["to_element_index"], 4);
+        assert_eq!(request.arguments["from_x"], 1.0);
+        assert_eq!(request.arguments["from_y"], 2.0);
+        assert_eq!(request.arguments["to_x"], 3.0);
+        assert_eq!(request.arguments["to_y"], 4.0);
+    }
+
+    #[test]
+    fn drag_element_targets_ignore_host_default_coordinates() {
+        let request = captured_action_request(
+            ActionName::Drag,
+            json!({
+                "snapshot_id": "snap-1",
+                "element_index": 3,
+                "x": 0.0,
+                "y": 0.0,
+                "from_x": 0.0,
+                "from_y": 0.0,
+                "to_element_index": 4,
+                "to_x": 0.0,
+                "to_y": 0.0
+            }),
+        );
+
+        assert_eq!(request.snapshot_id.as_deref(), Some("snap-1"));
+        assert_eq!(request.element_index, Some(3));
+        assert_eq!(request.arguments["element_index"], 3);
+        assert_eq!(request.arguments["to_element_index"], 4);
+        assert!(request.arguments.get("x").is_none());
+        assert!(request.arguments.get("y").is_none());
+        assert!(request.arguments.get("from_x").is_none());
+        assert!(request.arguments.get("from_y").is_none());
+        assert!(request.arguments.get("to_x").is_none());
+        assert!(request.arguments.get("to_y").is_none());
     }
 
     fn registry_doctor_report() -> DoctorReport {

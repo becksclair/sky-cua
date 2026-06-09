@@ -3,8 +3,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
+import socket
+import stat
 import subprocess
 import sys
+import threading
+import time
 import tomllib
 from pathlib import Path
 from types import ModuleType
@@ -12,6 +16,7 @@ from typing import cast
 
 import pytest
 
+import _mcp_stdio
 import _plugin_bundle as plugin_bundle
 import build_plugin
 import build_runtime_packages
@@ -455,6 +460,25 @@ def test_stop_unix_runtime_processes_targets_deleted_cache_process(
     assert all(pid != 456 for pid, _signal in calls)
 
 
+def test_chrome_host_smoke_finds_service_process_by_socket_env(tmp_path: Path) -> None:
+    proc_root = tmp_path / "proc"
+    matching_proc = proc_root / "123"
+    matching_proc.mkdir(parents=True)
+    (matching_proc / "environ").write_bytes(
+        b"PATH=/usr/bin\0SKY_CUA_SERVICE_SOCKET_PATH=/tmp/sky-cua-smoke.sock\0"
+    )
+
+    ignored_proc = proc_root / "456"
+    ignored_proc.mkdir()
+    (ignored_proc / "environ").write_bytes(b"SKY_CUA_SERVICE_SOCKET_PATH=/tmp/other.sock\0")
+
+    assert _mcp_stdio.process_ids_with_env_var(
+        "SKY_CUA_SERVICE_SOCKET_PATH",
+        "/tmp/sky-cua-smoke.sock",
+        proc_root=proc_root,
+    ) == [123]
+
+
 def test_stop_windows_cache_processes_uses_powershell_string_escaping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -512,12 +536,53 @@ def test_bundle_source_paths_include_standard_optional_plugin_roots() -> None:
 
 
 def test_worktree_bundle_dirs_include_untracked_runtime_resources() -> None:
+    assert (
+        Path("docs/operations/testing-vm-desktop-smokes.md") in build_plugin.WORKTREE_BUNDLE_FILES
+    )
     assert Path("resources/chrome-extension") in build_plugin.WORKTREE_BUNDLE_DIRS
     assert Path("resources/kwin") in build_plugin.WORKTREE_BUNDLE_DIRS
-    assert (
-        Path("skills/computer-use-workflows/references/apps") in build_plugin.WORKTREE_BUNDLE_DIRS
+    assert Path("skills/computer-use") in build_plugin.WORKTREE_BUNDLE_DIRS
+    assert Path("skills/browser-use") in build_plugin.WORKTREE_BUNDLE_DIRS
+
+
+def test_copy_tracked_bundle_sources_rejects_unexpected_missing_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(
+        build_plugin,
+        "tracked_bundle_files",
+        lambda: [
+            Path("README.md"),
+            Path("skills/computer-use-workflows/SKILL.md"),
+        ],
     )
-    assert Path("skills/sky-cua-isolated-daemon/references") in build_plugin.WORKTREE_BUNDLE_DIRS
+
+    with pytest.raises(FileNotFoundError, match="tracked bundle source is missing"):
+        build_plugin.copy_tracked_bundle_sources(tmp_path / "bundle")
+
+
+def test_copy_tracked_bundle_sources_allows_retired_skill_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(
+        build_plugin,
+        "tracked_bundle_files",
+        lambda: [
+            Path("skills/computer-use-workflows/SKILL.md"),
+            Path("skills/sky-cua-isolated-daemon/SKILL.md"),
+            Path("skills/sky-cua-plugin-release/SKILL.md"),
+        ],
+    )
+
+    build_plugin.copy_tracked_bundle_sources(tmp_path / "bundle")
 
 
 def test_copy_worktree_bundle_dirs_includes_kwin_effect_resources(
@@ -1467,15 +1532,18 @@ def write_minimal_bundle_sources(root: Path) -> None:
     (root / "bin" / "sky-cua-service").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "bin" / "sky-cua-overlay-host").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "bin" / "sky-cua-browser-preflight").write_text("#!/bin/sh\n", encoding="utf-8")
-    (root / "skills" / "computer-use-workflows").mkdir(parents=True)
-    (root / "skills" / "computer-use-workflows" / "SKILL.md").write_text(
+    (root / "skills" / "computer-use").mkdir(parents=True)
+    (root / "skills" / "computer-use" / "SKILL.md").write_text(
         "skill",
         encoding="utf-8",
     )
-    (root / "skills" / "sky-cua-isolated-daemon" / "references").mkdir(parents=True)
-    (
-        root / "skills" / "sky-cua-isolated-daemon" / "references" / "testing-vm-desktop-smokes.md"
-    ).write_text(
+    (root / "skills" / "browser-use").mkdir(parents=True)
+    (root / "skills" / "browser-use" / "SKILL.md").write_text(
+        "skill",
+        encoding="utf-8",
+    )
+    (root / "docs" / "operations").mkdir(parents=True)
+    (root / "docs" / "operations" / "testing-vm-desktop-smokes.md").write_text(
         "testing vm desktop smoke notes\n",
         encoding="utf-8",
     )
@@ -1493,8 +1561,9 @@ def tracked_minimal_bundle_files() -> list[Path]:
         Path("bin/sky-cua-service"),
         Path("bin/sky-cua-overlay-host"),
         Path("bin/sky-cua-browser-preflight"),
-        Path("skills/computer-use-workflows/SKILL.md"),
-        Path("skills/sky-cua-isolated-daemon/references/testing-vm-desktop-smokes.md"),
+        Path("skills/computer-use/SKILL.md"),
+        Path("skills/browser-use/SKILL.md"),
+        Path("docs/operations/testing-vm-desktop-smokes.md"),
         Path("resources/app-instructions/index.json"),
     ]
 
@@ -2167,6 +2236,483 @@ def test_generic_mcp_bin_links_copy_when_symlinks_are_unavailable(
     assert (bin_dir / "sky-cua-overlay-host.exe").read_text(encoding="utf-8") == "overlay"
 
 
+def test_generic_mcp_restart_runtime_stops_installed_processes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    calls: list[list[Path]] = []
+
+    def fake_stop_unix_runtime_processes(search_roots: list[Path]) -> None:
+        calls.append(search_roots)
+
+    monkeypatch.setattr(
+        install_mcp_server,
+        "stop_unix_runtime_processes",
+        fake_stop_unix_runtime_processes,
+    )
+    monkeypatch.setattr(install_mcp_server, "stop_windows_cache_processes", lambda _root: None)
+
+    install_mcp_server.restart_runtime_processes(target_dir)
+
+    assert calls == [[target_dir]]
+
+
+def test_generic_mcp_main_can_restart_runtime_after_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_dir = tmp_path / "installed"
+    client_path = target_dir / "bin" / "sky-cua-client"
+    restarted: list[Path] = []
+
+    monkeypatch.setattr(
+        sys, "argv", ["install_mcp_server.py", "--target-dir", str(target_dir), "--restart-runtime"]
+    )
+    monkeypatch.setattr(install_mcp_server, "install_binaries", lambda _target_dir: client_path)
+    monkeypatch.setattr(
+        install_mcp_server,
+        "write_mcp_json",
+        lambda target, _config: target / ".mcp.json",
+    )
+    monkeypatch.setattr(
+        install_mcp_server,
+        "restart_runtime_processes",
+        lambda target: restarted.append(target),
+    )
+    monkeypatch.setattr(install_mcp_server, "print_next_steps", lambda *_args: None)
+
+    assert install_mcp_server.main() == 0
+    assert restarted == [target_dir.resolve()]
+
+
+def test_generic_mcp_main_stops_windows_runtime_before_binary_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_dir = tmp_path / "installed"
+    client_path = target_dir / "bin" / "sky-cua-client.exe"
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["install_mcp_server.py", "--target-dir", str(target_dir), "--restart-runtime"],
+    )
+    monkeypatch.setattr(install_mcp_server.sys, "platform", "win32")
+    monkeypatch.setattr(
+        install_mcp_server,
+        "restart_runtime_processes",
+        lambda _target: events.append("restart"),
+    )
+
+    def fake_install_binaries(_target_dir: Path) -> Path:
+        events.append("install")
+        return client_path
+
+    monkeypatch.setattr(install_mcp_server, "install_binaries", fake_install_binaries)
+    monkeypatch.setattr(
+        install_mcp_server,
+        "write_mcp_json",
+        lambda target, _config: target / ".mcp.json",
+    )
+    monkeypatch.setattr(install_mcp_server, "print_next_steps", lambda *_args: None)
+
+    assert install_mcp_server.main() == 0
+    assert events == ["restart", "install", "restart"]
+
+
+def test_generic_mcp_next_steps_document_restart_runtime(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target_dir = Path("/tmp/sky-cua-install")
+    client_path = target_dir / "bin" / "sky-cua-client"
+    config_path = target_dir / "opencode.json"
+
+    install_mcp_server.print_next_steps("opencode", target_dir, client_path, config_path)
+    install_mcp_server.print_next_steps("pi", target_dir, client_path, target_dir / "pi_mcp.json")
+    install_mcp_server.print_next_steps(
+        "openclaw", target_dir, client_path, target_dir / "openclaw_mcp.json"
+    )
+
+    output = capsys.readouterr().out
+    assert "--restart-runtime" in output
+    assert "Restart or reload the OpenCode session" in output
+    assert "Restart Pi or run /reload" in output
+    assert "configured OpenClaw workspace" in output
+    assert "~/.openclaw/workspace/skills" not in output
+
+
+def test_opencode_install_configures_browser_tools_without_enable_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(install_mcp_server.BROWSER_SELECTION_ENV, raising=False)
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+
+    config_path = install_mcp_server.install_opencode(target_dir, client_path)
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    env = config["mcp"]["sky_cua"]["environment"]
+    assert env["SKY_CUA_REPO_ROOT"] == str(install_mcp_server.REPO_ROOT)
+    assert install_mcp_server.BROWSER_SELECTION_ENV not in env
+
+
+def test_opencode_install_preserves_browser_selection_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(install_mcp_server.BROWSER_SELECTION_ENV, "brave")
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+
+    config_path = install_mcp_server.install_opencode(target_dir, client_path)
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    env = config["mcp"]["sky_cua"]["environment"]
+    assert env[install_mcp_server.BROWSER_SELECTION_ENV] == "brave"
+
+
+def test_claude_desktop_install_preserves_browser_selection_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(install_mcp_server.BROWSER_SELECTION_ENV, "brave")
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+
+    config_path = install_mcp_server.install_claude_desktop(target_dir, client_path)
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    env = config["mcpServers"]["computer-use"]["env"]
+    assert env["SKY_CUA_REPO_ROOT"] == str(install_mcp_server.REPO_ROOT)
+    assert env[install_mcp_server.BROWSER_SELECTION_ENV] == "brave"
+
+
+def test_pi_install_merges_mcp_config_and_copies_sky_cua_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(install_mcp_server.BROWSER_SELECTION_ENV, "brave")
+    repo_root = tmp_path / "repo"
+    for skill_name in install_mcp_server.SKY_CUA_SKILLS:
+        skill_dir = repo_root / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+    monkeypatch.setattr(install_mcp_server, "REPO_ROOT", repo_root)
+
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+    agent_dir = tmp_path / "pi-agent"
+    agent_dir.mkdir()
+    (agent_dir / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"context7": {"command": "context7"}}}),
+        encoding="utf-8",
+    )
+    stale_skill = agent_dir / "skills" / install_mcp_server.SKY_CUA_SKILLS[0]
+    stale_skill.mkdir(parents=True)
+    (stale_skill / "obsolete.md").write_text("old", encoding="utf-8")
+    unrelated_skill = agent_dir / "skills" / "other-skill"
+    unrelated_skill.mkdir(parents=True)
+    (unrelated_skill / "SKILL.md").write_text("# other\n", encoding="utf-8")
+
+    snippet_path = install_mcp_server.install_pi(target_dir, client_path, agent_dir)
+
+    wrapper = target_dir / "pi_mcp_wrapper.sh"
+    wrapper_text = wrapper.read_text(encoding="utf-8")
+    assert f"export {install_mcp_server.BROWSER_SELECTION_ENV}=brave" in wrapper_text
+    assert snippet_path == target_dir / "pi_mcp.json"
+    snippet = json.loads(snippet_path.read_text(encoding="utf-8"))
+    assert snippet["mcpServers"]["sky_cua"]["command"] == str(wrapper)
+
+    merged = json.loads((agent_dir / "mcp.json").read_text(encoding="utf-8"))
+    assert merged["mcpServers"]["context7"] == {"command": "context7"}
+    assert merged["mcpServers"]["sky_cua"]["command"] == str(wrapper)
+    for skill_name in install_mcp_server.SKY_CUA_SKILLS:
+        assert (agent_dir / "skills" / skill_name / "SKILL.md").read_text(
+            encoding="utf-8"
+        ) == f"# {skill_name}\n"
+    assert not (stale_skill / "obsolete.md").exists()
+    assert (unrelated_skill / "SKILL.md").read_text(encoding="utf-8") == "# other\n"
+
+
+def test_pi_install_preserves_symlinked_mcp_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    for skill_name in install_mcp_server.SKY_CUA_SKILLS:
+        skill_dir = repo_root / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+    monkeypatch.setattr(install_mcp_server, "REPO_ROOT", repo_root)
+
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+    agent_dir = tmp_path / "pi-agent"
+    agent_dir.mkdir()
+    real_config = tmp_path / "real-mcp.json"
+    real_config.write_text(
+        json.dumps({"mcpServers": {"context7": {"command": "context7"}}}) + "\n",
+        encoding="utf-8",
+    )
+    config_link = agent_dir / "mcp.json"
+    try:
+        config_link.symlink_to(real_config)
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    install_mcp_server.install_pi(target_dir, client_path, agent_dir)
+
+    assert config_link.is_symlink()
+    merged = json.loads(real_config.read_text(encoding="utf-8"))
+    assert merged["mcpServers"]["context7"] == {"command": "context7"}
+    assert merged["mcpServers"]["sky_cua"]["command"] == str(target_dir / "pi_mcp_wrapper.sh")
+
+
+def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(install_mcp_server.BROWSER_SELECTION_ENV, "brave")
+    repo_root = tmp_path / "repo"
+    for skill_name in install_mcp_server.SKY_CUA_SKILLS:
+        skill_dir = repo_root / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+    monkeypatch.setattr(install_mcp_server, "REPO_ROOT", repo_root)
+    calls: list[dict[str, object]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append({"command": command, "check": check, "env": env, "timeout": timeout})
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+    openclaw_dir = tmp_path / "openclaw"
+    (openclaw_dir / "workspace" / "skills" / install_mcp_server.SKY_CUA_SKILLS[0]).mkdir(
+        parents=True
+    )
+    (
+        openclaw_dir / "workspace" / "skills" / install_mcp_server.SKY_CUA_SKILLS[0] / "obsolete.md"
+    ).write_text("old", encoding="utf-8")
+
+    config_path = install_mcp_server.install_openclaw(
+        target_dir,
+        client_path,
+        openclaw_dir=openclaw_dir,
+        openclaw_bin="openclaw",
+    )
+
+    assert config_path == target_dir / "openclaw_mcp.json"
+    snippet = json.loads(config_path.read_text(encoding="utf-8"))
+    server = snippet["mcp"]["servers"]["sky_cua"]
+    assert server["command"] == str(client_path)
+    assert server["args"] == ["mcp"]
+    assert server["cwd"] == str(target_dir)
+    assert server["env"]["SKY_CUA_REPO_ROOT"] == str(repo_root)
+    assert server["env"][install_mcp_server.BROWSER_SELECTION_ENV] == "brave"
+    assert server["codex"]["defaultToolsApprovalMode"] == "approve"
+
+    assert len(calls) == 1
+    command = cast(list[str], calls[0]["command"])
+    assert command[:4] == ["openclaw", "mcp", "set", "sky_cua"]
+    assert json.loads(command[4]) == server
+    assert calls[0]["check"] is True
+    assert calls[0]["timeout"] == install_mcp_server.OPENCLAW_MCP_SET_TIMEOUT_SECONDS
+    env = cast(dict[str, str], calls[0]["env"])
+    assert env["OPENCLAW_STATE_DIR"] == str(openclaw_dir)
+    assert env["OPENCLAW_CONFIG_PATH"] == str(openclaw_dir / "openclaw.json")
+
+    for skill_name in install_mcp_server.SKY_CUA_SKILLS:
+        assert (openclaw_dir / "workspace" / "skills" / skill_name / "SKILL.md").read_text(
+            encoding="utf-8"
+        ) == f"# {skill_name}\n"
+    assert not (
+        openclaw_dir / "workspace" / "skills" / install_mcp_server.SKY_CUA_SKILLS[0] / "obsolete.md"
+    ).exists()
+
+
+def test_openclaw_install_reports_registration_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    for skill_name in install_mcp_server.SKY_CUA_SKILLS:
+        skill_dir = repo_root / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+    monkeypatch.setattr(install_mcp_server, "REPO_ROOT", repo_root)
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    with pytest.raises(TimeoutError, match="timed out registering sky-cua with OpenClaw"):
+        install_mcp_server.install_openclaw(
+            tmp_path / "installed",
+            tmp_path / "installed" / "bin" / "sky-cua-client",
+            openclaw_dir=tmp_path / "openclaw",
+            openclaw_bin="openclaw",
+        )
+
+
+def test_generic_mcp_main_can_install_openclaw_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    client_path = target_dir / "bin" / "sky-cua-client"
+    installed: list[tuple[Path, Path, Path]] = []
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "install_mcp_server.py",
+            "--target-dir",
+            str(target_dir),
+            "--host",
+            "openclaw",
+            "--openclaw-dir",
+            str(openclaw_dir),
+        ],
+    )
+    monkeypatch.setattr(install_mcp_server, "install_binaries", lambda _target_dir: client_path)
+    monkeypatch.setattr(
+        install_mcp_server,
+        "install_openclaw",
+        lambda target, client, openclaw_dir, openclaw_bin="openclaw": (
+            installed.append((target, client, openclaw_dir)) or target / "openclaw_mcp.json"
+        ),
+    )
+    monkeypatch.setattr(install_mcp_server, "print_next_steps", lambda *_args: None)
+
+    assert install_mcp_server.main() == 0
+    assert installed == [(target_dir.resolve(), client_path, openclaw_dir.resolve())]
+
+
+def test_pi_mcp_config_merge_keeps_existing_file_when_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "mcp.json"
+    original = json.dumps({"mcpServers": {"context7": {"command": "context7"}}}) + "\n"
+    config_path.write_text(original, encoding="utf-8")
+
+    def fail_replace(_source: Path, _destination: Path) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(install_mcp_server.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        install_mcp_server.merge_pi_mcp_config(
+            config_path,
+            {"mcpServers": {"sky_cua": {"command": "/tmp/sky-cua-client"}}},
+        )
+
+    assert config_path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob(".mcp.json.tmp-*"))
+
+
+def test_pi_mcp_config_merge_preserves_existing_file_permissions(tmp_path: Path) -> None:
+    config_path = tmp_path / "mcp.json"
+    config_path.write_text(
+        json.dumps({"mcpServers": {"context7": {"command": "context7"}}}) + "\n",
+        encoding="utf-8",
+    )
+    config_path.chmod(0o600)
+
+    install_mcp_server.merge_pi_mcp_config(
+        config_path,
+        {"mcpServers": {"sky_cua": {"command": "/tmp/sky-cua-client"}}},
+    )
+
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+
+
+def test_pi_skill_install_keeps_existing_skill_when_copy_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill_name = "computer-use"
+    monkeypatch.setattr(install_mcp_server, "SKY_CUA_SKILLS", (skill_name,))
+    repo_root = tmp_path / "repo"
+    source = repo_root / "skills" / skill_name
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("# new\n", encoding="utf-8")
+    monkeypatch.setattr(install_mcp_server, "REPO_ROOT", repo_root)
+
+    skills_dir = tmp_path / "skills"
+    destination = skills_dir / skill_name
+    destination.mkdir(parents=True)
+    (destination / "SKILL.md").write_text("# old\n", encoding="utf-8")
+
+    def fail_copytree(_source: Path, destination: Path) -> None:
+        destination.mkdir(parents=True)
+        (destination / "partial.md").write_text("partial\n", encoding="utf-8")
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(install_mcp_server.shutil, "copytree", fail_copytree)
+
+    with pytest.raises(OSError, match="copy failed"):
+        install_mcp_server.install_pi_skills(skills_dir)
+
+    assert (destination / "SKILL.md").read_text(encoding="utf-8") == "# old\n"
+    assert not (destination / "partial.md").exists()
+    assert not list(skills_dir.glob(f".{skill_name}.tmp-*"))
+
+
+def test_replace_tree_atomically_restores_file_destination_when_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "SKILL.md").write_text("# new\n", encoding="utf-8")
+    destination = tmp_path / "skill"
+    destination.write_text("# old-file\n", encoding="utf-8")
+    real_replace = install_mcp_server.os.replace
+
+    def fail_new_tree_replace(source_path: Path, destination_path: Path) -> None:
+        if (
+            Path(source_path).name.startswith(".skill.tmp-")
+            and Path(destination_path) == destination
+        ):
+            raise OSError("replace failed")
+        real_replace(source_path, destination_path)
+
+    monkeypatch.setattr(install_mcp_server.os, "replace", fail_new_tree_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        install_mcp_server.replace_tree_atomically(source, destination)
+
+    assert destination.read_text(encoding="utf-8") == "# old-file\n"
+    assert not list(tmp_path.glob(".skill.tmp-*"))
+    assert not list(tmp_path.glob(".skill.backup-*"))
+
+
 def test_version_from_tag_updates_plugin_manifest(tmp_path: Path) -> None:
     bundle_root = tmp_path / "bundle"
     write_minimal_bundle_sources(bundle_root)
@@ -2566,6 +3112,7 @@ def test_mcp_config_allows_runtime_override_env_vars() -> None:
     assert "SKY_CUA_COSMIC_HELPER" in env_vars
     assert "CODEX_COMPUTER_USE_COSMIC_HELPER" in env_vars
     assert "SKY_CUA_AGENT_CURSOR" in env_vars
+    assert "SKY_CUA_BROWSER" in env_vars
     assert "SKY_CUA_OVERLAY_BACKEND" in env_vars
     assert "SKY_CUA_INPUT_BACKEND" in env_vars
     assert "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE" in env_vars
@@ -2574,6 +3121,44 @@ def test_mcp_config_allows_runtime_override_env_vars() -> None:
     assert "SKY_CUA_REPO_ROOT" in env_vars
     assert "SKY_CUA_SERVICE_PATH" in env_vars
     assert "YDOTOOL_SOCKET" in env_vars
+
+
+def test_tab_list_proof_redacts_titles_and_urls() -> None:
+    proof = live_chrome_host_client_smoke.redacted_tab_list_proof(
+        {
+            "id": "client-get-user-tabs-mcp-proof",
+            "result": {
+                "tabs": [
+                    {
+                        "id": 42,
+                        "title": "Private tab title",
+                        "url": "https://private.example.test/path",
+                    }
+                ]
+            },
+        },
+        expected_tab_id=42,
+    )
+
+    assert proof == {
+        "id": "client-get-user-tabs-mcp-proof",
+        "has_result": True,
+        "expected_tab_id": 42,
+        "expected_tab_present": True,
+        "tabs_count": 1,
+    }
+    assert "Private tab title" not in json.dumps(proof)
+    assert "private.example.test" not in json.dumps(proof)
+
+
+def test_expected_tab_present_accepts_mcp_tab_id_shape() -> None:
+    tabs: list[object] = [
+        {"tab_id": "7", "title": "Private tab title", "url": "https://private.example.test"}
+    ]
+
+    assert live_chrome_host_client_smoke.expected_tab_present(tabs, 7) is True
+    assert live_chrome_host_client_smoke.expected_tab_present(tabs, 8) is False
+    assert live_chrome_host_client_smoke.expected_tab_present(tabs, None) is None
 
 
 def test_chrome_preflight_default_env_allowlist_matches_primary_mcp_config() -> None:
@@ -3093,6 +3678,59 @@ def test_chrome_host_smoke_rejects_turn_ended_error_response() -> None:
 
     assert response is not None
     assert not live_chrome_host_client_smoke.turn_ended_response_was_successful(response)
+
+
+def test_chrome_mcp_client_times_out_when_process_sends_no_frame() -> None:
+    client = live_chrome_host_client_smoke.McpClient(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        extra_env={},
+        read_timeout=0.05,
+    )
+
+    started_at = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out while reading MCP headers"):
+        client._read_message()
+
+    assert time.monotonic() - started_at < 2
+    assert client.proc.poll() is not None
+
+
+def test_chrome_native_request_uses_aggregate_timeout_for_pings() -> None:
+    client_sock, server_sock = socket.socketpair()
+    stop = threading.Event()
+
+    def serve_pings() -> None:
+        try:
+            live_chrome_host_client_smoke.read_native_frame(server_sock, timeout=1)
+            while not stop.is_set():
+                try:
+                    live_chrome_host_client_smoke.write_native_frame(
+                        server_sock,
+                        {"jsonrpc": "2.0", "id": "ping", "method": "ping"},
+                    )
+                except OSError:
+                    break
+                time.sleep(0.01)
+        finally:
+            server_sock.close()
+
+    thread = threading.Thread(target=serve_pings)
+    thread.start()
+    started_at = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError, match=r"native request getInfo.*timed out"):
+            live_chrome_host_client_smoke.native_request(
+                client_sock,
+                "getInfo",
+                {},
+                timeout=0.05,
+                request_id="aggregate-timeout",
+            )
+        assert time.monotonic() - started_at < 2
+    finally:
+        stop.set()
+        client_sock.close()
+        thread.join(timeout=2)
 
 
 def test_publish_marketplace_detects_staged_plugin_changes(tmp_path: Path) -> None:

@@ -126,7 +126,7 @@ log so the extension's session lifecycle is honored.
 - `resources/chrome_preflight.py` — preflight that syncs bundled
   cache, writes native-host manifests, enables companion plugins.
 - `crates/sky-cua-chrome-host/` — Linux native messaging host.
-- `resources/chrome-extension/codex/1.1.4_0/` — extracted upstream
+- `resources/chrome-extension/codex/1.1.5_0/` — extracted upstream
   Codex Chrome extension fallback payload.
 - `bin/sky-cua-browser-preflight` — preflight wrapper.
 - `.codex-plugin/plugin.json`, `.mcp.json` — plugin manifest and MCP
@@ -172,13 +172,14 @@ Latest accepted artifacts:
   (widen Linux `computerUse` availability, strip external Browser Use
   build-flavor gates, keep Browser Use / Chrome companion descriptors
   available when `computerUse` is enabled).
-- **First-class `browser_*` MCP tools are intentionally deferred.**
-  Browser automation goes through the companion Browser Use plugin
-  rather than `sky-cua`'s MCP surface. The Chrome host is a protocol
-  bridge, not a command-specific browser MCP implementation.
+- **Full first-class `browser_*` actions are still partial.**
+  `sky-cua` now exposes gated browser readiness and real user-tab
+  listing through MCP, but navigation, snapshots, and browser actions
+  still go through the companion Browser Use plugin until the shared
+  runtime delegates those commands.
 - **No standalone Chrome extension smoke fixture.** The current
   fallback is the extracted upstream Codex extension under
-  `resources/chrome-extension/codex/1.1.4_0/`. A
+  `resources/chrome-extension/codex/1.1.5_0/`. A
   `scripts/install_chrome_extension.py` automated temporary-profile
   loader does not exist yet.
 - **Codex Desktop UI proof requires a fresh re-run after upstream

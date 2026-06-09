@@ -1,8 +1,15 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+mod browser;
 mod service;
 
+pub use browser::{
+    BrowserActionResponse, BrowserClaimTabResponse, BrowserListTabsResponse,
+    BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse, BrowserRequest,
+    BrowserResponse, BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport,
+    BrowserTab, BrowserTargetAvailability, BrowserTargetKind, normalize_browser_open_url,
+};
 pub use service::{ServiceRequest, ServiceResponse};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -605,22 +612,97 @@ pub struct WindowTarget {
 }
 
 impl WindowTarget {
+    pub const FIELD_NAMES: &'static [&'static str] = &[
+        "window_id",
+        "pid",
+        "tty",
+        "terminal_pid",
+        "terminal_command",
+        "terminal_cwd",
+        "app_id",
+        "wm_class",
+        "title",
+    ];
+
+    pub fn from_argument_fields(
+        arguments: &serde_json::Value,
+    ) -> Result<Option<Self>, serde_json::Error> {
+        let Some(arguments) = arguments.as_object() else {
+            return Ok(None);
+        };
+
+        let mut target_arguments = serde_json::Map::new();
+        for field in Self::FIELD_NAMES {
+            if let Some(value) = arguments.get(*field)
+                && target_argument_is_present(value)
+            {
+                target_arguments.insert((*field).to_string(), value.clone());
+            }
+        }
+
+        if target_arguments.is_empty() {
+            return Ok(None);
+        }
+
+        let mut target: Self = serde_json::from_value(serde_json::Value::Object(target_arguments))?;
+        target.normalize_empty_fields();
+        Ok(target.has_target().then_some(target))
+    }
+
     #[must_use]
     pub fn has_target(&self) -> bool {
         self.window_id.as_deref().is_some_and(non_empty)
-            || self.pid.is_some()
+            || self.pid.is_some_and(non_zero)
             || self.tty.as_deref().is_some_and(non_empty)
-            || self.terminal_pid.is_some()
+            || self.terminal_pid.is_some_and(non_zero)
             || self.terminal_command.as_deref().is_some_and(non_empty)
             || self.terminal_cwd.as_deref().is_some_and(non_empty)
             || self.app_id.as_deref().is_some_and(non_empty)
             || self.wm_class.as_deref().is_some_and(non_empty)
             || self.title.as_deref().is_some_and(non_empty)
     }
+
+    pub fn normalize_empty_fields(&mut self) {
+        self.window_id = normalize_optional_string(self.window_id.take());
+        self.pid = self.pid.filter(|pid| non_zero(*pid));
+        self.tty = normalize_optional_string(self.tty.take());
+        self.terminal_pid = self.terminal_pid.filter(|pid| non_zero(*pid));
+        self.terminal_command = normalize_optional_string(self.terminal_command.take());
+        self.terminal_cwd = normalize_optional_string(self.terminal_cwd.take());
+        self.app_id = normalize_optional_string(self.app_id.take());
+        self.wm_class = normalize_optional_string(self.wm_class.take());
+        self.title = normalize_optional_string(self.title.take());
+    }
 }
 
 fn non_empty(value: &str) -> bool {
     !value.trim().is_empty()
+}
+
+fn non_zero(value: u32) -> bool {
+    value != 0
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else if trimmed.len() == value.len() {
+            Some(value)
+        } else {
+            Some(trimmed.to_owned())
+        }
+    })
+}
+
+fn target_argument_is_present(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::String(value) => !value.trim().is_empty(),
+        serde_json::Value::Number(value) => value.as_u64().is_none_or(|value| value != 0),
+        _ => true,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -91,6 +91,13 @@ pub async fn run_service() -> Result<()> {
                 }
             }
             _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                // Check if socket file still exists; warn if it was deleted
+                // The listener can still accept connections (it has the file descriptor),
+                // but new clients won't be able to connect until the daemon is restarted
+                if !socket_path.exists() {
+                    warn!("sky-cua-service socket file disappeared at {}; the daemon can still accept connections on the existing listener, but new clients will fail to connect. Please restart the daemon.", socket_path.display());
+                }
+
                 if service_idle_timed_out(&daemon, &connections).await {
                     info!("sky-cua-service idle timeout reached; exiting");
                     break;

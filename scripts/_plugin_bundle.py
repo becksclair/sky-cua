@@ -373,8 +373,9 @@ def ensure_bundle_structure(root: Path) -> None:
     required = [
         root / ".codex-plugin" / "plugin.json",
         root / ".mcp.json",
-        root / "skills" / "computer-use-workflows" / "SKILL.md",
-        root / "skills" / "sky-cua-isolated-daemon" / "references" / "testing-vm-desktop-smokes.md",
+        root / "skills" / "computer-use" / "SKILL.md",
+        root / "skills" / "browser-use" / "SKILL.md",
+        root / "docs" / "operations" / "testing-vm-desktop-smokes.md",
         root / "resources" / "app-instructions" / "index.json",
     ]
     required.extend(root / path for path in bundle_entrypoint_paths())

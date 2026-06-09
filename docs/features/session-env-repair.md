@@ -66,7 +66,7 @@ Invariants:
 - `crates/sky-cua-linux/src/session_env.rs` — service rehydration
 - `crates/sky-cua-platform/src/model.rs` — `DoctorSessionEnvReport`,
   `DoctorSessionEnvRepair`
-- `skills/computer-use-workflows/SKILL.md` — agent guidance for inspecting
+- `skills/computer-use/SKILL.md` — agent guidance for inspecting
   `doctor.session_env` and treating `SessionEnvRepaired` as recovered
   context
 - `scripts/live_session_env_smoke.py`,

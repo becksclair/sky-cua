@@ -201,7 +201,7 @@ python3 scripts/run_gui_testing_vm_smoke.py \
 ```
 
 The `opencode-mcp` profile installs sky-cua as an MCP server for OpenCode,
-deploys the `computer-use-workflows` skill, and runs dialog dismissal smokes
+deploys the `computer-use` skill, and runs dialog dismissal smokes
 through OpenCode's tool-calling loop.
 
 Verify OpenCode is functional before the smoke:
@@ -234,7 +234,7 @@ python3 scripts/run_gui_testing_vm_smoke.py \
 
 The `pi-mcp` profile installs sky-cua as an MCP server for Pi, merges the
 `sky_cua` entry into Pi's `~/.pi/agent/mcp.json`, deploys the
-`computer-use-workflows` skill to `~/.pi/agent/skills/`, and runs dialog
+`computer-use` and `browser-use` skills to `~/.pi/agent/skills/`, and runs dialog
 dismissal smokes through Pi's tool-calling loop.
 
 ## Portal Selection

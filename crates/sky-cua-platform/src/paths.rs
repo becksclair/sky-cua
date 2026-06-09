@@ -86,3 +86,60 @@ fn current_uid() -> u32 {
 fn current_uid() -> u32 {
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    use super::{SERVICE_SOCKET_PATH_ENV, service_socket_path};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+
+    #[test]
+    fn service_socket_path_uses_stable_default_name() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_override = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
+        let old_runtime = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe {
+            std::env::remove_var(SERVICE_SOCKET_PATH_ENV);
+            std::env::set_var("XDG_RUNTIME_DIR", "/tmp/sky-cua-runtime-test");
+        }
+
+        let first = service_socket_path();
+        let second = service_socket_path();
+
+        restore_env(SERVICE_SOCKET_PATH_ENV, old_override);
+        restore_env("XDG_RUNTIME_DIR", old_runtime);
+
+        assert_eq!(
+            first,
+            PathBuf::from("/tmp/sky-cua-runtime-test/sky-cua/service.sock")
+        );
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn service_socket_path_env_override_wins() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_override = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
+        unsafe {
+            std::env::set_var(SERVICE_SOCKET_PATH_ENV, "/tmp/sky-cua-custom.sock");
+        }
+
+        let path = service_socket_path();
+
+        restore_env(SERVICE_SOCKET_PATH_ENV, old_override);
+
+        assert_eq!(path, PathBuf::from("/tmp/sky-cua-custom.sock"));
+    }
+}

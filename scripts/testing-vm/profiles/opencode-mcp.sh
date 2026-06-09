@@ -28,10 +28,10 @@ plugin_skills="${HOME}/.codex/plugins/cache/debug/sky-cua/local/skills"
 if [[ ! -d "${plugin_skills}" ]]; then
 	# Fallback: copy skills directly into OpenCode skills path
 	mkdir -p "${HOME}/.codex/skills"
-	rm -rf "${HOME}/.codex/skills/computer-use-workflows"
-	cp -r "${remote_root}/skills/computer-use-workflows" "${HOME}/.codex/skills/"
-	rm -rf "${HOME}/.codex/skills/sky-cua-isolated-daemon"
-	cp -r "${remote_root}/skills/sky-cua-isolated-daemon" "${HOME}/.codex/skills/"
+	for skill in computer-use browser-use; do
+		rm -rf "${HOME}/.codex/skills/${skill}"
+		cp -r "${remote_root}/skills/${skill}" "${HOME}/.codex/skills/"
+	done
 fi
 
 # Run smoke tests across available fixtures

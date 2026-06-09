@@ -7,6 +7,7 @@ messaging host used by the running browser can bridge:
 
 - client -> native host -> extension -> client with `getInfo`
 - client -> native host -> extension -> client with `getTabs`
+- sky-cua MCP -> daemon -> native host -> extension -> MCP with `browser_list_tabs`
 - extension -> native host -> client with the heartbeat `ping`
 - session-log completion -> native host -> extension with `turnEnded`
 """
@@ -26,6 +27,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -37,16 +39,28 @@ from pathlib import Path
 from typing import NamedTuple, cast
 from urllib.parse import urlparse
 
+from _mcp_stdio import McpClient, stop_service_processes_for_socket
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXTENSION_ID = "hehggadaopoacecdllhhajmbjkdcmajg"
+DEFAULT_EXTENSION_VERSION_DIR = "1.1.5_0"
 DEFAULT_EXTENSION_DIR = (
-    Path.home() / ".config/google-chrome/Default/Extensions" / DEFAULT_EXTENSION_ID / "1.1.4_0"
+    Path.home()
+    / ".config/google-chrome/Default/Extensions"
+    / DEFAULT_EXTENSION_ID
+    / DEFAULT_EXTENSION_VERSION_DIR
 )
-FALLBACK_EXTENSION_DIR = REPO_ROOT / "resources/chrome-extension/codex/1.1.4_0"
+FALLBACK_EXTENSION_DIR = (
+    REPO_ROOT / "resources/chrome-extension/codex" / DEFAULT_EXTENSION_VERSION_DIR
+)
 DEFAULT_HOST_PATH = REPO_ROOT / "target/debug/sky-cua-chrome-host"
+DEFAULT_MCP_CLIENT_PATH = REPO_ROOT / "target/debug/sky-cua-client"
 HOST_NAME = "com.openai.codexextension"
 SMOKE_SESSION_ID = "smoke-session"
 SMOKE_TURN_ID = "smoke-turn"
+MCP_BROWSER_SESSION_ID = "sky-cua-mcp"
+MCP_BROWSER_TURN_ID = "browser-list-tabs"
+MCP_READ_TIMEOUT_SECONDS = 15.0
 TURN_ENDED_ID = f"native-turn-ended:{SMOKE_SESSION_ID}:{SMOKE_TURN_ID}"
 CDP_COUNTER = 0
 NATIVE_COUNTER = 0
@@ -239,9 +253,20 @@ def parse_args() -> argparse.Namespace:
         help="sky-cua-chrome-host binary to install temporarily for this smoke.",
     )
     parser.add_argument(
+        "--mcp-client-path",
+        type=Path,
+        default=DEFAULT_MCP_CLIENT_PATH,
+        help="sky-cua-client binary to use for the optional MCP browser_list_tabs proof.",
+    )
+    parser.add_argument(
         "--install-temp-native-manifest",
         action="store_true",
         help="Temporarily point the selected browser native manifest at --host-path, then restore it.",
+    )
+    parser.add_argument(
+        "--mcp-list-tabs-proof",
+        action="store_true",
+        help="Also prove sky-cua MCP browser_list_tabs against the launched browser socket.",
     )
     parser.add_argument(
         "--skip-turn-ended-proof",
@@ -346,8 +371,19 @@ def native_request(
             "params": params,
         },
     )
+    deadline = time.monotonic() + timeout
     while True:
-        response = read_native_frame(sock, timeout=timeout)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"native request {method} id={message_id} timed out after {timeout:g}s"
+            )
+        try:
+            response = read_native_frame(sock, timeout=remaining)
+        except TimeoutError:
+            raise TimeoutError(
+                f"native request {method} id={message_id} timed out after {timeout:g}s"
+            ) from None
         if response.get("id") == message_id:
             if "error" in response:
                 raise RuntimeError(f"native request {method} failed: {response['error']!r}")
@@ -371,6 +407,125 @@ def native_result(response: dict[str, object]) -> object:
     if "result" not in response:
         raise RuntimeError(f"native response had no result: {response!r}")
     return response["result"]
+
+
+def tab_id_from_payload(tab: object) -> str | None:
+    if not isinstance(tab, dict):
+        return None
+    for key in ("tab_id", "tabId", "id"):
+        value = tab.get(key)
+        if isinstance(value, (str, int)):
+            return str(value)
+    return None
+
+
+def expected_tab_present(tabs: list[object], expected_tab_id: int | None) -> bool | None:
+    if expected_tab_id is None:
+        return None
+    expected = str(expected_tab_id)
+    return any(tab_id_from_payload(tab) == expected for tab in tabs)
+
+
+def tab_list_result(response: dict[str, object]) -> list[object]:
+    result = response.get("result")
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict):
+        tabs = result.get("tabs")
+        if isinstance(tabs, list):
+            return tabs
+    return []
+
+
+def redacted_tab_list_proof(
+    response: dict[str, object],
+    *,
+    expected_tab_id: int | None,
+) -> dict[str, object]:
+    tabs = tab_list_result(response)
+    return {
+        "id": response.get("id"),
+        "has_result": "result" in response,
+        "expected_tab_id": expected_tab_id,
+        "expected_tab_present": expected_tab_present(tabs, expected_tab_id),
+        "tabs_count": len(tabs),
+    }
+
+
+def run_mcp_list_tabs_proof(
+    *,
+    client_path: Path,
+    socket_dir: Path,
+    service_socket_path: Path,
+    expected_tab_id: int | None,
+) -> dict[str, object]:
+    client_path = client_path.expanduser().resolve()
+    if not client_path.exists():
+        raise FileNotFoundError(f"MCP client binary not found: {client_path}")
+
+    client = McpClient(
+        [str(client_path), "mcp"],
+        extra_env={
+            "CODEX_BROWSER_USE_SOCKET_DIR": str(socket_dir),
+            "SKY_CUA_BROWSER_USE_SOCKET_DIR": str(socket_dir),
+            "SKY_CUA_REPO_ROOT": str(REPO_ROOT),
+            "SKY_CUA_SERVICE_SOCKET_PATH": str(service_socket_path),
+        },
+        read_timeout=MCP_READ_TIMEOUT_SECONDS,
+        client_name="live-chrome-host-smoke",
+    )
+    try:
+        client.initialize()
+        tools = client.tools_list()
+        tool_names: list[str] = []
+        for tool in tools:
+            name = tool.get("name")
+            if isinstance(name, str):
+                tool_names.append(name)
+        tool_names.sort()
+        result = client.tools_call(
+            3,
+            "browser_list_tabs",
+            {"target": "user_chrome"},
+        )
+    finally:
+        try:
+            client.close()
+        finally:
+            stop_service_processes_for_socket(service_socket_path)
+
+    if "browser_list_tabs" not in tool_names:
+        raise RuntimeError(f"browser_list_tabs was not advertised by tools/list: {tool_names!r}")
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict):
+        raise RuntimeError(f"browser_list_tabs returned no structuredContent: {result!r}")
+    tabs = structured.get("tabs")
+    if not isinstance(tabs, list):
+        raise RuntimeError(f"browser_list_tabs returned invalid tabs payload: {structured!r}")
+    diagnostics = structured.get("diagnostics", [])
+    if not isinstance(diagnostics, list):
+        raise RuntimeError(
+            f"browser_list_tabs returned invalid diagnostics payload: {structured!r}"
+        )
+    if diagnostics:
+        raise RuntimeError(f"browser_list_tabs reported diagnostics: {diagnostics!r}")
+    if not tabs:
+        raise RuntimeError("browser_list_tabs returned no tabs from the live browser socket")
+    found_expected_tab = expected_tab_present(tabs, expected_tab_id)
+    if expected_tab_id is not None and not found_expected_tab:
+        raise RuntimeError(
+            "browser_list_tabs did not return the expected live tab id "
+            f"{expected_tab_id}; tabs_count={len(tabs)}"
+        )
+
+    return {
+        "client_path": str(client_path),
+        "tool_listed": True,
+        "expected_tab_id": expected_tab_id,
+        "expected_tab_present": found_expected_tab,
+        "tabs_count": len(tabs),
+        "diagnostics": diagnostics,
+    }
 
 
 class CursorFixtureHandler(http.server.BaseHTTPRequestHandler):
@@ -697,6 +852,26 @@ def browser_session_params() -> dict[str, object]:
     }
 
 
+def mcp_browser_session_params() -> dict[str, object]:
+    return {
+        "session_id": MCP_BROWSER_SESSION_ID,
+        "turn_id": MCP_BROWSER_TURN_ID,
+    }
+
+
+def create_mcp_visible_tab(client: socket.socket) -> tuple[dict[str, object], int]:
+    tab = native_result(
+        native_request(
+            client,
+            "createTab",
+            mcp_browser_session_params(),
+            request_id="client-create-tab-mcp-proof",
+        )
+    )
+    tab_id = require_tab_id(tab)
+    return cast(dict[str, object], tab), tab_id
+
+
 def create_attached_tab(client: socket.socket) -> tuple[dict[str, object], int]:
     tab = native_result(native_request(client, "createTab", browser_session_params()))
     tab_id = require_tab_id(tab)
@@ -709,9 +884,7 @@ def create_attached_tab(client: socket.socket) -> tuple[dict[str, object], int]:
         },
     )
     extension_execute_cdp(client, tab_id=tab_id, method="Page.enable")
-    if not isinstance(tab, dict):
-        raise RuntimeError(f"extension createTab returned unexpected result: {tab!r}")
-    return tab, tab_id
+    return cast(dict[str, object], tab), tab_id
 
 
 def extension_execute_cdp(
@@ -1232,6 +1405,9 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
     host_path = args.host_path.expanduser().resolve()
     if args.install_temp_native_manifest and not host_path.exists():
         raise FileNotFoundError(f"host binary not found: {host_path}")
+    mcp_client_path = args.mcp_client_path.expanduser().resolve()
+    if args.mcp_list_tabs_proof and not mcp_client_path.exists():
+        raise FileNotFoundError(f"MCP client binary not found: {mcp_client_path}")
     if args.keep_browser_open and not args.skip_turn_ended_proof:
         raise ValueError(
             "--keep-browser-open cannot prove turnEnded because stderr is read on exit"
@@ -1242,8 +1418,11 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
     with tempfile.TemporaryDirectory(prefix="sky-cua-chrome-host-smoke-") as temp:
         root = Path(temp)
         user_data_dir = root / "profile"
+        loaded_extension_dir = root / "extension"
         socket_dir = root / "sockets"
         sessions_dir = root / "sessions"
+        service_socket_path = root / "sky-cua-service.sock"
+        shutil.copytree(extension_dir, loaded_extension_dir)
         socket_dir.mkdir()
         sessions_dir.mkdir()
         proc: subprocess.Popen[str] | None = None
@@ -1253,7 +1432,7 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
             proc = launch_browser(
                 browser.command,
                 user_data_dir=user_data_dir,
-                extension_dir=extension_dir,
+                extension_dir=loaded_extension_dir,
                 socket_dir=socket_dir,
                 sessions_dir=sessions_dir,
             )
@@ -1294,6 +1473,28 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
                 hacker_news_proof = (
                     run_hacker_news_proof(client, artifact_dir) if args.hacker_news_proof else None
                 )
+                mcp_visible_tab = None
+                mcp_visible_tab_id = None
+                get_user_tabs_for_mcp_proof = None
+                mcp_list_tabs_proof = None
+                if args.mcp_list_tabs_proof:
+                    mcp_visible_tab, mcp_visible_tab_id = create_mcp_visible_tab(client)
+                    get_user_tabs_for_mcp_proof = native_request(
+                        client,
+                        "getUserTabs",
+                        mcp_browser_session_params(),
+                        request_id="client-get-user-tabs-mcp-proof",
+                    )
+                    get_user_tabs_for_mcp_proof = redacted_tab_list_proof(
+                        get_user_tabs_for_mcp_proof,
+                        expected_tab_id=mcp_visible_tab_id,
+                    )
+                    mcp_list_tabs_proof = run_mcp_list_tabs_proof(
+                        client_path=mcp_client_path,
+                        socket_dir=socket_dir,
+                        service_socket_path=service_socket_path,
+                        expected_tab_id=mcp_visible_tab_id,
+                    )
                 get_tabs_after_hacker_news = None
                 if hacker_news_proof is not None:
                     get_tabs_after_hacker_news = native_request(
@@ -1338,7 +1539,12 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
                 )
         except BaseException:
             if proc is not None:
-                terminate_browser(proc, args.keep_browser_open)
+                stderr_tail = terminate_browser(proc, args.keep_browser_open)[-4000:]
+                if stderr_tail:
+                    print(
+                        "browser/native-host stderr tail after smoke failure:\n" + stderr_tail,
+                        file=sys.stderr,
+                    )
             raise
         finally:
             manifest_restored = restore_manifest(manifest_restore)
@@ -1363,6 +1569,9 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
         "native_status_before": status_before,
         "client_to_extension_getInfo": get_info,
         "client_to_extension_getTabs": get_tabs,
+        "mcp_visible_tab": mcp_visible_tab,
+        "client_to_extension_getUserTabs_for_mcp_proof": get_user_tabs_for_mcp_proof,
+        "mcp_list_tabs_proof": mcp_list_tabs_proof,
         "cursor_proof": cursor_proof,
         "hacker_news_proof": hacker_news_proof,
         "client_to_extension_getTabs_after_hacker_news": get_tabs_after_hacker_news,

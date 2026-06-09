@@ -16,120 +16,16 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from _mcp_stdio import McpClient
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLIENT = REPO_ROOT / "bin" / "sky-cua-client"
 POINTER_FIXTURE = REPO_ROOT / "scripts" / "gtk_pointer_smoke_fixture.py"
 ZENITY_TITLE = "sky-cua zenity smoke"
 POINTER_TITLE = "sky-cua pointer smoke"
-
-
-@dataclass
-class McpResponse:
-    raw: dict[str, Any]
-
-    @property
-    def result(self) -> dict[str, Any]:
-        if "result" not in self.raw:
-            raise RuntimeError(
-                "MCP call did not return a result payload.\n"
-                f"response={json.dumps(self.raw, indent=2, sort_keys=True)}"
-            )
-        return self.raw["result"]
-
-
-class McpClient:
-    def __init__(
-        self,
-        argv: list[str],
-        *,
-        extra_env: dict[str, str] | None = None,
-        base_env: dict[str, str] | None = None,
-    ) -> None:
-        env = dict(os.environ if base_env is None else base_env)
-        env.setdefault("SKY_CUA_REPO_ROOT", str(REPO_ROOT))
-        if extra_env:
-            env.update(extra_env)
-        self.proc = subprocess.Popen(
-            argv,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-            cwd=REPO_ROOT,
-            env=env,
-        )
-
-    def close(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-
-    def initialize(self) -> None:
-        self.call_raw(
-            1,
-            "initialize",
-            {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "live-desktop-smoke", "version": "0.2.0"},
-            },
-        )
-        self.notify("notifications/initialized", {})
-
-    def tools_list(self) -> list[dict[str, Any]]:
-        response = self.call_raw(2, "tools/list", {})
-        return response.result["tools"]
-
-    def tools_call(self, request_id: int, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        response = self.call_raw(
-            request_id,
-            "tools/call",
-            {"name": name, "arguments": arguments},
-        )
-        return response.result
-
-    def notify(self, method: str, params: dict[str, Any]) -> None:
-        payload = {"jsonrpc": "2.0", "method": method, "params": params}
-        self._write_message(payload)
-
-    def call_raw(self, request_id: int, method: str, params: dict[str, Any]) -> McpResponse:
-        payload = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
-        self._write_message(payload)
-        return McpResponse(self._read_message())
-
-    def _write_message(self, payload: dict[str, Any]) -> None:
-        encoded = json.dumps(payload).encode("utf-8")
-        message = f"Content-Length: {len(encoded)}\r\n\r\n".encode("ascii") + encoded
-        assert self.proc.stdin is not None
-        self.proc.stdin.write(message)
-        self.proc.stdin.flush()
-
-    def _read_message(self) -> dict[str, Any]:
-        assert self.proc.stdout is not None
-        headers = {}
-        while True:
-            line = self.proc.stdout.readline()
-            if not line:
-                stderr = b""
-                if self.proc.stderr is not None:
-                    stderr = self.proc.stderr.read() or b""
-                raise RuntimeError(
-                    f"MCP client exited unexpectedly.\nstderr:\n{stderr.decode(errors='replace')}"
-                )
-            if line == b"\r\n":
-                break
-            name, _, value = line.decode("ascii").partition(":")
-            headers[name.strip().lower()] = value.strip()
-        length = int(headers["content-length"])
-        body = self.proc.stdout.read(length)
-        return json.loads(body.decode("utf-8"))
 
 
 def wait_for_app_snapshot(client: McpClient, title_hint: str, deadline: float) -> dict[str, Any]:

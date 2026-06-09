@@ -233,6 +233,7 @@ fn render_operator_response(
                 ok,
                 service_socket,
                 desktop_env,
+                ..
             },
         ) => Ok(RenderedResponse {
             payload: json!({

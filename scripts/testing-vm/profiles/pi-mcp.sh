@@ -42,10 +42,10 @@ fi
 
 # Deploy sky-cua skills for Pi
 mkdir -p "${HOME}/.pi/agent/skills"
-rm -rf "${HOME}/.pi/agent/skills/computer-use-workflows"
-cp -r "${remote_root}/skills/computer-use-workflows" "${HOME}/.pi/agent/skills/"
-rm -rf "${HOME}/.pi/agent/skills/sky-cua-isolated-daemon"
-cp -r "${remote_root}/skills/sky-cua-isolated-daemon" "${HOME}/.pi/agent/skills/"
+for skill in computer-use browser-use; do
+	rm -rf "${HOME}/.pi/agent/skills/${skill}"
+	cp -r "${remote_root}/skills/${skill}" "${HOME}/.pi/agent/skills/"
+done
 
 # Run smoke tests across available fixtures
 for fixture in zenity kdialog; do

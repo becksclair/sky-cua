@@ -1,0 +1,4 @@
+interface:
+  display_name: "Browser Use"
+  short_description: "Browser tab and page automation through sky-cua"
+  default_prompt: "Use the installed sky-cua browser MCP tools to operate browser tabs and pages, using browser snapshots/screenshots for proof and browser screenshot pixels for coordinates."
