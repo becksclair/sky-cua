@@ -1,0 +1,14 @@
+{
+  "name": "sky-cua",
+  "owner": {
+    "name": "Rebecca Clair",
+    "url": "https://github.com/becksclair"
+  },
+  "plugins": [
+    {
+      "name": "sky-cua",
+      "source": "./",
+      "description": "Cross-platform desktop and browser computer use runtime exposed over MCP, with bundled computer-use and browser-use skills."
+    }
+  ]
+}

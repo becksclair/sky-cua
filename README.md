@@ -46,6 +46,12 @@ packaged adapter around that runtime, not the runtime boundary itself.
 - app-action policy in `resources/app-instructions/index.json`, including the
   Kate-scoped `set_value` fallback
 - host-portable workflow guidance in `skills/computer-use/` and `skills/browser-use/`
+- agent-agnostic screenshot delivery: browser screenshots arrive as MCP image
+  content blocks plus persisted capture paths in one CSS-pixel coordinate
+  space, and `get_app_state` supports `screenshot_delivery: "inline"` for
+  hosts that cannot read files by path
+- Claude Code host support through `.claude-plugin/` (plugin + marketplace
+  manifests) and `scripts/install_mcp_server.py --host claude-code`
 - Windows compile/runtime foundation through `sky-cua-windows`, including
   top-level window fallback snapshots, GDI screenshots, and SendInput actions
 - Linux window targeting through a registry of KWin, X11, GNOME, COSMIC,

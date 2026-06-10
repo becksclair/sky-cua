@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Generic agent MCP smoke harness for sky-cua.
 
-Supports OpenCode and Pi against various desktop fixtures.
+Supports OpenCode, Pi, and Claude Code against various desktop fixtures.
 Usage:
   python3 scripts/live_agent_mcp_smoke.py --agent opencode --fixture zenity
   python3 scripts/live_agent_mcp_smoke.py --agent pi --fixture kdialog
+  python3 scripts/live_agent_mcp_smoke.py --agent claude --fixture zenity
 """
 
 from __future__ import annotations
@@ -102,7 +103,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generic agent MCP smoke harness.")
     parser.add_argument(
         "--agent",
-        choices=("opencode", "pi"),
+        choices=("opencode", "pi", "claude"),
         required=True,
         help="Agent to use for driving sky-cua.",
     )
@@ -121,7 +122,7 @@ def main() -> int:
 
     try:
         prompt = (
-            f"Use the sky_cua MCP tools. "
+            f"Use the sky-cua MCP tools (server name sky_cua, sky-cua, or computer-use). "
             f"Load the computer-use skill if available. "
             f"Find the dialog titled '{fixture['title']}', "
             f"read its text, {fixture['prompt_suffix']}, and confirm it is gone. "

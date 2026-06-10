@@ -162,10 +162,13 @@ def version_from_tag(tag: str) -> str:
 
 
 def update_plugin_manifest_version(bundle_root: Path, version: str) -> None:
-    manifest_path = bundle_root / ".codex-plugin" / "plugin.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["version"] = version
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    for manifest_path in (
+        bundle_root / ".codex-plugin" / "plugin.json",
+        bundle_root / ".claude-plugin" / "plugin.json",
+    ):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["version"] = version
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
 def merge_runtime_artifacts(bundle_root: Path, artifacts_root: Path) -> None:
@@ -371,6 +374,8 @@ def _terminate_process(pid: int) -> None:
 
 def ensure_bundle_structure(root: Path) -> None:
     required = [
+        root / ".claude-plugin" / "plugin.json",
+        root / ".claude-plugin" / "marketplace.json",
         root / ".codex-plugin" / "plugin.json",
         root / ".mcp.json",
         root / "skills" / "computer-use" / "SKILL.md",

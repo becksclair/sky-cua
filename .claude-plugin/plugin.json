@@ -1,0 +1,27 @@
+{
+  "name": "sky-cua",
+  "description": "Cross-platform desktop and browser computer use: native app discovery, accessibility trees, screenshots, input actions, window targeting, and Chrome-family browser automation through MCP.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Rebecca Clair",
+    "url": "https://github.com/becksclair"
+  },
+  "homepage": "https://github.com/becksclair/sky-cua",
+  "repository": "https://github.com/becksclair/sky-cua",
+  "license": "MIT",
+  "keywords": [
+    "computer-use",
+    "browser-use",
+    "desktop-control",
+    "mcp",
+    "linux",
+    "windows",
+    "wayland"
+  ],
+  "mcpServers": {
+    "sky-cua": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/sky-cua-client",
+      "args": ["mcp"]
+    }
+  }
+}

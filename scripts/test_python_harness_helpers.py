@@ -529,6 +529,7 @@ def test_build_bundle_inputs_are_selected_from_git_index(
 
 
 def test_bundle_source_paths_include_standard_optional_plugin_roots() -> None:
+    assert Path(".claude-plugin") in build_plugin.BUNDLE_SOURCE_PATHS
     assert Path(".codex-plugin") in build_plugin.BUNDLE_SOURCE_PATHS
     assert Path(".app.json") in build_plugin.BUNDLE_SOURCE_PATHS
     assert Path("assets") in build_plugin.BUNDLE_SOURCE_PATHS
@@ -540,6 +541,8 @@ def test_worktree_bundle_dirs_include_untracked_runtime_resources() -> None:
     assert (
         Path("docs/operations/testing-vm-desktop-smokes.md") in build_plugin.WORKTREE_BUNDLE_FILES
     )
+    assert Path(".claude-plugin/plugin.json") in build_plugin.WORKTREE_BUNDLE_FILES
+    assert Path(".claude-plugin/marketplace.json") in build_plugin.WORKTREE_BUNDLE_FILES
     assert Path("resources/chrome-extension") in build_plugin.WORKTREE_BUNDLE_DIRS
     assert Path("resources/kwin") in build_plugin.WORKTREE_BUNDLE_DIRS
     assert Path("skills/computer-use") in build_plugin.WORKTREE_BUNDLE_DIRS
@@ -1564,6 +1567,15 @@ def write_minimal_bundle_sources(root: Path) -> None:
         json.dumps({"version": "0.1.0"}),
         encoding="utf-8",
     )
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "sky-cua", "version": "0.1.0"}),
+        encoding="utf-8",
+    )
+    (root / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"name": "sky-cua", "plugins": []}),
+        encoding="utf-8",
+    )
     (root / ".mcp.json").write_text("{}", encoding="utf-8")
     (root / "bin").mkdir(parents=True, exist_ok=True)
     (root / "bin" / "sky-cua-client").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -1594,6 +1606,8 @@ def write_minimal_bundle_sources(root: Path) -> None:
 
 def tracked_minimal_bundle_files() -> list[Path]:
     return [
+        Path(".claude-plugin/plugin.json"),
+        Path(".claude-plugin/marketplace.json"),
         Path(".codex-plugin/plugin.json"),
         Path("bin/sky-cua-client"),
         Path("bin/sky-cua-service"),

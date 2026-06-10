@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -44,12 +45,36 @@ def run_agent(
         ]
     elif agent == "pi":
         argv = ["pi", "-p", prompt]
+    elif agent == "claude":
+        claude_bin = shutil.which("claude") or shutil.which("openclaude")
+        if claude_bin is None:
+            raise FileNotFoundError("neither claude nor openclaude is on PATH")
+        model = os.environ.get("SKY_CUA_SMOKE_CLAUDE_MODEL", "claude-sonnet-4-6")
+        argv = [
+            claude_bin,
+            "--dangerously-skip-permissions",
+            "--model",
+            model,
+            "-p",
+            prompt,
+        ]
     else:
         raise ValueError(f"unknown agent: {agent}")
 
     # Forward the Fireworks API key when available so Pi can use the
     # same model endpoint as OpenCode (firepass/accounts/fireworks/...).
     env = os.environ.copy()
+    if agent == "claude":
+        # Nested Claude CLI runs must not inherit the calling session's
+        # markers; they make the child expect host-provided credentials and
+        # fail with "Not logged in" when this harness runs inside another
+        # Claude session.
+        env = {
+            key: value
+            for key, value in env.items()
+            if not key.startswith("CLAUDE_CODE_")
+            and key not in {"CLAUDECODE", "CLAUDE_AGENT_SDK_VERSION", "CLAUDE_EFFORT"}
+        }
     fireworks_key = os.environ.get("FIREWORKS_API_KEY")
     if fireworks_key:
         env["FIREWORKS_API_KEY"] = fireworks_key

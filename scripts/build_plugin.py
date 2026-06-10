@@ -28,6 +28,7 @@ from _plugin_bundle import (
 )
 
 BUNDLE_SOURCE_PATHS = [
+    Path(".claude-plugin"),
     Path(".codex-plugin"),
     Path(".app.json"),
     Path("assets"),
@@ -42,6 +43,8 @@ OPENAI_BUNDLED_PLUGIN_NAMES = ("browser-use", "chrome")
 OPENAI_BUNDLED_MARKETPLACE_PLUGIN_NAMES = ("browser-use", "chrome", "computer-use")
 NODE_REPL_NAME = "node_repl"
 WORKTREE_BUNDLE_FILES = (
+    Path(".claude-plugin") / "plugin.json",
+    Path(".claude-plugin") / "marketplace.json",
     Path("resources") / "chrome_preflight.py",
     Path("docs") / "operations" / "isolated-daemon-smokes.md",
     Path("docs") / "operations" / "plugin-release.md",

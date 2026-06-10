@@ -6,6 +6,7 @@ and emits a host-ready MCP server configuration with absolute paths.
 
 Supported host targets:
   - opencode        OpenCode via opencode.json
+  - claude-code     Claude Code via `claude mcp add-json` and ~/.claude/skills
   - claude-desktop  Claude Desktop via claude_desktop_config.json
   - pi              Pi via mcp.json
   - generic         Raw .mcp.json for manual wiring (default)
@@ -46,6 +47,7 @@ BROWSER_SELECTION_ENV = "SKY_CUA_BROWSER"
 SKY_CUA_SKILLS = ("computer-use", "browser-use")
 DEFAULT_OPENCLAW_DIR = Path.home() / ".openclaw"
 OPENCLAW_MCP_SET_TIMEOUT_SECONDS = 30
+CLAUDE_MCP_ADD_TIMEOUT_SECONDS = 30
 
 
 def current_platform() -> str:
@@ -279,6 +281,102 @@ def install_claude_desktop(target_dir: Path, client_path: Path) -> Path:
     return path
 
 
+def install_claude_code(
+    target_dir: Path,
+    client_path: Path,
+    claude_config_dir: Path | None = None,
+) -> Path:
+    """Register sky-cua with Claude Code and copy skills into ~/.claude/skills.
+
+    Claude Code stdio MCP servers inherit the parent process environment, so the
+    config only pins SKY_CUA_REPO_ROOT plus any explicit browser selection.
+    """
+    server: dict[str, object] = {
+        "type": "stdio",
+        "command": str(client_path),
+        "args": ["mcp"],
+        "env": {
+            "SKY_CUA_REPO_ROOT": str(REPO_ROOT),
+            **browser_selection_environment(),
+        },
+    }
+    # Claude Code reserves the MCP server name "computer-use" for its native
+    # integration, so the Claude-facing registration uses "sky-cua".
+    snippet = {"mcpServers": {"sky-cua": server}}
+    path = target_dir / "claude_code_mcp.json"
+    write_text_atomically(path, json.dumps(snippet, indent=2) + "\n")
+
+    claude_dir = (claude_config_dir or (Path.home() / ".claude")).expanduser()
+    if claude_dir.exists():
+        install_sky_cua_skills(claude_dir / "skills")
+        print(f"Installed sky-cua skills into {claude_dir / 'skills'}")
+
+    claude_bin = shutil.which("claude")
+    if claude_bin is None:
+        print(
+            "claude CLI not found on PATH; register manually with:\n"
+            f"  claude mcp add-json --scope user sky-cua "
+            f"{shlex.quote(json.dumps(server, separators=(',', ':')))}"
+        )
+        return path
+
+    register_claude_code_server(claude_bin, server, path)
+    return path
+
+
+def register_claude_code_server(
+    claude_bin: str,
+    server: dict[str, object],
+    snippet_path: Path,
+) -> None:
+    """Register (or re-register) the sky-cua server at user scope.
+
+    `claude mcp add-json` refuses existing names, so updates remove the stale
+    entry first; Claude Code respawns the stdio server lazily on next use.
+    """
+    add_command = [
+        claude_bin,
+        "mcp",
+        "add-json",
+        "--scope",
+        "user",
+        "sky-cua",
+        json.dumps(server, separators=(",", ":")),
+    ]
+    for attempt in ("add", "replace"):
+        try:
+            subprocess.run(
+                add_command,
+                check=True,
+                timeout=CLAUDE_MCP_ADD_TIMEOUT_SECONDS,
+                capture_output=True,
+            )
+            verb = "Registered" if attempt == "add" else "Re-registered"
+            print(f"{verb} MCP server sky-cua with Claude Code (user scope).")
+            return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            stderr = ""
+            if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+                stderr = error.stderr.decode(errors="replace").strip()
+            if attempt == "add" and "already exists" in stderr:
+                remove = subprocess.run(
+                    [claude_bin, "mcp", "remove", "--scope", "user", "sky-cua"],
+                    check=False,
+                    timeout=CLAUDE_MCP_ADD_TIMEOUT_SECONDS,
+                    capture_output=True,
+                )
+                if remove.returncode == 0:
+                    continue
+                stderr = remove.stderr.decode(errors="replace").strip()
+            detail = f": {stderr}" if stderr else ""
+            print(
+                f"warning: claude mcp registration failed ({error}{detail}); "
+                f"merge {snippet_path} into your Claude Code MCP config manually.",
+                file=sys.stderr,
+            )
+            return
+
+
 def install_pi(
     target_dir: Path,
     client_path: Path,
@@ -445,6 +543,13 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
         print("  2. Run: opencode mcp list")
         print("  3. Run: opencode run 'Use the sky_cua MCP tool list_apps'")
         print("  4. Restart or reload the OpenCode session if it does not reconnect automatically")
+    elif host == "claude-code":
+        print("\nNext steps for Claude Code:")
+        print(f"  1. Snippet written for inspection: {config_path}")
+        print("  2. If the claude CLI was found, the sky-cua server was registered at user scope;")
+        print("     otherwise run the printed claude mcp add-json command")
+        print("  3. If ~/.claude exists, sky-cua skills were copied into ~/.claude/skills")
+        print("  4. Run: claude mcp list, then ask Claude to use the sky-cua list_apps tool")
     elif host == "claude-desktop":
         print("\nNext steps for Claude Desktop:")
         print(f"  1. Merge {config_path} into your Claude Desktop config:")
@@ -487,7 +592,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--host",
-        choices=("generic", "opencode", "claude-desktop", "pi", "openclaw"),
+        choices=("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw"),
         default="generic",
         help="Host-specific MCP config format to emit.",
     )
@@ -531,6 +636,8 @@ def main() -> int:
 
     if args.host == "opencode":
         config_path = install_opencode(target_dir, client_path)
+    elif args.host == "claude-code":
+        config_path = install_claude_code(target_dir, client_path)
     elif args.host == "claude-desktop":
         config_path = install_claude_desktop(target_dir, client_path)
     elif args.host == "pi":
