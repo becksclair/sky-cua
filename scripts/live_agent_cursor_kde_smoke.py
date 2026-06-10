@@ -26,6 +26,15 @@ from typing import Any
 
 from PIL import Image, ImageChops
 
+import _kwin_effect
+from _kwin_effect import (
+    KWIN_EFFECT_CURSOR_ASSET,
+    KWIN_EFFECT_ID,
+    compute_effect_build_id,
+    parse_kwin_effect_list,
+    set_effect_enabled_config,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = REPO_ROOT / "artifacts" / "codex-e2e" / "agent-cursor-kde"
 SERVICE_BIN = Path(
@@ -37,11 +46,6 @@ OVERLAY_HOST_BIN = Path(
     )
 )
 POINTER_FIXTURE = REPO_ROOT / "scripts" / "gtk_pointer_smoke_fixture.py"
-KWIN_EFFECT_SOURCE_DIR = REPO_ROOT / "resources" / "kwin" / "effects" / "sky-cua-agent-cursor"
-KWIN_EFFECT_CURSOR_ASSET = (
-    REPO_ROOT / "crates" / "sky-cua-overlay-host" / "assets" / "cursor-chat.png"
-)
-KWIN_EFFECT_ID = "sky-cua-agent-cursor"
 MODE_ARTIFACT_SLUGS = {
     "synthetic": "syn",
     "layer-shell-debug-visible": "vis",
@@ -956,23 +960,17 @@ def build_and_install_kwin_effect(
     build_dir = artifact_dir / "kwin-effect-build"
     install_prefix = install_prefix or Path.home() / ".local"
     subprocess.run(
-        [
-            "cmake",
-            "-S",
-            str(KWIN_EFFECT_SOURCE_DIR),
-            "-B",
-            str(build_dir),
-            "-G",
-            "Ninja",
-            f"-DCMAKE_INSTALL_PREFIX={install_prefix}",
-            f"-DSKY_CUA_CURSOR_ASSET={KWIN_EFFECT_CURSOR_ASSET}",
-        ],
+        _kwin_effect.cmake_configure_command(
+            build_dir,
+            install_prefix=install_prefix,
+            build_id=compute_effect_build_id(),
+        ),
         cwd=REPO_ROOT,
         check=True,
     )
-    subprocess.run(["cmake", "--build", str(build_dir)], cwd=REPO_ROOT, check=True)
+    subprocess.run(_kwin_effect.cmake_build_command(build_dir), cwd=REPO_ROOT, check=True)
     subprocess.run(
-        [*(install_command_prefix or []), "cmake", "--install", str(build_dir)],
+        _kwin_effect.cmake_install_command(build_dir, sudo_cmd=install_command_prefix or []),
         cwd=REPO_ROOT,
         check=True,
     )
@@ -1411,58 +1409,35 @@ def process_summary(completed: subprocess.CompletedProcess[str]) -> dict[str, An
 
 
 def disable_kwin_effect_config() -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "kwriteconfig6",
-            "--file",
-            "kwinrc",
-            "--group",
-            "Plugins",
-            "--key",
-            f"{KWIN_EFFECT_ID}Enabled",
-            "false",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    # The smoke disables kwinrc persistence on purpose so effect loading stays
+    # under explicit loadEffect control; the deploy lane enables it instead.
+    return set_effect_enabled_config(False)
+
+
+def _raise_for_check(result: subprocess.CompletedProcess[str]) -> subprocess.CompletedProcess[str]:
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode, result.args, output=result.stdout, stderr=result.stderr
+        )
+    return result
 
 
 def run_kwin_reconfigure(*, check: bool) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["qdbus6", "org.kde.KWin", "/KWin", "reconfigure"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=check,
-    )
+    result = _kwin_effect.run_kwin_reconfigure()
+    return _raise_for_check(result) if check else result
 
 
 def run_kwin_effect_command(method: str, *, check: bool) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "qdbus6",
-            "org.kde.KWin",
-            "/Effects",
-            f"org.kde.kwin.Effects.{method}",
-            KWIN_EFFECT_ID,
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=check,
-    )
+    result = _kwin_effect.run_kwin_effect_command(method)
+    return _raise_for_check(result) if check else result
 
 
 def kwin_effect_loaded() -> bool:
-    status = run_kwin_effect_command("isEffectLoaded", check=False)
-    return status.stdout.strip().lower() == "true"
+    return _kwin_effect.kwin_effect_loaded()
 
 
 def kwin_effect_supported() -> bool:
-    status = run_kwin_effect_command("isEffectSupported", check=False)
-    return status.stdout.strip().lower() == "true"
+    return _kwin_effect.kwin_effect_supported()
 
 
 def kwin_effect_discovery() -> dict[str, Any]:
@@ -1484,24 +1459,7 @@ def kwin_effect_discovery() -> dict[str, Any]:
 
 
 def run_kwin_effects_property(property_name: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "qdbus6",
-            "org.kde.KWin",
-            "/Effects",
-            "org.freedesktop.DBus.Properties.Get",
-            "org.kde.kwin.Effects",
-            property_name,
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def parse_kwin_effect_list(stdout: str) -> list[str]:
-    return [line.strip() for line in stdout.splitlines() if line.strip()]
+    return _kwin_effect.run_kwin_effects_property(property_name)
 
 
 def prune_empty_parent(effect_id: str) -> None:

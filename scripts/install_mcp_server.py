@@ -26,6 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _kwin_effect import deploy_kwin_effect
 from _plugin_bundle import (
     LINUX_ARM64,
     LINUX_X64,
@@ -509,6 +510,14 @@ def main() -> int:
             "so MCP hosts respawn the updated binaries on the next tool call."
         ),
     )
+    parser.add_argument(
+        "--kwin-effect",
+        action="store_true",
+        help=(
+            "Also build, install (sudo cmake --install), and reload the sky-cua "
+            "KWin agent-cursor effect (Linux/KDE only)."
+        ),
+    )
     args = parser.parse_args()
 
     target_dir = args.target_dir.resolve()
@@ -541,6 +550,22 @@ def main() -> int:
     if args.restart_runtime:
         restart_runtime_processes(target_dir)
         print(f"Stopped installed sky-cua runtime processes rooted under: {target_dir}")
+
+    if args.kwin_effect:
+        outcome = deploy_kwin_effect(build_dir=target_dir / "kwin-effect-build")
+        if outcome.session_restart_required:
+            if outcome.notification_delivered:
+                print(
+                    "KWin effect updated; the new build activates after the next "
+                    "Plasma session restart (a desktop notification was shown)."
+                )
+            else:
+                print(
+                    "KWin effect updated; the new build activates after the next "
+                    "Plasma session restart. The desktop notification could not "
+                    "be delivered - tell the user to restart their session when "
+                    "convenient."
+                )
 
     print_next_steps(args.host, target_dir, client_path, config_path)
     return 0

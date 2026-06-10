@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from _kwin_effect import deploy_kwin_effect
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DIST_PLUGIN_ROOT,
@@ -38,6 +39,14 @@ def main() -> int:
         action="store_true",
         help="Symlink the bundle into the debug cache instead of copying it.",
     )
+    parser.add_argument(
+        "--kwin-effect",
+        action="store_true",
+        help=(
+            "Also build, install (sudo cmake --install), and reload the sky-cua "
+            "KWin agent-cursor effect (Linux/KDE only)."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.no_build:
@@ -54,6 +63,25 @@ def main() -> int:
     update_codex_config(config_path, disabled_plugin_ids=[RELEASE_PLUGIN_ID])
     print(f"installed_path={destination}")
     print(f"config_path={config_path}")
+
+    # This lane only stops the Codex cache runtime. The installed-MCP runtime
+    # used by Claude Code and other hosts is restarted through
+    # `install_mcp_server.py --restart-runtime`.
+    if args.kwin_effect:
+        outcome = deploy_kwin_effect(build_dir=destination.parent / "kwin-effect-build")
+        if outcome.session_restart_required:
+            if outcome.notification_delivered:
+                print(
+                    "KWin effect updated; the new build activates after the next "
+                    "Plasma session restart (a desktop notification was shown)."
+                )
+            else:
+                print(
+                    "KWin effect updated; the new build activates after the next "
+                    "Plasma session restart. The desktop notification could not "
+                    "be delivered - tell the user to restart their session when "
+                    "convenient."
+                )
     return 0
 
 
