@@ -11,14 +11,53 @@ use crate::portal::eis_input::{
 };
 use crate::portal::eis_keymap::{keysym_for_char, keysym_for_key_name};
 use crate::portal::remote_desktop::{
-    MouseButton, PORTAL_EIS_INPUT_FALLBACK, PORTAL_EIS_INPUT_USED, PORTAL_SESSION_REBUILT,
-    PortalLifecycleEvent, RemoteDesktopSessionManager,
+    MouseButton, PORTAL_EIS_INPUT_FALLBACK, PORTAL_EIS_INPUT_USED, PORTAL_EIS_POINTER_DISABLED,
+    PORTAL_SESSION_REBUILT, PortalLifecycleEvent, RemoteDesktopSessionManager,
 };
 use crate::virtual_input::{LinuxVirtualInput, virtual_input_keyboard_available};
 use crate::x11::input_xtest;
 
+const PORTAL_EIS_ENV: &str = "SKY_CUA_PORTAL_EIS";
+
+/// Whether RemoteDesktop EIS should drive pointer-positioned actions.
+///
+/// This is a diagnostic knob for isolating compositor input-lane behavior;
+/// both the EIS and legacy NotifyPointer* lanes dispatch clicks at the
+/// requested coordinates on the proven compositors. Keyboard EIS is never
+/// gated here: key events carry no coordinates. Note that on KWin with
+/// fractional scaling and panels, the *visible* hardware cursor can render
+/// offset by the work-area origin during RemoteDesktop input on both lanes
+/// while input dispatch stays accurate; the agent cursor overlay marks the
+/// true input position.
+fn eis_pointer_input_enabled() -> bool {
+    eis_pointer_input_enabled_from(std::env::var(PORTAL_EIS_ENV).ok().as_deref())
+}
+
+fn eis_pointer_input_enabled_from(mode: Option<&str>) -> bool {
+    !matches!(
+        mode.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("never" | "off" | "0" | "false")
+    )
+}
+
 impl RemoteDesktopSessionManager {
+    async fn push_eis_pointer_disabled_event(&self, action: &str) {
+        self.push_lifecycle_event(PortalLifecycleEvent {
+            code: PORTAL_EIS_POINTER_DISABLED,
+            message: format!(
+                "EIS pointer {action} skipped by session policy; using legacy RemoteDesktop pointer calls."
+            ),
+            details: None,
+        })
+        .await;
+    }
+
     pub async fn click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
+        if !eis_pointer_input_enabled() {
+            self.push_eis_pointer_disabled_event("click").await;
+            self.pointer_move_absolute(x, y).await?;
+            return self.click(button).await;
+        }
         let action = EisAction::Click { x, y, button };
         match self.run_eis_action_with_retry(action).await {
             Ok(details) => {
@@ -56,6 +95,10 @@ impl RemoteDesktopSessionManager {
     }
 
     pub async fn drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
+        if !eis_pointer_input_enabled() {
+            self.push_eis_pointer_disabled_event("drag").await;
+            return self.legacy_drag(from, to).await;
+        }
         let action = EisAction::Drag { from, to };
         match self.run_eis_action_with_retry(action).await {
             Ok(details) => {
@@ -86,21 +129,25 @@ impl RemoteDesktopSessionManager {
                     details: Some(eis_fallback_details(&failure)),
                 })
                 .await;
-                self.pointer_move_absolute(from.0, from.1).await?;
-                self.pointer_button(MouseButton::Left, true).await?;
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                let result = async {
-                    self.pointer_move_absolute(to.0, to.1).await?;
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                    self.pointer_button(MouseButton::Left, false).await
-                }
-                .await;
-                if result.is_err() {
-                    let _ = self.pointer_button(MouseButton::Left, false).await;
-                }
-                result
+                self.legacy_drag(from, to).await
             }
         }
+    }
+
+    async fn legacy_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
+        self.pointer_move_absolute(from.0, from.1).await?;
+        self.pointer_button(MouseButton::Left, true).await?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let result = async {
+            self.pointer_move_absolute(to.0, to.1).await?;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.pointer_button(MouseButton::Left, false).await
+        }
+        .await;
+        if result.is_err() {
+            let _ = self.pointer_button(MouseButton::Left, false).await;
+        }
+        result
     }
 
     pub async fn scroll_vertical_at(
@@ -110,6 +157,15 @@ impl RemoteDesktopSessionManager {
         delta_y: Option<f64>,
         steps: i32,
     ) -> Result<(), BackendError> {
+        if !eis_pointer_input_enabled() {
+            self.push_eis_pointer_disabled_event("scroll").await;
+            self.pointer_move_absolute(x, y).await?;
+            return if let Some(delta_y) = delta_y {
+                self.scroll_vertical_smooth(delta_y).await
+            } else {
+                self.scroll_vertical_discrete(steps).await
+            };
+        }
         let action = EisAction::ScrollVertical {
             x,
             y,
@@ -517,5 +573,26 @@ impl RemoteDesktopSessionManager {
         }
         session.eis_worker = Some(worker.clone());
         Ok(worker)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eis_pointer_input_enabled_from;
+
+    #[test]
+    fn eis_pointer_policy_defaults_to_enabled() {
+        assert!(eis_pointer_input_enabled_from(None));
+        assert!(eis_pointer_input_enabled_from(Some("auto")));
+        assert!(eis_pointer_input_enabled_from(Some("always")));
+        assert!(eis_pointer_input_enabled_from(Some("unknown-value")));
+    }
+
+    #[test]
+    fn eis_pointer_policy_disables_on_explicit_opt_out() {
+        assert!(!eis_pointer_input_enabled_from(Some("never")));
+        assert!(!eis_pointer_input_enabled_from(Some(" off ")));
+        assert!(!eis_pointer_input_enabled_from(Some("0")));
+        assert!(!eis_pointer_input_enabled_from(Some("FALSE")));
     }
 }

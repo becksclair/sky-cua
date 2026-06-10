@@ -80,6 +80,7 @@ pub(crate) const PORTAL_SESSION_REBUILT: &str = "PortalSessionRebuilt";
 pub(crate) const PORTAL_SESSION_TOKEN_ROTATED: &str = "PortalSessionTokenRotated";
 pub(crate) const PORTAL_EIS_INPUT_USED: &str = "PortalEisInputUsed";
 pub(crate) const PORTAL_EIS_INPUT_FALLBACK: &str = "PortalEisInputFallback";
+pub(crate) const PORTAL_EIS_POINTER_DISABLED: &str = "PortalEisPointerDisabled";
 pub(crate) const EIS_POINT_OUTSIDE_REGION_PREFIX: &str = "EIS absolute point";
 
 pub async fn version() -> Result<u32, BackendError> {
