@@ -7,7 +7,7 @@ These patterns are adapted from the bundled macOS Computer Use guidance and expa
 The model should not wait for a perfect control tree before it does anything useful.
 
 - take a fresh screenshot-backed state snapshot first
-- if a `screenshot_path` is available, inspect it with `view_image`
+- if a `screenshot_path` is available, view that image file with your host's file-reading or image-viewing tool; request `screenshot_delivery: "inline"` on `get_app_state` if your session cannot open files by path
 - use the tree for names, bounds, values, text readback, and candidate regions when it exists
 - after initial orientation, prefer compact app-state snapshots for repeated action verification; keep full snapshots for debugging or when verbose element descriptions are actually needed
 - if the tree is sparse, fallback-only, or plainly wrong, use the screenshot to decide the target directly
@@ -15,7 +15,7 @@ The model should not wait for a perfect control tree before it does anything use
 - treat fallback regions as visual anchors that narrow the search space, not as guaranteed widgets
 - in fallback-heavy apps, take one action at a time and reacquire a fresh screenshot before the next click, keypress, scroll, drag, or text entry
 - when the target is one window inside a full desktop screenshot, visually narrow your attention to that window but keep coordinate actions in the current screenshot pixel coordinate space
-- for `click` and `drag`, explicit x/y coordinates are screenshot pixels from the snapshot image; the plugin converts them to desktop or stream coordinates before moving the pointer
+- for `click` and `drag`, explicit x/y coordinates are screenshot pixels from the snapshot image; the runtime converts them to desktop or stream coordinates before moving the pointer
 
 That is especially important for custom media apps, games, design tools, and native Wayland surfaces that expose only partial accessibility coverage.
 

@@ -20,7 +20,7 @@ Treat the accessibility tree as structure, not gospel.
 - Use `doctor` when readiness is unclear, especially after missing screenshots, empty accessibility trees, portal failures, or unavailable input/window targeting.
 - On Linux, if a detached launch reports unsupported environment, missing capture/input, helper-command failures, or a thin app list, inspect `doctor.session_env` and snapshot diagnostics for `SessionEnvRepaired` before deciding the desktop is unavailable.
 - Use `list_windows`, `focused_window`, and `activate_window` when the task is about choosing a desktop window, terminal, or app instance rather than interacting with a control inside the current app.
-- If `get_app_state` gives you a `screenshot_path`, inspect it with `view_image` before you commit to a target in a murky UI.
+- If `get_app_state` gives you a `screenshot_path`, view that image file with your host's file-reading or image-viewing tool before you commit to a target in a murky UI. If your session cannot read local files by path, pass `screenshot_delivery: "inline"` to `get_app_state` so the screenshot is attached to the result directly.
 - Start from the screenshot. The tree is optional structure, not a prerequisite for action.
 - Use full `get_app_state` for discovery and debugging. Once the target app/window is known, prefer `detail: "compact"` for repeated loops. Use `capture_screen: "never"` for structure-only semantic passes, `capture_screen: "always"` when a fresh visual frame is required, and the default `capture_screen: "if_changed"` otherwise.
 - If the tree is thin, missing, or fallback-only, use the screenshot to decide where to click, drag, scroll, or type.
@@ -55,7 +55,7 @@ Treat the accessibility tree as structure, not gospel.
    - treat `workspace` as backend-native metadata, not a portable targeting field
 
 4. **Use screenshots or visual confirmation to verify the target**
-   - inspect the current `screenshot_path` with `view_image` when precise on-screen targeting matters
+   - view the image at the current `screenshot_path` when precise on-screen targeting matters; request `screenshot_delivery: "inline"` if you cannot open files by path
    - confirm that the intended control is visibly present
    - before text entry, confirm the focused or target field and whether it already contains text
    - confirm dialog state, tab selection, and transient UI that may lag behind the tree

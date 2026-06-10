@@ -91,3 +91,25 @@ not a production-equivalent proof on a running desktop session.
   deployment path.
 - This finding is referenced from
   `docs/features/agent-cursor-overlay.md` under "Known limitations".
+
+## Follow-up (2026-06-10)
+
+Local deploy tooling now automates the system install and update path:
+`scripts/install_kwin_effect.py` stamps builds with a content hash exposed
+through the effect's `BuildId` DBus slot and attempts a hot
+`unloadEffect`/`reconfigure`/`loadEffect` cycle. Verified live on KWin 6.6.5
+(2026-06-10): a freshly installed effect hot-loads through `loadEffect`
+without any restart, but a replaced `.so` does not — `unloadEffect` followed
+by `loadEffect` reloads the old binary from memory, so effect updates only
+activate after a Plasma session restart. The deploy notifies the user and
+never restarts KWin itself.
+
+## Restart caveat (2026-06-10)
+
+Restarting `plasma-kwin_wayland.service` is unsafe from tooling. Verified
+live: one restart survived (reconnecting Wayland clients), a later one took
+the entire session down, and restarts can bring KWin back as a compositor
+without re-registering the `org.kde.KWin` DBus name (only
+`org.kde.KWinWrapper` remains), leaving the effects/scripting DBus surface
+unreachable until another restart reclaims it. Effect updates therefore
+notify the user to restart the Plasma session at their convenience.

@@ -1,8 +1,8 @@
 # sky-cua roadmap
 
-This file is the curated index of active workstreams. For live session state,
-see [`CONTINUITY.md`](CONTINUITY.md). For durable behavior, see
-[`docs/features/`](docs/features/). For active forward-looking design, see
+This file is the curated index of active workstreams. For durable behavior,
+see [`docs/features/`](docs/features/). For tactical memory, see
+[`NOTES.md`](NOTES.md). For active forward-looking design, see
 [`plans/`](plans/).
 
 Closed boxes link to the feature doc that describes the shipped behavior.
@@ -19,6 +19,7 @@ Open boxes link to the active ExecPlan that owns the work.
 - [x] Linux virtual input (`LinuxVirtualInput` backend) — [`docs/features/linux-virtual-input.md`](docs/features/linux-virtual-input.md)
 - [x] Native agent cursor overlay — [`docs/features/agent-cursor-overlay.md`](docs/features/agent-cursor-overlay.md)
 - [x] Compositor cursor hiding (KWin / X11 / GNOME / Hyprland / patched COSMIC) — [`docs/features/compositor-cursor-hiding.md`](docs/features/compositor-cursor-hiding.md)
+  - [x] Local KWin effect deploy/update tooling (`install_kwin_effect.py`, `--kwin-effect` deploy flags, BuildId convergence, session-restart notification — tooling never restarts KWin)
   - [x] Unpatched COSMIC transparent-Xcursor mode (VM-only fallback)
   - [ ] Long-term unpatched COSMIC path or accepted upstream integration
 - [ ] Wayland fallback vision anchors — [`plans/wayland_fallback_vision_anchors.md`](plans/wayland_fallback_vision_anchors.md)
@@ -58,6 +59,9 @@ Open boxes link to the active ExecPlan that owns the work.
 
 - [x] Codex Desktop compatibility (one active `computer-use` server, Browser Use companion, native-host preflight) — [`docs/features/codex-desktop-compat.md`](docs/features/codex-desktop-compat.md)
 - [x] OpenCode/Pi MCP host smoke parity
+- [x] Claude Code host support (plugin manifest + marketplace, `--host claude-code` installer, `~/.claude/skills` sync) — [`docs/features/claude-code-host.md`](docs/features/claude-code-host.md)
+- [x] Agent-agnostic screenshot delivery (browser MCP image blocks + persisted capture paths, `get_app_state screenshot_delivery: inline`, one CSS-pixel browser coordinate space) — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
+  - [ ] Re-run the VM smoke matrix for the CSS-pixel browser contract (only the live KDE host is verified so far)
 - [x] First-class browser MCP tools for `user_chrome` — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [x] Explicit host opt-in gate for OpenCode/Pi, with Codex Desktop kept on the companion Browser Use path
   - [x] Real user-tab listing, session-owned tab creation, existing-tab claiming, and Brave/Chrome/Chromium socket selection
