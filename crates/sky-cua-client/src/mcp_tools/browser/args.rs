@@ -117,6 +117,29 @@ pub(crate) fn parse_browser_scroll(arguments: &Value) -> Result<(f64, f64, f64, 
     Ok((delta_x, delta_y, x, y))
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BrowserSnapshotOptions {
+    pub(crate) element_offset: Option<usize>,
+    pub(crate) element_limit: Option<usize>,
+    pub(crate) element_query: Option<String>,
+}
+
+pub(crate) fn parse_browser_snapshot_options(arguments: &Value) -> Result<BrowserSnapshotOptions> {
+    Ok(BrowserSnapshotOptions {
+        element_offset: parse_optional_usize(
+            arguments,
+            "element_offset",
+            "browser_snapshot element_offset",
+        )?,
+        element_limit: parse_optional_usize(
+            arguments,
+            "element_limit",
+            "browser_snapshot element_limit",
+        )?,
+        element_query: parse_optional_string_argument(arguments, "element_query")?,
+    })
+}
+
 fn parse_optional_number(arguments: &Value, name: &str, default: f64, label: &str) -> Result<f64> {
     let Some(raw_value) = arguments.get(name) else {
         return Ok(default);
@@ -124,6 +147,21 @@ fn parse_optional_number(arguments: &Value, name: &str, default: f64, label: &st
     raw_value
         .as_f64()
         .ok_or_else(|| anyhow!("{label} must be a number"))
+}
+
+fn parse_optional_usize(arguments: &Value, name: &str, label: &str) -> Result<Option<usize>> {
+    let Some(raw_value) = arguments.get(name) else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
+    }
+    let Some(value) = raw_value.as_u64() else {
+        return Err(anyhow!("{label} must be a non-negative integer"));
+    };
+    usize::try_from(value)
+        .map(Some)
+        .map_err(|_| anyhow!("{label} is too large"))
 }
 
 fn parse_non_negative_finite_number(arguments: &Value, name: &str, label: &str) -> Result<f64> {

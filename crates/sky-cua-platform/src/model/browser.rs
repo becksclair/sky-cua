@@ -77,6 +77,12 @@ pub enum BrowserRequest {
         #[serde(default)]
         y: f64,
     },
+    Eval {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<BrowserTargetKind>,
+        tab_id: String,
+        expression: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -94,6 +100,7 @@ pub enum BrowserResponse {
     TypeText { response: BrowserActionResponse },
     PressKey { response: BrowserActionResponse },
     Scroll { response: BrowserActionResponse },
+    Eval { response: BrowserEvalResponse },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -247,6 +254,23 @@ pub struct BrowserElementBounds {
     pub height: Option<f64>,
 }
 
+/// Environment variable gating arbitrary page-JavaScript execution via
+/// `browser_eval`. This is a security boundary the MCP client and the service
+/// must agree on, so the opt-in check lives here and is shared by both rather
+/// than duplicated per crate.
+pub const BROWSER_EVAL_ENV: &str = "SKY_CUA_BROWSER_EVAL";
+
+/// Whether the operator has opted in to `browser_eval` page-JavaScript
+/// execution. Off unless `SKY_CUA_BROWSER_EVAL` is `on`, `1`, or `true`.
+pub fn browser_eval_enabled() -> bool {
+    matches!(
+        std::env::var(BROWSER_EVAL_ENV)
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref(),
+        Ok("on" | "1" | "true")
+    )
+}
+
 pub fn browser_diagnostic_is_error_code(code: &str) -> bool {
     matches!(
         code,
@@ -265,6 +289,8 @@ pub fn browser_diagnostic_is_error_code(code: &str) -> bool {
             | "BrowserNavigationFailed"
             | "BrowserOpenPartial"
             | "BrowserClaimPartial"
+            | "BrowserEvalException"
+            | "BrowserEvalDisabled"
     )
 }
 
@@ -274,6 +300,16 @@ pub struct BrowserScreenshotResponse {
     pub tab_id: String,
     pub mime_type: String,
     pub data_base64: String,
+    /// Filesystem path of the persisted capture, when the service wrote one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_path: Option<String>,
+    /// Image width in pixels. Matches CSS viewport width so image pixels,
+    /// snapshot element bounds, and pointer coordinates share one space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Image height in pixels. See `width`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiagnosticEntry>,
 }
@@ -283,6 +319,16 @@ pub struct BrowserActionResponse {
     pub target: BrowserTargetKind,
     pub tab_id: String,
     pub action: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<DiagnosticEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BrowserEvalResponse {
+    pub target: BrowserTargetKind,
+    pub tab_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiagnosticEntry>,
 }

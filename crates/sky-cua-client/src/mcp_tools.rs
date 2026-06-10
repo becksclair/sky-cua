@@ -189,6 +189,7 @@ pub(crate) fn handle_tool_call(
             let selector = parse_app_selector(&arguments);
             let detail = parse_app_state_detail(&arguments);
             let capture_screen = effective_capture_screen(&arguments, model);
+            let screenshot_delivery = parse_screenshot_delivery(&arguments);
             match service.call(&ServiceRequest::GetAppState {
                 selector,
                 capture_screen,
@@ -206,17 +207,32 @@ pub(crate) fn handle_tool_call(
                         AppStateDetail::Full => serde_json::to_value(&snapshot)?,
                         AppStateDetail::Compact => compact_snapshot(&snapshot),
                     };
-                    let text_content =
+                    let mut text_content =
                         if detail == AppStateDetail::Compact && model.can_receive_images() {
                             compact_snapshot_text_content(&snapshot)
                         } else {
                             snapshot_text_content(&snapshot)
                         };
+
+                    let mut content = Vec::with_capacity(2);
+                    if screenshot_delivery == ScreenshotDelivery::Inline
+                        && model.can_receive_images()
+                    {
+                        match inline_screenshot_block(&snapshot) {
+                            Some(Ok(image_block)) => content.push(image_block),
+                            Some(Err(message)) => {
+                                text_content.push_str(
+                                    "\nInline screenshot delivery failed; read screenshot_path instead: ",
+                                );
+                                text_content.push_str(&message);
+                            }
+                            None => {}
+                        }
+                    }
+                    content.insert(0, json!({"type": "text", "text": text_content}));
+
                     Ok(json!({
-                        "content": [{
-                            "type": "text",
-                            "text": text_content
-                        }],
+                        "content": content,
                         "structuredContent": structured_content,
                         "isError": false
                     }))
@@ -226,7 +242,7 @@ pub(crate) fn handle_tool_call(
             }
         }
         name if browser::is_browser_tool(name) => {
-            browser::handle_tool_call(service, name, arguments)
+            browser::handle_tool_call(service, name, arguments, model)
         }
         "focus_element" => handle_action_call(service, ActionName::FocusElement, arguments),
         "activate_element" => handle_action_call(service, ActionName::ActivateElement, arguments),
@@ -850,7 +866,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
     let tool_array = tools
         .as_array_mut()
         .expect("tool definition registry should be a JSON array");
-    browser::push_tool_definitions(tool_array);
+    browser::push_tool_definitions(tool_array, browser::browser_eval_enabled());
 
     tools
 }
@@ -875,6 +891,14 @@ fn get_app_state_properties(can_receive_images: bool) -> Value {
                 "type": "string",
                 "enum": ["auto", "if_changed", "always", "never"],
                 "description": "Screen-capture policy for this state snapshot. Defaults to if_changed. Use always when a fresh visual frame is required, never for structure-only loops, and auto when the runtime should choose."
+            }),
+        );
+        property_map.insert(
+            "screenshot_delivery".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["path", "inline"],
+                "description": "How the captured screenshot is delivered. path (default) returns only screenshot_path for reading the image file on demand; inline also attaches the image to this result for sessions that cannot read local files."
             }),
         );
     }
@@ -994,6 +1018,53 @@ pub(crate) fn parse_app_state_detail(arguments: &Value) -> AppStateDetail {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ScreenshotDelivery {
+    /// Reference the capture by `screenshot_path` only (token-lean default).
+    #[default]
+    Path,
+    /// Also attach the capture as an MCP image content block, for hosts or
+    /// agents that cannot read local files by path.
+    Inline,
+}
+
+fn parse_screenshot_delivery(arguments: &Value) -> ScreenshotDelivery {
+    match arguments.get("screenshot_delivery").and_then(Value::as_str) {
+        Some("inline") => ScreenshotDelivery::Inline,
+        _ => ScreenshotDelivery::Path,
+    }
+}
+
+/// Build an MCP image content block from the snapshot's persisted screenshot.
+/// Returns None when the snapshot has no capture, and Err text when the file
+/// cannot be read back.
+fn inline_screenshot_block(
+    snapshot: &sky_cua_platform::model::AppStateSnapshot,
+) -> Option<Result<Value, String>> {
+    let path = snapshot.capture.as_ref()?.screenshot_path.as_deref()?;
+    let mime_type = match std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "image/png",
+    };
+    Some(match std::fs::read(path) {
+        Ok(bytes) => {
+            use base64::Engine as _;
+            Ok(json!({
+                "type": "image",
+                "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                "mimeType": mime_type,
+            }))
+        }
+        Err(error) => Err(format!("{path}: {error}")),
+    })
+}
+
 pub(crate) fn effective_capture_screen(
     arguments: &Value,
     model: &ModelSessionInfo,
@@ -1060,11 +1131,12 @@ mod tests {
     use serde_json::json;
     use sky_cua_platform::model::{
         AccessibilitySetupReport, ActionName, ActionOutcome, ActionRequest, AgentCursorPoint,
-        AgentCursorState, AppInfo, AppStateSnapshot, CaptureBackendKind, CaptureScreenMode,
-        CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorReadiness, DoctorReport, ElementNode,
-        ElementTextReadback, EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities,
-        RectF, SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind,
-        SetupCommandReport, ToolAvailability, ToolCapabilities, WindowTargetingSetupReport,
+        AgentCursorState, AppInfo, AppStateSnapshot, CaptureBackendKind, CaptureInfo,
+        CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorReadiness,
+        DoctorReport, ElementNode, ElementTextReadback, EnvironmentInfo, FocusedApp,
+        InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest,
+        ServiceResponse, SessionKind, SetupCommandReport, ToolAvailability, ToolCapabilities,
+        WindowTargetingSetupReport,
     };
 
     use crate::heuristics::HeuristicsRegistry;
@@ -1764,6 +1836,120 @@ mod tests {
             result["structuredContent"]["elements"][0]["backend_ref"],
             "atspi:/7"
         );
+    }
+
+    fn capture_info_with_screenshot(path: &std::path::Path) -> CaptureInfo {
+        CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            coordinate_space: None,
+            stream_id: None,
+            source_type: None,
+            mapping_id: None,
+            logical_rect: None,
+            pixel_size: None,
+            original_pixel_size: None,
+            logical_to_pixel_scale: None,
+            screenshot_path: Some(path.display().to_string()),
+            original_screenshot_path: None,
+            model_image_format: None,
+            model_image_quality: None,
+            model_image_bytes: None,
+            model_image_encode_ms: None,
+        }
+    }
+
+    #[test]
+    fn get_app_state_inline_delivery_attaches_image_block() {
+        let screenshot_file = std::env::temp_dir().join(format!(
+            "sky-cua-inline-delivery-{}.jpg",
+            std::process::id()
+        ));
+        std::fs::write(&screenshot_file, b"fake-jpeg-bytes").unwrap();
+
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.capture = Some(capture_info_with_screenshot(&screenshot_file));
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({"detail": "compact", "screenshot_delivery": "inline"}),
+        )
+        .unwrap();
+        std::fs::remove_file(&screenshot_file).unwrap();
+
+        let content = result["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["mimeType"], "image/jpeg");
+        use base64::Engine as _;
+        assert_eq!(
+            content[1]["data"],
+            base64::engine::general_purpose::STANDARD.encode(b"fake-jpeg-bytes")
+        );
+    }
+
+    #[test]
+    fn get_app_state_path_delivery_keeps_text_only_content() {
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.capture = Some(capture_info_with_screenshot(std::path::Path::new(
+            "/nonexistent/snapshot.jpg",
+        )));
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({"detail": "compact"}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result["content"].as_array().expect("content array").len(),
+            1
+        );
+        assert_eq!(result["content"][0]["type"], "text");
+    }
+
+    #[test]
+    fn get_app_state_inline_delivery_reports_unreadable_screenshot() {
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.capture = Some(capture_info_with_screenshot(std::path::Path::new(
+            "/nonexistent/snapshot.jpg",
+        )));
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({"detail": "compact", "screenshot_delivery": "inline"}),
+        )
+        .unwrap();
+
+        let content = result["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 1);
+        let text = content[0]["text"].as_str().expect("text content");
+        assert!(text.contains("Inline screenshot delivery failed"));
     }
 
     #[test]

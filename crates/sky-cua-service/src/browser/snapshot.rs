@@ -27,12 +27,14 @@ pub(super) const BROWSER_SNAPSHOT_EXPRESSION: &str = r#"
     };
   };
   const selector = 'a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]';
+  const elements = Array.from(document.querySelectorAll(selector));
   return {
     title: document.title || '',
     url: location.href,
     viewport: { width: innerWidth, height: innerHeight, devicePixelRatio: devicePixelRatio || 1 },
     text,
-    elements: Array.from(document.querySelectorAll(selector)).slice(0, 200).map(elementFor)
+    elementCount: elements.length,
+    elements: elements.slice(0, 5000).map(elementFor)
   };
 })()
 "#;

@@ -3,8 +3,8 @@
 ## Status
 
 Shipped for `user_chrome`; managed browser lifecycle is planned but not
-implemented. Last verified: 2026-06-08 with live Brave MCP/native-host smokes
-plus focused Rust tests. With
+implemented. Last verified: 2026-06-09 with focused Rust browser MCP tests and
+the 2026-06-08 live Brave MCP/native-host smokes. With
 `SKY_CUA_BROWSER=brave`, a full isolated MCP smoke advertised the browser tools,
 opened a session-owned Brave tab, navigated it to a local HTTP fixture, captured
 a snapshot and screenshot, moved the browser cursor, clicked, typed, pressed a
@@ -41,25 +41,53 @@ MCP tools, always advertised by `sky-cua-client mcp`:
   `browser_list_tabs`. It asks the extension to adopt that existing user tab into
   the sky-cua browser session for subsequent browser actions.
 - `browser_move_mouse` accepts `target=user_chrome`, `tab_id`, `x`, `y`, and
-  optional `wait_for_arrival`. Coordinates are browser screenshot pixels; sky-cua
-  converts them through `window.devicePixelRatio` before sending browser input.
+  optional `wait_for_arrival`. Coordinates are CSS pixels, the same space as
+  `browser_screenshot` image pixels and `browser_snapshot` element bounds.
 - `browser_navigate` accepts `target=user_chrome`, `tab_id`, and `url`. Allowed
   URL forms are `http://`, `https://`, and `about:blank`.
-- `browser_snapshot` accepts `target=user_chrome` and `tab_id`, then returns the
+- `browser_snapshot` accepts `target=user_chrome`, `tab_id`, and optional
+  `element_query`, `element_offset`, and `element_limit`, then returns the
   current page title, URL, and a structured DOM snapshot payload when CDP access
-  succeeds.
-- `browser_screenshot` accepts `target=user_chrome` and `tab_id`, then returns a
-  base64-encoded PNG in `data_base64` with `mime_type="image/png"`.
-- `browser_click` accepts `target=user_chrome`, `tab_id`, `x`, and `y`, using
-  browser screenshot-pixel coordinates.
+  succeeds. The element filters are applied to the MCP response so agents can
+  surface controls deep in dense sidebars without dumping every unrelated
+  element. The capture collects up to 5000 elements so `element_query` reaches
+  deep controls, but the structured `elements` array defaults to at most 200 so
+  untuned calls do not overflow host output-token budgets; `snapshot.elementCount`
+  always reports the full total, and `element_limit` raises or lowers the cap.
+- `browser_screenshot` accepts `target=user_chrome` and `tab_id`, then captures
+  the visible viewport, normalizes the image to CSS-pixel dimensions, and
+  re-encodes it with the shared model-screenshot knobs (JPEG by default, WebP
+  via `SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp`). The MCP result attaches the
+  image as an MCP image content block when the session's model supports image
+  input, and `structuredContent` carries `mime_type`, `screenshot_path` (the
+  persisted capture under the runtime captures directory), and `width`/`height`.
+  The base64 payload is never repeated inside `structuredContent`.
+- `browser_click` accepts `target=user_chrome`, `tab_id`, `x`, and `y` in CSS
+  pixels, matching `browser_screenshot` image pixels and `browser_snapshot`
+  element bounds.
 - `browser_type_text` accepts `target=user_chrome`, `tab_id`, and non-empty
   `text`, then inserts text into the focused page control.
 - `browser_press_key` accepts `target=user_chrome`, `tab_id`, and non-empty
-  `key`, then dispatches the key to the page.
+  `key`, then dispatches the key to the page. Single CDP key names and modifier
+  chords such as `Ctrl+K`, `Ctrl+L`, `Shift+Tab`, and `Meta+K` are accepted.
 - `browser_scroll` accepts `target=user_chrome`, `tab_id`, `delta_x`, `delta_y`,
-  and optional browser screenshot-pixel `x`/`y` context fields. sky-cua converts
-  deltas and context coordinates through `window.devicePixelRatio`, and the
-  scroll is applied to the page, not the desktop window.
+  and optional CSS-pixel `x`/`y` context fields. sky-cua scrolls the nearest
+  scrollable DOM container under `x`/`y` when possible and falls back to the
+  page viewport.
+- `browser_eval` accepts `target=user_chrome`, `tab_id`, and `expression`, then
+  evaluates JavaScript in the page with CDP `Runtime.evaluate`, awaits promises,
+  and returns the serializable result by value. It is intended for diagnostics
+  and controlled page-level fallbacks when visible UI automation is blocked.
+  The tool is disabled by default: running arbitrary JavaScript in real
+  signed-in user tabs crosses a stronger trust boundary than visible UI
+  automation (hidden DOM, storage, same-origin requests) and amplifies prompt
+  injection. The operator enables it explicitly with `SKY_CUA_BROWSER_EVAL=on`,
+  enforced at both layers: when disabled the client does not advertise it in
+  `tools/list` and rejects direct calls, and the service — the real CDP
+  execution boundary — independently rejects `BrowserRequest::Eval` with a
+  `BrowserEvalDisabled` diagnostic so a direct service-socket caller cannot
+  bypass the opt-in. A thrown or rejected expression surfaces as a
+  `BrowserEvalException` diagnostic instead of a silent `null` value.
 
 Browser targets:
 
@@ -82,11 +110,15 @@ tabs from `browser_list_tabs`. Browser actions should target tabs returned by
 `browser_open` or successfully adopted by `browser_claim_tab`; callers should
 not assume every listed tab is already controllable.
 
-Browser action coordinates are browser screenshot pixels from
-`browser_screenshot`. They are not desktop screen coordinates and they are not
-coordinates from `get_app_state` screenshots. The runtime converts those browser
-screenshot pixels through `window.devicePixelRatio` before sending CDP or
-extension input, so agents do not need to divide by DPR manually.
+All browser tool coordinates are CSS pixels and share one space:
+`browser_screenshot` image pixels, `browser_snapshot` element bounds, and
+`browser_click`/`browser_move_mouse`/`browser_scroll` coordinates line up
+one-to-one. They are not desktop screen coordinates and they are not
+coordinates from `get_app_state` screenshots. The service normalizes high-DPI
+captures to CSS-pixel dimensions at capture time, so agents never divide by
+`window.devicePixelRatio` and the center of a returned snapshot element can be
+passed directly to `browser_click`. Screenshots cover the currently visible
+viewport only; scroll and re-capture when the target is off-screen.
 
 Recommended agent flow:
 
@@ -95,17 +127,19 @@ Recommended agent flow:
   by `browser_claim_tab` for an existing user tab. When many tabs are open, pass
   `url_contains` or `title_contains` to make the text response list relevant tab
   ids instead of only a count.
-- Use `browser_snapshot` to inspect page title, URL, viewport/DPR, visible text,
-  and up to 200 common actionable element summaries. Its MCP text summary also
-  includes these details for text-only hosts.
+- Use `browser_snapshot` to inspect page title, URL, viewport, visible text,
+  and common actionable element summaries with click-ready CSS-pixel bounds. Pass `element_query: "update"` or an `element_offset`/`element_limit`
+  window when a page contains many controls. Its MCP text summary also includes
+  these details for text-only hosts.
 - Use `browser_click`, `browser_type_text`, `browser_press_key`,
   `browser_scroll`, and `browser_move_mouse` against the tab returned by
   `browser_open` or `browser_claim_tab`. The service self-recovers once when the
   native-host bridge reports that the tab fell out of `sky-cua-mcp` session
   ownership or that the debugger is no longer attached.
-- Use `browser_screenshot` when visual proof is needed; it returns page PNG data,
-  not a desktop capture path. Text-only agents should prefer `browser_snapshot`
-  instead of trying to decode hidden image payloads.
+- Use `browser_screenshot` when visual proof is needed; the image arrives as an
+  MCP image content block for image-capable sessions and is also persisted to
+  the file named in `structuredContent.screenshot_path`. Text-only agents should
+  prefer `browser_snapshot`.
 
 Environment variables:
 
@@ -123,31 +157,38 @@ Service IPC variants:
   `Status`, `ListTabs { target }`, `Open { target, url }`,
   `ClaimTab { target, tab_id }`,
   `MoveMouse { target, tab_id, x, y, wait_for_arrival }`,
-  `Navigate { target, tab_id, url }`, `Snapshot { target, tab_id }`,
+  `Navigate { target, tab_id, url }`,
+  `Snapshot { target, tab_id, element_offset, element_limit, element_query }`,
   `Screenshot { target, tab_id }`, `Click { target, tab_id, x, y }`,
   `TypeText { target, tab_id, text }`, `PressKey { target, tab_id, key }`, and
-  `Scroll { target, tab_id, delta_x, delta_y, x, y }`.
+  `Scroll { target, tab_id, delta_x, delta_y, x, y }`, and
+  `Eval { target, tab_id, expression }`.
 - Browser IPC responses use the matching envelope:
   `ServiceResponse::Browser { response: BrowserResponse }`.
 - `BrowserResponse` is internally tagged with `type` and currently includes
   `Status { report }`, `ListTabs { response }`, `Open { response }`,
   `ClaimTab { response }`, `MoveMouse { response }`, `Navigate { response }`,
   `Snapshot { response }`, `Screenshot { response }`, `Click { response }`,
-  `TypeText { response }`, `PressKey { response }`, and `Scroll { response }`.
+  `TypeText { response }`, `PressKey { response }`, `Scroll { response }`, and
+  `Eval { response }`.
 - `ListTabs` responses contain `target`, `tabs`, and `diagnostics`.
 - `Open` responses contain `target`, optional created `tab`, and `diagnostics`.
 - `ClaimTab` responses contain `target`, optional adopted `tab`, and
   `diagnostics`.
-- `MoveMouse` responses contain `target`, `tab_id`, requested browser
-  screenshot coordinates, `wait_for_arrival`, and `diagnostics`.
+- `MoveMouse` responses contain `target`, `tab_id`, the requested CSS-pixel
+  coordinates, `wait_for_arrival`, and `diagnostics`.
 - `Navigate` responses contain `target`, `tab_id`, `url`, and `diagnostics`.
 - `Snapshot` responses contain `target`, `tab_id`, optional `title`, optional
   `url`, optional `snapshot`, and `diagnostics`.
 - `Screenshot` responses contain `target`, `tab_id`, `mime_type`,
-  `data_base64`, and `diagnostics`.
+  `data_base64`, optional `screenshot_path`, optional `width`/`height`, and
+  `diagnostics`. The client drops `data_base64` from `structuredContent` and
+  forwards the image as an MCP image content block instead.
 - `Click`, `TypeText`, `PressKey`, and `Scroll` return
   `BrowserActionResponse` with `target`, `tab_id`, `action`, and
   `diagnostics`.
+- `Eval` responses contain `target`, `tab_id`, optional serializable `value`,
+  and `diagnostics`.
 
 Install outputs:
 
@@ -160,6 +201,17 @@ Install outputs:
 - `scripts/install_mcp_server.py --host openclaw` writes `openclaw_mcp.json`,
   registers the `sky_cua` stdio server through `openclaw mcp set`, and copies
   sky-cua skills into `~/.openclaw/workspace/skills`.
+- `scripts/install_mcp_server.py --host claude-code` writes
+  `claude_code_mcp.json`, registers the `sky-cua` stdio server (Claude Code
+  reserves the name `computer-use`) through
+  `claude mcp add-json --scope user` when the `claude` CLI is on `PATH`, and
+  copies sky-cua skills into `~/.claude/skills` when `~/.claude` exists.
+  Claude Code stdio servers inherit the parent environment, so no env-var
+  passthrough list is required. The repository also ships a Claude Code plugin
+  manifest (`.claude-plugin/plugin.json` with an inline `mcpServers` entry
+  rooted at `${CLAUDE_PLUGIN_ROOT}`) plus `.claude-plugin/marketplace.json`, so
+  a built checkout or staged bundle can be installed directly as a Claude Code
+  plugin.
 - `scripts/install_mcp_server.py --restart-runtime` is an opt-in development
   deploy helper. After copying new installed binaries, it stops sky-cua runtime
   processes rooted under the install target so OpenCode, Pi, or another MCP host
@@ -225,20 +277,29 @@ enable fails, the response returns the adopted tab plus `BrowserClaimPartial` an
 the MCP call is marked as an error.
 
 `browser_move_mouse(user_chrome)` sends `moveMouse` with the same sky-cua MCP
-session id, target tab id, coordinates converted from browser screenshot pixels
-to CSS pixels, and `waitForArrival`. It moves the extension's webpage/browser
-cursor, not the sky-cua desktop synthetic cursor used for portal screenshots. If
-the coordinate-scale probe reports stale session ownership or an unattached
-debugger, sky-cua reclaims, attaches, enables Page, and retries once.
+session id, target tab id, the CSS-pixel coordinates as provided, and
+`waitForArrival`. It moves the extension's webpage/browser cursor, not the
+sky-cua desktop synthetic cursor used for portal screenshots. If the bridge
+reports stale session ownership or an unattached debugger, sky-cua reclaims,
+attaches, enables Page, and retries once.
 
 `browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_click`,
-`browser_type_text`, and `browser_press_key` use extension `executeCdp` requests
-against tabs that are part of the sky-cua browser session. Navigation uses
-`Page.navigate`. Snapshot uses `Runtime.evaluate` to return the page title, URL,
-viewport, body text up to 20,000 characters, and up to 200 common actionable
-elements matching anchors, buttons, inputs, textareas, selects, button/link
-roles, and editable content. Screenshot uses `Page.captureScreenshot` and
-returns base64 PNG data. Click, type, and key actions use CDP `Input.*` events.
+`browser_type_text`, `browser_press_key`, and `browser_eval` use extension
+`executeCdp` requests against tabs that are part of the sky-cua browser session.
+Navigation uses `Page.navigate`. Snapshot uses `Runtime.evaluate` to return the
+page title, URL, viewport, body text up to 20,000 characters, total actionable
+element count, and up to 5,000 common actionable elements matching anchors,
+buttons, inputs, textareas, selects, button/link roles, and editable content.
+Screenshot first evaluates the viewport metrics (`innerWidth`,
+`innerHeight`, `devicePixelRatio`), then uses `Page.captureScreenshot` with
+`fromSurface` to capture the visible viewport as PNG. The service normalizes
+the capture to CSS-pixel dimensions (resampling when DPR is not 1), re-encodes
+it as JPEG or WebP per `SKY_CUA_MODEL_SCREENSHOT_FORMAT`/`*_QUALITY`, writes it
+under the runtime captures directory (`$XDG_RUNTIME_DIR/sky-cua/captures`,
+pruned to the eight most recent captures per tab), and reports the path and
+dimensions alongside the encoded data. Click, type, and key actions use CDP
+`Input.*` events with CSS-pixel coordinates passed through unchanged. `browser_eval` uses
+`Runtime.evaluate` with `awaitPromise=true` and `returnByValue=true`.
 Snapshot element values are suppressed for password/hidden/token/API-key/auth/
 credential/session/code/PIN-like fields; use desktop computer-use or explicit
 user-directed workflows for sensitive form inspection instead of relying on raw
@@ -249,11 +310,13 @@ browser session`, sky-cua sends `claimUserTab`, `attach`, and
 action once. Failures after that retry are surfaced as diagnostics rather than
 looping indefinitely.
 
-`browser_scroll` uses `Runtime.evaluate(window.scrollBy(...))` rather than CDP
+`browser_scroll` uses `Runtime.evaluate` rather than CDP
 `Input.dispatchMouseEvent(type="mouseWheel")`, because the live extension bridge
 timed out on the mouse-wheel CDP command during the 2026-06-06 full MCP smoke.
-The tool still accepts optional `x`/`y` context for a future pointer-relative
-scroll path, but current behavior scrolls the page viewport.
+When `x`/`y` are provided, the evaluated script finds
+`document.elementFromPoint(x, y)`, walks to the nearest scrollable ancestor, and
+scrolls that container. If no scrollable element is found, it scrolls the page
+viewport.
 
 Socket discovery uses `/tmp/codex-browser-use/extension-<pid>-<nonce>.sock` by
 default. The service inspects `/proc` process ancestry to classify sockets as
@@ -290,6 +353,27 @@ delegates browser actions through the shared runtime.
 
 ## Verification
 
+Focused browser reliability checks from 2026-06-09:
+
+```bash
+cargo fmt --check
+cargo test -p sky-cua-platform -p sky-cua-service -p sky-cua-client
+```
+
+- Service regression tests prove CDP action recovery still handles
+  `Debugger is not attached` and stale session ownership, `browser_scroll`
+  targets the nearest scrollable DOM container under `x`/`y`, `browser_eval`
+  returns the CDP runtime value, and `browser_press_key` dispatches modifier
+  chords with CDP modifier bits.
+- Client regression tests prove `browser_snapshot` advertises and applies
+  `element_query`/`element_offset`/`element_limit`, including a dense
+  OpenChamber-style sidebar case where `Update Available` is deep in the element
+  list.
+- Client registry tests prove `browser_eval` stays unadvertised by default, is
+  advertised only with the explicit opt-in, rejects calls when disabled, and is
+  routed through the Browser MCP service request/response envelope; a service
+  test proves thrown expressions become `BrowserEvalException` diagnostics.
+
 Focused hardening checks from 2026-06-08:
 
 ```bash
@@ -305,8 +389,13 @@ cargo test -p sky-cua-client -- --test-threads=1
 - Client regression tests prove `browser_list_tabs` text summaries expose bounded
   tab ids/title/URL data and respect `url_contains`/`title_contains` filters.
 - Client regression tests prove `browser_snapshot` text summaries expose title,
-  URL, viewport/DPR, visible text, actionable elements, and element bounds for
-  text-only agents.
+  URL, viewport, visible text, actionable elements, and element bounds for
+  text-only agents. Service regression tests pin snapshot bounds to CSS pixels
+  and prove screenshot captures are normalized to CSS-pixel dimensions,
+  re-encoded with the model-screenshot knobs, and persisted to disk.
+- Client regression tests prove `browser_screenshot` results attach an MCP
+  image content block for image-capable sessions, omit it for text-only
+  sessions, and never repeat `data_base64` inside `structuredContent`.
 - Direct installed MCP smoke used `SKY_CUA_BROWSER=brave` and isolated service
   socket `/tmp/sky-cua-recover-smoke-465994.sock`. It completed
   `browser_open`, `browser_snapshot`, `browser_screenshot`, `browser_click`,

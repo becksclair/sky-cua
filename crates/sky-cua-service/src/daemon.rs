@@ -221,6 +221,18 @@ impl ServiceDaemon {
                     },
                 }
             }
+            BrowserRequest::Eval {
+                target,
+                tab_id,
+                expression,
+            } => {
+                debug!(?target, ?tab_id, "handling browser_eval request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Eval {
+                        response: crate::browser::eval(target, tab_id, expression).await,
+                    },
+                }
+            }
             BrowserRequest::Status => self.handle_browser_status_request().await,
         }
     }

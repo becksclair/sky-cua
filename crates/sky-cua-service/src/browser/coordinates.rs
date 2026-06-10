@@ -9,27 +9,24 @@ use super::protocol::VIEWPORT_SCALE_REQUEST_ID;
 use super::snapshot;
 use super::transport::execute_cdp_until;
 
-pub(super) async fn screenshot_point_to_css_point_until(
-    stream: &mut UnixStream,
-    socket: &Path,
-    tab_id: &Value,
-    x: f64,
-    y: f64,
-    deadline: TokioInstant,
-) -> Result<(f64, f64), DiagnosticEntry> {
-    let scale = browser_coordinate_scale_until(stream, socket, tab_id, deadline).await?;
-    Ok((
-        device_pixels_to_css_pixels(x, scale),
-        device_pixels_to_css_pixels(y, scale),
-    ))
+/// Current CSS viewport geometry for a tab. All browser tool coordinates are
+/// CSS pixels, so this is the single source for sizing screenshot captures.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ViewportMetrics {
+    pub(super) css_width: f64,
+    pub(super) css_height: f64,
+    /// Page-coordinate scroll offsets, used to clip captures to the visible
+    /// viewport when `captureBeyondViewport` forces a full-page repaint.
+    pub(super) scroll_x: f64,
+    pub(super) scroll_y: f64,
 }
 
-pub(super) async fn browser_coordinate_scale_until(
+pub(super) async fn viewport_metrics_until(
     stream: &mut UnixStream,
     socket: &Path,
     tab_id: &Value,
     deadline: TokioInstant,
-) -> Result<f64, DiagnosticEntry> {
+) -> Result<ViewportMetrics, DiagnosticEntry> {
     let response = execute_cdp_until(
         stream,
         socket,
@@ -37,20 +34,24 @@ pub(super) async fn browser_coordinate_scale_until(
         tab_id,
         "Runtime.evaluate",
         json!({
-            "expression": "(() => ({ devicePixelRatio: window.devicePixelRatio || 1 }))()",
+            "expression": "(() => ({ width: innerWidth, height: innerHeight, scrollX: scrollX, scrollY: scrollY }))()",
             "awaitPromise": true,
             "returnByValue": true,
         }),
         deadline,
     )
     .await?;
-    let scale = snapshot::cdp_runtime_value(&response)
-        .and_then(|value| value.get("devicePixelRatio").and_then(Value::as_f64))
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or(1.0);
-    Ok(scale)
-}
-
-pub(super) fn device_pixels_to_css_pixels(value: f64, scale: f64) -> f64 {
-    value / scale
+    let value = snapshot::cdp_runtime_value(&response);
+    let number = |name: &str| {
+        value
+            .as_ref()
+            .and_then(|value| value.get(name).and_then(Value::as_f64))
+            .filter(|value| value.is_finite())
+    };
+    Ok(ViewportMetrics {
+        css_width: number("width").filter(|v| *v > 0.0).unwrap_or(0.0),
+        css_height: number("height").filter(|v| *v > 0.0).unwrap_or(0.0),
+        scroll_x: number("scrollX").filter(|v| *v >= 0.0).unwrap_or(0.0),
+        scroll_y: number("scrollY").filter(|v| *v >= 0.0).unwrap_or(0.0),
+    })
 }

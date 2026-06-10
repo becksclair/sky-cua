@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use anyhow::Result;
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    BrowserActionResponse, BrowserClaimTabResponse, BrowserListTabsResponse,
+    BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
     BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
     BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport, BrowserTab,
     BrowserTargetKind, DiagnosticEntry, browser_diagnostic_is_error_code,
@@ -335,6 +335,47 @@ pub(crate) fn browser_snapshot_result(response: BrowserSnapshotResponse) -> Resu
     }))
 }
 
+/// Default ceiling on the structured `elements` array when the caller does not
+/// pass `element_limit`. The capture itself returns up to 5000 elements so
+/// `element_query` can reach deep controls, but serializing all of them by
+/// default blows host output-token budgets; `snapshot.elementCount` still
+/// reports the true total.
+const DEFAULT_SNAPSHOT_ELEMENT_LIMIT: usize = 200;
+
+pub(crate) fn browser_snapshot_structured_response(
+    mut response: BrowserSnapshotResponse,
+    element_offset: Option<usize>,
+    element_limit: Option<usize>,
+    element_query: Option<&str>,
+) -> BrowserSnapshotResponse {
+    let Some(snapshot) = response.snapshot.as_mut() else {
+        return response;
+    };
+    let Some(snapshot_object) = snapshot.as_object_mut() else {
+        return response;
+    };
+    // Move the array out rather than cloning it: the capture can carry up to
+    // 5000 elements and `response` is owned, so the clone was pure waste.
+    let elements = match snapshot_object.get_mut("elements") {
+        Some(Value::Array(elements)) => std::mem::take(elements),
+        _ => return response,
+    };
+
+    let query = element_query.map(str::to_lowercase);
+    let filtered = elements
+        .into_iter()
+        .filter(|element| {
+            query
+                .as_deref()
+                .is_none_or(|query| browser_snapshot_element_search_text(element).contains(query))
+        })
+        .skip(element_offset.unwrap_or(0))
+        .take(element_limit.unwrap_or(DEFAULT_SNAPSHOT_ELEMENT_LIMIT))
+        .collect::<Vec<_>>();
+    snapshot_object.insert("elements".to_string(), Value::Array(filtered));
+    response
+}
+
 pub(crate) fn browser_snapshot_summary(response: &BrowserSnapshotResponse) -> String {
     let mut text = format!("Captured browser snapshot for tab {}.", response.tab_id);
     if let Some(title) = response.title.as_deref().filter(|title| !title.is_empty()) {
@@ -446,6 +487,17 @@ fn append_browser_snapshot_element(text: &mut String, element: &Value) {
     }
 }
 
+fn browser_snapshot_element_search_text(element: &Value) -> String {
+    let mut haystack = String::new();
+    for field in ["tag", "role", "name", "href", "value"] {
+        if let Some(value) = element.get(field).and_then(Value::as_str) {
+            haystack.push_str(value);
+            haystack.push('\n');
+        }
+    }
+    haystack.to_lowercase()
+}
+
 fn browser_bounds_summary(bounds: &Value) -> String {
     let number = |name: &str| {
         bounds
@@ -471,7 +523,10 @@ fn format_browser_number(value: f64) -> String {
     }
 }
 
-pub(crate) fn browser_screenshot_result(response: BrowserScreenshotResponse) -> Result<Value> {
+pub(crate) fn browser_screenshot_result(
+    response: BrowserScreenshotResponse,
+    can_receive_images: bool,
+) -> Result<Value> {
     let is_error =
         response.data_base64.is_empty() || browser_diagnostics_are_error(&response.diagnostics);
     let mut text = if is_error {
@@ -480,17 +535,51 @@ pub(crate) fn browser_screenshot_result(response: BrowserScreenshotResponse) -> 
             response.tab_id
         )
     } else {
-        format!(
-            "Captured {} browser screenshot for tab {} ({} base64 bytes). Use this image's pixels directly with browser_click/browser_move_mouse/browser_scroll; text-only agents should prefer browser_snapshot for page details.",
-            response.mime_type,
-            response.tab_id,
-            response.data_base64.len()
-        )
+        let mut text = format!(
+            "Captured {} browser screenshot of the visible viewport for tab {}",
+            response.mime_type, response.tab_id
+        );
+        if let (Some(width), Some(height)) = (response.width, response.height) {
+            let _ = write!(text, " ({width}x{height} pixels)");
+        }
+        text.push('.');
+        if let Some(path) = response.screenshot_path.as_deref() {
+            let _ = write!(text, " Saved to {path}.");
+        }
+        text.push_str(
+            " Image pixels, browser_snapshot element bounds, and browser_click/browser_move_mouse/browser_scroll coordinates all share the same CSS-pixel space.",
+        );
+        if can_receive_images {
+            text.push_str(" The image is attached to this result.");
+        } else {
+            text.push_str(
+                " This session's model does not support image input; use browser_snapshot for page details.",
+            );
+        }
+        text
     };
     append_first_diagnostic(&mut text, &response.diagnostics);
+
+    let mut content = vec![json!({"type": "text", "text": text})];
+    if !is_error && can_receive_images {
+        content.push(json!({
+            "type": "image",
+            "data": response.data_base64,
+            "mimeType": response.mime_type,
+        }));
+    }
+
+    // The image travels as a content block (or on disk at screenshot_path);
+    // repeating the base64 payload in structuredContent would only bloat
+    // host context windows.
+    let mut structured = serde_json::to_value(&response)?;
+    if let Some(map) = structured.as_object_mut() {
+        map.remove("data_base64");
+    }
+
     Ok(json!({
-        "content": [{"type": "text", "text": text}],
-        "structuredContent": response,
+        "content": content,
+        "structuredContent": structured,
         "isError": is_error
     }))
 }
@@ -507,6 +596,24 @@ pub(crate) fn browser_action_result(response: BrowserActionResponse) -> Result<V
             "Performed browser action {} in tab {}.",
             response.action, response.tab_id
         )
+    };
+    append_first_diagnostic(&mut text, &response.diagnostics);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
+pub(crate) fn browser_eval_result(response: BrowserEvalResponse) -> Result<Value> {
+    let is_error = browser_diagnostics_are_error(&response.diagnostics);
+    let mut text = if is_error {
+        format!(
+            "Could not evaluate JavaScript in browser tab {}.",
+            response.tab_id
+        )
+    } else {
+        format!("Evaluated JavaScript in browser tab {}.", response.tab_id)
     };
     append_first_diagnostic(&mut text, &response.diagnostics);
     Ok(json!({

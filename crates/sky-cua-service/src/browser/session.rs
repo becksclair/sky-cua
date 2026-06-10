@@ -7,7 +7,6 @@ use sky_cua_platform::model::{
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
-use super::coordinates::screenshot_point_to_css_point_until;
 use super::protocol::{
     ATTACH_TAB_REQUEST_ID, ATTACH_TAB_RETRY_REQUEST_ID, CLAIM_TAB_REQUEST_ID,
     CLAIM_TAB_RETRY_REQUEST_ID, DETACH_TAB_FOR_RETRY_REQUEST_ID, ENABLE_PAGE_REQUEST_ID,
@@ -327,13 +326,19 @@ async fn enable_page_until(
 
 fn is_debugger_unattached_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
     diagnostic.code == "BrowserBridgeRequestFailed"
-        && diagnostic.message.contains("Debugger is not attached")
+        && debugger_unattached_message(&diagnostic.message)
 }
 
 pub(super) fn is_recoverable_cdp_session_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
     diagnostic.code == "BrowserBridgeRequestFailed"
-        && (diagnostic.message.contains("Debugger is not attached")
+        && (debugger_unattached_message(&diagnostic.message)
             || diagnostic.message.contains("not part of browser session"))
+}
+
+fn debugger_unattached_message(message: &str) -> bool {
+    message.contains("Debugger is not attached")
+        || message.contains("Debugger unattached")
+        || message.contains("Detached while handling command")
 }
 
 pub(super) async fn recover_cdp_session_until(
@@ -351,6 +356,14 @@ pub(super) async fn recover_cdp_session_until(
         deadline,
     )
     .await?;
+    let _ = detach_tab_until(
+        stream,
+        socket,
+        DETACH_TAB_FOR_RETRY_REQUEST_ID,
+        tab_id,
+        deadline,
+    )
+    .await;
     attach_tab_until(
         stream,
         socket,
@@ -378,8 +391,6 @@ pub(super) async fn move_mouse_on_stream(
     wait_for_arrival: bool,
     deadline: TokioInstant,
 ) -> Result<(), DiagnosticEntry> {
-    let (css_x, css_y) =
-        screenshot_point_to_css_point_until(stream, socket, tab_id_value, x, y, deadline).await?;
     send_bridge_request_until(
         stream,
         socket,
@@ -389,8 +400,8 @@ pub(super) async fn move_mouse_on_stream(
             browser_session_params(),
             json!({
                 "tabId": tab_id_value.clone(),
-                "x": css_x,
-                "y": css_y,
+                "x": x,
+                "y": y,
                 "waitForArrival": wait_for_arrival,
             }),
         ),
@@ -471,5 +482,22 @@ fn stale_sky_cua_owner_session_from_claim_error(diagnostic: &DiagnosticEntry) ->
         Some(session_id)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::debugger_unattached_message;
+
+    #[test]
+    fn debugger_unattached_message_accepts_live_extension_wordings() {
+        assert!(debugger_unattached_message(
+            "Debugger is not attached to the tab with id: 515."
+        ));
+        assert!(debugger_unattached_message("Debugger unattached"));
+        assert!(debugger_unattached_message(
+            "Detached while handling command."
+        ));
+        assert!(!debugger_unattached_message("Navigation failed"));
     }
 }

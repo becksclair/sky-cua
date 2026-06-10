@@ -162,6 +162,7 @@ For plain MCP hosts, build release binaries and emit a host-specific config:
 cargo build --release
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host generic
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host claude-code
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host claude-desktop
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw
 ```
@@ -199,8 +200,10 @@ The host-facing tools are the portable product contract. Current tools:
 - readiness/setup: `doctor`, `setup_accessibility`, `setup_window_targeting`
 - app/window discovery: `list_apps`, `list_windows`, `focused_window`,
   `activate_window`
-- state capture: `get_app_state`, with `detail: "full"` by default and
-  `detail: "compact"` for repeated screenshot-first loops
+- state capture: `get_app_state`, with `detail: "full"` by default,
+  `detail: "compact"` for repeated screenshot-first loops, and
+  `screenshot_delivery: "inline"` to attach the captured screenshot as an MCP
+  image content block for hosts that cannot read `screenshot_path` files
 - semantic element actions: `focus_element`, `activate_element`,
   `select_element`, `expand_element`, `collapse_element`, `toggle_element`,
   and `perform_action`
@@ -211,7 +214,7 @@ The host-facing tools are the portable product contract. Current tools:
   `browser_list_tabs`, `browser_open`, `browser_claim_tab`,
   `browser_move_mouse`, `browser_navigate`, `browser_snapshot`,
   `browser_screenshot`, `browser_click`, `browser_type_text`,
-  `browser_press_key`, and `browser_scroll`
+  `browser_press_key`, `browser_scroll`, and `browser_eval`
 
 Browser tools do not require a host-specific enable flag. Codex Desktop may
 still use the companion Browser Use/Chrome plugin path until its adapter
@@ -233,13 +236,18 @@ stale session with `keep=[]`, retries the claim once, then attaches and enables
 Page CDP so action tools can use the tab. It does not reclaim tabs owned by
 non-sky-cua sessions.
 
-Browser action coordinates are browser screenshot pixels from
-`browser_screenshot`. They are not desktop screen coordinates and they are not
-coordinates from `get_app_state` screenshots. The service converts browser
-screenshot pixels through `window.devicePixelRatio` before sending CDP or
-extension input, so callers should not divide coordinates by DPR manually.
-`browser_screenshot` returns a base64 PNG from the browser page, not a desktop
-capture. `browser_scroll` currently scrolls the page viewport through
+Browser tool coordinates are CSS pixels in one shared space:
+`browser_screenshot` image pixels, `browser_snapshot` element bounds, and
+`browser_click`/`browser_move_mouse`/`browser_scroll` coordinates line up
+one-to-one. They are not desktop screen coordinates and they are not
+coordinates from `get_app_state` screenshots. The service normalizes high-DPI
+captures to CSS-pixel dimensions at capture time, so callers never divide
+coordinates by DPR manually.
+`browser_screenshot` captures the browser page's visible viewport, not the
+desktop. The image is attached to the MCP result as an image content block for
+image-capable sessions, persisted to the file named in
+`structuredContent.screenshot_path`, and never repeated as base64 inside
+`structuredContent`. `browser_scroll` currently scrolls the page viewport through
 `window.scrollBy(...)` because CDP mouse-wheel dispatch timed out through the
 live extension bridge. `browser_snapshot` returns page title, URL, viewport,
 body text, and common actionable element summaries; it is not an accessibility

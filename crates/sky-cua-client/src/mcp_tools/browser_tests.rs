@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 
 use serde_json::json;
 use sky_cua_platform::model::{
-    BrowserActionResponse, BrowserClaimTabResponse, BrowserListTabsResponse,
+    BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
     BrowserMoveMouseResponse, BrowserOpenResponse, BrowserRequest, BrowserResponse,
     BrowserSnapshotResponse, BrowserStatusReport, BrowserTab, BrowserTargetAvailability,
     BrowserTargetKind, DiagnosticEntry, ServiceRequest, ServiceResponse,
@@ -12,13 +12,17 @@ use sky_cua_platform::model::{
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::ModelSessionInfo;
 
+use super::browser::push_tool_definitions;
 use super::browser::{
-    BrowserTabTextFilter, browser_list_tabs_summary, browser_open_summary,
+    BROWSER_EVAL_ENV, BrowserTabTextFilter, browser_list_tabs_summary, browser_open_summary,
     browser_snapshot_summary, browser_status_summary, parse_browser_open_url, parse_browser_point,
     parse_browser_scroll, parse_browser_tab_id, parse_browser_target, parse_required_browser_url,
     parse_required_literal_string, parse_required_string,
 };
 use super::{McpService, build_tool_definitions, handle_tool_call};
+
+/// Serializes the tests that toggle `SKY_CUA_BROWSER_EVAL`.
+static EVAL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Default)]
 struct FakeService {
@@ -82,6 +86,10 @@ fn browser_tool_definitions_are_always_advertised() {
     assert!(names.contains(&"browser_type_text"));
     assert!(names.contains(&"browser_press_key"));
     assert!(names.contains(&"browser_scroll"));
+    assert!(
+        !names.contains(&"browser_eval"),
+        "browser_eval must stay opt-in"
+    );
 }
 
 #[test]
@@ -95,6 +103,22 @@ fn browser_scroll_schema_matches_delta_defaults() {
         .expect("browser_scroll tool is advertised");
 
     assert_eq!(scroll_tool["inputSchema"]["required"], json!(["tab_id"]));
+}
+
+#[test]
+fn browser_snapshot_schema_advertises_element_filtering() {
+    let definitions = build_tool_definitions(false);
+    let snapshot_tool = definitions
+        .as_array()
+        .expect("tools should be an array")
+        .iter()
+        .find(|tool| tool["name"] == "browser_snapshot")
+        .expect("browser_snapshot tool is advertised");
+
+    let properties = &snapshot_tool["inputSchema"]["properties"];
+    assert!(properties.get("element_query").is_some());
+    assert!(properties.get("element_offset").is_some());
+    assert!(properties.get("element_limit").is_some());
 }
 
 #[test]
@@ -651,6 +675,174 @@ fn browser_snapshot_summary_exposes_page_details_for_text_only_agents() {
 }
 
 #[test]
+fn browser_snapshot_caps_structured_elements_by_default() {
+    let many_elements: Vec<_> = (0..1000)
+        .map(|index| json!({"index": index, "tag": "button", "role": "button"}))
+        .collect();
+    let service = FakeService::with_response(browser_service_response!(Snapshot {
+        response: BrowserSnapshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            title: Some("Dense".to_string()),
+            url: Some("https://dense.example/".to_string()),
+            snapshot: Some(json!({
+                "title": "Dense",
+                "url": "https://dense.example/",
+                "viewport": {"width": 1440, "height": 900, "devicePixelRatio": 1},
+                "text": "Dense",
+                "elementCount": 1000,
+                "elements": many_elements,
+            })),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({"tab_id": "tab-1"}),
+    )
+    .unwrap();
+
+    let elements = result["structuredContent"]["snapshot"]["elements"]
+        .as_array()
+        .expect("elements array");
+    // Untuned calls are capped so dense pages do not overflow host budgets,
+    // but the true total stays visible via elementCount.
+    assert_eq!(elements.len(), 200);
+    assert_eq!(
+        result["structuredContent"]["snapshot"]["elementCount"],
+        1000
+    );
+}
+
+#[test]
+fn browser_snapshot_filters_structured_elements_for_deep_sidebar_controls() {
+    let service = FakeService::with_response(browser_service_response!(Snapshot {
+        response: BrowserSnapshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            title: Some("Dot Agents | OpenChamber".to_string()),
+            url: Some("https://chamber.heliasar.com/".to_string()),
+            snapshot: Some(json!({
+                "title": "Dot Agents | OpenChamber",
+                "url": "https://chamber.heliasar.com/",
+                "viewport": {"width": 1440, "height": 900, "devicePixelRatio": 1},
+                "text": "OpenChamber",
+                "elementCount": 200,
+                "elements": [
+                    {"index": 0, "tag": "button", "role": "button", "name": "New Session"},
+                    {"index": 184, "tag": "button", "role": "button", "name": "Update Available"},
+                    {"index": 185, "tag": "button", "role": "button", "name": "Settings"}
+                ]
+            })),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({"tab_id": "tab-1", "element_query": "update", "element_limit": 1}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], false);
+    let elements = result["structuredContent"]["snapshot"]["elements"]
+        .as_array()
+        .expect("filtered elements");
+    assert_eq!(elements.len(), 1);
+    assert_eq!(elements[0]["index"], 184);
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Update Available")
+    );
+    assert!(!result.to_string().contains("New Session"));
+}
+
+#[test]
+fn browser_eval_tool_is_gated_behind_explicit_opt_in() {
+    let mut disabled = Vec::new();
+    push_tool_definitions(&mut disabled, false);
+    assert!(!disabled.iter().any(|tool| tool["name"] == "browser_eval"));
+
+    let mut enabled = Vec::new();
+    push_tool_definitions(&mut enabled, true);
+    assert!(enabled.iter().any(|tool| tool["name"] == "browser_eval"));
+}
+
+#[test]
+fn browser_eval_rejected_when_not_opted_in() {
+    let _guard = EVAL_ENV_LOCK.lock().unwrap();
+    let previous = std::env::var_os(BROWSER_EVAL_ENV);
+    unsafe { std::env::remove_var(BROWSER_EVAL_ENV) };
+
+    let service = FakeService::default();
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_eval",
+        json!({"tab_id": "tab-1", "expression": "1"}),
+    )
+    .unwrap();
+
+    if let Some(value) = previous {
+        unsafe { std::env::set_var(BROWSER_EVAL_ENV, value) };
+    }
+    assert_eq!(result["isError"], true);
+    assert!(result.to_string().contains("SKY_CUA_BROWSER_EVAL"));
+    assert!(service.take_requests().is_empty());
+}
+
+#[test]
+fn browser_eval_routes_expression_to_service() {
+    let _guard = EVAL_ENV_LOCK.lock().unwrap();
+    let previous = std::env::var_os(BROWSER_EVAL_ENV);
+    unsafe { std::env::set_var(BROWSER_EVAL_ENV, "on") };
+    let service = FakeService::with_response(browser_service_response!(Eval {
+        response: BrowserEvalResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            value: Some(json!({"ok": true})),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_eval",
+        json!({"tab_id": "tab-1", "expression": "(() => ({ok: true}))()"}),
+    )
+    .unwrap();
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var(BROWSER_EVAL_ENV, value) },
+        None => unsafe { std::env::remove_var(BROWSER_EVAL_ENV) },
+    }
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["structuredContent"]["value"]["ok"], true);
+    assert_eq!(
+        service.take_requests(),
+        vec![ServiceRequest::Browser {
+            request: BrowserRequest::Eval {
+                target: None,
+                tab_id: "tab-1".to_string(),
+                expression: "(() => ({ok: true}))()".to_string(),
+            },
+        }]
+    );
+}
+
+#[test]
 fn browser_list_tabs_marks_bridge_failure_as_mcp_error() {
     let service = FakeService::with_response(browser_service_response!(ListTabs {
         response: BrowserListTabsResponse {
@@ -708,4 +900,111 @@ fn browser_list_tabs_marks_unsupported_bridge_as_mcp_error() {
         result["structuredContent"]["diagnostics"][0]["code"],
         "BrowserBridgeUnsupported"
     );
+}
+
+fn screenshot_service_response() -> ServiceResponse {
+    browser_service_response!(Screenshot {
+        response: sky_cua_platform::model::BrowserScreenshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "123".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            data_base64: "aGVsbG8=".to_string(),
+            screenshot_path: Some("/tmp/sky-cua/captures/browser-123-1.jpg".to_string()),
+            width: Some(1280),
+            height: Some(720),
+            diagnostics: Vec::new(),
+        },
+    })
+}
+
+#[test]
+fn browser_screenshot_attaches_image_block_and_strips_base64() {
+    let service = FakeService::with_response(screenshot_service_response());
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo {
+            supports_images: Some(true),
+        },
+        "browser_screenshot",
+        json!({"target": "user_chrome", "tab_id": "123"}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], false);
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("1280x720"));
+    assert!(text.contains("/tmp/sky-cua/captures/browser-123-1.jpg"));
+    assert!(text.contains("CSS-pixel"));
+
+    assert_eq!(result["content"][1]["type"], "image");
+    assert_eq!(result["content"][1]["data"], "aGVsbG8=");
+    assert_eq!(result["content"][1]["mimeType"], "image/jpeg");
+
+    let structured = &result["structuredContent"];
+    assert!(structured.get("data_base64").is_none());
+    assert_eq!(
+        structured["screenshot_path"],
+        "/tmp/sky-cua/captures/browser-123-1.jpg"
+    );
+    assert_eq!(structured["width"], 1280);
+    assert_eq!(structured["height"], 720);
+}
+
+#[test]
+fn browser_screenshot_for_text_only_model_omits_image_block() {
+    let service = FakeService::with_response(screenshot_service_response());
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo {
+            supports_images: Some(false),
+        },
+        "browser_screenshot",
+        json!({"target": "user_chrome", "tab_id": "123"}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["content"].as_array().unwrap().len(), 1);
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("does not support image input"));
+    assert!(text.contains("browser_snapshot"));
+    assert!(result["structuredContent"].get("data_base64").is_none());
+}
+
+#[test]
+fn browser_screenshot_with_empty_data_reports_error() {
+    let service = FakeService::with_response(browser_service_response!(Screenshot {
+        response: sky_cua_platform::model::BrowserScreenshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "123".to_string(),
+            mime_type: "image/png".to_string(),
+            data_base64: String::new(),
+            screenshot_path: None,
+            width: None,
+            height: None,
+            diagnostics: vec![DiagnosticEntry {
+                code: "BrowserBridgeRequestFailed".to_string(),
+                message: "Browser screenshot CDP response did not include image data.".to_string(),
+                details: None,
+            }],
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo {
+            supports_images: Some(true),
+        },
+        "browser_screenshot",
+        json!({"target": "user_chrome", "tab_id": "123"}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], true);
+    assert_eq!(result["content"].as_array().unwrap().len(), 1);
 }

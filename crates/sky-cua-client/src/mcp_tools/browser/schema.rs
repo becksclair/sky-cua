@@ -1,6 +1,14 @@
 use serde_json::{Value, json};
 
-pub(crate) fn push_tool_definitions(tool_array: &mut Vec<Value>) {
+// `browser_eval` executes arbitrary page JavaScript in real signed-in user
+// tabs — a stronger trust boundary than visible UI automation. The opt-in
+// check is shared with the service execution boundary so the two cannot
+// diverge; see `sky_cua_platform::model::browser_eval_enabled`.
+#[cfg(test)]
+pub(crate) use sky_cua_platform::model::BROWSER_EVAL_ENV;
+pub(crate) use sky_cua_platform::model::browser_eval_enabled;
+
+pub(crate) fn push_tool_definitions(tool_array: &mut Vec<Value>, eval_enabled: bool) {
     tool_array.push(browser_status_tool());
     tool_array.push(browser_list_tabs_tool());
     tool_array.push(browser_open_tool());
@@ -13,6 +21,9 @@ pub(crate) fn push_tool_definitions(tool_array: &mut Vec<Value>) {
     tool_array.push(browser_type_text_tool());
     tool_array.push(browser_press_key_tool());
     tool_array.push(browser_scroll_tool());
+    if eval_enabled {
+        tool_array.push(browser_eval_tool());
+    }
 }
 
 fn browser_status_tool() -> Value {
@@ -101,7 +112,7 @@ fn browser_claim_tab_tool() -> Value {
 fn browser_move_mouse_tool() -> Value {
     json!({
         "name": "browser_move_mouse",
-        "description": "Move the webpage/browser cursor in a claimed or session-owned user_chrome tab using browser screenshot pixel coordinates. Use browser_claim_tab for existing user tabs, or browser_open for session-owned tabs.",
+        "description": "Move the webpage/browser cursor in a claimed or session-owned user_chrome tab. Coordinates are CSS pixels, the same space as browser_screenshot image pixels and browser_snapshot element bounds. Use browser_claim_tab for existing user tabs, or browser_open for session-owned tabs.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -117,12 +128,12 @@ fn browser_move_mouse_tool() -> Value {
                 "x": {
                     "type": "number",
                     "minimum": 0,
-                    "description": "Target X coordinate in browser screenshot pixels; sky-cua converts through devicePixelRatio before sending browser input."
+                    "description": "Target X coordinate in CSS pixels, matching browser_screenshot image pixels and browser_snapshot element bounds."
                 },
                 "y": {
                     "type": "number",
                     "minimum": 0,
-                    "description": "Target Y coordinate in browser screenshot pixels; sky-cua converts through devicePixelRatio before sending browser input."
+                    "description": "Target Y coordinate in CSS pixels, matching browser_screenshot image pixels and browser_snapshot element bounds."
                 },
                 "wait_for_arrival": {
                     "type": "boolean",
@@ -152,8 +163,23 @@ fn browser_navigate_tool() -> Value {
 fn browser_snapshot_tool() -> Value {
     browser_tab_tool(
         "browser_snapshot",
-        "Return a structured browser page snapshot for a claimed or session-owned user_chrome tab, including title, URL, visible text, viewport, and common element summaries when available.",
-        json!({}),
+        "Return a structured browser page snapshot for a claimed or session-owned user_chrome tab, including title, URL, visible text, viewport, and common element summaries. Element bounds are CSS pixels, the same space as browser_screenshot image pixels and browser_click coordinates. Use element_query or element_offset/element_limit when many controls are present.",
+        json!({
+            "element_offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Optional zero-based offset into actionable elements returned in structuredContent and shown in the text summary."
+            },
+            "element_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional maximum number of actionable elements returned in structuredContent and shown in the text summary. Defaults to 200; snapshot.elementCount always reports the full total."
+            },
+            "element_query": {
+                "type": "string",
+                "description": "Optional case-insensitive filter over element tag, role, name, value, and href. Example: update"
+            }
+        }),
         json!(["tab_id"]),
     )
 }
@@ -161,7 +187,7 @@ fn browser_snapshot_tool() -> Value {
 fn browser_screenshot_tool() -> Value {
     browser_tab_tool(
         "browser_screenshot",
-        "Capture a PNG screenshot from a claimed or session-owned user_chrome tab through CDP and return base64 image data.",
+        "Capture a screenshot of the visible viewport in a claimed or session-owned user_chrome tab. The image is attached to the result when the session's model supports image input, and saved to a file whose path is returned in structuredContent.screenshot_path. Image pixels are CSS pixels, the same space as browser_snapshot element bounds and browser_click coordinates.",
         json!({}),
         json!(["tab_id"]),
     )
@@ -170,10 +196,10 @@ fn browser_screenshot_tool() -> Value {
 fn browser_click_tool() -> Value {
     browser_tab_tool(
         "browser_click",
-        "Click within a claimed or session-owned user_chrome tab using browser screenshot pixel coordinates.",
+        "Click within a claimed or session-owned user_chrome tab. Coordinates are CSS pixels, the same space as browser_screenshot image pixels and browser_snapshot element bounds.",
         json!({
-            "x": { "type": "number", "minimum": 0, "description": "Target X coordinate in browser screenshot pixels; sky-cua converts through devicePixelRatio before sending browser input." },
-            "y": { "type": "number", "minimum": 0, "description": "Target Y coordinate in browser screenshot pixels; sky-cua converts through devicePixelRatio before sending browser input." }
+            "x": { "type": "number", "minimum": 0, "description": "Target X coordinate in CSS pixels, matching browser_screenshot image pixels and browser_snapshot element bounds." },
+            "y": { "type": "number", "minimum": 0, "description": "Target Y coordinate in CSS pixels, matching browser_screenshot image pixels and browser_snapshot element bounds." }
         }),
         json!(["tab_id", "x", "y"]),
     )
@@ -193,9 +219,9 @@ fn browser_type_text_tool() -> Value {
 fn browser_press_key_tool() -> Value {
     browser_tab_tool(
         "browser_press_key",
-        "Press a keyboard key in a claimed or session-owned user_chrome tab using CDP Input.dispatchKeyEvent key names.",
+        "Press a keyboard key in a claimed or session-owned user_chrome tab using CDP Input.dispatchKeyEvent key names. Modifier chords such as Ctrl+K, Ctrl+L, Shift+Tab, Meta+K, and hyphen targets like Ctrl+- are accepted.",
         json!({
-            "key": { "type": "string", "description": "CDP key name, such as Enter, Tab, Escape, ArrowDown, or a printable character." }
+            "key": { "type": "string", "description": "CDP key name or modifier chord, such as Enter, Tab, Escape, ArrowDown, Ctrl+K, Ctrl+L, Shift+Tab, or Ctrl+- (zoom out)." }
         }),
         json!(["tab_id", "key"]),
     )
@@ -204,14 +230,28 @@ fn browser_press_key_tool() -> Value {
 fn browser_scroll_tool() -> Value {
     browser_tab_tool(
         "browser_scroll",
-        "Scroll the page viewport within a claimed or session-owned user_chrome tab. Positive delta_y scrolls down.",
+        "Scroll within a claimed or session-owned user_chrome tab. When x/y are provided, sky-cua scrolls the nearest scrollable DOM container under that point; otherwise it falls back to the page viewport. Positive delta_y scrolls down.",
         json!({
-            "delta_x": { "type": "number", "description": "Horizontal scroll delta in browser screenshot pixels. Defaults to 0; sky-cua converts through devicePixelRatio." },
-            "delta_y": { "type": "number", "description": "Vertical scroll delta in browser screenshot pixels. Positive values scroll down; sky-cua converts through devicePixelRatio." },
-            "x": { "type": "number", "minimum": 0, "description": "Wheel event X context coordinate in browser screenshot pixels. Defaults to 0; sky-cua converts through devicePixelRatio." },
-            "y": { "type": "number", "minimum": 0, "description": "Wheel event Y context coordinate in browser screenshot pixels. Defaults to 0; sky-cua converts through devicePixelRatio." }
+            "delta_x": { "type": "number", "description": "Horizontal scroll delta in CSS pixels. Defaults to 0." },
+            "delta_y": { "type": "number", "description": "Vertical scroll delta in CSS pixels. Positive values scroll down." },
+            "x": { "type": "number", "minimum": 0, "description": "Wheel event X context coordinate in CSS pixels, matching browser_screenshot image pixels. Defaults to 0." },
+            "y": { "type": "number", "minimum": 0, "description": "Wheel event Y context coordinate in CSS pixels, matching browser_screenshot image pixels. Defaults to 0." }
         }),
         json!(["tab_id"]),
+    )
+}
+
+fn browser_eval_tool() -> Value {
+    browser_tab_tool(
+        "browser_eval",
+        "Evaluate JavaScript in a claimed or session-owned user_chrome tab through CDP Runtime.evaluate and return the result by value. Use for diagnostics or controlled page-level fallbacks when visible UI automation is blocked. Available only when the operator sets SKY_CUA_BROWSER_EVAL=on.",
+        json!({
+            "expression": {
+                "type": "string",
+                "description": "JavaScript expression to evaluate in the page. Promises are awaited; serializable results are returned by value."
+            }
+        }),
+        json!(["tab_id", "expression"]),
     )
 }
 

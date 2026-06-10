@@ -777,7 +777,7 @@ async fn claim_tab_reattaches_when_page_enable_finds_stale_debugger_state() {
                 "id": enable["id"],
                 "error": {
                     "code": 1,
-                    "message": "Debugger is not attached to the tab with id: 515."
+                    "message": "Debugger unattached"
                 }
             }),
         )
@@ -820,7 +820,6 @@ async fn move_mouse_targets_claimed_or_session_tab() {
 
     let server = tokio::spawn(async move {
         let mut stream = accept_after_info(&listener).await;
-        reply_to_viewport_scale(&mut stream, 515, 1.25).await;
         let move_mouse = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(
             move_mouse.get("method").and_then(Value::as_str),
@@ -828,8 +827,8 @@ async fn move_mouse_targets_claimed_or_session_tab() {
         );
         assert_eq!(move_mouse["params"]["session_id"], "sky-cua-mcp");
         assert_eq!(move_mouse["params"]["tabId"], 515);
-        assert_eq!(move_mouse["params"]["x"], 192.0);
-        assert_eq!(move_mouse["params"]["y"], 128.0);
+        assert_eq!(move_mouse["params"]["x"], 240.0);
+        assert_eq!(move_mouse["params"]["y"], 160.0);
         assert_eq!(move_mouse["params"]["waitForArrival"], true);
         write_frame(
             &mut stream,
@@ -861,26 +860,25 @@ async fn move_mouse_targets_claimed_or_session_tab() {
 }
 
 #[tokio::test]
-async fn move_mouse_recovers_when_viewport_scale_finds_stale_session() {
+async fn move_mouse_recovers_when_bridge_finds_stale_session() {
     let _env_guard = env_lock().await;
     let socket_dir = unique_test_dir("sky-cua-browser-move-mouse-recover");
     std::fs::create_dir_all(&socket_dir).unwrap();
     let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
 
     let server = tokio::spawn(async move {
-        let (mut stream, scale) = accept_until_non_info_request(&listener).await;
+        let (mut stream, first_move) = accept_until_non_info_request(&listener).await;
         assert_eq!(
-            scale.get("method").and_then(Value::as_str),
-            Some("executeCdp")
+            first_move.get("method").and_then(Value::as_str),
+            Some("moveMouse")
         );
-        assert_eq!(scale["params"]["session_id"], "sky-cua-mcp");
-        assert_eq!(scale["params"]["target"]["tabId"], 515);
-        assert_eq!(scale["params"]["method"], "Runtime.evaluate");
+        assert_eq!(first_move["params"]["session_id"], "sky-cua-mcp");
+        assert_eq!(first_move["params"]["tabId"], 515);
         write_frame(
             &mut stream,
             &json!({
                 "jsonrpc": "2.0",
-                "id": scale["id"],
+                "id": first_move["id"],
                 "error": {
                     "code": 1,
                     "message": "Tab 515 is not part of browser session sky-cua-mcp."
@@ -913,8 +911,8 @@ async fn move_mouse_recovers_when_viewport_scale_finds_stale_session() {
         .await
         .unwrap();
 
+        reply_to_detach(&mut stream, 515).await;
         reply_to_attach_and_enable(&mut stream, 515).await;
-        reply_to_viewport_scale(&mut stream, 515, 2.0).await;
 
         let move_mouse = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(
@@ -923,8 +921,8 @@ async fn move_mouse_recovers_when_viewport_scale_finds_stale_session() {
         );
         assert_eq!(move_mouse["params"]["session_id"], "sky-cua-mcp");
         assert_eq!(move_mouse["params"]["tabId"], 515);
-        assert_eq!(move_mouse["params"]["x"], 120.0);
-        assert_eq!(move_mouse["params"]["y"], 80.0);
+        assert_eq!(move_mouse["params"]["x"], 240.0);
+        assert_eq!(move_mouse["params"]["y"], 160.0);
         assert_eq!(move_mouse["params"]["waitForArrival"], true);
         write_frame(
             &mut stream,
@@ -955,15 +953,14 @@ async fn move_mouse_recovers_when_viewport_scale_finds_stale_session() {
 }
 
 #[tokio::test]
-async fn click_converts_browser_screenshot_pixels_to_css_pixels() {
+async fn click_dispatches_css_pixel_coordinates_directly() {
     let _env_guard = env_lock().await;
-    let socket_dir = unique_test_dir("sky-cua-browser-click-device-pixels");
+    let socket_dir = unique_test_dir("sky-cua-browser-click-css-pixels");
     std::fs::create_dir_all(&socket_dir).unwrap();
     let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
 
     let server = tokio::spawn(async move {
         let mut stream = accept_after_info(&listener).await;
-        reply_to_viewport_scale(&mut stream, 515, 1.25).await;
 
         for (expected_type, expected_button) in [
             ("mouseMoved", None),
@@ -978,8 +975,8 @@ async fn click_converts_browser_screenshot_pixels_to_css_pixels() {
             assert_eq!(event["params"]["method"], "Input.dispatchMouseEvent");
             let command = &event["params"]["commandParams"];
             assert_eq!(command["type"], expected_type);
-            assert_eq!(command["x"], 240.0);
-            assert_eq!(command["y"], 971.2);
+            assert_eq!(command["x"], 300.0);
+            assert_eq!(command["y"], 1214.0);
             if let Some(button) = expected_button {
                 assert_eq!(command["button"], button);
             }
@@ -1017,22 +1014,19 @@ async fn cdp_action_recovers_when_tab_is_not_in_browser_session() {
     let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
 
     let server = tokio::spawn(async move {
-        let (mut stream, first_screenshot) = accept_until_non_info_request(&listener).await;
+        let (mut stream, first_metrics) = accept_until_non_info_request(&listener).await;
         assert_eq!(
-            first_screenshot.get("method").and_then(Value::as_str),
+            first_metrics.get("method").and_then(Value::as_str),
             Some("executeCdp")
         );
-        assert_eq!(first_screenshot["params"]["session_id"], "sky-cua-mcp");
-        assert_eq!(first_screenshot["params"]["target"]["tabId"], 515);
-        assert_eq!(
-            first_screenshot["params"]["method"],
-            "Page.captureScreenshot"
-        );
+        assert_eq!(first_metrics["params"]["session_id"], "sky-cua-mcp");
+        assert_eq!(first_metrics["params"]["target"]["tabId"], 515);
+        assert_eq!(first_metrics["params"]["method"], "Runtime.evaluate");
         write_frame(
             &mut stream,
             &json!({
                 "jsonrpc": "2.0",
-                "id": first_screenshot["id"],
+                "id": first_metrics["id"],
                 "error": {
                     "code": 1,
                     "message": "Tab 515 is not part of browser session sky-cua-mcp."
@@ -1065,7 +1059,9 @@ async fn cdp_action_recovers_when_tab_is_not_in_browser_session() {
         .await
         .unwrap();
 
+        reply_to_detach(&mut stream, 515).await;
         reply_to_attach_and_enable(&mut stream, 515).await;
+        reply_to_viewport_metrics(&mut stream, 515, 100.0, 80.0, 2.0).await;
 
         let retried_screenshot = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(
@@ -1078,12 +1074,17 @@ async fn cdp_action_recovers_when_tab_is_not_in_browser_session() {
             retried_screenshot["params"]["method"],
             "Page.captureScreenshot"
         );
+        let capture_params = &retried_screenshot["params"]["commandParams"];
+        assert_eq!(capture_params["captureBeyondViewport"], true);
+        assert_eq!(capture_params["clip"]["width"], 100.0);
+        assert_eq!(capture_params["clip"]["height"], 80.0);
+        assert_eq!(capture_params["clip"]["scale"], 1);
         write_frame(
             &mut stream,
             &json!({
                 "jsonrpc": "2.0",
                 "id": retried_screenshot["id"],
-                "result": {"data": "png-base64"}
+                "result": {"data": test_png_base64(200, 160)}
             }),
         )
         .await
@@ -1098,7 +1099,18 @@ async fn cdp_action_recovers_when_tab_is_not_in_browser_session() {
     std::fs::remove_dir_all(socket_dir).unwrap();
 
     assert!(response.diagnostics.is_empty());
-    assert_eq!(response.data_base64, "png-base64");
+    // The capture is normalized to CSS-pixel dimensions and re-encoded with
+    // the model screenshot knobs (JPEG by default).
+    assert_eq!(response.mime_type, "image/jpeg");
+    assert_eq!(response.width, Some(100));
+    assert_eq!(response.height, Some(80));
+    assert!(!response.data_base64.is_empty());
+    let screenshot_path = response
+        .screenshot_path
+        .as_deref()
+        .expect("screenshot should be persisted to disk");
+    assert!(std::path::Path::new(screenshot_path).exists());
+    let _ = std::fs::remove_file(screenshot_path);
 }
 
 #[tokio::test]
@@ -1154,6 +1166,7 @@ async fn cdp_action_recovers_when_debugger_is_unattached() {
         .await
         .unwrap();
 
+        reply_to_detach(&mut stream, 515).await;
         reply_to_attach_and_enable(&mut stream, 515).await;
 
         let retried_snapshot = read_frame(&mut stream).await.unwrap().unwrap();
@@ -1284,6 +1297,7 @@ async fn cdp_action_recovery_reclaims_stale_sky_cua_owner() {
         .await
         .unwrap();
 
+        reply_to_detach(&mut stream, 515).await;
         reply_to_attach_and_enable(&mut stream, 515).await;
 
         let retried_snapshot = read_frame(&mut stream).await.unwrap().unwrap();
@@ -1336,18 +1350,22 @@ fn browser_snapshot_expression_suppresses_sensitive_form_values() {
             .contains("if (!('value' in el) || sensitiveField(el)) return null;")
     );
     assert!(BROWSER_SNAPSHOT_EXPRESSION.contains("return String(el.value).slice"));
+    // Element bounds stay in CSS pixels so they line up with screenshot
+    // pixels and pointer coordinates.
+    assert!(!BROWSER_SNAPSHOT_EXPRESSION.contains("rect.x * scale"));
+    assert!(BROWSER_SNAPSHOT_EXPRESSION.contains("x: rect.x"));
+    assert!(BROWSER_SNAPSHOT_EXPRESSION.contains("elements.slice(0, 5000)"));
 }
 
 #[tokio::test]
-async fn scroll_converts_browser_screenshot_pixels_to_css_pixels() {
+async fn scroll_dispatches_css_pixel_coordinates_directly() {
     let _env_guard = env_lock().await;
-    let socket_dir = unique_test_dir("sky-cua-browser-scroll-device-pixels");
+    let socket_dir = unique_test_dir("sky-cua-browser-scroll-css-pixels");
     std::fs::create_dir_all(&socket_dir).unwrap();
     let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
 
     let server = tokio::spawn(async move {
         let mut stream = accept_after_info(&listener).await;
-        reply_to_viewport_scale(&mut stream, 515, 1.25).await;
 
         let scroll = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(
@@ -1358,9 +1376,13 @@ async fn scroll_converts_browser_screenshot_pixels_to_css_pixels() {
         let expression = scroll["params"]["commandParams"]["expression"]
             .as_str()
             .unwrap_or_default();
-        assert!(expression.contains("window.scrollBy(80, 320)"));
-        assert!(expression.contains("eventX: 240"));
-        assert!(expression.contains("eventY: 971.2"));
+        assert!(expression.contains("document.elementFromPoint(eventX, eventY)"));
+        assert!(expression.contains("target.scrollBy(deltaX, deltaY)"));
+        assert!(expression.contains("window.scrollBy(deltaX, deltaY)"));
+        assert!(expression.contains("const eventX = 300"));
+        assert!(expression.contains("const eventY = 1214"));
+        assert!(expression.contains("const deltaX = 100"));
+        assert!(expression.contains("const deltaY = 400"));
         write_frame(
             &mut stream,
             &json!({"jsonrpc": "2.0", "id": scroll["id"], "result": {}}),
@@ -1386,6 +1408,197 @@ async fn scroll_converts_browser_screenshot_pixels_to_css_pixels() {
 
     assert!(response.diagnostics.is_empty());
     assert_eq!(response.action, "scroll");
+}
+
+#[tokio::test]
+async fn press_key_dispatches_modifier_chord() {
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-press-key-modifier");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let mut stream = accept_after_info(&listener).await;
+
+        let key_down = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(
+            key_down.get("method").and_then(Value::as_str),
+            Some("executeCdp")
+        );
+        assert_eq!(key_down["params"]["method"], "Input.dispatchKeyEvent");
+        assert_eq!(key_down["params"]["commandParams"]["type"], "keyDown");
+        assert_eq!(key_down["params"]["commandParams"]["key"], "K");
+        assert_eq!(key_down["params"]["commandParams"]["modifiers"], 2);
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": key_down["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+
+        let key_up = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(key_up["params"]["method"], "Input.dispatchKeyEvent");
+        assert_eq!(key_up["params"]["commandParams"]["type"], "keyUp");
+        assert_eq!(key_up["params"]["commandParams"]["key"], "K");
+        assert_eq!(key_up["params"]["commandParams"]["modifiers"], 2);
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": key_up["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    let response = press_key(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        "Ctrl+K".to_string(),
+    )
+    .await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    assert!(response.diagnostics.is_empty());
+    assert_eq!(response.action, "press_key");
+}
+
+#[tokio::test]
+async fn eval_returns_runtime_value() {
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-eval");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let mut stream = accept_after_info(&listener).await;
+
+        let eval_request = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(
+            eval_request.get("method").and_then(Value::as_str),
+            Some("executeCdp")
+        );
+        assert_eq!(eval_request["params"]["method"], "Runtime.evaluate");
+        assert_eq!(
+            eval_request["params"]["commandParams"]["expression"],
+            "(() => ({ok: true}))()"
+        );
+        assert_eq!(
+            eval_request["params"]["commandParams"]["awaitPromise"],
+            true
+        );
+        assert_eq!(
+            eval_request["params"]["commandParams"]["returnByValue"],
+            true
+        );
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": eval_request["id"],
+                "result": {
+                    "result": {
+                        "type": "object",
+                        "value": {"ok": true}
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    let previous_eval = std::env::var_os("SKY_CUA_BROWSER_EVAL");
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    unsafe { std::env::set_var("SKY_CUA_BROWSER_EVAL", "on") };
+    let response = eval(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        "(() => ({ok: true}))()".to_string(),
+    )
+    .await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    restore_env("SKY_CUA_BROWSER_EVAL", previous_eval);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    assert!(response.diagnostics.is_empty());
+    assert_eq!(response.value, Some(json!({"ok": true})));
+}
+
+#[tokio::test]
+async fn eval_disabled_without_opt_in_returns_diagnostic() {
+    let _env_guard = env_lock().await;
+    let previous_eval = std::env::var_os("SKY_CUA_BROWSER_EVAL");
+    unsafe { std::env::remove_var("SKY_CUA_BROWSER_EVAL") };
+    let response = eval(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        "(() => 1)()".to_string(),
+    )
+    .await;
+    restore_env("SKY_CUA_BROWSER_EVAL", previous_eval);
+
+    assert_eq!(response.value, None);
+    assert_eq!(response.diagnostics.len(), 1);
+    assert_eq!(response.diagnostics[0].code, "BrowserEvalDisabled");
+}
+
+#[tokio::test]
+async fn eval_reports_thrown_exception_as_diagnostic() {
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-eval-throw");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let mut stream = accept_after_info(&listener).await;
+        let eval_request = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(eval_request["params"]["method"], "Runtime.evaluate");
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": eval_request["id"],
+                "result": {
+                    "result": {"type": "object", "subtype": "error"},
+                    "exceptionDetails": {
+                        "text": "Uncaught",
+                        "exception": {
+                            "type": "object",
+                            "subtype": "error",
+                            "description": "TypeError: boom"
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    let previous_eval = std::env::var_os("SKY_CUA_BROWSER_EVAL");
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    unsafe { std::env::set_var("SKY_CUA_BROWSER_EVAL", "on") };
+    let response = eval(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        "throw new TypeError('boom')".to_string(),
+    )
+    .await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    restore_env("SKY_CUA_BROWSER_EVAL", previous_eval);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    assert_eq!(response.value, None);
+    assert_eq!(response.diagnostics.len(), 1);
+    assert_eq!(response.diagnostics[0].code, "BrowserEvalException");
+    assert!(response.diagnostics[0].message.contains("TypeError: boom"));
 }
 
 #[tokio::test]

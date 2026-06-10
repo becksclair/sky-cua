@@ -2,7 +2,9 @@
   "mcpServers": {
     "computer-use": {
       "command": "./bin/sky-cua-client",
-      "args": ["mcp"],
+      "args": [
+        "mcp"
+      ],
       "env_vars": [
         "CODEX_COMPUTER_USE_COSMIC_HELPER",
         "DBUS_SESSION_BUS_ADDRESS",
@@ -10,6 +12,7 @@
         "DISPLAY",
         "SKY_CUA_AGENT_CURSOR",
         "SKY_CUA_BROWSER",
+        "SKY_CUA_BROWSER_EVAL",
         "SKY_CUA_COSMIC_HELPER",
         "SKY_CUA_INPUT_BACKEND",
         "SKY_CUA_MODEL_SCREENSHOT_FORMAT",

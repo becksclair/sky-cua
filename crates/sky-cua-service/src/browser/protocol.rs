@@ -29,6 +29,7 @@ pub(super) const TYPE_TEXT_REQUEST_ID: &str = "sky-cua-browser-type-text";
 pub(super) const KEY_DOWN_REQUEST_ID: &str = "sky-cua-browser-key-down";
 pub(super) const KEY_UP_REQUEST_ID: &str = "sky-cua-browser-key-up";
 pub(super) const SCROLL_REQUEST_ID: &str = "sky-cua-browser-scroll";
+pub(super) const EVAL_REQUEST_ID: &str = "sky-cua-browser-eval";
 pub(super) const MAX_FRAME_SIZE: usize = 4 * 1024 * 1024;
 
 pub(super) async fn write_frame(

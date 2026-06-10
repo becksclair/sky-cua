@@ -178,33 +178,67 @@ pub(super) async fn reply_to_attach_and_enable(stream: &mut UnixStream, tab_id: 
     .unwrap();
 }
 
-pub(super) async fn reply_to_viewport_scale(
+pub(super) async fn reply_to_detach(stream: &mut UnixStream, tab_id: i64) {
+    let detach = read_frame(stream).await.unwrap().unwrap();
+    assert_eq!(detach.get("method").and_then(Value::as_str), Some("detach"));
+    assert_eq!(detach["params"]["session_id"], "sky-cua-mcp");
+    assert_eq!(detach["params"]["tabId"], tab_id);
+    write_frame(
+        stream,
+        &json!({"jsonrpc": "2.0", "id": detach["id"], "result": {}}),
+    )
+    .await
+    .unwrap();
+}
+
+pub(super) async fn reply_to_viewport_metrics(
     stream: &mut UnixStream,
     tab_id: i64,
+    css_width: f64,
+    css_height: f64,
     device_pixel_ratio: f64,
 ) {
-    let scale = read_frame(stream).await.unwrap().unwrap();
+    let metrics = read_frame(stream).await.unwrap().unwrap();
     assert_eq!(
-        scale.get("method").and_then(Value::as_str),
+        metrics.get("method").and_then(Value::as_str),
         Some("executeCdp")
     );
-    assert_eq!(scale["params"]["session_id"], "sky-cua-mcp");
-    assert_eq!(scale["params"]["target"]["tabId"], tab_id);
-    assert_eq!(scale["params"]["method"], "Runtime.evaluate");
+    assert_eq!(metrics["params"]["session_id"], "sky-cua-mcp");
+    assert_eq!(metrics["params"]["target"]["tabId"], tab_id);
+    assert_eq!(metrics["params"]["method"], "Runtime.evaluate");
     write_frame(
         stream,
         &json!({
             "jsonrpc": "2.0",
-            "id": scale["id"],
+            "id": metrics["id"],
             "result": {
                 "result": {
-                    "value": {"devicePixelRatio": device_pixel_ratio}
+                    "value": {
+                        "width": css_width,
+                        "height": css_height,
+                        "devicePixelRatio": device_pixel_ratio
+                    }
                 }
             }
         }),
     )
     .await
     .unwrap();
+}
+
+/// Encode a solid-color PNG for fake CDP screenshot replies.
+pub(super) fn test_png_base64(width: u32, height: u32) -> String {
+    use base64::Engine as _;
+
+    let mut bytes = Vec::new();
+    let image = image::RgbImage::from_pixel(width, height, image::Rgb([40, 90, 160]));
+    image::DynamicImage::ImageRgb8(image)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .expect("encode test png");
+    base64::engine::general_purpose::STANDARD.encode(&bytes)
 }
 
 pub(super) async fn reply_with_info_then_hang_on_create(listener: UnixListener) {

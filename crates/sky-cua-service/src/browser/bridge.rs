@@ -3,10 +3,10 @@ use std::time::Duration;
 #[cfg(test)]
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    BrowserActionResponse, BrowserClaimTabResponse, BrowserListTabsResponse,
+    BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
     BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
     BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserTargetKind, DiagnosticEntry,
-    normalize_browser_open_url,
+    browser_eval_enabled, normalize_browser_open_url,
 };
 #[cfg(test)]
 use std::path::{Path, PathBuf};
@@ -321,6 +321,9 @@ pub(crate) async fn screenshot(
             tab_id: normalized_tab_id,
             mime_type: "image/png".to_string(),
             data_base64: String::new(),
+            screenshot_path: None,
+            width: None,
+            height: None,
             diagnostics,
         };
     }
@@ -332,19 +335,37 @@ pub(crate) async fn screenshot(
     )
     .await
     {
-        Ok(BrowserCdpResult::Screenshot { data_base64 }) => BrowserScreenshotResponse {
-            target: resolved_target,
-            tab_id: normalized_tab_id,
-            mime_type: "image/png".to_string(),
+        Ok(BrowserCdpResult::Screenshot {
             data_base64,
-            diagnostics: Vec::new(),
-        },
+            css_width,
+            css_height,
+        }) => {
+            let prepared = super::model_image::prepare_browser_capture(
+                &normalized_tab_id,
+                &data_base64,
+                css_width,
+                css_height,
+            );
+            BrowserScreenshotResponse {
+                target: resolved_target,
+                tab_id: normalized_tab_id,
+                mime_type: prepared.mime_type,
+                data_base64: prepared.data_base64,
+                screenshot_path: prepared.screenshot_path,
+                width: (prepared.width > 0).then_some(prepared.width),
+                height: (prepared.height > 0).then_some(prepared.height),
+                diagnostics: prepared.diagnostics,
+            }
+        }
         Ok(_) => unreachable!("screenshot action returns screenshot result"),
         Err(diagnostic) => BrowserScreenshotResponse {
             target: resolved_target,
             tab_id: normalized_tab_id,
             mime_type: "image/png".to_string(),
             data_base64: String::new(),
+            screenshot_path: None,
+            width: None,
+            height: None,
             diagnostics: vec![diagnostic],
         },
     }
@@ -401,6 +422,63 @@ pub(crate) async fn press_key(
         BrowserCdpAction::PressKey { key },
     )
     .await
+}
+
+pub(crate) async fn eval(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    expression: String,
+) -> BrowserEvalResponse {
+    let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
+    let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
+    if !browser_eval_enabled() {
+        return BrowserEvalResponse {
+            target: resolved_target,
+            tab_id: normalized_tab_id,
+            value: None,
+            diagnostics: vec![DiagnosticEntry {
+                code: "BrowserEvalDisabled".to_string(),
+                message: "browser_eval is disabled. The operator can enable arbitrary \
+                          page-JavaScript execution with SKY_CUA_BROWSER_EVAL=on."
+                    .to_string(),
+                details: None,
+            }],
+        };
+    }
+    let mut diagnostics = validate_action_target(resolved_target, &normalized_tab_id);
+    if expression.trim().is_empty() {
+        diagnostics.push(invalid_text_diagnostic());
+    }
+    if !diagnostics.is_empty() {
+        return BrowserEvalResponse {
+            target: resolved_target,
+            tab_id: normalized_tab_id,
+            value: None,
+            diagnostics,
+        };
+    }
+
+    match run_cdp_action(
+        resolved_target,
+        &normalized_tab_id,
+        BrowserCdpAction::Eval { expression },
+    )
+    .await
+    {
+        Ok(BrowserCdpResult::Eval { value }) => BrowserEvalResponse {
+            target: resolved_target,
+            tab_id: normalized_tab_id,
+            value,
+            diagnostics: Vec::new(),
+        },
+        Ok(_) => unreachable!("eval action returns eval result"),
+        Err(diagnostic) => BrowserEvalResponse {
+            target: resolved_target,
+            tab_id: normalized_tab_id,
+            value: None,
+            diagnostics: vec![diagnostic],
+        },
+    }
 }
 
 pub(crate) async fn scroll(

@@ -13,20 +13,23 @@ pub(super) use args::{
     parse_browser_target, parse_required_browser_url, parse_required_literal_string,
     parse_required_string,
 };
-use args::{parse_browser_tab_filter, parse_optional_bool};
+use args::{parse_browser_snapshot_options, parse_browser_tab_filter, parse_optional_bool};
 #[cfg(test)]
 pub(super) use response::browser_list_tabs_summary;
 #[cfg(test)]
 pub(super) use response::browser_snapshot_summary;
 use response::{
     browser_action_result, browser_claim_tab_is_error, browser_claim_tab_summary,
-    browser_list_tabs_is_error, browser_list_tabs_structured_response,
+    browser_eval_result, browser_list_tabs_is_error, browser_list_tabs_structured_response,
     browser_list_tabs_summary_with_matches, browser_move_mouse_is_error,
     browser_move_mouse_summary, browser_navigate_result, browser_open_is_error,
-    browser_screenshot_result, browser_snapshot_result, browser_tab_match_indexes,
+    browser_screenshot_result, browser_snapshot_result, browser_snapshot_structured_response,
+    browser_tab_match_indexes,
 };
 pub(super) use response::{browser_open_summary, browser_status_summary};
-pub(super) use schema::push_tool_definitions;
+#[cfg(test)]
+pub(super) use schema::BROWSER_EVAL_ENV;
+pub(super) use schema::{browser_eval_enabled, push_tool_definitions};
 
 use super::{McpService, invalid_request_tool_error, tool_error};
 
@@ -45,6 +48,7 @@ pub(super) fn is_browser_tool(tool_name: &str) -> bool {
             | "browser_type_text"
             | "browser_press_key"
             | "browser_scroll"
+            | "browser_eval"
     )
 }
 
@@ -52,6 +56,7 @@ pub(super) fn handle_tool_call(
     service: &impl McpService,
     tool_name: &str,
     arguments: Value,
+    model: &crate::mcp_server::ModelSessionInfo,
 ) -> Result<Value> {
     match tool_name {
         "browser_status" => match service.call(&browser_service_request(BrowserRequest::Status))? {
@@ -239,13 +244,22 @@ pub(super) fn handle_tool_call(
                 Ok(tab_id) => tab_id,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
+            let snapshot_options = match parse_browser_snapshot_options(&arguments) {
+                Ok(options) => options,
+                Err(error) => return invalid_request_tool_error(error.to_string()),
+            };
             match service.call(&browser_service_request(BrowserRequest::Snapshot {
                 target,
                 tab_id,
             }))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::Snapshot { response },
-                } => browser_snapshot_result(response),
+                } => browser_snapshot_result(browser_snapshot_structured_response(
+                    response,
+                    snapshot_options.element_offset,
+                    snapshot_options.element_limit,
+                    snapshot_options.element_query.as_deref(),
+                )),
                 ServiceResponse::Error { code, message } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_snapshot: {other:?}"
@@ -267,7 +281,7 @@ pub(super) fn handle_tool_call(
             }))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::Screenshot { response },
-                } => browser_screenshot_result(response),
+                } => browser_screenshot_result(response, model.can_receive_images()),
                 ServiceResponse::Error { code, message } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_screenshot: {other:?}"
@@ -381,6 +395,43 @@ pub(super) fn handle_tool_call(
                 } => browser_action_result(response),
                 ServiceResponse::Error { code, message } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for browser_scroll: {other:?}")),
+            }
+        }
+        "browser_eval" => {
+            if !browser_eval_enabled() {
+                return tool_error(
+                    "BrowserEvalDisabled",
+                    "browser_eval is disabled by default because it runs arbitrary \
+                     JavaScript in real user tabs. The operator can enable it with \
+                     SKY_CUA_BROWSER_EVAL=on.",
+                );
+            }
+            let target = match parse_browser_target(&arguments) {
+                Ok(target) => target,
+                Err(error) => return invalid_request_tool_error(error.to_string()),
+            };
+            let tab_id = match parse_browser_tab_id(&arguments) {
+                Ok(tab_id) => tab_id,
+                Err(error) => return invalid_request_tool_error(error.to_string()),
+            };
+            let expression = match parse_required_literal_string(
+                &arguments,
+                "expression",
+                "browser_eval expression",
+            ) {
+                Ok(expression) => expression,
+                Err(error) => return invalid_request_tool_error(error.to_string()),
+            };
+            match service.call(&browser_service_request(BrowserRequest::Eval {
+                target,
+                tab_id,
+                expression,
+            }))? {
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Eval { response },
+                } => browser_eval_result(response),
+                ServiceResponse::Error { code, message } => tool_error(code, message),
+                other => Err(anyhow!("unexpected response for browser_eval: {other:?}")),
             }
         }
         other => Err(anyhow!("unexpected browser tool name: {other}")),
