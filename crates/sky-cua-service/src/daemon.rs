@@ -49,6 +49,29 @@ impl ServiceDaemon {
         })
     }
 
+    /// Spawn a background task that hides the agent cursor overlay once it
+    /// has been idle past the timeout, even when no further requests arrive
+    /// (interrupted or abandoned agent turns must not leave the overlay
+    /// shown or the user's cursor hidden).
+    pub fn spawn_overlay_idle_watchdog(self: &std::sync::Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let daemon = std::sync::Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                let diagnostics = daemon.overlay.lock().await.hide_idle_cursor();
+                for entry in diagnostics {
+                    debug!(
+                        code = entry.code,
+                        message = entry.message,
+                        "overlay idle watchdog"
+                    );
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_tests() -> std::io::Result<Self> {
         Ok(Self {

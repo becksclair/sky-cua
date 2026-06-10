@@ -3,7 +3,7 @@ use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use sky_cua_overlay_host::{
@@ -16,6 +16,73 @@ use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpac
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(100);
+
+// Watchdog: when the service dies after showing the agent cursor, nothing
+// would ever hide it again. The serve loops poll for connections and hide the
+// overlay after this long without a visibility refresh.
+const OVERLAY_IDLE_HIDE_DEFAULT_MS: u64 = 4_000;
+// Floor stays above the service's own idle timeout (1.5s in
+// sky-cua-service overlay.rs): a shorter host timeout would hide the cursor
+// mid-action while the service still refreshes it, flickering on every step.
+const OVERLAY_IDLE_HIDE_MIN_MS: u64 = 2_000;
+const OVERLAY_IDLE_HIDE_MAX_MS: u64 = 600_000;
+const OVERLAY_IDLE_HIDE_ENV: &str = "SKY_CUA_OVERLAY_IDLE_HIDE_MS";
+const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+fn overlay_idle_hide_timeout() -> Duration {
+    overlay_idle_hide_timeout_from(std::env::var(OVERLAY_IDLE_HIDE_ENV).ok().as_deref())
+}
+
+fn overlay_idle_hide_timeout_from(value: Option<&str>) -> Duration {
+    let millis = value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|millis| (OVERLAY_IDLE_HIDE_MIN_MS..=OVERLAY_IDLE_HIDE_MAX_MS).contains(millis))
+        .unwrap_or(OVERLAY_IDLE_HIDE_DEFAULT_MS);
+    Duration::from_millis(millis)
+}
+
+struct IdleHideTracker {
+    timeout: Duration,
+    deadline: Option<Instant>,
+}
+
+impl IdleHideTracker {
+    fn new(timeout: Duration) -> Self {
+        Self {
+            timeout,
+            deadline: None,
+        }
+    }
+
+    fn note_visibility(&mut self, visibility: Option<bool>) {
+        match visibility {
+            Some(true) => self.deadline = Some(Instant::now() + self.timeout),
+            Some(false) => self.deadline = None,
+            None => {}
+        }
+    }
+
+    fn hide_if_expired(&mut self, backend: &mut OverlayHostBackend) {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            let _ = backend.handle_message(OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::Hide,
+                state: None,
+                reason: Some("overlay host idle timeout".to_string()),
+            });
+            self.deadline = None;
+        }
+    }
+}
+
+struct HandledMessage {
+    shutdown: bool,
+    /// Some(true|false) when the message changed cursor visibility.
+    visibility: Option<bool>,
+}
 
 fn main() -> Result<()> {
     let command = std::env::args()
@@ -150,26 +217,48 @@ fn serve_json_lines() -> Result<()> {
 }
 
 fn serve_tcp(addr: String) -> Result<()> {
+    serve_tcp_with(addr, overlay_idle_hide_timeout())
+}
+
+fn serve_tcp_with(addr: String, idle_hide_timeout: Duration) -> Result<()> {
     let listener = TcpListener::bind(&addr)
         .with_context(|| format!("failed to bind overlay host TCP listener {addr}"))?;
+    listener
+        .set_nonblocking(true)
+        .context("failed to make overlay host TCP listener non-blocking")?;
     let mut backend = OverlayHostBackend::from_env();
-    for stream in listener.incoming() {
-        let mut stream = stream.context("failed to accept overlay host TCP connection")?;
-        stream
-            .set_read_timeout(Some(CLIENT_IO_TIMEOUT))
-            .context("failed to set overlay host TCP read timeout")?;
-        stream
-            .set_write_timeout(Some(CLIENT_IO_TIMEOUT))
-            .context("failed to set overlay host TCP write timeout")?;
-        let shutdown = match handle_socket_message(&mut backend, &mut stream) {
-            Ok(shutdown) => shutdown,
-            Err(error) => {
-                eprintln!("overlay host TCP connection failed: {error:#}");
-                false
+    let mut tracker = IdleHideTracker::new(idle_hide_timeout);
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream
+                    .set_nonblocking(false)
+                    .context("failed to make overlay host TCP stream blocking")?;
+                stream
+                    .set_read_timeout(Some(CLIENT_IO_TIMEOUT))
+                    .context("failed to set overlay host TCP read timeout")?;
+                stream
+                    .set_write_timeout(Some(CLIENT_IO_TIMEOUT))
+                    .context("failed to set overlay host TCP write timeout")?;
+                match handle_socket_message(&mut backend, &mut stream) {
+                    Ok(handled) => {
+                        tracker.note_visibility(handled.visibility);
+                        if handled.shutdown {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("overlay host TCP connection failed: {error:#}");
+                    }
+                }
             }
-        };
-        if shutdown {
-            break;
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                tracker.hide_if_expired(&mut backend);
+                std::thread::sleep(ACCEPT_POLL_INTERVAL);
+            }
+            Err(error) => {
+                return Err(error).context("failed to accept overlay host TCP connection");
+            }
         }
     }
     Ok(())
@@ -177,6 +266,11 @@ fn serve_tcp(addr: String) -> Result<()> {
 
 #[cfg(unix)]
 fn serve_unix_socket(path: PathBuf) -> Result<()> {
+    serve_unix_socket_with(path, overlay_idle_hide_timeout())
+}
+
+#[cfg(unix)]
+fn serve_unix_socket_with(path: PathBuf, idle_hide_timeout: Duration) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| {
             format!(
@@ -195,24 +289,43 @@ fn serve_unix_socket(path: PathBuf) -> Result<()> {
     }
     let listener = UnixListener::bind(&path)
         .with_context(|| format!("failed to bind overlay host socket {}", path.display()))?;
+    listener
+        .set_nonblocking(true)
+        .context("failed to make overlay host socket listener non-blocking")?;
     let mut backend = OverlayHostBackend::from_env();
-    for stream in listener.incoming() {
-        let mut stream = stream.context("failed to accept overlay host socket connection")?;
-        stream
-            .set_read_timeout(Some(CLIENT_IO_TIMEOUT))
-            .context("failed to set overlay host socket read timeout")?;
-        stream
-            .set_write_timeout(Some(CLIENT_IO_TIMEOUT))
-            .context("failed to set overlay host socket write timeout")?;
-        let shutdown = match handle_socket_message(&mut backend, &mut stream) {
-            Ok(shutdown) => shutdown,
-            Err(error) => {
-                eprintln!("overlay host socket connection failed: {error:#}");
-                false
+    let mut tracker = IdleHideTracker::new(idle_hide_timeout);
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream
+                    .set_nonblocking(false)
+                    .context("failed to make overlay host socket stream blocking")?;
+                stream
+                    .set_read_timeout(Some(CLIENT_IO_TIMEOUT))
+                    .context("failed to set overlay host socket read timeout")?;
+                stream
+                    .set_write_timeout(Some(CLIENT_IO_TIMEOUT))
+                    .context("failed to set overlay host socket write timeout")?;
+                match handle_socket_message(&mut backend, &mut stream) {
+                    Ok(handled) => {
+                        tracker.note_visibility(handled.visibility);
+                        if handled.shutdown {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("overlay host socket connection failed: {error:#}");
+                    }
+                }
             }
-        };
-        if shutdown {
-            break;
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                tracker.hide_if_expired(&mut backend);
+                std::thread::sleep(ACCEPT_POLL_INTERVAL);
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&path);
+                return Err(error).context("failed to accept overlay host socket connection");
+            }
         }
     }
     let _ = std::fs::remove_file(&path);
@@ -227,18 +340,22 @@ fn serve_unix_socket(_path: PathBuf) -> Result<()> {
 fn handle_socket_message(
     backend: &mut OverlayHostBackend,
     stream: &mut impl ReadWrite,
-) -> Result<bool> {
+) -> Result<HandledMessage> {
     let mut reader = io::BufReader::new(stream);
     let mut line = String::new();
     reader
         .read_line(&mut line)
         .context("failed to read overlay host socket request")?;
     if line.trim().is_empty() {
-        return Ok(false);
+        return Ok(HandledMessage {
+            shutdown: false,
+            visibility: None,
+        });
     }
     let message: OverlayHostMessage =
         serde_json::from_str(line.trim_end()).context("invalid overlay host request JSON")?;
     let shutdown = message.kind == OverlayHostMessageKind::Shutdown;
+    let visibility = message_visibility(&message);
     let reply = backend.handle_message(message);
     let stream = reader.get_mut();
     serde_json::to_writer(&mut *stream, &reply).context("failed to write reply JSON")?;
@@ -246,7 +363,21 @@ fn handle_socket_message(
         .write_all(b"\n")
         .context("failed to write reply newline")?;
     stream.flush().context("failed to flush reply")?;
-    Ok(shutdown)
+    Ok(HandledMessage {
+        shutdown,
+        visibility,
+    })
+}
+
+fn message_visibility(message: &OverlayHostMessage) -> Option<bool> {
+    match message.kind {
+        OverlayHostMessageKind::SetCursor => {
+            Some(message.state.as_ref().is_some_and(|state| state.visible))
+        }
+        OverlayHostMessageKind::Show => Some(true),
+        OverlayHostMessageKind::Hide => Some(false),
+        _ => None,
+    }
 }
 
 trait ReadWrite: io::Read + io::Write {}
@@ -267,10 +398,108 @@ mod tests {
     };
     use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpace};
 
-    use super::{CLIENT_IO_TIMEOUT, serve_tcp, serve_unix_socket};
+    use super::{
+        CLIENT_IO_TIMEOUT, overlay_idle_hide_timeout_from, serve_tcp, serve_unix_socket,
+        serve_unix_socket_with,
+    };
+
+    /// Pin the serve loops to the noop backend: these are transport tests and
+    /// must never attach to a live desktop backend (the auto-selected KWin
+    /// effect on a Plasma host with the sky-cua effect installed, for
+    /// example). Safe to set from parallel tests because the value is
+    /// identical everywhere.
+    fn pin_noop_overlay_backend() {
+        unsafe { std::env::set_var("SKY_CUA_OVERLAY_BACKEND", "noop") };
+    }
+
+    #[test]
+    fn overlay_idle_hide_timeout_parser_clamps_and_defaults() {
+        assert_eq!(
+            overlay_idle_hide_timeout_from(None),
+            Duration::from_millis(4_000)
+        );
+        assert_eq!(
+            overlay_idle_hide_timeout_from(Some("2500")),
+            Duration::from_millis(2_500)
+        );
+        // Values at or below the service's idle timeout would make the host
+        // hide the cursor mid-action; they fall back to the default.
+        assert_eq!(
+            overlay_idle_hide_timeout_from(Some("250")),
+            Duration::from_millis(4_000)
+        );
+        assert_eq!(
+            overlay_idle_hide_timeout_from(Some("10")),
+            Duration::from_millis(4_000)
+        );
+        assert_eq!(
+            overlay_idle_hide_timeout_from(Some("9999999")),
+            Duration::from_millis(4_000)
+        );
+        assert_eq!(
+            overlay_idle_hide_timeout_from(Some("junk")),
+            Duration::from_millis(4_000)
+        );
+    }
+
+    #[test]
+    fn unix_socket_serve_hides_overlay_after_idle_timeout() {
+        pin_noop_overlay_backend();
+        let dir = unique_temp_dir("socket-idle-hide");
+        let socket_path = dir.join("agent-cursor.sock");
+        let server_path = socket_path.clone();
+        let server =
+            thread::spawn(move || serve_unix_socket_with(server_path, Duration::from_millis(150)));
+        wait_for_socket(&socket_path);
+
+        let set = send(
+            &socket_path,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::SetCursor,
+                state: Some(cursor_state()),
+                reason: None,
+            },
+        );
+        assert!(set.state.as_ref().expect("state").visible);
+
+        // No further messages: the serve-loop watchdog must hide the overlay
+        // on its own once the idle timeout elapses.
+        thread::sleep(Duration::from_millis(600));
+
+        let probe = send(
+            &socket_path,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::Capabilities,
+                state: None,
+                reason: None,
+            },
+        );
+        assert!(
+            !probe.state.as_ref().expect("state").visible,
+            "overlay should be hidden by the idle watchdog"
+        );
+
+        let shutdown = send(
+            &socket_path,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::Shutdown,
+                state: None,
+                reason: None,
+            },
+        );
+        assert!(shutdown.ok);
+        server
+            .join()
+            .expect("server thread join")
+            .expect("server result");
+    }
 
     #[test]
     fn unix_socket_serve_round_trips_json_lines() {
+        pin_noop_overlay_backend();
         let dir = unique_temp_dir("socket-serve");
         let socket_path = dir.join("agent-cursor.sock");
         let server_path = socket_path.clone();
@@ -325,6 +554,7 @@ mod tests {
 
     #[test]
     fn tcp_serve_round_trips_json_lines() {
+        pin_noop_overlay_backend();
         let listener = TcpListener::bind("127.0.0.1:0").expect("reserve tcp port");
         let addr = listener.local_addr().expect("read tcp addr").to_string();
         drop(listener);
@@ -362,6 +592,7 @@ mod tests {
 
     #[test]
     fn unix_socket_serve_drops_idle_client_and_serves_next_request() {
+        pin_noop_overlay_backend();
         let dir = unique_temp_dir("socket-idle-client");
         let socket_path = dir.join("agent-cursor.sock");
         let server_path = socket_path.clone();
@@ -401,6 +632,7 @@ mod tests {
 
     #[test]
     fn tcp_serve_drops_idle_client_and_serves_next_request() {
+        pin_noop_overlay_backend();
         let listener = TcpListener::bind("127.0.0.1:0").expect("reserve tcp port");
         let addr = listener.local_addr().expect("read tcp addr").to_string();
         drop(listener);

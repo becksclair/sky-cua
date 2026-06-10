@@ -67,6 +67,7 @@ pub async fn run_service() -> Result<()> {
 
     let listener = UnixListener::bind(&socket_path)?;
     let daemon = Arc::new(ServiceDaemon::new(socket_path.clone()).await?);
+    let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let connections = Arc::new(ConnectionTracker::default());
     info!("sky-cua-service listening on {}", socket_path.display());
 
@@ -135,6 +136,7 @@ pub async fn run_service() -> Result<()> {
     let listener = TcpListener::bind(&bind_addr).await?;
     let local_addr = listener.local_addr()?.to_string();
     let daemon = Arc::new(ServiceDaemon::new(local_addr.clone().into()).await?);
+    let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let connections = Arc::new(ConnectionTracker::default());
     info!("sky-cua-service listening on {}", local_addr);
 

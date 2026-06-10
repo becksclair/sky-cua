@@ -135,6 +135,48 @@ Each accepted artifact reports `ok=true`, host framebuffer agent marker
 present while overlay is visible, no native cursor marker until hide, and
 clean cleanup.
 
+## Local install and update on a real Plasma host
+
+`scripts/install_kwin_effect.py` builds the effect from the current sources,
+installs it system-wide (`sudo cmake --install`, the only step that escalates;
+the exact command is printed first), enables it persistently in `kwinrc`
+(`Plugins/sky-cua-agent-cursorEnabled=true`), and drives the running KWin to
+the new build:
+
+```bash
+python3 scripts/install_kwin_effect.py --status   # session + effect state as JSON
+python3 scripts/install_kwin_effect.py            # build, install, reload
+```
+
+Update detection uses a build stamp: the deploy hashes the effect sources and
+cursor asset into `SKY_CUA_EFFECT_BUILD_ID`, the compiled effect reports it
+through the `com.skycua.AgentCursor.BuildId` DBus slot, and the script
+considers the deploy converged only when the running build id matches the
+installed one. Fresh installs hot-load through `loadEffect`; a replaced `.so`
+cannot hot-reload into the running KWin (no dlclose; verified live on KWin
+6.6), so updates report a pending Plasma session restart and show a desktop
+notification (`notify-send`, kdialog passive popup fallback) telling the user
+to log out and back in at their convenience. The deploy never restarts KWin
+itself: restarting `plasma-kwin_wayland.service` took a whole session down
+during live verification (it can also bring KWin back without re-claiming the
+`org.kde.KWin` DBus name). `--no-notify` suppresses the notification for
+automation. The effect itself starts hidden — autoloading with the session
+must not hide the user's cursor until an overlay host activates it — and
+carries an 8s idle auto-hide failsafe that restores the system cursor when
+the overlay host stops refreshing the cursor state (see the watchdog chain in
+[`agent-cursor-overlay.md`](agent-cursor-overlay.md)).
+
+The same deploy runs from the plugin lanes:
+
+```bash
+python3 scripts/install_mcp_server.py --host claude-code --restart-runtime --kwin-effect
+python3 scripts/deploy_debug_plugin.py --kwin-effect
+```
+
+Legacy installs without the `BuildId` slot report `unknown` and are treated as
+stale. Rerun the installer after KWin package updates: the effect links
+against the installed KWin headers and a stale binary can fail to load.
+
 ## Known limitations
 
 - **Generic Wayland clients cannot hide the compositor cursor globally.**

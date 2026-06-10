@@ -260,7 +260,12 @@ impl OverlayController {
             )
     }
 
-    fn hide_idle_cursor(&mut self) -> Vec<DiagnosticEntry> {
+    /// Hide the agent cursor when it has been idle past the timeout.
+    ///
+    /// Called lazily from snapshot handling and actively from the daemon's
+    /// idle watchdog, so an interrupted or abandoned agent turn still
+    /// restores the user's cursor without any further requests.
+    pub(crate) fn hide_idle_cursor(&mut self) -> Vec<DiagnosticEntry> {
         let Some(state) = self.state.as_ref().filter(|state| state.visible) else {
             return Vec::new();
         };

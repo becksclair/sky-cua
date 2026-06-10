@@ -45,6 +45,34 @@ Environment variables (allowlisted in `resources/chrome_preflight.py`):
 
 ## Behavior
 
+### Idle auto-hide watchdog chain
+
+The agent cursor must never outlive the agent driving it. Three independent
+watchdog layers guarantee the overlay hides and the system cursor is restored
+after a short timeout, no matter which part of the stack was interrupted,
+crashed, or abandoned mid-turn:
+
+1. **Service (1.5s)** — the daemon runs an active idle watchdog task that
+   hides the overlay once the cursor state is older than the idle timeout,
+   in addition to the lazy check on the next snapshot. Covers abandoned or
+   interrupted agent turns while the runtime is healthy.
+2. **Overlay host (4s, `SKY_CUA_OVERLAY_IDLE_HIDE_MS`)** — the host's serve
+   loop polls for connections and synthesizes a Hide
+   (`overlay host idle timeout`) when no visibility refresh arrives in time.
+   Covers a crashed or killed service. The env value is clamped to a 2s
+   floor so this layer cannot be configured below the service's 1.5s
+   timeout, which would hide the cursor mid-action between refreshes.
+3. **KWin effect (8s)** — the effect arms a single-shot timer on every
+   Show/SetCursorState and hides itself (restoring the system cursor) when no
+   refresh arrives. Covers a killed overlay host; this layer lives inside the
+   compositor and survives everything else dying. Hide/Show and the failsafe
+   keep the `StateJson` introspection's `visible` field in sync.
+
+Verified live on KDE Plasma (2026-06-10): the service layer hid at exactly
+1.5s with no further requests, and the host layer hid the real kwin_effect
+backend at the 4s boundary with the service SIGKILLed.
+
+
 The overlay has two planes that operate independently:
 
 1. **`UserVisible`** — a native overlay window, layer, or compositor effect
@@ -137,7 +165,7 @@ python3 scripts/run_gui_testing_vm_smoke.py --profile cosmic-patched-cursor-host
 python3 scripts/run_gui_testing_vm_smoke.py --profile cosmic-transparent-xcursor-host-proof --desktop-env COSMIC --wayland-display wayland-1
 ```
 
-Latest accepted artifacts (per `CONTINUITY.md` 2026-05-15):
+Latest accepted artifacts (2026-05-15 session):
 
 - KDE/KWin compiled effect: `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T132649888064Z/host-summary.json`
 - KDE/KWin layer-shell sequence: `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100302670580-syn`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100303845615-vis`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100305142807-hide`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click`
@@ -148,6 +176,20 @@ Latest accepted artifacts (per `CONTINUITY.md` 2026-05-15):
 - COSMIC transparent Xcursor: `artifacts/cosmic-transparent-xcursor-cursor-proof/20260516T073232164704Z/host-summary.json`
 
 ## Known limitations
+
+- On KWin with fractional scaling and panels, KWin renders the visible
+  hardware cursor offset by roughly the work-area origin during
+  RemoteDesktop-driven input, on both the EIS and legacy portal lanes.
+  Input dispatch is unaffected: clicks land at the requested coordinates,
+  matching the agent cursor, and the offset ghost cursor is KWin's visual
+  artifact. Verified live on Plasma (scale 1.5, left panel) on 2026-06-10
+  with synthetic-cursor captures and a small-button click probe.
+  Installing the sky-cua KWin effect hides the system cursor while the
+  agent cursor is shown, which removes the visual confusion; install or
+  update it with `python3 scripts/install_kwin_effect.py` (see
+  [`compositor-cursor-hiding.md`](compositor-cursor-hiding.md)).
+  `SKY_CUA_PORTAL_EIS=never` forces the legacy pointer lane for input-lane
+  debugging.
 
 - **Windows overlay is deferred.** The shared model and IPC contract were
   designed not to make Windows harder, but no Windows live proof exists yet.

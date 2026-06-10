@@ -39,6 +39,9 @@ if(NOT SKY_CUA_CURSOR_ASSET OR NOT EXISTS "${SKY_CUA_CURSOR_ASSET}")
     message(FATAL_ERROR "Set SKY_CUA_CURSOR_ASSET to crates/sky-cua-overlay-host/assets/cursor-chat.png")
 endif()
 
+set(SKY_CUA_EFFECT_BUILD_ID "unstamped" CACHE STRING
+    "Build identity stamp reported by the effect's BuildId() DBus slot")
+
 kcoreaddons_add_plugin(sky-cua-agent-cursor
     SOURCES
         main.cpp
@@ -48,6 +51,8 @@ kcoreaddons_add_plugin(sky-cua-agent-cursor
 )
 
 target_compile_features(sky-cua-agent-cursor PRIVATE cxx_std_20)
+target_compile_definitions(sky-cua-agent-cursor PRIVATE
+    SKY_CUA_EFFECT_BUILD_ID="${SKY_CUA_EFFECT_BUILD_ID}")
 target_include_directories(sky-cua-agent-cursor PRIVATE "${KWIN_INCLUDE_DIR}")
 set_target_properties(sky-cua-agent-cursor PROPERTIES PREFIX "")
 target_link_libraries(sky-cua-agent-cursor

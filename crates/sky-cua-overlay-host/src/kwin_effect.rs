@@ -47,6 +47,14 @@ impl KwinEffectOverlayBackend {
             );
         }
 
+        let hide_reason = if message.kind == OverlayHostMessageKind::Hide {
+            message
+                .reason
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+        } else {
+            None
+        };
         let result = match message.kind {
             OverlayHostMessageKind::Hello
             | OverlayHostMessageKind::Ping
@@ -58,7 +66,17 @@ impl KwinEffectOverlayBackend {
         };
 
         match result {
-            Ok(()) => self.reply(true, Vec::new()),
+            Ok(()) => {
+                // Diagnostic parity with the other visible backends.
+                let diagnostics = hide_reason.map_or_else(Vec::new, |reason| {
+                    vec![diagnostic(
+                        "OverlayCursorHidden",
+                        "Overlay host hid the cursor.",
+                        Some(reason),
+                    )]
+                });
+                self.reply(true, diagnostics)
+            }
             Err(error) => OverlayHostReply {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 ok: false,
@@ -89,17 +107,10 @@ impl KwinEffectOverlayBackend {
         Ok(())
     }
 
-    fn hide(&mut self, reason: Option<String>) -> Result<()> {
+    fn hide(&mut self, _reason: Option<String>) -> Result<()> {
         self.call_agent_cursor_method("Hide", std::iter::empty::<&str>())?;
         if let Some(state) = self.state.as_mut() {
             state.visible = false;
-        }
-        if let Some(reason) = reason {
-            self.state = self.state.take().map(|mut state| {
-                state.visible = false;
-                state
-            });
-            let _ = reason;
         }
         Ok(())
     }

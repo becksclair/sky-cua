@@ -18,6 +18,10 @@
 #include <cmath>
 #include <optional>
 
+#ifndef SKY_CUA_EFFECT_BUILD_ID
+#define SKY_CUA_EFFECT_BUILD_ID "unstamped"
+#endif
+
 namespace KWin
 {
 namespace
@@ -31,6 +35,10 @@ constexpr auto QmlPath = "kwin/effects/sky-cua-agent-cursor/qml/main.qml";
 constexpr auto CursorPath = "kwin/effects/sky-cua-agent-cursor/assets/cursor-chat.png";
 constexpr auto DBusObjectPath = "/com/skycua/AgentCursor";
 constexpr auto DBusInterface = "com.skycua.AgentCursor";
+// The agent cursor must never outlive its driver: if the overlay host stops
+// refreshing the state (crashed service, killed host, abandoned agent turn),
+// hide the overlay and restore the system cursor after this long.
+constexpr int IdleHideTimeoutMs = 8000;
 
 std::optional<QPointF> pointFromValue(const QJsonValue &value)
 {
@@ -56,13 +64,33 @@ std::optional<QPointF> pointFromState(const QJsonObject &state)
     if (auto nativePoint = pointFromValue(state.value(QStringLiteral("native_point")))) {
         return nativePoint;
     }
-    return pointFromValue(state.value(QStringLiteral("model_point")));
+    // The model point is usually in stream/model pixels; only desktop-logical
+    // coordinates can be placed directly in KWin's scene space.
+    const QJsonValue modelValue = state.value(QStringLiteral("model_point"));
+    if (modelValue.isObject()
+        && modelValue.toObject().value(QStringLiteral("coordinate_space")).toString()
+            == QStringLiteral("desktop_logical")) {
+        return pointFromValue(modelValue);
+    }
+    return std::nullopt;
 }
 
 } // namespace
 
 SkyCuaAgentCursorEffect::SkyCuaAgentCursorEffect()
 {
+    m_idleHideTimer.setSingleShot(true);
+    m_idleHideTimer.setInterval(IdleHideTimeoutMs);
+    QObject::connect(&m_idleHideTimer, &QTimer::timeout, this, [this] {
+        if (!m_cursorVisible) {
+            return;
+        }
+        m_cursorVisible = false;
+        syncStateJsonVisibility();
+        restoreSystemCursor();
+        effects->addRepaintFull();
+    });
+
     QDBusConnection::sessionBus().registerObject(
         QString::fromLatin1(DBusObjectPath),
         QString::fromLatin1(DBusInterface),
@@ -134,6 +162,7 @@ bool SkyCuaAgentCursorEffect::SetCursorState(const QString &stateJson)
     if (!m_cursorVisible) {
         restoreSystemCursor();
     }
+    armIdleHideTimer();
     effects->addRepaintFull();
     return true;
 }
@@ -141,6 +170,8 @@ bool SkyCuaAgentCursorEffect::SetCursorState(const QString &stateJson)
 void SkyCuaAgentCursorEffect::Hide()
 {
     m_cursorVisible = false;
+    m_idleHideTimer.stop();
+    syncStateJsonVisibility();
     restoreSystemCursor();
     effects->addRepaintFull();
 }
@@ -148,12 +179,19 @@ void SkyCuaAgentCursorEffect::Hide()
 void SkyCuaAgentCursorEffect::Show()
 {
     m_cursorVisible = true;
+    syncStateJsonVisibility();
+    armIdleHideTimer();
     effects->addRepaintFull();
 }
 
 QString SkyCuaAgentCursorEffect::StateJson() const
 {
     return m_stateJson;
+}
+
+QString SkyCuaAgentCursorEffect::BuildId() const
+{
+    return QStringLiteral(SKY_CUA_EFFECT_BUILD_ID);
 }
 
 void SkyCuaAgentCursorEffect::ensureScene()
@@ -181,6 +219,32 @@ void SkyCuaAgentCursorEffect::ensureScene()
             {QStringLiteral("cursorSource"), QUrl::fromLocalFile(cursorPath).toString()},
         });
     m_scene->show();
+}
+
+// Keep the StateJson introspection honest: Hide/Show and the idle failsafe
+// change visibility without a new SetCursorState payload.
+void SkyCuaAgentCursorEffect::syncStateJsonVisibility()
+{
+    if (m_stateJson.isEmpty()) {
+        return;
+    }
+    QJsonParseError parseError;
+    QJsonDocument document = QJsonDocument::fromJson(m_stateJson.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        return;
+    }
+    QJsonObject state = document.object();
+    state.insert(QStringLiteral("visible"), m_cursorVisible);
+    m_stateJson = QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact));
+}
+
+void SkyCuaAgentCursorEffect::armIdleHideTimer()
+{
+    if (m_cursorVisible) {
+        m_idleHideTimer.start();
+    } else {
+        m_idleHideTimer.stop();
+    }
 }
 
 void SkyCuaAgentCursorEffect::restoreSystemCursor()
