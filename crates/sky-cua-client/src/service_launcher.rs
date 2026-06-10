@@ -23,7 +23,7 @@ const SERVICE_WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 const STARTUP_HEALTH_READ_TIMEOUT: Duration = Duration::from_millis(250);
 const STARTUP_HEALTH_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(150);
-const STARTUP_HEALTH_ATTEMPTS: usize = 40;
+const STARTUP_HEALTH_ATTEMPTS: usize = 160;
 #[derive(Debug, Clone)]
 pub struct ServiceClient {
     endpoint: ServiceEndpoint,
@@ -33,8 +33,8 @@ pub struct ServiceClient {
 
 impl ServiceClient {
     pub fn connect_or_spawn() -> Result<Self> {
-        let client = Self::new()?;
         let launch_environment = LaunchEnvironment::probe();
+        let client = Self::new(&launch_environment)?;
         // Startup probes must fail fast; a stale or half-ready daemon should not
         // consume the entire MCP server startup window before we even spawn a
         // fresh service instance.
@@ -166,9 +166,9 @@ impl ServiceClient {
         Ok((response, stream))
     }
 
-    fn new() -> Result<Self> {
+    fn new(launch_environment: &LaunchEnvironment) -> Result<Self> {
         Ok(Self {
-            endpoint: ServiceEndpoint::new()?,
+            endpoint: ServiceEndpoint::new(launch_environment)?,
             child: Arc::new(Mutex::new(None)),
             cached_stream: Arc::new(Mutex::new(None)),
         })
@@ -250,13 +250,16 @@ enum ServiceEndpoint {
 }
 
 impl ServiceEndpoint {
-    fn new() -> Result<Self> {
+    fn new(launch_environment: &LaunchEnvironment) -> Result<Self> {
         #[cfg(unix)]
         {
-            Ok(Self::Unix(service_socket_path()))
+            Ok(Self::Unix(service_socket_path_for_launch_environment(
+                launch_environment,
+            )))
         }
         #[cfg(windows)]
         {
+            let _ = launch_environment;
             Ok(Self::Tcp(resolve_service_tcp_addr()?))
         }
     }
@@ -293,6 +296,23 @@ impl ServiceEndpoint {
             }
         }
     }
+}
+
+#[cfg(unix)]
+fn service_socket_path_for_launch_environment(launch_environment: &LaunchEnvironment) -> PathBuf {
+    if std::env::var_os(SERVICE_SOCKET_PATH_ENV).is_some() {
+        return service_socket_path();
+    }
+
+    if std::env::var_os("XDG_RUNTIME_DIR").is_none()
+        && let Some(runtime_dir) = launch_environment.repaired_desktop_var("XDG_RUNTIME_DIR")
+    {
+        return PathBuf::from(runtime_dir)
+            .join("sky-cua")
+            .join("service.sock");
+    }
+
+    service_socket_path()
 }
 
 impl std::fmt::Display for ServiceEndpoint {
@@ -454,10 +474,68 @@ mod tests {
     }
 
     #[test]
+    fn unix_service_endpoint_uses_repaired_runtime_dir_before_cache_fallback() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
+        let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe {
+            std::env::remove_var(SERVICE_SOCKET_PATH_ENV);
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+        let launch_environment = LaunchEnvironment::from_repaired_desktop_vars_for_tests(vec![(
+            "XDG_RUNTIME_DIR".to_string(),
+            "/run/user/1000".to_string(),
+        )]);
+
+        let endpoint = ServiceEndpoint::new(&launch_environment).expect("endpoint should resolve");
+
+        restore_env(SERVICE_SOCKET_PATH_ENV, old_socket_path);
+        restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
+        match endpoint {
+            ServiceEndpoint::Unix(path) => {
+                assert_eq!(path, PathBuf::from("/run/user/1000/sky-cua/service.sock"));
+            }
+        }
+    }
+
+    #[test]
+    fn unix_service_endpoint_preserves_explicit_socket_override() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
+        let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe {
+            std::env::set_var(SERVICE_SOCKET_PATH_ENV, "/tmp/sky-cua-explicit.sock");
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+        let launch_environment = LaunchEnvironment::from_repaired_desktop_vars_for_tests(vec![(
+            "XDG_RUNTIME_DIR".to_string(),
+            "/run/user/1000".to_string(),
+        )]);
+
+        let endpoint = ServiceEndpoint::new(&launch_environment).expect("endpoint should resolve");
+
+        restore_env(SERVICE_SOCKET_PATH_ENV, old_socket_path);
+        restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
+        match endpoint {
+            ServiceEndpoint::Unix(path) => {
+                assert_eq!(path, PathBuf::from("/tmp/sky-cua-explicit.sock"));
+            }
+        }
+    }
+
+    #[test]
     fn closed_cached_connection_is_retryable() {
         let error = anyhow!("sky-cua-service connection closed before response");
 
         assert!(is_stale_stream_error(&error));
+    }
+
+    #[test]
+    fn startup_health_budget_allows_slow_desktop_service_startup() {
+        let budget = STARTUP_POLL_INTERVAL * STARTUP_HEALTH_ATTEMPTS as u32;
+
+        assert!(budget >= Duration::from_secs(20));
+        assert!(budget < Duration::from_secs(30));
     }
 
     #[test]

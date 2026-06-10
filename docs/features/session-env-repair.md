@@ -4,7 +4,7 @@
 
 Shipped on Linux. Code complete and live-smoked on the current KDE/Plasma
 host through direct MCP, Codex exec, and rich app-server lanes. Last
-verified: per `CONTINUITY.md` 2026-05-15. VM matrix coverage and a
+verified: 2026-05-15. VM matrix coverage and a
 non-Codex host (OpenCode/Pi) smoke remain follow-up work.
 
 ## Summary

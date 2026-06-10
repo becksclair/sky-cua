@@ -31,9 +31,25 @@ impl LaunchEnvironment {
         &self.repaired_desktop_vars
     }
 
+    pub(crate) fn repaired_desktop_var(&self, key: &str) -> Option<&str> {
+        self.repaired_desktop_vars
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.as_str())
+    }
+
     pub(crate) fn ensure_startup_health(&self, response: &ServiceResponse) -> Result<()> {
         ensure_health_satisfies_desktop_env(response, &self.repaired_desktop_vars)?;
         ensure_health_satisfies_browser_env(response)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_repaired_desktop_vars_for_tests(
+        repaired_desktop_vars: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            repaired_desktop_vars,
+        }
     }
 }
 
