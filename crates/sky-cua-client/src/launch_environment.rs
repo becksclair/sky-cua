@@ -266,9 +266,14 @@ fn ensure_health_satisfies_desktop_env(
                 .map(|value| (key, value))
         })
         .collect::<Vec<_>>();
+    // Health equality is scoped to the graphical-session set. Repaired PATH
+    // is launch-spawn material only (DESKTOP_LAUNCH_ENV_KEYS): every host has
+    // a different PATH, so requiring the daemon's PATH to equal this client's
+    // would make a daemon spawned by one host permanently unhealthy for all
+    // others.
     for (key, value) in desktop_vars {
         let key = key.as_str();
-        if DESKTOP_LAUNCH_ENV_KEYS.contains(&key)
+        if GRAPHICAL_SESSION_ENV_KEYS.contains(&key)
             && !value.is_empty()
             && !required
                 .iter()
@@ -348,6 +353,37 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
+    fn startup_health_ignores_repaired_path_differences() {
+        // PATH is launch-spawn repair material; hosts have divergent PATHs,
+        // so a daemon spawned by one host must stay healthy for the others.
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let mut desktop_env = GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .filter_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .map(|value| ((*key).to_string(), value))
+            })
+            .collect::<BTreeMap<_, _>>();
+        desktop_env.insert(
+            "PATH".to_string(),
+            "/daemon/spawner/path:/usr/bin".to_string(),
+        );
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env,
+            browser_env: BTreeMap::new(),
+        };
+        let desktop_vars = vec![(
+            "PATH".to_string(),
+            "/client/specific/path:/usr/bin".to_string(),
+        )];
+
+        assert!(ensure_health_satisfies_desktop_env(&response, &desktop_vars).is_ok());
+    }
+
+    #[test]
     fn startup_health_rejects_service_missing_repaired_desktop_env() {
         let response = ServiceResponse::Health {
             ok: true,
@@ -364,22 +400,6 @@ mod tests {
             .expect_err("stale service env should be rejected");
 
         assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
-    }
-
-    #[test]
-    fn startup_health_rejects_service_missing_repaired_path() {
-        let response = ServiceResponse::Health {
-            ok: true,
-            service_socket: "/tmp/sky-cua/service.sock".to_string(),
-            desktop_env: BTreeMap::new(),
-            browser_env: BTreeMap::new(),
-        };
-        let desktop_vars = vec![("PATH".to_string(), "/tmp:/usr/bin".to_string())];
-
-        let error = ensure_health_satisfies_desktop_env(&response, &desktop_vars)
-            .expect_err("stale service PATH should be rejected");
-
-        assert!(error.to_string().contains("PATH"));
     }
 
     #[test]

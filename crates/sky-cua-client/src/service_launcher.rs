@@ -213,16 +213,24 @@ impl ServiceClient {
     }
 
     fn wait_for_startup_health(&self, launch_environment: &LaunchEnvironment) -> Result<()> {
+        let mut last_error: Option<anyhow::Error> = None;
         for _ in 0..STARTUP_HEALTH_ATTEMPTS {
-            if self.startup_health(launch_environment).is_ok() {
-                return Ok(());
+            match self.startup_health(launch_environment) {
+                Ok(_) => return Ok(()),
+                Err(error) => last_error = Some(error),
             }
             self.reap_exited_child()?;
             thread::sleep(STARTUP_POLL_INTERVAL);
         }
 
+        // Surface the concrete per-poll failure; "did not become healthy"
+        // alone hides whether the daemon was unreachable, slow, or rejected
+        // by an environment staleness check.
+        let detail = last_error
+            .map(|error| format!(": last health error: {error:#}"))
+            .unwrap_or_default();
         Err(anyhow!(
-            "sky-cua-service did not become healthy on {}",
+            "sky-cua-service did not become healthy on {}{detail}",
             self.endpoint
         ))
     }
