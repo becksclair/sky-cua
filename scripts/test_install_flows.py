@@ -91,6 +91,46 @@ def test_generic_mcp_install_copies_all_current_platform_binaries(
             assert binary_path.stat().st_mode & 0o111
 
 
+def test_bundle_binary_install_copies_from_bundle_not_release_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    release_root = repo_root / "target" / "release"
+    release_root.mkdir(parents=True)
+    bundle_root = tmp_path / "bundle"
+    target_dir = tmp_path / "installed"
+    platform_id = install_mcp_server.current_platform()
+
+    for binary_name in install_mcp_server.platform_runtime_binary_base_names(platform_id):
+        source_name = runtime_binary_source_name(platform_id, binary_name)
+        (release_root / source_name).write_text(f"release {binary_name}", encoding="utf-8")
+        bundle_binary = bundle_root / runtime_binary_path(platform_id, binary_name)
+        bundle_binary.parent.mkdir(parents=True, exist_ok=True)
+        bundle_binary.write_text(f"bundle {binary_name}", encoding="utf-8")
+
+    monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
+
+    client_path = install_mcp_server.install_bundle_binaries(bundle_root, target_dir)
+
+    assert client_path == target_dir / install_mcp_server.entrypoint_path(
+        platform_id, "sky-cua-client"
+    )
+    for binary_name in install_mcp_server.platform_runtime_binary_base_names(platform_id):
+        binary_path = target_dir / install_mcp_server.entrypoint_path(platform_id, binary_name)
+        assert binary_path.read_text(encoding="utf-8") == f"bundle {binary_name}"
+
+
+def test_bundle_binary_install_requires_bundle_binaries(
+    tmp_path: Path,
+) -> None:
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+
+    with pytest.raises(FileNotFoundError, match="bundle binary not found"):
+        install_mcp_server.install_bundle_binaries(bundle_root, tmp_path / "installed")
+
+
 def test_generic_mcp_bin_links_use_platform_entrypoint_names(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

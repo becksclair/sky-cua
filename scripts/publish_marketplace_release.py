@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import filecmp
 import os
 import subprocess
 from pathlib import Path
 
+import _install_shared
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DEFAULT_MARKETPLACE_ROOT,
@@ -15,7 +17,11 @@ from _plugin_bundle import (
     RELEASE_MARKETPLACE_NAME,
     RELEASE_PLUGIN_ID,
     build_bundle,
+    current_runtime_platform,
     merge_runtime_artifacts,
+    platform_runtime_binary_base_names,
+    runtime_binary_path,
+    runtime_binary_source_name,
     update_codex_config,
     update_plugin_manifest_version,
     version_from_tag,
@@ -85,6 +91,25 @@ def configure_marketplace(codex_bin: Path, marketplace_source: str) -> None:
     run([str(codex_bin), "plugin", "marketplace", "upgrade", RELEASE_MARKETPLACE_NAME])
 
 
+def stale_bundle_binaries(bundle_root: Path, release_dir: Path) -> list[str]:
+    """Return current-platform bundle binaries whose content differs from target/release.
+
+    Guards --no-build publishes: a rebuilt target/release with an unrebuilt
+    bundle means the publish would silently ship old code. Binaries missing
+    on either side are skipped so artifact-only flows (CI) stay unaffected.
+    """
+    platform_id = current_runtime_platform()
+    stale: list[str] = []
+    for name in platform_runtime_binary_base_names(platform_id):
+        bundle_binary = bundle_root / runtime_binary_path(platform_id, name)
+        release_binary = release_dir / runtime_binary_source_name(platform_id, name)
+        if not bundle_binary.exists() or not release_binary.exists():
+            continue
+        if not filecmp.cmp(bundle_binary, release_binary, shallow=False):
+            stale.append(name)
+    return stale
+
+
 def current_tag() -> str:
     for name in ["GITHUB_REF_NAME", "GITEA_REF_NAME", "CI_COMMIT_TAG"]:
         value = os.environ.get(name, "").strip()
@@ -130,6 +155,11 @@ def main() -> int:
         "--no-build",
         action="store_true",
         help="Publish the existing bundle without rebuilding first.",
+    )
+    parser.add_argument(
+        "--allow-stale-bundle",
+        action="store_true",
+        help="With --no-build, publish even when bundle binaries differ from target/release.",
     )
     parser.add_argument(
         "--runtime-artifacts",
@@ -181,6 +211,14 @@ def main() -> int:
         build_bundle()
 
     bundle_root = args.bundle_root.resolve()
+    if args.no_build and not args.allow_stale_bundle:
+        stale = stale_bundle_binaries(bundle_root, _install_shared.REPO_ROOT / "target" / "release")
+        if stale:
+            raise RuntimeError(
+                f"bundle binaries differ from target/release ({', '.join(stale)}); "
+                "rerun without --no-build (or scripts/build_plugin.py first), "
+                "or pass --allow-stale-bundle to publish the bundle as-is"
+            )
     if args.runtime_artifacts is not None:
         merge_runtime_artifacts(bundle_root, args.runtime_artifacts.resolve())
     if args.version_from_tag:
@@ -221,6 +259,7 @@ def main() -> int:
             local_install_dir,
             args.local_install_host,
             restart_runtime=True,
+            bundle_root=bundle_root,
         )
 
     print(f"marketplace_root={marketplace_root}")

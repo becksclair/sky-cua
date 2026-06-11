@@ -53,12 +53,15 @@ It then refreshes the local MCP-server install at `~/.local/share/sky-cua`
 (claude-code host config) and restarts its runtime processes so the shared
 daemon respawns from the new binaries. All plugin consumers share one daemon
 socket, so publishing without this refresh would leave non-Codex hosts served
-by stale daemon logic.
+by stale daemon logic. The local install copies binaries from the published
+bundle, so every channel ships identical bits.
 
 Useful options:
 
-- `--no-build`: publish the existing `dist/plugin/sky-cua`. The local install
-  copies binaries from `target/release`, so ensure that is current too.
+- `--no-build`: publish the existing `dist/plugin/sky-cua`. The publish
+  aborts if the bundle's binaries differ from a present `target/release`
+  (a rebuilt workspace with an unrebuilt bundle would silently ship old
+  code); pass `--allow-stale-bundle` to publish the bundle as-is.
 - `--no-push`: commit locally but leave the marketplace push to the operator.
 - `--skip-codex-install`: update the marketplace repo without changing the
   local Codex install. Also skips the local MCP-server refresh (repo-only

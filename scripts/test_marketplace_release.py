@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import _install_shared
 import _plugin_bundle as plugin_bundle
 import publish_marketplace_release
 import setup_heliasar_marketplace
@@ -71,6 +72,7 @@ def test_publish_marketplace_preflights_git_repo_before_writing(
     bundle_root = tmp_path / "bundle"
     write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
 
+    _pin_repo_root(monkeypatch, tmp_path)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -116,6 +118,11 @@ def _init_marketplace_repo(repo_root: Path) -> None:
     )
 
 
+def _pin_repo_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point REPO_ROOT at tmp so the stale-bundle guard never sees the real build."""
+    monkeypatch.setattr(_install_shared, "REPO_ROOT", tmp_path / "repo")
+
+
 def _stub_codex_install_steps(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         publish_marketplace_release,
@@ -154,8 +161,9 @@ def test_publish_refreshes_local_install_with_runtime_restart(
     write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
     local_install_dir = tmp_path / "local-install"
 
+    _pin_repo_root(monkeypatch, tmp_path)
     _stub_codex_install_steps(monkeypatch)
-    local_calls: list[tuple[Path, str, bool]] = []
+    local_calls: list[tuple[Path, str, bool, Path | None]] = []
 
     def fake_local_install(
         target_dir: Path,
@@ -163,9 +171,10 @@ def test_publish_refreshes_local_install_with_runtime_restart(
         *,
         openclaw_dir: Path | None = None,
         restart_runtime: bool = False,
+        bundle_root: Path | None = None,
     ) -> tuple[Path, Path]:
         del openclaw_dir
-        local_calls.append((target_dir, host, restart_runtime))
+        local_calls.append((target_dir, host, restart_runtime, bundle_root))
         return target_dir / "bin" / "sky-cua-client", target_dir / "claude_code_mcp.json"
 
     monkeypatch.setattr(
@@ -190,7 +199,9 @@ def test_publish_refreshes_local_install_with_runtime_restart(
     )
 
     assert publish_marketplace_release.main() == 0
-    assert local_calls == [(local_install_dir.resolve(), "claude-code", True)]
+    assert local_calls == [
+        (local_install_dir.resolve(), "claude-code", True, bundle_root.resolve())
+    ]
 
 
 def test_publish_skips_local_install_for_repo_only_runs(
@@ -202,14 +213,17 @@ def test_publish_skips_local_install_for_repo_only_runs(
     bundle_root = tmp_path / "bundle"
     write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
 
+    _pin_repo_root(monkeypatch, tmp_path)
+
     def fail_local_install(
         target_dir: Path,
         host: str,
         *,
         openclaw_dir: Path | None = None,
         restart_runtime: bool = False,
+        bundle_root: Path | None = None,
     ) -> tuple[Path, Path]:
-        del target_dir, host, openclaw_dir, restart_runtime
+        del target_dir, host, openclaw_dir, restart_runtime, bundle_root
         raise AssertionError("local install must not run for repo-only publishes")
 
     monkeypatch.setattr(
@@ -244,6 +258,7 @@ def test_publish_honors_skip_local_install_flag(
     bundle_root = tmp_path / "bundle"
     write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
 
+    _pin_repo_root(monkeypatch, tmp_path)
     _stub_codex_install_steps(monkeypatch)
 
     def fail_local_install(
@@ -252,8 +267,9 @@ def test_publish_honors_skip_local_install_flag(
         *,
         openclaw_dir: Path | None = None,
         restart_runtime: bool = False,
+        bundle_root: Path | None = None,
     ) -> tuple[Path, Path]:
-        del target_dir, host, openclaw_dir, restart_runtime
+        del target_dir, host, openclaw_dir, restart_runtime, bundle_root
         raise AssertionError("local install must not run when --skip-local-install is set")
 
     monkeypatch.setattr(
@@ -269,6 +285,102 @@ def test_publish_honors_skip_local_install_flag(
             "--no-build",
             "--no-push",
             "--skip-local-install",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--bundle-root",
+            str(bundle_root),
+        ],
+    )
+
+    assert publish_marketplace_release.main() == 0
+
+
+def _write_release_binaries(release_dir: Path, *, content_suffix: str = "") -> None:
+    platform_id = plugin_bundle.current_runtime_platform()
+    release_dir.mkdir(parents=True, exist_ok=True)
+    for name in plugin_bundle.platform_runtime_binary_base_names(platform_id):
+        source_name = plugin_bundle.runtime_binary_source_name(platform_id, name)
+        (release_dir / source_name).write_text(f"{source_name}{content_suffix}", encoding="utf-8")
+
+
+def test_stale_bundle_binaries_passes_when_content_matches(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+    release_dir = tmp_path / "release"
+    _write_release_binaries(release_dir)
+
+    assert publish_marketplace_release.stale_bundle_binaries(bundle_root, release_dir) == []
+
+
+def test_stale_bundle_binaries_reports_content_drift(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+    release_dir = tmp_path / "release"
+    _write_release_binaries(release_dir, content_suffix="-rebuilt")
+
+    stale = publish_marketplace_release.stale_bundle_binaries(bundle_root, release_dir)
+
+    assert "sky-cua-client" in stale
+    assert "sky-cua-service" in stale
+
+
+def test_stale_bundle_binaries_skips_missing_release_build(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+
+    assert publish_marketplace_release.stale_bundle_binaries(bundle_root, tmp_path / "absent") == []
+
+
+def test_publish_no_build_aborts_on_stale_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marketplace_root = tmp_path / "marketplace"
+    _init_marketplace_repo(marketplace_root)
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+
+    _pin_repo_root(monkeypatch, tmp_path)
+    _write_release_binaries(tmp_path / "repo" / "target" / "release", content_suffix="-rebuilt")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "publish_marketplace_release.py",
+            "--no-build",
+            "--no-push",
+            "--skip-codex-install",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--bundle-root",
+            str(bundle_root),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="differ from target/release"):
+        publish_marketplace_release.main()
+
+
+def test_publish_allow_stale_bundle_overrides_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marketplace_root = tmp_path / "marketplace"
+    _init_marketplace_repo(marketplace_root)
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+
+    _pin_repo_root(monkeypatch, tmp_path)
+    _write_release_binaries(tmp_path / "repo" / "target" / "release", content_suffix="-rebuilt")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "publish_marketplace_release.py",
+            "--no-build",
+            "--allow-stale-bundle",
+            "--no-push",
+            "--skip-codex-install",
             "--marketplace-root",
             str(marketplace_root),
             "--bundle-root",

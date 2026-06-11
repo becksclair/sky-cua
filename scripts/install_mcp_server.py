@@ -128,6 +128,42 @@ def install_binaries(target_dir: Path) -> Path:
     return installed_client
 
 
+def install_bundle_binaries(bundle_root: Path, target_dir: Path) -> Path:
+    """Copy runtime binaries from a built plugin bundle into target_dir.
+
+    Deploy scripts use this instead of install_binaries so every channel
+    ships the exact bits staged in the bundle, not whatever happens to sit
+    in target/release.
+    """
+    platform_id = current_platform()
+    installed_client: Path | None = None
+
+    for name in platform_runtime_binary_base_names(platform_id):
+        src = bundle_root / runtime_binary_path(platform_id, name)
+        if not src.exists():
+            raise FileNotFoundError(
+                f"bundle binary not found: {src}. Build first with scripts/build_plugin.py."
+            )
+        dst = target_dir / entrypoint_path(platform_id, name)
+        copy_executable(src, dst)
+        if name == "sky-cua-client":
+            installed_client = dst
+
+    for foreign_platform in (LINUX_X64, LINUX_ARM64, WINDOWS_X64):
+        if foreign_platform == platform_id:
+            continue
+        for name in platform_runtime_binary_base_names(foreign_platform):
+            foreign_src = bundle_root / runtime_binary_path(foreign_platform, name)
+            if not foreign_src.exists():
+                continue
+            copy_executable(foreign_src, target_dir / runtime_binary_path(foreign_platform, name))
+
+    if installed_client is None:
+        raise RuntimeError("sky-cua-client binary was not installed")
+
+    return installed_client
+
+
 def generate_mcp_config(client_path: Path, target_dir: Path) -> dict[str, object]:
     """Build an MCP server config dict with absolute paths."""
     return {
@@ -406,18 +442,24 @@ def install_local_mcp_server(
     *,
     openclaw_dir: Path = DEFAULT_OPENCLAW_DIR,
     restart_runtime: bool = False,
+    bundle_root: Path | None = None,
 ) -> tuple[Path, Path]:
     """Install runtime binaries and host config; optionally restart installed runtimes.
 
     Returns ``(client_path, config_path)``. Other deploy scripts call this to
     refresh a local MCP-server install alongside their own publishing steps.
+    With ``bundle_root``, binaries come from that built bundle instead of
+    target/release so all channels ship identical bits.
     """
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if restart_runtime and sys.platform == "win32":
         restart_runtime_processes(target_dir)
 
-    client_path = install_binaries(target_dir)
+    if bundle_root is not None:
+        client_path = install_bundle_binaries(bundle_root, target_dir)
+    else:
+        client_path = install_binaries(target_dir)
 
     seeded = _install_shared.seed_machine_config_from_environment()
     if seeded is not None:
