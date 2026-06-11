@@ -331,11 +331,42 @@ fn ydotool_socket_check() -> DoctorCheck {
 }
 
 fn browser_report() -> BrowserIntegrationReport {
+    // Distros ship Chrome-family browsers under different executable names
+    // (Arch installs Brave as `brave`, Debian/Fedora as `brave-browser`), so
+    // each family probes a candidate list instead of one hardcoded name.
     BrowserIntegrationReport {
-        chrome: binary_check("google-chrome"),
-        chromium: binary_check("chromium"),
-        brave: binary_check("brave-browser"),
+        chrome: binary_check_any(
+            "chrome",
+            &[
+                "google-chrome",
+                "google-chrome-stable",
+                "google-chrome-beta",
+            ],
+        ),
+        chromium: binary_check_any("chromium", &["chromium", "chromium-browser"]),
+        brave: binary_check_any("brave", &["brave-browser", "brave", "brave-browser-stable"]),
         native_host_manifest: native_host_manifest_check(),
+    }
+}
+
+fn binary_check_any(name: &str, candidates: &[&str]) -> DoctorCheck {
+    for candidate in candidates {
+        let check = binary_check(candidate);
+        if check.ok {
+            return DoctorCheck {
+                name: name.to_string(),
+                ok: true,
+                detail: check.detail,
+            };
+        }
+    }
+    DoctorCheck {
+        name: name.to_string(),
+        ok: false,
+        detail: format!(
+            "no executable found on PATH (tried {})",
+            candidates.join(", ")
+        ),
     }
 }
 
@@ -584,6 +615,30 @@ mod tests {
                 detail: "(<false>,)".to_string(),
             },
         }
+    }
+
+    #[test]
+    fn binary_check_any_reports_later_candidate_under_probe_name() {
+        let check = binary_check_any("brave", &["definitely-not-a-real-browser-xyz", "sh"]);
+
+        assert!(check.ok);
+        assert_eq!(check.name, "brave");
+        assert!(check.detail.ends_with("/sh"), "detail: {}", check.detail);
+    }
+
+    #[test]
+    fn binary_check_any_lists_tried_candidates_when_none_resolve() {
+        let check = binary_check_any(
+            "brave",
+            &["definitely-not-a-real-browser-xyz", "also-not-real-abc"],
+        );
+
+        assert!(!check.ok);
+        assert_eq!(check.name, "brave");
+        assert_eq!(
+            check.detail,
+            "no executable found on PATH (tried definitely-not-a-real-browser-xyz, also-not-real-abc)"
+        );
     }
 
     #[test]
