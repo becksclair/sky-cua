@@ -1096,3 +1096,85 @@ def test_openclaw_codex_home_toml_refuses_orphaned_marker(
 
     assert "corrupt sky-cua marker block" in capsys.readouterr().err
     assert config_path.read_text(encoding="utf-8") == user_config
+
+
+def test_openclaw_install_interrupt_during_registration_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    original_config = 'model = "gpt-5.5"\n'
+    config_path.write_text(original_config, encoding="utf-8")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    with pytest.raises(KeyboardInterrupt):
+        install_mcp_server.install_openclaw(
+            target_dir,
+            target_dir / "bin" / "sky-cua-client",
+            openclaw_dir=openclaw_dir,
+            openclaw_bin="openclaw",
+        )
+
+    # An operator Ctrl-C mid-registration must not leave half-pinned state.
+    assert config_path.read_text(encoding="utf-8") == original_config
+    assert not (target_dir / "openclaw_mcp.json").exists()
+
+
+def test_openclaw_install_post_commit_timeout_keeps_committed_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    for skill_name in install_mcp_server.SKY_CUA_SKILLS:
+        skill_dir = repo_root / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+    monkeypatch.setattr(install_mcp_server, "REPO_ROOT", repo_root)
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+        timeout: int,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        if command[1:3] == ["mcp", "reload"]:
+            # A post-commit timeout must not roll back the committed
+            # registration and pins.
+            raise subprocess.TimeoutExpired(command, timeout)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    def raising_reload(openclaw_bin: str, env: dict[str, str]) -> None:
+        raise subprocess.TimeoutExpired(["openclaw", "mcp", "reload"], 30)
+
+    monkeypatch.setattr(install_mcp_server, "reload_openclaw_mcp_runtimes", raising_reload)
+
+    with pytest.raises(TimeoutError):
+        install_mcp_server.install_openclaw(
+            target_dir,
+            target_dir / "bin" / "sky-cua-client",
+            openclaw_dir=openclaw_dir,
+            openclaw_bin="openclaw",
+        )
+
+    assert "[mcp_servers.sky_cua]" in config_path.read_text(encoding="utf-8")
+    assert (target_dir / "openclaw_mcp.json").exists()

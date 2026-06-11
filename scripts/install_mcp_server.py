@@ -513,12 +513,24 @@ def install_openclaw(
     env["OPENCLAW_CONFIG_PATH"] = str(openclaw_state_dir / "openclaw.json")
     codex_home_snapshots = snapshot_openclaw_agent_codex_mcp_server_updates(codex_home_updates)
     snippet_snapshot = snapshot_text_path(path)
-    apply_openclaw_agent_codex_mcp_server_updates(
-        codex_home_updates, codex_home_snapshots, emit_messages=False
-    )
     registration_committed = False
+    pins_applied = False
     snippet_written = False
+
+    def rollback() -> None:
+        if pins_applied:
+            restore_openclaw_agent_codex_mcp_server_snapshots(codex_home_snapshots)
+        if snippet_written:
+            restore_text_path_snapshot(path, snippet_snapshot)
+
+    # Catch BaseException so an operator Ctrl-C mid-registration still rolls
+    # back; after the registration commits, post-commit failures (reload,
+    # skills copy) deliberately keep the consistent committed state.
     try:
+        apply_openclaw_agent_codex_mcp_server_updates(
+            codex_home_updates, codex_home_snapshots, emit_messages=False
+        )
+        pins_applied = True
         write_text_atomically(path, json.dumps(snippet, indent=2) + "\n")
         snippet_written = True
         subprocess.run(command, check=True, env=env, timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS)
@@ -527,20 +539,17 @@ def install_openclaw(
         reload_openclaw_mcp_runtimes(openclaw_bin, env)
         install_sky_cua_skills(openclaw_state_dir / "workspace" / "skills")
     except subprocess.TimeoutExpired as error:
-        restore_openclaw_agent_codex_mcp_server_snapshots(codex_home_snapshots)
-        if snippet_written:
-            restore_text_path_snapshot(path, snippet_snapshot)
+        if not registration_committed:
+            rollback()
         command_text = shlex.join(command)
         raise TimeoutError(
             "timed out registering sky-cua with OpenClaw after "
             f"{OPENCLAW_MCP_SET_TIMEOUT_SECONDS} seconds: {command_text} "
             f"(OPENCLAW_STATE_DIR={openclaw_state_dir})"
         ) from error
-    except Exception:
+    except BaseException:
         if not registration_committed:
-            restore_openclaw_agent_codex_mcp_server_snapshots(codex_home_snapshots)
-            if snippet_written:
-                restore_text_path_snapshot(path, snippet_snapshot)
+            rollback()
         raise
     return path
 
