@@ -1722,6 +1722,7 @@ dependencies = [
  "base64",
  "chrono",
  "image",
+ "libc",
  "serde_json",
  "sky-cua-linux",
  "sky-cua-overlay-host",

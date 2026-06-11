@@ -61,11 +61,28 @@ pub async fn run_service() -> Result<()> {
             set_owner_only_permissions(parent)?;
         }
     }
+
+    // Singleton guard: only the flock holder may unlink and bind the socket
+    // path. Without it, concurrent spawns stomp a healthy daemon's socket and
+    // an orphaned daemon's shutdown deletes the current owner's socket file,
+    // leaving windows where new clients fail to connect and hosts lose the
+    // whole tool surface for a turn.
+    let singleton_lock = match acquire_singleton_lock(&socket_path)? {
+        Some(lock) => lock,
+        None => {
+            info!(
+                "another sky-cua-service instance owns {}; exiting so clients use it",
+                socket_path.display()
+            );
+            return Ok(());
+        }
+    };
+
     if socket_path.exists() {
         let _ = tokio::fs::remove_file(&socket_path).await;
     }
 
-    let listener = UnixListener::bind(&socket_path)?;
+    let mut listener = UnixListener::bind(&socket_path)?;
     let daemon = Arc::new(ServiceDaemon::new(socket_path.clone()).await?);
     let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let connections = Arc::new(ConnectionTracker::default());
@@ -92,11 +109,27 @@ pub async fn run_service() -> Result<()> {
                 }
             }
             _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                // Check if socket file still exists; warn if it was deleted
-                // The listener can still accept connections (it has the file descriptor),
-                // but new clients won't be able to connect until the daemon is restarted
+                // Recreate the socket path if something unlinked it (a stale
+                // pre-singleton daemon's shutdown, runtime-dir cleanup). The
+                // existing listener keeps serving connected clients, but new
+                // clients get ENOENT until the path exists again; holding the
+                // singleton lock makes re-binding safe.
                 if !socket_path.exists() {
-                    warn!("sky-cua-service socket file disappeared at {}; the daemon can still accept connections on the existing listener, but new clients will fail to connect. Please restart the daemon.", socket_path.display());
+                    match UnixListener::bind(&socket_path) {
+                        Ok(replacement) => {
+                            listener = replacement;
+                            warn!(
+                                "sky-cua-service socket file disappeared at {}; re-bound the listener so new clients can connect",
+                                socket_path.display()
+                            );
+                        }
+                        Err(error) => {
+                            warn!(
+                                "sky-cua-service socket file disappeared at {} and re-binding failed: {error}; new clients will fail to connect until the daemon restarts",
+                                socket_path.display()
+                            );
+                        }
+                    }
                 }
 
                 if service_idle_timed_out(&daemon, &connections).await {
@@ -111,8 +144,43 @@ pub async fn run_service() -> Result<()> {
         }
     }
 
+    // Holding the singleton lock proves this daemon still owns the socket
+    // path, so removing it here cannot delete a successor's socket.
     let _ = tokio::fs::remove_file(&socket_path).await;
+    drop(singleton_lock);
     Ok(())
+}
+
+/// Try to take the exclusive daemon lock next to the socket path.
+///
+/// Returns `Ok(None)` when another live daemon holds the lock. The lock file
+/// is intentionally never removed: unlinking it would let a third daemon
+/// acquire a fresh lock on the recreated path while the old lock holder still
+/// runs, which is the stomping bug this guard exists to prevent.
+#[cfg(unix)]
+fn acquire_singleton_lock(socket_path: &std::path::Path) -> Result<Option<std::fs::File>> {
+    use std::os::unix::io::AsRawFd;
+
+    let mut lock_name = socket_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("service.sock"));
+    lock_name.push(".lock");
+    let lock_path = socket_path.with_file_name(lock_name);
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)?;
+    let result = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result == 0 {
+        return Ok(Some(lock_file));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        return Ok(None);
+    }
+    Err(error.into())
 }
 
 #[cfg(unix)]
@@ -225,6 +293,30 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn singleton_lock_excludes_second_daemon_until_released() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("sky-cua-singleton-test-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        let socket_path = temp_dir.join("service.sock");
+
+        let first = acquire_singleton_lock(&socket_path)
+            .expect("first acquisition should not error")
+            .expect("first acquisition should win the lock");
+        let second =
+            acquire_singleton_lock(&socket_path).expect("contended probe should not error");
+        assert!(second.is_none(), "second daemon must not acquire the lock");
+
+        drop(first);
+        let third = acquire_singleton_lock(&socket_path)
+            .expect("post-release acquisition should not error");
+        assert!(third.is_some(), "lock must be reacquirable after release");
+
+        drop(third);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn idle_timeout_requires_no_active_connections() {

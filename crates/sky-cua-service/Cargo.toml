@@ -20,6 +20,9 @@ webp.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 sky-cua-linux = { path = "../sky-cua-linux" }
 
