@@ -547,6 +547,17 @@ def upsert_toml_key(config_text: str, header: str, key: str, rendered_value: str
     return config_text[: match.start()] + header_line + "\n" + new_body + config_text[match.end() :]
 
 
+def compat_plugin_cache_root(codex_home: Path) -> Path:
+    """Cache root of the computer-use compat plugin.
+
+    Layout owner: `resources/chrome_preflight.py` (`OPENAI_BUNDLED_MARKETPLACE`,
+    `COMPUTER_USE_PLUGIN_NAME`, `sync_computer_use_compat_plugin`). The
+    preflight ships inside the bundle and runs standalone, so it cannot import
+    this module; keep the two spellings in sync.
+    """
+    return codex_home / "plugins" / "cache" / "openai-bundled" / "computer-use"
+
+
 def compat_plugin_available(codex_home: Path) -> bool:
     """Whether a materialized computer-use compat plugin root exists.
 
@@ -555,15 +566,18 @@ def compat_plugin_available(codex_home: Path) -> bool:
     enabling the compat id would leave no active computer-use MCP server, so
     callers fall back to enabling a sky-cua channel id directly.
     """
-    return (
-        codex_home
-        / "plugins"
-        / "cache"
-        / "openai-bundled"
-        / "computer-use"
-        / "latest"
-        / ".mcp.json"
-    ).exists()
+    return (compat_plugin_cache_root(codex_home) / "latest" / ".mcp.json").exists()
+
+
+def compat_plugin_target(codex_home: Path) -> str | None:
+    """Command the materialized compat plugin launches, or None."""
+    mcp_path = compat_plugin_cache_root(codex_home) / "latest" / ".mcp.json"
+    try:
+        servers = json.loads(mcp_path.read_text(encoding="utf-8"))["mcpServers"]
+        command = servers["computer-use"]["command"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+    return command if isinstance(command, str) else None
 
 
 def apply_compat_plugin_enablement(config_text: str) -> str:
@@ -606,11 +620,21 @@ def update_codex_config(
         config_text = ensure_release_marketplace_config(config_text, marketplace_root)
     if compat_enablement:
         # Compat-first mode owns all computer-use plugin toggles; per-channel
-        # plugin_id/plugin_enabled arguments do not apply.
+        # plugin_id/plugin_enabled/disabled_plugin_ids arguments do not apply
+        # (the helper already disables both channel ids).
         config_text = apply_compat_plugin_enablement(config_text)
     else:
         config_text = set_plugin_enabled(config_text, plugin_id, enabled=plugin_enabled)
-    for disabled_plugin_id in disabled_plugin_ids or []:
-        if disabled_plugin_id != plugin_id or compat_enablement:
-            config_text = set_plugin_enabled(config_text, disabled_plugin_id, enabled=False)
+        if plugin_enabled:
+            # Channel-id fallback is the symmetric inverse: exactly one
+            # enabled computer-use plugin id, so enabling a channel id turns
+            # off a previously enabled compat id (e.g. after a cache wipe
+            # removed its root). Disable-only staging calls leave the compat
+            # id alone to avoid a transient zero-enabled window mid-deploy.
+            config_text = set_plugin_enabled(
+                config_text, COMPUTER_USE_COMPAT_PLUGIN_ID, enabled=False
+            )
+        for disabled_plugin_id in disabled_plugin_ids or []:
+            if disabled_plugin_id != plugin_id:
+                config_text = set_plugin_enabled(config_text, disabled_plugin_id, enabled=False)
     config_path.write_text(config_text, encoding="utf-8")

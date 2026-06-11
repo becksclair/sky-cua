@@ -34,7 +34,7 @@ def main() -> int:
     dialog = run_session_env_dialog()
     try:
         result = run_codex_exec(
-            prompt=with_plugin_mention(session_env_prompt()),
+            prompt=with_plugin_mention(session_env_prompt(), codex_home),
             artifact_dir=artifact_dir,
             output_schema=REPO_ROOT / "scripts" / "schemas" / "session_env_smoke_result.json",
             extra_env=stripped_desktop_env({"CODEX_HOME": str(codex_home)}),

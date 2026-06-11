@@ -8,7 +8,6 @@ from _app_server_harness import (
     require_computer_use_item,
     run_rich_app_server_turn,
     transcript_computer_use_items,
-    with_plugin_mention,
 )
 from _codex_exec import make_artifact_dir
 from _plugin_bundle import REPO_ROOT
@@ -30,7 +29,7 @@ def main() -> int:
     dialog = run_session_env_dialog()
     try:
         result = run_rich_app_server_turn(
-            prompt=with_plugin_mention(session_env_prompt()),
+            prompt=session_env_prompt(),
             artifact_dir=artifact_dir,
             output_schema=REPO_ROOT / "scripts" / "schemas" / "session_env_smoke_result.json",
             extra_env=stripped_desktop_env(),

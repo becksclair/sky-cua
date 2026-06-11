@@ -14,7 +14,7 @@ from _codex_exec import (
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
     FAST_SERVICE_TIER,
-    PLUGIN_MENTION,
+    plugin_mention,
     prepare_chatgpt_plugin_test_home,
 )
 from _plugin_bundle import REPO_ROOT
@@ -22,9 +22,9 @@ from _plugin_bundle import REPO_ROOT
 _READ_POLL_SECONDS = 0.25
 
 
-def with_plugin_mention(prompt: str) -> str:
+def with_plugin_mention(prompt: str, codex_home: Path) -> str:
     return (
-        f"Use {PLUGIN_MENTION} and its bundled computer-use skill.\n"
+        f"Use {plugin_mention(codex_home)} and its bundled computer-use skill.\n"
         "When `get_app_state` returns a `screenshot_path`, inspect that image with `view_image` and"
         " treat it as the visual source of truth. If the control tree is sparse or fallback-only,"
         " you may still act by confirmed on-screen coordinates through the computer-use tools."
@@ -407,6 +407,9 @@ def run_rich_app_server_turn(
 ) -> AppServerTurnResult:
     policy = policy or AppServerHarnessPolicy()
     codex_home = prepare_chatgpt_plugin_test_home(artifact_dir=artifact_dir)
+    # The mention must reference the plugin id this prepared home enables, so
+    # the harness owns mention wrapping; callers pass the raw task prompt.
+    prompt = with_plugin_mention(prompt, codex_home)
     service_socket_path = (artifact_dir / "service.sock").resolve()
     if service_socket_path.exists():
         service_socket_path.unlink()

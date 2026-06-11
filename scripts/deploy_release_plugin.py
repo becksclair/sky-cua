@@ -20,6 +20,8 @@ from _plugin_bundle import (
     RELEASE_PLUGIN_ID,
     build_bundle,
     compat_plugin_available,
+    compat_plugin_cache_root,
+    compat_plugin_target,
     copytree_replace,
     copytree_replace_preserving_platform_binaries,
     ensure_bundle_structure,
@@ -84,14 +86,29 @@ def release_payload_root(codex_home: Path, version: str, installed_path: Path) -
     return installed_path
 
 
+def payload_version_key(name: str) -> tuple[int, ...]:
+    """Numeric version-prefix sort key; non-numeric names sort lowest."""
+    parts: list[int] = []
+    for piece in name.split("."):
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        if not digits or not piece.startswith(digits):
+            break
+        parts.append(int(digits))
+    return tuple(parts) if parts else (-1,)
+
+
 def latest_release_payload(codex_home: Path) -> Path | None:
-    """Newest installed release cache payload, or None before any install."""
+    """Highest-version installed release cache payload, or None before any
+    install. Directory mtimes are copied from build sources by `copytree`, so
+    they do not track install order; the semver-style directory name does.
+    mtime only breaks version-key ties.
+    """
     root = release_cache_root(codex_home)
     if not root.is_dir():
         return None
     candidates = sorted(
         (entry for entry in root.iterdir() if entry.is_dir() and not entry.is_symlink()),
-        key=lambda entry: entry.stat().st_mtime,
+        key=lambda entry: (payload_version_key(entry.name), entry.stat().st_mtime),
     )
     return candidates[-1] if candidates else None
 
@@ -236,19 +253,25 @@ def main() -> int:
     config_path = args.codex_home / "config.toml"
     cache_root = release_cache_root(args.codex_home)
     cache_backup = snapshot_path(cache_root, backup_dir, "release-cache")
+    # refresh_compat_plugin rewrites the compat root mid-deploy; without this
+    # snapshot a failed deploy would roll back the release cache while the
+    # still-enabled compat plugin points at the deleted payload.
+    compat_root = compat_plugin_cache_root(args.codex_home)
+    compat_backup = snapshot_path(compat_root, backup_dir, "compat-plugin")
     codex_bin = resolve_codex_bin(args.codex_bin) if not args.skip_codex_install else None
     codex_install = "skipped"
     cache_path: Path | None = None
+    compat_enabled = False
     deploy_complete = False
     installed_path = release_root
     previous_config = config_path.read_text() if config_path.exists() else None
     configure_local_marketplace = not config_has_release_marketplace(previous_config or "")
     try:
         stop_unix_runtime_processes([cache_root.parent, release_root])
+        installed_path = install_release_bundle(args.bundle_root, args.marketplace_root)
+        manifest_path = write_release_marketplace(args.marketplace_root)
         if not args.skip_codex_install:
             assert codex_bin is not None
-            installed_path = install_release_bundle(args.bundle_root, args.marketplace_root)
-            manifest_path = write_release_marketplace(args.marketplace_root)
             update_codex_config(
                 config_path,
                 plugin_id=RELEASE_PLUGIN_ID,
@@ -268,32 +291,29 @@ def main() -> int:
                 args.codex_home, plugin_version(installed_path), installed_path
             )
             refresh_compat_plugin(payload_root, args.codex_home)
-            update_codex_config(
-                config_path,
-                plugin_id=RELEASE_PLUGIN_ID,
-                disabled_plugin_ids=[PLUGIN_ID],
-                compat_enablement=compat_plugin_available(args.codex_home),
-                marketplace_root=args.marketplace_root if configure_local_marketplace else None,
-            )
+        # With --skip-codex-install no compat refresh runs: an existing compat
+        # root keeps its current payload target, and the flip below only keeps
+        # the compat id authoritative. The compat_target print makes the
+        # active payload visible either way.
+        compat_enabled = compat_plugin_available(args.codex_home)
+        update_codex_config(
+            config_path,
+            plugin_id=RELEASE_PLUGIN_ID,
+            disabled_plugin_ids=[PLUGIN_ID],
+            compat_enablement=compat_enabled,
+            marketplace_root=args.marketplace_root if configure_local_marketplace else None,
+        )
+        if not args.skip_codex_install:
+            assert codex_bin is not None
             reload_mcp_servers(codex_bin, args.codex_home)
-            deploy_complete = True
-        else:
-            installed_path = install_release_bundle(args.bundle_root, args.marketplace_root)
-            manifest_path = write_release_marketplace(args.marketplace_root)
-            update_codex_config(
-                config_path,
-                plugin_id=RELEASE_PLUGIN_ID,
-                disabled_plugin_ids=[PLUGIN_ID],
-                compat_enablement=compat_plugin_available(args.codex_home),
-                marketplace_root=args.marketplace_root if configure_local_marketplace else None,
-            )
-            deploy_complete = True
+        deploy_complete = True
     except Exception:
         if previous_config is None:
             config_path.unlink(missing_ok=True)
         else:
             config_path.write_text(previous_config)
         restore_snapshot(cache_root, cache_backup)
+        restore_snapshot(compat_root, compat_backup)
         restore_snapshot(release_root, plugin_backup)
         restore_snapshot(manifest_path, manifest_backup)
         raise
@@ -306,6 +326,10 @@ def main() -> int:
     print(f"installed_path={installed_path}")
     print(f"plugin_id={RELEASE_PLUGIN_ID}")
     print(f"config_path={config_path}")
+    print(f"compat_enablement={str(compat_enabled).lower()}")
+    compat_target = compat_plugin_target(args.codex_home)
+    if compat_target is not None:
+        print(f"compat_target={compat_target}")
     if not args.skip_codex_install:
         print(f"codex_install={codex_install}")
     if cache_path is not None:

@@ -62,7 +62,8 @@ Rules:
 - Prefer the skill's hybrid workflow: use the tree for structure, screenshots for confirmation, and physical actions if the obvious button is easier than a semantic click.
 - Include a screenshot_path from plugin state if you can.
 - If blocked by portal approval or missing app state, classify the result honestly instead of inventing success.
-""".strip()
+""".strip(),
+            codex_home,
         )
         result = run_codex_exec(
             prompt=prompt,

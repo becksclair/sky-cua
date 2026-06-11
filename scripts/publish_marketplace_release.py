@@ -18,6 +18,7 @@ from _plugin_bundle import (
     RELEASE_PLUGIN_ID,
     build_bundle,
     compat_plugin_available,
+    compat_plugin_target,
     current_runtime_platform,
     merge_runtime_artifacts,
     platform_runtime_binary_base_names,
@@ -247,13 +248,18 @@ def main() -> int:
         install_with_codex(codex_bin, args.codex_home, manifest_path)
         payload_root = release_payload_root(args.codex_home, version, installed_path)
         refresh_compat_plugin(payload_root, args.codex_home)
+        compat_enabled = compat_plugin_available(args.codex_home)
         update_codex_config(
             args.codex_home / "config.toml",
             plugin_id=RELEASE_PLUGIN_ID,
             disabled_plugin_ids=[PLUGIN_ID],
-            compat_enablement=compat_plugin_available(args.codex_home),
+            compat_enablement=compat_enabled,
         )
         reload_mcp_servers(codex_bin, args.codex_home)
+        print(f"compat_enablement={str(compat_enabled).lower()}")
+        compat_target = compat_plugin_target(args.codex_home)
+        if compat_target is not None:
+            print(f"compat_target={compat_target}")
 
     # Keep the local MCP-server install (and the shared daemon it backs) in
     # lockstep with the published release so the two channels cannot drift.

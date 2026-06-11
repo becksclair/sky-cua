@@ -8,7 +8,6 @@ import time
 from _app_server_harness import (
     require_computer_use_item,
     run_rich_app_server_turn,
-    with_plugin_mention,
 )
 from _codex_exec import make_artifact_dir
 from _plugin_bundle import REPO_ROOT
@@ -29,8 +28,7 @@ def main() -> int:
         ]
     )
     try:
-        prompt = with_plugin_mention(
-            """
+        prompt = """
 Goal: inspect the visible zenity dialog titled `sky-cua rich app-server smoke`, report the dialog text, dismiss it, and return only the schema result.
 
 Required workflow:
@@ -45,7 +43,6 @@ Rules:
 - Include a screenshot_path from plugin state if you can.
 - If blocked by portal approval or missing app state, classify the result honestly instead of inventing success.
             """.strip()
-        )
         result = run_rich_app_server_turn(
             prompt=prompt,
             artifact_dir=artifact_dir,

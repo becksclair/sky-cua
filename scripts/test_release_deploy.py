@@ -261,19 +261,51 @@ def test_release_payload_root_prefers_codex_cache_payload(tmp_path: Path) -> Non
     )
 
 
-def test_latest_release_payload_returns_newest_version_dir(tmp_path: Path) -> None:
+def test_latest_release_payload_orders_by_version_not_mtime(tmp_path: Path) -> None:
     codex_home = tmp_path / "codex-home"
     assert release_deploy.latest_release_payload(codex_home) is None
 
     cache_root = release_deploy.release_cache_root(codex_home)
-    old = cache_root / "0.1.0"
-    old.mkdir(parents=True)
+    # copytree-based installs preserve source mtimes, so a freshly installed
+    # higher version can carry an OLDER mtime than a stale cache entry.
+    newest_version = cache_root / "0.10.0"
+    newest_version.mkdir(parents=True)
     past = time.time() - 60
-    os.utime(old, (past, past))
-    new = cache_root / "0.2.0"
-    new.mkdir()
+    os.utime(newest_version, (past, past))
+    stale_touched = cache_root / "0.9.0"
+    stale_touched.mkdir()
+    junk = cache_root / "not-a-version"
+    junk.mkdir()
 
-    assert release_deploy.latest_release_payload(codex_home) == new
+    assert release_deploy.latest_release_payload(codex_home) == newest_version
+
+
+def test_update_codex_config_channel_enable_disables_compat_id(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[plugins."{COMPUTER_USE_COMPAT_PLUGIN_ID}"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+
+    update_codex_config(config_path, plugin_id=RELEASE_PLUGIN_ID, compat_enablement=False)
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is True
+    assert parsed["plugins"][COMPUTER_USE_COMPAT_PLUGIN_ID]["enabled"] is False
+
+
+def test_update_codex_config_disable_only_call_leaves_compat_id_alone(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[plugins."{COMPUTER_USE_COMPAT_PLUGIN_ID}"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+
+    update_codex_config(config_path, plugin_id=RELEASE_PLUGIN_ID, plugin_enabled=False)
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is False
+    assert parsed["plugins"][COMPUTER_USE_COMPAT_PLUGIN_ID]["enabled"] is True
 
 
 def test_release_deploy_restores_cache_when_reload_fails(
@@ -286,6 +318,8 @@ def test_release_deploy_restores_cache_when_reload_fails(
     cache_version = release_deploy.release_cache_root(codex_home) / "0.1.0"
     cache_version.mkdir(parents=True)
     (cache_version / "old-marker.txt").write_text("old", encoding="utf-8")
+    compat_latest = write_fake_compat_root(codex_home)
+    previous_compat_mcp = (compat_latest / ".mcp.json").read_text(encoding="utf-8")
 
     write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
 
@@ -297,10 +331,28 @@ def test_release_deploy_restores_cache_when_reload_fails(
         target.mkdir(parents=True)
         (target / "new-marker.txt").write_text("new", encoding="utf-8")
 
+    def fake_refresh_compat_plugin(_payload_root: Path, codex_home_arg: Path) -> None:
+        # Simulate the preflight retargeting the compat root at the payload
+        # the rollback is about to delete.
+        mcp_path = (
+            codex_home_arg
+            / "plugins"
+            / "cache"
+            / "openai-bundled"
+            / "computer-use"
+            / "latest"
+            / ".mcp.json"
+        )
+        mcp_path.write_text(
+            '{"mcpServers": {"computer-use": {"command": "/deleted/payload"}}}',
+            encoding="utf-8",
+        )
+
     def fail_reload(_codex_bin: Path, _codex_home: Path) -> None:
         raise RuntimeError("reload failed")
 
     monkeypatch.setattr(release_deploy, "install_with_codex", fake_install_with_codex)
+    monkeypatch.setattr(release_deploy, "refresh_compat_plugin", fake_refresh_compat_plugin)
     monkeypatch.setattr(release_deploy, "reload_mcp_servers", fail_reload)
     monkeypatch.setattr(
         sys,
@@ -324,3 +376,5 @@ def test_release_deploy_restores_cache_when_reload_fails(
 
     assert (cache_version / "old-marker.txt").read_text(encoding="utf-8") == "old"
     assert not (cache_version / "new-marker.txt").exists()
+    restored_compat_mcp = (compat_latest / ".mcp.json").read_text(encoding="utf-8")
+    assert restored_compat_mcp == previous_compat_mcp

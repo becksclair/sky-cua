@@ -22,7 +22,8 @@ from _smoke_config import LIVE_SMOKE_MODEL, LIVE_SMOKE_REASONING_EFFORT
 DEFAULT_MODEL = LIVE_SMOKE_MODEL
 DEFAULT_REASONING_EFFORT = LIVE_SMOKE_REASONING_EFFORT
 FAST_SERVICE_TIER = "fast"
-PLUGIN_MENTION = "[@sky-cua](plugin://sky-cua@debug)"
+COMPAT_PLUGIN_MENTION = "[@computer-use](plugin://computer-use@openai-bundled)"
+DEBUG_PLUGIN_MENTION = "[@sky-cua](plugin://sky-cua@debug)"
 COMPUTER_USE_NAMESPACE = "mcp__computer_use__"
 TOOL_VISIBILITY_SCHEMA = REPO_ROOT / "scripts" / "schemas" / "tool_visibility_result.json"
 DESKTOP_E2E_EXEC_ARGS = ["--dangerously-bypass-approvals-and-sandbox"]
@@ -41,9 +42,21 @@ NESTED_CODEX_ENV_VARS = (
 )
 
 
-def with_plugin_mention(prompt: str) -> str:
+def plugin_mention(codex_home: Path) -> str:
+    """Mention for the computer-use plugin id enabled in the given home.
+
+    Compat-first homes enable `computer-use@openai-bundled`; channel-fallback
+    homes enable `sky-cua@debug`. Mentioning a disabled plugin id would hand
+    the model a dead reference.
+    """
+    if compat_plugin_available(codex_home):
+        return COMPAT_PLUGIN_MENTION
+    return DEBUG_PLUGIN_MENTION
+
+
+def with_plugin_mention(prompt: str, codex_home: Path) -> str:
     return (
-        f"Use {PLUGIN_MENTION} and its bundled computer-use skill.\n"
+        f"Use {plugin_mention(codex_home)} and its bundled computer-use skill.\n"
         "Start from a fresh `get_app_state`, inspect any returned `screenshot_path` with `view_image`,"
         " and treat the screenshot as the visual source of truth. When the tree is sparse or fallback-only,"
         ' use full `get_app_state` for initial orientation, then prefer `detail: "compact"` for repeated'

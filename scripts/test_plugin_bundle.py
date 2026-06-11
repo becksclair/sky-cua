@@ -595,14 +595,25 @@ def test_browser_preflight_update_config_enables_bundled_plugins(tmp_path: Path)
     chrome_preflight = load_chrome_preflight()
     codex_home = tmp_path / "codex-home"
 
+    # Without a materialized compat root the compat id must stay disabled, or
+    # the host would carry an enabled plugin with no working server.
     chrome_preflight.update_codex_config(codex_home)
 
     parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
     assert parsed["features"]["plugins"] is True
     assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is True
     assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is True
+    assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is False
+
     # Compat-first: Codex Desktop detects Computer Use plugins by the
-    # built-in plugin name, so the compat id is the enabled one.
+    # built-in plugin name, so once the compat root is materialized the
+    # compat id is the enabled one.
+    compat_latest = codex_home / "plugins" / "cache" / "openai-bundled" / "computer-use" / "latest"
+    compat_latest.mkdir(parents=True)
+    (compat_latest / ".mcp.json").write_text("{}", encoding="utf-8")
+    chrome_preflight.update_codex_config(codex_home)
+
+    parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
     assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is True
 
 
@@ -652,6 +663,9 @@ def test_browser_preflight_computer_use_compat_plugin_preserves_env_allowlist(
         ),
         encoding="utf-8",
     )
+    skills_dir = sky_root / "skills" / "computer-use"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("computer use skill", encoding="utf-8")
     codex_home = tmp_path / "codex-home"
 
     chrome_preflight.sync_computer_use_compat_plugin(source_root, codex_home)
@@ -675,6 +689,19 @@ def test_browser_preflight_computer_use_compat_plugin_preserves_env_allowlist(
     assert (
         codex_home / ".tmp" / "bundled-marketplaces" / "openai-bundled" / "plugins" / "computer-use"
     ).readlink() == cache_root / "latest"
+    # The compat root is the enabled plugin id, so it must carry the payload's
+    # skills per docs/runtime/compat-plugin-contract.md.
+    compat_skill = compat_mcp_path.parent / "skills" / "computer-use" / "SKILL.md"
+    assert compat_skill.read_text(encoding="utf-8") == "computer use skill"
+
+    # A no-op re-sync must not rewrite the materialized root: remove/recreate
+    # churn under a running Codex host can reset per-plugin state such as
+    # Computer Use app approvals.
+    first_sync_stat = compat_mcp_path.stat()
+    chrome_preflight.sync_computer_use_compat_plugin(source_root, codex_home)
+    second_sync_stat = compat_mcp_path.stat()
+    assert second_sync_stat.st_mtime_ns == first_sync_stat.st_mtime_ns
+    assert second_sync_stat.st_ino == first_sync_stat.st_ino
 
 
 def test_bundled_resource_root_accepts_upstream_codex_resource_root(

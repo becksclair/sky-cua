@@ -33,7 +33,7 @@ def main() -> int:
     dialog = run_zenity_readback_dialog()
     try:
         result = run_codex_exec(
-            prompt=with_plugin_mention(text_readback_prompt()),
+            prompt=with_plugin_mention(text_readback_prompt(), codex_home),
             artifact_dir=artifact_dir,
             output_schema=REPO_ROOT / "scripts" / "schemas" / "text_readback_smoke_result.json",
             extra_env={"CODEX_HOME": str(codex_home)},

@@ -142,6 +142,14 @@ def link_or_copy_directory(target: Path, link_path: Path) -> None:
     to a full copy there. The cache layout only needs a navigable directory
     at ``link_path``; readers do not require it to be a symlink.
     """
+    if link_path.is_symlink():
+        try:
+            if link_path.readlink() == target:
+                # Already pointing at the right target; avoid replace churn
+                # under a running Codex host.
+                return
+        except OSError:
+            pass
     if link_path.exists() and not link_path.is_symlink():
         remove_path(link_path)
     link_path.unlink(missing_ok=True)
@@ -265,12 +273,6 @@ def sync_computer_use_compat_plugin(source_root: Path, codex_home: Path) -> None
     )
     cache_plugin = cache_root / compat_version
 
-    remove_path(cache_plugin)
-    (cache_plugin / ".codex-plugin").mkdir(parents=True, exist_ok=True)
-    (cache_plugin / "assets").mkdir(parents=True, exist_ok=True)
-    if (sky_root / "assets" / "app-icon.png").exists():
-        shutil.copy2(sky_root / "assets" / "app-icon.png", cache_plugin / "assets" / "app-icon.png")
-
     compat_manifest = {
         "name": COMPUTER_USE_PLUGIN_NAME,
         "version": compat_version,
@@ -303,10 +305,6 @@ def sync_computer_use_compat_plugin(source_root: Path, codex_home: Path) -> None
             "screenshots": [],
         },
     }
-    (cache_plugin / ".codex-plugin" / "plugin.json").write_text(
-        json.dumps(compat_manifest, indent=2) + "\n",
-        encoding="utf-8",
-    )
     mcp = {
         "mcpServers": {
             "computer-use": {
@@ -317,11 +315,50 @@ def sync_computer_use_compat_plugin(source_root: Path, codex_home: Path) -> None
             }
         }
     }
-    (cache_plugin / ".mcp.json").write_text(json.dumps(mcp, indent=2) + "\n", encoding="utf-8")
+    manifest_text = json.dumps(compat_manifest, indent=2) + "\n"
+    mcp_text = json.dumps(mcp, indent=2) + "\n"
+    skills_source = sky_root / "skills"
+
+    # Skip the rewrite when the materialized root already matches: removing
+    # and recreating the plugin root churns the directory the running Codex
+    # host has loaded and can reset per-plugin state such as Computer Use
+    # app approvals. Only rewrite when the generated content actually changed.
+    if not compat_plugin_root_is_current(cache_plugin, manifest_text, mcp_text, skills_source):
+        remove_path(cache_plugin)
+        (cache_plugin / ".codex-plugin").mkdir(parents=True, exist_ok=True)
+        (cache_plugin / "assets").mkdir(parents=True, exist_ok=True)
+        if (sky_root / "assets" / "app-icon.png").exists():
+            shutil.copy2(
+                sky_root / "assets" / "app-icon.png", cache_plugin / "assets" / "app-icon.png"
+            )
+        # The compat root is the enabled plugin id, so it must carry the
+        # skills the payload ships (docs/runtime/compat-plugin-contract.md
+        # layout); the disabled channel plugin no longer provides them.
+        if skills_source.is_dir():
+            shutil.copytree(skills_source, cache_plugin / "skills")
+        (cache_plugin / ".codex-plugin" / "plugin.json").write_text(
+            manifest_text,
+            encoding="utf-8",
+        )
+        (cache_plugin / ".mcp.json").write_text(mcp_text, encoding="utf-8")
 
     latest = cache_root / "latest"
     ensure_cached_plugin_link(cache_root, compat_version)
     ensure_marketplace_plugin_link(codex_home, COMPUTER_USE_PLUGIN_NAME, latest)
+
+
+def compat_plugin_root_is_current(
+    cache_plugin: Path, manifest_text: str, mcp_text: str, skills_source: Path
+) -> bool:
+    try:
+        manifest_current = (
+            cache_plugin / ".codex-plugin" / "plugin.json"
+        ).read_text(encoding="utf-8") == manifest_text
+        mcp_current = (cache_plugin / ".mcp.json").read_text(encoding="utf-8") == mcp_text
+    except OSError:
+        return False
+    skills_current = not skills_source.is_dir() or (cache_plugin / "skills").is_dir()
+    return manifest_current and mcp_current and skills_current
 
 
 def ensure_cached_plugin_link(cache_root: Path, version: str) -> None:
@@ -706,12 +743,24 @@ def update_codex_config(codex_home: Path) -> None:
     # Codex Desktop detects Computer Use plugins by the built-in plugin name
     # "computer-use", so the compat plugin id is the single enabled
     # computer-use plugin. The sky-cua channel ids stay disabled; the active
-    # payload is whichever one the compat root's .mcp.json points at.
+    # payload is whichever one the compat root's .mcp.json points at. Only
+    # enable the id when the compat root actually materialized — the sync can
+    # skip silently on an unreadable payload manifest, and enabling a ghost
+    # plugin would leave the host with no working computer-use server.
+    compat_ready = (
+        codex_home
+        / "plugins"
+        / "cache"
+        / OPENAI_BUNDLED_MARKETPLACE
+        / COMPUTER_USE_PLUGIN_NAME
+        / "latest"
+        / ".mcp.json"
+    ).exists()
     config_text = upsert_toml_key(
         config_text,
         f'plugins."{COMPUTER_USE_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"',
         "enabled",
-        "true",
+        "true" if compat_ready else "false",
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(config_text, encoding="utf-8")

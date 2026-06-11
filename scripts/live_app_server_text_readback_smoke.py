@@ -8,7 +8,6 @@ from _app_server_harness import (
     require_computer_use_item,
     run_rich_app_server_turn,
     transcript_computer_use_items,
-    with_plugin_mention,
 )
 from _codex_exec import make_artifact_dir
 from _plugin_bundle import REPO_ROOT
@@ -27,7 +26,7 @@ def main() -> int:
     dialog = run_zenity_readback_dialog()
     try:
         result = run_rich_app_server_turn(
-            prompt=with_plugin_mention(text_readback_prompt()),
+            prompt=text_readback_prompt(),
             artifact_dir=artifact_dir,
             output_schema=REPO_ROOT / "scripts" / "schemas" / "text_readback_smoke_result.json",
         )
