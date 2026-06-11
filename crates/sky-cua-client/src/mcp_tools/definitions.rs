@@ -457,6 +457,9 @@ mod annotation_tests {
     const EXPECTED: &[(&str, (bool, bool, bool, bool))] = &[
         ("doctor", (true, false, true, false)),
         ("setup_accessibility", (false, false, true, false)),
+        // Deliberate judgment call: installs a GNOME Shell extension, but the
+        // install is reversible, idempotent, and cannot destroy user data, so
+        // it is pinned non-destructive rather than worst-case.
         ("setup_window_targeting", (false, false, true, false)),
         ("list_apps", (true, false, true, false)),
         ("list_windows", (true, false, true, false)),
@@ -482,6 +485,10 @@ mod annotation_tests {
         ("browser_open", (false, false, false, true)),
         ("browser_claim_tab", (false, false, true, false)),
         ("browser_move_mouse", (false, false, true, false)),
+        // Deliberate judgment call: navigation can discard unsaved page
+        // state, but it is pinned non-destructive + idempotent because
+        // re-navigating to the same URL converges and codex would otherwise
+        // gate every page load behind an approval.
         ("browser_navigate", (false, false, true, true)),
         ("browser_snapshot", (true, false, true, false)),
         ("browser_screenshot", (true, false, true, false)),

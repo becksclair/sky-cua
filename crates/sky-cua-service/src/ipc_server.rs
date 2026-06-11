@@ -93,15 +93,7 @@ pub async fn run_service() -> Result<()> {
             accept_result = listener.accept() => {
                 match accept_result {
                     Ok((stream, _)) => {
-                        let daemon = daemon.clone();
-                        connections.register().await;
-                        let connections = connections.clone();
-                        tokio::spawn(async move {
-                            if let Err(error) = handle_connection(stream, daemon.clone()).await {
-                                warn!("sky-cua IPC connection error: {error}");
-                            }
-                            connections.unregister_and_cleanup_if_idle(&daemon).await;
-                        });
+                        spawn_connection_handler(stream, &daemon, &connections).await;
                     }
                     Err(error) => {
                         warn!("sky-cua IPC accept error: {error}");
@@ -117,9 +109,14 @@ pub async fn run_service() -> Result<()> {
                 if !socket_path.exists() {
                     match UnixListener::bind(&socket_path) {
                         Ok(replacement) => {
-                            listener = replacement;
+                            let displaced = std::mem::replace(&mut listener, replacement);
+                            // Clients that completed connect(2) against the
+                            // unlinked inode are still queued on the old
+                            // listener; serve them instead of dropping them.
+                            let drained =
+                                drain_pending_connections(&displaced, &daemon, &connections).await;
                             warn!(
-                                "sky-cua-service socket file disappeared at {}; re-bound the listener so new clients can connect",
+                                "sky-cua-service socket file disappeared at {}; re-bound the listener (served {drained} queued connection(s))",
                                 socket_path.display()
                             );
                         }
@@ -151,6 +148,45 @@ pub async fn run_service() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+async fn spawn_connection_handler(
+    stream: UnixStream,
+    daemon: &Arc<ServiceDaemon>,
+    connections: &Arc<ConnectionTracker>,
+) {
+    let daemon = daemon.clone();
+    connections.register().await;
+    let connections = connections.clone();
+    tokio::spawn(async move {
+        if let Err(error) = handle_connection(stream, daemon.clone()).await {
+            warn!("sky-cua IPC connection error: {error}");
+        }
+        connections.unregister_and_cleanup_if_idle(&daemon).await;
+    });
+}
+
+/// Serve connections already queued on a displaced listener without waiting
+/// for new ones. Bounded so a connect flood cannot pin the select loop.
+#[cfg(unix)]
+async fn drain_pending_connections(
+    listener: &UnixListener,
+    daemon: &Arc<ServiceDaemon>,
+    connections: &Arc<ConnectionTracker>,
+) -> usize {
+    const MAX_DRAINED_CONNECTIONS: usize = 32;
+    let mut drained = 0;
+    while drained < MAX_DRAINED_CONNECTIONS {
+        match tokio::time::timeout(Duration::ZERO, listener.accept()).await {
+            Ok(Ok((stream, _))) => {
+                spawn_connection_handler(stream, daemon, connections).await;
+                drained += 1;
+            }
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    drained
+}
+
 /// Try to take the exclusive daemon lock next to the socket path.
 ///
 /// Returns `Ok(None)` when another live daemon holds the lock. The lock file
@@ -172,18 +208,41 @@ fn acquire_singleton_lock(socket_path: &std::path::Path) -> Result<Option<std::f
         .truncate(false)
         .write(true)
         .open(&lock_path)?;
-    loop {
+    match nonblocking_flock_outcome(|| {
         let result = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         if result == 0 {
-            return Ok(Some(lock_file));
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
         }
-        let error = std::io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(libc::EWOULDBLOCK) => return Ok(None),
-            // A signal can interrupt even a non-blocking flock; retry rather
-            // than failing daemon startup.
-            Some(libc::EINTR) => continue,
-            _ => return Err(error.into()),
+    })? {
+        FlockOutcome::Acquired => Ok(Some(lock_file)),
+        FlockOutcome::Held => Ok(None),
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+enum FlockOutcome {
+    Acquired,
+    Held,
+}
+
+/// Drive a non-blocking flock attempt to a terminal outcome, retrying EINTR:
+/// a signal can interrupt even `LOCK_NB`, and that must not abort daemon
+/// startup.
+#[cfg(unix)]
+fn nonblocking_flock_outcome(
+    mut attempt: impl FnMut() -> std::io::Result<()>,
+) -> Result<FlockOutcome> {
+    loop {
+        match attempt() {
+            Ok(()) => return Ok(FlockOutcome::Acquired),
+            Err(error) => match error.raw_os_error() {
+                Some(libc::EWOULDBLOCK) => return Ok(FlockOutcome::Held),
+                Some(libc::EINTR) => continue,
+                _ => return Err(error.into()),
+            },
         }
     }
 }
@@ -298,6 +357,56 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn flock_retries_eintr_until_a_terminal_outcome() {
+        let mut results = vec![
+            Err(std::io::Error::from_raw_os_error(libc::EINTR)),
+            Err(std::io::Error::from_raw_os_error(libc::EINTR)),
+            Ok(()),
+        ]
+        .into_iter();
+        let outcome = nonblocking_flock_outcome(|| results.next().expect("attempt"))
+            .expect("retry loop should reach the Ok attempt");
+        assert_eq!(outcome, FlockOutcome::Acquired);
+
+        let mut results = vec![
+            Err(std::io::Error::from_raw_os_error(libc::EINTR)),
+            Err(std::io::Error::from_raw_os_error(libc::EWOULDBLOCK)),
+        ]
+        .into_iter();
+        let outcome = nonblocking_flock_outcome(|| results.next().expect("attempt"))
+            .expect("held lock is a terminal outcome");
+        assert_eq!(outcome, FlockOutcome::Held);
+
+        let mut results = vec![Err(std::io::Error::from_raw_os_error(libc::EACCES))].into_iter();
+        assert!(nonblocking_flock_outcome(|| results.next().expect("attempt")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drain_serves_connections_queued_on_a_displaced_listener() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("sky-cua-drain-test-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        let socket_path = temp_dir.join("drain.sock");
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path).expect("bind test listener");
+        let queued_one =
+            std::os::unix::net::UnixStream::connect(&socket_path).expect("queue first client");
+        let queued_two =
+            std::os::unix::net::UnixStream::connect(&socket_path).expect("queue second client");
+
+        let daemon = Arc::new(ServiceDaemon::new_for_tests().expect("daemon"));
+        let connections = Arc::new(ConnectionTracker::default());
+        let drained = drain_pending_connections(&listener, &daemon, &connections).await;
+
+        drop(queued_one);
+        drop(queued_two);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        assert_eq!(drained, 2, "both queued connections must be served");
+    }
 
     #[cfg(unix)]
     #[test]
