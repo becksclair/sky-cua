@@ -494,6 +494,181 @@ def test_openclaw_codex_home_toml_upsert_is_idempotent(
     assert parsed["mcp_servers"]["sky_cua"]["default_tools_approval_mode"] == "approve"
 
 
+def test_openclaw_codex_home_pin_refusal_fails_install_without_success_message(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    user_config = f"{install_mcp_server.CODEX_MCP_SERVER_TOML_BEGIN}\nuser_key = 1\n"
+    config_path.write_text(user_config, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="refused to update OpenClaw agent codex-home"):
+        install_mcp_server.install_openclaw_agent_codex_mcp_servers(
+            tmp_path, tmp_path / "sky-cua-client"
+        )
+
+    captured = capsys.readouterr()
+    assert "corrupt sky-cua marker block" in captured.err
+    assert "Pinned sky_cua mcp_servers entry" not in captured.out
+    assert config_path.read_text(encoding="utf-8") == user_config
+
+
+def test_openclaw_codex_home_pin_refusal_keeps_batch_unmodified(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    valid_path = tmp_path / "agents" / "alpha" / "agent" / "codex-home" / "config.toml"
+    corrupt_path = tmp_path / "agents" / "zulu" / "agent" / "codex-home" / "config.toml"
+    valid_path.parent.mkdir(parents=True)
+    corrupt_path.parent.mkdir(parents=True)
+    valid_config = 'model = "gpt-5.5"\n'
+    corrupt_config = f"{install_mcp_server.CODEX_MCP_SERVER_TOML_BEGIN}\nuser_key = 1\n"
+    valid_path.write_text(valid_config, encoding="utf-8")
+    corrupt_path.write_text(corrupt_config, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="refused to update OpenClaw agent codex-home"):
+        install_mcp_server.install_openclaw_agent_codex_mcp_servers(
+            tmp_path, tmp_path / "sky-cua-client"
+        )
+
+    captured = capsys.readouterr()
+    assert "corrupt sky-cua marker block" in captured.err
+    assert "Pinned sky_cua mcp_servers entry" not in captured.out
+    assert valid_path.read_text(encoding="utf-8") == valid_config
+    assert corrupt_path.read_text(encoding="utf-8") == corrupt_config
+
+
+def test_openclaw_codex_home_write_failure_rolls_back_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    alpha_path = tmp_path / "agents" / "alpha" / "agent" / "codex-home" / "config.toml"
+    zulu_path = tmp_path / "agents" / "zulu" / "agent" / "codex-home" / "config.toml"
+    alpha_path.parent.mkdir(parents=True)
+    zulu_path.parent.mkdir(parents=True)
+    alpha_config = 'model = "gpt-5.5"\n'
+    zulu_config = 'model = "gpt-5.5-mini"\n'
+    alpha_path.write_text(alpha_config, encoding="utf-8")
+    zulu_path.write_text(zulu_config, encoding="utf-8")
+    real_write = install_mcp_server.write_text_atomically
+
+    def fail_zulu(path: Path, text: str, mode: int | None = None) -> None:
+        if path == zulu_path:
+            raise OSError("write failed")
+        real_write(path, text, mode=mode)
+
+    monkeypatch.setattr(install_mcp_server, "write_text_atomically", fail_zulu)
+
+    with pytest.raises(OSError, match="write failed"):
+        install_mcp_server.install_openclaw_agent_codex_mcp_servers(
+            tmp_path, tmp_path / "sky-cua-client"
+        )
+
+    assert "Pinned sky_cua mcp_servers entry" not in capsys.readouterr().out
+    assert alpha_path.read_text(encoding="utf-8") == alpha_config
+    assert zulu_path.read_text(encoding="utf-8") == zulu_config
+
+
+def test_openclaw_install_preflights_codex_home_before_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        f"{install_mcp_server.CODEX_MCP_SERVER_TOML_BEGIN}\nuser_key = 1\n",
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="refused to update OpenClaw agent codex-home"):
+        install_mcp_server.install_openclaw(
+            target_dir,
+            target_dir / "bin" / "sky-cua-client",
+            openclaw_dir=openclaw_dir,
+            openclaw_bin="openclaw",
+        )
+
+    assert calls == []
+    assert not (target_dir / "openclaw_mcp.json").exists()
+
+
+def test_openclaw_install_codex_home_write_failure_precedes_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    original_config = 'model = "gpt-5.5"\n'
+    config_path.write_text(original_config, encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    real_write = install_mcp_server.write_text_atomically
+
+    def fail_config_write(path: Path, text: str, mode: int | None = None) -> None:
+        if path == config_path:
+            raise OSError("codex-home write failed")
+        real_write(path, text, mode=mode)
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+    monkeypatch.setattr(install_mcp_server, "write_text_atomically", fail_config_write)
+
+    with pytest.raises(OSError, match="codex-home write failed"):
+        install_mcp_server.install_openclaw(
+            target_dir,
+            target_dir / "bin" / "sky-cua-client",
+            openclaw_dir=openclaw_dir,
+            openclaw_bin="openclaw",
+        )
+
+    assert calls == []
+    assert not (target_dir / "openclaw_mcp.json").exists()
+    assert config_path.read_text(encoding="utf-8") == original_config
+
+
+def test_openclaw_install_refuses_broken_codex_home_symlink_before_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    broken_target = tmp_path / "missing" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.symlink_to(broken_target)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="refused to update OpenClaw agent codex-home"):
+        install_mcp_server.install_openclaw(
+            target_dir,
+            target_dir / "bin" / "sky-cua-client",
+            openclaw_dir=openclaw_dir,
+            openclaw_bin="openclaw",
+        )
+
+    assert "broken symlink" in capsys.readouterr().err
+    assert calls == []
+    assert config_path.is_symlink()
+    assert config_path.readlink() == broken_target
+    assert not broken_target.exists()
+    assert not (target_dir / "openclaw_mcp.json").exists()
+
+
 def test_openclaw_codex_home_discovery_skips_missing_agents_dir(tmp_path: Path) -> None:
     assert install_mcp_server.openclaw_agent_codex_config_paths(tmp_path) == []
 
@@ -506,6 +681,7 @@ def test_openclaw_codex_home_discovery_skips_missing_agents_dir(tmp_path: Path) 
 def test_openclaw_install_reports_registration_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     repo_root = tmp_path / "repo"
     for skill_name in install_mcp_server.SKY_CUA_SKILLS:
@@ -524,14 +700,140 @@ def test_openclaw_install_reports_registration_timeout(
         raise subprocess.TimeoutExpired(command, timeout)
 
     monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    original_config = 'model = "gpt-5.5"\n'
+    config_path.write_text(original_config, encoding="utf-8")
 
     with pytest.raises(TimeoutError, match="timed out registering sky-cua with OpenClaw"):
         install_mcp_server.install_openclaw(
-            tmp_path / "installed",
-            tmp_path / "installed" / "bin" / "sky-cua-client",
-            openclaw_dir=tmp_path / "openclaw",
+            target_dir,
+            target_dir / "bin" / "sky-cua-client",
+            openclaw_dir=openclaw_dir,
             openclaw_bin="openclaw",
         )
+    assert "Pinned sky_cua mcp_servers entry" not in capsys.readouterr().out
+    assert config_path.read_text(encoding="utf-8") == original_config
+    assert not (target_dir / "openclaw_mcp.json").exists()
+
+
+def test_openclaw_install_registration_error_rolls_back_snippet_without_pin_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    original_config = 'model = "gpt-5.5"\n'
+    config_path.write_text(original_config, encoding="utf-8")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(1, command, stderr=b"registration failed")
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        install_mcp_server.install_openclaw(
+            target_dir,
+            target_dir / "bin" / "sky-cua-client",
+            openclaw_dir=openclaw_dir,
+            openclaw_bin="openclaw",
+        )
+
+    assert "Pinned sky_cua mcp_servers entry" not in capsys.readouterr().out
+    assert config_path.read_text(encoding="utf-8") == original_config
+    assert not (target_dir / "openclaw_mcp.json").exists()
+
+
+def test_openclaw_install_registration_error_preserves_broken_snippet_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    snippet_path = target_dir / "openclaw_mcp.json"
+    broken_target = tmp_path / "missing" / "openclaw_mcp.json"
+    snippet_path.symlink_to(broken_target)
+    openclaw_dir = tmp_path / "openclaw"
+    config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    original_config = 'model = "gpt-5.5"\n'
+    config_path.write_text(original_config, encoding="utf-8")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(1, command, stderr=b"registration failed")
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        install_mcp_server.install_openclaw(
+            target_dir,
+            target_dir / "bin" / "sky-cua-client",
+            openclaw_dir=openclaw_dir,
+            openclaw_bin="openclaw",
+        )
+
+    assert snippet_path.is_symlink()
+    assert snippet_path.readlink() == broken_target
+    assert not broken_target.exists()
+    assert config_path.read_text(encoding="utf-8") == original_config
+
+
+def test_openclaw_install_keeps_codex_home_pin_after_registration_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+        timeout: int,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    def fail_skill_install(_skills_dir: Path) -> None:
+        raise OSError("skill copy failed")
+
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+    monkeypatch.setattr(install_mcp_server, "install_sky_cua_skills", fail_skill_install)
+
+    with pytest.raises(OSError, match="skill copy failed"):
+        install_mcp_server.install_openclaw(
+            target_dir,
+            target_dir / "bin" / "sky-cua-client",
+            openclaw_dir=openclaw_dir,
+            openclaw_bin="openclaw",
+        )
+
+    assert len(calls) == 2
+    assert calls[0][:4] == ["openclaw", "mcp", "set", "sky_cua"]
+    assert calls[1] == ["openclaw", "mcp", "reload"]
+    assert (target_dir / "openclaw_mcp.json").exists()
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "[mcp_servers.sky_cua]" in config_text
+    assert f'command = "{target_dir / "bin" / "sky-cua-client"}"' in config_text
 
 
 def test_generic_mcp_main_can_install_openclaw_host(
@@ -707,3 +1009,90 @@ def test_install_mcp_server_kwin_effect_flag_invokes_helper(
 
     assert install_mcp_server.main() == 0
     assert calls["build_dir"] == (tmp_path / "install").resolve() / "kwin-effect-build"
+
+
+def test_openclaw_codex_home_toml_escapes_special_path_characters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tomllib
+
+    weird_repo = tmp_path / 'repo "with" quotes\\and-backslash'
+    monkeypatch.setattr(install_mcp_server, "REPO_ROOT", weird_repo)
+    monkeypatch.delenv(install_mcp_server.BROWSER_SELECTION_ENV, raising=False)
+    config_path = tmp_path / "config.toml"
+    client_path = tmp_path / 'bin "x"' / "sky-cua-client"
+
+    assert install_mcp_server.upsert_codex_mcp_server_toml(config_path, client_path)
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["mcp_servers"]["sky_cua"]["command"] == str(client_path)
+    assert parsed["mcp_servers"]["sky_cua"]["env"]["SKY_CUA_REPO_ROOT"] == str(weird_repo)
+
+
+def test_openclaw_codex_home_toml_escapes_del_character(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tomllib
+
+    weird_repo = tmp_path / "repo\x7fdel"
+    monkeypatch.setattr(install_mcp_server, "REPO_ROOT", weird_repo)
+    monkeypatch.delenv(install_mcp_server.BROWSER_SELECTION_ENV, raising=False)
+    config_path = tmp_path / "config.toml"
+    client_path = tmp_path / "sky-cua-client"
+
+    assert install_mcp_server.upsert_codex_mcp_server_toml(config_path, client_path)
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["mcp_servers"]["sky_cua"]["env"]["SKY_CUA_REPO_ROOT"] == str(weird_repo)
+
+
+def test_openclaw_codex_home_toml_refuses_unmanaged_duplicate_table(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[mcp_servers.sky_cua]\ncommand = "/old/by-hand"\n', encoding="utf-8")
+
+    assert not install_mcp_server.upsert_codex_mcp_server_toml(
+        config_path, tmp_path / "sky-cua-client"
+    )
+
+    assert "outside the managed block" in capsys.readouterr().err
+    # The hand-written config is untouched.
+    assert config_path.read_text(encoding="utf-8").count("[mcp_servers.sky_cua]") == 1
+
+
+def test_openclaw_codex_home_toml_allows_marker_text_in_comments_and_strings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import tomllib
+
+    config_path = tmp_path / "config.toml"
+    user_config = '# [mcp_servers.sky_cua]\nnote = "[mcp_servers.sky_cua]"\n'
+    config_path.write_text(user_config, encoding="utf-8")
+
+    assert install_mcp_server.upsert_codex_mcp_server_toml(config_path, tmp_path / "sky-cua-client")
+
+    assert capsys.readouterr().err == ""
+    text = config_path.read_text(encoding="utf-8")
+    assert user_config in text
+    parsed = tomllib.loads(text)
+    assert parsed["note"] == "[mcp_servers.sky_cua]"
+    assert parsed["mcp_servers"]["sky_cua"]["args"] == ["mcp"]
+
+
+def test_openclaw_codex_home_toml_refuses_orphaned_marker(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.toml"
+    user_config = f"{install_mcp_server.CODEX_MCP_SERVER_TOML_BEGIN}\nuser_key = 1\n"
+    config_path.write_text(user_config, encoding="utf-8")
+
+    # First run must refuse rather than appending a block whose END marker
+    # would make a later run splice out the user content between the orphan
+    # BEGIN and the appended END.
+    assert not install_mcp_server.upsert_codex_mcp_server_toml(
+        config_path, tmp_path / "sky-cua-client"
+    )
+
+    assert "corrupt sky-cua marker block" in capsys.readouterr().err
+    assert config_path.read_text(encoding="utf-8") == user_config

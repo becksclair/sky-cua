@@ -22,18 +22,35 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from _agent_mcp_smoke import make_artifact_dir
+from install_mcp_server import CODEX_TOOLS_APPROVAL_MODE
 
 SERVER_NAME = "sky_cua"
 SMOKE_REPORT_KEY = "sky_cua_smoke"
+AGENT_TURN_TOOL_NAME = f"{SERVER_NAME}__browser_status"
 COMMAND_TIMEOUT_SECONDS = 60
 AGENT_TURN_TIMEOUT_SECONDS = 300
+TIMEOUT_RETURNCODE = 124
+TOOL_SUCCESS_STATUSES = {"completed", "ok", "success", "succeeded"}
+TOOL_FAILURE_STATUSES = {"error", "failed", "failure", "unsuccessful"}
+OPENCLAW_TOOL_SUMMARY_CONTEXT_KEYS = {
+    "completion",
+    "executionTrace",
+    "finalAssistantRawText",
+    "finalAssistantVisibleText",
+    "livenessState",
+    "requestShaping",
+    "replayInvalid",
+    "stopReason",
+}
 PROBE_ATTEMPTS = 3
 PROBE_RETRY_DELAY_SECONDS = 5
 
@@ -71,23 +88,44 @@ def run_openclaw(
     timeout: float = COMMAND_TIMEOUT_SECONDS,
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    """Run an openclaw CLI command, always leaving stdout/stderr artifacts.
+
+    A hung command is exactly what this smoke exists to catch, so timeouts
+    return a synthetic failed result (rc=TIMEOUT_RETURNCODE) with whatever
+    partial output was captured instead of raising out of the stage.
+    """
     env = os.environ.copy()
     if openclaw_dir is not None:
         env["OPENCLAW_STATE_DIR"] = str(openclaw_dir)
         env["OPENCLAW_CONFIG_PATH"] = str(openclaw_dir / "openclaw.json")
     if extra_env:
         env.update(extra_env)
-    proc = subprocess.run(
-        [openclaw_bin, *args],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=env,
-        check=False,
-    )
+    argv = [openclaw_bin, *args]
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        stdout = _timeout_output_text(error.stdout)
+        stderr = _timeout_output_text(error.stderr)
+        stderr += f"\n[smoke] command timed out after {timeout} seconds\n"
+        proc = subprocess.CompletedProcess(argv, TIMEOUT_RETURNCODE, stdout, stderr)
     (artifact_dir / f"{log_name}.stdout.log").write_text(proc.stdout, encoding="utf-8")
     (artifact_dir / f"{log_name}.stderr.log").write_text(proc.stderr, encoding="utf-8")
     return proc
+
+
+def _timeout_output_text(captured: str | bytes | None) -> str:
+    if captured is None:
+        return ""
+    if isinstance(captured, bytes):
+        return captured.decode(errors="replace")
+    return captured
 
 
 def gateway_auth_environment(openclaw_dir: Path | None) -> dict[str, str]:
@@ -139,12 +177,12 @@ def check_show_config(config: dict[str, Any]) -> list[str]:
 
     codex = config.get("codex")
     approval_mode = codex.get("defaultToolsApprovalMode") if isinstance(codex, dict) else None
-    if approval_mode != "approve":
+    if approval_mode != CODEX_TOOLS_APPROVAL_MODE:
         failures.append(
-            f"codex.defaultToolsApprovalMode is {approval_mode!r}, expected 'approve'. "
-            "Codex 'approve' approves every tool call without user interaction; "
-            "'auto' prompts for unannotated MCP tools, which codex treats as "
-            "destructive and open-world by default. "
+            f"codex.defaultToolsApprovalMode is {approval_mode!r}, expected "
+            f"{CODEX_TOOLS_APPROVAL_MODE!r}. Codex 'approve' approves every tool "
+            "call without user interaction; 'auto' prompts for unannotated MCP "
+            "tools, which codex treats as destructive and open-world by default. "
             "Re-run: python3 scripts/install_mcp_server.py --host openclaw"
         )
 
@@ -181,10 +219,22 @@ def check_probe_result(probe: dict[str, Any]) -> list[str]:
     return failures
 
 
-def find_json_object_with_key(text: str, key: str) -> dict[str, Any] | None:
-    """Find the last JSON object in text that contains key at any depth."""
+def extract_smoke_report(text: str) -> dict[str, Any] | None:
+    """Extract the agent's structured smoke report from `openclaw agent --json`.
+
+    Decodes every JSON object in the text and keeps the last one carrying the
+    report, recursing into reply-text string fields that embed JSON.
+    """
+    report: dict[str, Any] | None = None
+    for candidate in iter_decoded_json_values(text):
+        found = _dig_smoke_report(candidate)
+        if found is not None:
+            report = found
+    return report
+
+
+def iter_decoded_json_values(text: str) -> Iterator[Any]:
     decoder = json.JSONDecoder()
-    found: dict[str, Any] | None = None
     index = text.find("{")
     while index != -1:
         try:
@@ -192,34 +242,8 @@ def find_json_object_with_key(text: str, key: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             index = text.find("{", index + 1)
             continue
-        if isinstance(candidate, dict) and _contains_key(candidate, key):
-            found = candidate
+        yield candidate
         index = text.find("{", end)
-    return found
-
-
-def _contains_key(value: object, key: str) -> bool:
-    if isinstance(value, dict):
-        if key in value:
-            return True
-        return any(_contains_key(child, key) for child in value.values())
-    if isinstance(value, list):
-        return any(_contains_key(child, key) for child in value)
-    if isinstance(value, str):
-        return key in value
-    return False
-
-
-def extract_smoke_report(stdout: str) -> dict[str, Any] | None:
-    """Extract the agent's structured smoke report from `openclaw agent --json`.
-
-    The report may appear as a nested object or embedded in a reply-text
-    string field, so string fields containing the marker are re-scanned.
-    """
-    container = find_json_object_with_key(stdout, SMOKE_REPORT_KEY)
-    if container is None:
-        return None
-    return _dig_smoke_report(container)
 
 
 def _dig_smoke_report(value: object) -> dict[str, Any] | None:
@@ -237,10 +261,175 @@ def _dig_smoke_report(value: object) -> dict[str, Any] | None:
             if found is not None:
                 return found
     elif isinstance(value, str) and SMOKE_REPORT_KEY in value:
-        nested = find_json_object_with_key(value, SMOKE_REPORT_KEY)
-        if nested is not None and nested is not value:
-            return _dig_smoke_report(nested)
+        return extract_smoke_report(value)
     return None
+
+
+def agent_turn_has_browser_status_tool_event(text: str) -> bool:
+    """Return True only when stdout contains browser_status result evidence."""
+    _report, tool_result_seen = scan_agent_turn_stdout(text)
+    return tool_result_seen
+
+
+def scan_agent_turn_stdout(text: str) -> tuple[dict[str, Any] | None, bool]:
+    report: dict[str, Any] | None = None
+    browser_status_call_ids: set[str] = set()
+    tool_result_seen = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if (
+            (stripped.startswith("[tool result]") or stripped.startswith("[tool_result]"))
+            and _text_names_browser_status_tool(stripped)
+            and _text_has_success_status(stripped)
+        ):
+            tool_result_seen = True
+    for candidate in iter_decoded_json_values(text):
+        found = _dig_smoke_report(candidate)
+        if found is not None:
+            report = found
+        if _has_browser_status_tool_result(candidate, browser_status_call_ids):
+            tool_result_seen = True
+    return report, tool_result_seen
+
+
+def _has_browser_status_tool_result(value: object, call_ids: set[str]) -> bool:
+    if isinstance(value, dict):
+        if _record_has_successful_tool_summary(value):
+            return True
+        data = value.get("data")
+        if _record_is_implicit_tool_result(value) and isinstance(data, dict):
+            child = {**data}
+            for key in (
+                "toolCallId",
+                "tool_call_id",
+                "toolUseId",
+                "tool_use_id",
+                "name",
+                "toolName",
+                "tool_name",
+                "tool",
+                "title",
+            ):
+                if key in value:
+                    child.setdefault(key, value[key])
+            child.setdefault("sessionUpdate", "tool_result")
+            if _has_browser_status_tool_result(child, call_ids):
+                return True
+        is_tool_record = _is_tool_event_record(value)
+        names_browser_status = _record_directly_names_browser_status_tool(value)
+        call_id = _record_tool_call_id(value)
+        if is_tool_record and names_browser_status and call_id is not None:
+            call_ids.add(call_id)
+        matched_browser_status = is_tool_record and (
+            names_browser_status or (call_id is not None and call_id in call_ids)
+        )
+        if matched_browser_status and _record_is_failed_tool_result(value):
+            return False
+        if matched_browser_status:
+            if _record_is_implicit_tool_result(value) and _record_has_result_payload(value):
+                return True
+            if _record_has_successful_tool_result(value) and _record_has_result_payload(value):
+                return True
+        return any(_has_browser_status_tool_result(child, call_ids) for child in value.values())
+    if isinstance(value, list):
+        return any(_has_browser_status_tool_result(child, call_ids) for child in value)
+    return False
+
+
+def _is_tool_event_record(record: dict[str, Any]) -> bool:
+    for key in ("type", "sessionUpdate", "kind", "event", "role", "method"):
+        value = record.get(key)
+        if isinstance(value, str) and "tool" in value.lower():
+            return True
+    return False
+
+
+def _record_tool_call_id(record: dict[str, Any]) -> str | None:
+    for key in ("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "id"):
+        value = record.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _record_has_successful_tool_result(record: dict[str, Any]) -> bool:
+    for key in ("status", "phase", "state", "result"):
+        value = record.get(key)
+        if isinstance(value, str) and value.lower() in TOOL_SUCCESS_STATUSES:
+            return True
+    return False
+
+
+def _record_has_result_payload(record: dict[str, Any]) -> bool:
+    for key in (
+        "output",
+        "content",
+        "structuredContent",
+        "structured_content",
+        "toolResult",
+        "tool_result",
+    ):
+        if key in record and record[key] is not None:
+            return True
+    result = record.get("result")
+    return isinstance(result, (dict, list))
+
+
+def _record_is_failed_tool_result(record: dict[str, Any]) -> bool:
+    if record.get("is_error") is True or record.get("isError") is True:
+        return True
+    for key in ("status", "phase", "state", "result"):
+        value = record.get(key)
+        if isinstance(value, str) and value.lower() in TOOL_FAILURE_STATUSES:
+            return True
+    return False
+
+
+def _record_is_implicit_tool_result(record: dict[str, Any]) -> bool:
+    for key in ("type", "sessionUpdate", "kind", "event", "role"):
+        value = record.get(key)
+        if isinstance(value, str) and "toolresult" in _normalized_tool_event_kind(value):
+            return not _record_is_failed_tool_result(record)
+    return False
+
+
+def _normalized_tool_event_kind(value: str) -> str:
+    return re.sub(r"[^a-z]", "", value.lower())
+
+
+def _record_directly_names_browser_status_tool(record: dict[str, Any]) -> bool:
+    for key in ("name", "toolName", "tool_name", "tool", "title"):
+        value = record.get(key)
+        if isinstance(value, str) and _text_names_browser_status_tool(value):
+            return True
+    return False
+
+
+def _record_has_successful_tool_summary(record: dict[str, Any]) -> bool:
+    if record.keys().isdisjoint(OPENCLAW_TOOL_SUMMARY_CONTEXT_KEYS):
+        return False
+    summary = record.get("toolSummary")
+    if not isinstance(summary, dict) or summary.get("failures") != 0:
+        return False
+    calls = summary.get("calls")
+    if not isinstance(calls, int) or calls <= 0:
+        return False
+    tools = summary.get("tools")
+    return isinstance(tools, list) and any(
+        isinstance(tool, str) and _text_names_browser_status_tool(tool) for tool in tools
+    )
+
+
+def _text_names_browser_status_tool(text: str) -> bool:
+    return AGENT_TURN_TOOL_NAME in text or (SERVER_NAME in text and "browser_status" in text)
+
+
+def _text_has_success_status(text: str) -> bool:
+    lowered = text.lower()
+    if re.search(r"\b(?:no|not|never)\s+(?:completed|ok|success|succeeded)\b", lowered):
+        return False
+    tokens = set(re.findall(r"[a-z]+", lowered))
+    return tokens.isdisjoint(TOOL_FAILURE_STATUSES) and not tokens.isdisjoint(TOOL_SUCCESS_STATUSES)
 
 
 def check_agent_report(report: dict[str, Any] | None) -> list[str]:
@@ -258,6 +447,107 @@ def check_agent_report(report: dict[str, Any] | None) -> list[str]:
         detail = f" (agent error: {error})" if error else ""
         failures.append(f"agent could not execute {SERVER_NAME}__browser_status{detail}")
     return failures
+
+
+def run_show_stage(
+    args: argparse.Namespace, artifact_dir: Path
+) -> tuple[dict[str, Any], list[str]]:
+    """Stage 1: the registered config is sane."""
+    show = run_openclaw(
+        args.openclaw_bin,
+        ["mcp", "show", SERVER_NAME, "--json"],
+        artifact_dir,
+        "mcp-show",
+        args.openclaw_dir,
+    )
+    if show.returncode != 0:
+        failures = [
+            f"openclaw mcp show {SERVER_NAME} failed (rc={show.returncode}); "
+            "is sky_cua registered? Run scripts/install_mcp_server.py --host openclaw"
+        ]
+        return {"ok": False, "returncode": show.returncode}, failures
+    try:
+        failures = check_show_config(parse_json_output(show.stdout, "mcp show"))
+    except ValueError as error:
+        failures = [str(error)]
+    return {"ok": not failures, "failures": failures}, failures
+
+
+def run_probe_stage(
+    args: argparse.Namespace, artifact_dir: Path
+) -> tuple[dict[str, Any], list[str]]:
+    """Stage 2: OpenClaw can spawn the server and sees the required tools.
+
+    Probe spawns a fresh client; right after an install or `mcp reload` it can
+    lose a one-off race against concurrent sky-cua sessions, so retry before
+    declaring the deployment broken.
+    """
+    failures: list[str] = []
+    attempt = 0
+    for attempt in range(1, PROBE_ATTEMPTS + 1):
+        probe = run_openclaw(
+            args.openclaw_bin,
+            ["mcp", "probe", SERVER_NAME, "--json"],
+            artifact_dir,
+            f"mcp-probe-{attempt}",
+            args.openclaw_dir,
+        )
+        if probe.returncode != 0:
+            failures = [f"openclaw mcp probe {SERVER_NAME} failed (rc={probe.returncode})"]
+        else:
+            try:
+                failures = check_probe_result(parse_json_output(probe.stdout, "mcp probe"))
+            except ValueError as error:
+                failures = [str(error)]
+        if not failures:
+            break
+        if attempt < PROBE_ATTEMPTS:
+            time.sleep(PROBE_RETRY_DELAY_SECONDS)
+    return {"ok": not failures, "failures": failures, "attempts": attempt}, failures
+
+
+def run_agent_turn_stage(
+    args: argparse.Namespace, artifact_dir: Path
+) -> tuple[dict[str, Any], list[str]]:
+    """Stage 3: a real agent turn can see and execute the tools."""
+    agent_args = ["agent", "--message", AGENT_TURN_PROMPT, "--json"]
+    if args.agent:
+        agent_args.extend(["--agent", args.agent])
+    if args.session_key:
+        agent_args.extend(["--session-key", args.session_key])
+    turn = run_openclaw(
+        args.openclaw_bin,
+        agent_args,
+        artifact_dir,
+        "agent-turn",
+        args.openclaw_dir,
+        timeout=AGENT_TURN_TIMEOUT_SECONDS,
+        extra_env=gateway_auth_environment(args.openclaw_dir),
+    )
+    report, tool_result_seen = scan_agent_turn_stdout(turn.stdout)
+    if turn.returncode == TIMEOUT_RETURNCODE:
+        failures = [f"agent turn timed out after {AGENT_TURN_TIMEOUT_SECONDS} seconds"]
+        return {
+            "ok": False,
+            "timeout": True,
+            "returncode": TIMEOUT_RETURNCODE,
+            "failures": failures,
+            "report": report,
+            "tool_result_seen": tool_result_seen,
+        }, failures
+    failures = check_agent_report(report)
+    if not tool_result_seen:
+        failures.append(
+            f"agent turn transcript did not show a completed {AGENT_TURN_TOOL_NAME} result"
+        )
+    if turn.returncode != 0:
+        failures.append(f"openclaw agent exited with rc={turn.returncode}")
+    return {
+        "ok": not failures,
+        "failures": failures,
+        "report": report,
+        "tool_result_seen": tool_result_seen,
+    }, failures
 
 
 def main() -> int:
@@ -299,97 +589,16 @@ def main() -> int:
     artifact_dir = make_artifact_dir("openclaw", "mcp")
     if args.session_key is None:
         args.session_key = f"sky-cua-mcp-smoke-{artifact_dir.name}"
+
     stages: dict[str, Any] = {}
     failures: list[str] = []
-
-    # Stage 1: registered config is sane.
-    show = run_openclaw(
-        args.openclaw_bin,
-        ["mcp", "show", SERVER_NAME, "--json"],
-        artifact_dir,
-        "mcp-show",
-        args.openclaw_dir,
-    )
-    if show.returncode != 0:
-        failures.append(
-            f"openclaw mcp show {SERVER_NAME} failed (rc={show.returncode}); "
-            "is sky_cua registered? Run scripts/install_mcp_server.py --host openclaw"
-        )
-        stages["show"] = {"ok": False, "returncode": show.returncode}
-    else:
-        try:
-            config = parse_json_output(show.stdout, "mcp show")
-            stage_failures = check_show_config(config)
-        except ValueError as error:
-            stage_failures = [str(error)]
-        failures.extend(stage_failures)
-        stages["show"] = {"ok": not stage_failures, "failures": stage_failures}
-
-    # Stage 2: OpenClaw can spawn the server and sees the required tools.
-    # Probe spawns a fresh client; right after an install or `mcp reload` it
-    # can lose a one-off race against concurrent sky-cua sessions, so retry
-    # a couple of times before declaring the deployment broken.
-    stage_failures = []
-    attempts = 0
-    for attempt in range(1, PROBE_ATTEMPTS + 1):
-        attempts = attempt
-        probe = run_openclaw(
-            args.openclaw_bin,
-            ["mcp", "probe", SERVER_NAME, "--json"],
-            artifact_dir,
-            f"mcp-probe-{attempt}",
-            args.openclaw_dir,
-        )
-        if probe.returncode != 0:
-            stage_failures = [f"openclaw mcp probe {SERVER_NAME} failed (rc={probe.returncode})"]
-        else:
-            try:
-                probe_result = parse_json_output(probe.stdout, "mcp probe")
-                stage_failures = check_probe_result(probe_result)
-            except ValueError as error:
-                stage_failures = [str(error)]
-        if not stage_failures:
-            break
-        if attempt < PROBE_ATTEMPTS:
-            time.sleep(PROBE_RETRY_DELAY_SECONDS)
+    stages["show"], stage_failures = run_show_stage(args, artifact_dir)
     failures.extend(stage_failures)
-    stages["probe"] = {
-        "ok": not stage_failures,
-        "failures": stage_failures,
-        "attempts": attempts,
-    }
-
-    # Stage 3 (optional): a real agent turn can see and execute the tools.
+    stages["probe"], stage_failures = run_probe_stage(args, artifact_dir)
+    failures.extend(stage_failures)
     if args.agent_turn:
-        agent_args = ["agent", "--message", AGENT_TURN_PROMPT, "--json"]
-        if args.agent:
-            agent_args.extend(["--agent", args.agent])
-        if args.session_key:
-            agent_args.extend(["--session-key", args.session_key])
-        try:
-            turn = run_openclaw(
-                args.openclaw_bin,
-                agent_args,
-                artifact_dir,
-                "agent-turn",
-                args.openclaw_dir,
-                timeout=AGENT_TURN_TIMEOUT_SECONDS,
-                extra_env=gateway_auth_environment(args.openclaw_dir),
-            )
-        except subprocess.TimeoutExpired:
-            failures.append(f"agent turn timed out after {AGENT_TURN_TIMEOUT_SECONDS} seconds")
-            stages["agent_turn"] = {"ok": False, "timeout": True}
-        else:
-            report = extract_smoke_report(turn.stdout)
-            stage_failures = check_agent_report(report)
-            if turn.returncode != 0:
-                stage_failures.append(f"openclaw agent exited with rc={turn.returncode}")
-            failures.extend(stage_failures)
-            stages["agent_turn"] = {
-                "ok": not stage_failures,
-                "failures": stage_failures,
-                "report": report,
-            }
+        stages["agent_turn"], stage_failures = run_agent_turn_stage(args, artifact_dir)
+        failures.extend(stage_failures)
 
     result: dict[str, Any] = {
         "server": SERVER_NAME,
