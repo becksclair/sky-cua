@@ -33,7 +33,7 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 | ICA-010 | P2 | M | Medium | High | complete | Linux desktop parity / Host portability: detached launch breadth | `crates/sky-cua-client/src/service_launcher.rs`, service health env contracts |
 | ICA-011 | P2 | M | Medium | High | complete | Diagnostics and operator UX: curated VM runner profile set | `scripts/run_gui_testing_vm_smoke.py` |
 | ICA-012 | P2 | M | Medium | Medium | complete | Host portability: Browser MCP managed lifecycle | browser snapshot/diagnostic wire contract |
-| ICA-009 | P2 | M | Medium | High | candidate | Host portability: Codex Desktop compatibility and deploy proof | `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py` |
+| ICA-009 | P2 | M | Medium | High | complete | Host portability: Codex Desktop compatibility and deploy proof | `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py` |
 | ICA-013 | P3 | S | Low | High | candidate | Enabler for roadmap-aligned work; not standalone roadmap scope | Python/Rust browser test fixture layout |
 | ICA-015 | P3 | M | Medium | High | candidate | Follow-up for Windows overlay IPC transport maintainability | overlay host IPC lifecycle and listener handling |
 | ICA-016 | P3 | S | Low | High | candidate | Follow-up for VM runner profile descriptor maintainability | `scripts/run_gui_testing_vm_smoke.py` profile metadata and helper boundaries |
@@ -54,6 +54,7 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 - [x] `ICA-011` GUI VM smoke profile descriptors.
 - [x] `ICA-012` typed browser snapshot and diagnostic severity contracts.
 - [x] `ICA-014` overlay host platform transport boundary.
+- [x] `ICA-009` shared codex app-server JSON-RPC client.
 
 ## Tasks
 
@@ -215,8 +216,8 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - [x] Migrate one response shaper behind the shared policy.
   - [x] Remove stringly duplicated error lists only after all browser tools use the shared policy.
 
-- [ ] **ICA-009: Extract a shared Codex app-server JSON-RPC client**
-  Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: candidate
+- [x] **ICA-009: Extract a shared Codex app-server JSON-RPC client**
+  Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: complete
   Roadmap alignment: Host portability -> Codex Desktop compatibility; Diagnostics and operator UX proof quality.
   Cluster: `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py`, `scripts/test_python_harness_helpers.py`
   Dependency category: Evented or asynchronous boundary; Local-substitutable
@@ -229,20 +230,22 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   Why coupled: Both flows share the same transport lifecycle and failure modes, but only the smoke harness has transcript/timing artifacts and only release deploy has queue-backed stderr handling.
   Suggested first move: Create `_codex_app_server.py` with request/notify, initialize/initialized, timeout/error handling, stderr capture, transcript hooks, and clean shutdown; keep turn policy in `_app_server_harness.py` and release operations in `deploy_release_plugin.py`.
   Testing impact: Add pure tests for request id matching, notification buffering, server-request handling hooks, timeout stderr reporting, and close/kill behavior with fake subprocess streams. Existing deploy and rich-smoke helper tests should migrate to the shared client.
-  Needs human decision: None unless release deploy intentionally needs different `--listen` arguments than the rich harness.
+  Needs human decision: None; release deploy keeps `--listen stdio://` and the rich harness keeps the bare `codex app-server` invocation, both passed as explicit commands to the shared client.
+  Completion note: Added `scripts/_codex_app_server.py` with one `CodexAppServerClient` owning process spawn, queue-backed stdout/stderr reader threads, request-id matching, notification buffering, initialize/initialized sequencing, timeout/exit errors with stderr context, and bounded terminate/kill shutdown. Two consumption lanes: blocking `request()` for release deploy and streaming `read_message()` for the rich harness transcript loop. `JsonRpcProcess` and `AppServerClient` are removed. The rich harness deadline now also bounds individual reads, so a silent hung server times out instead of blocking forever on `readline`.
+  Verification: `uv run ruff format --check scripts`; `uv run ruff check scripts`; `uv run basedpyright`; `uv run pytest` (176 passed); live transport proof: initialize/initialized round-trip and clean shutdown against real `codex app-server --listen stdio://` (codex 0.137.0). Not run: a full rich app-server turn smoke (`live_app_server_smoke.py`) and a full release deploy (`deploy_release_plugin.py`); both should ride the next routine deploy/smoke pass.
   Acceptance criteria:
-  - [ ] Rich smokes and release deploy use one app-server transport/client implementation.
-  - [ ] Release deploy keeps plugin install and MCP reload behavior unchanged.
-  - [ ] Rich smokes keep transcript, request log, timing, and elicitation/approval handling unchanged.
-  - [ ] The client never blocks indefinitely on stderr or stdout during process exit.
-  - [ ] This refactor does not delay direct Browser MCP managed lifecycle or Windows overlay work.
+  - [x] Rich smokes and release deploy use one app-server transport/client implementation.
+  - [x] Release deploy keeps plugin install and MCP reload behavior unchanged.
+  - [x] Rich smokes keep transcript, request log, timing, and elicitation/approval handling unchanged.
+  - [x] The client never blocks indefinitely on stderr or stdout during process exit.
+  - [x] This refactor does not delay direct Browser MCP managed lifecycle or Windows overlay work.
   Work checklist:
-  - [ ] Validate the evidence and mark false assumptions.
-  - [ ] Add fake-process tests for current app-server request/notification behavior.
-  - [ ] Introduce the shared transport with compatibility wrappers.
-  - [ ] Migrate release deploy first because its operation set is smaller.
-  - [ ] Migrate rich smokes and preserve artifact file outputs.
-  - [ ] Remove duplicated client classes after both paths pass Python checks.
+  - [x] Validate the evidence and mark false assumptions.
+  - [x] Add fake-process tests for current app-server request/notification behavior.
+  - [x] Introduce the shared transport with compatibility wrappers.
+  - [x] Migrate release deploy first because its operation set is smaller.
+  - [x] Migrate rich smokes and preserve artifact file outputs.
+  - [x] Remove duplicated client classes after both paths pass Python checks.
 
 - [ ] **ICA-013: Split broad helper tests into subsystem fixtures**
   Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: candidate
@@ -256,6 +259,7 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - `crates/sky-cua-service/src/browser/tests.rs`: one large module mixes sockets, protocol frame I/O, bridge operations, session recovery, snapshot expression privacy, coordinate conversion, and fake server helpers.
   Why coupled: The tests have become fixture libraries plus many subsystem suites, which makes boundary refactors noisier and hides which behavior belongs to which module.
   Suggested first move: Split tests only when doing an adjacent roadmap-aligned slice, or when a focused refactor first needs shared fixtures. Do not lead with this as independent cleanup.
+  Progress: The `ICA-009` slice moved app-server tests into focused modules (`scripts/test_codex_app_server.py`, `scripts/test_app_server_harness.py`). Remaining scope is the rest of `test_python_harness_helpers.py` and the Rust browser test module split.
   Testing impact: This is mostly test architecture. The acceptance check is that the same focused test commands pass and test names remain discoverable by subsystem.
   Needs human decision: None.
   Acceptance criteria:

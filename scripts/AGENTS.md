@@ -9,16 +9,19 @@ pytest.
 
 - Shared helpers: `_plugin_bundle.py` (plugin paths/config),
   `_smoke_config.py` (live-smoke model/reasoning settings), `_codex_exec.py`
-  (codex exec harness), `_app_server_harness.py` (rich app-server JSON-RPC),
-  `_kwin_effect.py` (KWin effect deploy).
+  (codex exec harness), `_codex_app_server.py` (shared codex app-server
+  stdio JSON-RPC client), `_app_server_harness.py` (rich app-server turn
+  policy), `_kwin_effect.py` (KWin effect deploy).
 - Build/deploy entrypoints: `build_plugin.py`, `install_plugin.py`,
   `install_mcp_server.py`, `deploy_debug_plugin.py`,
   `deploy_release_plugin.py`, `install_kwin_effect.py`.
 - Live operator smokes are `live_*_smoke.py` and must fail honestly when app
   state is blocked. JSON schemas for final agent messages:
   `scripts/schemas/*.json`.
-- Pure helper tests live in `test_python_harness_helpers.py` and stay free
-  of desktop app requirements.
+- Pure helper tests stay free of desktop app requirements. Subsystem suites
+  get focused modules (`test_codex_app_server.py`,
+  `test_app_server_harness.py`); the broad remainder lives in
+  `test_python_harness_helpers.py` and should shrink, not grow.
 
 ## Conventions
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -10,6 +9,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from _codex_app_server import CodexAppServerClient
 from _codex_exec import (
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
@@ -18,6 +18,8 @@ from _codex_exec import (
     prepare_chatgpt_plugin_test_home,
 )
 from _plugin_bundle import REPO_ROOT
+
+_READ_POLL_SECONDS = 0.25
 
 
 def with_plugin_mention(prompt: str) -> str:
@@ -67,48 +69,6 @@ class AppServerTurnResult:
     request_log_path: Path
     timing_path: Path
     timing_summary_path: Path
-
-
-class JsonRpcProcess:
-    def __init__(self, command: list[str], *, env: dict[str, str], cwd: Path) -> None:
-        self.command = command
-        self.proc = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=cwd,
-            env=env,
-            bufsize=1,
-        )
-
-    def close(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-
-    def write(self, payload: dict[str, Any]) -> None:
-        assert self.proc.stdin is not None
-        self.proc.stdin.write(json.dumps(payload) + "\n")
-        self.proc.stdin.flush()
-
-    def read(self) -> dict[str, Any]:
-        assert self.proc.stdout is not None
-        line = self.proc.stdout.readline()
-        if not line:
-            stderr = ""
-            if self.proc.stderr is not None:
-                stderr = self.proc.stderr.read() or ""
-            raise RuntimeError(
-                "app-server exited unexpectedly.\n"
-                f"command={' '.join(self.command)}\n"
-                f"stderr:\n{stderr}"
-            )
-        return json.loads(line)
 
 
 def choose_user_input_answers(params: dict[str, Any]) -> dict[str, Any]:
@@ -475,14 +435,13 @@ def run_rich_app_server_turn(
     if extra_env:
         env.update(extra_env)
 
-    rpc = JsonRpcProcess(command, env=env, cwd=REPO_ROOT)
+    rpc = CodexAppServerClient(command, env=env, cwd=REPO_ROOT)
     transcript_lines: list[str] = []
     request_lines: list[str] = []
     timing_events: list[dict[str, Any]] = []
     last_agent_message: dict[str, Any] | None = None
     thread_id = ""
     turn_id = ""
-    next_id = 1
     start_monotonic = time.monotonic()
     pending_client_requests: dict[int, dict[str, Any]] = {}
     pending_server_requests: dict[int, dict[str, Any]] = {}
@@ -523,20 +482,25 @@ def run_rich_app_server_turn(
             )
 
     def send_request(method: str, params: dict[str, Any]) -> int:
-        nonlocal next_id
-        request_id = next_id
-        next_id += 1
+        request_id = rpc.send_request(method, params)
         pending_client_requests[request_id] = {
             "method": method,
             "start_ms": elapsed_ms(),
         }
         record_timing("client_request_sent", id=request_id, method=method)
-        rpc.write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         return request_id
 
     def send_notification(method: str, params: dict[str, Any]) -> None:
         record_timing("client_notification_sent", method=method)
-        rpc.write({"jsonrpc": "2.0", "method": method, "params": params})
+        rpc.notify(method, params)
+
+    def read_message(phase: str) -> dict[str, Any]:
+        while True:
+            ensure_not_timed_out(phase)
+            try:
+                return rpc.read_message(timeout=_READ_POLL_SECONDS)
+            except TimeoutError:
+                continue
 
     def handle_server_request(message: dict[str, Any]) -> None:
         record_request(message)
@@ -555,19 +519,11 @@ def run_rich_app_server_turn(
         )
 
         if method == "item/tool/requestUserInput":
-            rpc.write(
-                {"jsonrpc": "2.0", "id": request_id, "result": choose_user_input_answers(params)}
-            )
+            rpc.respond(request_id, choose_user_input_answers(params))
             record_server_request_answer(request_id)
             return
         if method == "mcpServer/elicitation/request":
-            rpc.write(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": choose_mcp_elicitation_response(params),
-                }
-            )
+            rpc.respond(request_id, choose_mcp_elicitation_response(params))
             record_server_request_answer(request_id)
             return
         if method in {
@@ -575,17 +531,11 @@ def run_rich_app_server_turn(
             "item/fileChange/requestApproval",
             "item/permissions/requestApproval",
         }:
-            rpc.write(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"decision": choose_approval_decision(method, policy)},
-                }
-            )
+            rpc.respond(request_id, {"decision": choose_approval_decision(method, policy)})
             record_server_request_answer(request_id)
             return
 
-        rpc.write({"jsonrpc": "2.0", "id": request_id, "result": {"decision": "cancel"}})
+        rpc.respond(request_id, {"decision": "cancel"})
         record_server_request_answer(request_id)
 
     def record_server_request_answer(request_id: int) -> None:
@@ -617,8 +567,7 @@ def run_rich_app_server_turn(
     def read_until_response(target_id: int) -> dict[str, Any]:
         nonlocal last_agent_message
         while True:
-            ensure_not_timed_out(f"response {target_id}")
-            message = rpc.read()
+            message = read_message(f"response {target_id}")
             record(message)
             if "id" in message and message.get("method") is None:
                 record_client_response(message)
@@ -640,8 +589,7 @@ def run_rich_app_server_turn(
     def read_until_turn_completed() -> dict[str, Any]:
         nonlocal last_agent_message
         while True:
-            ensure_not_timed_out("turn completion")
-            message = rpc.read()
+            message = read_message("turn completion")
             record(message)
             if "id" in message and message.get("method"):
                 handle_server_request(message)
@@ -715,10 +663,7 @@ def run_rich_app_server_turn(
             json.dumps(summarize_timing(timing_events, transcript_lines), indent=2)
         )
         rpc.close()
-        stderr = ""
-        if rpc.proc.stderr is not None:
-            stderr = rpc.proc.stderr.read() or ""
-        stderr_path.write_text(stderr)
+        stderr_path.write_text(rpc.stderr_text())
         if last_agent_message is not None and not last_message_path.exists():
             last_message_path.write_text(json.dumps(last_agent_message, indent=2))
 

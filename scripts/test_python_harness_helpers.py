@@ -34,7 +34,6 @@ import package_runtime_artifact
 import publish_marketplace_release
 import run_gui_testing_vm_smoke
 import setup_heliasar_marketplace
-from _app_server_harness import build_schema_accept_value, response_contains_computer_use_server
 from _codex_exec import DEFAULT_MODEL, DEFAULT_REASONING_EFFORT
 from _plugin_bundle import (
     PLUGIN_CATEGORY,
@@ -3099,42 +3098,6 @@ def test_release_deploy_restores_cache_when_reload_fails(
 
     assert (cache_version / "old-marker.txt").read_text(encoding="utf-8") == "old"
     assert not (cache_version / "new-marker.txt").exists()
-
-
-def test_build_schema_accept_value_prefers_required_fields_and_enums() -> None:
-    value = build_schema_accept_value(
-        {
-            "type": "object",
-            "required": ["decision", "count", "flags"],
-            "properties": {
-                "decision": {"type": "string", "enum": ["accept", "decline"]},
-                "count": {"type": "integer"},
-                "flags": {
-                    "type": "array",
-                    "minItems": 2,
-                    "items": {"type": "boolean"},
-                },
-                "optional": {"type": "string"},
-            },
-        }
-    )
-
-    assert value == {
-        "decision": "accept",
-        "count": 1,
-        "flags": [True, True],
-    }
-
-
-def test_response_contains_computer_use_server_accepts_common_shapes() -> None:
-    assert response_contains_computer_use_server(
-        {"result": {"servers": [{"name": "computer-use"}]}}
-    )
-    assert response_contains_computer_use_server({"result": {"data": [{"name": "computer-use"}]}})
-    assert response_contains_computer_use_server(
-        {"result": {"items": [{"server": "computer-use"}]}}
-    )
-    assert not response_contains_computer_use_server({"result": {"servers": []}})
 
 
 def test_plugin_manifest_tracks_scaffold_metadata_contract() -> None:

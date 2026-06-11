@@ -4,16 +4,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import queue
 import shutil
-import subprocess
 import tempfile
-import threading
-import time
 import tomllib
 from pathlib import Path
-from typing import Any
 
+from _codex_app_server import CodexAppServerClient
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DEFAULT_MARKETPLACE_ROOT,
@@ -36,104 +32,13 @@ from _plugin_bundle import (
 )
 
 
-class AppServerClient:
-    def __init__(self, codex_bin: Path, codex_home: Path) -> None:
-        env = os.environ.copy()
-        env["CODEX_HOME"] = str(codex_home)
-        self.proc = subprocess.Popen(
-            [str(codex_bin), "app-server", "--listen", "stdio://"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            env=env,
-        )
-        self.next_id = 1
-        self.notifications: list[dict[str, Any]] = []
-        self.stderr_lines: list[str] = []
-        self.stdout_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-        assert self.proc.stdout is not None
-        assert self.proc.stderr is not None
-        threading.Thread(
-            target=self.read_stdout,
-            args=(self.proc.stdout,),
-            daemon=True,
-        ).start()
-        threading.Thread(
-            target=self.read_stderr,
-            args=(self.proc.stderr,),
-            daemon=True,
-        ).start()
-
-    def read_stdout(self, stream: Any) -> None:
-        for line in stream:
-            try:
-                self.stdout_queue.put(json.loads(line))
-            except json.JSONDecodeError:
-                self.stderr_lines.append(f"non-json stdout: {line.rstrip()}")
-
-    def read_stderr(self, stream: Any) -> None:
-        for line in stream:
-            self.stderr_lines.append(line.rstrip())
-
-    def close(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=5)
-
-    def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
-        payload: dict[str, Any] = {"method": method}
-        if params is not None:
-            payload["params"] = params
-        self.write(payload)
-
-    def request(
-        self,
-        method: str,
-        params: dict[str, Any] | None = None,
-        *,
-        timeout: float = 60.0,
-    ) -> dict[str, Any]:
-        request_id = self.next_id
-        self.next_id += 1
-        payload: dict[str, Any] = {"id": request_id, "method": method}
-        if params is not None:
-            payload["params"] = params
-        self.write(payload)
-
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.proc.poll() is not None:
-                raise RuntimeError(
-                    f"codex app-server exited before {method} completed.\nstderr:\n"
-                    + "\n".join(self.stderr_lines[-80:])
-                )
-            try:
-                message = self.stdout_queue.get(timeout=0.25)
-            except queue.Empty:
-                continue
-            if message.get("id") != request_id:
-                self.notifications.append(message)
-                continue
-            if "error" in message:
-                raise RuntimeError(f"{method} failed: {json.dumps(message['error'])}")
-            result = message.get("result")
-            return result if isinstance(result, dict) else {}
-        raise TimeoutError(
-            f"timed out waiting for {method}.\nstderr:\n" + "\n".join(self.stderr_lines[-80:])
-        )
-
-    def write(self, payload: dict[str, Any]) -> None:
-        assert self.proc.stdin is not None
-        self.proc.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
-        self.proc.stdin.flush()
+def app_server_client(codex_bin: Path, codex_home: Path) -> CodexAppServerClient:
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(codex_home)
+    return CodexAppServerClient(
+        [str(codex_bin), "app-server", "--listen", "stdio://"],
+        env=env,
+    )
 
 
 def resolve_codex_bin(codex_bin: Path | None) -> Path:
@@ -146,19 +51,9 @@ def resolve_codex_bin(codex_bin: Path | None) -> Path:
 
 
 def install_with_codex(codex_bin: Path, codex_home: Path, marketplace_path: Path) -> None:
-    client = AppServerClient(codex_bin, codex_home)
+    client = app_server_client(codex_bin, codex_home)
     try:
-        client.request(
-            "initialize",
-            {
-                "clientInfo": {
-                    "name": "sky-cua-release-deploy",
-                    "version": "0",
-                },
-                "capabilities": {},
-            },
-        )
-        client.notify("initialized")
+        client.initialize(client_name="sky-cua-release-deploy", client_version="0")
         client.request(
             "plugin/install",
             {
@@ -175,19 +70,9 @@ def release_cache_root(codex_home: Path) -> Path:
 
 
 def reload_mcp_servers(codex_bin: Path, codex_home: Path) -> None:
-    client = AppServerClient(codex_bin, codex_home)
+    client = app_server_client(codex_bin, codex_home)
     try:
-        client.request(
-            "initialize",
-            {
-                "clientInfo": {
-                    "name": "sky-cua-release-deploy",
-                    "version": "0",
-                },
-                "capabilities": {},
-            },
-        )
-        client.notify("initialized")
+        client.initialize(client_name="sky-cua-release-deploy", client_version="0")
         client.request("config/mcpServer/reload")
     finally:
         client.close()

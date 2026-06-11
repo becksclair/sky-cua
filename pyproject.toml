@@ -38,6 +38,7 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = [
     "_app_server_harness",
+    "_codex_app_server",
     "_codex_exec",
     "_plugin_bundle",
     "live_desktop_smoke",
