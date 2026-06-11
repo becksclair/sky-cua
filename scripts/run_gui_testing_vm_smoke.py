@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 
 from live_agent_cursor_kde_smoke import MarkerProbe, probe_marker  # type: ignore[import-not-found]
 
@@ -61,14 +62,22 @@ class VmProfileDescriptor:
     name: str
     dispatch: str = "remote"
     remote_profile: str | None = None
+    # Provisional curated-set membership. The final trimmed pre-merge profile
+    # set is a roadmap/product decision; until then this only drives
+    # `--list-profiles` output and test assertions, not dispatch.
     curated: bool = False
-    host_framebuffer_proof: bool = False
     preauthorize_gnome_remote_desktop: bool = False
     preauthorize_kde_remote_desktop: bool = False
     preauthorize_screenshot_portal: bool = False
 
     def runner_profile(self) -> str:
         return self.remote_profile or self.name
+
+    @property
+    def host_framebuffer_proof(self) -> bool:
+        # Membership comes from the runner registry keys, so a host-proof
+        # profile cannot exist without a registered host-side runner.
+        return self.dispatch in HOST_FRAMEBUFFER_PROOF_DISPATCHES
 
 
 VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
@@ -80,7 +89,6 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
             dispatch="kwin-system-install",
             remote_profile="agent-cursor-kde",
             curated=True,
-            host_framebuffer_proof=True,
         ),
         VmProfileDescriptor("kde-plasma"),
         VmProfileDescriptor("i3"),
@@ -96,13 +104,11 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
             "cosmic-patched-cursor-host-proof",
             dispatch="cosmic-patched-host-proof",
             remote_profile="agent-cursor-cosmic-patched-host-proof",
-            host_framebuffer_proof=True,
         ),
         VmProfileDescriptor(
             "cosmic-transparent-xcursor-host-proof",
             dispatch="cosmic-transparent-xcursor-host-proof",
             remote_profile="agent-cursor-cosmic-transparent-xcursor-host-proof",
-            host_framebuffer_proof=True,
         ),
         VmProfileDescriptor("wayland-layer-shell-overlay", curated=True),
         VmProfileDescriptor(
@@ -273,7 +279,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run sky-cua GUI desktop smoke profiles on the Arch testing VM."
     )
-    parser.add_argument("--host", required=True, help="SSH host name or address for the VM.")
+    parser.add_argument("--host", help="SSH host name or address for the VM.")
+    parser.add_argument(
+        "--list-profiles",
+        action="store_true",
+        help="Print the profile registry with dispatch, provisional curated membership, and host-framebuffer-proof metadata, then exit.",
+    )
     parser.add_argument("--user", default="skycua", help="SSH user for the VM.")
     parser.add_argument("--port", type=int, default=22, help="SSH port for the VM.")
     parser.add_argument(
@@ -370,6 +381,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.list_profiles:
+        print(format_profile_listing())
+        return 0
+    if not args.host:
+        parser.error("--host is required unless --list-profiles is set")
+
     profile = VM_PROFILE_DESCRIPTORS[args.profile]
     ssh_target = f"{args.user}@{args.host}"
     remote_root = args.remote_root
@@ -426,8 +443,9 @@ def main() -> int:
             args.ssh_option,
             remote_root,
         )
-    if profile.dispatch == "kwin-system-install":
-        return run_remote_kwin_effect_system_install_profile(
+    if profile.host_framebuffer_proof:
+        return run_host_framebuffer_proof_profile(
+            profile,
             ssh_target,
             args.port,
             args.ssh_option,
@@ -435,28 +453,6 @@ def main() -> int:
             wayland_display=args.wayland_display,
             desktop_env=args.desktop_env,
             sync_codex_settings=args.sync_codex_settings and not args.skip_codex_settings,
-            vm_name=args.vm_name,
-            libvirt_uri=args.libvirt_uri,
-        )
-    if profile.dispatch == "cosmic-patched-host-proof":
-        return run_remote_cosmic_patched_cursor_host_proof_profile(
-            ssh_target,
-            args.port,
-            args.ssh_option,
-            remote_root,
-            wayland_display=args.wayland_display,
-            desktop_env=args.desktop_env or "COSMIC",
-            vm_name=args.vm_name,
-            libvirt_uri=args.libvirt_uri,
-        )
-    if profile.dispatch == "cosmic-transparent-xcursor-host-proof":
-        return run_remote_cosmic_transparent_xcursor_host_proof_profile(
-            ssh_target,
-            args.port,
-            args.ssh_option,
-            remote_root,
-            wayland_display=args.wayland_display,
-            desktop_env=args.desktop_env or "COSMIC",
             vm_name=args.vm_name,
             libvirt_uri=args.libvirt_uri,
         )
@@ -471,6 +467,148 @@ def main() -> int:
         desktop_env=args.desktop_env,
         sync_codex_settings=args.sync_codex_settings and not args.skip_codex_settings,
     )
+
+
+class HostFramebufferProofRunner(Protocol):
+    def __call__(
+        self,
+        ssh_target: str,
+        port: int,
+        ssh_options: list[str],
+        remote_root: Path,
+        *,
+        wayland_display: str,
+        desktop_env: str,
+        sync_codex_settings: bool,
+        vm_name: str,
+        libvirt_uri: str,
+    ) -> int: ...
+
+
+def _kwin_system_install_host_proof(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    wayland_display: str,
+    desktop_env: str,
+    sync_codex_settings: bool,
+    vm_name: str,
+    libvirt_uri: str,
+) -> int:
+    return run_remote_kwin_effect_system_install_profile(
+        ssh_target,
+        port,
+        ssh_options,
+        remote_root,
+        wayland_display=wayland_display,
+        desktop_env=desktop_env,
+        sync_codex_settings=sync_codex_settings,
+        vm_name=vm_name,
+        libvirt_uri=libvirt_uri,
+    )
+
+
+def _cosmic_patched_host_proof(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    wayland_display: str,
+    desktop_env: str,
+    sync_codex_settings: bool,
+    vm_name: str,
+    libvirt_uri: str,
+) -> int:
+    # The COSMIC host-proof runners default the desktop env and do not sync
+    # Codex settings; they run an unauthenticated cursor proof.
+    del sync_codex_settings
+    return run_remote_cosmic_patched_cursor_host_proof_profile(
+        ssh_target,
+        port,
+        ssh_options,
+        remote_root,
+        wayland_display=wayland_display,
+        desktop_env=desktop_env or "COSMIC",
+        vm_name=vm_name,
+        libvirt_uri=libvirt_uri,
+    )
+
+
+def _cosmic_transparent_xcursor_host_proof(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    wayland_display: str,
+    desktop_env: str,
+    sync_codex_settings: bool,
+    vm_name: str,
+    libvirt_uri: str,
+) -> int:
+    del sync_codex_settings
+    return run_remote_cosmic_transparent_xcursor_host_proof_profile(
+        ssh_target,
+        port,
+        ssh_options,
+        remote_root,
+        wayland_display=wayland_display,
+        desktop_env=desktop_env or "COSMIC",
+        vm_name=vm_name,
+        libvirt_uri=libvirt_uri,
+    )
+
+
+# Host-side runners that capture the VM framebuffer through libvirt instead of
+# the generic remote profile path. The registry keys are the single source of
+# host-framebuffer-proof dispatch membership.
+HOST_FRAMEBUFFER_PROOF_RUNNERS: dict[str, HostFramebufferProofRunner] = {
+    "kwin-system-install": _kwin_system_install_host_proof,
+    "cosmic-patched-host-proof": _cosmic_patched_host_proof,
+    "cosmic-transparent-xcursor-host-proof": _cosmic_transparent_xcursor_host_proof,
+}
+HOST_FRAMEBUFFER_PROOF_DISPATCHES = frozenset(HOST_FRAMEBUFFER_PROOF_RUNNERS)
+
+
+def run_host_framebuffer_proof_profile(
+    profile: VmProfileDescriptor,
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    wayland_display: str,
+    desktop_env: str,
+    sync_codex_settings: bool,
+    vm_name: str,
+    libvirt_uri: str,
+) -> int:
+    runner = HOST_FRAMEBUFFER_PROOF_RUNNERS[profile.dispatch]
+    return runner(
+        ssh_target,
+        port,
+        ssh_options,
+        remote_root,
+        wayland_display=wayland_display,
+        desktop_env=desktop_env,
+        sync_codex_settings=sync_codex_settings,
+        vm_name=vm_name,
+        libvirt_uri=libvirt_uri,
+    )
+
+
+def format_profile_listing() -> str:
+    lines = ["profile  dispatch  curated  host-framebuffer-proof"]
+    for descriptor in VM_PROFILE_DESCRIPTORS.values():
+        lines.append(
+            f"{descriptor.name}  {descriptor.dispatch}  "
+            f"{'curated' if descriptor.curated else '-'}  "
+            f"{'host-proof' if descriptor.host_framebuffer_proof else '-'}"
+        )
+    return "\n".join(lines)
 
 
 def build_host_runtime_artifacts() -> None:

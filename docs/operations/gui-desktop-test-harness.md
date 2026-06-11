@@ -111,6 +111,13 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile pi-mcp -
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all
 ```
 
+List the profile registry without a VM, including dispatch type, provisional
+curated-set membership, and host-framebuffer-proof routing:
+
+```bash
+python3 scripts/run_gui_testing_vm_smoke.py --list-profiles
+```
+
 The runner:
 
 - builds host artifacts with
