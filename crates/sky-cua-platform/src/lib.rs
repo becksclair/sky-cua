@@ -1,5 +1,6 @@
 pub mod app_instructions;
 pub mod backend;
+pub mod config;
 pub mod diagnostics;
 pub mod model;
 pub mod paths;

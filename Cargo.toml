@@ -44,6 +44,7 @@ gstreamer-app = { version = "0.25.0", features = ["v1_22"] }
 image = { version = "0.25.8", default-features = false, features = ["jpeg", "png", "webp"] }
 libc = "0.2.177"
 serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.1.2"
 serde_json = "1.0.145"
 reis = "0.6.1"
 smithay-client-toolkit = { version = "0.20.0", default-features = false }

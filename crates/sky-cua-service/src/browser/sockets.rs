@@ -233,7 +233,16 @@ pub(super) fn cache_socket_family_for_tests(socket: &Path, family: Option<Browse
 
 pub(super) fn browser_socket_selection_from_env() -> Result<BrowserSocketSelection, DiagnosticEntry>
 {
-    browser_socket_selection_from_value(std::env::var(SKY_CUA_BROWSER_ENV).ok().as_deref())
+    // Env override first, then the machine config file
+    // (~/.config/sky-cua/sky-cua.toml `browser` key), then no selection.
+    let resolved = sky_cua_platform::config::resolved_browser_selection().map_err(|message| {
+        DiagnosticEntry {
+            code: "MachineConfigInvalid".to_string(),
+            message,
+            details: None,
+        }
+    })?;
+    browser_socket_selection_from_value(resolved.as_deref())
 }
 
 pub(super) fn browser_socket_selection_from_value(
