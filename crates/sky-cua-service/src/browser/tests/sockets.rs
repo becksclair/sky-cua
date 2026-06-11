@@ -13,8 +13,9 @@ use crate::browser::bridge::{
 use crate::browser::sockets::{
     BrowserFamily, BrowserSocketSelection, CODEX_SOCKET_DIR_ENV, MAX_BRIDGE_SOCKET_CANDIDATES,
     SKY_CUA_BROWSER_ENV, SKY_CUA_SOCKET_DIR_ENV, browser_family_from_cmdline,
-    browser_socket_selection_from_value, cache_socket_family_for_tests, find_bridge_sockets,
-    record_bridge_socket_result, reset_socket_inventory_for_tests, socket_host_pid,
+    browser_socket_selection_from_env, browser_socket_selection_from_value,
+    cache_socket_family_for_tests, find_bridge_sockets, record_bridge_socket_result,
+    reset_socket_inventory_for_tests, socket_host_pid,
 };
 use crate::browser::transport::BRIDGE_REQUEST_TIMEOUT;
 
@@ -490,4 +491,39 @@ async fn socket_inventory_skips_recently_disconnected_socket() {
 
     assert!(!sockets.contains(&stale_path));
     assert!(sockets.contains(&live_path));
+}
+
+#[tokio::test]
+async fn browser_selection_resolves_from_machine_config_file() {
+    let _env_guard = env_lock().await;
+    let temp_dir = std::env::temp_dir().join(format!(
+        "sky-cua-machine-config-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir).expect("create test temp dir");
+    let config_path = temp_dir.join("sky-cua.toml");
+    std::fs::write(&config_path, "browser = \"brave\"\n").expect("write machine config");
+    unsafe {
+        std::env::set_var(
+            sky_cua_platform::config::MACHINE_CONFIG_PATH_ENV,
+            &config_path,
+        )
+    };
+
+    let selection = browser_socket_selection_from_env().expect("config selection resolves");
+    assert_eq!(
+        selection,
+        BrowserSocketSelection::Browser(BrowserFamily::Brave)
+    );
+
+    // The env var is a per-process override on top of the file.
+    unsafe { std::env::set_var(SKY_CUA_BROWSER_ENV, "chrome") };
+    let selection = browser_socket_selection_from_env().expect("env override resolves");
+    assert_eq!(
+        selection,
+        BrowserSocketSelection::Browser(BrowserFamily::Chrome)
+    );
+    unsafe { std::env::remove_var(SKY_CUA_BROWSER_ENV) };
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }

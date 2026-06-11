@@ -286,11 +286,15 @@ const GUARDED_ENV_VARS: &[&str] = &[
     BROWSER_EVAL_ENV,
     SKY_CUA_SOCKET_DIR_ENV,
     CODEX_SOCKET_DIR_ENV,
+    sky_cua_platform::config::MACHINE_CONFIG_PATH_ENV,
 ];
 
 /// Serialize env-mutating browser tests. Browser selection and eval opt-in are
-/// also reset to a deterministic absent state; socket dir overrides are left
-/// as-is because each test sets its own before use.
+/// also reset to a deterministic absent state, and the machine config path is
+/// pinned to a nonexistent file so tests never read the developer's real
+/// ~/.config/sky-cua/sky-cua.toml (a seeded `browser` pin there filters the
+/// fixture sockets out of discovery and hangs the open-tab tests); socket dir
+/// overrides are left as-is because each test sets its own before use.
 pub(super) async fn env_lock() -> BrowserEnvGuard {
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
@@ -300,6 +304,12 @@ pub(super) async fn env_lock() -> BrowserEnvGuard {
         .collect();
     unsafe { std::env::remove_var(SKY_CUA_BROWSER_ENV) };
     unsafe { std::env::remove_var(BROWSER_EVAL_ENV) };
+    unsafe {
+        std::env::set_var(
+            sky_cua_platform::config::MACHINE_CONFIG_PATH_ENV,
+            "/nonexistent/sky-cua-test-machine-config.toml",
+        )
+    };
     BrowserEnvGuard {
         _guard: guard,
         previous,
