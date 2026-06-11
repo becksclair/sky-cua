@@ -314,17 +314,27 @@ fn ensure_health_satisfies_browser_env(response: &ServiceResponse) -> Result<()>
         return Ok(());
     };
 
+    // Only an explicit conflict is stale: both sides pinning different
+    // values. An unset side is compatible — unset selection means "probe
+    // every Chrome-family browser" (a superset), and demanding exact
+    // equality would let the first spawning host's environment permanently
+    // starve every other host now that the daemon is a singleton.
     let stale = BROWSER_ENV_HEALTH_KEYS
         .iter()
         .copied()
-        .filter(|key| browser_env.get(*key) != desired.get(*key))
+        .filter(|key| {
+            matches!(
+                (browser_env.get(*key), desired.get(*key)),
+                (Some(actual), Some(wanted)) if actual != wanted
+            )
+        })
         .collect::<Vec<_>>();
     if stale.is_empty() {
         return Ok(());
     }
 
     Err(anyhow!(
-        "existing sky-cua-service has stale browser environment keys: {}",
+        "existing sky-cua-service has conflicting browser environment keys: {}",
         stale.join(", ")
     ))
 }
@@ -472,7 +482,32 @@ mod tests {
     }
 
     #[test]
-    fn startup_health_rejects_service_with_stale_browser_selection() {
+    fn startup_health_rejects_conflicting_browser_selection() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_selection = std::env::var_os("SKY_CUA_BROWSER");
+        unsafe {
+            std::env::set_var("SKY_CUA_BROWSER", "brave");
+        }
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::new(),
+            browser_env: BTreeMap::from([("SKY_CUA_BROWSER".to_string(), "chrome".to_string())]),
+        };
+
+        let result = ensure_health_satisfies_browser_env(&response);
+
+        restore_env("SKY_CUA_BROWSER", old_selection);
+        let error = result.expect_err("conflicting browser pins should be rejected");
+        assert!(error.to_string().contains("SKY_CUA_BROWSER"));
+    }
+
+    #[test]
+    fn startup_health_accepts_unpinned_service_for_pinned_client() {
+        // A daemon without a browser selection probes every Chrome-family
+        // browser (a superset), so a client pinning one browser must not
+        // reject it: with the daemon singleton, exact-equality would let the
+        // first spawning host permanently starve every other host.
         let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let old_selection = std::env::var_os("SKY_CUA_BROWSER");
         unsafe {
@@ -488,53 +523,36 @@ mod tests {
         let result = ensure_health_satisfies_browser_env(&response);
 
         restore_env("SKY_CUA_BROWSER", old_selection);
-        let error = result.expect_err("stale service browser env should be rejected");
-        assert!(error.to_string().contains("SKY_CUA_BROWSER"));
+        assert!(result.is_ok(), "unpinned daemon must serve pinned clients");
     }
 
     #[test]
-    fn startup_health_rejects_browser_env_mismatch_without_enable_flag() {
+    fn startup_health_accepts_pinned_service_for_unpinned_client() {
         let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let old_selection = std::env::var_os("SKY_CUA_BROWSER");
-        unsafe {
-            std::env::set_var("SKY_CUA_BROWSER", "brave");
-        }
-        let response = ServiceResponse::Health {
-            ok: true,
-            service_socket: "/tmp/sky-cua/service.sock".to_string(),
-            desktop_env: BTreeMap::new(),
-            browser_env: BTreeMap::new(),
-        };
-
-        let result = ensure_health_satisfies_browser_env(&response);
-
-        restore_env("SKY_CUA_BROWSER", old_selection);
-        let error = result.expect_err("browser env mismatch should be rejected");
-        assert!(error.to_string().contains("SKY_CUA_BROWSER"));
-    }
-
-    #[test]
-    fn startup_health_rejects_service_with_extra_browser_socket_dir() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let old_socket_dir = std::env::var_os("SKY_CUA_BROWSER_USE_SOCKET_DIR");
         unsafe {
+            std::env::remove_var("SKY_CUA_BROWSER");
             std::env::remove_var("SKY_CUA_BROWSER_USE_SOCKET_DIR");
         }
         let response = ServiceResponse::Health {
             ok: true,
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env: BTreeMap::new(),
-            browser_env: BTreeMap::from([(
-                "SKY_CUA_BROWSER_USE_SOCKET_DIR".to_string(),
-                "/tmp/old-browser-use".to_string(),
-            )]),
+            browser_env: BTreeMap::from([
+                ("SKY_CUA_BROWSER".to_string(), "brave".to_string()),
+                (
+                    "SKY_CUA_BROWSER_USE_SOCKET_DIR".to_string(),
+                    "/tmp/old-browser-use".to_string(),
+                ),
+            ]),
         };
 
         let result = ensure_health_satisfies_browser_env(&response);
 
+        restore_env("SKY_CUA_BROWSER", old_selection);
         restore_env("SKY_CUA_BROWSER_USE_SOCKET_DIR", old_socket_dir);
-        let error = result.expect_err("stale service browser socket dir should be rejected");
-        assert!(error.to_string().contains("SKY_CUA_BROWSER_USE_SOCKET_DIR"));
+        assert!(result.is_ok(), "pinned daemon must serve unpinned clients");
     }
 
     #[test]

@@ -172,15 +172,20 @@ fn acquire_singleton_lock(socket_path: &std::path::Path) -> Result<Option<std::f
         .truncate(false)
         .write(true)
         .open(&lock_path)?;
-    let result = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if result == 0 {
-        return Ok(Some(lock_file));
+    loop {
+        let result = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            return Ok(Some(lock_file));
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EWOULDBLOCK) => return Ok(None),
+            // A signal can interrupt even a non-blocking flock; retry rather
+            // than failing daemon startup.
+            Some(libc::EINTR) => continue,
+            _ => return Err(error.into()),
+        }
     }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
-        return Ok(None);
-    }
-    Err(error.into())
 }
 
 #[cfg(unix)]
