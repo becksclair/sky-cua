@@ -46,7 +46,11 @@ def run_agent(
     elif agent == "pi":
         argv = ["pi", "-p", prompt]
     elif agent == "openclaw":
-        argv = ["openclaw", "agent", "--message", prompt, "--json"]
+        # `openclaw agent` requires an explicit session target, and OpenClaw
+        # resumes one codex thread per session key, so each smoke run gets a
+        # fresh key instead of resuming a stale thread.
+        session_key = f"sky-cua-agent-smoke-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        argv = ["openclaw", "agent", "--session-key", session_key, "--message", prompt, "--json"]
     elif agent == "claude":
         claude_bin = shutil.which("claude") or shutil.which("openclaude")
         if claude_bin is None:

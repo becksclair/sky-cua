@@ -4,7 +4,7 @@
 Stages:
   1. show   - `openclaw mcp show sky_cua --json`: the registration exists, the
               client binary is present, and the codex approval mode will not
-              silently block tool calls in unattended agent turns.
+              raise per-call approval prompts during agent turns.
   2. probe  - `openclaw mcp probe sky_cua --json`: OpenClaw spawns the server
               and the required computer-use and browser-use tools are listed.
   3. agent  - optional (--agent-turn): one live agent turn via
