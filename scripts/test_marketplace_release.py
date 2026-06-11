@@ -92,6 +92,193 @@ def test_publish_marketplace_preflights_git_repo_before_writing(
     assert not marketplace_root.exists()
 
 
+def _init_marketplace_repo(repo_root: Path) -> None:
+    repo_root.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=repo_root,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=repo_root,
+        check=True,
+    )
+    (repo_root / "README.md").write_text("marketplace\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=repo_root,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+
+def _stub_codex_install_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        publish_marketplace_release,
+        "resolve_codex_bin",
+        lambda _codex_bin: Path("/usr/bin/codex"),
+    )
+    monkeypatch.setattr(
+        publish_marketplace_release,
+        "configure_marketplace",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        publish_marketplace_release,
+        "install_with_codex",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        publish_marketplace_release,
+        "update_codex_config",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        publish_marketplace_release,
+        "reload_mcp_servers",
+        lambda *args, **kwargs: None,
+    )
+
+
+def test_publish_refreshes_local_install_with_runtime_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marketplace_root = tmp_path / "marketplace"
+    _init_marketplace_repo(marketplace_root)
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+    local_install_dir = tmp_path / "local-install"
+
+    _stub_codex_install_steps(monkeypatch)
+    local_calls: list[tuple[Path, str, bool]] = []
+
+    def fake_local_install(
+        target_dir: Path,
+        host: str,
+        *,
+        openclaw_dir: Path | None = None,
+        restart_runtime: bool = False,
+    ) -> tuple[Path, Path]:
+        del openclaw_dir
+        local_calls.append((target_dir, host, restart_runtime))
+        return target_dir / "bin" / "sky-cua-client", target_dir / "claude_code_mcp.json"
+
+    monkeypatch.setattr(
+        publish_marketplace_release,
+        "install_local_mcp_server",
+        fake_local_install,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "publish_marketplace_release.py",
+            "--no-build",
+            "--no-push",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--bundle-root",
+            str(bundle_root),
+            "--local-install-dir",
+            str(local_install_dir),
+        ],
+    )
+
+    assert publish_marketplace_release.main() == 0
+    assert local_calls == [(local_install_dir.resolve(), "claude-code", True)]
+
+
+def test_publish_skips_local_install_for_repo_only_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marketplace_root = tmp_path / "marketplace"
+    _init_marketplace_repo(marketplace_root)
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+
+    def fail_local_install(
+        target_dir: Path,
+        host: str,
+        *,
+        openclaw_dir: Path | None = None,
+        restart_runtime: bool = False,
+    ) -> tuple[Path, Path]:
+        del target_dir, host, openclaw_dir, restart_runtime
+        raise AssertionError("local install must not run for repo-only publishes")
+
+    monkeypatch.setattr(
+        publish_marketplace_release,
+        "install_local_mcp_server",
+        fail_local_install,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "publish_marketplace_release.py",
+            "--no-build",
+            "--no-push",
+            "--skip-codex-install",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--bundle-root",
+            str(bundle_root),
+        ],
+    )
+
+    assert publish_marketplace_release.main() == 0
+
+
+def test_publish_honors_skip_local_install_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marketplace_root = tmp_path / "marketplace"
+    _init_marketplace_repo(marketplace_root)
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+
+    _stub_codex_install_steps(monkeypatch)
+
+    def fail_local_install(
+        target_dir: Path,
+        host: str,
+        *,
+        openclaw_dir: Path | None = None,
+        restart_runtime: bool = False,
+    ) -> tuple[Path, Path]:
+        del target_dir, host, openclaw_dir, restart_runtime
+        raise AssertionError("local install must not run when --skip-local-install is set")
+
+    monkeypatch.setattr(
+        publish_marketplace_release,
+        "install_local_mcp_server",
+        fail_local_install,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "publish_marketplace_release.py",
+            "--no-build",
+            "--no-push",
+            "--skip-local-install",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--bundle-root",
+            str(bundle_root),
+        ],
+    )
+
+    assert publish_marketplace_release.main() == 0
+
+
 def test_setup_marketplace_checkout_expands_github_short_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

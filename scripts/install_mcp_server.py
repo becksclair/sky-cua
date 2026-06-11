@@ -400,6 +400,50 @@ def restart_runtime_processes(target_dir: Path) -> None:
         stop_unix_runtime_processes([target_dir])
 
 
+def install_local_mcp_server(
+    target_dir: Path,
+    host: str,
+    *,
+    openclaw_dir: Path = DEFAULT_OPENCLAW_DIR,
+    restart_runtime: bool = False,
+) -> tuple[Path, Path]:
+    """Install runtime binaries and host config; optionally restart installed runtimes.
+
+    Returns ``(client_path, config_path)``. Other deploy scripts call this to
+    refresh a local MCP-server install alongside their own publishing steps.
+    """
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    if restart_runtime and sys.platform == "win32":
+        restart_runtime_processes(target_dir)
+
+    client_path = install_binaries(target_dir)
+
+    seeded = _install_shared.seed_machine_config_from_environment()
+    if seeded is not None:
+        print(f"Seeded machine config browser selection: {seeded}")
+
+    if host == "opencode":
+        config_path = install_opencode(target_dir, client_path)
+    elif host == "claude-code":
+        config_path = install_claude_code(target_dir, client_path)
+    elif host == "claude-desktop":
+        config_path = install_claude_desktop(target_dir, client_path)
+    elif host == "pi":
+        config_path = install_pi(target_dir, client_path)
+    elif host == "openclaw":
+        config_path = install_openclaw(target_dir, client_path, openclaw_dir=openclaw_dir)
+    else:
+        config = generate_mcp_config(client_path, target_dir)
+        config_path = write_mcp_json(target_dir, config)
+
+    if restart_runtime:
+        restart_runtime_processes(target_dir)
+        print(f"Stopped installed sky-cua runtime processes rooted under: {target_dir}")
+
+    return client_path, config_path
+
+
 def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path: Path) -> None:
     print(f"\nInstalled sky-cua MCP server to: {target_dir}")
     print(f"Client binary: {client_path}")
@@ -502,41 +546,15 @@ def main() -> int:
     args = parser.parse_args()
 
     target_dir = args.target_dir.resolve()
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    if args.restart_runtime and sys.platform == "win32":
-        restart_runtime_processes(target_dir)
-
-    client_path = install_binaries(target_dir)
-
-    seeded = _install_shared.seed_machine_config_from_environment()
-    if seeded is not None:
-        print(f"Seeded machine config browser selection: {seeded}")
-
-    if args.host == "opencode":
-        config_path = install_opencode(target_dir, client_path)
-    elif args.host == "claude-code":
-        config_path = install_claude_code(target_dir, client_path)
-    elif args.host == "claude-desktop":
-        config_path = install_claude_desktop(target_dir, client_path)
-    elif args.host == "pi":
-        config_path = install_pi(target_dir, client_path)
-    elif args.host == "openclaw":
-        config_path = install_openclaw(
-            target_dir,
-            client_path,
-            openclaw_dir=args.openclaw_dir.expanduser().resolve(),
-        )
-    else:
-        config = generate_mcp_config(client_path, target_dir)
-        config_path = write_mcp_json(target_dir, config)
+    client_path, config_path = install_local_mcp_server(
+        target_dir,
+        args.host,
+        openclaw_dir=args.openclaw_dir.expanduser().resolve(),
+        restart_runtime=args.restart_runtime,
+    )
 
     if args.bin_dir:
         link_current_platform_binaries(target_dir, args.bin_dir.expanduser().resolve())
-
-    if args.restart_runtime:
-        restart_runtime_processes(target_dir)
-        print(f"Stopped installed sky-cua runtime processes rooted under: {target_dir}")
 
     if args.kwin_effect:
         outcome = deploy_kwin_effect(build_dir=target_dir / "kwin-effect-build")

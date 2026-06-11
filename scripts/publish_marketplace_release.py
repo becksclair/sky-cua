@@ -28,6 +28,9 @@ from deploy_release_plugin import (
     reload_mcp_servers,
     resolve_codex_bin,
 )
+from install_mcp_server import install_local_mcp_server
+
+DEFAULT_LOCAL_INSTALL_DIR = Path.home() / ".local" / "share" / "sky-cua"
 
 DEFAULT_MARKETPLACE_SOURCE = "becksclair/heliasar-marketplace"
 
@@ -150,6 +153,23 @@ def main() -> int:
         help="Only stage/commit/push the marketplace; do not configure or install in Codex.",
     )
     parser.add_argument(
+        "--skip-local-install",
+        action="store_true",
+        help="Do not refresh the local MCP-server install or restart its runtime.",
+    )
+    parser.add_argument(
+        "--local-install-dir",
+        type=Path,
+        default=DEFAULT_LOCAL_INSTALL_DIR,
+        help=f"Local MCP-server install to refresh (default: {DEFAULT_LOCAL_INSTALL_DIR}).",
+    )
+    parser.add_argument(
+        "--local-install-host",
+        default="claude-code",
+        choices=("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw"),
+        help="Host config format for the local MCP-server install (default: claude-code).",
+    )
+    parser.add_argument(
         "--codex-bin",
         type=Path,
         default=None,
@@ -191,12 +211,29 @@ def main() -> int:
         )
         reload_mcp_servers(codex_bin, args.codex_home)
 
+    # Keep the local MCP-server install (and the shared daemon it backs) in
+    # lockstep with the published release so the two channels cannot drift.
+    # Skipped alongside --skip-codex-install, which marks repo-only runs (CI).
+    refresh_local_install = not args.skip_local_install and not args.skip_codex_install
+    local_install_dir = args.local_install_dir.expanduser().resolve()
+    if refresh_local_install:
+        install_local_mcp_server(
+            local_install_dir,
+            args.local_install_host,
+            restart_runtime=True,
+        )
+
     print(f"marketplace_root={marketplace_root}")
     print(f"marketplace_manifest={manifest_path}")
     print(f"installed_path={installed_path}")
     print(f"plugin_id={RELEASE_PLUGIN_ID}")
     print(f"committed={str(committed).lower()}")
     print(f"pushed={str(not args.no_push).lower()}")
+    if refresh_local_install:
+        print(f"local_install={local_install_dir}")
+        print(f"local_install_host={args.local_install_host}")
+    else:
+        print("local_install=skipped")
     return 0
 
 

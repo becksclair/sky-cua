@@ -49,11 +49,24 @@ This builds `dist/plugin/sky-cua`, stages it into
 manifest, commits marketplace changes, pushes `origin main`, upgrades the Codex
 marketplace, installs/reloads `sky-cua@Heliasar`, and disables `sky-cua@debug`.
 
+It then refreshes the local MCP-server install at `~/.local/share/sky-cua`
+(claude-code host config) and restarts its runtime processes so the shared
+daemon respawns from the new binaries. All plugin consumers share one daemon
+socket, so publishing without this refresh would leave non-Codex hosts served
+by stale daemon logic.
+
 Useful options:
 
-- `--no-build`: publish the existing `dist/plugin/sky-cua`.
+- `--no-build`: publish the existing `dist/plugin/sky-cua`. The local install
+  copies binaries from `target/release`, so ensure that is current too.
 - `--no-push`: commit locally but leave the marketplace push to the operator.
-- `--skip-codex-install`: update the marketplace repo without changing the local Codex install.
+- `--skip-codex-install`: update the marketplace repo without changing the
+  local Codex install. Also skips the local MCP-server refresh (repo-only
+  runs, e.g. CI).
+- `--skip-local-install`: publish and install in Codex without touching the
+  local MCP-server install.
+- `--local-install-dir`, `--local-install-host`: override the local
+  MCP-server install location and host config format.
 
 Before publishing, the Heliasar checkout must already be an initialized Git repo
 with `HEAD`; first-time repo creation belongs to `gitea-repo`, not this script.
