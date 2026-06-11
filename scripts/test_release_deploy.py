@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -11,17 +13,56 @@ import pytest
 
 import deploy_release_plugin as release_deploy
 from _plugin_bundle import (
+    COMPUTER_USE_COMPAT_PLUGIN_ID,
+    PLUGIN_ID,
     RELEASE_PLUGIN_ID,
     all_runtime_binary_names,
     codex_config_path,
+    compat_plugin_available,
     current_runtime_platform,
     release_plugin_root,
     runtime_binary_names,
     runtime_binary_path,
+    update_codex_config,
 )
 from _test_support import (
     write_minimal_bundle,
 )
+
+
+def write_fake_compat_root(codex_home: Path) -> Path:
+    compat_latest = codex_home / "plugins" / "cache" / "openai-bundled" / "computer-use" / "latest"
+    compat_latest.mkdir(parents=True)
+    (compat_latest / ".mcp.json").write_text(
+        '{"mcpServers": {"computer-use": {"command": "/payload/bin/sky-cua-client"}}}',
+        encoding="utf-8",
+    )
+    return compat_latest
+
+
+def test_compat_plugin_available_requires_materialized_mcp_config(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    assert compat_plugin_available(codex_home) is False
+
+    write_fake_compat_root(codex_home)
+    assert compat_plugin_available(codex_home) is True
+
+
+def test_update_codex_config_compat_enablement_owns_computer_use_toggles(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[plugins."{RELEASE_PLUGIN_ID}"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+
+    update_codex_config(config_path, compat_enablement=True)
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["plugins"][COMPUTER_USE_COMPAT_PLUGIN_ID]["enabled"] is True
+    assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is False
+    assert parsed["plugins"][PLUGIN_ID]["enabled"] is False
 
 
 def test_release_install_preserves_existing_other_platform_binaries(tmp_path: Path) -> None:
@@ -153,6 +194,86 @@ def test_release_deploy_configures_local_marketplace_when_missing(
     assert parsed["marketplaces"]["Heliasar"]["source"] == codex_config_path(marketplace_root)
     assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is True
     assert parsed["plugins"]["sky-cua@debug"]["enabled"] is False
+
+
+def test_release_deploy_prefers_compat_plugin_when_root_is_materialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    marketplace_root = tmp_path / "marketplace"
+    bundle_root = tmp_path / "bundle"
+    config_path = codex_home / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        f'[plugins."{RELEASE_PLUGIN_ID}"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+    write_minimal_bundle(bundle_root, binaries=runtime_binary_names())
+    write_fake_compat_root(codex_home)
+
+    refresh_calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(release_deploy, "install_with_codex", lambda *_args: None)
+    monkeypatch.setattr(release_deploy, "reload_mcp_servers", lambda *_args: None)
+    monkeypatch.setattr(
+        release_deploy,
+        "refresh_compat_plugin",
+        lambda payload_root, home: refresh_calls.append((payload_root, home)),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "deploy_release_plugin.py",
+            "--no-build",
+            "--codex-home",
+            str(codex_home),
+            "--marketplace-root",
+            str(marketplace_root),
+            "--bundle-root",
+            str(bundle_root),
+            "--codex-bin",
+            "codex",
+        ],
+    )
+
+    assert release_deploy.main() == 0
+
+    assert refresh_calls == [
+        (release_plugin_root(marketplace_root), codex_home),
+    ]
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["plugins"][COMPUTER_USE_COMPAT_PLUGIN_ID]["enabled"] is True
+    assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is False
+    assert parsed["plugins"][PLUGIN_ID]["enabled"] is False
+
+
+def test_release_payload_root_prefers_codex_cache_payload(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    installed_path = tmp_path / "marketplace-payload"
+    cache_payload = release_deploy.release_cache_root(codex_home) / "0.1.0"
+    (cache_payload / "resources").mkdir(parents=True)
+    (cache_payload / "resources" / "chrome_preflight.py").write_text("", encoding="utf-8")
+
+    assert release_deploy.release_payload_root(codex_home, "0.1.0", installed_path) == cache_payload
+    assert (
+        release_deploy.release_payload_root(codex_home, "0.2.0", installed_path) == installed_path
+    )
+
+
+def test_latest_release_payload_returns_newest_version_dir(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    assert release_deploy.latest_release_payload(codex_home) is None
+
+    cache_root = release_deploy.release_cache_root(codex_home)
+    old = cache_root / "0.1.0"
+    old.mkdir(parents=True)
+    past = time.time() - 60
+    os.utime(old, (past, past))
+    new = cache_root / "0.2.0"
+    new.mkdir()
+
+    assert release_deploy.latest_release_payload(codex_home) == new
 
 
 def test_release_deploy_restores_cache_when_reload_fails(

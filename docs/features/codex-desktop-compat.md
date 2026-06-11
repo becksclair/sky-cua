@@ -60,18 +60,20 @@ enabled = true
 enabled = true
 
 [plugins."computer-use@openai-bundled"]
-enabled = false   # disabled to avoid duplicate computer-use server
+enabled = true    # the single enabled computer-use plugin id
 
 [plugins."sky-cua@Heliasar"]
-enabled = true
+enabled = false   # payload carrier; the compat root points at its cache payload
 
 [marketplaces.Heliasar]
 source = "/home/bex/projects/heliasar-marketplace"
 source_type = "local"
 ```
 
-The `computer-use@openai-bundled` compatibility entry is staged but
-disabled so Codex does not see two active `computer-use` MCP servers.
+Codex Desktop detects Computer Use plugins by the built-in plugin name
+`computer-use`, so the `computer-use@openai-bundled` compat entry is the
+single enabled computer-use plugin; the sky-cua channel ids stay disabled so
+Codex never sees two active `computer-use` MCP servers.
 
 ## Behavior
 
@@ -105,8 +107,8 @@ Preflight (`resources/chrome_preflight.py`,
   plugin into the local Codex bundled marketplace cache.
 - Writes exact native-host manifests for Google Chrome, Brave, and
   Chromium under `com.openai.codexextension`.
-- Enables `chrome@openai-bundled` and `browser-use@openai-bundled`;
-  stages `computer-use@openai-bundled` disabled.
+- Enables `chrome@openai-bundled`, `browser-use@openai-bundled`, and the
+  `computer-use@openai-bundled` compat plugin (compat-first enablement).
 
 The Linux native messaging host (`crates/sky-cua-chrome-host`) bridges
 the official Codex Chrome extension and the sky-cua runtime: it

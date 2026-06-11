@@ -11,10 +11,17 @@ from _plugin_bundle import (
     PLUGIN_ID,
     RELEASE_MARKETPLACE_NAME,
     RELEASE_PLUGIN_ID,
+    compat_plugin_available,
     marketplace_manifest_path,
     update_codex_config,
 )
-from deploy_release_plugin import install_with_codex, reload_mcp_servers, resolve_codex_bin
+from deploy_release_plugin import (
+    install_with_codex,
+    latest_release_payload,
+    refresh_compat_plugin,
+    reload_mcp_servers,
+    resolve_codex_bin,
+)
 from publish_marketplace_release import DEFAULT_MARKETPLACE_SOURCE
 
 
@@ -79,10 +86,14 @@ def main() -> int:
 
     manifest_path = marketplace_manifest_path(marketplace_root)
     install_with_codex(codex_bin, args.codex_home, manifest_path)
+    payload_root = latest_release_payload(args.codex_home)
+    if payload_root is not None:
+        refresh_compat_plugin(payload_root, args.codex_home)
     update_codex_config(
         args.codex_home / "config.toml",
         plugin_id=RELEASE_PLUGIN_ID,
         disabled_plugin_ids=[PLUGIN_ID],
+        compat_enablement=compat_plugin_available(args.codex_home),
     )
     reload_mcp_servers(codex_bin, args.codex_home)
 

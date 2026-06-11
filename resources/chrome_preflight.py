@@ -703,11 +703,15 @@ def update_codex_config(codex_home: Path) -> None:
         "enabled",
         "true",
     )
+    # Codex Desktop detects Computer Use plugins by the built-in plugin name
+    # "computer-use", so the compat plugin id is the single enabled
+    # computer-use plugin. The sky-cua channel ids stay disabled; the active
+    # payload is whichever one the compat root's .mcp.json points at.
     config_text = upsert_toml_key(
         config_text,
         f'plugins."{COMPUTER_USE_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"',
         "enabled",
-        "false",
+        "true",
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(config_text, encoding="utf-8")

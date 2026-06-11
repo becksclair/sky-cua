@@ -10,6 +10,7 @@ from pathlib import Path
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DIST_PLUGIN_ROOT,
+    compat_plugin_available,
     copytree_replace_preserving_platform_binaries,
     current_runtime_platform,
     ensure_bundle_structure,
@@ -78,7 +79,13 @@ def main() -> int:
     run_browser_preflight(destination, args.codex_home)
 
     config_path = args.codex_home / "config.toml"
-    update_codex_config(config_path)
+    # Compat-first: the preflight above retargets the computer-use compat
+    # plugin at this debug payload; channel ids stay disabled. When no compat
+    # root exists, fall back to enabling the debug channel id directly.
+    update_codex_config(
+        config_path,
+        compat_enablement=compat_plugin_available(args.codex_home),
+    )
     print(f"installed_path={destination}")
     print(f"config_path={config_path}")
     return 0

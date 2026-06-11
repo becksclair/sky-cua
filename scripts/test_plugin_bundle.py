@@ -591,7 +591,7 @@ def test_browser_preflight_adds_coupled_plugins_to_marketplace(tmp_path: Path) -
     assert computer_use["source"]["path"] == "./plugins/computer-use"
 
 
-def test_browser_preflight_update_config_enables_browser_plugins_only(tmp_path: Path) -> None:
+def test_browser_preflight_update_config_enables_bundled_plugins(tmp_path: Path) -> None:
     chrome_preflight = load_chrome_preflight()
     codex_home = tmp_path / "codex-home"
 
@@ -601,7 +601,9 @@ def test_browser_preflight_update_config_enables_browser_plugins_only(tmp_path: 
     assert parsed["features"]["plugins"] is True
     assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is True
     assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is True
-    assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is False
+    # Compat-first: Codex Desktop detects Computer Use plugins by the
+    # built-in plugin name, so the compat id is the enabled one.
+    assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is True
 
 
 def test_browser_preflight_rejects_uppercase_native_host_name(tmp_path: Path) -> None:

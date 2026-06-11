@@ -17,6 +17,7 @@ from _plugin_bundle import (
     RELEASE_MARKETPLACE_NAME,
     RELEASE_PLUGIN_ID,
     build_bundle,
+    compat_plugin_available,
     current_runtime_platform,
     merge_runtime_artifacts,
     platform_runtime_binary_base_names,
@@ -31,6 +32,8 @@ from deploy_release_plugin import (
     install_release_bundle,
     install_with_codex,
     plugin_version,
+    refresh_compat_plugin,
+    release_payload_root,
     reload_mcp_servers,
     resolve_codex_bin,
 )
@@ -242,10 +245,13 @@ def main() -> int:
         codex_bin = resolve_codex_bin(args.codex_bin)
         configure_marketplace(codex_bin, args.marketplace_source)
         install_with_codex(codex_bin, args.codex_home, manifest_path)
+        payload_root = release_payload_root(args.codex_home, version, installed_path)
+        refresh_compat_plugin(payload_root, args.codex_home)
         update_codex_config(
             args.codex_home / "config.toml",
             plugin_id=RELEASE_PLUGIN_ID,
             disabled_plugin_ids=[PLUGIN_ID],
+            compat_enablement=compat_plugin_available(args.codex_home),
         )
         reload_mcp_servers(codex_bin, args.codex_home)
 

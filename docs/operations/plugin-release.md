@@ -4,14 +4,32 @@ Use this runbook for Codex plugin lifecycle work, not ordinary desktop or browse
 
 ## Core Invariant
 
-Keep the Heliasar marketplace registered, but enable only one `computer-use`
-plugin id at a time.
+Keep the Heliasar marketplace registered, and keep exactly one active
+`computer-use` MCP server — provided by the compat plugin id, not by a
+sky-cua channel id.
 
-- Debug work: `sky-cua@debug` enabled, `sky-cua@Heliasar` disabled.
-- Release/published work: `sky-cua@Heliasar` enabled, `sky-cua@debug` disabled.
+Codex Desktop detects Computer Use plugins by the built-in plugin name
+`computer-use`, so `computer-use@openai-bundled` (the compat plugin root the
+chrome preflight materializes under
+`~/.codex/plugins/cache/openai-bundled/computer-use/`) is the single enabled
+computer-use plugin. Both `sky-cua@debug` and `sky-cua@Heliasar` stay
+installed but disabled; they are payload carriers, not the active plugin id.
 
-Do not remove the Heliasar marketplace just to work on debug builds. Toggle
-plugin ids instead.
+Debug-versus-release selection happens by retargeting the compat root, not by
+toggling channel ids:
+
+- Debug work: `deploy_debug_plugin.py` reruns the preflight from the debug
+  install, so the compat root's `.mcp.json` launches the debug payload.
+- Release work: `publish_marketplace_release.py` / `deploy_release_plugin.py`
+  rerun the preflight from the installed Heliasar cache payload
+  (`~/.codex/plugins/cache/Heliasar/sky-cua/<version>`), so the compat root
+  launches the published release.
+
+Fallback: when a bundle ships without the openai-bundled resources (no compat
+root can be materialized — minimal test bundles, non-Linux), the deploy
+scripts fall back to enabling the matching sky-cua channel id directly.
+
+Do not remove the Heliasar marketplace just to work on debug builds.
 
 ## Debug Iteration
 
@@ -34,7 +52,9 @@ Verify the active MCP server when needed:
 codex mcp list --json
 ```
 
-The `computer-use` server should point at a debug cache path, not the Heliasar cache.
+The `computer-use` server should point at a debug cache path, not the
+Heliasar cache. The server is provided by `computer-use@openai-bundled`;
+whether it runs debug or release bits is visible in the server command path.
 
 ## Publish Release
 
@@ -46,8 +66,11 @@ python3 scripts/publish_marketplace_release.py
 
 This builds `dist/plugin/sky-cua`, stages it into
 `~/projects/heliasar-marketplace/plugins/sky-cua`, writes the marketplace
-manifest, commits marketplace changes, pushes `origin main`, upgrades the Codex
-marketplace, installs/reloads `sky-cua@Heliasar`, and disables `sky-cua@debug`.
+manifest, commits marketplace changes, pushes `origin main`, upgrades the
+Codex marketplace, installs the plugin, regenerates the `computer-use` compat
+plugin root against the installed Heliasar cache payload, enables
+`computer-use@openai-bundled`, disables both sky-cua channel ids, and reloads
+MCP servers.
 
 It then refreshes the local MCP-server install at `~/.local/share/sky-cua`
 (claude-code host config) and restarts its runtime processes so the shared
@@ -82,8 +105,8 @@ python3 scripts/setup_heliasar_marketplace.py
 
 This clones or fast-forwards `~/projects/heliasar-marketplace`, runs the public
 Codex marketplace add/upgrade flow for `becksclair/heliasar-marketplace`,
-installs `sky-cua`, enables `sky-cua@Heliasar`, disables `sky-cua@debug`, and
-reloads MCP servers.
+installs `sky-cua`, regenerates the compat plugin root from the installed
+cache payload, applies the compat-first enablement, and reloads MCP servers.
 
 ## Verification
 

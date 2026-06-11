@@ -20,6 +20,12 @@ PLUGIN_CHANNEL = "debug"
 RELEASE_MARKETPLACE_NAME = "Heliasar"
 RELEASE_PLUGIN_ID = f"{PLUGIN_NAME}@{RELEASE_MARKETPLACE_NAME}"
 PLUGIN_ID = f"{PLUGIN_NAME}@{PLUGIN_CHANNEL}"
+# Codex Desktop detects Computer Use plugins by the built-in plugin name
+# "computer-use", so this compat id is the single enabled computer-use plugin
+# for the codex host. The sky-cua channel ids stay installed but disabled;
+# debug-vs-release selection happens by retargeting the compat plugin root's
+# .mcp.json at the matching payload (see docs/operations/plugin-release.md).
+COMPUTER_USE_COMPAT_PLUGIN_ID = "computer-use@openai-bundled"
 PLUGIN_CATEGORY = "Coding"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DIST_PLUGIN_ROOT = REPO_ROOT / "dist" / "plugin" / PLUGIN_NAME
@@ -541,6 +547,39 @@ def upsert_toml_key(config_text: str, header: str, key: str, rendered_value: str
     return config_text[: match.start()] + header_line + "\n" + new_body + config_text[match.end() :]
 
 
+def compat_plugin_available(codex_home: Path) -> bool:
+    """Whether a materialized computer-use compat plugin root exists.
+
+    The chrome preflight only materializes the compat root when the payload
+    ships the bundled openai-bundled resources (Linux installs). Without it,
+    enabling the compat id would leave no active computer-use MCP server, so
+    callers fall back to enabling a sky-cua channel id directly.
+    """
+    return (
+        codex_home
+        / "plugins"
+        / "cache"
+        / "openai-bundled"
+        / "computer-use"
+        / "latest"
+        / ".mcp.json"
+    ).exists()
+
+
+def apply_compat_plugin_enablement(config_text: str) -> str:
+    """Apply compat-plugin-first enablement for the codex host.
+
+    Enables `computer-use@openai-bundled` (the only computer-use plugin id the
+    Codex Desktop UI detects) and disables both sky-cua channel ids. The
+    active payload is selected by regenerating the compat plugin root against
+    the debug or Heliasar cache payload, not by toggling channel ids.
+    """
+    config_text = set_plugin_enabled(config_text, COMPUTER_USE_COMPAT_PLUGIN_ID, enabled=True)
+    config_text = set_plugin_enabled(config_text, PLUGIN_ID, enabled=False)
+    config_text = set_plugin_enabled(config_text, RELEASE_PLUGIN_ID, enabled=False)
+    return config_text
+
+
 def update_codex_config(
     config_path: Path,
     *,
@@ -550,6 +589,7 @@ def update_codex_config(
     plugin_enabled: bool = True,
     disabled_plugin_ids: list[str] | None = None,
     marketplace_root: Path | None = None,
+    compat_enablement: bool = False,
 ) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -564,8 +604,13 @@ def update_codex_config(
         config_text = ensure_fast_service_tier(config_text)
     if marketplace_root is not None:
         config_text = ensure_release_marketplace_config(config_text, marketplace_root)
-    config_text = set_plugin_enabled(config_text, plugin_id, enabled=plugin_enabled)
+    if compat_enablement:
+        # Compat-first mode owns all computer-use plugin toggles; per-channel
+        # plugin_id/plugin_enabled arguments do not apply.
+        config_text = apply_compat_plugin_enablement(config_text)
+    else:
+        config_text = set_plugin_enabled(config_text, plugin_id, enabled=plugin_enabled)
     for disabled_plugin_id in disabled_plugin_ids or []:
-        if disabled_plugin_id != plugin_id:
+        if disabled_plugin_id != plugin_id or compat_enablement:
             config_text = set_plugin_enabled(config_text, disabled_plugin_id, enabled=False)
     config_path.write_text(config_text, encoding="utf-8")

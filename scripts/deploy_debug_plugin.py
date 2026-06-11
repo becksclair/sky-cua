@@ -10,6 +10,7 @@ from _plugin_bundle import (
     DIST_PLUGIN_ROOT,
     RELEASE_PLUGIN_ID,
     build_bundle,
+    compat_plugin_available,
     ensure_bundle_structure,
     installed_plugin_root,
     stop_unix_runtime_processes,
@@ -60,7 +61,15 @@ def main() -> int:
     install_bundle(bundle_root, destination, args.symlink)
     run_browser_preflight(destination, args.codex_home)
     config_path = args.codex_home / "config.toml"
-    update_codex_config(config_path, disabled_plugin_ids=[RELEASE_PLUGIN_ID])
+    # Compat-first: the preflight above retargets the computer-use compat
+    # plugin at this debug payload; channel ids stay disabled. When the
+    # bundle ships no openai-bundled resources (no compat root), fall back to
+    # enabling the debug channel id directly.
+    update_codex_config(
+        config_path,
+        disabled_plugin_ids=[RELEASE_PLUGIN_ID],
+        compat_enablement=compat_plugin_available(args.codex_home),
+    )
     print(f"installed_path={destination}")
     print(f"config_path={config_path}")
 

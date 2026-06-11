@@ -19,6 +19,7 @@ from _plugin_bundle import (
     RELEASE_MARKETPLACE_NAME,
     RELEASE_PLUGIN_ID,
     build_bundle,
+    compat_plugin_available,
     copytree_replace,
     copytree_replace_preserving_platform_binaries,
     ensure_bundle_structure,
@@ -30,6 +31,7 @@ from _plugin_bundle import (
     update_codex_config,
     write_release_marketplace,
 )
+from install_plugin import run_browser_preflight
 
 
 def app_server_client(codex_bin: Path, codex_home: Path) -> CodexAppServerClient:
@@ -67,6 +69,42 @@ def install_with_codex(codex_bin: Path, codex_home: Path, marketplace_path: Path
 
 def release_cache_root(codex_home: Path) -> Path:
     return codex_home / "plugins" / "cache" / RELEASE_MARKETPLACE_NAME / PLUGIN_NAME
+
+
+def release_payload_root(codex_home: Path, version: str, installed_path: Path) -> Path:
+    """The payload the compat plugin should point at after a release deploy.
+
+    Prefer the Codex plugin cache entry the install created; fall back to the
+    marketplace checkout only when the cache entry is absent (for example
+    when codex install was skipped or failed over).
+    """
+    cache_payload = release_cache_root(codex_home) / version
+    if (cache_payload / "resources" / "chrome_preflight.py").exists():
+        return cache_payload
+    return installed_path
+
+
+def latest_release_payload(codex_home: Path) -> Path | None:
+    """Newest installed release cache payload, or None before any install."""
+    root = release_cache_root(codex_home)
+    if not root.is_dir():
+        return None
+    candidates = sorted(
+        (entry for entry in root.iterdir() if entry.is_dir() and not entry.is_symlink()),
+        key=lambda entry: entry.stat().st_mtime,
+    )
+    return candidates[-1] if candidates else None
+
+
+def refresh_compat_plugin(payload_root: Path, codex_home: Path) -> None:
+    """Regenerate the computer-use compat plugin root against a payload.
+
+    Runs the payload's own chrome preflight, which rewrites the compat
+    plugin's .mcp.json to launch `<payload>/bin/sky-cua-client` and refreshes
+    the bundled openai-bundled marketplace links. Linux-only, like the
+    install-time preflight.
+    """
+    run_browser_preflight(payload_root, codex_home)
 
 
 def reload_mcp_servers(codex_bin: Path, codex_home: Path) -> None:
@@ -226,10 +264,15 @@ def main() -> int:
                     raise
                 cache_path = install_release_cache(installed_path, args.codex_home)
                 codex_install = "direct-cache-fallback"
+            payload_root = release_payload_root(
+                args.codex_home, plugin_version(installed_path), installed_path
+            )
+            refresh_compat_plugin(payload_root, args.codex_home)
             update_codex_config(
                 config_path,
                 plugin_id=RELEASE_PLUGIN_ID,
                 disabled_plugin_ids=[PLUGIN_ID],
+                compat_enablement=compat_plugin_available(args.codex_home),
                 marketplace_root=args.marketplace_root if configure_local_marketplace else None,
             )
             reload_mcp_servers(codex_bin, args.codex_home)
@@ -241,6 +284,7 @@ def main() -> int:
                 config_path,
                 plugin_id=RELEASE_PLUGIN_ID,
                 disabled_plugin_ids=[PLUGIN_ID],
+                compat_enablement=compat_plugin_available(args.codex_home),
                 marketplace_root=args.marketplace_root if configure_local_marketplace else None,
             )
             deploy_complete = True

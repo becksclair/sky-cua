@@ -14,6 +14,7 @@ from _plugin_bundle import (
     DIST_PLUGIN_ROOT,
     INSTALLED_PLUGIN_ROOT,
     REPO_ROOT,
+    compat_plugin_available,
     update_codex_config,
 )
 from _smoke_config import LIVE_SMOKE_MODEL, LIVE_SMOKE_REASONING_EFFORT
@@ -133,6 +134,7 @@ def prepare_chatgpt_plugin_test_home(*, artifact_dir: Path, symlink: bool = Fals
         codex_home / "config.toml",
         disable_apps=True,
         fast_service_tier=True,
+        compat_enablement=compat_plugin_available(codex_home),
     )
     return codex_home
 
