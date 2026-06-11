@@ -230,6 +230,30 @@ computer-use tools are listed; the optional agent turn asks the model to call
 and executable. `scripts/live_agent_mcp_smoke.py --agent openclaw` drives the
 desktop-fixture flow through OpenClaw as well.
 
+## Machine configuration
+
+Per-machine runtime settings live in one TOML file rather than in every MCP
+host registration's environment:
+
+- Linux/macOS: `$XDG_CONFIG_HOME/sky-cua/sky-cua.toml`
+  (default `~/.config/sky-cua/sky-cua.toml`)
+- Windows: `%APPDATA%\sky-cua\sky-cua.toml`
+
+Supported keys:
+
+```toml
+# Chrome-family browser selection: brave, chrome, chromium, or all.
+# Unset probes every Chrome-family browser.
+browser = "brave"
+```
+
+Environment variables stay per-process overrides on top of the file:
+`SKY_CUA_BROWSER` beats the file's `browser`, and `SKY_CUA_CONFIG_PATH`
+relocates the file itself (tests, fixtures). The file is read on use, so
+changes apply without restarting the daemon. Unknown keys are tolerated for
+forward compatibility; an unparseable file surfaces as a
+`MachineConfigInvalid` diagnostic instead of being silently ignored.
+
 ## MCP tool surface
 
 The host-facing tools are the portable product contract. Current tools:

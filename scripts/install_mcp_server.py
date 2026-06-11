@@ -25,10 +25,19 @@ import shutil
 import stat
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
+import _install_shared
+from _install_shared import (
+    BROWSER_SELECTION_ENV,
+    atomic_sibling_path,
+    ensure_parent,
+    install_sky_cua_skills,
+    subprocess_error_detail,
+    write_text_atomically,
+)
 from _kwin_effect import deploy_kwin_effect
+from _openclaw_install import DEFAULT_OPENCLAW_DIR, install_openclaw
 from _plugin_bundle import (
     LINUX_ARM64,
     LINUX_X64,
@@ -42,29 +51,7 @@ from _plugin_bundle import (
     stop_windows_cache_processes,
 )
 
-# Relative to the script location, which lives under scripts/
-REPO_ROOT = Path(__file__).resolve().parents[1]
-BROWSER_SELECTION_ENV = "SKY_CUA_BROWSER"
-SKY_CUA_SKILLS = ("computer-use", "browser-use")
-DEFAULT_OPENCLAW_DIR = Path.home() / ".openclaw"
-# Codex per-tool approval semantics: "approve" = always approved with no user
-# interaction; "auto" = gated on MCP tool annotations, prompting for
-# destructive/open-world tools. Shared by the openclaw.json projection, the
-# codex-home config.toml block, and the OpenClaw smoke validator.
-CODEX_TOOLS_APPROVAL_MODE = "approve"
-CODEX_MCP_SERVER_TOML_BEGIN = "# >>> sky-cua mcp_servers (managed by install_mcp_server.py) >>>"
-CODEX_MCP_SERVER_TOML_END = "# <<< sky-cua mcp_servers <<<"
-OPENCLAW_MCP_SET_TIMEOUT_SECONDS = 30
 CLAUDE_MCP_ADD_TIMEOUT_SECONDS = 30
-
-
-def subprocess_error_detail(error: Exception) -> str:
-    """Render ': <stderr>' for subprocess errors that captured stderr."""
-    if isinstance(error, subprocess.CalledProcessError) and error.stderr:
-        stderr = error.stderr.decode(errors="replace").strip()
-        if stderr:
-            return f": {stderr}"
-    return ""
 
 
 def current_platform() -> str:
@@ -78,11 +65,7 @@ def entrypoint_path(platform_id: str, name: str) -> Path:
 
 
 def source_binary_path(name: str) -> Path:
-    return REPO_ROOT / "target" / "release" / name
-
-
-def ensure_parent(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    return _install_shared.REPO_ROOT / "target" / "release" / name
 
 
 def copy_executable(src: Path, dst: Path) -> None:
@@ -97,61 +80,6 @@ def copy_executable(src: Path, dst: Path) -> None:
         os.replace(temp_path, dst)
     finally:
         remove_path(temp_path)
-
-
-def atomic_sibling_path(path: Path, suffix: str) -> Path:
-    return path.with_name(f".{path.name}.{suffix}-{os.getpid()}")
-
-
-def write_text_atomically(path: Path, text: str, mode: int | None = None) -> None:
-    ensure_parent(path)
-    write_path = atomic_write_target(path)
-    if write_path != path:
-        ensure_parent(write_path)
-    target_mode = mode
-    if target_mode is None and write_path.exists():
-        target_mode = stat.S_IMODE(write_path.stat().st_mode)
-    temp_path = atomic_sibling_path(write_path, "tmp")
-    remove_path(temp_path)
-    try:
-        temp_path.write_text(text, encoding="utf-8")
-        if target_mode is not None:
-            temp_path.chmod(target_mode)
-        os.replace(temp_path, write_path)
-    finally:
-        remove_path(temp_path)
-
-
-def atomic_write_target(path: Path) -> Path:
-    return path.resolve(strict=False) if path.is_symlink() else path
-
-
-def replace_tree_atomically(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = atomic_sibling_path(destination, "tmp")
-    backup_path = atomic_sibling_path(destination, "backup")
-    backup_in_use = False
-    remove_path(temp_path)
-    remove_path(backup_path)
-    try:
-        shutil.copytree(source, temp_path)
-        if destination.exists() or destination.is_symlink():
-            os.replace(destination, backup_path)
-            backup_in_use = True
-            try:
-                os.replace(temp_path, destination)
-            except OSError:
-                os.replace(backup_path, destination)
-                backup_in_use = False
-                raise
-            remove_path(backup_path)
-            backup_in_use = False
-        else:
-            os.replace(temp_path, destination)
-    finally:
-        remove_path(temp_path)
-        if not backup_in_use:
-            remove_path(backup_path)
 
 
 def find_built_binary(name: str) -> Path | None:
@@ -184,7 +112,7 @@ def install_binaries(target_dir: Path) -> Path:
             continue
         for name in platform_runtime_binary_base_names(foreign_platform):
             foreign_src = (
-                REPO_ROOT
+                _install_shared.REPO_ROOT
                 / "target"
                 / "release"
                 / runtime_binary_source_name(foreign_platform, name)
@@ -249,13 +177,6 @@ def write_mcp_json(target_dir: Path, config: dict[str, object]) -> Path:
     return path
 
 
-def browser_selection_environment() -> dict[str, str]:
-    value = os.environ.get(BROWSER_SELECTION_ENV)
-    if value is None or not value.strip():
-        return {}
-    return {BROWSER_SELECTION_ENV: value.strip()}
-
-
 def install_opencode(target_dir: Path, client_path: Path) -> Path:
     """Update or create opencode.json in the target directory."""
     opencode_config: dict[str, object] = {
@@ -265,8 +186,7 @@ def install_opencode(target_dir: Path, client_path: Path) -> Path:
                 "type": "local",
                 "command": [str(client_path), "mcp"],
                 "environment": {
-                    "SKY_CUA_REPO_ROOT": str(REPO_ROOT),
-                    **browser_selection_environment(),
+                    "SKY_CUA_REPO_ROOT": str(_install_shared.REPO_ROOT),
                 },
                 "enabled": True,
                 "timeout": 30000,
@@ -281,17 +201,13 @@ def install_opencode(target_dir: Path, client_path: Path) -> Path:
 
 def install_claude_desktop(target_dir: Path, client_path: Path) -> Path:
     """Emit a Claude Desktop config snippet and print instructions."""
-
-    # Claude Desktop uses a slightly different shape in ~/Library/Application Support/Claude/claude_desktop_config.json
-    # or on Linux: ~/.config/Claude/claude_desktop_config.json
     snippet: dict[str, object] = {
         "mcpServers": {
             "computer-use": {
                 "command": str(client_path),
                 "args": ["mcp"],
                 "env": {
-                    "SKY_CUA_REPO_ROOT": str(REPO_ROOT),
-                    **browser_selection_environment(),
+                    "SKY_CUA_REPO_ROOT": str(_install_shared.REPO_ROOT),
                 },
             }
         }
@@ -317,8 +233,7 @@ def install_claude_code(
         "command": str(client_path),
         "args": ["mcp"],
         "env": {
-            "SKY_CUA_REPO_ROOT": str(REPO_ROOT),
-            **browser_selection_environment(),
+            "SKY_CUA_REPO_ROOT": str(_install_shared.REPO_ROOT),
         },
     }
     # Claude Code reserves the MCP server name "computer-use" for its native
@@ -408,15 +323,10 @@ def install_pi(
     client binary.
     """
     wrapper_path = target_dir / "pi_mcp_wrapper.sh"
-    selection_exports = "".join(
-        f"export {name}={shlex.quote(value)}\n"
-        for name, value in browser_selection_environment().items()
-    )
     wrapper_content = "".join(
         [
             "#!/usr/bin/env bash\n",
-            f"export SKY_CUA_REPO_ROOT={shlex.quote(str(REPO_ROOT))}\n",
-            selection_exports,
+            f"export SKY_CUA_REPO_ROOT={shlex.quote(str(_install_shared.REPO_ROOT))}\n",
             f'exec {shlex.quote(str(client_path))} mcp "$@"\n',
         ]
     )
@@ -461,357 +371,8 @@ def merge_pi_mcp_config(config_path: Path, snippet: dict[str, object]) -> None:
     write_text_atomically(config_path, json.dumps(config, indent=2) + "\n")
 
 
-def install_sky_cua_skills(skills_dir: Path) -> None:
-    skills_dir.mkdir(parents=True, exist_ok=True)
-    for skill_name in SKY_CUA_SKILLS:
-        source = REPO_ROOT / "skills" / skill_name
-        if not source.exists():
-            raise FileNotFoundError(f"sky-cua skill source not found: {source}")
-        destination = skills_dir / skill_name
-        replace_tree_atomically(source, destination)
-
-
 def install_pi_skills(skills_dir: Path) -> None:
     install_sky_cua_skills(skills_dir)
-
-
-def install_openclaw(
-    target_dir: Path,
-    client_path: Path,
-    openclaw_dir: Path | None = None,
-    openclaw_bin: str = "openclaw",
-) -> Path:
-    """Register sky-cua with OpenClaw and copy sky-cua skills into its workspace."""
-    openclaw_state_dir = (openclaw_dir or DEFAULT_OPENCLAW_DIR).expanduser().resolve()
-    openclaw_state_dir.mkdir(parents=True, exist_ok=True)
-    codex_home_updates = plan_openclaw_agent_codex_mcp_servers(openclaw_state_dir, client_path)
-    server: dict[str, object] = {
-        "enabled": True,
-        "command": str(client_path),
-        "args": ["mcp"],
-        "cwd": str(target_dir),
-        "env": {
-            "SKY_CUA_REPO_ROOT": str(REPO_ROOT),
-            **browser_selection_environment(),
-        },
-        # OpenClaw's native codex runtime projects this as Codex
-        # default_tools_approval_mode; see CODEX_TOOLS_APPROVAL_MODE.
-        "codex": {"defaultToolsApprovalMode": CODEX_TOOLS_APPROVAL_MODE},
-    }
-    snippet = {"mcp": {"servers": {"sky_cua": server}}}
-    path = target_dir / "openclaw_mcp.json"
-
-    command = [
-        openclaw_bin,
-        "mcp",
-        "set",
-        "sky_cua",
-        json.dumps(server, separators=(",", ":")),
-    ]
-    env = os.environ.copy()
-    env["OPENCLAW_STATE_DIR"] = str(openclaw_state_dir)
-    env["OPENCLAW_CONFIG_PATH"] = str(openclaw_state_dir / "openclaw.json")
-    codex_home_snapshots = snapshot_openclaw_agent_codex_mcp_server_updates(codex_home_updates)
-    snippet_snapshot = snapshot_text_path(path)
-    registration_committed = False
-    pins_applied = False
-    snippet_written = False
-
-    def rollback() -> None:
-        if pins_applied:
-            restore_openclaw_agent_codex_mcp_server_snapshots(codex_home_snapshots)
-        if snippet_written:
-            restore_text_path_snapshot(path, snippet_snapshot)
-
-    # Catch BaseException so an operator Ctrl-C mid-registration still rolls
-    # back; after the registration commits, post-commit failures (reload,
-    # skills copy) deliberately keep the consistent committed state.
-    try:
-        apply_openclaw_agent_codex_mcp_server_updates(
-            codex_home_updates, codex_home_snapshots, emit_messages=False
-        )
-        pins_applied = True
-        write_text_atomically(path, json.dumps(snippet, indent=2) + "\n")
-        snippet_written = True
-        try:
-            subprocess.run(command, check=True, env=env, timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired as error:
-            # Translate only the registration timeout; a timeout from a
-            # post-commit step must not be mislabeled as a registration one.
-            command_text = shlex.join(command)
-            raise TimeoutError(
-                "timed out registering sky-cua with OpenClaw after "
-                f"{OPENCLAW_MCP_SET_TIMEOUT_SECONDS} seconds: {command_text} "
-                f"(OPENCLAW_STATE_DIR={openclaw_state_dir})"
-            ) from error
-        registration_committed = True
-        print_openclaw_agent_codex_mcp_server_updates(codex_home_updates)
-        reload_openclaw_mcp_runtimes(openclaw_bin, env)
-        install_sky_cua_skills(openclaw_state_dir / "workspace" / "skills")
-    except BaseException:
-        if not registration_committed:
-            rollback()
-        raise
-    return path
-
-
-def openclaw_agent_codex_config_paths(openclaw_state_dir: Path) -> list[Path]:
-    """codex-home config.toml files for every configured OpenClaw agent."""
-    agents_dir = openclaw_state_dir / "agents"
-    if not agents_dir.is_dir():
-        return []
-    return sorted(agents_dir.glob("*/agent/codex-home/config.toml"))
-
-
-def install_openclaw_agent_codex_mcp_servers(
-    openclaw_state_dir: Path,
-    client_path: Path,
-) -> None:
-    """Pin sky_cua into each agent's codex-home config.toml mcp_servers table.
-
-    OpenClaw's native codex runtime projects mcp.servers into per-thread
-    config, but that projection has runtime-state gates that can drop the
-    server from a turn. The codex app-server also reads CODEX_HOME/config.toml
-    at process level, which applies to every thread unconditionally, so the
-    deploy pins the server in both places.
-    """
-    apply_openclaw_agent_codex_mcp_server_updates(
-        plan_openclaw_agent_codex_mcp_servers(openclaw_state_dir, client_path)
-    )
-
-
-def plan_openclaw_agent_codex_mcp_servers(
-    openclaw_state_dir: Path,
-    client_path: Path,
-) -> list[tuple[Path, str]]:
-    """Validate every OpenClaw agent codex-home config before any writes."""
-    planned_updates: list[tuple[Path, str]] = []
-    refused_paths: list[Path] = []
-    for config_path in openclaw_agent_codex_config_paths(openclaw_state_dir):
-        if config_path.is_symlink() and not config_path.exists():
-            print(
-                f"warning: refusing to update {config_path}: config.toml is a "
-                "broken symlink; repair the link target and rerun the installer.",
-                file=sys.stderr,
-            )
-            refused_paths.append(config_path)
-            continue
-        planned = plan_codex_mcp_server_toml(config_path, client_path)
-        if planned is None:
-            refused_paths.append(config_path)
-        else:
-            planned_updates.append((config_path, planned))
-    if refused_paths:
-        refused = ", ".join(str(path) for path in refused_paths)
-        raise RuntimeError(
-            "refused to update OpenClaw agent codex-home config(s): "
-            f"{refused}; fix the warning(s) above and rerun the installer."
-        )
-    return planned_updates
-
-
-def apply_openclaw_agent_codex_mcp_server_updates(
-    planned_updates: list[tuple[Path, str]],
-    snapshots: dict[Path, tuple[str | None, int | None]] | None = None,
-    emit_messages: bool = True,
-) -> None:
-    if snapshots is None:
-        snapshots = snapshot_openclaw_agent_codex_mcp_server_updates(planned_updates)
-    written_paths: list[Path] = []
-    try:
-        for config_path, text in planned_updates:
-            write_text_atomically(config_path, text)
-            written_paths.append(config_path)
-    except Exception:
-        restore_openclaw_agent_codex_mcp_server_snapshots(snapshots, written_paths)
-        raise
-    if emit_messages:
-        print_openclaw_agent_codex_mcp_server_updates(planned_updates)
-
-
-def print_openclaw_agent_codex_mcp_server_updates(
-    planned_updates: list[tuple[Path, str]],
-) -> None:
-    for config_path, _text in planned_updates:
-        print(f"Pinned sky_cua mcp_servers entry in {config_path}")
-
-
-def snapshot_text_path(path: Path) -> tuple[Path, str | None, int | None]:
-    target_path = atomic_write_target(path)
-    return (
-        target_path,
-        target_path.read_text(encoding="utf-8") if target_path.exists() else None,
-        stat.S_IMODE(target_path.stat().st_mode) if target_path.exists() else None,
-    )
-
-
-def restore_text_path_snapshot(_path: Path, snapshot: tuple[Path, str | None, int | None]) -> None:
-    target_path, original_text, original_mode = snapshot
-    if original_text is None:
-        remove_path(target_path)
-    else:
-        write_text_atomically(target_path, original_text, mode=original_mode)
-
-
-def snapshot_openclaw_agent_codex_mcp_server_updates(
-    planned_updates: list[tuple[Path, str]],
-) -> dict[Path, tuple[str | None, int | None]]:
-    return {
-        config_path: (
-            config_path.read_text(encoding="utf-8") if config_path.exists() else None,
-            stat.S_IMODE(config_path.stat().st_mode) if config_path.exists() else None,
-        )
-        for config_path, _text in planned_updates
-    }
-
-
-def restore_openclaw_agent_codex_mcp_server_snapshots(
-    snapshots: dict[Path, tuple[str | None, int | None]],
-    paths: list[Path] | None = None,
-) -> None:
-    for path in reversed(paths or list(snapshots)):
-        original_text, original_mode = snapshots[path]
-        if original_text is None:
-            remove_path(path)
-        else:
-            write_text_atomically(path, original_text, mode=original_mode)
-
-
-def toml_basic_string(value: str) -> str:
-    """Render a TOML basic string with backslash/quote/control escaping."""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    escaped = "".join(
-        f"\\u{ord(char):04X}"
-        if (ord(char) < 0x20 and char not in "\t") or ord(char) == 0x7F
-        else char
-        for char in escaped
-    )
-    return f'"{escaped}"'
-
-
-def codex_mcp_server_toml_block(client_path: Path) -> str:
-    env_lines = [f"SKY_CUA_REPO_ROOT = {toml_basic_string(str(REPO_ROOT))}"]
-    env_lines.extend(
-        f"{name} = {toml_basic_string(value)}"
-        for name, value in browser_selection_environment().items()
-    )
-    rendered_env = "\n".join(env_lines)
-    return (
-        f"{CODEX_MCP_SERVER_TOML_BEGIN}\n"
-        "[mcp_servers.sky_cua]\n"
-        f"command = {toml_basic_string(str(client_path))}\n"
-        'args = ["mcp"]\n'
-        "startup_timeout_sec = 30\n"
-        # Always-allow: codex "approve" mode approves every tool call without
-        # user interaction. "auto" would prompt for unannotated MCP tools,
-        # which codex treats as destructive and open-world by default.
-        f'default_tools_approval_mode = "{CODEX_TOOLS_APPROVAL_MODE}"\n'
-        "[mcp_servers.sky_cua.env]\n"
-        f"{rendered_env}\n"
-        f"{CODEX_MCP_SERVER_TOML_END}\n"
-    )
-
-
-def has_codex_mcp_server_table(text: str) -> bool:
-    try:
-        parsed = tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
-        return False
-    mcp_servers = parsed.get("mcp_servers")
-    return isinstance(mcp_servers, dict) and "sky_cua" in mcp_servers
-
-
-def plan_codex_mcp_server_toml(config_path: Path, client_path: Path) -> str | None:
-    """Return updated config text for a marker-delimited sky_cua mcp_servers block.
-
-    Returns None when the existing file cannot be updated
-    safely: a corrupt marker pair, an unmanaged ``[mcp_servers.sky_cua]``
-    table outside the markers (a duplicate table would make the whole agent
-    config unparseable), or a result that fails TOML validation.
-    """
-    block = codex_mcp_server_toml_block(client_path)
-    text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    begin = text.find(CODEX_MCP_SERVER_TOML_BEGIN)
-    end = text.find(CODEX_MCP_SERVER_TOML_END)
-    if (begin == -1) != (end == -1) or (begin != -1 and end < begin):
-        print(
-            f"warning: {config_path} has a corrupt sky-cua marker block; "
-            "remove the stray marker line(s) and rerun the installer.",
-            file=sys.stderr,
-        )
-        return None
-    if begin != -1:
-        end += len(CODEX_MCP_SERVER_TOML_END)
-        if end < len(text) and text[end] == "\n":
-            end += 1
-        if CODEX_MCP_SERVER_TOML_BEGIN in text[begin + 1 : end - 1]:
-            print(
-                f"warning: {config_path} has nested sky-cua marker blocks; "
-                "remove the managed block(s) by hand and rerun the installer.",
-                file=sys.stderr,
-            )
-            return None
-        unmanaged = text[:begin] + text[end:]
-        new_text = text[:begin] + block + text[end:]
-    else:
-        unmanaged = text
-        separator = (
-            "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-        )
-        new_text = text + separator + block
-    if has_codex_mcp_server_table(unmanaged):
-        print(
-            f"warning: {config_path} already defines [mcp_servers.sky_cua] outside "
-            "the managed block; remove the hand-written table and rerun the "
-            "installer (a duplicate table would break the whole config).",
-            file=sys.stderr,
-        )
-        return None
-    try:
-        tomllib.loads(new_text)
-    except tomllib.TOMLDecodeError as error:
-        print(
-            f"warning: refusing to write {config_path}: updated config fails TOML "
-            f"validation ({error}); fix the file by hand and rerun the installer.",
-            file=sys.stderr,
-        )
-        return None
-    return new_text
-
-
-def upsert_codex_mcp_server_toml(config_path: Path, client_path: Path) -> bool:
-    """Replace or append the marker-delimited sky_cua mcp_servers block."""
-    new_text = plan_codex_mcp_server_toml(config_path, client_path)
-    if new_text is None:
-        return False
-    write_text_atomically(config_path, new_text)
-    return True
-
-
-def reload_openclaw_mcp_runtimes(openclaw_bin: str, env: dict[str, str]) -> None:
-    """Dispose cached OpenClaw MCP runtimes so the next turn uses the new config.
-
-    Without this, a running OpenClaw gateway keeps serving the previously
-    cached sky-cua process and config until restarted. Reload failures are
-    reported but non-fatal: the registration itself already succeeded.
-    """
-    command = [openclaw_bin, "mcp", "reload"]
-    try:
-        subprocess.run(
-            command,
-            check=True,
-            env=env,
-            timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
-            capture_output=True,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        detail = subprocess_error_detail(error)
-        print(
-            f"warning: openclaw mcp reload failed ({error}{detail}); "
-            "restart the OpenClaw gateway or run 'openclaw mcp reload' manually "
-            "so agent turns pick up the new sky-cua config.",
-            file=sys.stderr,
-        )
 
 
 def link_current_platform_binaries(target_dir: Path, bin_dir: Path) -> None:
@@ -947,6 +508,10 @@ def main() -> int:
         restart_runtime_processes(target_dir)
 
     client_path = install_binaries(target_dir)
+
+    seeded = _install_shared.seed_machine_config_from_environment()
+    if seeded is not None:
+        print(f"Seeded machine config browser selection: {seeded}")
 
     if args.host == "opencode":
         config_path = install_opencode(target_dir, client_path)

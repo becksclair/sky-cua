@@ -5,9 +5,11 @@ Stages:
   1. show   - `openclaw mcp show sky_cua --json`: the registration exists, the
               client binary is present, and the codex approval mode will not
               raise per-call approval prompts during agent turns.
-  2. probe  - `openclaw mcp probe sky_cua --json`: OpenClaw spawns the server
+  2. codex-home - every agent codex-home config.toml parses and pins
+              mcp_servers.sky_cua with an existing client binary.
+  3. probe  - `openclaw mcp probe sky_cua --json`: OpenClaw spawns the server
               and the required computer-use and browser-use tools are listed.
-  3. agent  - optional (--agent-turn): one live agent turn via
+  4. agent  - optional (--agent-turn): one live agent turn via
               `openclaw agent --json` that must call sky_cua browser_status
               and report structured evidence.
 
@@ -26,12 +28,13 @@ import re
 import subprocess
 import sys
 import time
+import tomllib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from _agent_mcp_smoke import make_artifact_dir
-from install_mcp_server import CODEX_TOOLS_APPROVAL_MODE
+from _openclaw_install import CODEX_TOOLS_APPROVAL_MODE
 
 SERVER_NAME = "sky_cua"
 SMOKE_REPORT_KEY = "sky_cua_smoke"
@@ -191,6 +194,45 @@ def check_show_config(config: dict[str, Any]) -> list[str]:
         failures.append("config env does not pin SKY_CUA_REPO_ROOT")
 
     return failures
+
+
+def check_codex_home_pins(openclaw_dir: Path | None) -> tuple[list[str], int]:
+    """Validate the installer's codex-home config.toml pins.
+
+    Every OpenClaw agent's codex-home config must parse and pin
+    mcp_servers.sky_cua with an existing client binary; the per-thread
+    projection can be gated by runtime state, so this file is the pin that
+    must always hold. Returns (failures, configs_checked).
+    """
+    state_dir = (openclaw_dir or (Path.home() / ".openclaw")).expanduser()
+    config_paths = sorted(state_dir.glob("agents/*/agent/codex-home/config.toml"))
+    failures: list[str] = []
+    for config_path in config_paths:
+        try:
+            parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            failures.append(f"{config_path}: unreadable or invalid TOML: {error}")
+            continue
+        server = parsed.get("mcp_servers", {}).get(SERVER_NAME)
+        if not isinstance(server, dict):
+            failures.append(
+                f"{config_path}: missing [mcp_servers.{SERVER_NAME}] pin; "
+                "re-run scripts/install_mcp_server.py --host openclaw"
+            )
+            continue
+        command = server.get("command")
+        if not isinstance(command, str) or not Path(command).exists():
+            failures.append(f"{config_path}: pinned command does not exist: {command!r}")
+    return failures, len(config_paths)
+
+
+def run_codex_home_stage(
+    args: argparse.Namespace, artifact_dir: Path
+) -> tuple[dict[str, Any], list[str]]:
+    """Stage: the codex-home pins written at install time still hold."""
+    del artifact_dir
+    failures, checked = check_codex_home_pins(args.openclaw_dir)
+    return {"ok": not failures, "failures": failures, "configs_checked": checked}, failures
 
 
 def check_probe_result(probe: dict[str, Any]) -> list[str]:
@@ -593,6 +635,8 @@ def main() -> int:
     stages: dict[str, Any] = {}
     failures: list[str] = []
     stages["show"], stage_failures = run_show_stage(args, artifact_dir)
+    failures.extend(stage_failures)
+    stages["codex_home"], stage_failures = run_codex_home_stage(args, artifact_dir)
     failures.extend(stage_failures)
     stages["probe"], stage_failures = run_probe_stage(args, artifact_dir)
     failures.extend(stage_failures)

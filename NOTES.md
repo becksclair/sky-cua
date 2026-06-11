@@ -163,12 +163,20 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
   "approve"`) into each agent's `codex-home/config.toml`, which codex
   app-server applies process-wide. Agent-turn smokes must use a fresh session
   key per run; a reused key resumes a codex thread with stale MCP state.
-- Startup health must never require cross-host equality of PATH (or any
-  per-host env): each MCP host spawns sky-cua-client with a different PATH,
-  so a daemon spawned by one host would fail health for every other host.
-  Health equality is scoped to `GRAPHICAL_SESSION_ENV_KEYS`; repaired PATH
-  is spawn-forwarding material only. The startup failure message includes
+- Startup health must never require cross-host equality of per-host env:
+  each MCP host spawns sky-cua-client with a different PATH and browser
+  env, so exact-equality checks let the first spawning host starve every
+  other host under the daemon singleton. Health equality is scoped to
+  `GRAPHICAL_SESSION_ENV_KEYS` (never PATH); browser keys reject only when
+  both sides pin different values. Accepted tradeoffs: a daemon spawned
+  with a genuinely broken PATH stays "healthy", and a daemon pinned to one
+  browser serves clients with no pin. The startup failure message includes
   the last per-poll health error — read it before strace.
+- Machine-level settings live in `~/.config/sky-cua/sky-cua.toml`
+  (`%APPDATA%\sky-cua\sky-cua.toml` on Windows), starting with `browser`
+  selection. Env (`SKY_CUA_BROWSER`) overrides the file per process;
+  `SKY_CUA_CONFIG_PATH` overrides the file location for tests. Prefer the
+  file over baking selection env into per-host MCP registrations.
 - `sky-cua-service` must handle SIGTERM through normal teardown. Process
   cleanup must match `sky-cua-service`, the full overlay-host argv, and the
   truncated comm name `sky-cua-overlay`. If the live KDE smoke fails

@@ -604,3 +604,42 @@ def test_openclaw_smoke_agent_turn_accepts_tool_event_and_report(
     assert failures == []
     assert stage["ok"] is True
     assert stage["tool_result_seen"] is True
+
+
+def test_openclaw_smoke_codex_home_stage_validates_pins(tmp_path: Path) -> None:
+    state_dir = tmp_path / "openclaw"
+    client = tmp_path / "sky-cua-client"
+    client.write_text("", encoding="utf-8")
+
+    good = state_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    good.parent.mkdir(parents=True)
+    good.write_text(
+        f'[mcp_servers.sky_cua]\ncommand = "{client}"\nargs = ["mcp"]\n', encoding="utf-8"
+    )
+    failures, checked = live_openclaw_mcp_smoke.check_codex_home_pins(state_dir)
+    assert failures == []
+    assert checked == 1
+
+    missing_pin = state_dir / "agents" / "esther" / "agent" / "codex-home" / "config.toml"
+    missing_pin.parent.mkdir(parents=True)
+    missing_pin.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    broken = state_dir / "agents" / "luke" / "agent" / "codex-home" / "config.toml"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("browser = ", encoding="utf-8")
+    dead_command = state_dir / "agents" / "main" / "agent" / "codex-home" / "config.toml"
+    dead_command.parent.mkdir(parents=True)
+    dead_command.write_text(
+        '[mcp_servers.sky_cua]\ncommand = "/missing/sky-cua-client"\n', encoding="utf-8"
+    )
+
+    failures, checked = live_openclaw_mcp_smoke.check_codex_home_pins(state_dir)
+    assert checked == 4
+    assert len(failures) == 3
+    assert any("missing [mcp_servers.sky_cua] pin" in failure for failure in failures)
+    assert any("invalid TOML" in failure for failure in failures)
+    assert any("pinned command does not exist" in failure for failure in failures)
+
+    # No agents directory: vacuously clean with zero configs checked.
+    failures, checked = live_openclaw_mcp_smoke.check_codex_home_pins(tmp_path / "empty")
+    assert failures == []
+    assert checked == 0
