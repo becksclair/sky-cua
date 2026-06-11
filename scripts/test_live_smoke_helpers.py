@@ -191,7 +191,7 @@ def test_openclaw_smoke_show_config_accepts_installed_auto_mode(tmp_path: Path) 
         "command": str(client),
         "args": ["mcp"],
         "env": {"SKY_CUA_REPO_ROOT": str(tmp_path)},
-        "codex": {"defaultToolsApprovalMode": "auto"},
+        "codex": {"defaultToolsApprovalMode": "approve"},
     }
 
     assert live_openclaw_mcp_smoke.check_show_config(config) == []
@@ -204,19 +204,19 @@ def test_openclaw_smoke_show_config_rejects_approve_mode_and_disabled(tmp_path: 
         "enabled": False,
         "command": str(client),
         "env": {"SKY_CUA_REPO_ROOT": str(tmp_path)},
-        "codex": {"defaultToolsApprovalMode": "approve"},
+        "codex": {"defaultToolsApprovalMode": "auto"},
     }
 
     failures = live_openclaw_mcp_smoke.check_show_config(config)
 
     assert any("enabled: false" in failure for failure in failures)
-    assert any("defaultToolsApprovalMode is 'approve'" in failure for failure in failures)
+    assert any("defaultToolsApprovalMode is 'auto'" in failure for failure in failures)
 
 
 def test_openclaw_smoke_show_config_reports_missing_binary_and_env(tmp_path: Path) -> None:
     config = {
         "command": str(tmp_path / "missing-client"),
-        "codex": {"defaultToolsApprovalMode": "auto"},
+        "codex": {"defaultToolsApprovalMode": "approve"},
     }
 
     failures = live_openclaw_mcp_smoke.check_show_config(config)

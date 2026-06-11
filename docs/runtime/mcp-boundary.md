@@ -197,15 +197,16 @@ and `browser-use` skills into `~/.openclaw/workspace/skills`. Use
 OpenClaw's native codex runtime projects `mcp.servers.sky_cua` into
 Codex-native `mcp_servers` thread config on `thread/start`/`thread/resume`.
 The `codex.defaultToolsApprovalMode` field controls Codex's per-tool approval
-(`auto` | `prompt` | `approve`). The installer pins `auto`: `approve` defers
-each MCP tool call to the codex app-server approval policy, and with the
-common unattended setting `appServer.approvalPolicy: "never"` the tools are
-projected but every call is blocked — the server looks connected while no
-sky-cua tool works during an agent turn. `openclaw mcp probe` passing does
-not cover this case; only an agent-turn check does.
+(`auto` | `prompt` | `approve`). The installer pins `approve`, which codex
+treats as "always approved without user interaction". `auto` is not enough:
+codex gates `auto` on MCP tool annotations (`destructiveHint`,
+`openWorldHint`), and tools without annotations — all sky-cua tools today —
+default to destructive and open-world, so every call raises a user approval
+that OpenClaw relays to chat. `openclaw mcp probe` passing does not cover
+this case; only an agent-turn check does.
 
 The installer additionally pins a marker-managed `[mcp_servers.sky_cua]`
-block (including `default_tools_approval_mode = "auto"` and the sky-cua
+block (including `default_tools_approval_mode = "approve"` and the sky-cua
 environment) into every agent's `codex-home/config.toml` under the OpenClaw
 state directory. The codex app-server reads that file at process level, so
 the server reaches every codex thread even when the per-thread projection

@@ -139,12 +139,12 @@ def check_show_config(config: dict[str, Any]) -> list[str]:
 
     codex = config.get("codex")
     approval_mode = codex.get("defaultToolsApprovalMode") if isinstance(codex, dict) else None
-    if approval_mode != "auto":
+    if approval_mode != "approve":
         failures.append(
-            f"codex.defaultToolsApprovalMode is {approval_mode!r}, expected 'auto'. "
-            "Other modes defer MCP tool calls to the codex app-server approval "
-            "policy; with approvalPolicy 'never' (the unattended default) the "
-            "tools list but every call is blocked during agent turns. "
+            f"codex.defaultToolsApprovalMode is {approval_mode!r}, expected 'approve'. "
+            "Codex 'approve' approves every tool call without user interaction; "
+            "'auto' prompts for unannotated MCP tools, which codex treats as "
+            "destructive and open-world by default. "
             "Re-run: python3 scripts/install_mcp_server.py --host openclaw"
         )
 

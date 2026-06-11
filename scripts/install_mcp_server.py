@@ -477,11 +477,12 @@ def install_openclaw(
             **browser_selection_environment(),
         },
         # OpenClaw's native codex runtime projects this as Codex
-        # default_tools_approval_mode. "approve" defers each MCP tool call to
-        # the app-server approval policy, which is typically "never" for
-        # unattended agent turns; the tools then list but every call is
-        # blocked. "auto" keeps them callable without interactive approval.
-        "codex": {"defaultToolsApprovalMode": "auto"},
+        # default_tools_approval_mode. Codex semantics: "approve" = always
+        # approved with no user interaction; "auto" = approve unless the
+        # tool's MCP annotations mark it destructive/open-world, and
+        # unannotated tools (like sky-cua's) default to both, so "auto"
+        # prompts on every call.
+        "codex": {"defaultToolsApprovalMode": "approve"},
     }
     snippet = {"mcp": {"servers": {"sky_cua": server}}}
     path = target_dir / "openclaw_mcp.json"
@@ -549,9 +550,10 @@ def codex_mcp_server_toml_block(client_path: Path) -> str:
         f'command = "{client_path}"\n'
         'args = ["mcp"]\n'
         "startup_timeout_sec = 30\n"
-        # Always-allow: other modes defer to the app-server approval policy,
-        # which is "never" for unattended turns and would block every call.
-        'default_tools_approval_mode = "auto"\n'
+        # Always-allow: codex "approve" mode approves every tool call without
+        # user interaction. "auto" would prompt for unannotated MCP tools,
+        # which codex treats as destructive and open-world by default.
+        'default_tools_approval_mode = "approve"\n'
         "[mcp_servers.sky_cua.env]\n"
         f"{rendered_env}\n"
         f"{CODEX_MCP_SERVER_TOML_END}\n"

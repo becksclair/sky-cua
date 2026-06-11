@@ -434,10 +434,9 @@ def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
     assert server["env"]["SKY_CUA_REPO_ROOT"] == str(repo_root)
     assert server["env"][install_mcp_server.BROWSER_SELECTION_ENV] == "brave"
     assert server["enabled"] is True
-    # "approve" defers MCP tool calls to the codex app-server approval policy,
-    # which blocks every call during unattended agent turns; "auto" keeps the
-    # tools callable.
-    assert server["codex"]["defaultToolsApprovalMode"] == "auto"
+    # Codex "approve" mode approves every tool call without user interaction;
+    # "auto" prompts for unannotated MCP tools (treated destructive/open-world).
+    assert server["codex"]["defaultToolsApprovalMode"] == "approve"
 
     assert len(calls) == 2
     command = cast(list[str], calls[0]["command"])
@@ -490,9 +489,9 @@ def test_openclaw_codex_home_toml_upsert_is_idempotent(
 
     parsed = tomllib.loads(second)
     assert parsed["mcp_servers"]["sky_cua"]["args"] == ["mcp"]
-    # Always-allow at the codex layer: any other mode defers to the
-    # app-server approval policy and blocks calls in unattended turns.
-    assert parsed["mcp_servers"]["sky_cua"]["default_tools_approval_mode"] == "auto"
+    # Always-allow at the codex layer: "approve" never prompts; "auto" would
+    # prompt for unannotated MCP tools.
+    assert parsed["mcp_servers"]["sky_cua"]["default_tools_approval_mode"] == "approve"
 
 
 def test_openclaw_codex_home_discovery_skips_missing_agents_dir(tmp_path: Path) -> None:

@@ -154,15 +154,15 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
   `scripts/live_app_server_smoke.py`; `codex exec` is diagnostic. Close the
   `codex app-server` child before draining `stderr` or cleanup hangs.
 - OpenClaw native-codex turns: `mcp.servers.<name>.codex.defaultToolsApprovalMode`
-  must be `auto`. `approve` defers to `appServer.approvalPolicy`, and with
-  `"never"` (unattended default) tools project but every call is blocked —
-  `openclaw mcp probe` still passes. Post-deploy proof:
+  must be `approve` (codex semantics: always approved, no user interaction).
+  `auto` prompts on every sky-cua call because codex treats unannotated MCP
+  tools as destructive + open-world. Post-deploy proof:
   `scripts/live_openclaw_mcp_smoke.py [--agent-turn]`; after config changes run
   `openclaw mcp reload` or the gateway keeps the cached runtime. The installer
   also pins `[mcp_servers.sky_cua]` (with `default_tools_approval_mode =
-  "auto"`) into each agent's `codex-home/config.toml`, which codex app-server
-  applies process-wide. Agent-turn smokes must use a fresh session key per
-  run; a reused key resumes a codex thread with stale MCP state.
+  "approve"`) into each agent's `codex-home/config.toml`, which codex
+  app-server applies process-wide. Agent-turn smokes must use a fresh session
+  key per run; a reused key resumes a codex thread with stale MCP state.
 - Startup health must never require cross-host equality of PATH (or any
   per-host env): each MCP host spawns sky-cua-client with a different PATH,
   so a daemon spawned by one host would fail health for every other host.
