@@ -10,7 +10,7 @@ from typing import Any
 
 TITLE = "sky-cua session env smoke"
 SUBMITTED_VALUE = "session-env-ok"
-DESKTOP_ENV_KEYS = [
+GRAPHICAL_SESSION_ENV_KEYS = [
     "DBUS_SESSION_BUS_ADDRESS",
     "DESKTOP_SESSION",
     "DISPLAY",
@@ -22,7 +22,7 @@ DESKTOP_ENV_KEYS = [
 
 
 def import_current_env_to_systemd() -> None:
-    keys = [key for key in [*DESKTOP_ENV_KEYS, "PATH"] if os.environ.get(key)]
+    keys = [key for key in [*GRAPHICAL_SESSION_ENV_KEYS, "PATH"] if os.environ.get(key)]
     if not keys:
         return
     subprocess.run(
@@ -34,8 +34,8 @@ def import_current_env_to_systemd() -> None:
 
 
 def stripped_desktop_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key not in DESKTOP_ENV_KEYS}
-    for key in DESKTOP_ENV_KEYS:
+    env = {key: value for key, value in os.environ.items() if key not in GRAPHICAL_SESSION_ENV_KEYS}
+    for key in GRAPHICAL_SESSION_ENV_KEYS:
         env[key] = ""
     path_parts = ["/tmp", "/usr/bin", "/bin"]
     if codex_path := shutil.which("codex"):

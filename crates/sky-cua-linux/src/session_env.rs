@@ -6,7 +6,7 @@ use std::{
 };
 
 use sky_cua_platform::{
-    CURRENT_ENV_HEALTH_KEYS,
+    GRAPHICAL_SESSION_ENV_KEYS,
     model::{DoctorSessionEnvRepair, DoctorSessionEnvReport},
 };
 const DEFAULT_PATH_DIRS: &[&str] = &[
@@ -65,7 +65,7 @@ pub fn hydrate_session_bus_env() {
 
 fn hydrate_desktop_env_from_process_tree(report: &mut DoctorSessionEnvReport) {
     for process_env in desktop_process_environments() {
-        for key in CURRENT_ENV_HEALTH_KEYS {
+        for key in GRAPHICAL_SESSION_ENV_KEYS {
             if env_var(key).is_some() {
                 continue;
             }
@@ -78,7 +78,7 @@ fn hydrate_desktop_env_from_process_tree(report: &mut DoctorSessionEnvReport) {
             }
         }
 
-        if CURRENT_ENV_HEALTH_KEYS
+        if GRAPHICAL_SESSION_ENV_KEYS
             .iter()
             .all(|key| env_var(key).is_some())
         {
@@ -99,7 +99,7 @@ fn hydrate_desktop_env_from_map(
     source: &str,
     values: &HashMap<String, String>,
 ) {
-    for key in CURRENT_ENV_HEALTH_KEYS {
+    for key in GRAPHICAL_SESSION_ENV_KEYS {
         if env_var(key).is_some() {
             continue;
         }

@@ -5,7 +5,10 @@ pub mod model;
 pub mod paths;
 pub mod snapshot;
 
-pub const DESKTOP_ENV_KEYS: &[&str] = &[
+/// Environment keys repaired by the client launcher, forwarded to spawned
+/// service processes, and reported in daemon desktop health. Includes `PATH`
+/// because launch repair normalizes and forwards it alongside session vars.
+pub const DESKTOP_LAUNCH_ENV_KEYS: &[&str] = &[
     "DBUS_SESSION_BUS_ADDRESS",
     "DESKTOP_SESSION",
     "DISPLAY",
@@ -15,7 +18,11 @@ pub const DESKTOP_ENV_KEYS: &[&str] = &[
     "XDG_RUNTIME_DIR",
     "XDG_SESSION_TYPE",
 ];
-pub const CURRENT_ENV_HEALTH_KEYS: &[&str] = &[
+/// Environment keys that describe the current graphical session, used for
+/// client/daemon health comparison and Linux backend session hydration.
+/// Intentionally excludes `PATH`: it is not a session identity variable and
+/// is normalized separately by launch repair.
+pub const GRAPHICAL_SESSION_ENV_KEYS: &[&str] = &[
     "DBUS_SESSION_BUS_ADDRESS",
     "DESKTOP_SESSION",
     "DISPLAY",
@@ -47,3 +54,28 @@ pub use paths::{
     sky_cua_state_dir,
 };
 pub use snapshot::new_snapshot_id;
+
+#[cfg(test)]
+mod env_key_tests {
+    use super::{DESKTOP_LAUNCH_ENV_KEYS, GRAPHICAL_SESSION_ENV_KEYS};
+
+    #[test]
+    fn graphical_session_keys_exclude_path() {
+        assert!(!GRAPHICAL_SESSION_ENV_KEYS.contains(&"PATH"));
+    }
+
+    #[test]
+    fn launch_keys_are_graphical_session_keys_plus_path() {
+        assert!(DESKTOP_LAUNCH_ENV_KEYS.contains(&"PATH"));
+        for key in GRAPHICAL_SESSION_ENV_KEYS {
+            assert!(
+                DESKTOP_LAUNCH_ENV_KEYS.contains(key),
+                "launch keys must cover session key {key}"
+            );
+        }
+        assert_eq!(
+            DESKTOP_LAUNCH_ENV_KEYS.len(),
+            GRAPHICAL_SESSION_ENV_KEYS.len() + 1
+        );
+    }
+}

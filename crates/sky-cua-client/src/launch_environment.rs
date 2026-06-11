@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use sky_cua_platform::{
-    BROWSER_ENV_HEALTH_KEYS, CURRENT_ENV_HEALTH_KEYS, DESKTOP_ENV_KEYS, model::ServiceResponse,
+    BROWSER_ENV_HEALTH_KEYS, DESKTOP_LAUNCH_ENV_KEYS, GRAPHICAL_SESSION_ENV_KEYS,
+    model::ServiceResponse,
 };
 
 const DEFAULT_PATH_DIRS: &[&str] = &[
@@ -145,7 +146,7 @@ fn probe_desktop_env_vars() -> Vec<(String, String)> {
     }
 
     if let Some(systemd_env) = systemd_user_environment() {
-        for key in DESKTOP_ENV_KEYS {
+        for key in DESKTOP_LAUNCH_ENV_KEYS {
             if *key == "PATH" {
                 continue;
             }
@@ -255,7 +256,7 @@ fn ensure_health_satisfies_desktop_env(
         return Ok(());
     }
 
-    let mut required = CURRENT_ENV_HEALTH_KEYS
+    let mut required = GRAPHICAL_SESSION_ENV_KEYS
         .iter()
         .copied()
         .filter_map(|key| {
@@ -267,7 +268,7 @@ fn ensure_health_satisfies_desktop_env(
         .collect::<Vec<_>>();
     for (key, value) in desktop_vars {
         let key = key.as_str();
-        if DESKTOP_ENV_KEYS.contains(&key)
+        if DESKTOP_LAUNCH_ENV_KEYS.contains(&key)
             && !value.is_empty()
             && !required
                 .iter()

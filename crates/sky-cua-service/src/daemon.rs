@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sky_cua_platform::DESKTOP_ENV_KEYS;
+use sky_cua_platform::DESKTOP_LAUNCH_ENV_KEYS;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppStateSnapshot, BrowserRequest, BrowserResponse, CaptureInfo,
@@ -658,7 +658,7 @@ fn agent_cursor_status_response(
 }
 
 fn desktop_env_values_present() -> BTreeMap<String, String> {
-    DESKTOP_ENV_KEYS
+    DESKTOP_LAUNCH_ENV_KEYS
         .iter()
         .copied()
         .filter_map(|key| {
