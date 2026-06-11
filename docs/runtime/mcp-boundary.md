@@ -259,6 +259,22 @@ delegates to this shared browser surface, while host-specific configs emitted by
 `scripts/install_mcp_server.py` can pass browser-selection environment such as
 `SKY_CUA_BROWSER`.
 
+Every tool definition carries MCP `ToolAnnotations` (`readOnlyHint`,
+`destructiveHint`, `idempotentHint`, `openWorldHint`). Hosts use these for
+graduated approval: Codex's `auto` approval mode silently approves read-only
+tools and prompts for destructive or open-world ones, and treats unannotated
+tools as both. The hints are honest by policy, not flattering: observation
+tools (`doctor`, `list_apps`, `list_windows`, `focused_window`,
+`get_app_state`, `browser_status`, `browser_list_tabs`, `browser_snapshot`,
+`browser_screenshot`) are read-only; focus/selection/expansion moves and tab
+claims are non-destructive and idempotent; arbitrary input (`click`,
+`type_text`, `press_key`, `drag`, `perform_action`, `activate_element`,
+`browser_click`, `browser_type_text`, `browser_press_key`, `browser_eval`)
+stays destructive because it can trigger any in-app action, and live-web
+actions are additionally open-world. The full table is pinned by
+`mcp_tools::annotation_tests`; changing a row changes what hosts
+auto-approve and must be deliberate.
+
 Browser target names are not interchangeable. `user_chrome` is the user's
 already-running Chrome-family browser, reached through the extension/native-host
 bridge. `managed` is reserved for a future sky-cua-owned isolated browser

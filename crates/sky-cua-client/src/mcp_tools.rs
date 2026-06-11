@@ -16,7 +16,13 @@ use crate::output_shapes::{
 };
 use crate::service_launcher::ServiceClient;
 
+mod annotations;
 mod browser;
+
+use annotations::{
+    LOCAL_DESTRUCTIVE_ACTION, LOCAL_NAVIGATION_ACTION, LOCAL_STATEFUL_ACTION, READ_ONLY_TOOL,
+    ToolAnnotations,
+};
 #[cfg(test)]
 mod browser_tests;
 
@@ -648,6 +654,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "doctor",
             "description": "Report Computer Use desktop integration readiness, including environment, detached session-env repair diagnostics, semantic, capture, and input backend checks.",
+            "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -657,6 +664,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "setup_accessibility",
             "description": "Enable toolkit accessibility for AT-SPI-backed semantic app trees, then return a before/after doctor report. Target apps may need restart.",
+            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -666,6 +674,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "setup_window_targeting",
             "description": "Install and enable the bundled GNOME Shell window-control extension for exact GNOME window targeting, then report window backend status.",
+            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -675,6 +684,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "list_apps",
             "description": "List currently exposed desktop applications from the active platform window and accessibility backends, with diagnostics when detached session-env repair affected runtime readiness.",
+            "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -684,6 +694,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "list_windows",
             "description": "List desktop windows from native windowing backends, including backend identity and terminal metadata when available.",
+            "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -693,6 +704,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "focused_window",
             "description": "Return the focused desktop window reported by native windowing backends, if one is available.",
+            "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -702,6 +714,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "activate_window",
             "description": "Activate a desktop window by window_id or selector metadata. Supports exact window activation when the matched backend can target windows; otherwise reports unsupported backends honestly.",
+            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
                 "properties": window_target_schema(),
@@ -715,6 +728,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
             } else {
                 "Build a structured desktop app-state snapshot with environment and detached session-env diagnostics, flattened accessibility elements, and readback for focused or editable text/value controls when the backend can prove it. This session's model does not support image input, so screen capture is disabled."
             },
+            "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
                 "properties": get_app_state_properties(can_receive_images),
@@ -724,30 +738,37 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         semantic_element_tool(
             "focus_element",
             "Move semantic focus to an accessibility element from the current snapshot.",
+            LOCAL_NAVIGATION_ACTION,
         ),
         semantic_element_tool(
             "activate_element",
             "Perform the element's semantic default action, such as pressing an app-chrome button or opening a menu.",
+            LOCAL_DESTRUCTIVE_ACTION,
         ),
         semantic_element_tool(
             "select_element",
             "Select an accessibility element such as a tab, list item, radio item, or selectable row.",
+            LOCAL_NAVIGATION_ACTION,
         ),
         semantic_element_tool(
             "expand_element",
             "Expand an accessibility element such as a collapsed menu, combo box, disclosure, or tree item.",
+            LOCAL_NAVIGATION_ACTION,
         ),
         semantic_element_tool(
             "collapse_element",
             "Collapse an accessibility element such as an expanded menu, combo box, disclosure, or tree item.",
+            LOCAL_NAVIGATION_ACTION,
         ),
         semantic_element_tool(
             "toggle_element",
             "Toggle an accessibility element such as a checkbox, switch, or toggle button.",
+            LOCAL_STATEFUL_ACTION,
         ),
         action_tool(
             "click",
             "Click an element by index from the current snapshot, or explicit x/y screen coordinates without a snapshot.",
+            LOCAL_DESTRUCTIVE_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
                 "x": coordinate_schema(&format!("X coordinate. {point_description}")),
@@ -758,6 +779,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         action_tool(
             "perform_action",
             "Invoke a specific AT-SPI action by name or index on an element. Prefer named tools such as click, activate_element, select_element, expand_element, collapse_element, and toggle_element for common operations; use this for custom AT-SPI actions exposed in get_app_state.semantic_actions.",
+            LOCAL_DESTRUCTIVE_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
                 "element_identifier": {
@@ -789,6 +811,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         action_tool(
             "perform_secondary_action",
             "Perform a secondary click or context action by element index from the current snapshot, or explicit x/y screen coordinates without a snapshot.",
+            LOCAL_DESTRUCTIVE_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
                 "x": coordinate_schema(&format!("X coordinate. {point_description}")),
@@ -800,6 +823,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         action_tool(
             "scroll",
             "Scroll within an element from the current snapshot, or the focused area without a snapshot.",
+            LOCAL_STATEFUL_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
                 "direction": {
@@ -813,6 +837,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         action_tool(
             "drag",
             "Drag from one point or element to another; explicit coordinates can run without a snapshot.",
+            LOCAL_DESTRUCTIVE_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
                 "x": coordinate_schema(&format!("Drag start X coordinate. {drag_point_description}")),
@@ -828,6 +853,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         action_tool(
             "type_text",
             "Type literal text into the focused control; may use snapshot context or a window target when provided.",
+            LOCAL_DESTRUCTIVE_ACTION,
             keyboard_target_properties(json!({
                 "text": { "type": "string" }
             })),
@@ -836,6 +862,7 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         action_tool(
             "press_key",
             "Press a keyboard key or key chord in the focused control; may use snapshot context or a window target when provided.",
+            LOCAL_DESTRUCTIVE_ACTION,
             keyboard_target_properties(json!({
                 "key": { "type": "string" }
             })),
@@ -844,6 +871,14 @@ fn build_tool_definitions(can_receive_images: bool) -> Value {
         action_tool(
             "set_value",
             "Set an editable element value semantically where supported. Target by element_index, element_identifier, or a semantic selector from the latest get_app_state snapshot, then reacquire get_app_state and inspect value/text readback to verify the edit landed.",
+            // Overwrites existing content (destructive), but writing the
+            // same value twice converges to the same state (idempotent).
+            ToolAnnotations {
+                read_only: false,
+                destructive: true,
+                idempotent: true,
+                open_world: false,
+            },
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
                 "element_identifier": {
@@ -951,10 +986,11 @@ fn keyboard_target_properties(mut properties: Value) -> Value {
     properties
 }
 
-fn semantic_element_tool(name: &str, description: &str) -> Value {
+fn semantic_element_tool(name: &str, description: &str, annotations: ToolAnnotations) -> Value {
     action_tool(
         name,
         description,
+        annotations,
         json!({
             "element_index": {
                 "type": "integer",
@@ -987,7 +1023,13 @@ fn semantic_element_tool(name: &str, description: &str) -> Value {
     )
 }
 
-fn action_tool(name: &str, description: &str, mut properties: Value, required: Value) -> Value {
+fn action_tool(
+    name: &str,
+    description: &str,
+    annotations: ToolAnnotations,
+    mut properties: Value,
+    required: Value,
+) -> Value {
     let Some(property_map) = properties.as_object_mut() else {
         panic!("action_tool called with non-object properties for {name}")
     };
@@ -1007,6 +1049,7 @@ fn action_tool(name: &str, description: &str, mut properties: Value, required: V
     json!({
         "name": name,
         "description": description,
+        "annotations": annotations.to_value(),
         "inputSchema": input_schema
     })
 }
@@ -1119,6 +1162,111 @@ fn parse_app_selector(arguments: &Value) -> Option<AppSelector> {
 fn optional_non_empty_string(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+#[cfg(test)]
+mod annotation_tests {
+    use super::build_tool_definitions;
+
+    /// Pinned (read_only, destructive, idempotent, open_world) per tool.
+    ///
+    /// Hosts gate per-tool approval on these MCP annotations — Codex "auto"
+    /// approval mode silently approves read-only tools and prompts for
+    /// destructive/open-world ones, and treats unannotated tools as both.
+    /// Changing a row here changes which sky-cua calls hosts auto-approve,
+    /// so it must be a deliberate decision.
+    const EXPECTED: &[(&str, (bool, bool, bool, bool))] = &[
+        ("doctor", (true, false, true, false)),
+        ("setup_accessibility", (false, false, true, false)),
+        ("setup_window_targeting", (false, false, true, false)),
+        ("list_apps", (true, false, true, false)),
+        ("list_windows", (true, false, true, false)),
+        ("focused_window", (true, false, true, false)),
+        ("activate_window", (false, false, true, false)),
+        ("get_app_state", (true, false, true, false)),
+        ("focus_element", (false, false, true, false)),
+        ("activate_element", (false, true, false, false)),
+        ("select_element", (false, false, true, false)),
+        ("expand_element", (false, false, true, false)),
+        ("collapse_element", (false, false, true, false)),
+        ("toggle_element", (false, false, false, false)),
+        ("click", (false, true, false, false)),
+        ("perform_action", (false, true, false, false)),
+        ("perform_secondary_action", (false, true, false, false)),
+        ("scroll", (false, false, false, false)),
+        ("drag", (false, true, false, false)),
+        ("type_text", (false, true, false, false)),
+        ("press_key", (false, true, false, false)),
+        ("set_value", (false, true, true, false)),
+        ("browser_status", (true, false, true, false)),
+        ("browser_list_tabs", (true, false, true, false)),
+        ("browser_open", (false, false, false, true)),
+        ("browser_claim_tab", (false, false, true, false)),
+        ("browser_move_mouse", (false, false, true, false)),
+        ("browser_navigate", (false, false, true, true)),
+        ("browser_snapshot", (true, false, true, false)),
+        ("browser_screenshot", (true, false, true, false)),
+        ("browser_click", (false, true, false, true)),
+        ("browser_type_text", (false, true, false, true)),
+        ("browser_press_key", (false, true, false, true)),
+        ("browser_scroll", (false, false, false, false)),
+        ("browser_eval", (false, true, false, true)),
+    ];
+
+    #[test]
+    fn every_tool_pins_honest_mcp_annotations() {
+        for can_receive_images in [false, true] {
+            let tools = build_tool_definitions(can_receive_images);
+            let tools = tools.as_array().expect("tool definitions array");
+            assert!(!tools.is_empty());
+            for tool in tools {
+                let name = tool["name"].as_str().expect("tool name");
+                let annotations = tool
+                    .get("annotations")
+                    .unwrap_or_else(|| panic!("tool {name} is missing annotations"));
+                let expected = EXPECTED
+                    .iter()
+                    .find(|(expected_name, _)| *expected_name == name)
+                    .unwrap_or_else(|| panic!("tool {name} has no pinned annotation row"));
+                let (read_only, destructive, idempotent, open_world) = expected.1;
+                assert_eq!(
+                    annotations["readOnlyHint"].as_bool(),
+                    Some(read_only),
+                    "{name} readOnlyHint"
+                );
+                assert_eq!(
+                    annotations["destructiveHint"].as_bool(),
+                    Some(destructive),
+                    "{name} destructiveHint"
+                );
+                assert_eq!(
+                    annotations["idempotentHint"].as_bool(),
+                    Some(idempotent),
+                    "{name} idempotentHint"
+                );
+                assert_eq!(
+                    annotations["openWorldHint"].as_bool(),
+                    Some(open_world),
+                    "{name} openWorldHint"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn read_only_tools_never_mutate_per_their_own_hints() {
+        let tools = build_tool_definitions(true);
+        for tool in tools.as_array().expect("tool definitions array") {
+            let annotations = &tool["annotations"];
+            if annotations["readOnlyHint"] == true {
+                assert_eq!(
+                    annotations["destructiveHint"], false,
+                    "read-only tool {} must not be destructive",
+                    tool["name"]
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
