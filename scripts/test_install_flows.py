@@ -1155,20 +1155,19 @@ def test_openclaw_install_post_commit_timeout_keeps_committed_state(
         timeout: int,
         capture_output: bool = False,
     ) -> subprocess.CompletedProcess[str]:
-        if command[1:3] == ["mcp", "reload"]:
-            # A post-commit timeout must not roll back the committed
-            # registration and pins.
-            raise subprocess.TimeoutExpired(command, timeout)
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
 
     def raising_reload(openclaw_bin: str, env: dict[str, str]) -> None:
+        # A post-commit timeout must not roll back the committed
+        # registration and pins, and must not be mislabeled as a
+        # registration timeout.
         raise subprocess.TimeoutExpired(["openclaw", "mcp", "reload"], 30)
 
     monkeypatch.setattr(install_mcp_server, "reload_openclaw_mcp_runtimes", raising_reload)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(subprocess.TimeoutExpired):
         install_mcp_server.install_openclaw(
             target_dir,
             target_dir / "bin" / "sky-cua-client",
