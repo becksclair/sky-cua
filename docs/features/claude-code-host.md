@@ -70,7 +70,7 @@ matches Claude Code's vision-capable models.
 
 ## Verification
 
-- `uv run pytest scripts/test_python_harness_helpers.py` covers bundle
+- `uv run pytest scripts/test_plugin_bundle.py` covers bundle
   structure, manifest version bumps, and bundle source selection including
   `.claude-plugin`.
 - Live smoke: `--host claude-code` install followed by a headless

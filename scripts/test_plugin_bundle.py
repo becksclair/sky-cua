@@ -1,0 +1,951 @@
+"""Tests for plugin bundle build, staging, and browser preflight helpers."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import shutil
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+from types import ModuleType
+from typing import cast
+
+import pytest
+
+import _plugin_bundle as plugin_bundle
+import build_plugin
+import live_agent_cursor_kde_smoke
+import live_chrome_host_client_smoke
+from _plugin_bundle import (
+    PLUGIN_CATEGORY,
+    RELEASE_PLUGIN_ID,
+    all_runtime_binary_names,
+    bundle_entrypoint_paths,
+    codex_config_path,
+    current_runtime_platform,
+    ensure_apps_feature_disabled,
+    ensure_fast_service_tier,
+    ensure_plugin_enabled,
+    ensure_plugins_feature_enabled,
+    marketplace_manifest_path,
+    release_plugin_root,
+    runtime_binary_names,
+    runtime_binary_path,
+    stop_unix_runtime_processes,
+    stop_windows_cache_processes,
+    update_codex_config,
+    update_plugin_manifest_version,
+    version_from_tag,
+    write_release_marketplace,
+)
+from _test_support import (
+    tracked_minimal_bundle_files,
+    write_minimal_bundle,
+    write_minimal_bundle_sources,
+)
+
+
+def load_chrome_preflight() -> ModuleType:
+    module_path = Path(__file__).resolve().parents[1] / "resources" / "chrome_preflight.py"
+    spec = importlib.util.spec_from_file_location("chrome_preflight", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed to load {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_codex_config_helpers_update_existing_sections() -> None:
+    config = "\n".join(
+        [
+            'service_tier = "flex"',
+            "",
+            "[features]",
+            "plugins = false",
+            "apps = true",
+            "",
+            '[plugins."sky-cua@debug"]',
+            "enabled = false",
+            "",
+            "[profiles.default]",
+            'service_tier = "flex"',
+            "",
+        ]
+    )
+
+    config = ensure_plugins_feature_enabled(config)
+    config = ensure_apps_feature_disabled(config)
+    config = ensure_fast_service_tier(config)
+    config = ensure_plugin_enabled(config)
+
+    assert 'service_tier = "fast"' in config
+    assert "plugins = true" in config
+    assert "apps = false" in config
+    assert "enabled = true" in config
+    assert "[profiles.default]\n" in config
+    assert 'profiles.default]\nservice_tier = "flex"' not in config
+
+
+def test_bundle_entrypoint_paths_always_include_unix_launchers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert Path("bin/sky-cua-client") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-service") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-overlay-host") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-client.exe") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-service.exe") in bundle_entrypoint_paths()
+    assert Path("bin/sky-cua-overlay-host.exe") in bundle_entrypoint_paths()
+
+
+def test_remove_path_retries_transient_non_empty_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "bundle.tmp"
+    target.mkdir()
+    (target / "file.txt").write_text("content", encoding="utf-8")
+    calls = 0
+    real_rmtree = shutil.rmtree
+
+    def flaky_rmtree(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError(plugin_bundle.errno.ENOTEMPTY, "Directory not empty", str(path))
+        real_rmtree(path)
+
+    monkeypatch.setattr(plugin_bundle.shutil, "rmtree", flaky_rmtree)
+    monkeypatch.setattr(plugin_bundle.time, "sleep", lambda _seconds: None)
+
+    plugin_bundle.remove_path(target)
+
+    assert calls == 2
+    assert not target.exists()
+
+
+def test_stop_unix_runtime_processes_targets_deleted_cache_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Unix process cleanup is not used on Windows")
+
+    cache_root = tmp_path / "codex" / "plugins" / "cache" / "Heliasar"
+    deleted_exe = cache_root / "plugin-backup-old" / "sky-cua" / "0.1.0" / "bin" / "sky-cua-client"
+    deleted_exe.parent.mkdir(parents=True)
+
+    proc_root = tmp_path / "proc"
+    match_proc = proc_root / "123"
+    match_proc.mkdir(parents=True)
+    (match_proc / "cmdline").write_bytes(str(deleted_exe).encode() + b"\0mcp")
+    (match_proc / "exe").symlink_to(f"{deleted_exe} (deleted)")
+    (match_proc / "cwd").symlink_to(f"{deleted_exe.parent.parent} (deleted)")
+
+    ignored_proc = proc_root / "456"
+    ignored_proc.mkdir()
+    (ignored_proc / "cmdline").write_bytes(b"/usr/bin/sky-cua-client\0mcp")
+    (ignored_proc / "exe").symlink_to("/usr/bin/sky-cua-client")
+    (ignored_proc / "cwd").symlink_to("/usr/bin")
+
+    helper_exe = (
+        cache_root / "plugin-backup-old" / "sky-cua" / "0.1.0" / "bin" / "sky-cua-cosmic-helper"
+    )
+    helper_proc = proc_root / "789"
+    helper_proc.mkdir()
+    (helper_proc / "cmdline").write_bytes(str(helper_exe).encode() + b"\0")
+    (helper_proc / "exe").symlink_to(helper_exe)
+    (helper_proc / "cwd").symlink_to(helper_exe.parent.parent)
+
+    overlay_exe = (
+        cache_root / "plugin-backup-old" / "sky-cua" / "0.1.0" / "bin" / "sky-cua-overlay-host"
+    )
+    overlay_proc = proc_root / "790"
+    overlay_proc.mkdir()
+    (overlay_proc / "cmdline").write_bytes(str(overlay_exe).encode() + b"\0serve")
+    (overlay_proc / "exe").symlink_to(overlay_exe)
+    (overlay_proc / "cwd").symlink_to(overlay_exe.parent.parent)
+
+    terminated: set[int] = set()
+    calls: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, signal: int) -> None:
+        calls.append((pid, signal))
+        if signal == plugin_bundle.SIGTERM:
+            terminated.add(pid)
+        if signal == 0 and pid in terminated:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(plugin_bundle.os, "kill", fake_kill)
+
+    stop_unix_runtime_processes([cache_root], proc_root=proc_root)
+
+    assert (123, plugin_bundle.SIGTERM) in calls
+    assert (789, plugin_bundle.SIGTERM) in calls
+    assert (790, plugin_bundle.SIGTERM) in calls
+    assert all(pid != 456 for pid, _signal in calls)
+
+
+def test_stop_windows_cache_processes_uses_powershell_string_escaping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeWindowsPath:
+        def resolve(self) -> str:
+            return r"C:\Users\O'Brien\sky-cua"
+
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
+        assert check is True
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(plugin_bundle.sys, "platform", "win32")
+    monkeypatch.setattr(plugin_bundle.subprocess, "run", fake_run)
+
+    stop_windows_cache_processes(cast(Path, FakeWindowsPath()))
+
+    script = commands[0][-1]
+    assert "$cacheRoot = 'C:\\Users\\O''Brien\\sky-cua';" in script
+    assert "C:\\\\Users" not in script
+
+
+def test_build_bundle_inputs_are_selected_from_git_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.DEVNULL)
+    (tmp_path / "README.md").write_text("tracked readme\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "kept.md").write_text("tracked doc\n", encoding="utf-8")
+    (tmp_path / "docs" / "local-only.md").write_text("untracked doc\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md", "docs/kept.md"],
+        cwd=tmp_path,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
+
+    assert build_plugin.tracked_bundle_files([Path("README.md"), Path("docs")]) == [
+        Path("README.md"),
+        Path("docs/kept.md"),
+    ]
+
+
+def test_bundle_source_paths_include_standard_optional_plugin_roots() -> None:
+    assert Path(".claude-plugin") in build_plugin.BUNDLE_SOURCE_PATHS
+    assert Path(".codex-plugin") in build_plugin.BUNDLE_SOURCE_PATHS
+    assert Path(".app.json") in build_plugin.BUNDLE_SOURCE_PATHS
+    assert Path("assets") in build_plugin.BUNDLE_SOURCE_PATHS
+    assert Path("hooks") in build_plugin.BUNDLE_SOURCE_PATHS
+    assert Path("skills") in build_plugin.BUNDLE_SOURCE_PATHS
+
+
+def test_worktree_bundle_dirs_include_untracked_runtime_resources() -> None:
+    assert (
+        Path("docs/operations/testing-vm-desktop-smokes.md") in build_plugin.WORKTREE_BUNDLE_FILES
+    )
+    assert Path(".claude-plugin/plugin.json") in build_plugin.WORKTREE_BUNDLE_FILES
+    assert Path(".claude-plugin/marketplace.json") in build_plugin.WORKTREE_BUNDLE_FILES
+    assert Path("resources/chrome-extension") in build_plugin.WORKTREE_BUNDLE_DIRS
+    assert Path("resources/kwin") in build_plugin.WORKTREE_BUNDLE_DIRS
+    assert Path("skills/computer-use") in build_plugin.WORKTREE_BUNDLE_DIRS
+    assert Path("skills/browser-use") in build_plugin.WORKTREE_BUNDLE_DIRS
+
+
+def test_copy_tracked_bundle_sources_rejects_unexpected_missing_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(
+        build_plugin,
+        "tracked_bundle_files",
+        lambda: [
+            Path("README.md"),
+            Path("skills/computer-use-workflows/SKILL.md"),
+        ],
+    )
+
+    with pytest.raises(FileNotFoundError, match="tracked bundle source is missing"):
+        build_plugin.copy_tracked_bundle_sources(tmp_path / "bundle")
+
+
+def test_copy_tracked_bundle_sources_allows_retired_skill_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(
+        build_plugin,
+        "tracked_bundle_files",
+        lambda: [
+            Path("skills/computer-use-workflows/SKILL.md"),
+            Path("skills/sky-cua-isolated-daemon/SKILL.md"),
+            Path("skills/sky-cua-plugin-release/SKILL.md"),
+        ],
+    )
+
+    build_plugin.copy_tracked_bundle_sources(tmp_path / "bundle")
+
+
+def test_copy_worktree_bundle_dirs_includes_kwin_effect_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    effect_dir = repo_root / "resources" / "kwin" / "effects" / "sky-cua-agent-cursor"
+    effect_dir.mkdir(parents=True)
+    (effect_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "KPackageStructure": "KWin/Effect",
+                "KPlugin": {"Id": "sky-cua-agent-cursor"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    bundle_root = tmp_path / "bundle"
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", repo_root)
+
+    build_plugin.copy_worktree_bundle_dirs(bundle_root)
+
+    copied = (
+        bundle_root / "resources" / "kwin" / "effects" / "sky-cua-agent-cursor" / "metadata.json"
+    )
+    assert json.loads(copied.read_text(encoding="utf-8"))["KPlugin"]["Id"] == (
+        "sky-cua-agent-cursor"
+    )
+
+
+def test_stage_bundle_preserves_existing_other_platform_binaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle_root = tmp_path / "dist" / "plugin" / "sky-cua"
+    current_binaries = runtime_binary_names()
+    current_runtime_paths = [
+        runtime_binary_path(current_runtime_platform(), name.removesuffix(".exe"))
+        for name in current_binaries
+    ]
+    other_binaries = [
+        name
+        for name in all_runtime_binary_names()
+        if Path("bin") / name not in current_runtime_paths
+    ]
+    write_minimal_bundle(bundle_root, binaries=other_binaries)
+    write_minimal_bundle_sources(tmp_path)
+    target_release = tmp_path / "target" / "release"
+    target_release.mkdir(parents=True)
+    for binary_name in current_binaries:
+        (target_release / binary_name).write_text(f"fresh {binary_name}", encoding="utf-8")
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        build_plugin,
+        "tracked_bundle_files",
+        tracked_minimal_bundle_files,
+    )
+
+    build_plugin.stage_bundle(bundle_root)
+
+    for binary_name, runtime_path in zip(current_binaries, current_runtime_paths, strict=True):
+        assert (bundle_root / runtime_path).read_text(encoding="utf-8") == (f"fresh {binary_name}")
+    for binary_name in other_binaries:
+        assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == binary_name
+
+
+def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle_root = tmp_path / "dist" / "plugin" / "sky-cua"
+    current_binaries = runtime_binary_names()
+    current_runtime_paths = [
+        runtime_binary_path(current_runtime_platform(), name.removesuffix(".exe"))
+        for name in current_binaries
+    ]
+    other_binaries = [
+        name
+        for name in all_runtime_binary_names()
+        if Path("bin") / name not in current_runtime_paths
+    ]
+    write_minimal_bundle(bundle_root, binaries=[])
+    write_minimal_bundle_sources(tmp_path)
+    (tmp_path / "target" / "release").mkdir(parents=True)
+    for binary_name in current_binaries:
+        (tmp_path / "target" / "release" / binary_name).write_text(
+            f"fresh {binary_name}",
+            encoding="utf-8",
+        )
+    (tmp_path / "bin").mkdir(exist_ok=True)
+    for binary_name in other_binaries:
+        binary_path = tmp_path / "bin" / binary_name
+        binary_path.parent.mkdir(parents=True, exist_ok=True)
+        binary_path.write_text(f"repo {binary_name}", encoding="utf-8")
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        build_plugin,
+        "tracked_bundle_files",
+        tracked_minimal_bundle_files,
+    )
+
+    build_plugin.stage_bundle(bundle_root)
+
+    for binary_name, runtime_path in zip(current_binaries, current_runtime_paths, strict=True):
+        assert (bundle_root / runtime_path).read_text(encoding="utf-8") == (f"fresh {binary_name}")
+    for binary_name in other_binaries:
+        assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == (
+            f"repo {binary_name}"
+        )
+
+
+def test_browser_preflight_links_browser_use_into_bundled_marketplace(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    source_plugin = tmp_path / "source" / "plugins" / "openai-bundled" / "plugins" / "browser-use"
+    (source_plugin / ".codex-plugin").mkdir(parents=True)
+    (source_plugin / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"version": "1.2.3"}),
+        encoding="utf-8",
+    )
+    (source_plugin / "scripts").mkdir()
+    (source_plugin / "scripts" / "browser-client.mjs").write_text(
+        "client",
+        encoding="utf-8",
+    )
+    codex_home = tmp_path / "codex-home"
+
+    chrome_preflight.sync_browser_use_plugin(source_plugin.parents[1], codex_home)
+
+    cache_root = codex_home / "plugins" / "cache" / "openai-bundled" / "browser-use"
+    assert (cache_root / "latest").readlink() == Path("1.2.3")
+    plugin_link = (
+        codex_home / ".tmp" / "bundled-marketplaces" / "openai-bundled" / "plugins" / "browser-use"
+    )
+    assert plugin_link.readlink() == cache_root / "latest"
+
+
+def test_browser_preflight_replaces_read_only_cached_plugin_tree(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "fresh.txt").write_text("fresh", encoding="utf-8")
+    destination.mkdir()
+    (destination / "stale.txt").write_text("stale", encoding="utf-8")
+    destination.chmod(0o500)
+
+    try:
+        chrome_preflight.copytree_replace(source, destination)
+    finally:
+        destination.chmod(0o700)
+
+    assert (destination / "fresh.txt").read_text(encoding="utf-8") == "fresh"
+    assert not (destination / "stale.txt").exists()
+
+
+def test_browser_use_node_repl_is_staged_from_upstream_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    true_binary = shutil.which("true")
+    if true_binary is None:
+        pytest.skip("true binary is not available")
+
+    source_root = tmp_path / "upstream" / "resources" / "plugins" / "openai-bundled"
+    marketplace = source_root / ".agents" / "plugins" / "marketplace.json"
+    marketplace.parent.mkdir(parents=True)
+    marketplace.write_text(json.dumps({"plugins": []}), encoding="utf-8")
+    for plugin_name in ("browser-use", "chrome"):
+        plugin = source_root / "plugins" / plugin_name
+        (plugin / ".codex-plugin").mkdir(parents=True)
+        (plugin / ".codex-plugin" / "plugin.json").write_text(
+            json.dumps({"name": plugin_name, "version": "1.0.0"}),
+            encoding="utf-8",
+        )
+        (plugin / "scripts").mkdir()
+        (plugin / "scripts" / "browser-client.mjs").write_text("client", encoding="utf-8")
+    shutil.copy2(true_binary, source_root.parents[1] / "node_repl")
+
+    monkeypatch.setattr(build_plugin, "bundled_resource_root", lambda: source_root)
+    monkeypatch.setattr(build_plugin, "install_bundled_chrome_host", lambda _root: None)
+    temp_root = tmp_path / "bundle"
+
+    build_plugin.stage_openai_bundled_plugins(temp_root)
+
+    staged = temp_root / "resources" / "node_repl"
+    assert staged.exists()
+    assert staged.stat().st_mode & 0o111
+    assert staged.read_bytes() == Path(true_binary).read_bytes()
+
+
+def test_browser_use_node_repl_installer_rejects_incompatible_ldd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "node_repl"
+    destination = tmp_path / "out" / "node_repl"
+    source.write_text("fake", encoding="utf-8")
+
+    monkeypatch.setattr(build_plugin, "node_repl_ldd_compatible", lambda _path: False)
+
+    assert not build_plugin.install_browser_use_node_repl(source, destination)
+    assert not destination.exists()
+
+
+def test_browser_use_node_repl_non_elf_patch_is_noop(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    node_repl = tmp_path / "node_repl"
+    node_repl.write_bytes(b"not an elf")
+
+    assert chrome_preflight.patch_browser_use_node_repl_glibc_pidfd_symbols(node_repl) is False
+    assert node_repl.read_bytes() == b"not an elf"
+
+
+def test_browser_preflight_validates_node_repl_without_installing_to_codex_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chrome_preflight = load_chrome_preflight()
+    source_root = tmp_path / "upstream" / "resources" / "plugins" / "openai-bundled"
+    source_root.mkdir(parents=True)
+    source_node_repl = source_root.parents[1] / "node_repl"
+    source_node_repl.write_text("fake", encoding="utf-8")
+    calls: list[tuple[Path, Path]] = []
+
+    def fake_install(source: Path, destination: Path) -> bool:
+        calls.append((source, destination))
+        return True
+
+    monkeypatch.setattr(chrome_preflight, "install_browser_use_node_repl", fake_install)
+
+    chrome_preflight.validate_browser_use_node_repl(source_root)
+
+    assert calls
+    assert calls[0][0] == source_node_repl
+    assert calls[0][1].name == "node_repl"
+
+
+def test_browser_preflight_adds_coupled_plugins_to_marketplace(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    marketplace_path = (
+        tmp_path
+        / "codex-home"
+        / ".tmp"
+        / "bundled-marketplaces"
+        / "openai-bundled"
+        / ".agents"
+        / "plugins"
+        / "marketplace.json"
+    )
+    marketplace_path.parent.mkdir(parents=True)
+    marketplace_path.write_text(
+        json.dumps({"name": "openai-bundled", "plugins": [{"name": "chrome"}]}),
+        encoding="utf-8",
+    )
+
+    chrome_preflight.ensure_marketplace_entries(tmp_path / "codex-home")
+
+    manifest = json.loads(marketplace_path.read_text(encoding="utf-8"))
+    names = {plugin["name"] for plugin in manifest["plugins"]}
+    assert {"chrome", "browser-use", "computer-use"} <= names
+    computer_use = next(
+        plugin for plugin in manifest["plugins"] if plugin["name"] == "computer-use"
+    )
+    assert computer_use["source"]["path"] == "./plugins/computer-use"
+
+
+def test_browser_preflight_update_config_enables_browser_plugins_only(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    codex_home = tmp_path / "codex-home"
+
+    chrome_preflight.update_codex_config(codex_home)
+
+    parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    assert parsed["features"]["plugins"] is True
+    assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is True
+    assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is True
+    assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is False
+
+
+def test_browser_preflight_rejects_uppercase_native_host_name(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    plugin_root = tmp_path / "chrome"
+    scripts = plugin_root / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "extension-id.json").write_text(
+        json.dumps(
+            {
+                "extensionId": "abcdefghijklmnopabcdefghijklmnop",
+                "extensionHostName": "Com.OpenAI.CodexExtension",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="invalid Chrome native host name"):
+        chrome_preflight.read_chrome_extension_metadata(plugin_root)
+
+
+def test_browser_preflight_computer_use_compat_plugin_preserves_env_allowlist(
+    tmp_path: Path,
+) -> None:
+    chrome_preflight = load_chrome_preflight()
+    sky_root = tmp_path / "sky-cua"
+    source_root = sky_root / "resources" / "plugins" / "openai-bundled"
+    source_root.mkdir(parents=True)
+    (sky_root / ".codex-plugin").mkdir()
+    (sky_root / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"version": "1.2.3"}),
+        encoding="utf-8",
+    )
+    (sky_root / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "computer-use": {
+                        "command": "./bin/sky-cua-client",
+                        "args": ["mcp"],
+                        "env_vars": ["DISPLAY", "SKY_CUA_COSMIC_HELPER"],
+                        "cwd": ".",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    codex_home = tmp_path / "codex-home"
+
+    chrome_preflight.sync_computer_use_compat_plugin(source_root, codex_home)
+
+    compat_mcp_path = (
+        codex_home
+        / "plugins"
+        / "cache"
+        / "openai-bundled"
+        / "computer-use"
+        / "1.2.3-sky-cua"
+        / ".mcp.json"
+    )
+    cache_root = compat_mcp_path.parents[1]
+    compat_mcp = json.loads(compat_mcp_path.read_text(encoding="utf-8"))
+    server = compat_mcp["mcpServers"]["computer-use"]
+    assert server["env_vars"] == ["DISPLAY", "SKY_CUA_COSMIC_HELPER"]
+    assert server["command"] == str((sky_root / "bin" / "sky-cua-client").resolve())
+    assert server["cwd"] == str(sky_root.resolve())
+    assert (cache_root / "latest").readlink() == Path("1.2.3-sky-cua")
+    assert (
+        codex_home / ".tmp" / "bundled-marketplaces" / "openai-bundled" / "plugins" / "computer-use"
+    ).readlink() == cache_root / "latest"
+
+
+def test_bundled_resource_root_accepts_upstream_codex_resource_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream_root = tmp_path / "codex-app" / "resources"
+    bundled_root = upstream_root / "plugins" / "openai-bundled"
+    bundled_root.mkdir(parents=True)
+    monkeypatch.setenv("SKY_CUA_UPSTREAM_CODEX_RESOURCES", str(upstream_root))
+    monkeypatch.delenv("SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT", raising=False)
+
+    assert build_plugin.bundled_resource_root() == bundled_root
+
+
+def test_bundled_resource_root_accepts_legacy_openai_bundled_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundled_root = tmp_path / "openai-bundled"
+    monkeypatch.delenv("SKY_CUA_UPSTREAM_CODEX_RESOURCES", raising=False)
+    monkeypatch.setenv("SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT", str(bundled_root))
+
+    assert build_plugin.bundled_resource_root() == bundled_root
+
+
+def test_build_stage_marketplace_entries_include_coupled_plugins(tmp_path: Path) -> None:
+    marketplace_path = tmp_path / "marketplace.json"
+    marketplace_path.write_text(
+        json.dumps({"name": "openai-bundled", "plugins": [{"name": "chrome"}]}),
+        encoding="utf-8",
+    )
+
+    build_plugin.ensure_openai_bundled_marketplace_entries(marketplace_path)
+
+    manifest = json.loads(marketplace_path.read_text(encoding="utf-8"))
+    names = {plugin["name"] for plugin in manifest["plugins"]}
+    assert {"chrome", "browser-use", "computer-use"} <= names
+    browser_use = next(plugin for plugin in manifest["plugins"] if plugin["name"] == "browser-use")
+    assert browser_use["source"]["path"] == "./plugins/browser-use"
+
+
+def test_version_from_tag_updates_plugin_manifest(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    write_minimal_bundle_sources(bundle_root)
+
+    version = version_from_tag("v1.2.3")
+    update_plugin_manifest_version(bundle_root, version)
+
+    manifest = json.loads((bundle_root / ".codex-plugin" / "plugin.json").read_text())
+    assert manifest["version"] == "1.2.3"
+    with pytest.raises(ValueError, match=r"vX\.Y\.Z"):
+        version_from_tag("release-1.2.3")
+    with pytest.raises(ValueError, match=r"vX\.Y\.Z"):
+        version_from_tag("v1.2.3-rc.1")
+
+
+def test_build_release_binaries_retries_windows_sccache_shim_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, str] | None] = []
+
+    def fake_run(
+        _command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+        env: dict[str, str] | None = None,
+        text: bool,
+        capture_output: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert _command == build_plugin.CARGO_BUILD_COMMAND
+        assert cwd == build_plugin.REPO_ROOT
+        assert check is False
+        assert text is True
+        assert capture_output is True
+        calls.append(env)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                _command,
+                1,
+                stdout="",
+                stderr="Shim: Could not create process with command 'sccache rustc'.",
+            )
+        return subprocess.CompletedProcess(_command, 0, stdout="built\n", stderr="")
+
+    monkeypatch.setattr(build_plugin.sys, "platform", "win32")
+    monkeypatch.setenv("RUSTC_WRAPPER", "sccache")
+    monkeypatch.setattr(build_plugin.subprocess, "run", fake_run)
+
+    build_plugin.build_release_binaries()
+
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1] is not None
+    assert calls[1]["RUSTC_WRAPPER"] == ""
+    assert calls[1]["RUSTC_WORKSPACE_WRAPPER"] == ""
+
+
+def test_build_release_binaries_does_not_retry_unrelated_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+        env: dict[str, str] | None = None,
+        text: bool,
+        capture_output: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = command, cwd, check, env, text
+        nonlocal calls
+        assert capture_output is True
+        calls += 1
+        return subprocess.CompletedProcess(command, 101, stdout="", stderr="ordinary cargo error")
+
+    monkeypatch.setattr(build_plugin.sys, "platform", "win32")
+    monkeypatch.setattr(build_plugin.subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        build_plugin.build_release_binaries()
+
+    assert calls == 1
+
+
+def test_release_marketplace_helpers_use_local_marketplace_shape(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "marketplace"
+    config_path = tmp_path / "codex-home" / "config.toml"
+
+    manifest_path = write_release_marketplace(marketplace_root)
+    manifest = json.loads(manifest_path.read_text())
+    update_codex_config(
+        config_path,
+        plugin_id=RELEASE_PLUGIN_ID,
+        disabled_plugin_ids=["sky-cua@debug"],
+        marketplace_root=marketplace_root,
+    )
+    config = config_path.read_text()
+
+    assert manifest_path == marketplace_manifest_path(marketplace_root)
+    assert manifest_path.exists()
+    assert manifest["plugins"][0]["source"] == {
+        "source": "local",
+        "path": "./plugins/sky-cua",
+    }
+    assert manifest["plugins"][0]["policy"] == {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+    }
+    assert manifest["plugins"][0]["category"] == PLUGIN_CATEGORY
+    assert release_plugin_root(marketplace_root) == marketplace_root / "plugins" / "sky-cua"
+    assert "[marketplaces.Heliasar]" in config
+    assert str(marketplace_root.resolve()).replace("\\", "\\\\") in config
+    assert f'[plugins."{RELEASE_PLUGIN_ID}"]' in config
+    assert "enabled = true" in config
+    assert '[plugins."sky-cua@debug"]\nenabled = false' in config
+
+
+def test_codex_config_upsert_preserves_windows_backslashes(tmp_path: Path) -> None:
+    config_path = tmp_path / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            [
+                "[marketplaces.Heliasar]",
+                'source = "old"',
+                'source_type = "local"',
+                "",
+            ]
+        )
+    )
+    marketplace_root = Path(r"C:\Users\bex\projects\heliasar-marketplace")
+
+    update_codex_config(
+        config_path,
+        plugin_id=RELEASE_PLUGIN_ID,
+        marketplace_root=marketplace_root,
+    )
+    config = config_path.read_text()
+
+    parsed = tomllib.loads(config)
+    assert parsed["marketplaces"]["Heliasar"]["source"] == codex_config_path(marketplace_root)
+    assert "C:\\\\Users\\\\bex" in config
+
+
+def test_update_codex_config_can_stage_disabled_plugin_before_install(tmp_path: Path) -> None:
+    config_path = tmp_path / "codex-home" / "config.toml"
+
+    update_codex_config(
+        config_path,
+        plugin_id=RELEASE_PLUGIN_ID,
+        plugin_enabled=False,
+        disabled_plugin_ids=["sky-cua@debug"],
+        marketplace_root=tmp_path / "marketplace",
+    )
+    parsed = tomllib.loads(config_path.read_text())
+
+    assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is False
+    assert parsed["plugins"]["sky-cua@debug"]["enabled"] is False
+    assert parsed["features"]["plugins"] is True
+
+
+def test_codex_config_upsert_updates_crlf_sections_without_duplicate_tables(tmp_path: Path) -> None:
+    config_path = tmp_path / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '[features]\r\nplugins = false\r\n\r\n[plugins."sky-cua@debug"]\r\nenabled = false\r\n'
+    )
+
+    update_codex_config(config_path)
+    config = config_path.read_text()
+    parsed = tomllib.loads(config)
+
+    assert config.count("[features]") == 1
+    assert config.count('[plugins."sky-cua@debug"]') == 1
+    assert parsed["features"]["plugins"] is True
+    assert parsed["plugins"]["sky-cua@debug"]["enabled"] is True
+
+
+def test_plugin_manifest_tracks_scaffold_metadata_contract() -> None:
+    manifest_path = plugin_bundle.REPO_ROOT / ".codex-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    interface = manifest["interface"]
+
+    assert manifest["name"] == plugin_bundle.PLUGIN_NAME
+    assert manifest["mcpServers"] == "./.mcp.json"
+    assert manifest["skills"] == "./skills/"
+    assert manifest["homepage"].startswith("https://")
+    assert manifest["repository"].startswith("https://")
+    assert "computer-use" in manifest["keywords"]
+    assert interface["category"] == PLUGIN_CATEGORY
+    assert interface["capabilities"] == ["Interactive", "Read", "Write"]
+    assert interface["websiteURL"].startswith("https://")
+    assert interface["privacyPolicyURL"].startswith("https://")
+    assert interface["termsOfServiceURL"].startswith("https://")
+    assert (plugin_bundle.REPO_ROOT / interface["composerIcon"]).exists()
+    assert (plugin_bundle.REPO_ROOT / interface["logo"]).exists()
+
+
+def test_mcp_config_allows_runtime_override_env_vars() -> None:
+    mcp_config = json.loads((plugin_bundle.REPO_ROOT / ".mcp.json").read_text(encoding="utf-8"))
+    env_vars = set(mcp_config["mcpServers"]["computer-use"]["env_vars"])
+
+    assert "SKY_CUA_COSMIC_HELPER" in env_vars
+    assert "CODEX_COMPUTER_USE_COSMIC_HELPER" in env_vars
+    assert "SKY_CUA_AGENT_CURSOR" in env_vars
+    assert "SKY_CUA_BROWSER" in env_vars
+    assert "SKY_CUA_OVERLAY_BACKEND" in env_vars
+    assert "SKY_CUA_INPUT_BACKEND" in env_vars
+    assert "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE" in env_vars
+    assert "SKY_CUA_OVERLAY_HOST_PATH" in env_vars
+    assert "SKY_CUA_OVERLAY_HOST_TCP_ADDR" in env_vars
+    assert "SKY_CUA_SCREENSHOT_CURSOR" in env_vars
+    assert "SKY_CUA_REPO_ROOT" in env_vars
+    assert "SKY_CUA_SERVICE_PATH" in env_vars
+    assert "YDOTOOL_SOCKET" in env_vars
+
+
+def test_chrome_preflight_default_env_allowlist_matches_primary_mcp_config() -> None:
+    chrome_preflight = load_chrome_preflight()
+    mcp_config = json.loads((plugin_bundle.REPO_ROOT / ".mcp.json").read_text(encoding="utf-8"))
+    env_vars = mcp_config["mcpServers"]["computer-use"]["env_vars"]
+
+    assert env_vars == chrome_preflight.DEFAULT_COMPUTER_USE_ENV_VARS
+
+
+def test_bundled_chrome_extension_cursor_overlay_contract() -> None:
+    extension_dir = live_chrome_host_client_smoke.FALLBACK_EXTENSION_DIR
+    manifest = json.loads((extension_dir / "manifest.json").read_text(encoding="utf-8"))
+    content_script = (extension_dir / "content-scripts" / "codex.js").read_text(encoding="utf-8")
+    background = (extension_dir / "background.js").read_text(encoding="utf-8")
+
+    assert (extension_dir / "images" / "cursor-chat.png").exists()
+    native_cursor_asset = (
+        plugin_bundle.REPO_ROOT / "crates" / "sky-cua-overlay-host" / "assets" / "cursor-chat.png"
+    )
+    assert (
+        native_cursor_asset.read_bytes()
+        == (extension_dir / "images" / "cursor-chat.png").read_bytes()
+    )
+    from PIL import Image
+
+    with Image.open(native_cursor_asset) as cursor_image:
+        assert cursor_image.size == (
+            live_agent_cursor_kde_smoke.CURSOR_ASSET_SOURCE_WIDTH,
+            live_agent_cursor_kde_smoke.CURSOR_ASSET_SOURCE_HEIGHT,
+        )
+    assert live_agent_cursor_kde_smoke.CURSOR_ASSET_WIDTH == 23
+    assert live_agent_cursor_kde_smoke.CURSOR_ASSET_HEIGHT == 24
+    assert any(
+        "images/cursor-chat.png" in entry.get("resources", [])
+        for entry in manifest["web_accessible_resources"]
+    )
+    assert "codex-agent-overlay" in content_script
+    assert "pointer-events:none" in content_script
+    assert "images/cursor-chat.png" in content_script
+    assert "AGENT_CURSOR_STATE" in content_script
+    assert "GET_AGENT_CURSOR_STATE" in content_script
+    assert "AGENT_CURSOR_ARRIVED" in content_script
+    assert "async moveMouse" in background
+    assert "waitForArrival" in background
+    assert "createCursorArrivalWaiter" in background
+    assert "AGENT_CURSOR_ARRIVED" in background

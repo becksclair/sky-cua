@@ -137,10 +137,10 @@ log so the extension's session lifecycle is honored.
 Focused tests:
 
 ```bash
-uv run ruff format --check resources/chrome_preflight.py scripts/test_python_harness_helpers.py
-uv run ruff check resources/chrome_preflight.py scripts/test_python_harness_helpers.py
-uv run basedpyright resources/chrome_preflight.py scripts/test_python_harness_helpers.py
-uv run pytest scripts/test_python_harness_helpers.py -k 'browser_preflight or update_codex_config'
+uv run ruff format --check resources/chrome_preflight.py scripts/test_plugin_bundle.py
+uv run ruff check resources/chrome_preflight.py scripts/test_plugin_bundle.py
+uv run basedpyright resources/chrome_preflight.py scripts/test_plugin_bundle.py
+uv run pytest scripts/test_plugin_bundle.py -k 'browser_preflight or update_codex_config'
 cargo test -p sky-cua-chrome-host
 ```
 

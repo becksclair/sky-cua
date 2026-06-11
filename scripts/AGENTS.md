@@ -18,10 +18,11 @@ pytest.
 - Live operator smokes are `live_*_smoke.py` and must fail honestly when app
   state is blocked. JSON schemas for final agent messages:
   `scripts/schemas/*.json`.
-- Pure helper tests stay free of desktop app requirements. Subsystem suites
-  get focused modules (`test_codex_app_server.py`,
-  `test_app_server_harness.py`); the broad remainder lives in
-  `test_python_harness_helpers.py` and should shrink, not grow.
+- Pure helper tests stay free of desktop app requirements. Each subsystem
+  gets a focused `test_<subsystem>.py` module (for example
+  `test_plugin_bundle.py`, `test_gui_testing_vm.py`,
+  `test_install_flows.py`); shared bundle-tree fixtures live in
+  `_test_support.py`. Do not reintroduce a catch-all test module.
 
 ## Conventions
 

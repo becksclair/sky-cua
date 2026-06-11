@@ -1,10 +1,18 @@
+//! Shared fake-server fixtures and environment guards for browser tests.
+
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
+use serde_json::{Value, json};
+use sky_cua_platform::model::BROWSER_EVAL_ENV;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, MutexGuard};
 
-use super::*;
+use crate::browser::protocol::{
+    BRIDGE_INFO_REQUEST_ID, LIST_TABS_REQUEST_ID, read_frame, write_frame,
+};
+use crate::browser::sockets::{CODEX_SOCKET_DIR_ENV, SKY_CUA_BROWSER_ENV, SKY_CUA_SOCKET_DIR_ENV};
 
 pub(super) fn unique_test_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -259,23 +267,42 @@ pub(super) async fn hold_connection(listener: UnixListener) {
 
 pub(super) struct BrowserEnvGuard {
     _guard: MutexGuard<'static, ()>,
-    previous_browser: Option<std::ffi::OsString>,
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
 }
 
 impl Drop for BrowserEnvGuard {
     fn drop(&mut self) {
-        restore_env(SKY_CUA_BROWSER_ENV, self.previous_browser.take());
+        for (name, value) in &mut self.previous {
+            restore_env(name, value.take());
+        }
     }
 }
 
+/// Env vars browser tests mutate. The guard snapshots all of them at lock
+/// acquisition and Drop-restores them, so a panicking test cannot leak values
+/// (e.g. `SKY_CUA_BROWSER_EVAL=on` or a temp socket dir) into later tests.
+const GUARDED_ENV_VARS: &[&str] = &[
+    SKY_CUA_BROWSER_ENV,
+    BROWSER_EVAL_ENV,
+    SKY_CUA_SOCKET_DIR_ENV,
+    CODEX_SOCKET_DIR_ENV,
+];
+
+/// Serialize env-mutating browser tests. Browser selection and eval opt-in are
+/// also reset to a deterministic absent state; socket dir overrides are left
+/// as-is because each test sets its own before use.
 pub(super) async fn env_lock() -> BrowserEnvGuard {
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
-    let previous_browser = std::env::var_os(SKY_CUA_BROWSER_ENV);
+    let previous = GUARDED_ENV_VARS
+        .iter()
+        .map(|name| (*name, std::env::var_os(name)))
+        .collect();
     unsafe { std::env::remove_var(SKY_CUA_BROWSER_ENV) };
+    unsafe { std::env::remove_var(BROWSER_EVAL_ENV) };
     BrowserEnvGuard {
         _guard: guard,
-        previous_browser,
+        previous,
     }
 }
 

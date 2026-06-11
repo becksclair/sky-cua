@@ -1,17 +1,11 @@
 use std::time::Duration;
 
-#[cfg(test)]
-use serde_json::{Value, json};
 use sky_cua_platform::model::{
     BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
     BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
     BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserTargetKind, DiagnosticEntry,
     browser_eval_enabled, normalize_browser_open_url,
 };
-#[cfg(test)]
-use std::path::{Path, PathBuf};
-#[cfg(test)]
-use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
 use super::cdp::{BrowserCdpAction, BrowserCdpResult};
@@ -23,27 +17,18 @@ use super::diagnostics::{
 };
 use super::executor::BrowserBridgeExecutor;
 use super::probe::first_responsive_bridge_socket;
-#[cfg(test)]
-use super::protocol::{BRIDGE_INFO_REQUEST_ID, LIST_TABS_REQUEST_ID, read_frame, write_frame};
-#[cfg(test)]
-use super::snapshot::BROWSER_SNAPSHOT_EXPRESSION;
-#[cfg(test)]
-use super::sockets::record_bridge_socket_result;
 use super::sockets::{
     BrowserSocketSelection, browser_bridge_disconnected_for_selection,
     browser_socket_selection_from_env, find_bridge_sockets,
 };
-#[cfg(test)]
-use super::tabs::parse_tabs;
-#[cfg(test)]
-use super::transport::{
-    BRIDGE_REQUEST_TIMEOUT, browser_session_params, list_tabs_method, send_bridge_request,
-};
 
 #[cfg(not(test))]
-const BROWSER_OPEN_TIMEOUT: Duration = Duration::from_secs(12);
+pub(super) const BROWSER_OPEN_TIMEOUT: Duration = Duration::from_secs(12);
+// Short enough that the aggregate-deadline test stays fast, but with enough
+// headroom that happy-path operation tests do not time out under scheduler
+// load. Keep in sync with `BROWSER_OPEN_TIMEOUT_MS` in `diagnostics.rs`.
 #[cfg(test)]
-const BROWSER_OPEN_TIMEOUT: Duration = Duration::from_millis(250);
+pub(super) const BROWSER_OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) async fn list_tabs(target: Option<BrowserTargetKind>) -> BrowserListTabsResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
@@ -585,7 +570,3 @@ async fn run_cdp_action(
     let executor = BrowserBridgeExecutor::from_env(TokioInstant::now() + BROWSER_OPEN_TIMEOUT)?;
     executor.bind_tab(target, tab_id).run_cdp(action).await
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;

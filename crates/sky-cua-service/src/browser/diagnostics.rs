@@ -5,8 +5,9 @@ use sky_cua_platform::model::{BrowserTargetKind, DiagnosticEntry, normalize_brow
 
 #[cfg(not(test))]
 const BROWSER_OPEN_TIMEOUT_MS: u128 = 12_000;
+// Keep in sync with the cfg(test) `BROWSER_OPEN_TIMEOUT` in `bridge.rs`.
 #[cfg(test)]
-const BROWSER_OPEN_TIMEOUT_MS: u128 = 250;
+const BROWSER_OPEN_TIMEOUT_MS: u128 = 2_000;
 
 pub(super) fn validate_action_target(
     target: BrowserTargetKind,

@@ -319,7 +319,7 @@ Codex Desktop browser compatibility has an additional adapter lane:
 ```bash
 python3 scripts/build_plugin.py
 python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
-uv run pytest scripts/test_python_harness_helpers.py -k 'browser_preflight or update_codex_config'
+uv run pytest scripts/test_plugin_bundle.py -k 'browser_preflight or update_codex_config'
 ```
 
 The corresponding CodexDesktop-Rebuild patch checks live in that project:

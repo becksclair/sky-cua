@@ -13,6 +13,9 @@ mod status;
 mod tabs;
 mod transport;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use bridge::{
     browser_bridge_diagnostics, browser_env_values_present, claim_tab, click, eval, list_tabs,
     move_mouse, navigate, open_tab, press_key, screenshot, scroll, snapshot, type_text,
