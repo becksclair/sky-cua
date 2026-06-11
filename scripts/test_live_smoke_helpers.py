@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 import live_desktop_smoke
+import live_openclaw_mcp_smoke
 import live_portal_downgrade_smoke
 import live_wayland_pointer_smoke
 from _codex_exec import DEFAULT_MODEL, DEFAULT_REASONING_EFFORT
@@ -177,3 +181,118 @@ def test_wayland_pointer_smoke_requires_gnome_eis_diagnostics() -> None:
             {"structuredContent": {"diagnostics": []}}, "click", is_gnome=True
         )
     del os.environ["SKY_CUA_REQUIRE_EIS"]
+
+
+def test_openclaw_smoke_show_config_accepts_installed_auto_mode(tmp_path: Path) -> None:
+    client = tmp_path / "sky-cua-client"
+    client.write_text("", encoding="utf-8")
+    config = {
+        "enabled": True,
+        "command": str(client),
+        "args": ["mcp"],
+        "env": {"SKY_CUA_REPO_ROOT": str(tmp_path)},
+        "codex": {"defaultToolsApprovalMode": "auto"},
+    }
+
+    assert live_openclaw_mcp_smoke.check_show_config(config) == []
+
+
+def test_openclaw_smoke_show_config_rejects_approve_mode_and_disabled(tmp_path: Path) -> None:
+    client = tmp_path / "sky-cua-client"
+    client.write_text("", encoding="utf-8")
+    config = {
+        "enabled": False,
+        "command": str(client),
+        "env": {"SKY_CUA_REPO_ROOT": str(tmp_path)},
+        "codex": {"defaultToolsApprovalMode": "approve"},
+    }
+
+    failures = live_openclaw_mcp_smoke.check_show_config(config)
+
+    assert any("enabled: false" in failure for failure in failures)
+    assert any("defaultToolsApprovalMode is 'approve'" in failure for failure in failures)
+
+
+def test_openclaw_smoke_show_config_reports_missing_binary_and_env(tmp_path: Path) -> None:
+    config = {
+        "command": str(tmp_path / "missing-client"),
+        "codex": {"defaultToolsApprovalMode": "auto"},
+    }
+
+    failures = live_openclaw_mcp_smoke.check_show_config(config)
+
+    assert any("does not exist" in failure for failure in failures)
+    assert any("SKY_CUA_REPO_ROOT" in failure for failure in failures)
+
+
+def test_openclaw_smoke_probe_requires_browser_and_desktop_tools() -> None:
+    all_tools = list(live_openclaw_mcp_smoke.REQUIRED_TOOLS)
+    probe = {
+        "servers": {"sky_cua": {"tools": len(all_tools)}},
+        "tools": all_tools,
+        "diagnostics": [],
+    }
+    assert live_openclaw_mcp_smoke.check_probe_result(probe) == []
+
+    missing_browser = {
+        "servers": {"sky_cua": {"tools": 1}},
+        "tools": ["sky_cua__doctor"],
+        "diagnostics": [],
+    }
+    failures = live_openclaw_mcp_smoke.check_probe_result(missing_browser)
+    assert any("sky_cua__browser_status" in failure for failure in failures)
+
+    disconnected = {"servers": {}, "tools": [], "diagnostics": []}
+    failures = live_openclaw_mcp_smoke.check_probe_result(disconnected)
+    assert any("did not connect" in failure for failure in failures)
+
+
+def test_openclaw_smoke_extracts_agent_report_from_json_output() -> None:
+    report = {"tool_called": True, "tools_visible": True, "error": None}
+    direct = json.dumps({"reply": {"sky_cua_smoke": report}})
+    assert live_openclaw_mcp_smoke.extract_smoke_report(direct) == report
+
+    embedded_reply = json.dumps(
+        {"payloads": [{"text": "Here you go: " + json.dumps({"sky_cua_smoke": report})}]}
+    )
+    assert live_openclaw_mcp_smoke.extract_smoke_report(embedded_reply) == report
+
+    assert live_openclaw_mcp_smoke.extract_smoke_report("no structured output") is None
+
+
+def test_openclaw_smoke_gateway_auth_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+    monkeypatch.delenv("OPENCLAW_GATEWAY_PASSWORD", raising=False)
+
+    assert live_openclaw_mcp_smoke.gateway_auth_environment(tmp_path) == {}
+
+    (tmp_path / "gateway.systemd.env").write_text(
+        'OTHER_KEY=abc\nOPENCLAW_GATEWAY_PASSWORD="hunter2"\n', encoding="utf-8"
+    )
+    assert live_openclaw_mcp_smoke.gateway_auth_environment(tmp_path) == {
+        "OPENCLAW_GATEWAY_PASSWORD": "hunter2"
+    }
+
+    # Values already exported in the environment take precedence over the file.
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "tok")
+    assert live_openclaw_mcp_smoke.gateway_auth_environment(tmp_path) == {}
+
+
+def test_openclaw_smoke_agent_report_verdicts() -> None:
+    assert (
+        live_openclaw_mcp_smoke.check_agent_report(
+            {"tool_called": True, "tools_visible": True, "error": None}
+        )
+        == []
+    )
+
+    failures = live_openclaw_mcp_smoke.check_agent_report(
+        {"tool_called": False, "tools_visible": False, "error": "tools missing"}
+    )
+    assert any("not visible" in failure for failure in failures)
+    assert any("tools missing" in failure for failure in failures)
+
+    failures = live_openclaw_mcp_smoke.check_agent_report(None)
+    assert any("no structured smoke report" in failure for failure in failures)

@@ -103,7 +103,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generic agent MCP smoke harness.")
     parser.add_argument(
         "--agent",
-        choices=("opencode", "pi", "claude"),
+        choices=("opencode", "pi", "claude", "openclaw"),
         required=True,
         help="Agent to use for driving sky-cua.",
     )

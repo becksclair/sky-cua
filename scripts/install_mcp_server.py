@@ -466,6 +466,7 @@ def install_openclaw(
     openclaw_state_dir = (openclaw_dir or DEFAULT_OPENCLAW_DIR).expanduser().resolve()
     openclaw_state_dir.mkdir(parents=True, exist_ok=True)
     server: dict[str, object] = {
+        "enabled": True,
         "command": str(client_path),
         "args": ["mcp"],
         "cwd": str(target_dir),
@@ -473,7 +474,12 @@ def install_openclaw(
             "SKY_CUA_REPO_ROOT": str(REPO_ROOT),
             **browser_selection_environment(),
         },
-        "codex": {"defaultToolsApprovalMode": "approve"},
+        # OpenClaw's native codex runtime projects this as Codex
+        # default_tools_approval_mode. "approve" defers each MCP tool call to
+        # the app-server approval policy, which is typically "never" for
+        # unattended agent turns; the tools then list but every call is
+        # blocked. "auto" keeps them callable without interactive approval.
+        "codex": {"defaultToolsApprovalMode": "auto"},
     }
     snippet = {"mcp": {"servers": {"sky_cua": server}}}
     path = target_dir / "openclaw_mcp.json"
@@ -498,8 +504,38 @@ def install_openclaw(
             f"{OPENCLAW_MCP_SET_TIMEOUT_SECONDS} seconds: {command_text} "
             f"(OPENCLAW_STATE_DIR={openclaw_state_dir})"
         ) from error
+    reload_openclaw_mcp_runtimes(openclaw_bin, env)
     install_sky_cua_skills(openclaw_state_dir / "workspace" / "skills")
     return path
+
+
+def reload_openclaw_mcp_runtimes(openclaw_bin: str, env: dict[str, str]) -> None:
+    """Dispose cached OpenClaw MCP runtimes so the next turn uses the new config.
+
+    Without this, a running OpenClaw gateway keeps serving the previously
+    cached sky-cua process and config until restarted. Reload failures are
+    reported but non-fatal: the registration itself already succeeded.
+    """
+    command = [openclaw_bin, "mcp", "reload"]
+    try:
+        subprocess.run(
+            command,
+            check=True,
+            env=env,
+            timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
+            capture_output=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        stderr = ""
+        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+            stderr = error.stderr.decode(errors="replace").strip()
+        detail = f": {stderr}" if stderr else ""
+        print(
+            f"warning: openclaw mcp reload failed ({error}{detail}); "
+            "restart the OpenClaw gateway or run 'openclaw mcp reload' manually "
+            "so agent turns pick up the new sky-cua config.",
+            file=sys.stderr,
+        )
 
 
 def link_current_platform_binaries(target_dir: Path, bin_dir: Path) -> None:
@@ -571,8 +607,10 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
         print("\nNext steps for OpenClaw:")
         print(f"  1. Snippet written for inspection: {config_path}")
         print("  2. sky_cua was registered with: openclaw mcp set sky_cua <config>")
+        print("     and cached MCP runtimes were reloaded with: openclaw mcp reload")
         print("  3. sky-cua skills were copied into the configured OpenClaw workspace")
-        print("  4. Restart or reload active OpenClaw agent sessions if they do not reconnect")
+        print("  4. Verify the deployment: python3 scripts/live_openclaw_mcp_smoke.py")
+        print("     (add --agent-turn to also run a live agent turn through the Gateway)")
     else:
         print("\nNext steps for generic MCP hosts:")
         print(f"  1. Reference {config_path} in your host's MCP server registry")

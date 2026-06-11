@@ -400,6 +400,7 @@ def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
         check: bool,
         env: dict[str, str],
         timeout: int,
+        capture_output: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         calls.append({"command": command, "check": check, "env": env, "timeout": timeout})
         return subprocess.CompletedProcess(command, 0)
@@ -432,9 +433,13 @@ def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
     assert server["cwd"] == str(target_dir)
     assert server["env"]["SKY_CUA_REPO_ROOT"] == str(repo_root)
     assert server["env"][install_mcp_server.BROWSER_SELECTION_ENV] == "brave"
-    assert server["codex"]["defaultToolsApprovalMode"] == "approve"
+    assert server["enabled"] is True
+    # "approve" defers MCP tool calls to the codex app-server approval policy,
+    # which blocks every call during unattended agent turns; "auto" keeps the
+    # tools callable.
+    assert server["codex"]["defaultToolsApprovalMode"] == "auto"
 
-    assert len(calls) == 1
+    assert len(calls) == 2
     command = cast(list[str], calls[0]["command"])
     assert command[:4] == ["openclaw", "mcp", "set", "sky_cua"]
     assert json.loads(command[4]) == server
@@ -443,6 +448,10 @@ def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
     env = cast(dict[str, str], calls[0]["env"])
     assert env["OPENCLAW_STATE_DIR"] == str(openclaw_dir)
     assert env["OPENCLAW_CONFIG_PATH"] == str(openclaw_dir / "openclaw.json")
+    reload_command = cast(list[str], calls[1]["command"])
+    assert reload_command == ["openclaw", "mcp", "reload"]
+    reload_env = cast(dict[str, str], calls[1]["env"])
+    assert reload_env["OPENCLAW_STATE_DIR"] == str(openclaw_dir)
 
     for skill_name in install_mcp_server.SKY_CUA_SKILLS:
         assert (openclaw_dir / "workspace" / "skills" / skill_name / "SKILL.md").read_text(

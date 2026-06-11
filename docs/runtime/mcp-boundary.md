@@ -189,9 +189,34 @@ call; if they do not, reload the host session. For Pi, run `/reload` or restart
 Pi.
 
 `--host openclaw` registers `sky_cua` through `openclaw mcp set`, targeting
-`~/.openclaw/openclaw.json` by default, and copies the packaged `computer-use`
+`~/.openclaw/openclaw.json` by default, runs `openclaw mcp reload` so a live
+gateway drops its cached MCP runtime, and copies the packaged `computer-use`
 and `browser-use` skills into `~/.openclaw/workspace/skills`. Use
 `--openclaw-dir` only for profile/test state directories.
+
+OpenClaw's native codex runtime projects `mcp.servers.sky_cua` into
+Codex-native `mcp_servers` thread config on `thread/start`/`thread/resume`.
+The `codex.defaultToolsApprovalMode` field controls Codex's per-tool approval
+(`auto` | `prompt` | `approve`). The installer pins `auto`: `approve` defers
+each MCP tool call to the codex app-server approval policy, and with the
+common unattended setting `appServer.approvalPolicy: "never"` the tools are
+projected but every call is blocked — the server looks connected while no
+sky-cua tool works during an agent turn. `openclaw mcp probe` passing does
+not cover this case; only an agent-turn check does.
+
+Verify an OpenClaw deployment with the dedicated smoke:
+
+```bash
+python3 scripts/live_openclaw_mcp_smoke.py               # config + probe
+python3 scripts/live_openclaw_mcp_smoke.py --agent-turn  # plus one live turn
+```
+
+Stage 1 checks the registered config (binary path, `enabled`, approval mode);
+stage 2 has OpenClaw spawn the server and asserts the required browser-use and
+computer-use tools are listed; the optional agent turn asks the model to call
+`browser_status` and return structured evidence that the tools were visible
+and executable. `scripts/live_agent_mcp_smoke.py --agent openclaw` drives the
+desktop-fixture flow through OpenClaw as well.
 
 ## MCP tool surface
 

@@ -153,6 +153,12 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
   can describe shell-hack completions. The acceptance harness is
   `scripts/live_app_server_smoke.py`; `codex exec` is diagnostic. Close the
   `codex app-server` child before draining `stderr` or cleanup hangs.
+- OpenClaw native-codex turns: `mcp.servers.<name>.codex.defaultToolsApprovalMode`
+  must be `auto`. `approve` defers to `appServer.approvalPolicy`, and with
+  `"never"` (unattended default) tools project but every call is blocked —
+  `openclaw mcp probe` still passes. Post-deploy proof:
+  `scripts/live_openclaw_mcp_smoke.py [--agent-turn]`; after config changes run
+  `openclaw mcp reload` or the gateway keeps the cached runtime.
 - `sky-cua-service` must handle SIGTERM through normal teardown. Process
   cleanup must match `sky-cua-service`, the full overlay-host argv, and the
   truncated comm name `sky-cua-overlay`. If the live KDE smoke fails

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared helpers for agent MCP smoke harnesses (OpenCode and Pi)."""
+"""Shared helpers for agent MCP smoke harnesses (OpenCode, Pi, Claude, OpenClaw)."""
 
 from __future__ import annotations
 
@@ -45,6 +45,8 @@ def run_agent(
         ]
     elif agent == "pi":
         argv = ["pi", "-p", prompt]
+    elif agent == "openclaw":
+        argv = ["openclaw", "agent", "--message", prompt, "--json"]
     elif agent == "claude":
         claude_bin = shutil.which("claude") or shutil.which("openclaude")
         if claude_bin is None:
