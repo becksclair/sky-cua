@@ -93,9 +93,19 @@ fn repo_root() -> PathBuf {
         return PathBuf::from(path);
     }
 
-    std::env::current_dir()
+    if let Some(root) = std::env::current_dir()
         .ok()
         .and_then(|cwd| find_repo_root_from(&cwd))
+    {
+        return root;
+    }
+
+    // Packaged bundles ship resources/app-instructions above the runtime
+    // binary (bin/runtimes/<platform>/), so an arbitrary launch cwd must not
+    // lose app instructions.
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe_path| find_repo_root_from(&exe_path))
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -114,10 +124,33 @@ fn find_repo_root_from(start: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppInstructionEntry, app_instruction_entry_matches, focused_app_instruction_keys,
-        normalize_app_instruction_key,
+        APP_INSTRUCTIONS_INDEX_RELATIVE_PATH, AppInstructionEntry, app_instruction_entry_matches,
+        find_repo_root_from, focused_app_instruction_keys, normalize_app_instruction_key,
     };
     use crate::model::FocusedApp;
+
+    #[test]
+    fn finds_repo_root_from_packaged_runtime_binary_path() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "sky-cua-app-instructions-root-{}",
+            std::process::id()
+        ));
+        let bundle_root = temp_root.join("bundle");
+        let index_path = bundle_root.join(APP_INSTRUCTIONS_INDEX_RELATIVE_PATH);
+        std::fs::create_dir_all(index_path.parent().expect("index parent")).expect("create index");
+        std::fs::write(&index_path, "{\"entries\":[]}").expect("write index");
+        let runtime_binary = bundle_root.join("bin/runtimes/linux-x64/sky-cua-client");
+        std::fs::create_dir_all(runtime_binary.parent().expect("runtime parent"))
+            .expect("create runtime dir");
+        std::fs::write(&runtime_binary, b"").expect("write runtime");
+
+        let found = find_repo_root_from(&runtime_binary);
+        let outside = find_repo_root_from(&temp_root);
+
+        std::fs::remove_dir_all(&temp_root).expect("cleanup temp root");
+        assert_eq!(found, Some(bundle_root));
+        assert_eq!(outside, None);
+    }
 
     #[test]
     fn normalizes_instruction_keys() {

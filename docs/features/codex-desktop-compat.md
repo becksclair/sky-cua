@@ -172,11 +172,14 @@ Latest accepted artifacts:
   (widen Linux `computerUse` availability, strip external Browser Use
   build-flavor gates, keep Browser Use / Chrome companion descriptors
   available when `computerUse` is enabled).
-- **Full first-class `browser_*` actions are still partial.**
-  `sky-cua` now exposes gated browser readiness and real user-tab
-  listing through MCP, but navigation, snapshots, and browser actions
-  still go through the companion Browser Use plugin until the shared
-  runtime delegates those commands.
+- **Codex Desktop still presents the upstream Browser Use plugin as its
+  browser surface.** The full first-class `browser_*` MCP action surface is
+  shipped, but Codex Desktop's adoption of it goes through compat
+  materialization owned by the codex-desktop repo: that repo generates
+  plugin cache roots under the OpenAI built-in IDs that point at the
+  packaged sky-cua implementation. The sky-cua side of that contract is
+  documented in
+  [`docs/runtime/compat-plugin-contract.md`](../runtime/compat-plugin-contract.md).
 - **No standalone Chrome extension smoke fixture.** The current
   fallback is the extracted upstream Codex extension under
   `resources/chrome-extension/codex/1.1.5_0/`. A

@@ -101,6 +101,36 @@ def test_bundle_entrypoint_paths_always_include_unix_launchers(
     assert Path("bin/sky-cua-overlay-host.exe") in bundle_entrypoint_paths()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix launcher contract")
+def test_unix_launcher_runs_bundled_runtime_from_relocated_bundle(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    bundle_bin = tmp_path / "bundle" / "bin"
+    runtime_dir = bundle_bin / "runtimes" / current_runtime_platform()
+    runtime_dir.mkdir(parents=True)
+    shutil.copy(repo_root / "bin" / "sky-cua-client", bundle_bin / "sky-cua-client")
+    fake_runtime = runtime_dir / "sky-cua-client"
+    fake_runtime.write_text('#!/bin/sh\necho "bundled-runtime $@"\n', encoding="utf-8")
+    fake_runtime.chmod(0o755)
+
+    link_dir = tmp_path / "materialized"
+    link_dir.mkdir()
+    absolute_link = link_dir / "sky-cua-client"
+    absolute_link.symlink_to(bundle_bin / "sky-cua-client")
+    chained_link = link_dir / "sky-cua-client-chained"
+    chained_link.symlink_to(Path("sky-cua-client"))
+
+    for entrypoint in (bundle_bin / "sky-cua-client", absolute_link, chained_link):
+        result = subprocess.run(
+            [str(entrypoint), "mcp"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        assert result.stdout.strip() == "bundled-runtime mcp"
+
+
 def test_remove_path_retries_transient_non_empty_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

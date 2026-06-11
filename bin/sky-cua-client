@@ -14,7 +14,17 @@ case "$(uname -m)" in
     ;;
 esac
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# Resolve symlinked invocation so the bundled runtime is found next to the
+# real wrapper, not next to the symlink.
+script_path=$0
+while [ -h "$script_path" ]; do
+  link_target=$(readlink "$script_path")
+  case "$link_target" in
+    /*) script_path=$link_target ;;
+    *) script_path="$(dirname -- "$script_path")/$link_target" ;;
+  esac
+done
+script_dir=$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)
 bundled_runtime="$script_dir/runtimes/$sky_cua_platform/sky-cua-client"
 if [ -x "$bundled_runtime" ]; then
   exec "$bundled_runtime" "$@"
