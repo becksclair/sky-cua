@@ -38,11 +38,12 @@ Open boxes link to the active ExecPlan that owns the work.
     `expand_element`, `collapse_element`, `toggle_element` against UIA patterns
 - [ ] Windows capture ladder (WGC / DXGI before GDI) — [`plans/windows_capture_ladder.md`](plans/windows_capture_ladder.md)
 - [ ] Windows agent cursor overlay and host IPC
-  - [ ] Refactor overlay host platform modules so Linux-only cursor and
+  - [x] Refactor overlay host platform modules so Linux-only cursor and
         compositor code is cfg-scoped outside shared imports and contracts
-  - [ ] Split service overlay transport boundaries by platform: Unix domain
-        socket client on Unix, Windows named-pipe or localhost transport for
-        `sky-cua-overlay-host.exe`
+  - [x] Split service overlay transport boundaries by platform: Unix domain
+        socket client on Unix, localhost TCP (`serve --tcp`) selected as the
+        non-Unix transport for `sky-cua-overlay-host.exe`; Windows-target
+        service compilation proves the boundary
   - [ ] Add a Windows visible overlay host using a transparent, click-through,
         topmost layered window that renders the agent cursor without stealing
         focus
@@ -77,11 +78,17 @@ Open boxes link to the active ExecPlan that owns the work.
 ## Phase: Performance and runtime tuning
 
 - [x] Model screenshot size and format tuning — [`docs/features/image-size-performance.md`](docs/features/image-size-performance.md)
+- [x] Deep performance review backlog closed (criticals through lows fixed or
+      explicitly skipped with validation notes) — [`TODO_PERFORMANCE.md`](TODO_PERFORMANCE.md)
 
 ## Phase: Diagnostics and operator UX
 
 - [ ] Curated VM runner profile set: text-readback smokes, detached session-env,
       and current cursor matrix all in the trimmed pre-merge profile list
+  - [x] Profile descriptors with provisional curated membership, registry-driven
+        host-framebuffer-proof dispatch, and a `--list-profiles` registry view —
+        [`docs/operations/gui-desktop-test-harness.md`](docs/operations/gui-desktop-test-harness.md)
+  - [ ] Decide the final trimmed pre-merge set and wire a curated run mode
 - [ ] Doctor/setup wording improvements as new launch environments expose blockers
 
 ## Backlog / Ideas

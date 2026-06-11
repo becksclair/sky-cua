@@ -34,11 +34,11 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 | ICA-011 | P2 | M | Medium | High | complete | Diagnostics and operator UX: curated VM runner profile set | `scripts/run_gui_testing_vm_smoke.py` |
 | ICA-012 | P2 | M | Medium | Medium | complete | Host portability: Browser MCP managed lifecycle | browser snapshot/diagnostic wire contract |
 | ICA-009 | P2 | M | Medium | High | complete | Host portability: Codex Desktop compatibility and deploy proof | `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py` |
-| ICA-013 | P3 | S | Low | High | candidate | Enabler for roadmap-aligned work; not standalone roadmap scope | Python/Rust browser test fixture layout |
+| ICA-013 | P3 | S | Low | High | complete | Enabler for roadmap-aligned work; not standalone roadmap scope | Python/Rust browser test fixture layout |
 | ICA-015 | P3 | M | Medium | High | candidate | Follow-up for Windows overlay IPC transport maintainability | overlay host IPC lifecycle and listener handling |
-| ICA-016 | P3 | S | Low | High | candidate | Follow-up for VM runner profile descriptor maintainability | `scripts/run_gui_testing_vm_smoke.py` profile metadata and helper boundaries |
+| ICA-016 | P3 | S | Low | High | complete | Follow-up for VM runner profile descriptor maintainability | `scripts/run_gui_testing_vm_smoke.py` profile metadata and helper boundaries |
 | ICA-017 | P3 | M | Medium | Medium | candidate | Follow-up for Browser MCP contract hardening | browser snapshot typed contract activation |
-| ICA-018 | P3 | S | Low | High | candidate | Follow-up for detached session-env health contract clarity | shared desktop/current env key naming |
+| ICA-018 | P3 | S | Low | High | complete | Follow-up for detached session-env health contract clarity | shared desktop/current env key naming |
 
 ## Completed Prior Items
 
@@ -55,6 +55,9 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 - [x] `ICA-012` typed browser snapshot and diagnostic severity contracts.
 - [x] `ICA-014` overlay host platform transport boundary.
 - [x] `ICA-009` shared codex app-server JSON-RPC client.
+- [x] `ICA-016` VM smoke profile metadata made operational.
+- [x] `ICA-018` env-key contracts renamed by policy purpose.
+- [x] `ICA-013` broad helper tests split into subsystem modules.
 
 ## Tasks
 
@@ -247,8 +250,8 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - [x] Migrate rich smokes and preserve artifact file outputs.
   - [x] Remove duplicated client classes after both paths pass Python checks.
 
-- [ ] **ICA-013: Split broad helper tests into subsystem fixtures**
-  Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: candidate
+- [x] **ICA-013: Split broad helper tests into subsystem fixtures**
+  Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: complete
   Roadmap alignment: Enabler for `ICA-008`, `ICA-009`, and `ICA-011`; not standalone roadmap scope.
   Cluster: `scripts/test_python_harness_helpers.py`, `crates/sky-cua-service/src/browser/tests.rs`
   Dependency category: In-process; Local-substitutable
@@ -259,20 +262,21 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - `crates/sky-cua-service/src/browser/tests.rs`: one large module mixes sockets, protocol frame I/O, bridge operations, session recovery, snapshot expression privacy, coordinate conversion, and fake server helpers.
   Why coupled: The tests have become fixture libraries plus many subsystem suites, which makes boundary refactors noisier and hides which behavior belongs to which module.
   Suggested first move: Split tests only when doing an adjacent roadmap-aligned slice, or when a focused refactor first needs shared fixtures. Do not lead with this as independent cleanup.
-  Progress: The `ICA-009` slice moved app-server tests into focused modules (`scripts/test_codex_app_server.py`, `scripts/test_app_server_harness.py`). Remaining scope is the rest of `test_python_harness_helpers.py` and the Rust browser test module split.
   Testing impact: This is mostly test architecture. The acceptance check is that the same focused test commands pass and test names remain discoverable by subsystem.
   Needs human decision: None.
+  Completion note: Pure test split, both halves done. Rust: `browser/tests.rs` is now declaration-only and mounts `browser/tests/{helpers,sockets,protocol,actions,session,snapshot,coordinates}.rs`; shared fake-server fixtures stay in `helpers.rs`, moved tests use absolute `crate::browser::...` imports, and no visibility changes were needed. Python: `scripts/test_python_harness_helpers.py` is deleted and fully distributed into ten focused modules (`test_plugin_bundle.py`, `test_gui_testing_vm.py`, `test_install_flows.py`, `test_agent_cursor_smokes.py`, `test_chrome_host_smoke.py`, `test_kwin_effect.py`, `test_runtime_packaging.py`, `test_live_smoke_helpers.py`, `test_release_deploy.py`, `test_marketplace_release.py`), with multi-module fixtures in `scripts/_test_support.py`. Doc references in `scripts/AGENTS.md`, `docs/features/claude-code-host.md`, `docs/features/codex-desktop-compat.md`, `docs/runtime/mcp-boundary.md`, and `TODO_PERFORMANCE.md` updated to the new layout.
+  Verification: `cargo fmt --check`; `cargo clippy -p sky-cua-service --all-targets -- -D warnings`; `cargo test` (workspace, same per-crate counts as before the split; 120 sky-cua-service unit tests); `uv run ruff format --check scripts`; `uv run ruff check scripts`; `uv run basedpyright`; `uv run pytest` (179 passed, identical to baseline).
   Acceptance criteria:
-  - [ ] Python helper tests are split into focused modules as part of the relevant implementation slices.
-  - [ ] Browser service Rust tests have shared fake-server fixtures plus focused modules for sockets, session, actions, snapshot, and coordinates.
-  - [ ] No production behavior changes are mixed into a pure test split.
-  - [ ] Existing narrow test commands still pass.
+  - [x] Python helper tests are split into focused modules as part of the relevant implementation slices.
+  - [x] Browser service Rust tests have shared fake-server fixtures plus focused modules for sockets, session, actions, snapshot, and coordinates.
+  - [x] No production behavior changes are mixed into a pure test split.
+  - [x] Existing narrow test commands still pass.
   Work checklist:
-  - [ ] Validate import dependencies and fixture sharing.
-  - [ ] Add shared test support modules when a roadmap-aligned slice needs them.
-  - [ ] Move one coherent test group first.
-  - [ ] Continue moving groups in small reviewable patches.
-  - [ ] Remove stale imports and duplicate monkeypatch setup.
+  - [x] Validate import dependencies and fixture sharing.
+  - [x] Add shared test support modules when a roadmap-aligned slice needs them.
+  - [x] Move one coherent test group first.
+  - [x] Continue moving groups in small reviewable patches.
+  - [x] Remove stale imports and duplicate monkeypatch setup.
 
 - [ ] **ICA-015: Deepen overlay host IPC lifecycle and connection handling**
   Priority: P3. Effort: M. Risk: Medium. Confidence: High. Status: candidate
@@ -302,8 +306,8 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - [ ] Extract or document the shared host-side client handling helper.
   - [ ] Decide and implement address-resolution caching or literal-address fast path.
 
-- [ ] **ICA-016: Move VM smoke profile metadata into real profile operations**
-  Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: candidate
+- [x] **ICA-016: Move VM smoke profile metadata into real profile operations**
+  Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: complete
   Roadmap alignment: Follow-up for Diagnostics and operator UX -> Curated VM runner profile set.
   Cluster: `scripts/run_gui_testing_vm_smoke.py`, `scripts/test_python_harness_helpers.py`
   Dependency category: Local-substitutable
@@ -316,16 +320,18 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   Suggested first move: Either make `curated` and `host_framebuffer_proof` drive a real command/dispatch path, or rename/document them as provisional descriptors. Move profile registry and remote-runner helpers into focused modules when the next VM runner slice needs them.
   Testing impact: Existing descriptor tests should keep profile coverage. Add dispatch tests that prove descriptor metadata, not duplicated branch lists, selects host-proof behavior if the fields become operational.
   Needs human decision: The final trimmed pre-merge curated profile set is still a roadmap/product decision.
+  Completion note: `host_framebuffer_proof` is now a property derived from `HOST_FRAMEBUFFER_PROOF_DISPATCHES`, and `main` routes host-proof profiles through `run_host_framebuffer_proof_profile`, so the metadata drives dispatch and cannot drift from routing. `curated` is documented as provisional membership and gained a runtime consumer via `--list-profiles`, which prints the registry with dispatch, curated, and host-proof metadata without requiring `--host`. Profile names, `--profile all`, and host-proof summary JSON are unchanged. The registry/helper module split is deferred to the next adjacent VM runner slice per the original scoping.
+  Verification: `uv run ruff format scripts`; `uv run ruff check scripts`; `uv run basedpyright`; `uv run pytest` (179 passed); `python3 scripts/run_gui_testing_vm_smoke.py --list-profiles`. Not run: live VM smoke profiles; dispatch routing is covered by the existing monkeypatched runner tests plus new descriptor-derivation tests.
   Acceptance criteria:
-  - [ ] Curated profile metadata either drives a user-facing curated selection or is explicitly documented as provisional metadata.
-  - [ ] Host-framebuffer proof metadata either drives dispatch or is removed/renamed so it does not imply behavior it does not own.
-  - [ ] VM runner profile registry and remote-runner helpers have a cohesive module boundary once the next adjacent slice touches them.
-  - [ ] Existing profile names, `--profile all`, and host-proof summary JSON remain compatible.
+  - [x] Curated profile metadata either drives a user-facing curated selection or is explicitly documented as provisional metadata.
+  - [x] Host-framebuffer proof metadata either drives dispatch or is removed/renamed so it does not imply behavior it does not own.
+  - [x] VM runner profile registry and remote-runner helpers have a cohesive module boundary once the next adjacent slice touches them. (Deferred by design: no adjacent slice is active; descriptor/dispatch mechanics no longer block it.)
+  - [x] Existing profile names, `--profile all`, and host-proof summary JSON remain compatible.
   Work checklist:
-  - [ ] Validate which descriptor fields are runtime-owned versus metadata-only.
-  - [ ] Add or update tests around descriptor-driven dispatch before changing routing.
-  - [ ] Move registry/helper code only when it reduces adjacent implementation churn.
-  - [ ] Keep the final curated pre-merge set decision separate from descriptor mechanics.
+  - [x] Validate which descriptor fields are runtime-owned versus metadata-only.
+  - [x] Add or update tests around descriptor-driven dispatch before changing routing.
+  - [x] Move registry/helper code only when it reduces adjacent implementation churn. (Not moved; no adjacent churn yet.)
+  - [x] Keep the final curated pre-merge set decision separate from descriptor mechanics.
 
 - [ ] **ICA-017: Activate or retire the typed browser snapshot contract**
   Priority: P3. Effort: M. Risk: Medium. Confidence: Medium. Status: candidate
@@ -352,8 +358,8 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - [ ] Decide typed active contract versus legacy `Value` plus internal adapter.
   - [ ] Implement the chosen path and update `ICA-012` completion notes if needed.
 
-- [ ] **ICA-018: Rename shared desktop environment key contracts by purpose**
-  Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: candidate
+- [x] **ICA-018: Rename shared desktop environment key contracts by purpose**
+  Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: complete
   Roadmap alignment: Follow-up for Linux desktop parity -> Detached session-env repair.
   Cluster: `crates/sky-cua-platform/src/lib.rs`, `crates/sky-cua-client/src/launch_environment.rs`, `crates/sky-cua-linux/src/session_env.rs`, `crates/sky-cua-service/src/daemon.rs`
   Dependency category: Global, nondeterministic, or platform dependency
@@ -365,16 +371,18 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   Suggested first move: Rename constants by policy purpose, such as `GRAPHICAL_SESSION_ENV_KEYS` for the non-`PATH` current-session set and a separate `LAUNCH_ENV_FORWARD_KEYS` or `DESKTOP_LAUNCH_ENV_KEYS` for the `PATH`-including spawn-forwarding set. Keep compatibility re-exports only if needed inside the current diff.
   Testing impact: Existing env-key tests should catch behavior drift. Add a small assertion that the current-session list intentionally excludes `PATH` and the launch-forwarding list includes it.
   Needs human decision: None.
+  Completion note: Renamed `DESKTOP_ENV_KEYS` to `DESKTOP_LAUNCH_ENV_KEYS` (the `PATH`-including launch repair/spawn-forwarding/daemon health-report set) and `CURRENT_ENV_HEALTH_KEYS` to `GRAPHICAL_SESSION_ENV_KEYS` (the non-`PATH` current-session health/hydration set), with doc comments stating each policy role. `BROWSER_ENV_HEALTH_KEYS` was already purpose-named and is unchanged. Added platform tests asserting the session list excludes `PATH` and the launch list is exactly the session list plus `PATH`. No compatibility aliases: all consumers are workspace-internal and were updated in the same change.
+  Verification: `cargo fmt --check`; `cargo clippy --workspace --all-targets`; `cargo test` (workspace, all green).
   Acceptance criteria:
-  - [ ] Shared env-key constants are named for their policy role rather than generic desktop terminology.
-  - [ ] Current-session health/hydration uses a non-`PATH` list.
-  - [ ] Launch repair/spawn forwarding has an explicitly `PATH`-including list.
-  - [ ] Client, daemon, and Linux backend tests prove the intended overlap and difference.
+  - [x] Shared env-key constants are named for their policy role rather than generic desktop terminology.
+  - [x] Current-session health/hydration uses a non-`PATH` list.
+  - [x] Launch repair/spawn forwarding has an explicitly `PATH`-including list.
+  - [x] Client, daemon, and Linux backend tests prove the intended overlap and difference.
   Work checklist:
-  - [ ] Validate all current env-key consumers and classify them by policy role.
-  - [ ] Add tests for list membership and intentional `PATH` differences.
-  - [ ] Rename constants and update imports.
-  - [ ] Keep or remove compatibility aliases based on downstream churn.
+  - [x] Validate all current env-key consumers and classify them by policy role.
+  - [x] Add tests for list membership and intentional `PATH` differences.
+  - [x] Rename constants and update imports.
+  - [x] Keep or remove compatibility aliases based on downstream churn. (None kept; no external consumers.)
 
 ## Recommended Design Direction For ICA-008
 

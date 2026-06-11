@@ -3,7 +3,7 @@
 Generated from a deep performance review of the current working tree.
 Status: **13 of 13 critical/high findings implemented**. **23 of 26 medium/low fixed**; 1 skipped (MED-005); 1 no-change (LOW-005); **0 remain**.
 
-Last updated: 2026-05-18
+Last updated: 2026-06-11
 
 ---
 
@@ -298,12 +298,22 @@ Last updated: 2026-05-18
 - **Fix applied:** Wrapped the Chrome download/install in a conditional: `if [[ ! -x /opt/google/chrome/google-chrome ]]; then ... fi`. On re-provisions where Chrome is already present, the ~100 MB download is skipped entirely.
 
 ### LOW-008 — Linear string search explosion in provisioner test — ✅ FIXED
-- **File/line:** `scripts/test_python_harness_helpers.py:553-619`
+- **File/line:** `scripts/test_gui_testing_vm.py` (`test_testing_vm_provisioner_installs_arch_desktop_packages`)
 - **Problem:** `test_testing_vm_provisioner_installs_arch_desktop_packages()` performed 50+ independent `assert "string" in content` checks on a ~350-line shell script.
 - **Impact:** This was a test-time concern. The overhead was negligible, but if the assertion count doubled, it would become a minor pytest collection slowdown.
 - **Fix applied:** Compiled all expected tokens into a `set[str]` and performed a single set-inclusion pass with a set comprehension for missing tokens. Reduced 50+ individual assertions to 1 set operation + 1 exclusion assertion.
 
 ---
+
+## Test-Runtime Notes
+
+- **2026-06-11:** `cargo test -p sky-cua-service` wall time rose deliberately
+  from ~0.4 s to ~2.2 s. The `cfg(test)` `BROWSER_OPEN_TIMEOUT` in
+  `crates/sky-cua-service/src/browser/bridge.rs` was raised 250 ms → 2 s
+  (production stays 12 s) to stop happy-path browser operation tests flaking
+  under scheduler load; one aggregate-deadline test waits out the full window
+  and sets the suite tail. Do not "optimize" this back down without re-running
+  the load-stress gate (10+ consecutive full-suite runs under CPU load).
 
 ## Open Questions
 
