@@ -177,6 +177,8 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
   selection. Env (`SKY_CUA_BROWSER`) overrides the file per process;
   `SKY_CUA_CONFIG_PATH` overrides the file location for tests. Prefer the
   file over baking selection env into per-host MCP registrations.
+  Decision: per-request browser selection is rejected — the daemon uses
+  its machine config, full stop; do not add per-call selection plumbing.
 - `sky-cua-service` must handle SIGTERM through normal teardown. Process
   cleanup must match `sky-cua-service`, the full overlay-host argv, and the
   truncated comm name `sky-cua-overlay`. If the live KDE smoke fails
