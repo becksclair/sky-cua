@@ -68,11 +68,29 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Real user-tab listing, session-owned tab creation, existing-tab claiming, and Brave/Chrome/Chromium socket selection
   - [x] Page snapshots, screenshots, cursor movement, click, text entry, key dispatch, scroll, and navigation against session-owned or claimed tabs
   - [x] Live Brave MCP smoke and installed OpenCode MCP probe for the full browser tool set
-- [ ] Browser MCP managed lifecycle — [`plans/browser_use_mcp.md`](plans/browser_use_mcp.md)
-  - [ ] Launch and own an isolated browser/profile instead of using an existing user Chrome-family profile
-  - [ ] Run the shipped snapshot/screenshot/action tool sequence in that managed context
-  - [ ] Clean up managed browser process/profile state deterministically
-  - [ ] Delegate Codex Desktop's companion Browser Use adapter through the shared runtime without exposing duplicate browser tools by default
+- [ ] Codex Desktop compat materialization contract (decided 2026-06-11:
+      sky-cua owns behavior; the codex-desktop repo owns impersonation and
+      materialization of the OpenAI built-in plugin identities —
+      `computer-use@openai-bundled`, `browser-use@openai-bundled` — by
+      generating plugin cache roots that point at the packaged sky-cua
+      implementation)
+  - [x] sky-cua side: stable wrapper-friendly plugin assets (`.mcp.json`
+        server definitions, `skills/computer-use/SKILL.md`,
+        `skills/browser-use/SKILL.md`, assets/docs)
+  - [x] sky-cua side: MCP server runs from a copied/symlinked packaged
+        location, not only the dev checkout (symlink-safe `bin/` launchers,
+        exe-sibling service resolution, exe-ancestor app-instructions root)
+  - [x] sky-cua side: documented manifest/template contract for generating a
+        compat plugin from the sky-cua payload —
+        [`docs/runtime/compat-plugin-contract.md`](docs/runtime/compat-plugin-contract.md)
+  - [ ] codex-desktop side: cache-sync materialization of stock plugin roots,
+        config.toml enablement, and stock-layout smokes (tracked in the
+        codex-desktop repo, not here)
+- [x] Remove the status-only `managed` browser target from contracts, tool
+      rejection paths, status reporting, and docs (managed/isolated browser
+      lifecycle was retired 2026-06-11: driving the user's real logged-in
+      browser is the product; an isolated profile defeats that purpose) —
+      [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
 - [ ] Detached launch breadth across more desktop/session launchers
 
 ## Phase: Performance and runtime tuning

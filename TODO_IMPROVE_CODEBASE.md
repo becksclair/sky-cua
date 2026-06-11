@@ -37,7 +37,7 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 | ICA-013 | P3 | S | Low | High | complete | Enabler for roadmap-aligned work; not standalone roadmap scope | Python/Rust browser test fixture layout |
 | ICA-015 | P3 | M | Medium | High | candidate | Follow-up for Windows overlay IPC transport maintainability | overlay host IPC lifecycle and listener handling |
 | ICA-016 | P3 | S | Low | High | complete | Follow-up for VM runner profile descriptor maintainability | `scripts/run_gui_testing_vm_smoke.py` profile metadata and helper boundaries |
-| ICA-017 | P3 | M | Medium | Medium | candidate | Follow-up for Browser MCP contract hardening | browser snapshot typed contract activation |
+| ICA-017 | P3 | M | Medium | Medium | complete | Follow-up for Browser MCP contract hardening | browser snapshot typed contract activation |
 | ICA-018 | P3 | S | Low | High | complete | Follow-up for detached session-env health contract clarity | shared desktop/current env key naming |
 
 ## Completed Prior Items
@@ -333,9 +333,9 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - [x] Move registry/helper code only when it reduces adjacent implementation churn. (Not moved; no adjacent churn yet.)
   - [x] Keep the final curated pre-merge set decision separate from descriptor mechanics.
 
-- [ ] **ICA-017: Activate or retire the typed browser snapshot contract**
-  Priority: P3. Effort: M. Risk: Medium. Confidence: Medium. Status: candidate
-  Roadmap alignment: Follow-up for Host portability -> Browser MCP managed lifecycle.
+- [x] **ICA-017: Activate or retire the typed browser snapshot contract**
+  Priority: P3. Effort: M. Risk: Medium. Confidence: Medium. Status: complete
+  Roadmap alignment: Follow-up for Host portability -> Browser MCP `user_chrome` contract hardening. (Managed browser lifecycle was retired from the roadmap on 2026-06-11; `user_chrome` is the only browser target going forward, and the status-only `managed` stub is scheduled for removal.)
   Cluster: `crates/sky-cua-platform/src/model/browser.rs`, `crates/sky-cua-service/src/browser/snapshot.rs`, `crates/sky-cua-client/src/mcp_tools/browser/response.rs`
   Dependency category: Remote but owned, using ports and adapters
   Problem: `ICA-012` intentionally preserved legacy `snapshot: Option<Value>` structured output, but typed snapshot structs are now forward-looking public API rather than the active producer/renderer contract.
@@ -343,20 +343,22 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - Ultra-review residuals: `BrowserPageSnapshot`, `BrowserViewport`, `BrowserElementSummary`, and `BrowserElementBounds` are exported from the platform model, but current production snapshot structured output still preserves `Option<serde_json::Value>`.
   - Ultra-review residuals: client text summaries use borrowed legacy JSON field reads rather than the typed structs. This avoids the earlier clone/deserialization hot-path issue, but leaves the typed contract unused.
   - Ultra-review residuals: external compatibility expectations for `snapshot` remain the deciding factor for whether the public structured output can become typed or must remain an arbitrary legacy JSON value.
-  Why coupled: Browser MCP managed lifecycle needs stable snapshot contracts across user-profile and future managed-browser endpoints, but changing structured output shape can break external consumers.
+  Why coupled: Browser MCP hosts need a stable snapshot contract for the `user_chrome` target, but changing structured output shape can break external consumers.
   Suggested first move: Add serde compatibility tests and a narrow compatibility reader that exercises the typed structs without cloning the full snapshot. If external hosts require arbitrary `Value`, keep the public `Value` and move typed structs behind an internal adapter or retire the unused public types.
   Testing impact: Add golden summary tests and serde round-trip tests for representative snapshots, including extra fields, privacy-sensitive expression extraction, and capped element summaries.
-  Needs human decision: Decide whether external consumers rely on arbitrary `snapshot` JSON fields or whether the typed contract may become the active structured output shape.
+  Needs human decision: Resolved 2026-06-11. A review of the codex-desktop repo confirmed no external consumer parses the `snapshot` structured output, and the snapshot JSON is produced by the upstream Codex Chrome extension — a producer sky-cua does not own — so a typed active contract would assert a shape sky-cua cannot enforce.
+  Completion note: Retired the unused typed snapshot structs (`BrowserPageSnapshot`, `BrowserViewport`, `BrowserElementSummary`, `BrowserElementBounds`) from the platform model in the same change that removed the retired `BrowserTargetKind::Managed` stub. The active contract remains `snapshot: Option<Value>` passthrough with borrowed legacy JSON field reads for text summaries (allocation-conscious, no full-snapshot clone) and the shared diagnostic error policy from `ICA-012`. Existing snapshot summary and privacy-extraction characterization tests continue to pin behavior.
+  Verification: `cargo fmt --check`; `cargo clippy --workspace --all-targets`; `cargo test`.
   Acceptance criteria:
-  - [ ] Typed snapshot structs are either used by producer/renderer code or removed from public re-exports until they have a real caller.
-  - [ ] Browser snapshot text summary stays allocation-conscious and does not clone/deserialize the full snapshot on the hot path.
-  - [ ] Structured output compatibility is proven by tests or a documented migration.
-  - [ ] The contract supports both current user-profile browser targets and future managed-browser targets.
+  - [x] Typed snapshot structs are either used by producer/renderer code or removed from public re-exports until they have a real caller. (Removed.)
+  - [x] Browser snapshot text summary stays allocation-conscious and does not clone/deserialize the full snapshot on the hot path.
+  - [x] Structured output compatibility is proven by tests or a documented migration. (Legacy `Value` shape unchanged; characterization tests unchanged and passing.)
+  - [x] The contract serves the `user_chrome` target; no managed-browser provisions are required.
   Work checklist:
-  - [ ] Collect current smoke snapshot examples or fixtures.
-  - [ ] Add compatibility/golden tests before changing output shape.
-  - [ ] Decide typed active contract versus legacy `Value` plus internal adapter.
-  - [ ] Implement the chosen path and update `ICA-012` completion notes if needed.
+  - [x] Collect current smoke snapshot examples or fixtures. (Existing characterization tests cover representative snapshots.)
+  - [x] Add compatibility/golden tests before changing output shape. (Output shape did not change; existing tests pin it.)
+  - [x] Decide typed active contract versus legacy `Value` plus internal adapter. (Legacy `Value`; typed structs retired.)
+  - [x] Implement the chosen path and update `ICA-012` completion notes if needed.
 
 - [x] **ICA-018: Rename shared desktop environment key contracts by purpose**
   Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: complete

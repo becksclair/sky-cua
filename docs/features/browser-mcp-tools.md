@@ -2,8 +2,10 @@
 
 ## Status
 
-Shipped for `user_chrome`; managed browser lifecycle is planned but not
-implemented. Last verified: 2026-06-09 with focused Rust browser MCP tests and
+Shipped for `user_chrome`, the only browser target. The managed/isolated
+browser target was retired by decision on 2026-06-11 (controlling the user's
+real logged-in browser is the product) and its contract stub has been removed
+from the wire contract. Last verified: 2026-06-09 with focused Rust browser MCP tests and
 the 2026-06-08 live Brave MCP/native-host smokes. With
 `SKY_CUA_BROWSER=brave`, a full isolated MCP smoke advertised the browser tools,
 opened a session-owned Brave tab, navigated it to a local HTTP fixture, captured
@@ -29,9 +31,8 @@ MCP tools, always advertised by `sky-cua-client mcp`:
   summary and structured response. When filters are present, only matching tabs
   are returned to avoid leaking unrelated tab titles/URLs through
   `structuredContent`; call without filters only when a broad tab inventory is
-  actually needed. It returns tabs plus diagnostics. `managed` is not a tool
-  target yet; it is reported by `browser_status` only as planned lifecycle
-  status.
+  actually needed. It returns tabs plus diagnostics. `user_chrome` is the only
+  target value.
 - `browser_open` accepts optional `target=user_chrome` and optional `url`. It
   creates a new session-owned tab through the Chrome-family bridge, attaches it
   to the sky-cua browser session, enables CDP Page events, and navigates when a
@@ -95,15 +96,12 @@ Browser targets:
   Google Chrome, or Chromium. sky-cua reaches it through the Codex Chrome
   extension and native-host socket, then calls `getUserTabs` to enumerate the
   user's real tabs.
-- `managed` means a future sky-cua-owned isolated browser context. In that mode
-  sky-cua will launch the browser/profile and own lifecycle cleanup. That
-  ownership lifecycle is not implemented yet.
-
-The current tool surface deliberately rejects `target="managed"` for browser
-tools. Returning an empty list or action result would make agents believe a
-managed browser exists but has no tabs or state, which is worse than a clear
-error. `browser_status` may still list `managed` as a known future target, but
-it reports it unavailable until the managed lifecycle is real.
+A managed sky-cua-owned isolated browser context was once planned and was
+retired on 2026-06-11: an isolated profile loses the logged-in sessions that
+make real-browser control useful. The `managed` target has been removed from
+the wire contract entirely; `browser_status` reports only `user_chrome`, and
+any other `target` string is rejected at argument parsing with an explicit
+error.
 
 `browser_claim_tab` is the explicit adoption seam for existing `user_chrome`
 tabs from `browser_list_tabs`. Browser actions should target tabs returned by
@@ -229,10 +227,6 @@ desktop request lane is already busy, status still returns bridge diagnostics
 and marks browser integration checks as deferred instead of waiting behind the
 desktop action.
 
-For `managed`, `browser_status` reports browser-binary prerequisites as detail
-only. A detected Chromium/Chrome/Brave binary does not make the managed target
-available, because sky-cua does not yet own a managed browser process, profile,
-or tab session.
 
 `browser_list_tabs(user_chrome)` discovers Unix sockets from the Chrome-family
 native messaging host, filters them by `SKY_CUA_BROWSER`, and calls the Codex
@@ -527,11 +521,11 @@ Live native-host ownership proof from 2026-06-05:
 - Browser tools currently expose readiness, `user_chrome` tab listing,
   creation/navigation of session-owned `user_chrome` tabs, existing-tab
   claiming, browser cursor movement, snapshots, screenshots, click, text entry,
-  key dispatch, and page scrolling. Managed browser launch and Codex Desktop
-  adapter delegation remain active follow-up work.
-- `managed` is a planned sky-cua-owned browser context, not a synonym for the
-  user's existing Brave/Chrome/Chromium window. It is unavailable until process,
-  profile, tab-session ownership, and cleanup are implemented.
+  key dispatch, and page scrolling. Codex Desktop adapter delegation remains
+  follow-up work (owned by the codex-desktop repo per
+  [`docs/runtime/compat-plugin-contract.md`](../runtime/compat-plugin-contract.md));
+  managed browser launch was retired on 2026-06-11 and removed from the
+  contract.
 - Real-browser tab listing depends on the Codex Chrome extension/native-host
   socket already being connected in the selected Chrome-family browser.
 - `browser_claim_tab(user_chrome)` can adopt existing tabs and can recover tabs
@@ -544,9 +538,7 @@ Live native-host ownership proof from 2026-06-05:
 
 ## Related
 
-- [`ROADMAP.md`](../../ROADMAP.md) — Host portability phase and managed browser
-  lifecycle follow-up.
-- [`plans/browser_use_mcp.md`](../../plans/browser_use_mcp.md) — active plan
-  for managed browser lifecycle and Codex Desktop adapter delegation.
+- [`ROADMAP.md`](../../ROADMAP.md) — Host portability phase: Codex Desktop
+  compat materialization follow-up.
 - [`docs/features/codex-desktop-compat.md`](codex-desktop-compat.md) — Codex
   companion Browser Use and Chrome plugin compatibility.
