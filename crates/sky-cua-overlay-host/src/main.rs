@@ -85,6 +85,9 @@ struct HandledMessage {
 }
 
 fn main() -> Result<()> {
+    // The overlay host is a long-lived child of the service daemon; drop any
+    // descriptors leaked down the launcher chain before serving.
+    sky_cua_platform::fd_hygiene::close_inherited_fds();
     let command = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "serve".to_string());

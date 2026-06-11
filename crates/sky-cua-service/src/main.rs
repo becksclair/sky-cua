@@ -16,8 +16,18 @@ mod snapshot_manager;
 
 use anyhow::Result;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Must run before the tokio runtime opens its own descriptors: the
+    // daemon outlives its launcher and must not keep inherited sockets
+    // (e.g. an Electron DevTools listener) bound after the launcher exits.
+    sky_cua_platform::fd_hygiene::close_inherited_fds();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),

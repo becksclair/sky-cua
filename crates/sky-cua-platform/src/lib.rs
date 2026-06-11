@@ -2,6 +2,7 @@ pub mod app_instructions;
 pub mod backend;
 pub mod config;
 pub mod diagnostics;
+pub mod fd_hygiene;
 pub mod model;
 pub mod paths;
 pub mod snapshot;

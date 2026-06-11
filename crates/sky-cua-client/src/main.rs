@@ -11,6 +11,10 @@ use heuristics::HeuristicsRegistry;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // The MCP client is spawned by arbitrary hosts (Codex Desktop, app
+    // server); drop their leaked descriptors before opening any of our own
+    // so they cannot propagate into the long-lived service daemon either.
+    sky_cua_platform::fd_hygiene::close_inherited_fds();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
