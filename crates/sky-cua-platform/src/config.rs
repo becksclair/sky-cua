@@ -42,7 +42,9 @@ pub fn machine_config_path() -> Option<PathBuf> {
 
 fn machine_config_base_dir() -> Option<PathBuf> {
     if cfg!(windows) {
-        return std::env::var_os("APPDATA").map(PathBuf::from);
+        return std::env::var_os("APPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
     }
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(xdg));

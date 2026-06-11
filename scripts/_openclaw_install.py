@@ -17,6 +17,7 @@ from _install_shared import (
     restore_text_path_snapshot,
     snapshot_text_path,
     subprocess_error_detail,
+    toml_basic_string,
     write_text_atomically,
 )
 from _plugin_bundle import remove_path
@@ -214,18 +215,6 @@ def restore_openclaw_agent_codex_mcp_server_snapshots(
             remove_path(path)
         else:
             write_text_atomically(path, original_text, mode=original_mode)
-
-
-def toml_basic_string(value: str) -> str:
-    """Render a TOML basic string with backslash/quote/control escaping."""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    escaped = "".join(
-        f"\\u{ord(char):04X}"
-        if (ord(char) < 0x20 and char not in "\t") or ord(char) == 0x7F
-        else char
-        for char in escaped
-    )
-    return f'"{escaped}"'
 
 
 def codex_mcp_server_toml_block(client_path: Path) -> str:

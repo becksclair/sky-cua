@@ -106,6 +106,18 @@ def restore_text_path_snapshot(_path: Path, snapshot: tuple[Path, str | None, in
 MACHINE_CONFIG_PATH_ENV = "SKY_CUA_CONFIG_PATH"
 
 
+def toml_basic_string(value: str) -> str:
+    """Render a TOML basic string with backslash/quote/control escaping."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = "".join(
+        f"\\u{ord(char):04X}"
+        if (ord(char) < 0x20 and char not in "\t") or ord(char) == 0x7F
+        else char
+        for char in escaped
+    )
+    return f'"{escaped}"'
+
+
 def machine_config_path() -> Path | None:
     """Mirror the runtime's machine-config resolution (platform config.rs)."""
     explicit = os.environ.get(MACHINE_CONFIG_PATH_ENV)
@@ -116,7 +128,10 @@ def machine_config_path() -> Path | None:
         base = Path(appdata) if appdata else None
     else:
         xdg = os.environ.get("XDG_CONFIG_HOME")
-        base = Path(xdg) if xdg else Path.home() / ".config"
+        # Mirror the Rust resolver: no $HOME means no machine config, rather
+        # than falling back to the passwd database.
+        home = os.environ.get("HOME")
+        base = Path(xdg) if xdg else (Path(home) / ".config" if home else None)
     if base is None:
         return None
     return base / "sky-cua" / "sky-cua.toml"
@@ -146,7 +161,7 @@ def seed_machine_config_browser(value: str) -> Path | None:
         return None
     if existing.get("browser") == value:
         return path
-    line = f'browser = "{value}"\n'
+    line = f"browser = {toml_basic_string(value)}\n"
     if "browser" in existing:
         new_text, replacements = re.subn(r"(?m)^browser\s*=.*\n?", line, text, count=1)
         if replacements != 1:

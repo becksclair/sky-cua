@@ -262,7 +262,7 @@ pub(super) fn browser_socket_selection_from_value(
         _ => Err(DiagnosticEntry {
             code: "BrowserSelectionInvalid".to_string(),
             message: format!(
-                "Unsupported {SKY_CUA_BROWSER_ENV} value {value:?}; use brave, chrome, chromium, or all."
+                "Unsupported browser selection {value:?} (from {SKY_CUA_BROWSER_ENV} or the machine config `browser` key); use brave, chrome, chromium, or all."
             ),
             details: None,
         }),
