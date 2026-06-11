@@ -204,6 +204,17 @@ projected but every call is blocked — the server looks connected while no
 sky-cua tool works during an agent turn. `openclaw mcp probe` passing does
 not cover this case; only an agent-turn check does.
 
+The installer additionally pins a marker-managed `[mcp_servers.sky_cua]`
+block (including `default_tools_approval_mode = "auto"` and the sky-cua
+environment) into every agent's `codex-home/config.toml` under the OpenClaw
+state directory. The codex app-server reads that file at process level, so
+the server reaches every codex thread even when the per-thread projection
+path is unavailable, and tool calls stay auto-approved at both layers.
+Re-running the installer replaces the managed block in place. The smoke's
+agent turn uses a fresh session key per run because OpenClaw resumes one
+codex thread per session key, and a resumed thread keeps the MCP state it
+had when it was created.
+
 Verify an OpenClaw deployment with the dedicated smoke:
 
 ```bash
