@@ -46,6 +46,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BROWSER_SELECTION_ENV = "SKY_CUA_BROWSER"
 SKY_CUA_SKILLS = ("computer-use", "browser-use")
 DEFAULT_OPENCLAW_DIR = Path.home() / ".openclaw"
+CODEX_MCP_SERVER_TOML_BEGIN = "# >>> sky-cua mcp_servers (managed by install_mcp_server.py) >>>"
+CODEX_MCP_SERVER_TOML_END = "# <<< sky-cua mcp_servers <<<"
 OPENCLAW_MCP_SET_TIMEOUT_SECONDS = 30
 CLAUDE_MCP_ADD_TIMEOUT_SECONDS = 30
 
@@ -505,8 +507,74 @@ def install_openclaw(
             f"(OPENCLAW_STATE_DIR={openclaw_state_dir})"
         ) from error
     reload_openclaw_mcp_runtimes(openclaw_bin, env)
+    install_openclaw_agent_codex_mcp_servers(openclaw_state_dir, client_path)
     install_sky_cua_skills(openclaw_state_dir / "workspace" / "skills")
     return path
+
+
+def openclaw_agent_codex_config_paths(openclaw_state_dir: Path) -> list[Path]:
+    """codex-home config.toml files for every configured OpenClaw agent."""
+    agents_dir = openclaw_state_dir / "agents"
+    if not agents_dir.is_dir():
+        return []
+    return sorted(agents_dir.glob("*/agent/codex-home/config.toml"))
+
+
+def install_openclaw_agent_codex_mcp_servers(
+    openclaw_state_dir: Path,
+    client_path: Path,
+) -> None:
+    """Pin sky_cua into each agent's codex-home config.toml mcp_servers table.
+
+    OpenClaw's native codex runtime projects mcp.servers into per-thread
+    config, but that projection has runtime-state gates that can drop the
+    server from a turn. The codex app-server also reads CODEX_HOME/config.toml
+    at process level, which applies to every thread unconditionally, so the
+    deploy pins the server in both places.
+    """
+    for config_path in openclaw_agent_codex_config_paths(openclaw_state_dir):
+        upsert_codex_mcp_server_toml(config_path, client_path)
+        print(f"Pinned sky_cua mcp_servers entry in {config_path}")
+
+
+def codex_mcp_server_toml_block(client_path: Path) -> str:
+    env_lines = [f'SKY_CUA_REPO_ROOT = "{REPO_ROOT}"']
+    env_lines.extend(
+        f'{name} = "{value}"' for name, value in browser_selection_environment().items()
+    )
+    rendered_env = "\n".join(env_lines)
+    return (
+        f"{CODEX_MCP_SERVER_TOML_BEGIN}\n"
+        "[mcp_servers.sky_cua]\n"
+        f'command = "{client_path}"\n'
+        'args = ["mcp"]\n'
+        "startup_timeout_sec = 30\n"
+        # Always-allow: other modes defer to the app-server approval policy,
+        # which is "never" for unattended turns and would block every call.
+        'default_tools_approval_mode = "auto"\n'
+        "[mcp_servers.sky_cua.env]\n"
+        f"{rendered_env}\n"
+        f"{CODEX_MCP_SERVER_TOML_END}\n"
+    )
+
+
+def upsert_codex_mcp_server_toml(config_path: Path, client_path: Path) -> None:
+    """Replace or append the marker-delimited sky_cua mcp_servers block."""
+    block = codex_mcp_server_toml_block(client_path)
+    text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    begin = text.find(CODEX_MCP_SERVER_TOML_BEGIN)
+    end = text.find(CODEX_MCP_SERVER_TOML_END)
+    if begin != -1 and end != -1 and end > begin:
+        end += len(CODEX_MCP_SERVER_TOML_END)
+        if end < len(text) and text[end] == "\n":
+            end += 1
+        text = text[:begin] + block + text[end:]
+    else:
+        separator = (
+            "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+        )
+        text = text + separator + block
+    write_text_atomically(config_path, text)
 
 
 def reload_openclaw_mcp_runtimes(openclaw_bin: str, env: dict[str, str]) -> None:

@@ -287,12 +287,18 @@ def main() -> int:
     )
     parser.add_argument(
         "--session-key",
-        default="sky-cua-mcp-smoke",
-        help="Session key for the live turn (default: sky-cua-mcp-smoke).",
+        default=None,
+        help=(
+            "Session key for the live turn. Defaults to a fresh per-run key: "
+            "OpenClaw pins a codex thread per session, so reusing a key would "
+            "resume a thread whose MCP server state predates this deployment."
+        ),
     )
     args = parser.parse_args()
 
     artifact_dir = make_artifact_dir("openclaw", "mcp")
+    if args.session_key is None:
+        args.session_key = f"sky-cua-mcp-smoke-{artifact_dir.name}"
     stages: dict[str, Any] = {}
     failures: list[str] = []
 

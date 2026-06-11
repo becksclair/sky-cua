@@ -462,6 +462,48 @@ def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
     ).exists()
 
 
+def test_openclaw_codex_home_toml_upsert_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(install_mcp_server.BROWSER_SELECTION_ENV, "brave")
+    config_path = tmp_path / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    client_path = tmp_path / "bin" / "sky-cua-client"
+
+    install_mcp_server.install_openclaw_agent_codex_mcp_servers(tmp_path, client_path)
+    first = config_path.read_text(encoding="utf-8")
+    assert 'model = "gpt-5.5"' in first
+    assert "[mcp_servers.sky_cua]" in first
+    assert f'command = "{client_path}"' in first
+    assert f'{install_mcp_server.BROWSER_SELECTION_ENV} = "brave"' in first
+    assert "SKY_CUA_REPO_ROOT" in first
+
+    # Re-running replaces the managed block instead of appending a duplicate.
+    monkeypatch.delenv(install_mcp_server.BROWSER_SELECTION_ENV, raising=False)
+    install_mcp_server.install_openclaw_agent_codex_mcp_servers(tmp_path, client_path)
+    second = config_path.read_text(encoding="utf-8")
+    assert second.count("[mcp_servers.sky_cua]") == 1
+    assert install_mcp_server.BROWSER_SELECTION_ENV not in second.split("[mcp_servers")[1]
+
+    import tomllib
+
+    parsed = tomllib.loads(second)
+    assert parsed["mcp_servers"]["sky_cua"]["args"] == ["mcp"]
+    # Always-allow at the codex layer: any other mode defers to the
+    # app-server approval policy and blocks calls in unattended turns.
+    assert parsed["mcp_servers"]["sky_cua"]["default_tools_approval_mode"] == "auto"
+
+
+def test_openclaw_codex_home_discovery_skips_missing_agents_dir(tmp_path: Path) -> None:
+    assert install_mcp_server.openclaw_agent_codex_config_paths(tmp_path) == []
+
+    config_path = tmp_path / "agents" / "esther" / "agent" / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("", encoding="utf-8")
+    assert install_mcp_server.openclaw_agent_codex_config_paths(tmp_path) == [config_path]
+
+
 def test_openclaw_install_reports_registration_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
