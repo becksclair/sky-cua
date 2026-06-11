@@ -11,9 +11,8 @@ use tokio::time::Instant as TokioInstant;
 use super::cdp::{BrowserCdpAction, BrowserCdpResult};
 use super::diagnostics::{
     invalid_key_diagnostic, invalid_scroll_diagnostic, invalid_text_diagnostic,
-    managed_action_unsupported_diagnostic, managed_open_unsupported_diagnostic,
-    managed_tabs_unsupported_diagnostic, unsupported_open_url_diagnostic, validate_action_target,
-    validate_open_url, validate_point, validate_tab_id,
+    unsupported_open_url_diagnostic, validate_action_tab_id, validate_open_url, validate_point,
+    validate_tab_id,
 };
 use super::executor::BrowserBridgeExecutor;
 use super::probe::first_responsive_bridge_socket;
@@ -32,13 +31,6 @@ pub(super) const BROWSER_OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) async fn list_tabs(target: Option<BrowserTargetKind>) -> BrowserListTabsResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
-    if resolved_target == BrowserTargetKind::Managed {
-        return BrowserListTabsResponse {
-            target: Some(resolved_target),
-            tabs: Vec::new(),
-            diagnostics: vec![managed_tabs_unsupported_diagnostic()],
-        };
-    }
 
     match BrowserBridgeExecutor::from_env(TokioInstant::now() + BROWSER_OPEN_TIMEOUT) {
         Ok(executor) => executor.list_tabs(Some(resolved_target)).await,
@@ -55,13 +47,6 @@ pub(crate) async fn open_tab(
     url: Option<String>,
 ) -> BrowserOpenResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
-    if resolved_target == BrowserTargetKind::Managed {
-        return BrowserOpenResponse {
-            target: resolved_target,
-            tab: None,
-            diagnostics: vec![managed_open_unsupported_diagnostic()],
-        };
-    }
 
     let url = match validate_open_url(url) {
         Ok(url) => url,
@@ -101,13 +86,6 @@ pub(crate) async fn claim_tab(
     tab_id: String,
 ) -> BrowserClaimTabResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
-    if resolved_target == BrowserTargetKind::Managed {
-        return BrowserClaimTabResponse {
-            target: resolved_target,
-            tab: None,
-            diagnostics: vec![managed_action_unsupported_diagnostic()],
-        };
-    }
 
     let tab_id = match validate_tab_id(tab_id) {
         Ok(tab_id) => tab_id,
@@ -151,7 +129,7 @@ pub(crate) async fn move_mouse(
 ) -> BrowserMoveMouseResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
-    let mut diagnostics = validate_action_target(resolved_target, &normalized_tab_id);
+    let mut diagnostics = validate_action_tab_id(&normalized_tab_id);
     if let Err(diagnostic) = validate_point(x, y) {
         diagnostics.push(diagnostic);
     }
@@ -206,7 +184,7 @@ pub(crate) async fn navigate(
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
     let normalized_url = normalize_browser_open_url(&url).unwrap_or_default();
-    let mut diagnostics = validate_action_target(resolved_target, &normalized_tab_id);
+    let mut diagnostics = validate_action_tab_id(&normalized_tab_id);
     if normalized_url.is_empty() {
         diagnostics.push(unsupported_open_url_diagnostic("browser_navigate"));
     }
@@ -250,7 +228,7 @@ pub(crate) async fn snapshot(
 ) -> BrowserSnapshotResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
-    let diagnostics = validate_action_target(resolved_target, &normalized_tab_id);
+    let diagnostics = validate_action_tab_id(&normalized_tab_id);
     if !diagnostics.is_empty() {
         return BrowserSnapshotResponse {
             target: resolved_target,
@@ -299,7 +277,7 @@ pub(crate) async fn screenshot(
 ) -> BrowserScreenshotResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
-    let diagnostics = validate_action_target(resolved_target, &normalized_tab_id);
+    let diagnostics = validate_action_tab_id(&normalized_tab_id);
     if !diagnostics.is_empty() {
         return BrowserScreenshotResponse {
             target: resolved_target,
@@ -430,7 +408,7 @@ pub(crate) async fn eval(
             }],
         };
     }
-    let mut diagnostics = validate_action_target(resolved_target, &normalized_tab_id);
+    let mut diagnostics = validate_action_tab_id(&normalized_tab_id);
     if expression.trim().is_empty() {
         diagnostics.push(invalid_text_diagnostic());
     }
@@ -509,7 +487,7 @@ async fn browser_action_response(
 ) -> BrowserActionResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
-    let mut diagnostics = validate_action_target(resolved_target, &normalized_tab_id);
+    let mut diagnostics = validate_action_tab_id(&normalized_tab_id);
     if let Err(diagnostic) = action_validation {
         diagnostics.push(diagnostic);
     }

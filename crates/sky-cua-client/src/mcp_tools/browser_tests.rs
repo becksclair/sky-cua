@@ -493,9 +493,9 @@ fn browser_status_summary_mentions_targets_and_diagnostics() {
     let report = BrowserStatusReport {
         enabled: true,
         available_targets: vec![BrowserTargetAvailability {
-            target: BrowserTargetKind::Managed,
+            target: BrowserTargetKind::UserChrome,
             available: true,
-            detail: "Available browser binaries: chromium.".to_string(),
+            detail: "Chrome native-host browser bridge is responsive.".to_string(),
         }],
         tabs_known: None,
         browser_integration: None,
@@ -508,7 +508,7 @@ fn browser_status_summary_mentions_targets_and_diagnostics() {
 
     let summary = browser_status_summary(&report);
     assert!(summary.contains("Browser MCP tools are available"));
-    assert!(summary.contains("managed=available"));
+    assert!(summary.contains("user_chrome=available"));
     assert!(summary.contains("Tabs known: unknown"));
     assert!(summary.contains("No browser bridge is connected"));
 }

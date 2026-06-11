@@ -447,14 +447,17 @@ fn action_tool(
 mod annotation_tests {
     use super::build_tool_definitions;
 
-    /// Pinned (read_only, destructive, idempotent, open_world) per tool.
+    /// (read_only, destructive, idempotent, open_world) per tool.
+    type AnnotationRow = (&'static str, (bool, bool, bool, bool));
+
+    /// Pinned annotation rows per tool.
     ///
     /// Hosts gate per-tool approval on these MCP annotations — Codex "auto"
     /// approval mode silently approves read-only tools and prompts for
     /// destructive/open-world ones, and treats unannotated tools as both.
     /// Changing a row here changes which sky-cua calls hosts auto-approve,
     /// so it must be a deliberate decision.
-    const EXPECTED: &[(&str, (bool, bool, bool, bool))] = &[
+    const EXPECTED: &[AnnotationRow] = &[
         ("doctor", (true, false, true, false)),
         ("setup_accessibility", (false, false, true, false)),
         // Deliberate judgment call: installs a GNOME Shell extension, but the

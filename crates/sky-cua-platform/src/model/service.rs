@@ -201,7 +201,7 @@ mod tests {
             (
                 ServiceRequest::Browser {
                     request: BrowserRequest::ListTabs {
-                        target: Some(BrowserTargetKind::Managed),
+                        target: Some(BrowserTargetKind::UserChrome),
                     },
                 },
                 "browser",
@@ -490,7 +490,7 @@ mod tests {
                 report: BrowserStatusReport {
                     enabled: true,
                     available_targets: vec![BrowserTargetAvailability {
-                        target: BrowserTargetKind::Managed,
+                        target: BrowserTargetKind::UserChrome,
                         available: true,
                         detail: "ok".to_string(),
                     }],

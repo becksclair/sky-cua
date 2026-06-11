@@ -42,22 +42,15 @@ async fn browser_status_from_integration(
         Some(integration) => browser_target_availability(integration, bridge_ready),
         None => {
             diagnostics.push(missing_integration_diagnostic);
-            vec![
-                BrowserTargetAvailability {
-                    target: BrowserTargetKind::Managed,
-                    available: false,
-                    detail: "No Chrome-family browser checks were reported.".to_string(),
+            vec![BrowserTargetAvailability {
+                target: BrowserTargetKind::UserChrome,
+                available: bridge_ready,
+                detail: if bridge_ready {
+                    "Chrome native-host browser bridge is responsive.".to_string()
+                } else {
+                    "No Chrome native host manifest check was reported.".to_string()
                 },
-                BrowserTargetAvailability {
-                    target: BrowserTargetKind::UserChrome,
-                    available: bridge_ready,
-                    detail: if bridge_ready {
-                        "Chrome native-host browser bridge is responsive.".to_string()
-                    } else {
-                        "No Chrome native host manifest check was reported.".to_string()
-                    },
-                },
-            ]
+            }]
         }
     };
 
@@ -85,43 +78,28 @@ fn browser_target_availability(
         .map(|check| check.name.as_str())
         .collect::<Vec<_>>();
     let browser_binary_available = !available_browsers.is_empty();
-    let managed_detail = if browser_binary_available {
-        format!(
-            "Managed browser lifecycle is not implemented yet. Future managed launch prerequisites detected: {}.",
-            available_browsers.join(", ")
-        )
-    } else {
-        "Managed browser lifecycle is not implemented yet, and no Chrome-family browser binary was found in PATH.".to_string()
-    };
     let user_available =
         bridge_ready || (browser_binary_available && integration.native_host_manifest.ok);
 
-    vec![
-        BrowserTargetAvailability {
-            target: BrowserTargetKind::Managed,
-            available: false,
-            detail: managed_detail,
+    vec![BrowserTargetAvailability {
+        target: BrowserTargetKind::UserChrome,
+        available: user_available,
+        detail: if bridge_ready {
+            "Chrome native-host browser bridge is responsive.".to_string()
+        } else if user_available {
+            format!(
+                "Chrome native host manifest is installed: {}",
+                integration.native_host_manifest.detail
+            )
+        } else if !browser_binary_available {
+            "User Chrome automation requires a Chrome-family browser binary.".to_string()
+        } else {
+            format!(
+                "Chrome native host manifest is not ready: {}",
+                integration.native_host_manifest.detail
+            )
         },
-        BrowserTargetAvailability {
-            target: BrowserTargetKind::UserChrome,
-            available: user_available,
-            detail: if bridge_ready {
-                "Chrome native-host browser bridge is responsive.".to_string()
-            } else if user_available {
-                format!(
-                    "Chrome native host manifest is installed: {}",
-                    integration.native_host_manifest.detail
-                )
-            } else if !browser_binary_available {
-                "User Chrome automation requires a Chrome-family browser binary.".to_string()
-            } else {
-                format!(
-                    "Chrome native host manifest is not ready: {}",
-                    integration.native_host_manifest.detail
-                )
-            },
-        },
-    ]
+    }]
 }
 
 #[cfg(test)]
@@ -130,7 +108,7 @@ mod tests {
     use sky_cua_platform::model::{BrowserIntegrationReport, BrowserTargetKind, DoctorCheck};
 
     #[test]
-    fn managed_browser_status_is_unavailable_until_lifecycle_lands() {
+    fn browser_status_reports_only_the_user_chrome_target() {
         let availability = browser_target_availability(
             &BrowserIntegrationReport {
                 chrome: doctor_check("chrome", false, "missing"),
@@ -140,18 +118,10 @@ mod tests {
             },
             false,
         );
-        let managed = availability
-            .iter()
-            .find(|target| target.target == BrowserTargetKind::Managed)
-            .expect("managed target should be reported");
-        let user_chrome = availability
-            .iter()
-            .find(|target| target.target == BrowserTargetKind::UserChrome)
-            .expect("user_chrome target should be reported");
 
-        assert!(!managed.available);
-        assert!(managed.detail.contains("not implemented yet"));
-        assert!(user_chrome.available);
+        assert_eq!(availability.len(), 1);
+        assert_eq!(availability[0].target, BrowserTargetKind::UserChrome);
+        assert!(availability[0].available);
     }
 
     #[test]

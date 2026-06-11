@@ -154,20 +154,12 @@ fn unsupported_browser_status(
 ) -> BrowserStatusReport {
     BrowserStatusReport {
         enabled: true,
-        available_targets: vec![
-            BrowserTargetAvailability {
-                target: BrowserTargetKind::Managed,
-                available: false,
-                detail: "Managed browser lifecycle is not implemented on this platform."
-                    .to_string(),
-            },
-            BrowserTargetAvailability {
-                target: BrowserTargetKind::UserChrome,
-                available: false,
-                detail: "Chrome native-host browser bridge requires a Unix socket platform."
-                    .to_string(),
-            },
-        ],
+        available_targets: vec![BrowserTargetAvailability {
+            target: BrowserTargetKind::UserChrome,
+            available: false,
+            detail: "Chrome native-host browser bridge requires a Unix socket platform."
+                .to_string(),
+        }],
         tabs_known: None,
         browser_integration: integration,
         diagnostics,

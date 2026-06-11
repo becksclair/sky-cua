@@ -34,7 +34,7 @@ pub(crate) fn push_tool_definitions(tool_array: &mut Vec<Value>, eval_enabled: b
 fn browser_status_tool() -> Value {
     json!({
         "name": "browser_status",
-        "description": "Report first-class Browser Use readiness for sky-cua, including user-Chrome availability, planned managed-browser lifecycle status, native host manifest state, and browser bridge diagnostics.",
+        "description": "Report first-class Browser Use readiness for sky-cua, including user-Chrome availability, native host manifest state, and browser bridge diagnostics.",
         "annotations": READ_ONLY_TOOL.to_value(),
         "inputSchema": {
             "type": "object",

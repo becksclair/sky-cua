@@ -18,15 +18,6 @@ fn user_chrome_lists_real_browser_tabs() {
 }
 
 #[tokio::test]
-async fn managed_target_reports_unsupported_until_lifecycle_lands() {
-    let response = list_tabs(Some(BrowserTargetKind::Managed)).await;
-
-    assert!(response.tabs.is_empty());
-    assert_eq!(response.diagnostics.len(), 1);
-    assert_eq!(response.diagnostics[0].code, "BrowserTargetUnsupported");
-}
-
-#[tokio::test]
 async fn open_tab_rejects_unsupported_url_before_bridge() {
     let response = open_tab(
         Some(BrowserTargetKind::UserChrome),
@@ -80,12 +71,12 @@ fn parses_get_tabs_array_response_into_browser_tabs() {
                 "title": "missing id"
             }
         ])),
-        Some(BrowserTargetKind::Managed),
+        Some(BrowserTargetKind::UserChrome),
     );
 
     assert_eq!(tabs.len(), 2);
     assert_eq!(tabs[0].tab_id, "7");
-    assert_eq!(tabs[0].target, BrowserTargetKind::Managed);
+    assert_eq!(tabs[0].target, BrowserTargetKind::UserChrome);
     assert_eq!(tabs[0].title.as_deref(), Some("Example"));
     assert_eq!(tabs[0].url.as_deref(), Some("https://example.test/"));
     assert!(tabs[0].active);

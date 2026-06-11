@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use serde_json::Value;
-use sky_cua_platform::model::{BrowserTargetKind, DiagnosticEntry, normalize_browser_open_url};
+use sky_cua_platform::model::{DiagnosticEntry, normalize_browser_open_url};
 
 #[cfg(not(test))]
 const BROWSER_OPEN_TIMEOUT_MS: u128 = 12_000;
@@ -9,14 +9,8 @@ const BROWSER_OPEN_TIMEOUT_MS: u128 = 12_000;
 #[cfg(test)]
 const BROWSER_OPEN_TIMEOUT_MS: u128 = 2_000;
 
-pub(super) fn validate_action_target(
-    target: BrowserTargetKind,
-    normalized_tab_id: &str,
-) -> Vec<DiagnosticEntry> {
+pub(super) fn validate_action_tab_id(normalized_tab_id: &str) -> Vec<DiagnosticEntry> {
     let mut diagnostics = Vec::new();
-    if target == BrowserTargetKind::Managed {
-        diagnostics.push(managed_action_unsupported_diagnostic());
-    }
     if normalized_tab_id.is_empty() {
         diagnostics.push(invalid_tab_id_diagnostic());
     }
@@ -51,33 +45,6 @@ pub(crate) fn browser_bridge_disconnected_diagnostic() -> DiagnosticEntry {
     DiagnosticEntry {
         code: "BrowserBridgeDisconnected".to_string(),
         message: "No Chrome extension/native-host browser socket is available for tab enumeration."
-            .to_string(),
-        details: None,
-    }
-}
-
-pub(super) fn managed_tabs_unsupported_diagnostic() -> DiagnosticEntry {
-    DiagnosticEntry {
-        code: "BrowserTargetUnsupported".to_string(),
-        message: "Managed browser tab lifecycle is not implemented yet; use target=user_chrome."
-            .to_string(),
-        details: None,
-    }
-}
-
-pub(super) fn managed_open_unsupported_diagnostic() -> DiagnosticEntry {
-    DiagnosticEntry {
-        code: "BrowserTargetUnsupported".to_string(),
-        message: "Managed browser lifecycle is not implemented yet; use target=user_chrome."
-            .to_string(),
-        details: None,
-    }
-}
-
-pub(super) fn managed_action_unsupported_diagnostic() -> DiagnosticEntry {
-    DiagnosticEntry {
-        code: "BrowserTargetUnsupported".to_string(),
-        message: "Managed browser actions are not implemented yet; use target=user_chrome."
             .to_string(),
         details: None,
     }

@@ -637,7 +637,6 @@ fn append_first_diagnostic(summary: &mut String, diagnostics: &[DiagnosticEntry]
 
 fn browser_target_label(target: BrowserTargetKind) -> &'static str {
     match target {
-        BrowserTargetKind::Managed => "managed",
         BrowserTargetKind::UserChrome => "user_chrome",
     }
 }

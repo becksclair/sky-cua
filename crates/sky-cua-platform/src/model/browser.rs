@@ -103,10 +103,13 @@ pub enum BrowserResponse {
     Eval { response: BrowserEvalResponse },
 }
 
+/// Browser automation targets. `user_chrome` (the user's real, logged-in
+/// Chrome-family browser) is the only target: managed/isolated browser
+/// lifecycle was retired on 2026-06-11 because an isolated profile defeats
+/// the purpose of real-browser control.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserTargetKind {
-    Managed,
     UserChrome,
 }
 
@@ -202,58 +205,6 @@ pub struct BrowserSnapshotResponse {
     pub diagnostics: Vec<DiagnosticEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct BrowserPageSnapshot {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub viewport: Option<BrowserViewport>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(default)]
-    pub elements: Vec<BrowserElementSummary>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct BrowserViewport {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub height: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device_pixel_ratio: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct BrowserElementSummary {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tag: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub href: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bounds: Option<BrowserElementBounds>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct BrowserElementBounds {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub x: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub y: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub height: Option<f64>,
-}
-
 /// Environment variable gating arbitrary page-JavaScript execution via
 /// `browser_eval`. This is a security boundary the MCP client and the service
 /// must agree on, so the opt-in check lives here and is shared by both rather
@@ -279,7 +230,6 @@ pub fn browser_diagnostic_is_error_code(code: &str) -> bool {
             | "BrowserBridgeRequestFailed"
             | "BrowserBridgeRequestTimedOut"
             | "BrowserSelectionInvalid"
-            | "BrowserTargetUnsupported"
             | "BrowserTabIdInvalid"
             | "BrowserMouseCoordinateInvalid"
             | "BrowserTextInvalid"
