@@ -26,6 +26,7 @@ use crate::portal::remote_desktop::{
     MouseButton, PortalLifecycleEvent, RemoteDesktopSessionManager,
 };
 use crate::session_env;
+use crate::session_presence::SessionPresenceManager;
 use crate::virtual_input::{LinuxVirtualInput, virtual_input_keyboard_available};
 use crate::windowing as linux_windowing;
 use crate::x11::input_xtest::{self, X11MouseButton};
@@ -41,6 +42,7 @@ pub struct LinuxDesktopBackend {
     atspi: Arc<Mutex<Option<AccessibilityConnection>>>,
     app_policies: AppActionPolicies,
     session_env: Arc<StdMutex<DoctorSessionEnvReport>>,
+    session_presence: SessionPresenceManager,
     virtual_input: Arc<OnceLock<LinuxVirtualInput>>,
 }
 
@@ -78,6 +80,7 @@ impl LinuxDesktopBackend {
                 AppActionPolicies::default()
             }),
             session_env: Arc::new(StdMutex::new(session_env_report)),
+            session_presence: SessionPresenceManager::new(),
             virtual_input: Arc::new(OnceLock::new()),
         }
     }
@@ -341,9 +344,11 @@ impl DesktopBackend for LinuxDesktopBackend {
 
     async fn doctor(&self) -> Result<sky_cua_platform::model::DoctorReport, BackendError> {
         let environment = self.probe_environment().await?;
-        Ok(crate::doctor::build_doctor_report(
+        let session_presence = self.session_presence.doctor_report().await;
+        Ok(crate::doctor::build_doctor_report_with_session_presence(
             environment,
             self.session_env_report(),
+            Some(session_presence),
         ))
     }
 
@@ -447,8 +452,12 @@ impl DesktopBackend for LinuxDesktopBackend {
         let environment = self.probe_environment().await?;
         require_supported_environment(&environment)?;
         let capabilities = Self::capabilities(&environment);
-        let doctor_report =
-            crate::doctor::build_doctor_report(environment.clone(), self.session_env_report());
+        let session_presence = self.session_presence.doctor_report().await;
+        let doctor_report = crate::doctor::build_doctor_report_with_session_presence(
+            environment.clone(),
+            self.session_env_report(),
+            Some(session_presence),
+        );
         let mut diagnostics = DiagnosticBuilder::new();
         if let Some(diagnostic) = doctor_report
             .session_env
@@ -713,6 +722,24 @@ impl DesktopBackend for LinuxDesktopBackend {
         &self,
     ) -> Result<sky_cua_platform::model::PortalTokenResetOutcome, BackendError> {
         self.portal.reset_persisted_tokens().await
+    }
+
+    async fn ensure_session_presence(
+        &self,
+        intent: sky_cua_platform::model::SessionPresenceIntent,
+    ) -> Result<sky_cua_platform::model::SessionPresenceStatus, BackendError> {
+        Ok(self.session_presence.ensure(intent).await)
+    }
+
+    async fn release_session_presence(
+        &self,
+        relock: bool,
+    ) -> Result<sky_cua_platform::model::SessionPresenceStatus, BackendError> {
+        Ok(self.session_presence.release(relock).await)
+    }
+
+    async fn session_presence_status(&self) -> sky_cua_platform::model::SessionPresenceStatus {
+        self.session_presence.status().await
     }
 }
 

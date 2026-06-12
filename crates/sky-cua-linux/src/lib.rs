@@ -14,6 +14,7 @@ pub mod kwin;
 pub mod kwin_script;
 pub mod portal;
 pub mod session_env;
+pub mod session_presence;
 pub mod setup;
 pub mod virtual_input;
 pub mod windowing;

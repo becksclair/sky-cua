@@ -20,7 +20,7 @@ The single most important non-obvious fact this plan is built on: **on KDE Plasm
 
 - [x] (2026-06-12 12:00Z) M1 platform contracts landed: session-presence types, default trait methods, readiness booleans, service request/response variants, daemon dispatch for the explicit request path, and an unsupported Linux doctor report until the real Linux backend lands.
 - [x] (2026-06-12 12:04Z) M2 Linux inhibitor spike landed in `crates/sky-cua-linux/examples/session_presence_probe.rs`; `status`, `inhibit-suspend 15`, and `inhibit-lock 15` ran on the live KDE Plasma 6 Wayland box. `unlock` was deliberately not run because the orchestrator owns live lock/unlock verification for this task.
-- [ ] (M3) Linux backend implementation: a `SessionPresenceManager` holding the inhibitor handles, wired into `LinuxDesktopBackend`, with the doctor report populated.
+- [x] (2026-06-12 12:10Z) M3 Linux backend implementation landed: `SessionPresenceManager` owns logind and ScreenSaver handles, `LinuxDesktopBackend` delegates the trait methods, snapshots and direct doctor calls include the live session-presence report, and focused manager tests plus workspace validation pass.
 - [ ] (M4) Daemon lifecycle: env-gated, activity-driven acquire-on-request and timer-driven release, with optional re-lock, reusing `SessionStore`.
 - [ ] (M5) Tool surface: a `hold_session` MCP tool (and `unlock_session` alias), the service request/response plumbing, and a CLI subcommand.
 - [ ] (M6) Windows backend: suspend/display inhibition via the Windows power-request API; unlock reported as unsupported.
@@ -42,6 +42,8 @@ Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
   Evidence: `cargo run -p sky-cua-linux --example session_presence_probe -- status` printed `session_id: 3` and `session_path: /org/freedesktop/login1/session/_33`.
 - Observation: The logind sleep inhibitor registers under the example binary name as a block lock while the returned fd is held.
   Evidence: During `inhibit-suspend 15`, `systemd-inhibit --list` showed `sky-cua 1000 bex ... session_presenc sleep automation session active block`.
+- Observation: The live KDE box exposes all Linux session-presence capabilities expected by this plan.
+  Evidence: After M3, `cargo run -p sky-cua-service -- doctor` reported `can_inhibit_presence: true`, `can_unlock_session: true`, `session_presence.backend = "systemd-logind+screensaver"`, and `unlock.ok`, `inhibit_lock.ok`, `inhibit_suspend.ok`, and `lock_state_readable.ok` all true.
 
 ## Decision Log
 
@@ -66,6 +68,8 @@ Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
 M1 completed the shared contract only. All backends still report unsupported behavior, and the explicit service request path returns the structured unsupported status rather than an error. This does not yet unlock, inhibit, or decay a hold; it makes those behaviors representable and keeps `doctor` honest until the Linux implementation arrives.
 
 M2 proved the safe Linux primitives that this worker is allowed to exercise: the current logind session resolves, `LockedHint` reads, a logind `sleep` fd inhibitor appears in `systemd-inhibit --list`, and the session-bus ScreenSaver inhibitor returns and releases a cookie. This worker did not lock the session and did not run `probe unlock`, by task constraint.
+
+M3 moved the proven Linux primitives into the backend. `SessionPresenceManager` now owns the fd and ScreenSaver cookie lifetimes, exposes idempotent `ensure`, `release`, and `status`, and reports best-effort failures through `SessionPresenceStatus.detail` instead of aborting other presence operations. Live `doctor` now reports concrete logind/screensaver capability checks.
 
 ## Context and Orientation
 
@@ -325,6 +329,35 @@ M2 safe live probe transcripts:
     released ScreenSaver inhibitor cookie 637
 
 M2 validation:
+
+    $ cargo fmt --check
+    success
+
+    $ cargo build
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+
+    $ cargo test
+    test result: ok. Workspace unit and doc tests passed.
+
+M3 live doctor evidence:
+
+    $ cargo run -p sky-cua-service -- doctor
+    "readiness": {
+      "can_inhibit_presence": true,
+      "can_unlock_session": true
+    }
+    "session_presence": {
+      "backend": "systemd-logind+screensaver",
+      "unlock": { "ok": true, "detail": "logind session 3 LockedHint=false" },
+      "inhibit_lock": { "ok": true },
+      "inhibit_suspend": { "ok": true },
+      "lock_state_readable": { "ok": true, "detail": "logind session 3 LockedHint=false" }
+    }
+
+M3 focused and workspace validation:
+
+    $ cargo test -p sky-cua-linux session_presence -- --nocapture
+    test result: ok. 2 passed.
 
     $ cargo fmt --check
     success

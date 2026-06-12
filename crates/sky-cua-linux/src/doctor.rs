@@ -13,6 +13,18 @@ pub fn build_doctor_report(
     environment: EnvironmentInfo,
     session_env_report: DoctorSessionEnvReport,
 ) -> DoctorReport {
+    build_doctor_report_with_session_presence(
+        environment,
+        session_env_report,
+        Some(DoctorSessionPresenceReport::unsupported("none")),
+    )
+}
+
+pub fn build_doctor_report_with_session_presence(
+    environment: EnvironmentInfo,
+    session_env_report: DoctorSessionEnvReport,
+    session_presence: Option<DoctorSessionPresenceReport>,
+) -> DoctorReport {
     let window_probes = windowing::probe_backends(&environment);
     let can_list_windows = window_probes.iter().any(|probe| probe.can_list_windows);
     let can_target_windows = window_probes.iter().any(|probe| probe.can_focus_windows);
@@ -67,6 +79,12 @@ pub fn build_doctor_report(
     let can_capture_screen =
         environment.capture_backend != sky_cua_platform::model::CaptureBackendKind::None;
     let can_send_input = environment.input_backend != InputBackendKind::None;
+    let can_inhibit_presence = session_presence
+        .as_ref()
+        .is_some_and(|report| report.inhibit_lock.ok || report.inhibit_suspend.ok);
+    let can_unlock_session = session_presence
+        .as_ref()
+        .is_some_and(|report| report.unlock.ok && report.lock_state_readable.ok);
     let blockers = readiness_blockers(
         can_build_accessibility_tree,
         can_capture_screen,
@@ -113,8 +131,8 @@ pub fn build_doctor_report(
             can_send_input,
             can_list_windows,
             can_target_windows,
-            can_inhibit_presence: false,
-            can_unlock_session: false,
+            can_inhibit_presence,
+            can_unlock_session,
             recommended_next_step,
             blockers,
         },
@@ -150,7 +168,7 @@ pub fn build_doctor_report(
         }),
         input: Some(input),
         browser_integration: Some(browser_integration),
-        session_presence: Some(DoctorSessionPresenceReport::unsupported("none")),
+        session_presence,
     }
 }
 
