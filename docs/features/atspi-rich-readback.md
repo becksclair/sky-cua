@@ -88,8 +88,9 @@ message: at least one `get_app_state` tool result must contain
 - Live numeric Value extraction is implemented but live proof currently
   centers on `zenity` text-entry controls. Broader live numeric-control
   proof needs a stable desktop fixture.
-- Text-readback direct and agent smokes are not yet in the curated VM
-  runner profile set; tracked in `ROADMAP.md`.
+- The direct text-readback smoke rides the curated VM runner set as the
+  `text-readback` profile (`scripts/live_text_readback_smoke.py`); the
+  agent-harness readback smokes remain manual lanes.
 
 ## Related
 

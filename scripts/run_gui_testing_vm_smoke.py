@@ -62,9 +62,12 @@ class VmProfileDescriptor:
     name: str
     dispatch: str = "remote"
     remote_profile: str | None = None
-    # Provisional curated-set membership. The final trimmed pre-merge profile
-    # set is a roadmap/product decision; until then this only drives
-    # `--list-profiles` output and test assertions, not dispatch.
+    # Membership in the trimmed pre-merge curated set executed by
+    # `--profile curated`. The curated set is session-agnostic: every member
+    # must be able to pass against whichever real desktop session the VM is
+    # currently booted into. Session-specific host proofs (KWin system
+    # install, COSMIC cursor proofs, scaled output) stay outside the curated
+    # set and remain per-session feature/release gates.
     curated: bool = False
     preauthorize_gnome_remote_desktop: bool = False
     preauthorize_kde_remote_desktop: bool = False
@@ -88,13 +91,11 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
             "kde-kwin-effect-system-install",
             dispatch="kwin-system-install",
             remote_profile="agent-cursor-kde",
-            curated=True,
         ),
         VmProfileDescriptor("kde-plasma"),
         VmProfileDescriptor("i3"),
         VmProfileDescriptor(
             "computer-use",
-            curated=True,
             preauthorize_gnome_remote_desktop=True,
             preauthorize_kde_remote_desktop=True,
         ),
@@ -110,27 +111,54 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
             dispatch="cosmic-transparent-xcursor-host-proof",
             remote_profile="agent-cursor-cosmic-transparent-xcursor-host-proof",
         ),
-        VmProfileDescriptor("wayland-layer-shell-overlay", curated=True),
+        # In-guest layer-shell capture is grim-based (wlr-screencopy), so this
+        # lane is compositor-specific (Hyprland-class) and stays outside the
+        # session-agnostic curated set.
+        VmProfileDescriptor("wayland-layer-shell-overlay"),
         VmProfileDescriptor(
             "wayland-pointer",
             curated=True,
             preauthorize_gnome_remote_desktop=True,
             preauthorize_kde_remote_desktop=True,
         ),
-        VmProfileDescriptor("wayland-pointer-scaled", curated=True),
+        VmProfileDescriptor("wayland-pointer-scaled"),
+        VmProfileDescriptor(
+            "session-env",
+            curated=True,
+            preauthorize_gnome_remote_desktop=True,
+            preauthorize_kde_remote_desktop=True,
+        ),
+        VmProfileDescriptor(
+            "text-readback",
+            curated=True,
+            preauthorize_gnome_remote_desktop=True,
+            preauthorize_kde_remote_desktop=True,
+        ),
+        # The full strict-capture direct smoke requires live PipeWire frames,
+        # which COSMIC does not deliver headless; it stays a per-session lane
+        # outside the curated set.
+        VmProfileDescriptor(
+            "desktop-smoke",
+            preauthorize_gnome_remote_desktop=True,
+            preauthorize_kde_remote_desktop=True,
+        ),
         VmProfileDescriptor("gnome"),
         VmProfileDescriptor("cosmic"),
         VmProfileDescriptor("hyprland"),
         VmProfileDescriptor("opencode-mcp", preauthorize_screenshot_portal=True),
         VmProfileDescriptor("pi-mcp", preauthorize_screenshot_portal=True),
+        VmProfileDescriptor("curated", dispatch="curated"),
         VmProfileDescriptor(
             "all",
-            curated=True,
             preauthorize_gnome_remote_desktop=True,
             preauthorize_kde_remote_desktop=True,
         ),
     )
 }
+
+CURATED_PROFILE_NAMES = tuple(
+    descriptor.name for descriptor in VM_PROFILE_DESCRIPTORS.values() if descriptor.curated
+)
 
 PROFILES = tuple(VM_PROFILE_DESCRIPTORS)
 
@@ -283,7 +311,7 @@ def main() -> int:
     parser.add_argument(
         "--list-profiles",
         action="store_true",
-        help="Print the profile registry with dispatch, provisional curated membership, and host-framebuffer-proof metadata, then exit.",
+        help="Print the profile registry with dispatch, curated-set membership, and host-framebuffer-proof metadata, then exit.",
     )
     parser.add_argument("--user", default="skycua", help="SSH user for the VM.")
     parser.add_argument("--port", type=int, default=22, help="SSH port for the VM.")
@@ -291,7 +319,11 @@ def main() -> int:
         "--profile",
         choices=PROFILES,
         default="computer-use",
-        help="Desktop profile to execute inside the VM.",
+        help=(
+            "Desktop profile to execute inside the VM. `curated` runs the "
+            "trimmed pre-merge profile set in sequence against the current "
+            "guest session."
+        ),
     )
     parser.add_argument(
         "--remote-root",
@@ -410,63 +442,182 @@ def main() -> int:
             wayland_display=args.wayland_display,
             desktop_env=args.desktop_env,
         )
-    preauthorized_gnome_remote_desktop = (
-        not args.skip_gnome_remote_desktop_preauth
-        and should_preauthorize_gnome_remote_desktop(profile, args.desktop_env)
-    )
-    preauthorized_kde_remote_desktop = (
-        not args.skip_kde_remote_desktop_preauth
-        and should_preauthorize_kde_remote_desktop(profile, args.desktop_env)
-    )
-    if preauthorized_gnome_remote_desktop:
-        preauthorize_gnome_remote_desktop(
-            ssh_target,
-            args.port,
-            args.ssh_option,
-            remote_root,
-            wayland_display=args.wayland_display,
-            desktop_env=args.desktop_env,
-        )
-    if preauthorized_kde_remote_desktop:
-        preauthorize_kde_remote_desktop(
-            ssh_target,
-            args.port,
-            args.ssh_option,
-            remote_root,
-            wayland_display=args.wayland_display,
-            desktop_env=args.desktop_env,
-        )
-    if profile.preauthorize_screenshot_portal:
-        preauthorize_screenshot_portal(
-            ssh_target,
-            args.port,
-            args.ssh_option,
-            remote_root,
-        )
-    if profile.host_framebuffer_proof:
-        return run_host_framebuffer_proof_profile(
-            profile,
-            ssh_target,
-            args.port,
-            args.ssh_option,
-            remote_root,
-            wayland_display=args.wayland_display,
-            desktop_env=args.desktop_env,
-            sync_codex_settings=args.sync_codex_settings and not args.skip_codex_settings,
-            vm_name=args.vm_name,
-            libvirt_uri=args.libvirt_uri,
-        )
-    return run_remote_profile(
+    curated_mode = profile.dispatch == "curated"
+    profiles_to_run = curated_profiles() if curated_mode else (profile,)
+    preauthorize_for_profiles(
+        profiles_to_run,
         ssh_target,
         args.port,
         args.ssh_option,
         remote_root,
-        profile.runner_profile(),
+        wayland_display=args.wayland_display,
+        desktop_env=args.desktop_env,
+        skip_gnome_remote_desktop_preauth=args.skip_gnome_remote_desktop_preauth,
+        skip_kde_remote_desktop_preauth=args.skip_kde_remote_desktop_preauth,
+    )
+    sync_codex = args.sync_codex_settings and not args.skip_codex_settings
+    if curated_mode:
+        return run_curated_profiles(
+            profiles_to_run,
+            ssh_target,
+            args.port,
+            args.ssh_option,
+            remote_root,
+            headed=args.headed,
+            wayland_display=args.wayland_display,
+            desktop_env=args.desktop_env,
+            sync_codex_settings=sync_codex,
+            vm_name=args.vm_name,
+            libvirt_uri=args.libvirt_uri,
+        )
+    return execute_profile(
+        profile,
+        ssh_target,
+        args.port,
+        args.ssh_option,
+        remote_root,
         headed=args.headed,
         wayland_display=args.wayland_display,
         desktop_env=args.desktop_env,
-        sync_codex_settings=args.sync_codex_settings and not args.skip_codex_settings,
+        sync_codex_settings=sync_codex,
+        vm_name=args.vm_name,
+        libvirt_uri=args.libvirt_uri,
     )
+
+
+def curated_profiles() -> tuple[VmProfileDescriptor, ...]:
+    return tuple(VM_PROFILE_DESCRIPTORS[name] for name in CURATED_PROFILE_NAMES)
+
+
+def preauthorize_for_profiles(
+    profiles: tuple[VmProfileDescriptor, ...],
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    wayland_display: str,
+    desktop_env: str,
+    skip_gnome_remote_desktop_preauth: bool,
+    skip_kde_remote_desktop_preauth: bool,
+) -> None:
+    """Run each required preauthorization once for the set of profiles."""
+    if not skip_gnome_remote_desktop_preauth and any(
+        should_preauthorize_gnome_remote_desktop(profile, desktop_env) for profile in profiles
+    ):
+        preauthorize_gnome_remote_desktop(
+            ssh_target,
+            port,
+            ssh_options,
+            remote_root,
+            wayland_display=wayland_display,
+            desktop_env=desktop_env,
+        )
+    if not skip_kde_remote_desktop_preauth and any(
+        should_preauthorize_kde_remote_desktop(profile, desktop_env) for profile in profiles
+    ):
+        preauthorize_kde_remote_desktop(
+            ssh_target,
+            port,
+            ssh_options,
+            remote_root,
+            wayland_display=wayland_display,
+            desktop_env=desktop_env,
+        )
+    if any(profile.preauthorize_screenshot_portal for profile in profiles):
+        preauthorize_screenshot_portal(
+            ssh_target,
+            port,
+            ssh_options,
+            remote_root,
+        )
+
+
+def execute_profile(
+    profile: VmProfileDescriptor,
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    headed: bool,
+    wayland_display: str,
+    desktop_env: str,
+    sync_codex_settings: bool,
+    vm_name: str,
+    libvirt_uri: str,
+) -> int:
+    if profile.host_framebuffer_proof:
+        return run_host_framebuffer_proof_profile(
+            profile,
+            ssh_target,
+            port,
+            ssh_options,
+            remote_root,
+            wayland_display=wayland_display,
+            desktop_env=desktop_env,
+            sync_codex_settings=sync_codex_settings,
+            vm_name=vm_name,
+            libvirt_uri=libvirt_uri,
+        )
+    return run_remote_profile(
+        ssh_target,
+        port,
+        ssh_options,
+        remote_root,
+        profile.runner_profile(),
+        headed=headed,
+        wayland_display=wayland_display,
+        desktop_env=desktop_env,
+        sync_codex_settings=sync_codex_settings,
+    )
+
+
+def run_curated_profiles(
+    profiles: tuple[VmProfileDescriptor, ...],
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    headed: bool,
+    wayland_display: str,
+    desktop_env: str,
+    sync_codex_settings: bool,
+    vm_name: str,
+    libvirt_uri: str,
+) -> int:
+    """Run the trimmed pre-merge curated profile set in registry order.
+
+    Each member runs against the currently selected guest session after a
+    guest process reset, so a failed or leaky profile cannot poison the next
+    lane. The aggregate exits nonzero when any member fails; the per-profile
+    summary keeps individual results honest.
+    """
+    results: list[tuple[str, int]] = []
+    for index, profile in enumerate(profiles):
+        if index > 0:
+            reset_guest_sky_cua_processes(ssh_target, port, ssh_options)
+        print(f"curated profile starting: {profile.name}", flush=True)
+        returncode = execute_profile(
+            profile,
+            ssh_target,
+            port,
+            ssh_options,
+            remote_root,
+            headed=headed,
+            wayland_display=wayland_display,
+            desktop_env=desktop_env,
+            sync_codex_settings=sync_codex_settings,
+            vm_name=vm_name,
+            libvirt_uri=libvirt_uri,
+        )
+        results.append((profile.name, returncode))
+        print(f"curated profile finished: {profile.name} exit={returncode}", flush=True)
+    print("curated summary:")
+    for name, returncode in results:
+        print(f"  {name}: {'ok' if returncode == 0 else f'exit {returncode}'}")
+    return 0 if all(returncode == 0 for _, returncode in results) else 1
 
 
 class HostFramebufferProofRunner(Protocol):

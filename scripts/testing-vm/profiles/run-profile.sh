@@ -78,6 +78,15 @@ computer-use | wayland-pointer)
 wayland-pointer-scaled)
 	exec "$profile_dir/wayland-pointer-scaled.sh" "$@"
 	;;
+session-env)
+	exec "$profile_dir/session-env.sh" "$@"
+	;;
+desktop-smoke)
+	exec "$profile_dir/desktop-smoke.sh" "$@"
+	;;
+text-readback)
+	exec "$profile_dir/text-readback.sh" "$@"
+	;;
 codex-desktop)
 	exec "$profile_dir/codex-desktop.sh" "$@"
 	;;

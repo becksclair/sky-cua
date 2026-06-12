@@ -97,11 +97,10 @@ environment.
 
 ## Known limitations
 
-- Live proof exists on the current KDE/Plasma host only. The same runtime
-  seam should be exercised under OpenCode/Pi and additional VM desktops as
-  those harness lanes mature.
-- Stripped-env session repair is not yet a `scripts/run_gui_testing_vm_smoke.py`
-  profile. Tracked in `ROADMAP.md`.
+- Stripped-env session repair runs in the VM as the `session-env` profile, a
+  member of the curated pre-merge set (`--profile curated`); first VM proof
+  passed on COSMIC 2026-06-12. Additional desktops are covered as curated
+  runs happen against other guest sessions.
 - This is a recovery path, not a reason for host adapters to omit the
   desktop environment allowlist.
 

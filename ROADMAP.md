@@ -12,7 +12,8 @@ Open boxes link to the active ExecPlan that owns the work.
 
 - [x] AT-SPI rich readback — [`docs/features/atspi-rich-readback.md`](docs/features/atspi-rich-readback.md)
 - [x] Detached session-env repair — [`docs/features/session-env-repair.md`](docs/features/session-env-repair.md)
-  - [ ] Add stripped-env repair to the curated VM runner profile set
+  - [x] Add stripped-env repair to the curated VM runner profile set
+        (`session-env` profile, curated member)
   - [x] Non-Codex host smoke (OpenCode/Pi) once VM lane is live
 - [x] KWin and X11 workspace metadata — [`docs/features/kwin-x11-workspace-metadata.md`](docs/features/kwin-x11-workspace-metadata.md)
   - [ ] Capture a dedicated `list_windows` workspace artifact on real KWin and X11
@@ -104,12 +105,14 @@ Open boxes link to the active ExecPlan that owns the work.
 
 ## Phase: Diagnostics and operator UX
 
-- [ ] Curated VM runner profile set: text-readback smokes, detached session-env,
-      and current cursor matrix all in the trimmed pre-merge profile list
-  - [x] Profile descriptors with provisional curated membership, registry-driven
-        host-framebuffer-proof dispatch, and a `--list-profiles` registry view —
-        [`docs/operations/gui-desktop-test-harness.md`](docs/operations/gui-desktop-test-harness.md)
-  - [ ] Decide the final trimmed pre-merge set and wire a curated run mode
+- [x] Curated VM runner profile set — [`docs/operations/gui-desktop-test-harness.md`](docs/operations/gui-desktop-test-harness.md)
+  - [x] Profile descriptors with curated membership, registry-driven
+        host-framebuffer-proof dispatch, and a `--list-profiles` registry view
+  - [x] Final trimmed pre-merge set decided and wired as `--profile curated`:
+        `codex-desktop`, `wayland-pointer`, `session-env`, `text-readback`
+        (session-agnostic; first full pass on COSMIC 2026-06-12). The cursor
+        pixel matrix is inherently per-compositor and stays in the full
+        per-session matrix rather than the one-session trimmed gate.
 - [ ] Doctor/setup wording improvements as new launch environments expose blockers
 
 ## Backlog / Ideas

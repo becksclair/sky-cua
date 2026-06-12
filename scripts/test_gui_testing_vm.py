@@ -225,7 +225,22 @@ def test_testing_vm_profile_descriptors_carry_dispatch_and_curated_metadata() ->
     assert descriptors["cosmic-patched-cursor-host-proof"].host_framebuffer_proof
     assert descriptors["opencode-mcp"].preauthorize_screenshot_portal
     curated = {name for name, descriptor in descriptors.items() if descriptor.curated}
-    assert {"computer-use", "codex-desktop", "wayland-pointer", "all"} <= curated
+    assert curated == {
+        "codex-desktop",
+        "wayland-pointer",
+        "session-env",
+        "text-readback",
+    }
+    assert curated == set(run_gui_testing_vm_smoke.CURATED_PROFILE_NAMES)
+    assert descriptors["curated"].dispatch == "curated"
+    assert not descriptors["curated"].curated
+    assert not descriptors["all"].curated
+    assert not descriptors["computer-use"].curated
+    assert not descriptors["kde-kwin-effect-system-install"].curated
+    assert not descriptors["wayland-pointer-scaled"].curated
+    # Compositor-specific capture lanes stay outside the session-agnostic set.
+    assert not descriptors["wayland-layer-shell-overlay"].curated
+    assert not descriptors["desktop-smoke"].curated
 
 
 def test_testing_vm_host_framebuffer_proof_membership_comes_from_runner_registry() -> None:
@@ -252,8 +267,12 @@ def test_testing_vm_profile_listing_reports_metadata() -> None:
     lines = listing.splitlines()
     assert lines[0] == "profile  dispatch  curated  host-framebuffer-proof"
     assert len(lines) == len(run_gui_testing_vm_smoke.VM_PROFILE_DESCRIPTORS) + 1
-    assert "kde-kwin-effect-system-install  kwin-system-install  curated  host-proof" in lines
-    assert "wayland-pointer-scaled  remote  curated  -" in lines
+    assert "kde-kwin-effect-system-install  kwin-system-install  -  host-proof" in lines
+    assert "wayland-pointer-scaled  remote  -  -" in lines
+    assert "session-env  remote  curated  -" in lines
+    assert "text-readback  remote  curated  -" in lines
+    assert "desktop-smoke  remote  -  -" in lines
+    assert "curated  curated  -  -" in lines
     assert "gnome  remote  -  -" in lines
 
 
@@ -495,6 +514,147 @@ def test_testing_vm_runner_main_dispatches_cosmic_host_proof_profiles(
         ("patched", "wayland-1", "COSMIC"),
         ("transparent", "wayland-2", "cosmic"),
     ]
+
+
+def _patch_curated_main_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    reset_calls: list[None],
+    kde_preauth_calls: list[None],
+    gnome_preauth_calls: list[None],
+) -> None:
+    monkeypatch.setattr(run_gui_testing_vm_smoke, "build_host_runtime_artifacts", lambda: None)
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "sync_checkout",
+        lambda ssh_target, port, ssh_options, remote_root: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "reset_guest_sky_cua_processes",
+        lambda ssh_target, port, ssh_options: reset_calls.append(None),
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "wake_guest_display",
+        lambda ssh_target, port, ssh_options: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "refresh_guest_portal_stack",
+        lambda ssh_target, port, ssh_options, *, wayland_display, desktop_env: None,
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "preauthorize_kde_remote_desktop",
+        lambda ssh_target, port, ssh_options, remote_root, *, wayland_display, desktop_env: (
+            kde_preauth_calls.append(None)
+        ),
+    )
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "preauthorize_gnome_remote_desktop",
+        lambda ssh_target, port, ssh_options, remote_root, *, wayland_display, desktop_env: (
+            gnome_preauth_calls.append(None)
+        ),
+    )
+
+
+def test_testing_vm_runner_main_dispatches_curated_profile_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_calls: list[None] = []
+    kde_preauth_calls: list[None] = []
+    gnome_preauth_calls: list[None] = []
+    executed_profiles: list[str] = []
+
+    _patch_curated_main_dependencies(
+        monkeypatch,
+        reset_calls=reset_calls,
+        kde_preauth_calls=kde_preauth_calls,
+        gnome_preauth_calls=gnome_preauth_calls,
+    )
+
+    def fake_remote_profile(
+        ssh_target: str,
+        port: int,
+        ssh_options: list[str],
+        remote_root: Path,
+        profile: str,
+        *,
+        headed: bool = False,
+        wayland_display: str = "wayland-0",
+        desktop_env: str = "",
+        sync_codex_settings: bool = False,
+    ) -> int:
+        executed_profiles.append(profile)
+        return 0
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke, "run_remote_profile", fake_remote_profile)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_gui_testing_vm_smoke.py",
+            "--host",
+            "127.0.0.1",
+            "--profile",
+            "curated",
+            "--desktop-env",
+            "KDE",
+        ],
+    )
+
+    assert run_gui_testing_vm_smoke.main() == 0
+    assert tuple(executed_profiles) == run_gui_testing_vm_smoke.CURATED_PROFILE_NAMES
+    # KDE RemoteDesktop preauthorization runs once for the whole curated set,
+    # not once per member profile.
+    assert len(kde_preauth_calls) == 1
+    assert len(gnome_preauth_calls) == 0
+    # One reset before the first profile plus one between each pair.
+    assert len(reset_calls) == len(run_gui_testing_vm_smoke.CURATED_PROFILE_NAMES)
+
+
+def test_testing_vm_runner_curated_profile_set_aggregates_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_calls: list[None] = []
+    kde_preauth_calls: list[None] = []
+    gnome_preauth_calls: list[None] = []
+    executed_profiles: list[str] = []
+
+    _patch_curated_main_dependencies(
+        monkeypatch,
+        reset_calls=reset_calls,
+        kde_preauth_calls=kde_preauth_calls,
+        gnome_preauth_calls=gnome_preauth_calls,
+    )
+
+    def fake_remote_profile(
+        ssh_target: str,
+        port: int,
+        ssh_options: list[str],
+        remote_root: Path,
+        profile: str,
+        *,
+        headed: bool = False,
+        wayland_display: str = "wayland-0",
+        desktop_env: str = "",
+        sync_codex_settings: bool = False,
+    ) -> int:
+        executed_profiles.append(profile)
+        return 3 if profile == "session-env" else 0
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke, "run_remote_profile", fake_remote_profile)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gui_testing_vm_smoke.py", "--host", "127.0.0.1", "--profile", "curated"],
+    )
+
+    assert run_gui_testing_vm_smoke.main() == 1
+    # A failing member does not stop the remaining curated lanes.
+    assert tuple(executed_profiles) == run_gui_testing_vm_smoke.CURATED_PROFILE_NAMES
 
 
 def test_testing_vm_cosmic_host_framebuffer_profile_paths_are_stable() -> None:

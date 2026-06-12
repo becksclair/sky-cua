@@ -111,12 +111,42 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile pi-mcp -
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all
 ```
 
-List the profile registry without a VM, including dispatch type, provisional
-curated-set membership, and host-framebuffer-proof routing:
+List the profile registry without a VM, including dispatch type, curated-set
+membership, and host-framebuffer-proof routing:
 
 ```bash
 python3 scripts/run_gui_testing_vm_smoke.py --list-profiles
 ```
+
+## Curated pre-merge profile set
+
+`--profile curated` runs the trimmed pre-merge profile set in registry order
+against the currently selected guest session:
+
+```bash
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile curated --desktop-env COSMIC
+```
+
+The curated members are the profiles flagged `curated` in `--list-profiles`:
+`codex-desktop`, `wayland-pointer`, `session-env`, and `text-readback`.
+Together they cover host-app launch, the portal/EIS
+pointer-keyboard-scroll matrix, stripped-env detached session repair, and
+direct MCP text readback in one command.
+
+The curated set is deliberately session-agnostic: every member must be able
+to pass headless on whichever real desktop session the VM is booted into.
+That criterion excludes two lanes the provisional set once aimed at:
+`wayland-layer-shell-overlay` captures with `grim` (wlr-screencopy), which
+makes it a Hyprland-class lane, and `desktop-smoke` strictly requires live
+PipeWire snapshot frames, which COSMIC does not deliver headless. Those, the
+cursor pixel host proofs (`kde-kwin-effect-system-install`, the COSMIC
+cursor host proofs), `wayland-pointer-scaled`, and `i3` remain per-session
+feature and release gates run through the full matrix.
+
+The runner preauthorizes each required portal once for the whole curated
+sequence, resets guest sky-cua processes between members so a leaky lane
+cannot poison the next one, runs every member even after a failure, and
+prints a per-profile summary before exiting nonzero if any member failed.
 
 The runner:
 
@@ -144,10 +174,10 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-t
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all
 ```
 
-Detached session-env repair is not yet a VM runner profile, but it is now a
-first-class Linux launch seam. Use the local live smokes when changing client
-startup, service health checks, Linux environment probing, or Codex harness
-env-scrubbing:
+Detached session-env repair runs in the VM as the `session-env` profile (a
+curated-set member). The local live smokes remain the fastest loop when
+changing client startup, service health checks, Linux environment probing, or
+Codex harness env-scrubbing:
 
 ```bash
 python3 scripts/live_session_env_smoke.py
@@ -301,6 +331,23 @@ Profiles live under `scripts/testing-vm/profiles/`.
   `sky-cua-client mcp`.
 - `wayland-pointer`: explicit name for the same visible real-session pointer
   smoke used by `computer-use`.
+- `session-env`: real-session stripped-env proof for detached session-env
+  repair. It runs `scripts/live_session_env_smoke.py` on the guest: the MCP
+  client starts with graphical session variables stripped and a minimal
+  `PATH`, must show `doctor.session_env` repair, then finds and submits the
+  visible `zenity` dialog.
+- `text-readback`: real-session focused direct MCP readback proof. It runs
+  `scripts/live_text_readback_smoke.py` on the guest: initial `zenity` entry
+  readback of the stale value, `set_value` replacement, fresh-snapshot
+  verification, and dialog submission. It does not require live PipeWire
+  frame capture, so it passes headless on COSMIC.
+- `desktop-smoke`: real-session full direct MCP desktop smoke. It runs
+  `scripts/live_desktop_smoke.py` on the guest: semantic actions, pointer
+  fixtures, and strict capture requirements (snapshots must not downgrade
+  from PipeWire). Run it on sessions with preauthorized PipeWire capture,
+  such as Plasma.
+- `curated`: host-side run mode, not a remote profile. Runs the trimmed
+  pre-merge curated set in sequence; see "Curated pre-merge profile set".
 - `wayland-layer-shell-overlay`: real Wayland session proof for the native
   layer-shell cursor overlay. It uses the active session socket, draws the
   copied Chrome cursor asset through `sky-cua-overlay-host`, captures with the
@@ -551,7 +598,7 @@ Progress ledger:
 | VM provisioner | First live proof | `scripts/testing-vm/provision-arch-testing-vm.sh` provisioned a QEMU/libvirt Arch guest with COSMIC Wayland, Chrome, OpenCode, Codex Desktop, SSH, rsync, matching terminal apps, and the desktop matrix. | Re-run from a fully fresh guest after future package-list changes. |
 | VM runner | Accepted matrix runner | `scripts/run_gui_testing_vm_smoke.py` now owns the accepted real-session matrix for COSMIC helper/input, patched COSMIC cursor bridge, transparent COSMIC, KDE/KWin system-install, GNOME, Hyprland, and i3/X11 cursor proof profiles. | Add host-side artifact pullback or index generation if repeated VM runs need easier local browsing. |
 | OpenCode | Config/auth prep proof | `scripts/testing-vm/sync-opencode-to-vm.sh` synced host OpenCode config/auth without DB/log/snapshot state; VM `opencode --version` returned `1.14.51`, and `opencode models openai` succeeded. | Register and smoke the sky-cua MCP runtime under OpenCode when the non-Codex harness lane starts. |
-| Text readback | Direct MCP plus agent harness accepted on Plasma | In the Plasma `testing-vm`, `scripts/live_desktop_smoke.py` proved initial `zenity` entry value readback, post-`set_value` readback, and post-`type_text` readback through fresh `get_app_state` snapshots. `scripts/live_codex_exec_text_readback_smoke.py` produced `/workspace/artifacts/codex-e2e/codex-text-readback-smoke/20260517T041212Z`, and `scripts/live_app_server_text_readback_smoke.py` produced `/workspace/artifacts/codex-e2e/app-server-text-readback-smoke/20260517T041242Z`; both transcript checks require one `get_app_state` result with `stale-readback` and a later one with `verified-readback`. | Add this lane to the automated VM runner when the broader pre-merge profile set is curated; extend native readback proof to Windows/UIA only after that backend extracts equivalent metadata. |
+| Text readback | Direct MCP plus agent harness accepted on Plasma | In the Plasma `testing-vm`, `scripts/live_desktop_smoke.py` proved initial `zenity` entry value readback, post-`set_value` readback, and post-`type_text` readback through fresh `get_app_state` snapshots. `scripts/live_codex_exec_text_readback_smoke.py` produced `/workspace/artifacts/codex-e2e/codex-text-readback-smoke/20260517T041212Z`, and `scripts/live_app_server_text_readback_smoke.py` produced `/workspace/artifacts/codex-e2e/app-server-text-readback-smoke/20260517T041242Z`; both transcript checks require one `get_app_state` result with `stale-readback` and a later one with `verified-readback`. | The direct lane now rides the curated VM runner set as the `text-readback` profile (the strict-capture `desktop-smoke` profile remains a per-session lane); agent-harness readback smokes remain manual. Extend native readback proof to Windows/UIA only after that backend extracts equivalent metadata. |
 | COSMIC | Helper, app launch, pointer, text/key, patched cursor bridge, and transparent no-patch mode accepted | Real COSMIC Wayland guest session was active with `cosmic-session`, `cosmic-comp`, and `/run/user/1000/wayland-1`; `cosmic-helper` proved helper listing, activation, and focused-window readback at `/workspace/artifacts/gui-desktop-smoke/cosmic-helper/20260515T034206Z/`. Full input artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T092606Z` proves `LinuxVirtualInput` direct uinput click, drag, scroll plus ydotool-backed `type_text`/`press_key`; repeatable scaled profile artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T093737Z` proves the same path at 125%. Patched compositor proof `artifacts/cosmic-framebuffer-cursor-proof/20260515T142538562074Z/host-summary.json` reports `ok=true` with `system_cursor_backend=cosmic_comp_bridge`. No-patch transparent session proof `artifacts/cosmic-transparent-xcursor-cursor-proof/20260516T073232164704Z/host-summary.json` reports `ok=true` with `system_cursor_backend=cosmic_transparent_xcursor`. | Keep this in the session-matrix gate; broaden later to multi-output and richer list/focus coverage when the VM exposes more than one real output. |
 | KDE/KWin | Layer-shell, pointer input, and KWin effect system path accepted | Real Plasma Wayland VM proofs: clean cursor sequence `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100302670580-syn`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100303845615-vis`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100305142807-hide`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click`, full pointer `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T100113Z/`, user-level effect discovery blocker `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515075621741796-kwin`, and automated system-install proof `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T132649888064Z/host-summary.json`. | Keep this profile in the pre-merge/live-smoke gate for future KWin effect changes; broader registry/list/focus proof is still a separate seam. |
 | GNOME | Pointer/text input and Shell-extension cursor proof accepted | Real GNOME Wayland VM pointer artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260518T025611Z` proves click, secondary-click, drag, scroll, `type_text`, and `press_key` through GNOME RemoteDesktop EIS, with keyboard input backed by the compositor-provided XKB keymap. The GNOME Shell extension cursor artifact `artifacts/gnome-framebuffer-cursor-proof/20260515T140437893805720Z/host-summary.json` reports `ok=true` with `backend=gnome_shell_extension` and `system_cursor_backend=gnome_shell_extension`. | Broaden GNOME registry/listing/focus proof beyond the current cursor and pointer seams, and re-run after Shell or session-launch changes. |
