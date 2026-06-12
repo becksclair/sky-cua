@@ -1,6 +1,8 @@
 #[cfg(target_os = "windows")]
 mod backend;
 #[cfg(target_os = "windows")]
+mod session_presence;
+#[cfg(target_os = "windows")]
 mod uia;
 
 #[cfg(target_os = "windows")]

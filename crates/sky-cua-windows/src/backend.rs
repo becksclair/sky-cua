@@ -8,9 +8,10 @@ use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
-    CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, ElementNode,
+    CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, DoctorReport, ElementNode,
     EnvironmentInfo, FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities,
-    RectF, ScrollDirection, SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
+    RectF, ScrollDirection, SemanticBackendKind, SessionKind, SessionPresenceIntent,
+    SessionPresenceStatus, ToolAvailability, ToolCapabilities,
 };
 use sky_cua_platform::{new_snapshot_id, sky_cua_state_dir};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, WPARAM};
@@ -39,7 +40,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_CHAR, WM_KEYDOWN, WM_KEYUP,
 };
 
-use crate::uia;
+use crate::{session_presence::SessionPresenceManager, uia};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouseButton {
@@ -81,12 +82,16 @@ struct WindowInfo {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct WindowsDesktopBackend;
+pub struct WindowsDesktopBackend {
+    session_presence: SessionPresenceManager,
+}
 
 impl WindowsDesktopBackend {
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            session_presence: SessionPresenceManager::new(),
+        }
     }
 
     fn capabilities(environment: &EnvironmentInfo) -> ToolCapabilities {
@@ -199,6 +204,32 @@ impl DesktopBackend for WindowsDesktopBackend {
             display: None,
             wayland_display: None,
         })
+    }
+
+    async fn doctor(&self) -> Result<DoctorReport, BackendError> {
+        let environment = self.probe_environment().await?;
+        Ok(crate::session_presence::windows_doctor_report(
+            environment,
+            self.session_presence.doctor_report(),
+        ))
+    }
+
+    async fn ensure_session_presence(
+        &self,
+        intent: SessionPresenceIntent,
+    ) -> Result<SessionPresenceStatus, BackendError> {
+        Ok(self.session_presence.ensure(intent).await)
+    }
+
+    async fn release_session_presence(
+        &self,
+        relock: bool,
+    ) -> Result<SessionPresenceStatus, BackendError> {
+        Ok(self.session_presence.release(relock).await)
+    }
+
+    async fn session_presence_status(&self) -> SessionPresenceStatus {
+        self.session_presence.status().await
     }
 
     async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {

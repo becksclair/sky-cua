@@ -23,7 +23,7 @@ The single most important non-obvious fact this plan is built on: **on KDE Plasm
 - [x] (2026-06-12 12:10Z) M3 Linux backend implementation landed: `SessionPresenceManager` owns logind and ScreenSaver handles, `LinuxDesktopBackend` delegates the trait methods, snapshots and direct doctor calls include the live session-presence report, and focused manager tests plus workspace validation pass.
 - [x] (2026-06-12 12:17Z) M4 daemon lifecycle landed: `ServiceDaemon` reads the default-off env gate once, auto-acquires presence before activity requests, releases after `SessionStore` idleness through a watchdog, tracks held state to avoid repeated releases, and has a fake-backend regression test for one acquire plus one idle release.
 - [x] (2026-06-12 12:24Z) M5 tool surface landed: MCP tools `hold_session`, `unlock_session`, `release_session`, and `session_presence_status` route to `ServiceRequest::SessionPresence`, service and operator CLIs expose `session-presence <ensure|release|status>`, focused tool/CLI tests pass, and safe live `session-presence status` reports the Linux backend.
-- [ ] (M6) Windows backend: suspend/display inhibition via the Windows power-request API; unlock reported as unsupported.
+- [x] (2026-06-12 12:46Z) M6 Windows backend landed: `WindowsDesktopBackend` now owns a power-request session-presence manager, Windows doctor reports `backend = "windows-power-request"` with unlock unsupported, focused mocked handle tests pass, and devbox live `powercfg //requests` proved `SYSTEM` and `EXECUTION` requests while the probe held the handle.
 - [ ] (M7) Documentation: `docs/features/session-presence.md`, a section in the `computer-use` skill, and a `ROADMAP.md` entry.
 
 Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
@@ -48,6 +48,10 @@ Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
   Evidence: M4 added a fake-backend service test that enables the env-equivalent config, sends two `ExecuteAction` requests, observes exactly one automatic `ensure_session_presence`, advances past the idle threshold, and observes exactly one `release_session_presence`.
 - Observation: A direct `sky-cua-service session-presence ensure` command can only hold inhibitors for that command process lifetime, while the operator client can send the same request to the long-lived daemon.
   Evidence: M5 added the requested service CLI mode and also added `sky-cua-client session-presence <ensure|release|status>` so manual shell operation can persist through the daemon socket.
+- Observation: The devbox SSH shell is Git Bash, not PowerShell, and its configured `sccache` wrapper failed before rustc launched.
+  Evidence: `ssh devbox "pwd"` returned `/c/Users/bex`; the first `cargo build -p sky-cua-windows` failed with `Shim: Could not create process ... sccache.exe`. All successful devbox cargo commands used `RUSTC_WRAPPER=`.
+- Observation: In the devbox SSH service-session context, `PowerRequestDisplayRequired` fails with Windows error 50, while `PowerRequestExecutionRequired` and `PowerRequestSystemRequired` succeed and appear in `powercfg`.
+  Evidence: `session_presence_probe hold 20` reported `PowerSetRequest(PowerRequestDisplayRequired) failed with Windows error 50`; concurrent `powercfg //requests` listed the probe under `SYSTEM` and `EXECUTION`, with `DISPLAY: None`.
 
 ## Decision Log
 
@@ -72,6 +76,12 @@ Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
 - Decision: Keep `release_session`/CLI `release` defaulting to `relock: false`; require an explicit `relock: true` or `--relock`.
   Rationale: The task explicitly forbids locking the desktop during this implementation run, and manual release should not unexpectedly lock a user's live session. The automatic daemon lifecycle still uses its own env-controlled `SKY_CUA_PRESENCE_RELOCK` default.
   Date/Author: 2026-06-12, implementation.
+- Decision: On Windows, treat unlock and relock requests as no-op intent details rather than calling `LockWorkStation`.
+  Rationale: Windows exposes a lock call but no ordinary-user unlock counterpart; a decaying presence release that locks the desktop would strand future automation. The backend records the skipped intent and leaves lock state unchanged.
+  Date/Author: 2026-06-12, implementation.
+- Decision: Report Windows display-inhibit failures from the API rather than forcing `inhibit_lock` green.
+  Rationale: The backend still calls `PowerSetRequest(PowerRequestDisplayRequired)` as required, but the devbox SSH/service-session context returns `ERROR_NOT_SUPPORTED` (50). Structured status and doctor output need to preserve that truth while still reporting suspend inhibition as available.
+  Date/Author: 2026-06-12, implementation.
 
 ## Outcomes & Retrospective
 
@@ -84,6 +94,8 @@ M3 moved the proven Linux primitives into the backend. `SessionPresenceManager` 
 M4 added the automatic daemon lifecycle without arming it by default. Activity requests acquire presence once per held window; pure status queries and explicit session-presence requests are excluded from the automatic path; the watchdog releases once after the configured idle timeout and then waits for the next activity request to re-acquire. Live lock/unlock and relock observation remains intentionally unrun by this worker because the task forbids locking or unlocking the desktop session.
 
 M5 exposed the explicit control surface. MCP clients now get `hold_session`, `unlock_session`, `release_session`, and `session_presence_status`; the operator CLI can send persistent requests through the daemon; and the service binary also has the direct diagnostic/manual subcommand requested by the plan. This worker validated only status and parser/routing paths live; release with `relock: true` and live lock/unlock acceptance remain for the orchestrator because this task forbids locking or unlocking the desktop session.
+
+M6 added Windows inhibition through the Power Request API. The Windows backend now keeps a process-scoped power request handle across daemon calls, sets `PowerRequestExecutionRequired`, `PowerRequestSystemRequired`, and `PowerRequestDisplayRequired` best-effort, clears held request types before closing the handle, and reports Windows unlock/relock as unsupported without erroring. On devbox, the SSH service-session can hold `SYSTEM` and `EXECUTION` requests but cannot set `DISPLAY` (`ERROR_NOT_SUPPORTED` 50), so live proof covers suspend/execution inhibition and honest display-inhibit failure reporting rather than a full visible desktop display hold.
 
 ## Context and Orientation
 
@@ -427,6 +439,86 @@ M5 workspace validation:
 
     $ cargo test
     test result: ok. Workspace unit and doc tests passed.
+
+M6 local validation:
+
+    $ cargo check -p sky-cua-windows --target x86_64-pc-windows-gnu
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+
+    $ cargo test -p sky-cua-windows --target x86_64-pc-windows-gnu --no-run
+    Finished `test` profile [unoptimized + debuginfo] target(s)
+
+    $ cargo check -p sky-cua-windows --target x86_64-pc-windows-gnu --example session_presence_probe
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+
+    $ cargo fmt --check
+    success
+
+    $ cargo build
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+
+    $ cargo test
+    test result: ok. Workspace unit and doc tests passed.
+
+M6 devbox build and test validation:
+
+    $ ssh devbox "cargo --version"
+    cargo 1.97.0-nightly (06ac0e7c0 2026-04-21)
+
+    $ ssh devbox "cd /c/Users/bex/sky-cua-m6 && cargo build -p sky-cua-windows"
+    error: process didn't exit successfully: `sccache ... rustc.exe -vV`
+    Shim: Could not create process with command ... sccache.exe ...
+
+    $ ssh devbox "cd /c/Users/bex/sky-cua-m6 && RUSTC_WRAPPER= cargo build -p sky-cua-windows"
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+
+    $ ssh devbox "cd /c/Users/bex/sky-cua-m6 && RUSTC_WRAPPER= cargo test -p sky-cua-windows"
+    test result: ok. 31 passed; 0 failed.
+
+    $ ssh devbox "cd /c/Users/bex/sky-cua-m6 && RUSTC_WRAPPER= cargo test -p sky-cua-service"
+    test result: ok. 57 passed; 0 failed.
+
+M6 devbox doctor and live power-request validation:
+
+    $ ssh devbox "cd /c/Users/bex/sky-cua-m6 && RUSTC_WRAPPER= cargo run -p sky-cua-service -- doctor"
+    "readiness": {
+      "can_inhibit_presence": true,
+      "can_unlock_session": false
+    }
+    "session_presence": {
+      "backend": "windows-power-request",
+      "unlock": { "ok": false, "detail": "Windows does not expose a programmatic unlock API; LockWorkStation has no unlock counterpart and the secure desktop is LocalSystem-only" },
+      "inhibit_lock": { "ok": false, "detail": "PowerRequestExecutionRequired=ok PowerRequestDisplayRequired=failed; cleared PowerRequestSystemRequired; cleared PowerRequestExecutionRequired; closed Windows power request handle" },
+      "inhibit_suspend": { "ok": true, "detail": "PowerRequestExecutionRequired=ok PowerRequestSystemRequired=ok; cleared PowerRequestSystemRequired; cleared PowerRequestExecutionRequired; closed Windows power request handle" },
+      "lock_state_readable": { "ok": false, "detail": "Windows session lock state is not exposed to ordinary desktop processes" }
+    }
+
+    $ ssh devbox "cd /c/Users/bex/sky-cua-m6 && target/debug/examples/session_presence_probe.exe hold 20"
+    {
+      "backend": "windows-power-request",
+      "supported": true,
+      "unlock_supported": false,
+      "locked": null,
+      "lock_inhibited": false,
+      "suspend_inhibited": true,
+      "detail": "unlock requested but skipped: Windows does not expose a programmatic unlock API; LockWorkStation has no unlock counterpart and the secure desktop is LocalSystem-only; created Windows power request handle; set PowerRequestExecutionRequired; set PowerRequestSystemRequired; PowerSetRequest(PowerRequestDisplayRequired) failed with Windows error 50"
+    }
+
+    $ ssh devbox "powercfg //requests"
+    DISPLAY:
+    None.
+    SYSTEM:
+    [PROCESS] \Device\HarddiskVolume3\Users\bex\sky-cua-m6\target\debug\examples\session_presence_probe.exe
+    sky-cua automation session active
+    EXECUTION:
+    [PROCESS] \Device\HarddiskVolume3\Users\bex\sky-cua-m6\target\debug\examples\session_presence_probe.exe
+    sky-cua automation session active
+
+    # after release
+    $ ssh devbox "powercfg //requests"
+    DISPLAY: None.
+    SYSTEM: None.
+    EXECUTION: None.
 
 ## Interfaces and Dependencies
 
