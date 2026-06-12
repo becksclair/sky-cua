@@ -25,11 +25,10 @@ Open boxes link to the active ExecPlan that owns the work.
 - [ ] Wayland fallback vision anchors — [`plans/wayland_fallback_vision_anchors.md`](plans/wayland_fallback_vision_anchors.md)
   - [ ] Choose a current fallback-only target app to replace the retired TIDAL flow
   - [ ] Live app-server proof on the new target
-- [ ] CDUL-inspired Linux enhancements — [`plans/cdul_linux_enhancements.md`](plans/cdul_linux_enhancements.md)
-  - [ ] Terminal `command_line` fidelity in `crates/sky-cua-linux/src/windowing/terminal.rs`
-  - [ ] Linux input doctor polish in `crates/sky-cua-linux/src/doctor.rs`
-  - [ ] App-root prefiltering for AT-SPI snapshots
-  - [ ] GNOME setup-message polish
+- [x] CDUL-inspired Linux enhancements (terminal `command_line` fidelity,
+      granular input doctor diagnostics, AT-SPI app-root prefiltering,
+      GNOME setup-message polish) —
+      [`docs/features/linux-targeting-and-diagnostics.md`](docs/features/linux-targeting-and-diagnostics.md)
 
 ## Phase: Windows parity
 

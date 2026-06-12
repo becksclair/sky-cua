@@ -10,8 +10,8 @@ the chosen adoption strategy: do not port CDUL wholesale; selectively adopt
 small fidelity and operator-experience enhancements where `sky-cua` still
 has a gap.
 
-The active forward-looking work resulting from this research lives in
-[`plans/cdul_linux_enhancements.md`](../../plans/cdul_linux_enhancements.md).
+The resulting enhancements shipped; the behavior is documented in
+[`docs/features/linux-targeting-and-diagnostics.md`](../features/linux-targeting-and-diagnostics.md).
 
 ## Investigation
 
@@ -94,8 +94,10 @@ Reject:
 
 ## Implications
 
-- The active work lives in
-  [`plans/cdul_linux_enhancements.md`](../../plans/cdul_linux_enhancements.md).
+- The shipped behavior is documented in
+  [`docs/features/linux-targeting-and-diagnostics.md`](../features/linux-targeting-and-diagnostics.md);
+  the originating ExecPlan (`plans/cdul_linux_enhancements.md`) is retired
+  to git history.
 - Each implementation slice should be paired with a real VM proof per
   the [`vm-tests`](../../.agents/skills/vm-tests/SKILL.md) skill rather
   than relying on local unit tests alone.
