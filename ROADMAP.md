@@ -17,8 +17,8 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Non-Codex host smoke (OpenCode/Pi) once VM lane is live
 - [x] Session presence (Linux unlock plus lock/suspend inhibition, MCP tools,
       and CLI surface) — [`docs/features/session-presence.md`](docs/features/session-presence.md)
-  - [ ] Windows power-request inhibition backend (M6) —
-        [`plans/session-presence.md`](plans/session-presence.md)
+  - [x] Windows power-request inhibition backend (verified live on the
+        devbox VM; display inhibition untestable over SSH)
 - [x] KWin and X11 workspace metadata — [`docs/features/kwin-x11-workspace-metadata.md`](docs/features/kwin-x11-workspace-metadata.md)
   - [ ] Capture a dedicated `list_windows` workspace artifact on real KWin and X11
 - [x] KWin window targeting (focused_window + verified activation via KWin scripting) — [`docs/features/kwin-window-targeting.md`](docs/features/kwin-window-targeting.md)
