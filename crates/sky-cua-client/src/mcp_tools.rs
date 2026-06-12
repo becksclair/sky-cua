@@ -2,7 +2,8 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppInfo, AppSelector, AppStateSnapshot, CaptureScreenMode,
-    DiagnosticEntry, ServiceRequest, ServiceResponse, WindowInfo,
+    DiagnosticEntry, ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent,
+    SessionPresenceStatus, WindowInfo,
 };
 use std::fmt::Write as _;
 
@@ -249,6 +250,9 @@ pub(crate) fn handle_tool_call(
         name if browser::is_browser_tool(name) => {
             browser::handle_tool_call(service, name, arguments, model)
         }
+        "hold_session" | "unlock_session" | "release_session" | "session_presence_status" => {
+            handle_session_presence_call(service, tool_name, arguments)
+        }
         "focus_element" => handle_action_call(service, ActionName::FocusElement, arguments),
         "activate_element" => handle_action_call(service, ActionName::ActivateElement, arguments),
         "select_element" => handle_action_call(service, ActionName::SelectElement, arguments),
@@ -267,6 +271,56 @@ pub(crate) fn handle_tool_call(
         "set_value" => handle_action_call(service, ActionName::SetValue, arguments),
         _ => tool_error("UnknownTool", format!("unknown tool: {tool_name}")),
     }
+}
+
+fn handle_session_presence_call(
+    service: &impl McpService,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<Value> {
+    let action = match session_presence_action_from_tool(tool_name, &arguments) {
+        Ok(action) => action,
+        Err(error) => return invalid_request_tool_error(error.to_string()),
+    };
+
+    match service.call(&ServiceRequest::SessionPresence { action })? {
+        ServiceResponse::SessionPresence { status } => Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": session_presence_summary(&status)
+            }],
+            "structuredContent": status,
+            "isError": false
+        })),
+        ServiceResponse::Error { code, message } => tool_error(code, message),
+        other => Err(anyhow!(
+            "unexpected response for session presence call: {other:?}"
+        )),
+    }
+}
+
+fn session_presence_action_from_tool(
+    tool_name: &str,
+    arguments: &Value,
+) -> Result<SessionPresenceAction> {
+    let action = match tool_name {
+        "hold_session" => SessionPresenceAction::Ensure(SessionPresenceIntent {
+            unlock: parse_optional_bool(arguments, "unlock", false)?,
+            inhibit_lock: parse_optional_bool(arguments, "inhibit_lock", true)?,
+            inhibit_suspend: parse_optional_bool(arguments, "inhibit_suspend", true)?,
+        }),
+        "unlock_session" => SessionPresenceAction::Ensure(SessionPresenceIntent {
+            unlock: true,
+            inhibit_lock: parse_optional_bool(arguments, "inhibit_lock", true)?,
+            inhibit_suspend: parse_optional_bool(arguments, "inhibit_suspend", true)?,
+        }),
+        "release_session" => SessionPresenceAction::Release {
+            relock: parse_optional_bool(arguments, "relock", false)?,
+        },
+        "session_presence_status" => SessionPresenceAction::Status,
+        _ => unreachable!("session presence tool name was pre-filtered"),
+    };
+    Ok(action)
 }
 
 fn handle_action_call(
@@ -307,6 +361,31 @@ fn handle_action_call(
         ServiceResponse::Error { code, message } => tool_error(code, message),
         other => Err(anyhow!("unexpected response for action call: {other:?}")),
     }
+}
+
+fn parse_optional_bool(arguments: &Value, key: &str, default: bool) -> Result<bool> {
+    match arguments.get(key) {
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(anyhow!("{key} must be a boolean")),
+        None => Ok(default),
+    }
+}
+
+fn session_presence_summary(status: &SessionPresenceStatus) -> String {
+    let locked = status
+        .locked
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    format!(
+        "Session presence backend={} supported={} unlock_supported={} locked={} lock_inhibited={} suspend_inhibited={}. {}",
+        status.backend,
+        status.supported,
+        status.unlock_supported,
+        locked,
+        status.lock_inhibited,
+        status.suspend_inhibited,
+        status.detail
+    )
 }
 
 fn normalize_action_coordinate_targets(
@@ -748,7 +827,8 @@ mod tests {
         CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorReadiness,
         DoctorReport, ElementNode, ElementTextReadback, EnvironmentInfo, FocusedApp,
         InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest,
-        ServiceResponse, SessionKind, SetupCommandReport, ToolAvailability, ToolCapabilities,
+        ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
+        SessionPresenceStatus, SetupCommandReport, ToolAvailability, ToolCapabilities,
         WindowTargetingSetupReport,
     };
 
@@ -776,9 +856,13 @@ mod tests {
 
     impl FakeService {
         fn with_response(response: ServiceResponse) -> Self {
+            Self::with_responses([response])
+        }
+
+        fn with_responses(responses: impl IntoIterator<Item = ServiceResponse>) -> Self {
             Self {
                 requests: RefCell::new(Vec::new()),
-                responses: RefCell::new(VecDeque::from([response])),
+                responses: RefCell::new(responses.into_iter().collect()),
             }
         }
 
@@ -1957,6 +2041,10 @@ mod tests {
                 "focused_window",
                 "activate_window",
                 "get_app_state",
+                "hold_session",
+                "unlock_session",
+                "release_session",
+                "session_presence_status",
                 "focus_element",
                 "activate_element",
                 "select_element",
@@ -2056,6 +2144,115 @@ mod tests {
             true
         );
         assert_eq!(result["isError"], false);
+    }
+
+    #[test]
+    fn session_presence_tools_map_to_service_requests() {
+        let service = FakeService::with_responses([
+            ServiceResponse::SessionPresence {
+                status: session_presence_status(true),
+            },
+            ServiceResponse::SessionPresence {
+                status: session_presence_status(true),
+            },
+            ServiceResponse::SessionPresence {
+                status: session_presence_status(false),
+            },
+            ServiceResponse::SessionPresence {
+                status: session_presence_status(false),
+            },
+        ]);
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics load");
+        let model = ModelSessionInfo::default();
+
+        let hold = handle_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            "hold_session",
+            json!({"unlock": true, "inhibit_suspend": false}),
+        )
+        .unwrap();
+        let unlock = handle_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            "unlock_session",
+            json!({"inhibit_lock": false}),
+        )
+        .unwrap();
+        let release = handle_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            "release_session",
+            json!({"relock": true}),
+        )
+        .unwrap();
+        let status = handle_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            "session_presence_status",
+            json!({}),
+        )
+        .unwrap();
+
+        assert_eq!(hold["structuredContent"]["lock_inhibited"], true);
+        assert_eq!(unlock["structuredContent"]["suspend_inhibited"], true);
+        assert_eq!(release["structuredContent"]["lock_inhibited"], false);
+        assert_eq!(status["isError"], false);
+        assert!(
+            hold["content"][0]["text"]
+                .as_str()
+                .expect("text")
+                .contains("backend=fake")
+        );
+
+        assert_eq!(
+            service.take_requests(),
+            vec![
+                ServiceRequest::SessionPresence {
+                    action: SessionPresenceAction::Ensure(SessionPresenceIntent {
+                        unlock: true,
+                        inhibit_lock: true,
+                        inhibit_suspend: false,
+                    }),
+                },
+                ServiceRequest::SessionPresence {
+                    action: SessionPresenceAction::Ensure(SessionPresenceIntent {
+                        unlock: true,
+                        inhibit_lock: false,
+                        inhibit_suspend: true,
+                    }),
+                },
+                ServiceRequest::SessionPresence {
+                    action: SessionPresenceAction::Release { relock: true },
+                },
+                ServiceRequest::SessionPresence {
+                    action: SessionPresenceAction::Status,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn session_presence_tool_rejects_non_boolean_arguments() {
+        let service = FakeService::default();
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics load");
+
+        let result = handle_tool_call(
+            &service,
+            &heuristics,
+            &ModelSessionInfo::default(),
+            "hold_session",
+            json!({"unlock": "yes"}),
+        )
+        .unwrap();
+
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["code"], "InvalidRequest");
+        assert!(service.take_requests().is_empty());
     }
 
     #[test]
@@ -2368,6 +2565,22 @@ mod tests {
             input: None,
             browser_integration: None,
             session_presence: None,
+        }
+    }
+
+    fn session_presence_status(held: bool) -> SessionPresenceStatus {
+        SessionPresenceStatus {
+            backend: "fake".to_string(),
+            supported: true,
+            unlock_supported: true,
+            locked: Some(false),
+            lock_inhibited: held,
+            suspend_inhibited: held,
+            detail: if held {
+                "fake session presence held".to_string()
+            } else {
+                "fake session presence released".to_string()
+            },
         }
     }
 }

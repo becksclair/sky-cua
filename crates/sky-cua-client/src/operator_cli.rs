@@ -2,7 +2,10 @@ use std::process::ExitCode;
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
-use sky_cua_platform::model::{AppSelector, CaptureScreenMode, ServiceRequest, ServiceResponse};
+use sky_cua_platform::model::{
+    AppSelector, CaptureScreenMode, ServiceRequest, ServiceResponse, SessionPresenceAction,
+    SessionPresenceIntent,
+};
 
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_tools::enrich_snapshot;
@@ -29,6 +32,7 @@ pub(crate) enum OperatorCommand {
     ListWindows,
     FocusedWindow,
     GetAppState(GetAppStateArgs),
+    SessionPresence(SessionPresenceAction),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +61,9 @@ impl OperatorCommand {
             Self::GetAppState(args) => ServiceRequest::GetAppState {
                 selector: args.selector.clone(),
                 capture_screen: args.capture_screen,
+            },
+            Self::SessionPresence(action) => ServiceRequest::SessionPresence {
+                action: action.clone(),
             },
         }
     }
@@ -89,6 +96,9 @@ where
         "focused-window" => parse_simple_mode(rest, OperatorCommand::FocusedWindow),
         "get-app-state" => Ok(CliMode::Operator(OperatorCommand::GetAppState(
             parse_get_app_state_args(&rest)?,
+        ))),
+        "session-presence" => Ok(CliMode::Operator(OperatorCommand::SessionPresence(
+            parse_session_presence_action(&rest)?,
         ))),
         other => bail!("unsupported sky-cua-client mode: {other}"),
     }
@@ -160,6 +170,7 @@ fn command_name(command: &OperatorCommand) -> &'static str {
         OperatorCommand::ListWindows => "list-windows",
         OperatorCommand::FocusedWindow => "focused-window",
         OperatorCommand::GetAppState(_) => "get-app-state",
+        OperatorCommand::SessionPresence(_) => "session-presence",
     }
 }
 
@@ -219,6 +230,61 @@ fn parse_capture_screen_mode(value: &str) -> Result<CaptureScreenMode> {
         "never" => Ok(CaptureScreenMode::Never),
         _ => bail!("unsupported capture-screen value: {value}"),
     }
+}
+
+fn parse_session_presence_action(args: &[String]) -> Result<SessionPresenceAction> {
+    let Some(command) = args.first().map(String::as_str) else {
+        bail!("session-presence requires one of ensure, release, or status");
+    };
+
+    match command {
+        "ensure" | "hold" => parse_session_presence_ensure(&args[1..]),
+        "release" => parse_session_presence_release(&args[1..]),
+        "status" => {
+            ensure_no_extra_session_presence_args(command, &args[1..])?;
+            Ok(SessionPresenceAction::Status)
+        }
+        other => bail!("unsupported session-presence action: {other}"),
+    }
+}
+
+fn parse_session_presence_ensure(args: &[String]) -> Result<SessionPresenceAction> {
+    let mut intent = SessionPresenceIntent {
+        unlock: true,
+        inhibit_lock: true,
+        inhibit_suspend: true,
+    };
+    for arg in args {
+        match arg.as_str() {
+            "--unlock" => intent.unlock = true,
+            "--no-unlock" => intent.unlock = false,
+            "--inhibit-lock" => intent.inhibit_lock = true,
+            "--no-inhibit-lock" => intent.inhibit_lock = false,
+            "--inhibit-suspend" => intent.inhibit_suspend = true,
+            "--no-inhibit-suspend" => intent.inhibit_suspend = false,
+            other => bail!("unsupported session-presence ensure flag: {other}"),
+        }
+    }
+    Ok(SessionPresenceAction::Ensure(intent))
+}
+
+fn parse_session_presence_release(args: &[String]) -> Result<SessionPresenceAction> {
+    let mut relock = false;
+    for arg in args {
+        match arg.as_str() {
+            "--relock" => relock = true,
+            "--no-relock" => relock = false,
+            other => bail!("unsupported session-presence release flag: {other}"),
+        }
+    }
+    Ok(SessionPresenceAction::Release { relock })
+}
+
+fn ensure_no_extra_session_presence_args(command: &str, args: &[String]) -> Result<()> {
+    if let Some(arg) = args.first() {
+        bail!("unexpected argument for session-presence {command}: {arg}");
+    }
+    Ok(())
 }
 
 fn render_operator_response(
@@ -318,6 +384,12 @@ fn render_operator_response(
                 exit_code: ExitCode::SUCCESS,
             })
         }
+        (OperatorCommand::SessionPresence(_), ServiceResponse::SessionPresence { status }) => {
+            Ok(RenderedResponse {
+                payload: serde_json::to_value(status)?,
+                exit_code: ExitCode::SUCCESS,
+            })
+        }
         (_, ServiceResponse::Error { code, message }) => Ok(RenderedResponse {
             payload: json!({
                 "code": code,
@@ -355,8 +427,8 @@ mod tests {
     use sky_cua_platform::model::{
         AccessibilitySetupReport, CaptureBackendKind, DiagnosticEntry, DoctorCheck,
         DoctorReadiness, DoctorReport, EnvironmentInfo, FocusedApp, InputBackendKind,
-        PortalCapabilities, SemanticBackendKind, SessionKind, SetupCommandReport, ToolAvailability,
-        ToolCapabilities, WindowTargetingSetupReport,
+        PortalCapabilities, SemanticBackendKind, SessionKind, SessionPresenceStatus,
+        SetupCommandReport, ToolAvailability, ToolCapabilities, WindowTargetingSetupReport,
     };
 
     use super::*;
@@ -408,6 +480,66 @@ mod tests {
                 detail: AppStateDetail::Compact,
                 capture_screen: CaptureScreenMode::Always,
             }))
+        );
+    }
+
+    #[test]
+    fn parses_session_presence_status() {
+        let mode = parse_cli_mode(
+            ["session-presence", "status"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(
+            mode,
+            CliMode::Operator(OperatorCommand::SessionPresence(
+                SessionPresenceAction::Status
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_session_presence_ensure_flags() {
+        let mode = parse_cli_mode(
+            [
+                "session-presence",
+                "ensure",
+                "--no-unlock",
+                "--no-inhibit-suspend",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(
+            mode,
+            CliMode::Operator(OperatorCommand::SessionPresence(
+                SessionPresenceAction::Ensure(SessionPresenceIntent {
+                    unlock: false,
+                    inhibit_lock: true,
+                    inhibit_suspend: false,
+                })
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_session_presence_release_flags() {
+        let mode = parse_cli_mode(
+            ["session-presence", "release", "--relock"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(
+            mode,
+            CliMode::Operator(OperatorCommand::SessionPresence(
+                SessionPresenceAction::Release { relock: true }
+            ))
         );
     }
 
@@ -479,6 +611,22 @@ mod tests {
                     capture_screen: CaptureScreenMode::Never,
                 },
             ),
+            (
+                OperatorCommand::SessionPresence(SessionPresenceAction::Ensure(
+                    SessionPresenceIntent {
+                        unlock: true,
+                        inhibit_lock: true,
+                        inhibit_suspend: true,
+                    },
+                )),
+                ServiceRequest::SessionPresence {
+                    action: SessionPresenceAction::Ensure(SessionPresenceIntent {
+                        unlock: true,
+                        inhibit_lock: true,
+                        inhibit_suspend: true,
+                    }),
+                },
+            ),
         ];
 
         for (command, expected) in cases {
@@ -525,6 +673,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(rendered.payload, expected);
+        assert_eq!(rendered.exit_code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn session_presence_response_returns_status_json() {
+        let status = sample_session_presence_status();
+        let rendered = render_operator_response(
+            &OperatorCommand::SessionPresence(SessionPresenceAction::Status),
+            ServiceResponse::SessionPresence {
+                status: status.clone(),
+            },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(rendered.payload, serde_json::to_value(status).unwrap());
         assert_eq!(rendered.exit_code, ExitCode::SUCCESS);
     }
 
@@ -847,6 +1011,18 @@ mod tests {
             input: None,
             browser_integration: None,
             session_presence: None,
+        }
+    }
+
+    fn sample_session_presence_status() -> SessionPresenceStatus {
+        SessionPresenceStatus {
+            backend: "fake".to_string(),
+            supported: true,
+            unlock_supported: true,
+            locked: Some(false),
+            lock_inhibited: true,
+            suspend_inhibited: true,
+            detail: "fake hold".to_string(),
         }
     }
 }

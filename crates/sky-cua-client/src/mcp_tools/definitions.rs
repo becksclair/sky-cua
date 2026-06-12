@@ -124,6 +124,51 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
                 "additionalProperties": false
             }
         },
+        {
+            "name": "hold_session",
+            "description": "Hold session presence for remote automation by inhibiting lock and/or suspend; optionally unlock the session first.",
+            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
+            "inputSchema": {
+                "type": "object",
+                "properties": session_presence_hold_properties(true),
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "unlock_session",
+            "description": "Unlock the current session when supported, then hold session presence for remote automation.",
+            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
+            "inputSchema": {
+                "type": "object",
+                "properties": session_presence_hold_properties(false),
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "release_session",
+            "description": "Release held session-presence inhibitors and optionally re-lock the session when supported.",
+            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "relock": {
+                        "type": "boolean",
+                        "description": "Re-lock the session after releasing inhibitors. Defaults to false."
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "session_presence_status",
+            "description": "Report whether session presence is supported and whether lock/suspend inhibitors are currently held.",
+            "annotations": READ_ONLY_TOOL.to_value(),
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
         semantic_element_tool(
             "focus_element",
             "Move semantic focus to an accessibility element from the current snapshot.",
@@ -330,6 +375,31 @@ fn get_app_state_properties(can_receive_images: bool) -> Value {
     properties
 }
 
+fn session_presence_hold_properties(include_unlock: bool) -> Value {
+    let mut properties = json!({
+        "inhibit_lock": {
+            "type": "boolean",
+            "description": "Hold the desktop lock/screensaver inhibitor. Defaults to true."
+        },
+        "inhibit_suspend": {
+            "type": "boolean",
+            "description": "Hold the system suspend inhibitor. Defaults to true."
+        }
+    });
+
+    if include_unlock && let Some(property_map) = properties.as_object_mut() {
+        property_map.insert(
+            "unlock".to_string(),
+            json!({
+                "type": "boolean",
+                "description": "Unlock the session before holding inhibitors when supported. Defaults to false."
+            }),
+        );
+    }
+
+    properties
+}
+
 fn coordinate_schema(description: &str) -> Value {
     json!({
         "type": "number",
@@ -469,6 +539,10 @@ mod annotation_tests {
         ("focused_window", (true, false, true, false)),
         ("activate_window", (false, false, true, false)),
         ("get_app_state", (true, false, true, false)),
+        ("hold_session", (false, false, true, false)),
+        ("unlock_session", (false, false, true, false)),
+        ("release_session", (false, false, true, false)),
+        ("session_presence_status", (true, false, true, false)),
         ("focus_element", (false, false, true, false)),
         ("activate_element", (false, true, false, false)),
         ("select_element", (false, false, true, false)),

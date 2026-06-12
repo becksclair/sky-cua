@@ -22,7 +22,7 @@ The single most important non-obvious fact this plan is built on: **on KDE Plasm
 - [x] (2026-06-12 12:04Z) M2 Linux inhibitor spike landed in `crates/sky-cua-linux/examples/session_presence_probe.rs`; `status`, `inhibit-suspend 15`, and `inhibit-lock 15` ran on the live KDE Plasma 6 Wayland box. `unlock` was deliberately not run because the orchestrator owns live lock/unlock verification for this task.
 - [x] (2026-06-12 12:10Z) M3 Linux backend implementation landed: `SessionPresenceManager` owns logind and ScreenSaver handles, `LinuxDesktopBackend` delegates the trait methods, snapshots and direct doctor calls include the live session-presence report, and focused manager tests plus workspace validation pass.
 - [x] (2026-06-12 12:17Z) M4 daemon lifecycle landed: `ServiceDaemon` reads the default-off env gate once, auto-acquires presence before activity requests, releases after `SessionStore` idleness through a watchdog, tracks held state to avoid repeated releases, and has a fake-backend regression test for one acquire plus one idle release.
-- [ ] (M5) Tool surface: a `hold_session` MCP tool (and `unlock_session` alias), the service request/response plumbing, and a CLI subcommand.
+- [x] (2026-06-12 12:24Z) M5 tool surface landed: MCP tools `hold_session`, `unlock_session`, `release_session`, and `session_presence_status` route to `ServiceRequest::SessionPresence`, service and operator CLIs expose `session-presence <ensure|release|status>`, focused tool/CLI tests pass, and safe live `session-presence status` reports the Linux backend.
 - [ ] (M6) Windows backend: suspend/display inhibition via the Windows power-request API; unlock reported as unsupported.
 - [ ] (M7) Documentation: `docs/features/session-presence.md`, a section in the `computer-use` skill, and a `ROADMAP.md` entry.
 
@@ -46,6 +46,8 @@ Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
   Evidence: After M3, `cargo run -p sky-cua-service -- doctor` reported `can_inhibit_presence: true`, `can_unlock_session: true`, `session_presence.backend = "systemd-logind+screensaver"`, and `unlock.ok`, `inhibit_lock.ok`, `inhibit_suspend.ok`, and `lock_state_readable.ok` all true.
 - Observation: The daemon lifecycle can be tested without arming live lock/unlock behavior.
   Evidence: M4 added a fake-backend service test that enables the env-equivalent config, sends two `ExecuteAction` requests, observes exactly one automatic `ensure_session_presence`, advances past the idle threshold, and observes exactly one `release_session_presence`.
+- Observation: A direct `sky-cua-service session-presence ensure` command can only hold inhibitors for that command process lifetime, while the operator client can send the same request to the long-lived daemon.
+  Evidence: M5 added the requested service CLI mode and also added `sky-cua-client session-presence <ensure|release|status>` so manual shell operation can persist through the daemon socket.
 
 ## Decision Log
 
@@ -67,6 +69,9 @@ Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
 - Decision: Treat explicit `SessionPresence` service requests as their own lifecycle path, not as automatic hot-path triggers.
   Rationale: `hold_session`/`unlock_session` must work even when the daemon's automatic env gate is disabled, while `release_session` must not auto-acquire immediately before releasing. The shared held flag is still updated by explicit ensure/release so an enabled watchdog can decay an explicit hold.
   Date/Author: 2026-06-12, implementation.
+- Decision: Keep `release_session`/CLI `release` defaulting to `relock: false`; require an explicit `relock: true` or `--relock`.
+  Rationale: The task explicitly forbids locking the desktop during this implementation run, and manual release should not unexpectedly lock a user's live session. The automatic daemon lifecycle still uses its own env-controlled `SKY_CUA_PRESENCE_RELOCK` default.
+  Date/Author: 2026-06-12, implementation.
 
 ## Outcomes & Retrospective
 
@@ -77,6 +82,8 @@ M2 proved the safe Linux primitives that this worker is allowed to exercise: the
 M3 moved the proven Linux primitives into the backend. `SessionPresenceManager` now owns the fd and ScreenSaver cookie lifetimes, exposes idempotent `ensure`, `release`, and `status`, and reports best-effort failures through `SessionPresenceStatus.detail` instead of aborting other presence operations. Live `doctor` now reports concrete logind/screensaver capability checks.
 
 M4 added the automatic daemon lifecycle without arming it by default. Activity requests acquire presence once per held window; pure status queries and explicit session-presence requests are excluded from the automatic path; the watchdog releases once after the configured idle timeout and then waits for the next activity request to re-acquire. Live lock/unlock and relock observation remains intentionally unrun by this worker because the task forbids locking or unlocking the desktop session.
+
+M5 exposed the explicit control surface. MCP clients now get `hold_session`, `unlock_session`, `release_session`, and `session_presence_status`; the operator CLI can send persistent requests through the daemon; and the service binary also has the direct diagnostic/manual subcommand requested by the plan. This worker validated only status and parser/routing paths live; release with `relock: true` and live lock/unlock acceptance remain for the orchestrator because this task forbids locking or unlocking the desktop session.
 
 ## Context and Orientation
 
@@ -381,6 +388,36 @@ M4 focused daemon lifecycle validation:
     test result: ok. 1 passed.
 
 M4 workspace validation:
+
+    $ cargo fmt --check
+    success
+
+    $ cargo build
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+
+    $ cargo test
+    test result: ok. Workspace unit and doc tests passed.
+
+M5 focused tool and CLI validation:
+
+    $ cargo test -p sky-cua-client session_presence -- --nocapture
+    test result: ok. 6 passed.
+
+    $ cargo test -p sky-cua-service session_presence -- --nocapture
+    test result: ok. 5 passed.
+
+    $ cargo run -p sky-cua-service -- session-presence status
+    {
+      "backend": "systemd-logind+screensaver",
+      "supported": true,
+      "unlock_supported": true,
+      "locked": false,
+      "lock_inhibited": false,
+      "suspend_inhibited": false,
+      "detail": "session 3 LockedHint=false"
+    }
+
+M5 workspace validation:
 
     $ cargo fmt --check
     success
