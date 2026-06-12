@@ -1398,7 +1398,12 @@ mod tests {
             } => {
                 assert!(response.tab.is_none());
                 assert_eq!(response.diagnostics.len(), 1);
-                assert_eq!(response.diagnostics[0].code, "BrowserOpenUrlUnsupported");
+                let expected_code = if cfg!(target_os = "windows") {
+                    "BrowserBridgeUnsupported"
+                } else {
+                    "BrowserOpenUrlUnsupported"
+                };
+                assert_eq!(response.diagnostics[0].code, expected_code);
             }
             other => panic!("unexpected response: {other:?}"),
         }
@@ -1442,11 +1447,16 @@ mod tests {
                 response: BrowserResponse::Status { report },
             } => {
                 assert_eq!(report.browser_integration, None);
+                let expected_code = if cfg!(target_os = "windows") {
+                    "BrowserBridgeUnsupported"
+                } else {
+                    "BrowserIntegrationDeferred"
+                };
                 assert!(
                     report
                         .diagnostics
                         .iter()
-                        .any(|diagnostic| diagnostic.code == "BrowserIntegrationDeferred")
+                        .any(|diagnostic| diagnostic.code == expected_code)
                 );
             }
             other => panic!("unexpected response: {other:?}"),
