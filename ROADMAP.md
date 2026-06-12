@@ -91,6 +91,10 @@ Open boxes link to the active ExecPlan that owns the work.
       lifecycle was retired 2026-06-11: driving the user's real logged-in
       browser is the product; an isolated profile defeats that purpose) —
       [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
+- [x] One-shot installer (`install.py`): system deps, build, Heliasar
+      marketplace + compat plugin, MCP registration and skills for all
+      detected agents, health checks —
+      [`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md)
 - [ ] Detached launch breadth across more desktop/session launchers
 
 ## Phase: Performance and runtime tuning

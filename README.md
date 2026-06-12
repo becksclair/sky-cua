@@ -69,6 +69,21 @@ packaged adapter around that runtime, not the runtime boundary itself.
   `resources/chrome_preflight.py` and the `bin/sky-cua-browser-preflight`
   wrapper
 
+## Install
+
+One command sets up a fresh clone end to end — system dependencies, the
+runtime build, the Heliasar Codex marketplace (with the computer-use compat
+plugin), MCP registration plus skills for every detected agent (Codex,
+Claude Code, Claude Desktop, OpenCode, Pi, OpenClaw), and health checks:
+
+```bash
+python3 install.py
+```
+
+Use `--dry-run` to preview the phases, `--agents` to pick hosts explicitly,
+and `--kwin-effect` to also install the KDE agent-cursor effect. Details in
+[`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md).
+
 ## Development
 
 From the repo root:
