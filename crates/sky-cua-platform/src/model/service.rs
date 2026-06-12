@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AgentCursorCapabilities,
     AgentCursorState, AppInfo, AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse,
-    CaptureScreenMode, DiagnosticEntry, DoctorReport, EnvironmentInfo, WindowInfo, WindowTarget,
-    WindowTargetingSetupReport,
+    CaptureScreenMode, DiagnosticEntry, DoctorReport, EnvironmentInfo, SessionPresenceIntent,
+    SessionPresenceStatus, WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -41,6 +41,9 @@ pub enum ServiceRequest {
     ShowAgentCursor,
     Browser {
         request: BrowserRequest,
+    },
+    SessionPresence {
+        action: SessionPresenceAction,
     },
     ExecuteAction {
         request: Box<ActionRequest>,
@@ -124,6 +127,9 @@ pub enum ServiceResponse {
     Browser {
         response: BrowserResponse,
     },
+    SessionPresence {
+        status: SessionPresenceStatus,
+    },
     ExecuteAction {
         outcome: ActionOutcome,
     },
@@ -131,6 +137,17 @@ pub enum ServiceResponse {
         code: String,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionPresenceAction {
+    Ensure(SessionPresenceIntent),
+    Release {
+        #[serde(default)]
+        relock: bool,
+    },
+    Status,
 }
 
 #[cfg(test)]
@@ -235,6 +252,16 @@ mod tests {
                     },
                 },
                 "browser",
+            ),
+            (
+                ServiceRequest::SessionPresence {
+                    action: SessionPresenceAction::Ensure(SessionPresenceIntent {
+                        unlock: true,
+                        inhibit_lock: true,
+                        inhibit_suspend: true,
+                    }),
+                },
+                "session_presence",
             ),
             (
                 ServiceRequest::ExecuteAction {
@@ -452,6 +479,12 @@ mod tests {
                     },
                 },
                 "browser",
+            ),
+            (
+                ServiceResponse::SessionPresence {
+                    status: SessionPresenceStatus::unsupported("none"),
+                },
+                "session_presence",
             ),
             (
                 ServiceResponse::ExecuteAction {

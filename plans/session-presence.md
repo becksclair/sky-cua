@@ -18,7 +18,7 @@ The single most important non-obvious fact this plan is built on: **on KDE Plasm
 
 ## Progress
 
-- [ ] (M1) Platform contracts: session-presence types, trait methods with default "unsupported" behavior, and the `DoctorSessionPresenceReport` struct land in `sky-cua-platform`; workspace builds; `doctor` shows `session_presence` as unsupported on all backends.
+- [x] (2026-06-12 12:00Z) M1 platform contracts landed: session-presence types, default trait methods, readiness booleans, service request/response variants, daemon dispatch for the explicit request path, and an unsupported Linux doctor report until the real Linux backend lands.
 - [ ] (M2) Linux inhibitor spike: a standalone example binary in `crates/sky-cua-linux/examples/` proves, on the live box, that the logind `sleep` inhibitor fd blocks suspend, the `org.freedesktop.ScreenSaver` cookie blocks KDE auto-lock, `UnlockSession` unlocks without a prompt, and `LockedHint` reads correctly.
 - [ ] (M3) Linux backend implementation: a `SessionPresenceManager` holding the inhibitor handles, wired into `LinuxDesktopBackend`, with the doctor report populated.
 - [ ] (M4) Daemon lifecycle: env-gated, activity-driven acquire-on-request and timer-driven release, with optional re-lock, reusing `SessionStore`.
@@ -36,6 +36,8 @@ Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
   Evidence: `ServiceDaemon::spawn_overlay_idle_watchdog` at `crates/sky-cua-service/src/daemon.rs:56-73`.
 - Observation: KDE auto-lock is gated by `org.freedesktop.ScreenSaver` inhibition, not by logind idle inhibition; kscreenlocker increments its own `m_inhibitCounter` and consults its own KIdleTime timer.
   Evidence: research against KDE/kscreenlocker `ksldapp.cpp` (`isInhibited()`, `updateIdleTimeout()`) and `interface.cpp` + `dbus/org.freedesktop.ScreenSaver.xml`.
+- Observation: The platform default doctor and the Linux doctor builder are separate seams. Adding the optional report field to the trait default does not affect the live Linux `sky-cua-service doctor` output because Linux overrides `doctor()`.
+  Evidence: M1 added `session_presence: None` in `crates/sky-cua-platform/src/backend.rs` and a temporary unsupported `DoctorSessionPresenceReport` in `crates/sky-cua-linux/src/doctor.rs`; `cargo run -p sky-cua-service -- doctor` showed `session_presence.backend = "none"`.
 
 ## Decision Log
 
@@ -51,10 +53,13 @@ Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
 - Decision: Gate the entire feature behind environment variables, default off, and acquire presence only as a side effect of real tool activity (not on daemon startup).
   Rationale: When armed, any MCP client could otherwise unlock the desktop; defaulting off and tying acquisition to activity keeps the blast radius to "an explicitly-armed daemon, while actively working."
   Date/Author: 2026-06-12, design phase.
+- Decision: During M1, populate Linux `doctor` with an unsupported `session_presence` report even though the trait default keeps the optional field absent.
+  Rationale: The live Linux backend has a custom doctor implementation, so without a temporary Linux-side report the M1 acceptance check would not show the new structured field on this machine. M3 will replace this placeholder with real logind/screensaver checks.
+  Date/Author: 2026-06-12, implementation.
 
 ## Outcomes & Retrospective
 
-To be written at completion of each milestone and at the end. Compare the delivered behavior against the Purpose section: can a remotely-launched agent unlock a locked KDE session, keep it awake while working, and let it re-lock on idle, with honest `doctor` reporting on every platform?
+M1 completed the shared contract only. All backends still report unsupported behavior, and the explicit service request path returns the structured unsupported status rather than an error. This does not yet unlock, inhibit, or decay a hold; it makes those behaviors representable and keeps `doctor` honest until the Linux implementation arrives.
 
 ## Context and Orientation
 
@@ -272,6 +277,26 @@ Record M2 spike transcripts here as indented blocks as they are produced, for ex
     requested UnlockSession(3); LockedHint now: false
 
 Keep these concise and focused on proving the mechanism.
+
+M1 validation:
+
+    $ cargo fmt --check
+    success
+
+    $ cargo build
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+
+    $ cargo test
+    test result: ok. Workspace unit and doc tests passed.
+
+    $ cargo run -p sky-cua-service -- doctor
+    "session_presence": {
+      "backend": "none",
+      "unlock": { "ok": false, "detail": "session presence is not available for this backend" },
+      "inhibit_lock": { "ok": false, "detail": "session presence is not available for this backend" },
+      "inhibit_suspend": { "ok": false, "detail": "session presence is not available for this backend" },
+      "lock_state_readable": { "ok": false, "detail": "session presence is not available for this backend" }
+    }
 
 ## Interfaces and Dependencies
 

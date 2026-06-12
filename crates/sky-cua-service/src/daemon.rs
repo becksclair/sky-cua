@@ -6,7 +6,7 @@ use sky_cua_platform::DESKTOP_LAUNCH_ENV_KEYS;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppStateSnapshot, BrowserRequest, BrowserResponse, CaptureInfo,
-    CaptureScreenMode, DiagnosticEntry, ServiceRequest, ServiceResponse,
+    CaptureScreenMode, DiagnosticEntry, ServiceRequest, ServiceResponse, SessionPresenceAction,
 };
 
 use crate::action_router::route_action;
@@ -266,6 +266,23 @@ impl ServiceDaemon {
             ServiceRequest::Browser { .. } => {
                 unreachable!("browser requests bypass the desktop request lane")
             }
+            ServiceRequest::SessionPresence { action } => match action {
+                SessionPresenceAction::Ensure(intent) => {
+                    match self.backend.ensure_session_presence(intent).await {
+                        Ok(status) => ServiceResponse::SessionPresence { status },
+                        Err(error) => error_response(error.code, error.message),
+                    }
+                }
+                SessionPresenceAction::Release { relock } => {
+                    match self.backend.release_session_presence(relock).await {
+                        Ok(status) => ServiceResponse::SessionPresence { status },
+                        Err(error) => error_response(error.code, error.message),
+                    }
+                }
+                SessionPresenceAction::Status => ServiceResponse::SessionPresence {
+                    status: self.backend.session_presence_status().await,
+                },
+            },
             ServiceRequest::Doctor => match self.backend.doctor().await {
                 Ok(report) => ServiceResponse::Doctor {
                     report: Box::new(report),

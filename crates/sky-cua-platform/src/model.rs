@@ -12,7 +12,7 @@ pub use browser::{
     BrowserTargetKind, browser_diagnostic_is_error_code, browser_eval_enabled,
     normalize_browser_open_url,
 };
-pub use service::{ServiceRequest, ServiceResponse};
+pub use service::{ServiceRequest, ServiceResponse, SessionPresenceAction};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -390,6 +390,81 @@ pub struct DoctorCheck {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionPresenceIntent {
+    #[serde(default)]
+    pub unlock: bool,
+    #[serde(default)]
+    pub inhibit_lock: bool,
+    #[serde(default)]
+    pub inhibit_suspend: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionPresenceStatus {
+    pub backend: String,
+    pub supported: bool,
+    pub unlock_supported: bool,
+    pub locked: Option<bool>,
+    pub lock_inhibited: bool,
+    pub suspend_inhibited: bool,
+    pub detail: String,
+}
+
+impl SessionPresenceStatus {
+    #[must_use]
+    pub fn unsupported(backend: &str) -> Self {
+        Self {
+            backend: backend.to_string(),
+            supported: false,
+            unlock_supported: false,
+            locked: None,
+            lock_inhibited: false,
+            suspend_inhibited: false,
+            detail: "session presence is not available for this backend".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DoctorSessionPresenceReport {
+    pub backend: String,
+    pub unlock: DoctorCheck,
+    pub inhibit_lock: DoctorCheck,
+    pub inhibit_suspend: DoctorCheck,
+    pub lock_state_readable: DoctorCheck,
+}
+
+impl DoctorSessionPresenceReport {
+    #[must_use]
+    pub fn unsupported(backend: &str) -> Self {
+        let unsupported_detail = "session presence is not available for this backend".to_string();
+        Self {
+            backend: backend.to_string(),
+            unlock: DoctorCheck {
+                name: "unlock".to_string(),
+                ok: false,
+                detail: unsupported_detail.clone(),
+            },
+            inhibit_lock: DoctorCheck {
+                name: "inhibit_lock".to_string(),
+                ok: false,
+                detail: unsupported_detail.clone(),
+            },
+            inhibit_suspend: DoctorCheck {
+                name: "inhibit_suspend".to_string(),
+                ok: false,
+                detail: unsupported_detail.clone(),
+            },
+            lock_state_readable: DoctorCheck {
+                name: "lock_state_readable".to_string(),
+                ok: false,
+                detail: unsupported_detail,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DoctorReadiness {
     pub can_register_mcp_tools: bool,
@@ -400,6 +475,10 @@ pub struct DoctorReadiness {
     pub can_list_windows: bool,
     #[serde(default)]
     pub can_target_windows: bool,
+    #[serde(default)]
+    pub can_inhibit_presence: bool,
+    #[serde(default)]
+    pub can_unlock_session: bool,
     pub recommended_next_step: String,
     pub blockers: Vec<String>,
 }
@@ -517,6 +596,8 @@ pub struct DoctorReport {
     pub input: Option<DoctorInputReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_integration: Option<BrowserIntegrationReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_presence: Option<DoctorSessionPresenceReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -3,8 +3,8 @@ use std::{env, fs, path::Path, path::PathBuf, process::Command};
 use sky_cua_platform::model::{
     BrowserIntegrationReport, DoctorAccessibilityReport, DoctorCheck, DoctorInputReport,
     DoctorPlatformReport, DoctorPortalReport, DoctorReadiness, DoctorReport,
-    DoctorSessionEnvReport, DoctorWindowingReport, EnvironmentInfo, InputBackendKind,
-    WindowBackendProbe,
+    DoctorSessionEnvReport, DoctorSessionPresenceReport, DoctorWindowingReport, EnvironmentInfo,
+    InputBackendKind, WindowBackendProbe,
 };
 
 use crate::{session_env, windowing};
@@ -113,6 +113,8 @@ pub fn build_doctor_report(
             can_send_input,
             can_list_windows,
             can_target_windows,
+            can_inhibit_presence: false,
+            can_unlock_session: false,
             recommended_next_step,
             blockers,
         },
@@ -148,6 +150,7 @@ pub fn build_doctor_report(
         }),
         input: Some(input),
         browser_integration: Some(browser_integration),
+        session_presence: Some(DoctorSessionPresenceReport::unsupported("none")),
     }
 }
 

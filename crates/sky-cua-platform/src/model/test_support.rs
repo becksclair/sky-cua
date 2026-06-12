@@ -67,6 +67,8 @@ pub(super) fn doctor_report() -> DoctorReport {
             can_send_input: true,
             can_list_windows: true,
             can_target_windows: true,
+            can_inhibit_presence: false,
+            can_unlock_session: false,
             recommended_next_step: "Ready".to_string(),
             blockers: Vec::new(),
         },
@@ -77,6 +79,7 @@ pub(super) fn doctor_report() -> DoctorReport {
         windowing: None,
         input: None,
         browser_integration: None,
+        session_presence: None,
     }
 }
 

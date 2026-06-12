@@ -325,6 +325,8 @@ fn boxed_get_app_state_includes_doctor_report_when_present() {
             can_send_input: true,
             can_list_windows: false,
             can_target_windows: false,
+            can_inhibit_presence: false,
+            can_unlock_session: false,
             recommended_next_step: "Ready".to_string(),
             blockers: Vec::new(),
         },
@@ -335,6 +337,7 @@ fn boxed_get_app_state_includes_doctor_report_when_present() {
         windowing: None,
         input: None,
         browser_integration: None,
+        session_presence: None,
     };
     let rendered = serde_json::to_value(ServiceResponse::GetAppState {
         snapshot: Box::new(AppStateSnapshot {
@@ -397,6 +400,9 @@ fn doctor_report_deserializes_without_session_env() {
         serde_json::from_value(value).expect("old doctor JSON should deserialize");
 
     assert!(report.session_env.is_none());
+    assert!(!report.readiness.can_inhibit_presence);
+    assert!(!report.readiness.can_unlock_session);
+    assert!(report.session_presence.is_none());
 }
 
 #[test]

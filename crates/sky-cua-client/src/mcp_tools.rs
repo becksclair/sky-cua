@@ -922,6 +922,8 @@ mod tests {
                 can_send_input: true,
                 can_list_windows: false,
                 can_target_windows: false,
+                can_inhibit_presence: false,
+                can_unlock_session: false,
                 recommended_next_step: "Ready".to_string(),
                 blockers: Vec::new(),
             },
@@ -932,6 +934,7 @@ mod tests {
             windowing: None,
             input: None,
             browser_integration: None,
+            session_presence: None,
         };
         let snapshot = AppStateSnapshot {
             snapshot_id: "snap-1".to_string(),
@@ -1920,6 +1923,8 @@ mod tests {
                 can_send_input: true,
                 can_list_windows: true,
                 can_target_windows: true,
+                can_inhibit_presence: false,
+                can_unlock_session: false,
                 recommended_next_step: "ready".to_string(),
                 blockers: Vec::new(),
             },
@@ -1930,6 +1935,7 @@ mod tests {
             windowing: None,
             input: None,
             browser_integration: None,
+            session_presence: None,
         }
     }
     #[test]
@@ -2349,6 +2355,8 @@ mod tests {
                 can_send_input: true,
                 can_list_windows: true,
                 can_target_windows: true,
+                can_inhibit_presence: false,
+                can_unlock_session: false,
                 recommended_next_step: "ready".to_string(),
                 blockers: Vec::new(),
             },
@@ -2359,6 +2367,7 @@ mod tests {
             windowing: None,
             input: None,
             browser_integration: None,
+            session_presence: None,
         }
     }
 }

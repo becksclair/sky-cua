@@ -5,7 +5,8 @@ use crate::model::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
     CaptureBackendKind, CaptureScreenMode, DiagnosticEntry, DoctorCheck, DoctorReadiness,
     DoctorReport, EnvironmentInfo, HeuristicMatch, InputBackendKind, PortalTokenResetOutcome,
-    SemanticBackendKind, WindowInfo, WindowTarget, WindowTargetingSetupReport,
+    SemanticBackendKind, SessionPresenceIntent, SessionPresenceStatus, WindowInfo, WindowTarget,
+    WindowTargetingSetupReport,
 };
 
 #[async_trait]
@@ -63,6 +64,8 @@ pub trait DesktopBackend: Send + Sync {
                 can_send_input,
                 can_list_windows: false,
                 can_target_windows: false,
+                can_inhibit_presence: false,
+                can_unlock_session: false,
                 recommended_next_step,
                 blockers,
             },
@@ -73,6 +76,7 @@ pub trait DesktopBackend: Send + Sync {
             windowing: None,
             input: None,
             browser_integration: None,
+            session_presence: None,
         })
     }
     async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError>;
@@ -121,6 +125,21 @@ pub trait DesktopBackend: Send + Sync {
             crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
             "portal token reset is only available on portal-backed Linux sessions",
         ))
+    }
+    async fn ensure_session_presence(
+        &self,
+        _intent: SessionPresenceIntent,
+    ) -> Result<SessionPresenceStatus, BackendError> {
+        Ok(SessionPresenceStatus::unsupported("none"))
+    }
+    async fn release_session_presence(
+        &self,
+        _relock: bool,
+    ) -> Result<SessionPresenceStatus, BackendError> {
+        Ok(SessionPresenceStatus::unsupported("none"))
+    }
+    async fn session_presence_status(&self) -> SessionPresenceStatus {
+        SessionPresenceStatus::unsupported("none")
     }
 }
 

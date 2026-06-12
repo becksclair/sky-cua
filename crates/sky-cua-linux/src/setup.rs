@@ -342,6 +342,8 @@ mod tests {
                 can_send_input: true,
                 can_list_windows: true,
                 can_target_windows: true,
+                can_inhibit_presence: false,
+                can_unlock_session: false,
                 recommended_next_step: "ready".to_string(),
                 blockers: vec![],
             },
@@ -391,6 +393,7 @@ mod tests {
                 },
             }),
             browser_integration: None,
+            session_presence: None,
         }
     }
 
