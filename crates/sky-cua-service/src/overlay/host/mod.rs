@@ -16,6 +16,12 @@ use sky_cua_platform::overlay_host_tcp_addr;
 const OVERLAY_BACKEND_ENV: &str = "SKY_CUA_OVERLAY_BACKEND";
 const OVERLAY_HOST_PATH_ENV: &str = "SKY_CUA_OVERLAY_HOST_PATH";
 
+/// Endpoint the production connection uses on this platform.
+#[cfg(unix)]
+type DefaultEndpoint = UnixSocketEndpoint;
+#[cfg(not(unix))]
+type DefaultEndpoint = TcpEndpoint;
+
 #[derive(Debug)]
 pub(super) enum OverlayHostConnection {
     Disabled {
@@ -23,11 +29,10 @@ pub(super) enum OverlayHostConnection {
         report_diagnostic: bool,
     },
     #[cfg(test)]
-    Failing { diagnostic: DiagnosticEntry },
-    #[cfg(unix)]
-    Transport(ManagedOverlayHost<UnixSocketEndpoint>),
-    #[cfg(not(unix))]
-    Transport(ManagedOverlayHost<TcpEndpoint>),
+    Failing {
+        diagnostic: DiagnosticEntry,
+    },
+    Transport(ManagedOverlayHost<DefaultEndpoint>),
 }
 
 impl OverlayHostConnection {

@@ -243,6 +243,9 @@ impl OverlayHostEndpoint for UnixSocketEndpoint {
     }
 
     fn prepare_spawn(&self) -> Result<(), String> {
+        // The host binary repeats this directory/stale-socket cleanup before
+        // binding; keeping it here too surfaces preparation failures as a
+        // pre-spawn unavailable diagnostic instead of a startup exit.
         if let Some(parent) = self.socket_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("failed to create overlay socket directory: {error}"))?;
@@ -438,6 +441,8 @@ pub(super) fn client_error_detail(error: &str) -> String {
         "failed to connect to overlay host TCP listener".to_string()
     } else if error.starts_with("failed to resolve overlay host TCP address ") {
         "failed to resolve overlay host TCP address".to_string()
+    } else if error.starts_with("overlay host TCP address resolved to no socket addresses") {
+        "overlay host TCP address resolved to no socket addresses".to_string()
     } else {
         error.to_string()
     }
@@ -448,5 +453,54 @@ pub(super) fn diagnostic(code: &str, message: &str, details: Option<String>) -> 
         code: code.to_string(),
         message: message.to_string(),
         details,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_error_detail;
+
+    /// Every endpoint/lifecycle error string that embeds a local path or
+    /// address must map to a redacted client-facing detail. New error sites
+    /// must extend `client_error_detail` and this list together.
+    #[test]
+    fn client_error_detail_redacts_paths_and_addresses() {
+        let cases = [
+            (
+                "overlay host binary not found: /home/user/bin/host",
+                "overlay host binary not found",
+            ),
+            (
+                "failed to spawn overlay host /home/user/bin/host: oops",
+                "failed to spawn overlay host",
+            ),
+            (
+                "overlay host socket did not become ready at /run/user/1/x.sock: refused",
+                "overlay host socket did not become ready",
+            ),
+            (
+                "failed to connect to overlay host socket /run/user/1/x.sock: refused",
+                "failed to connect to overlay host socket",
+            ),
+            (
+                "overlay host TCP listener did not become ready at 127.0.0.1:1: refused",
+                "overlay host TCP listener did not become ready",
+            ),
+            (
+                "failed to connect to overlay host TCP listener 127.0.0.1:1: refused",
+                "failed to connect to overlay host TCP listener",
+            ),
+            (
+                "failed to resolve overlay host TCP address example.internal:1: nx",
+                "failed to resolve overlay host TCP address",
+            ),
+            (
+                "overlay host TCP address resolved to no socket addresses: example.internal:1",
+                "overlay host TCP address resolved to no socket addresses",
+            ),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(client_error_detail(raw), expected, "raw: {raw}");
+        }
     }
 }

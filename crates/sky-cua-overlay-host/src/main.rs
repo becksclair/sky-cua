@@ -230,7 +230,7 @@ fn serve_tcp_with(addr: String, idle_hide_timeout: Duration) -> Result<()> {
         .set_nonblocking(true)
         .context("failed to make overlay host TCP listener non-blocking")?;
     run_accept_loop(
-        || accept_client(|| listener.accept().map(|(stream, _)| stream), "TCP"),
+        || listener.accept().map(|(stream, _)| stream),
         idle_hide_timeout,
         "TCP",
     )
@@ -265,7 +265,7 @@ fn serve_unix_socket_with(path: PathBuf, idle_hide_timeout: Duration) -> Result<
         .set_nonblocking(true)
         .context("failed to make overlay host socket listener non-blocking")?;
     let result = run_accept_loop(
-        || accept_client(|| listener.accept().map(|(stream, _)| stream), "socket"),
+        || listener.accept().map(|(stream, _)| stream),
         idle_hide_timeout,
         "socket",
     );
@@ -273,63 +273,52 @@ fn serve_unix_socket_with(path: PathBuf, idle_hide_timeout: Duration) -> Result<
     result
 }
 
-/// Accept one pending client from a non-blocking listener and switch it to
-/// blocking mode with per-client I/O timeouts applied. Returns `Ok(None)`
-/// when no client is waiting.
-fn accept_client<S: ClientStream>(
-    accept: impl FnOnce() -> io::Result<S>,
-    label: &str,
-) -> Result<Option<S>> {
-    let stream = match accept() {
-        Ok(stream) => stream,
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to accept overlay host {label} connection"));
-        }
-    };
-    stream
-        .set_nonblocking(false)
-        .with_context(|| format!("failed to make overlay host {label} stream blocking"))?;
-    stream
-        .set_read_timeout(Some(CLIENT_IO_TIMEOUT))
-        .with_context(|| format!("failed to set overlay host {label} read timeout"))?;
-    stream
-        .set_write_timeout(Some(CLIENT_IO_TIMEOUT))
-        .with_context(|| format!("failed to set overlay host {label} write timeout"))?;
-    Ok(Some(stream))
-}
-
-/// Shared serve loop for socket-style endpoints: poll for clients, handle one
-/// request per connection, run the idle-hide watchdog while idle, and exit on
-/// a shutdown message.
+/// Shared serve loop for socket-style endpoints: poll a non-blocking listener
+/// for clients, switch each accepted stream to blocking mode with per-client
+/// I/O timeouts, handle one request per connection, run the idle-hide
+/// watchdog while idle, and exit on a shutdown message.
 ///
 /// Clients are handled serially: a connected client that never sends a
 /// request can delay subsequent requests by at most `CLIENT_IO_TIMEOUT`.
 /// That bound is acceptable for the supported single service-client model.
 fn run_accept_loop<S: ClientStream>(
-    mut accept: impl FnMut() -> Result<Option<S>>,
+    mut accept: impl FnMut() -> io::Result<S>,
     idle_hide_timeout: Duration,
     label: &str,
 ) -> Result<()> {
     let mut backend = OverlayHostBackend::from_env();
     let mut tracker = IdleHideTracker::new(idle_hide_timeout);
     loop {
-        match accept()? {
-            Some(mut stream) => match handle_socket_message(&mut backend, &mut stream) {
-                Ok(handled) => {
-                    tracker.note_visibility(handled.visibility);
-                    if handled.shutdown {
-                        return Ok(());
-                    }
-                }
-                Err(error) => {
-                    eprintln!("overlay host {label} connection failed: {error:#}");
-                }
-            },
-            None => {
+        let mut stream = match accept() {
+            Ok(stream) => stream,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 tracker.hide_if_expired(&mut backend);
                 std::thread::sleep(ACCEPT_POLL_INTERVAL);
+                continue;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to accept overlay host {label} connection"));
+            }
+        };
+        stream
+            .set_nonblocking(false)
+            .with_context(|| format!("failed to make overlay host {label} stream blocking"))?;
+        stream
+            .set_read_timeout(Some(CLIENT_IO_TIMEOUT))
+            .with_context(|| format!("failed to set overlay host {label} read timeout"))?;
+        stream
+            .set_write_timeout(Some(CLIENT_IO_TIMEOUT))
+            .with_context(|| format!("failed to set overlay host {label} write timeout"))?;
+        match handle_socket_message(&mut backend, &mut stream) {
+            Ok(handled) => {
+                tracker.note_visibility(handled.visibility);
+                if handled.shutdown {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                eprintln!("overlay host {label} connection failed: {error:#}");
             }
         }
     }
@@ -374,7 +363,7 @@ fn serve_unix_socket(_path: PathBuf) -> Result<()> {
 
 fn handle_socket_message(
     backend: &mut OverlayHostBackend,
-    stream: &mut impl ReadWrite,
+    stream: &mut (impl io::Read + io::Write),
 ) -> Result<HandledMessage> {
     let mut reader = io::BufReader::new(stream);
     let mut line = String::new();
@@ -414,10 +403,6 @@ fn message_visibility(message: &OverlayHostMessage) -> Option<bool> {
         _ => None,
     }
 }
-
-trait ReadWrite: io::Read + io::Write {}
-
-impl<T: io::Read + io::Write> ReadWrite for T {}
 
 #[cfg(all(test, unix))]
 mod tests {
