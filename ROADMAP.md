@@ -15,6 +15,10 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Add stripped-env repair to the curated VM runner profile set
         (`session-env` profile, curated member)
   - [x] Non-Codex host smoke (OpenCode/Pi) once VM lane is live
+- [x] Session presence (Linux unlock plus lock/suspend inhibition, MCP tools,
+      and CLI surface) — [`docs/features/session-presence.md`](docs/features/session-presence.md)
+  - [ ] Windows power-request inhibition backend (M6) —
+        [`plans/session-presence.md`](plans/session-presence.md)
 - [x] KWin and X11 workspace metadata — [`docs/features/kwin-x11-workspace-metadata.md`](docs/features/kwin-x11-workspace-metadata.md)
   - [ ] Capture a dedicated `list_windows` workspace artifact on real KWin and X11
 - [x] KWin window targeting (focused_window + verified activation via KWin scripting) — [`docs/features/kwin-window-targeting.md`](docs/features/kwin-window-targeting.md)

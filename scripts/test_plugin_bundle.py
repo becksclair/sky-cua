@@ -957,6 +957,12 @@ def test_mcp_config_allows_runtime_override_env_vars() -> None:
     assert "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE" in env_vars
     assert "SKY_CUA_OVERLAY_HOST_PATH" in env_vars
     assert "SKY_CUA_OVERLAY_HOST_TCP_ADDR" in env_vars
+    assert "SKY_CUA_PRESENCE_ENABLED" in env_vars
+    assert "SKY_CUA_PRESENCE_IDLE_RELEASE_SECS" in env_vars
+    assert "SKY_CUA_PRESENCE_INHIBIT_LOCK" in env_vars
+    assert "SKY_CUA_PRESENCE_INHIBIT_SUSPEND" in env_vars
+    assert "SKY_CUA_PRESENCE_RELOCK" in env_vars
+    assert "SKY_CUA_PRESENCE_UNLOCK" in env_vars
     assert "SKY_CUA_SCREENSHOT_CURSOR" in env_vars
     assert "SKY_CUA_REPO_ROOT" in env_vars
     assert "SKY_CUA_SERVICE_PATH" in env_vars

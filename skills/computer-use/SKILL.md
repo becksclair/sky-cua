@@ -20,6 +20,11 @@ unrelated; never carry coordinates across them.
 
 ## State
 
+- For remotely launched desktop threads, check `doctor.session_presence` before
+  the first UI action when the session may be locked or lockable. If doctor
+  reports unlock capability, call `unlock_session` first; if it reports
+  inhibition only, call `hold_session` first. The automatic daemon hold is
+  opt-in through `SKY_CUA_PRESENCE_ENABLED`, so do not assume it is armed.
 - `get_app_state` is the state source: diagnostics, element anchors, text
   readback, and `screenshot_path`. Use full `detail` once for orientation,
   then `detail: "compact"` for action loops. `capture_screen: "never"` for
