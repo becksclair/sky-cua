@@ -24,7 +24,7 @@ The single most important non-obvious fact this plan is built on: **on KDE Plasm
 - [x] (2026-06-12 12:17Z) M4 daemon lifecycle landed: `ServiceDaemon` reads the default-off env gate once, auto-acquires presence before activity requests, releases after `SessionStore` idleness through a watchdog, tracks held state to avoid repeated releases, and has a fake-backend regression test for one acquire plus one idle release.
 - [x] (2026-06-12 12:24Z) M5 tool surface landed: MCP tools `hold_session`, `unlock_session`, `release_session`, and `session_presence_status` route to `ServiceRequest::SessionPresence`, service and operator CLIs expose `session-presence <ensure|release|status>`, focused tool/CLI tests pass, and safe live `session-presence status` reports the Linux backend.
 - [ ] (M6) Windows backend: suspend/display inhibition via the Windows power-request API; unlock reported as unsupported.
-- [ ] (M7) Documentation: `docs/features/session-presence.md`, a section in the `computer-use` skill, and a `ROADMAP.md` entry.
+- [x] (2026-06-12 12:33Z) M7 Documentation: `docs/features/session-presence.md`, a section in the `computer-use` skill, and a `ROADMAP.md` entry.
 
 Use timestamps as steps complete, e.g. `- [x] (2026-06-12 14:00Z) M1 done.`
 
@@ -84,6 +84,8 @@ M3 moved the proven Linux primitives into the backend. `SessionPresenceManager` 
 M4 added the automatic daemon lifecycle without arming it by default. Activity requests acquire presence once per held window; pure status queries and explicit session-presence requests are excluded from the automatic path; the watchdog releases once after the configured idle timeout and then waits for the next activity request to re-acquire. Live lock/unlock and relock observation remains intentionally unrun by this worker because the task forbids locking or unlocking the desktop session.
 
 M5 exposed the explicit control surface. MCP clients now get `hold_session`, `unlock_session`, `release_session`, and `session_presence_status`; the operator CLI can send persistent requests through the daemon; and the service binary also has the direct diagnostic/manual subcommand requested by the plan. This worker validated only status and parser/routing paths live; release with `relock: true` and live lock/unlock acceptance remain for the orchestrator because this task forbids locking or unlocking the desktop session.
+
+M7 captured the shipped Linux/session-presence contract in `docs/features/session-presence.md`, added remote-launch guidance to the bundled `computer-use` skill, and linked the feature from `ROADMAP.md`. The documentation records the current branch truth: Linux uses `systemd-logind+screensaver`, the automatic daemon lifecycle is default-off through `SKY_CUA_PRESENCE_ENABLED`, explicit MCP/CLI requests return structured `SessionPresenceStatus`, Windows power-request inhibition remains M6 sibling-branch work, and macOS/other targets intentionally stay on the unsupported placeholder path until a backend lands.
 
 ## Context and Orientation
 
@@ -427,6 +429,65 @@ M5 workspace validation:
 
     $ cargo test
     test result: ok. Workspace unit and doc tests passed.
+
+M7 documentation and packaging validation:
+
+    $ cargo fmt --check
+    success
+
+    $ cargo test -p sky-cua-client session_presence -- --nocapture
+    test result: ok. 6 passed.
+
+    $ cargo test -p sky-cua-service session_presence -- --nocapture
+    test result: ok. 5 passed.
+
+    $ cargo test -p sky-cua-linux session_presence -- --nocapture
+    test result: ok. 2 passed.
+
+    $ cargo run -p sky-cua-service -- session-presence status
+    {
+      "backend": "systemd-logind+screensaver",
+      "supported": true,
+      "unlock_supported": true,
+      "locked": false,
+      "lock_inhibited": false,
+      "suspend_inhibited": false,
+      "detail": "session 3 LockedHint=false"
+    }
+
+    $ uv run ruff format --check scripts
+    70 files already formatted
+
+    $ uv run ruff check scripts
+    All checks passed!
+
+    $ uv run basedpyright
+    0 errors, 0 warnings, 0 notes
+
+    $ uv run pytest
+    247 passed
+
+    $ python3 scripts/build_plugin.py
+    /home/bex/projects/sky-cua.worktrees/docs-session-presence/dist/plugin/sky-cua
+
+    $ python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
+    installed_path=/home/bex/.codex/plugins/cache/debug/sky-cua/local
+
+The rebuilt bundle and installed plugin both contain
+`docs/features/session-presence.md`, the updated `skills/computer-use/SKILL.md`,
+and the `SKY_CUA_PRESENCE_*` env allowlist. A direct MCP initialize/tools-list
+against the installed bundle returned 38 tools including `hold_session`,
+`unlock_session`, `release_session`, and `session_presence_status`.
+
+`python3 scripts/live_app_server_smoke.py` was rerun twice and remains blocked
+outside the sky-cua MCP server path: Codex app-server reports
+`computer-use` startup failed with `connection closed: initialize response`,
+the transcript contains no `computer-use` MCP tool call, and the model reports
+the tools unavailable. Fresh blocked artifact:
+`artifacts/codex-e2e/app-server-smoke/20260612T124635Z`. The same artifact's
+installed `sky-cua-client mcp` initializes and lists the expected tools through
+the repo `_mcp_stdio.McpClient`, so the residual failure is in the app-server
+plugin startup lane rather than the bundled MCP runtime.
 
 ## Interfaces and Dependencies
 
