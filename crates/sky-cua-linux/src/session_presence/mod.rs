@@ -89,8 +89,11 @@ impl SessionPresenceManager {
         let mut state = self.inner.write().await;
         let mut details = Vec::new();
 
-        state.sleep_inhibitor = None;
-        details.push("released logind sleep inhibitor".to_string());
+        if state.sleep_inhibitor.take().is_some() {
+            details.push("released logind sleep inhibitor".to_string());
+        } else {
+            details.push("no logind sleep inhibitor was held".to_string());
+        }
 
         if let Some(inhibitor) = state.lock_inhibitor.take() {
             let cookie = inhibitor.cookie;

@@ -2,12 +2,12 @@
 
 ## Status
 
-Partial. Linux unlock and lock/suspend inhibition are shipped; the shared
-contract, daemon lifecycle, MCP tools, and CLI surfaces are implemented. Last
-verified: 2026-06-12 from the M3-M5 validation recorded in
-`plans/session-presence.md`. Windows power-request inhibition is M6 work on a
-sibling branch; macOS and other targets intentionally report unsupported
-status until a backend lands.
+Shipped. Linux unlock and lock/suspend inhibition, the shared contract, daemon
+lifecycle, MCP tools, CLI surfaces, and Windows power-request inhibition are
+all implemented. Last verified: 2026-06-12 (live KDE Plasma 6 Wayland
+lock/unlock/inhibit/decay cycle; Windows power requests observed in
+`powercfg /requests` on a Windows 11 host). macOS and other targets
+intentionally report unsupported status until a backend lands.
 
 ## Summary
 
@@ -68,9 +68,11 @@ Automatic daemon configuration in `crates/sky-cua-service/src/daemon.rs`:
 
 Boolean env parsing accepts `1`, `true`, `yes`, and `on` as true, and `0`,
 `false`, `no`, and `off` as false. Unknown values fall back to the default.
-The env gate controls the automatic daemon lifecycle; explicit MCP and CLI
-session-presence requests still route to the backend and report support
-honestly. `.mcp.json`, `scripts/install_mcp_server.py`, and
+`SKY_CUA_PRESENCE_ENABLED` is a hard gate for state-changing requests: when it
+is off, the daemon rejects explicit `Ensure` and `Release` session-presence
+requests (MCP tools and CLI alike) with `ActionUnsupportedForEnvironment`, so
+no local socket client can unlock or inhibit the desktop while the feature is
+disabled. `Status` requests remain available and report support honestly. `.mcp.json`, `scripts/install_mcp_server.py`, and
 `resources/chrome_preflight.py` include the six `SKY_CUA_PRESENCE_*` names in
 the installed MCP env allowlists so host-launched clients can forward the
 opt-in.
@@ -80,7 +82,7 @@ Per-platform capability matrix:
 | Platform | Backend name | Unlock | Lock inhibit | Suspend inhibit | Status |
 | --- | --- | --- | --- | --- | --- |
 | Linux with systemd-logind and `org.freedesktop.ScreenSaver` | `systemd-logind+screensaver` | Supported through logind `UnlockSession` when `LockedHint` is readable | Supported through the session-bus ScreenSaver inhibitor | Supported through a system-bus logind `sleep` fd inhibitor | Shipped on this branch |
-| Windows | `windows-power-request` | Unsupported; Windows has `LockWorkstation` but no equivalent user-session unlock API | Planned inhibition only through Windows power requests | Planned inhibition only through Windows power requests | M6 in progress on a sibling branch; this branch inherits the default unsupported trait methods |
+| Windows | `windows-power-request` | Unsupported; Windows has `LockWorkstation` but no equivalent user-session unlock API | Supported through `PowerRequestDisplayRequired` (fails honestly in sessions with no interactive display) | Supported through `PowerRequestSystemRequired` and `PowerRequestExecutionRequired` | Shipped |
 | macOS | `none` until a backend is added | Unsupported | Placeholder primitive would be `IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep)` | Placeholder primitive would be `IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep)` | Intentionally unsupported placeholder |
 | Other targets | `none` | Unsupported | Unsupported | Unsupported | Default unsupported backend |
 
@@ -177,8 +179,11 @@ not allowed to lock or unlock the active desktop session.
   behavior remains unchanged.
 - The Linux implementation depends on systemd-logind and a session-bus
   `org.freedesktop.ScreenSaver` owner for full capability.
-- Windows support is not landed on this branch. The intended backend is
-  `windows-power-request`, with inhibition only and no unlock support.
+- Windows uses the `windows-power-request` backend, with inhibition only and
+  no unlock support. `PowerRequestDisplayRequired` fails with
+  `ERROR_NOT_SUPPORTED` in sessions without an interactive display (for
+  example SSH service sessions); the failure is reported in `detail` and does
+  not abort the other holds.
 - macOS and other platforms intentionally report unsupported status. A future
   macOS backend would use IOPM assertions for idle display/system sleep
   inhibition and would still have no unlock primitive.
@@ -189,4 +194,4 @@ not allowed to lock or unlock the active desktop session.
 ## Related
 
 - ROADMAP entry: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop parity"
-- Originating ExecPlan: [`plans/session-presence.md`](../../plans/session-presence.md)
+- Research notes: [`docs/research/2026-06-kde-session-unlock-and-inhibition.md`](../research/2026-06-kde-session-unlock-and-inhibition.md)

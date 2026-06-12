@@ -83,6 +83,11 @@ pub async fn run_service() -> Result<()> {
     }
 
     let mut listener = UnixListener::bind(&socket_path)?;
+    // The socket peer is the authorization boundary for privileged requests
+    // (session presence can unlock the desktop), so restrict the inode itself
+    // even when the path override or temp-dir fallback skips the parent
+    // tightening above.
+    set_socket_owner_only_permissions(&socket_path)?;
     let daemon = Arc::new(ServiceDaemon::new(socket_path.clone()).await?);
     let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let _session_presence_watchdog = daemon.spawn_session_presence_watchdog();
@@ -110,6 +115,12 @@ pub async fn run_service() -> Result<()> {
                 if !socket_path.exists() {
                     match UnixListener::bind(&socket_path) {
                         Ok(replacement) => {
+                            if let Err(error) = set_socket_owner_only_permissions(&socket_path) {
+                                warn!(
+                                    "failed to restrict re-bound socket permissions at {}: {error}",
+                                    socket_path.display()
+                                );
+                            }
                             let displaced = std::mem::replace(&mut listener, replacement);
                             // Clients that completed connect(2) against the
                             // unlinked inode are still queued on the old
@@ -325,6 +336,14 @@ fn set_owner_only_permissions(path: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_socket_owner_only_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
 

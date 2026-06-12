@@ -92,16 +92,19 @@ impl ServiceDaemon {
     /// the daemon has been idle past the configured timeout.
     pub fn spawn_session_presence_watchdog(
         self: &std::sync::Arc<Self>,
-    ) -> tokio::task::JoinHandle<()> {
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        if !self.session_presence_config.enabled {
+            return None;
+        }
         let daemon = std::sync::Arc::clone(self);
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
                 daemon.release_idle_session_presence_if_needed().await;
             }
-        })
+        }))
     }
 
     #[cfg(test)]
@@ -303,6 +306,9 @@ impl ServiceDaemon {
             }
             ServiceRequest::SessionPresence { action } => match action {
                 SessionPresenceAction::Ensure(intent) => {
+                    if !self.session_presence_config.enabled {
+                        return session_presence_disabled_response();
+                    }
                     match self.backend.ensure_session_presence(intent).await {
                         Ok(status) => {
                             let mut held = self.session_presence_held.lock().await;
@@ -313,6 +319,9 @@ impl ServiceDaemon {
                     }
                 }
                 SessionPresenceAction::Release { relock } => {
+                    if !self.session_presence_config.enabled {
+                        return session_presence_disabled_response();
+                    }
                     match self.backend.release_session_presence(relock).await {
                         Ok(status) => {
                             let mut held = self.session_presence_held.lock().await;
@@ -721,6 +730,14 @@ impl SessionPresenceConfig {
     }
 }
 
+fn session_presence_disabled_response() -> ServiceResponse {
+    error_response(
+        sky_cua_platform::BackendErrorCode::ActionUnsupportedForEnvironment.as_str(),
+        "session presence is disabled; set SKY_CUA_PRESENCE_ENABLED=1 on the daemon to allow \
+         unlock and inhibitor requests",
+    )
+}
+
 fn env_bool(name: &str, default: bool) -> bool {
     match std::env::var(name) {
         Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
@@ -915,8 +932,8 @@ mod tests {
         AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse, BrowserTargetKind,
         CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, ElementNode,
         EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
-        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SessionPresenceIntent,
-        SessionPresenceStatus, ToolAvailability, ToolCapabilities,
+        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction,
+        SessionPresenceIntent, SessionPresenceStatus, ToolAvailability, ToolCapabilities,
     };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1576,6 +1593,52 @@ mod tests {
             })
             .await;
         assert_eq!(presence.ensure_calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn explicit_session_presence_requests_are_rejected_when_disabled() {
+        let presence = Arc::new(PresenceRecorder::default());
+        let daemon = daemon_with_backend_and_presence_config(
+            Box::new(FakeBackend {
+                snapshot: snapshot(None, Vec::new()),
+                outcome: success_outcome(),
+                presence: Some(presence.clone()),
+            }),
+            SessionPresenceConfig::disabled(),
+        );
+
+        for action in [
+            SessionPresenceAction::Ensure(SessionPresenceIntent {
+                unlock: true,
+                inhibit_lock: true,
+                inhibit_suspend: true,
+            }),
+            SessionPresenceAction::Release { relock: false },
+        ] {
+            match daemon
+                .handle(ServiceRequest::SessionPresence { action })
+                .await
+            {
+                ServiceResponse::Error { code, .. } => {
+                    assert_eq!(code, "ActionUnsupportedForEnvironment");
+                }
+                other => panic!("expected a disabled-gate error, got: {other:?}"),
+            }
+        }
+        assert_eq!(presence.ensure_calls(), 0);
+        assert_eq!(presence.release_calls(), 0);
+        assert!(!*daemon.session_presence_held.lock().await);
+
+        // Status stays available and reports honestly while disabled.
+        match daemon
+            .handle(ServiceRequest::SessionPresence {
+                action: SessionPresenceAction::Status,
+            })
+            .await
+        {
+            ServiceResponse::SessionPresence { .. } => {}
+            other => panic!("status should not be gated: {other:?}"),
+        }
     }
 
     #[test]
