@@ -329,10 +329,40 @@ fn is_debugger_unattached_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
         && debugger_unattached_message(&diagnostic.message)
 }
 
+/// Bridge failures that a detach/attach session reset can cure; the executor
+/// recovers once and (when safe) retries the operation on the same socket.
 pub(super) fn is_recoverable_cdp_session_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
+    if diagnostic.code != "BrowserBridgeRequestFailed" {
+        return false;
+    }
+    debugger_unattached_message(&diagnostic.message)
+        || diagnostic.message.contains("not part of browser session")
+        || is_cdp_command_timeout_diagnostic(diagnostic)
+}
+
+/// The extension abandons a CDP command after its `timeoutMs` budget but
+/// cannot cancel it, so the command may still execute and stays outstanding
+/// in the tab's debugger session, wedging every later command on that
+/// session. Detaching and re-attaching the debugger is the only reset that
+/// clears the stuck command. Callers must not blindly replay the failed
+/// operation: unlike the unattached/not-in-session causes, a timeout does
+/// not prove the command never ran.
+pub(super) fn is_cdp_command_timeout_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
     diagnostic.code == "BrowserBridgeRequestFailed"
-        && (debugger_unattached_message(&diagnostic.message)
-            || diagnostic.message.contains("not part of browser session"))
+        && diagnostic.message.contains("waiting for CDP command")
+}
+
+/// A tab-not-found answer is the one bridge failure that proves the tab does
+/// not exist on the queried browser at all, so trying another bridge socket
+/// is legitimate. Every other failure means the socket engaged with the tab
+/// (or failed for reasons unrelated to socket choice) and must not trigger a
+/// cross-socket retry of the operation. Both wordings are Chrome API errors
+/// passed through the extension: `chrome.tabs` says "No tab with id: X.",
+/// `chrome.debugger` says "No tab with given id X.".
+pub(super) fn is_tab_not_found_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
+    diagnostic.code == "BrowserBridgeRequestFailed"
+        && (diagnostic.message.contains("No tab with id")
+            || diagnostic.message.contains("No tab with given id"))
 }
 
 fn debugger_unattached_message(message: &str) -> bool {
@@ -487,7 +517,9 @@ fn stale_sky_cua_owner_session_from_claim_error(diagnostic: &DiagnosticEntry) ->
 
 #[cfg(test)]
 mod tests {
-    use super::debugger_unattached_message;
+    use sky_cua_platform::model::DiagnosticEntry;
+
+    use super::{debugger_unattached_message, is_recoverable_cdp_session_diagnostic};
 
     #[test]
     fn debugger_unattached_message_accepts_live_extension_wordings() {
@@ -499,5 +531,50 @@ mod tests {
             "Detached while handling command."
         ));
         assert!(!debugger_unattached_message("Navigation failed"));
+    }
+
+    #[test]
+    fn cdp_command_timeout_is_recoverable() {
+        let diagnostic = DiagnosticEntry {
+            code: "BrowserBridgeRequestFailed".to_string(),
+            message: "Chrome extension/native-host executeCdp request failed: \
+                      {\"code\":1,\"message\":\"Timed out after 10000ms waiting for \
+                      CDP command Page.captureScreenshot.\"}"
+                .to_string(),
+            details: None,
+        };
+        assert!(is_recoverable_cdp_session_diagnostic(&diagnostic));
+    }
+
+    #[test]
+    fn tab_not_found_accepts_both_chrome_api_wordings() {
+        let diagnostic = |message: &str| DiagnosticEntry {
+            code: "BrowserBridgeRequestFailed".to_string(),
+            message: format!("Chrome extension/native-host executeCdp request failed: {message}"),
+            details: None,
+        };
+        // chrome.tabs wording.
+        assert!(super::is_tab_not_found_diagnostic(&diagnostic(
+            "No tab with id: 515."
+        )));
+        // chrome.debugger wording.
+        assert!(super::is_tab_not_found_diagnostic(&diagnostic(
+            "No tab with given id 515."
+        )));
+        assert!(!super::is_tab_not_found_diagnostic(&diagnostic(
+            "Tab 515 is not part of browser session sky-cua-mcp"
+        )));
+    }
+
+    #[test]
+    fn unrelated_bridge_failure_is_not_recoverable() {
+        let diagnostic = DiagnosticEntry {
+            code: "BrowserBridgeRequestFailed".to_string(),
+            message: "Chrome extension/native-host executeCdp request failed: \
+                      {\"code\":1,\"message\":\"Navigation failed\"}"
+                .to_string(),
+            details: None,
+        };
+        assert!(!is_recoverable_cdp_session_diagnostic(&diagnostic));
     }
 }

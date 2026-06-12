@@ -1,3 +1,4 @@
+mod affinity;
 mod bridge;
 mod cdp;
 mod coordinates;

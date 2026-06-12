@@ -199,6 +199,46 @@ pub(super) async fn reply_to_detach(stream: &mut UnixStream, tab_id: i64) {
     .unwrap();
 }
 
+/// Serve one snapshot `Runtime.evaluate` request with a minimal page payload.
+/// The reply shape encodes the bridge snapshot contract; tests share this so
+/// the contract lives in one place.
+pub(super) async fn reply_to_snapshot_request(
+    stream: &mut UnixStream,
+    tab_id: i64,
+    title: &str,
+    url: &str,
+) {
+    let request = read_frame(stream).await.unwrap().unwrap();
+    assert_eq!(
+        request.get("method").and_then(Value::as_str),
+        Some("executeCdp")
+    );
+    assert_eq!(request["params"]["session_id"], "sky-cua-mcp");
+    assert_eq!(request["params"]["target"]["tabId"], tab_id);
+    assert_eq!(request["params"]["method"], "Runtime.evaluate");
+    write_frame(
+        stream,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": {
+                "result": {
+                    "type": "object",
+                    "value": {
+                        "title": title,
+                        "url": url,
+                        "viewport": {"width": 800, "height": 600, "devicePixelRatio": 1},
+                        "text": "ready",
+                        "elements": []
+                    }
+                }
+            }
+        }),
+    )
+    .await
+    .unwrap();
+}
+
 pub(super) async fn reply_to_viewport_metrics(
     stream: &mut UnixStream,
     tab_id: i64,

@@ -3,8 +3,10 @@
 mod helpers;
 
 mod actions;
+mod affinity;
 mod coordinates;
 mod protocol;
 mod session;
+mod session_recovery;
 mod snapshot;
 mod sockets;

@@ -107,6 +107,7 @@ pub(super) async fn execute_cdp_until(
     command_params: Value,
     deadline: TokioInstant,
 ) -> Result<Value, DiagnosticEntry> {
+    let timeout_ms = cdp_command_timeout_ms(deadline, TokioInstant::now());
     send_bridge_request_until(
         stream,
         socket,
@@ -118,12 +119,36 @@ pub(super) async fn execute_cdp_until(
                 "target": { "tabId": tab_id.clone() },
                 "method": method,
                 "commandParams": command_params,
-                "timeoutMs": 10_000,
+                "timeoutMs": timeout_ms,
             }),
         ),
         deadline,
     )
     .await
+}
+
+/// The extension aborts a CDP command after `timeoutMs` and returns a
+/// structured timeout error. That budget must expire before the service-side
+/// read deadline: if the service abandons the read first, the caller loses
+/// the structured error that recovery keys on, and the abandoned command
+/// wedges the extension session without a reset. The floor therefore yields
+/// to the remaining read budget: near an expired deadline the timer shrinks
+/// below `MIN_COMMAND_TIMEOUT_MS` rather than outliving the read.
+fn cdp_command_timeout_ms(deadline: TokioInstant, now: TokioInstant) -> u64 {
+    const RESPONSE_MARGIN_MS: u64 = 750;
+    const MIN_COMMAND_TIMEOUT_MS: u64 = 250;
+    const MAX_COMMAND_TIMEOUT_MS: u64 = 10_000;
+    const READ_DEADLINE_HEADROOM_MS: u64 = 100;
+    let remaining = deadline.checked_duration_since(now).unwrap_or_default();
+    let remaining_ms = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX);
+    let budget = remaining_ms
+        .saturating_sub(RESPONSE_MARGIN_MS)
+        .clamp(MIN_COMMAND_TIMEOUT_MS, MAX_COMMAND_TIMEOUT_MS);
+    budget.min(
+        remaining_ms
+            .saturating_sub(READ_DEADLINE_HEADROOM_MS)
+            .max(1),
+    )
 }
 
 pub(super) async fn connect_bridge_socket(socket: &Path) -> Result<UnixStream, DiagnosticEntry> {
@@ -219,4 +244,54 @@ async fn timeout_bridge_io_until<T>(
             ),
             details: None,
         })
+}
+
+#[cfg(test)]
+mod cdp_timeout_tests {
+    use std::time::Duration;
+
+    use tokio::time::Instant as TokioInstant;
+
+    use super::cdp_command_timeout_ms;
+
+    #[test]
+    fn generous_deadline_is_capped_at_extension_default() {
+        let now = TokioInstant::now();
+        assert_eq!(
+            cdp_command_timeout_ms(now + Duration::from_secs(60), now),
+            10_000
+        );
+    }
+
+    #[test]
+    fn command_timeout_expires_before_the_read_deadline() {
+        let now = TokioInstant::now();
+        let timeout = cdp_command_timeout_ms(now + Duration::from_secs(2), now);
+        assert_eq!(timeout, 1_250);
+    }
+
+    #[test]
+    fn short_deadline_keeps_the_floor_inside_the_read_budget() {
+        let now = TokioInstant::now();
+        assert_eq!(
+            cdp_command_timeout_ms(now + Duration::from_millis(500), now),
+            250
+        );
+    }
+
+    #[test]
+    fn near_expired_deadline_shrinks_below_the_floor() {
+        // The command timer must never outlive the service-side read
+        // deadline, so the 250ms floor yields when almost no budget remains.
+        let now = TokioInstant::now();
+        assert_eq!(cdp_command_timeout_ms(now, now), 1);
+        assert_eq!(
+            cdp_command_timeout_ms(now + Duration::from_millis(100), now),
+            1
+        );
+        assert_eq!(
+            cdp_command_timeout_ms(now + Duration::from_millis(200), now),
+            100
+        );
+    }
 }

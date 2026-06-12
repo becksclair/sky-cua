@@ -274,8 +274,9 @@ the MCP call is marked as an error.
 session id, target tab id, the CSS-pixel coordinates as provided, and
 `waitForArrival`. It moves the extension's webpage/browser cursor, not the
 sky-cua desktop synthetic cursor used for portal screenshots. If the bridge
-reports stale session ownership or an unattached debugger, sky-cua reclaims,
-attaches, enables Page, and retries once.
+reports stale session ownership, an unattached debugger, or a CDP command
+timeout, sky-cua reclaims, detaches, re-attaches, enables Page, and retries
+once (the move is an absolute position, so a replay is safe).
 
 `browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_click`,
 `browser_type_text`, `browser_press_key`, and `browser_eval` use extension
@@ -298,11 +299,24 @@ Snapshot element values are suppressed for password/hidden/token/API-key/auth/
 credential/session/code/PIN-like fields; use desktop computer-use or explicit
 user-directed workflows for sensitive form inspection instead of relying on raw
 browser snapshots.
-If the first CDP request reports `Debugger is not attached` or `not part of
-browser session`, sky-cua sends `claimUserTab`, `attach`, and
-`executeCdp(Page.enable)` on the same bridge socket, then retries the original
-action once. Failures after that retry are surfaced as diagnostics rather than
-looping indefinitely.
+If the first CDP request reports `Debugger is not attached`, `not part of
+browser session`, or a bridge-side CDP command timeout (`Timed out after …
+waiting for CDP command …`), sky-cua sends `claimUserTab`, `detach`, `attach`,
+and `executeCdp(Page.enable)` on the same bridge socket. Command timeouts take
+this recovery path because the extension abandons a timed-out CDP command
+without cancelling it; the stuck command wedges every later command on that
+tab's debugger session, and only a detach/attach cycle clears it. After the
+reset, the original action is retried once — except after a command timeout
+for actions that mutate the page (click, type, key, navigate, eval, scroll):
+the timed-out command may still have executed in the browser, so replaying it
+could double the input. Those calls surface the timeout diagnostic (with a
+note that the session was reset) instead; snapshot, screenshot, and absolute
+cursor moves are replayed. Failures after the retry are surfaced as
+diagnostics rather than looping indefinitely. Each `executeCdp` request
+carries a `timeoutMs` derived from the remaining call deadline (capped at the
+extension's 10-second default, and shrunk below the 250 ms floor when the
+deadline is nearly exhausted), so the bridge returns a structured timeout
+before the service abandons the socket read.
 
 `browser_scroll` uses `Runtime.evaluate` rather than CDP
 `Input.dispatchMouseEvent(type="mouseWheel")`, because the live extension bridge
@@ -320,6 +334,31 @@ sockets, considers at most 32 newest live socket paths per call, and caps bridge
 probes at eight concurrent socket tasks. Stale socket diagnostics are suppressed
 when at least one matching live socket responds; if no bridge is connected, the
 response returns an empty tab list with a `BrowserBridgeDisconnected` diagnostic.
+
+Tab-bound requests use daemon-global tab-to-socket affinity. Bridge tab ids
+are per-browser integers, so the same id can name unrelated tabs on two
+connected bridges; every path that learns which socket owns a tab
+(`browser_open`, `browser_claim_tab`, `browser_list_tabs`, and each successful
+tab-bound operation) records the mapping, and later operations on that tab run
+against the owning socket only. If the recorded owner itself answers that the
+tab does not exist, the call fails, the stale mapping is dropped, and the next
+call rediscovers the owner. A tab id listed by more than one socket in a
+single sweep is ambiguous and gets no mapping, and each sweep also prunes
+entries a listed socket owns for tabs that no longer appear in its listing —
+the close-a-tab case no other prune path covers. Without a mapping, the service
+probes all candidate sockets, but a mutating request may move to another
+socket only when a bridge answers `No tab with id` — proof the tab is not on
+that browser; a not-found from a non-owner never erases an existing mapping.
+Any other failure is terminal for the call: retrying it on another bridge
+could drive an unrelated tab that happens to share the id. Read-only
+operations (snapshot, screenshot, cursor moves) are exempt from that
+terminality and may still fall through, since retrying them cannot
+double-apply input; the terminal diagnostic, when one exists, is what the
+call surfaces even if a non-owner's not-found arrived first. Genuinely
+colliding ids stay
+unmapped, and a bound operation or claim on an unmapped colliding id may
+engage either browser; pinning `SKY_CUA_BROWSER` (or the machine config
+`browser` key) to one browser family is the operator mitigation.
 
 ## Source paths
 
@@ -346,6 +385,33 @@ still use the companion Browser Use and Chrome plugins until the adapter
 delegates browser actions through the shared runtime.
 
 ## Verification
+
+Focused screenshot-wedge hardening from 2026-06-12:
+
+```bash
+cargo fmt --check
+cargo test -p sky-cua-service
+```
+
+- Service regression tests prove a bridge-side CDP command timeout
+  (`Timed out after … waiting for CDP command …`) takes the
+  claim/detach/attach/enable recovery path and the retried screenshot
+  succeeds; that a timed-out input action (click) resets the session but is
+  not replayed and surfaces the timeout diagnostic instead — including on a
+  second bridge socket; and that `executeCdp` derives `timeoutMs` from the
+  remaining call deadline (250 ms–10 s with a 750 ms response margin,
+  shrinking below the floor near an exhausted deadline so the command timer
+  never outlives the read).
+- Affinity regression tests prove tab-bound requests route only to the
+  recorded owning socket, that `No tab with id` drops a stale mapping (only
+  when the owner itself answers it) and is the sole failure that lets a
+  mutating request fall through to another socket, that an unknown tab still
+  reaches the socket that has it, that a stored terminal diagnostic outranks
+  an earlier non-owner not-found in the surfaced error, and that a listing
+  sweep prunes entries for tabs closed while their browser stays connected.
+- Live smoke: `browser_open` + `browser_screenshot` against Brave through the
+  installed MCP client, including capture of a background tab and a minimized
+  Brave window.
 
 Focused browser reliability checks from 2026-06-09:
 
