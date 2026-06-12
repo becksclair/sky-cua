@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sky_cua_platform::DESKTOP_LAUNCH_ENV_KEYS;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppStateSnapshot, BrowserRequest, BrowserResponse, CaptureInfo,
     CaptureScreenMode, DiagnosticEntry, ServiceRequest, ServiceResponse, SessionPresenceAction,
+    SessionPresenceIntent,
 };
 
 use crate::action_router::route_action;
@@ -24,8 +26,20 @@ pub struct ServiceDaemon {
     sessions: SessionStore,
     snapshots: tokio::sync::Mutex<SnapshotManager>,
     overlay: tokio::sync::Mutex<OverlayController>,
+    session_presence_config: SessionPresenceConfig,
+    session_presence_held: tokio::sync::Mutex<bool>,
     desktop_lane: tokio::sync::Mutex<()>,
     socket_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionPresenceConfig {
+    enabled: bool,
+    idle_release: Duration,
+    unlock: bool,
+    relock: bool,
+    inhibit_lock: bool,
+    inhibit_suspend: bool,
 }
 
 impl ServiceDaemon {
@@ -44,6 +58,8 @@ impl ServiceDaemon {
             sessions: SessionStore::new(),
             snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
             overlay: tokio::sync::Mutex::new(OverlayController::new(&socket_path)),
+            session_presence_config: SessionPresenceConfig::from_env(),
+            session_presence_held: tokio::sync::Mutex::new(false),
             desktop_lane: tokio::sync::Mutex::new(()),
             socket_path,
         })
@@ -72,6 +88,22 @@ impl ServiceDaemon {
         })
     }
 
+    /// Spawn a background task that releases session-presence inhibitors once
+    /// the daemon has been idle past the configured timeout.
+    pub fn spawn_session_presence_watchdog(
+        self: &std::sync::Arc<Self>,
+    ) -> tokio::task::JoinHandle<()> {
+        let daemon = std::sync::Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                daemon.release_idle_session_presence_if_needed().await;
+            }
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_tests() -> std::io::Result<Self> {
         Ok(Self {
@@ -79,6 +111,8 @@ impl ServiceDaemon {
             sessions: SessionStore::new(),
             snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
             overlay: tokio::sync::Mutex::new(OverlayController::new_for_tests()),
+            session_presence_config: SessionPresenceConfig::disabled(),
+            session_presence_held: tokio::sync::Mutex::new(false),
             desktop_lane: tokio::sync::Mutex::new(()),
             socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
         })
@@ -86,6 +120,7 @@ impl ServiceDaemon {
 
     pub async fn handle(&self, request: ServiceRequest) -> ServiceResponse {
         self.sessions.touch().await;
+        self.ensure_session_presence_for_request(&request).await;
         match request {
             ServiceRequest::Health => ServiceResponse::Health {
                 ok: true,
@@ -269,13 +304,21 @@ impl ServiceDaemon {
             ServiceRequest::SessionPresence { action } => match action {
                 SessionPresenceAction::Ensure(intent) => {
                     match self.backend.ensure_session_presence(intent).await {
-                        Ok(status) => ServiceResponse::SessionPresence { status },
+                        Ok(status) => {
+                            let mut held = self.session_presence_held.lock().await;
+                            *held = true;
+                            ServiceResponse::SessionPresence { status }
+                        }
                         Err(error) => error_response(error.code, error.message),
                     }
                 }
                 SessionPresenceAction::Release { relock } => {
                     match self.backend.release_session_presence(relock).await {
-                        Ok(status) => ServiceResponse::SessionPresence { status },
+                        Ok(status) => {
+                            let mut held = self.session_presence_held.lock().await;
+                            *held = false;
+                            ServiceResponse::SessionPresence { status }
+                        }
                         Err(error) => error_response(error.code, error.message),
                     }
                 }
@@ -494,6 +537,74 @@ impl ServiceDaemon {
         self.sessions.idle_for().await
     }
 
+    async fn ensure_session_presence_for_request(&self, request: &ServiceRequest) {
+        if !self.session_presence_config.enabled || !request_should_hold_presence(request) {
+            return;
+        }
+
+        let mut held = self.session_presence_held.lock().await;
+        if *held {
+            return;
+        }
+
+        let intent = self.session_presence_config.intent();
+        match self.backend.ensure_session_presence(intent).await {
+            Ok(status) => {
+                debug!(
+                    backend = status.backend,
+                    supported = status.supported,
+                    detail = status.detail,
+                    "session presence ensured"
+                );
+                *held = true;
+            }
+            Err(error) => {
+                debug!(
+                    code = error.code,
+                    message = error.message,
+                    "session presence ensure failed"
+                );
+            }
+        }
+    }
+
+    async fn release_idle_session_presence_if_needed(&self) {
+        if !self.session_presence_config.enabled {
+            return;
+        }
+        if self.sessions.idle_for().await < self.session_presence_config.idle_release {
+            return;
+        }
+
+        let mut held = self.session_presence_held.lock().await;
+        if !*held {
+            return;
+        }
+
+        match self
+            .backend
+            .release_session_presence(self.session_presence_config.relock)
+            .await
+        {
+            Ok(status) => {
+                debug!(
+                    backend = status.backend,
+                    supported = status.supported,
+                    detail = status.detail,
+                    "session presence released after idle timeout"
+                );
+            }
+            Err(error) => {
+                debug!(
+                    code = error.code,
+                    message = error.message,
+                    "session presence idle release failed"
+                );
+            }
+        }
+        *held = false;
+    }
+
     async fn enrich_action_request(
         &self,
         mut request: ActionRequest,
@@ -570,6 +681,62 @@ impl ServiceDaemon {
             },
         }
     }
+}
+
+impl SessionPresenceConfig {
+    const DEFAULT_IDLE_RELEASE_SECS: u64 = 90;
+
+    fn from_env() -> Self {
+        Self {
+            enabled: env_bool("SKY_CUA_PRESENCE_ENABLED", false),
+            idle_release: Duration::from_secs(env_u64(
+                "SKY_CUA_PRESENCE_IDLE_RELEASE_SECS",
+                Self::DEFAULT_IDLE_RELEASE_SECS,
+            )),
+            unlock: env_bool("SKY_CUA_PRESENCE_UNLOCK", true),
+            relock: env_bool("SKY_CUA_PRESENCE_RELOCK", true),
+            inhibit_lock: env_bool("SKY_CUA_PRESENCE_INHIBIT_LOCK", true),
+            inhibit_suspend: env_bool("SKY_CUA_PRESENCE_INHIBIT_SUSPEND", true),
+        }
+    }
+
+    #[cfg(test)]
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            idle_release: Duration::from_secs(Self::DEFAULT_IDLE_RELEASE_SECS),
+            unlock: true,
+            relock: true,
+            inhibit_lock: true,
+            inhibit_suspend: true,
+        }
+    }
+
+    fn intent(&self) -> SessionPresenceIntent {
+        SessionPresenceIntent {
+            unlock: self.unlock,
+            inhibit_lock: self.inhibit_lock,
+            inhibit_suspend: self.inhibit_suspend,
+        }
+    }
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => default,
+        },
+        Err(_) => default,
+    }
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default)
 }
 
 fn reuse_unchanged_capture(
@@ -719,11 +886,25 @@ fn action_requires_snapshot_context(request: &ActionRequest) -> bool {
         || has_semantic_selector
 }
 
+fn request_should_hold_presence(request: &ServiceRequest) -> bool {
+    match request {
+        ServiceRequest::Health
+        | ServiceRequest::Doctor
+        | ServiceRequest::AgentCursorStatus
+        | ServiceRequest::SessionPresence { .. } => false,
+        ServiceRequest::Browser { request } => !matches!(
+            request,
+            BrowserRequest::Status | BrowserRequest::ListTabs { .. }
+        ),
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        OverlayController, ServiceDaemon, SessionStore, SnapshotManager,
-        action_requires_snapshot_context, reuse_unchanged_capture,
+        OverlayController, ServiceDaemon, SessionPresenceConfig, SessionStore, SnapshotManager,
+        action_requires_snapshot_context, request_should_hold_presence, reuse_unchanged_capture,
     };
     use image::{ImageBuffer, Rgba};
     use serde_json::json;
@@ -734,8 +915,8 @@ mod tests {
         AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse, BrowserTargetKind,
         CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, ElementNode,
         EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
-        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, ToolAvailability,
-        ToolCapabilities,
+        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SessionPresenceIntent,
+        SessionPresenceStatus, ToolAvailability, ToolCapabilities,
     };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -747,6 +928,15 @@ mod tests {
     struct FakeBackend {
         snapshot: AppStateSnapshot,
         outcome: ActionOutcome,
+        presence: Option<Arc<PresenceRecorder>>,
+    }
+
+    #[derive(Debug, Default)]
+    struct PresenceRecorder {
+        ensure_calls: AtomicUsize,
+        release_calls: AtomicUsize,
+        last_intent: std::sync::Mutex<Option<SessionPresenceIntent>>,
+        last_relock: std::sync::Mutex<Option<bool>>,
     }
 
     #[derive(Debug, Clone)]
@@ -782,6 +972,42 @@ mod tests {
             _request: ActionRequest,
         ) -> Result<ActionOutcome, BackendError> {
             Ok(self.outcome.clone())
+        }
+
+        async fn ensure_session_presence(
+            &self,
+            intent: SessionPresenceIntent,
+        ) -> Result<SessionPresenceStatus, BackendError> {
+            if let Some(presence) = &self.presence {
+                presence.record_ensure(intent);
+            }
+            Ok(SessionPresenceStatus {
+                backend: "fake".to_string(),
+                supported: true,
+                unlock_supported: true,
+                locked: Some(false),
+                lock_inhibited: intent.inhibit_lock,
+                suspend_inhibited: intent.inhibit_suspend,
+                detail: "fake session presence ensured".to_string(),
+            })
+        }
+
+        async fn release_session_presence(
+            &self,
+            relock: bool,
+        ) -> Result<SessionPresenceStatus, BackendError> {
+            if let Some(presence) = &self.presence {
+                presence.record_release(relock);
+            }
+            Ok(SessionPresenceStatus {
+                backend: "fake".to_string(),
+                supported: true,
+                unlock_supported: true,
+                locked: Some(relock),
+                lock_inhibited: false,
+                suspend_inhibited: false,
+                detail: "fake session presence released".to_string(),
+            })
         }
     }
 
@@ -830,6 +1056,31 @@ mod tests {
             resolved_focused_app: None,
             environment: None,
         }
+    }
+
+    #[test]
+    fn only_activity_requests_trigger_automatic_session_presence() {
+        assert!(!request_should_hold_presence(&ServiceRequest::Health));
+        assert!(!request_should_hold_presence(&ServiceRequest::Doctor));
+        assert!(!request_should_hold_presence(
+            &ServiceRequest::AgentCursorStatus
+        ));
+        assert!(!request_should_hold_presence(&ServiceRequest::Browser {
+            request: BrowserRequest::Status,
+        }));
+        assert!(request_should_hold_presence(&ServiceRequest::Browser {
+            request: BrowserRequest::Click {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "tab".to_string(),
+                x: 1.0,
+                y: 2.0,
+            },
+        }));
+        assert!(request_should_hold_presence(
+            &ServiceRequest::ExecuteAction {
+                request: Box::new(request(ActionName::Click, json!({"x": 1.0, "y": 2.0}),)),
+            },
+        ));
     }
 
     #[test]
@@ -1258,6 +1509,65 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn automatic_session_presence_acquires_once_and_releases_after_idle() {
+        let presence = Arc::new(PresenceRecorder::default());
+        let daemon = daemon_with_backend_and_presence_config(
+            Box::new(FakeBackend {
+                snapshot: snapshot(None, Vec::new()),
+                outcome: success_outcome(),
+                presence: Some(presence.clone()),
+            }),
+            SessionPresenceConfig {
+                enabled: true,
+                idle_release: Duration::from_millis(5),
+                unlock: true,
+                relock: true,
+                inhibit_lock: true,
+                inhibit_suspend: true,
+            },
+        );
+
+        for _ in 0..2 {
+            let action = request(ActionName::Click, json!({"x": 1.0, "y": 2.0}));
+            match daemon
+                .handle(ServiceRequest::ExecuteAction {
+                    request: Box::new(action),
+                })
+                .await
+            {
+                ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+        assert_eq!(presence.ensure_calls(), 1);
+        assert_eq!(presence.release_calls(), 0);
+        assert_eq!(
+            presence.last_intent(),
+            Some(SessionPresenceIntent {
+                unlock: true,
+                inhibit_lock: true,
+                inhibit_suspend: true,
+            })
+        );
+
+        tokio::time::sleep(Duration::from_millis(8)).await;
+        daemon.release_idle_session_presence_if_needed().await;
+        daemon.release_idle_session_presence_if_needed().await;
+
+        assert_eq!(presence.ensure_calls(), 1);
+        assert_eq!(presence.release_calls(), 1);
+        assert_eq!(presence.last_relock(), Some(true));
+
+        let action = request(ActionName::Click, json!({"x": 3.0, "y": 4.0}));
+        let _ = daemon
+            .handle(ServiceRequest::ExecuteAction {
+                request: Box::new(action),
+            })
+            .await;
+        assert_eq!(presence.ensure_calls(), 2);
+    }
+
     #[test]
     fn if_changed_reuses_previous_identical_model_capture_path() {
         let dir = unique_temp_dir("if-changed");
@@ -1359,15 +1669,28 @@ mod tests {
     }
 
     fn daemon_with(snapshot: AppStateSnapshot, outcome: ActionOutcome) -> ServiceDaemon {
-        daemon_with_backend(Box::new(FakeBackend { snapshot, outcome }))
+        daemon_with_backend(Box::new(FakeBackend {
+            snapshot,
+            outcome,
+            presence: None,
+        }))
     }
 
     fn daemon_with_backend(backend: Box<dyn DesktopBackend>) -> ServiceDaemon {
+        daemon_with_backend_and_presence_config(backend, SessionPresenceConfig::disabled())
+    }
+
+    fn daemon_with_backend_and_presence_config(
+        backend: Box<dyn DesktopBackend>,
+        session_presence_config: SessionPresenceConfig,
+    ) -> ServiceDaemon {
         ServiceDaemon {
             backend,
             sessions: SessionStore::new(),
             snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
             overlay: tokio::sync::Mutex::new(OverlayController::new_for_tests()),
+            session_presence_config,
+            session_presence_held: tokio::sync::Mutex::new(false),
             desktop_lane: tokio::sync::Mutex::new(()),
             socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
         }
@@ -1383,6 +1706,34 @@ mod tests {
                 second_execute_started: Arc::new(Notify::new()),
                 release_first_execute: Arc::new(Notify::new()),
             }
+        }
+    }
+
+    impl PresenceRecorder {
+        fn record_ensure(&self, intent: SessionPresenceIntent) {
+            self.ensure_calls.fetch_add(1, Ordering::SeqCst);
+            *self.last_intent.lock().expect("last intent lock") = Some(intent);
+        }
+
+        fn record_release(&self, relock: bool) {
+            self.release_calls.fetch_add(1, Ordering::SeqCst);
+            *self.last_relock.lock().expect("last relock lock") = Some(relock);
+        }
+
+        fn ensure_calls(&self) -> usize {
+            self.ensure_calls.load(Ordering::SeqCst)
+        }
+
+        fn release_calls(&self) -> usize {
+            self.release_calls.load(Ordering::SeqCst)
+        }
+
+        fn last_intent(&self) -> Option<SessionPresenceIntent> {
+            *self.last_intent.lock().expect("last intent lock")
+        }
+
+        fn last_relock(&self) -> Option<bool> {
+            *self.last_relock.lock().expect("last relock lock")
         }
     }
 
