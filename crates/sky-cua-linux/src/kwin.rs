@@ -1,14 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{AppInfo, CoordinateSpace, EnvironmentInfo, RectF, SessionKind};
 
-const ACTIVATION_SCRIPT_PLUGIN: &str = "sky-cua-activate-window";
+use crate::kwin_script;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KWinWindowInfo {
@@ -30,17 +29,120 @@ pub fn kwin_window_query_available(environment: &EnvironmentInfo) -> bool {
 }
 
 pub fn kwin_exact_activation_available(environment: &EnvironmentInfo) -> bool {
-    kwin_window_query_available(environment) && qdbus_command().is_some()
+    // Activation and active-window readback go through KWin scripting over
+    // the session bus, so the probe must reflect that seam, not just the
+    // gdbus-based window-query preconditions.
+    kwin_window_query_available(environment) && kwin_scripting_reachable()
 }
 
-pub fn discover_windows(
+/// Seed the scripting-reachability cache. Async callers run this once via
+/// `spawn_blocking` so the cold-start gdbus probe never parks a runtime
+/// worker; afterwards the sync capability probes always hit the cache.
+pub fn warm_scripting_probe() {
+    let _ = kwin_scripting_reachable();
+}
+
+/// Probe that `org.kde.KWin /Scripting` answers on the session bus, using a
+/// side-effect-free `isScriptLoaded` call. The probe shells out to gdbus
+/// while the runtime channel (`kwin_script`) speaks zbus; the transports can
+/// in principle diverge, but gdbus is already a hard precondition for KWin
+/// window listing (`kwin_window_query_available`), and routing the probe
+/// through the zbus channel would require async in sync probe callers.
+/// Stale-while-revalidate: expired entries are served stale and refreshed on
+/// a background thread, so steady-state capability checks never block a
+/// runtime worker on the gdbus subprocess. The once-per-process cold start
+/// probes synchronously (typically milliseconds, bounded at 2s by the
+/// subprocess timeout) so the first capability report is grounded rather
+/// than guessed; async backend paths pre-seed it off-worker via
+/// `warm_scripting_probe`, leaving the inline cold start as a fallback for
+/// sync callers that arrive first.
+fn kwin_scripting_reachable() -> bool {
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    static CACHE: StdMutex<Option<(Instant, bool)>> = StdMutex::new(None);
+    static REFRESHING: AtomicBool = AtomicBool::new(false);
+    const TTL: Duration = Duration::from_secs(30);
+
+    let refresh = |stamp: Instant, reachable: bool| {
+        if let Ok(mut cache) = CACHE.lock() {
+            *cache = Some((stamp, reachable));
+        }
+    };
+
+    match CACHE.lock().ok().and_then(|cache| *cache) {
+        Some((checked_at, reachable)) if checked_at.elapsed() < TTL => reachable,
+        Some((_, reachable)) => {
+            if !REFRESHING.swap(true, Ordering::AcqRel) {
+                std::thread::spawn(move || {
+                    // Reset the flag on unwind too: a panicking probe must
+                    // not wedge revalidation for the rest of the process.
+                    struct ResetRefreshing;
+                    impl Drop for ResetRefreshing {
+                        fn drop(&mut self) {
+                            REFRESHING.store(false, Ordering::Release);
+                        }
+                    }
+                    let _reset = ResetRefreshing;
+                    refresh(Instant::now(), probe_kwin_scripting());
+                });
+            }
+            reachable
+        }
+        None => {
+            // Cold start: probe once synchronously so the very first
+            // capability report is grounded, not guessed.
+            let reachable = probe_kwin_scripting();
+            refresh(Instant::now(), reachable);
+            reachable
+        }
+    }
+}
+
+fn probe_kwin_scripting() -> bool {
+    let mut command = if command_exists("timeout") {
+        let mut command = Command::new("timeout");
+        command.arg("2s").arg("gdbus");
+        command
+    } else {
+        Command::new("gdbus")
+    };
+    command
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.kde.KWin",
+            "--object-path",
+            "/Scripting",
+            "--method",
+            "org.kde.kwin.Scripting.isScriptLoaded",
+            "sky-cua-scripting-probe",
+        ])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+pub async fn discover_windows(
     environment: &EnvironmentInfo,
 ) -> Result<Vec<KWinWindowInfo>, BackendError> {
     if !kwin_window_query_available(environment) {
         return Ok(Vec::new());
     }
 
-    let active_window = query_active_window(environment)?;
+    // Active-window readback is best-effort: a wedged scripting seam must not
+    // take window listing down with it.
+    let active_window = query_active_window(environment).await.unwrap_or(None);
+    // The gdbus subprocess fan-out (runner queries plus one getWindowInfo per
+    // window) is blocking work; keep it off the async workers, especially for
+    // the focus-verification poll loop that re-runs discovery.
+    run_blocking(move || discover_windows_blocking(active_window)).await
+}
+
+fn discover_windows_blocking(
+    active_window: Option<KWinWindowInfo>,
+) -> Result<Vec<KWinWindowInfo>, BackendError> {
     let mut window_ids = query_window_runner_ids("")?;
     for query in candidate_window_queries() {
         window_ids.extend(query_window_runner_ids(&query)?);
@@ -75,95 +177,60 @@ pub fn discover_windows(
     Ok(windows)
 }
 
-pub fn query_active_window(
-    environment: &EnvironmentInfo,
-) -> Result<Option<KWinWindowInfo>, BackendError> {
-    let _ = environment;
-    // `org.kde.KWin.queryWindowInfo` has proven unreliable under Codex-launched
-    // plugin/service environments: sometimes it returns `UserCancel`, and
-    // sometimes it simply hangs long enough to wedge the entire backend call.
-    // Background-window discovery via WindowsRunner + getWindowInfo is the
-    // higher-value seam for native Wayland apps like TIDAL, so for now we
-    // intentionally skip the active-window hint instead of risking a deadlock.
-    Ok(None)
+async fn run_blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, BackendError> + Send + 'static,
+) -> Result<T, BackendError> {
+    tokio::task::spawn_blocking(work).await.map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            format!("KWin blocking task failed: {error}"),
+        )
+    })?
 }
 
-pub fn activate_window(window_id: &str) -> Result<(), BackendError> {
+/// Active-window readback through a KWin script with a DBus result callback.
+/// The old `org.kde.KWin.queryWindowInfo` seam is gone for good: it is an
+/// interactive window picker that hangs or returns `UserCancel` when no human
+/// clicks, which is exactly what wedged earlier service builds.
+pub async fn query_active_window(
+    environment: &EnvironmentInfo,
+) -> Result<Option<KWinWindowInfo>, BackendError> {
+    if !kwin_window_query_available(environment) {
+        return Ok(None);
+    }
+    let Some(uuid) = kwin_script::active_window_uuid().await? else {
+        return Ok(None);
+    };
+    let mut window = run_blocking(move || query_window_by_uuid(&uuid)).await?;
+    if let Some(window) = window.as_mut() {
+        window.app.is_focused_candidate = true;
+    }
+    Ok(window)
+}
+
+pub async fn activate_window(window_id: &str) -> Result<(), BackendError> {
     let uuid = kwin_uuid_from_window_id(window_id)?;
-    if query_window_by_uuid(&uuid)?.is_none() {
+    let precheck_uuid = uuid.clone();
+    if run_blocking(move || query_window_by_uuid(&precheck_uuid))
+        .await?
+        .is_none()
+    {
         return Err(BackendError::new(
             BackendErrorCode::ActionUnsupportedForEnvironment,
             format!("KWin activation target {uuid} is no longer present"),
         ));
     }
-    let Some(qdbus) = qdbus_command() else {
-        return Err(BackendError::new(
-            BackendErrorCode::ActionUnsupportedForEnvironment,
-            "KWin exact activation requires qdbus6 or qdbus on PATH",
-        ));
-    };
-
-    let script_path = write_activation_script(&uuid)?;
-    let script_path_string = script_path.display().to_string();
-    let _ = unload_activation_script(&qdbus);
-    let load = run_qdbus(
-        &qdbus,
-        &[
-            "org.kde.KWin",
-            "/Scripting",
-            "org.kde.kwin.Scripting.loadScript",
-            &script_path_string,
-            ACTIVATION_SCRIPT_PLUGIN,
-        ],
-    );
-    let script_id = match load.and_then(|output| {
-        parse_script_id(&output).ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::Internal,
-                format!(
-                    "KWin did not return a script id while loading activation script: {output}"
-                ),
-            )
-        })
-    }) {
-        Ok(script_id) => script_id,
-        Err(error) => {
-            let _ = fs::remove_file(&script_path);
-            return Err(error);
+    match kwin_script::activate_window_verified(&uuid).await? {
+        // `Dispatched` means focus had not landed by the time the script read
+        // it back; the registry focus-verification poll settles the truth.
+        kwin_script::ActivationVerdict::Verified | kwin_script::ActivationVerdict::Dispatched => {
+            Ok(())
         }
-    };
-
-    let script_object = format!("/Scripting/Script{script_id}");
-    let run_result = run_qdbus(
-        &qdbus,
-        &["org.kde.KWin", &script_object, "org.kde.kwin.Script.run"],
-    );
-    let _ = unload_activation_script(&qdbus);
-    let _ = fs::remove_file(&script_path);
-    run_result.and_then(|output| verify_activation_dispatched(&uuid, &output))
-}
-
-fn verify_activation_dispatched(uuid: &str, output: &str) -> Result<(), BackendError> {
-    let no_match = format!("sky-cua: no KWin window matched {uuid}");
-    if output.contains(&no_match) {
-        return Err(BackendError::new(
+        kwin_script::ActivationVerdict::NoMatch => Err(BackendError::new(
             BackendErrorCode::ActionUnsupportedForEnvironment,
             format!("KWin activation script did not find window {uuid}"),
-        ));
+        )),
     }
-    Ok(())
-}
-
-fn unload_activation_script(qdbus: &str) -> Result<String, BackendError> {
-    run_qdbus(
-        qdbus,
-        &[
-            "org.kde.KWin",
-            "/Scripting",
-            "org.kde.kwin.Scripting.unloadScript",
-            ACTIVATION_SCRIPT_PLUGIN,
-        ],
-    )
 }
 
 fn kwin_uuid_from_window_id(window_id: &str) -> Result<String, BackendError> {
@@ -173,124 +240,12 @@ fn kwin_uuid_from_window_id(window_id: &str) -> Result<String, BackendError> {
         .unwrap_or_else(|| window_id.trim())
         .trim();
     if is_uuid_token(value) {
-        return Ok(value.trim_matches(['{', '}']).to_ascii_lowercase());
+        return Ok(kwin_script::normalize_uuid(value));
     }
     Err(BackendError::new(
         BackendErrorCode::InvalidRequest,
         format!("KWin window id {window_id:?} is not a UUID-backed registry window id"),
     ))
-}
-
-fn write_activation_script(uuid: &str) -> Result<PathBuf, BackendError> {
-    let mut path = env::temp_dir();
-    path.push(format!(
-        "sky-cua-kwin-activate-{}-{}.js",
-        std::process::id(),
-        uuid
-    ));
-    let mut file = fs::File::create(&path).map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::Internal,
-            format!("failed to create KWin activation script: {error}"),
-        )
-    })?;
-    file.write_all(activation_script(uuid).as_bytes())
-        .map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::Internal,
-                format!("failed to write KWin activation script: {error}"),
-            )
-        })?;
-    Ok(path)
-}
-
-fn activation_script(uuid: &str) -> String {
-    format!(
-        r#"const target = "{uuid}";
-function normalize(value) {{
-    return String(value || "").replace(/[{{}}]/g, "").toLowerCase();
-}}
-function candidates() {{
-    if (typeof workspace.windowList === "function") {{
-        return workspace.windowList();
-    }}
-    if (workspace.stackingOrder) {{
-        return workspace.stackingOrder;
-    }}
-    return [];
-}}
-let matched = null;
-const windows = candidates();
-for (let i = 0; i < windows.length; i++) {{
-    const window = windows[i];
-    if (normalize(window.internalId) === target || normalize(window.uuid) === target) {{
-        matched = window;
-        break;
-    }}
-}}
-if (matched === null) {{
-    print("sky-cua: no KWin window matched " + target);
-    throw new Error("sky-cua: no KWin window matched " + target);
-}} else {{
-    if (typeof workspace.activateWindow === "function") {{
-        workspace.activateWindow(matched);
-    }} else {{
-        workspace.activeWindow = matched;
-    }}
-    if (typeof workspace.raiseWindow === "function") {{
-        workspace.raiseWindow(matched);
-    }}
-    print("sky-cua: activated " + target);
-}}
-"#
-    )
-}
-
-fn qdbus_command() -> Option<String> {
-    ["qdbus6", "qdbus"]
-        .into_iter()
-        .find(|binary| command_exists(binary))
-        .map(str::to_string)
-}
-
-#[cfg(test)]
-fn activation_script_plugin_name() -> &'static str {
-    ACTIVATION_SCRIPT_PLUGIN
-}
-
-fn run_qdbus(binary: &str, args: &[&str]) -> Result<String, BackendError> {
-    let output = if command_exists("timeout") {
-        let mut timeout_args = vec!["2s", binary];
-        timeout_args.extend_from_slice(args);
-        Command::new("timeout").args(timeout_args).output()
-    } else {
-        Command::new(binary).args(args).output()
-    }
-    .map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::Internal,
-            format!("failed to run KWin qdbus command: {error}"),
-        )
-    })?;
-    if !output.status.success() {
-        return Err(BackendError::new(
-            BackendErrorCode::ActionUnsupportedForEnvironment,
-            format!(
-                "KWin qdbus command failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn parse_script_id(output: &str) -> Option<String> {
-    let id = output
-        .chars()
-        .skip_while(|character| !character.is_ascii_digit())
-        .take_while(|character| character.is_ascii_digit())
-        .collect::<String>();
-    (!id.is_empty()).then_some(id)
 }
 
 fn query_window_runner_ids(query: &str) -> Result<Vec<String>, BackendError> {
@@ -704,29 +659,7 @@ fn normalize_match_key(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        activation_script_plugin_name, extract_window_ids, parse_window_info,
-        verify_activation_dispatched,
-    };
-
-    #[test]
-    fn activation_script_unload_uses_plugin_name_contract() {
-        assert_eq!(activation_script_plugin_name(), "sky-cua-activate-window");
-    }
-
-    #[test]
-    fn activation_dispatch_rejects_script_no_match_output() {
-        let uuid = "503e2ed7-832f-4e52-b74a-8edcfac72bc8";
-
-        assert!(verify_activation_dispatched(uuid, "").is_ok());
-        assert!(
-            verify_activation_dispatched(
-                uuid,
-                "sky-cua: no KWin window matched 503e2ed7-832f-4e52-b74a-8edcfac72bc8"
-            )
-            .is_err()
-        );
-    }
+    use super::{extract_window_ids, parse_window_info};
 
     #[test]
     fn parses_kwin_window_info() {

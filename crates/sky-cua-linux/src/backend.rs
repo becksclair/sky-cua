@@ -54,6 +54,19 @@ impl LinuxDesktopBackend {
     #[must_use]
     pub fn new() -> Self {
         let session_env_report = session_env::hydrate_session_env();
+        // Warm the KWin scripting-reachability cache on a plain thread at
+        // construction so even callers that supply a pre-built environment
+        // (bypassing probe_environment's awaited warmup) find the cache
+        // seeded instead of running the cold-start gdbus probe inline on a
+        // runtime worker. Gated on a cheap KDE session hint; the precise
+        // environment-based gate still applies in probe_environment.
+        if std::env::var("XDG_CURRENT_DESKTOP")
+            .map(|desktop| desktop.to_ascii_lowercase().contains("kde"))
+            .unwrap_or(false)
+            || std::env::var_os("KDE_FULL_SESSION").is_some()
+        {
+            std::thread::spawn(crate::kwin::warm_scripting_probe);
+        }
         Self {
             portal: RemoteDesktopSessionManager::new(),
             atspi: Arc::new(Mutex::new(None)),
@@ -155,15 +168,6 @@ impl LinuxDesktopBackend {
             ));
         }
 
-        if !linux_windowing::focus_verification_available(target_window) {
-            return Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                format!(
-                    "matched {} window {}, but targeted keyboard input requires focused-window verification that this backend does not expose",
-                    target_window.backend, target_window.window_id
-                ),
-            ));
-        }
         linux_windowing::activate_window(target_window).await?;
         let _ = linux_windowing::verify_window_focused(environment, target_window).await?;
         Ok(Some(target_window.clone()))
@@ -312,6 +316,19 @@ impl DesktopBackend for LinuxDesktopBackend {
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
         self.refresh_session_env();
         let mut environment = probe_environment().await?;
+        // Warm the KWin scripting-reachability cache off-worker once, awaited
+        // so the cache is guaranteed seeded before any downstream sync
+        // capability probe could run the cold-start gdbus subprocess on a
+        // runtime worker. After the first call this returns immediately.
+        if crate::kwin::kwin_window_query_available(&environment) {
+            static SCRIPTING_PROBE_WARMUP: tokio::sync::OnceCell<()> =
+                tokio::sync::OnceCell::const_new();
+            SCRIPTING_PROBE_WARMUP
+                .get_or_init(|| async {
+                    let _ = tokio::task::spawn_blocking(crate::kwin::warm_scripting_probe).await;
+                })
+                .await;
+        }
         environment.semantic_backend = if require_supported_environment(&environment).is_ok()
             && self.accessibility_connection().await.is_ok()
         {
@@ -388,15 +405,6 @@ impl DesktopBackend for LinuxDesktopBackend {
         if let Some(window) = windows.iter().find(|window| window.focused) {
             return Ok(Some(window.clone().into()));
         }
-        if windows
-            .iter()
-            .any(|window| !linux_windowing::focus_verification_available(window))
-        {
-            return Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                "focused_window is unavailable for KWin because this backend does not expose reliable active-window readback",
-            ));
-        }
         Ok(None)
     }
 
@@ -415,19 +423,6 @@ impl DesktopBackend for LinuxDesktopBackend {
         let windows = linux_windowing::discover_activation_windows(&environment).await?;
         let window = linux_windowing::resolve_window_target(&windows, &target.into())?;
         linux_windowing::activate_window(window).await?;
-        if !linux_windowing::focus_verification_available(window) {
-            return Ok(success_with_diagnostics(
-                format!("Activated {} window {}.", window.backend, window.window_id),
-                vec![DiagnosticEntry {
-                    code: "WindowActivationSent".to_string(),
-                    message: format!(
-                        "Activation was sent for {} window {}; this backend does not expose reliable focused-window verification.",
-                        window.backend, window.window_id
-                    ),
-                    details: None,
-                }],
-            ));
-        }
         let focused = linux_windowing::verify_window_focused(&environment, window).await?;
         Ok(success_with_diagnostics(
             format!("Activated {} window {}.", window.backend, window.window_id),

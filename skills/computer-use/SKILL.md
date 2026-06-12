@@ -57,6 +57,10 @@ unrelated; never carry coordinates across them.
 
 ## Linux notes
 
+- `activate_window` success is focus-verified on all Linux backends,
+  including KDE/KWin; trust it without a confirming screenshot.
+  `focused_window` works on KWin too. If either fails, read the error —
+  it names the missing backend seam.
 - XWayland editors may need keyboard input via the X11 lane rather than the
   portal keyboard lane.
 - Native Wayland apps can expose good structure yet report wrong actionable

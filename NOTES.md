@@ -110,10 +110,14 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
   names, desktop-file stem, exact title, and focus all rank. Never
   title-only correlation — KDE service roots (`ksmserver`, `kaccess`) steal
   title matches; penalize service executables in focus heuristics.
-- KDE background-window discovery without focus:
+- KDE background-window discovery:
   `org.kde.KWin /WindowsRunner org.kde.krunner1.Match` for UUIDs plus
-  `getWindowInfo` for metadata. Avoid `queryWindowInfo` (can `UserCancel`
-  or hang under service environments).
+  `getWindowInfo` for metadata. Never call `queryWindowInfo` — it is an
+  interactive window picker (blocks on a click, `UserCancel` otherwise).
+  Active-window readback and verified activation go through KWin scripting
+  with a `callDBus` result callback to the daemon's unique bus name
+  (`kwin_script.rs`, kdotool pattern); KWin exposes no foreign-toplevel
+  Wayland protocol and no active-window DBus getter.
 - On KDE 6 Wayland, `zenity` is a reliable semantic smoke fixture; `kdialog`
   can be visible without surfacing through AT-SPI remotely. A fullscreen GTK
   fixture works as a pointer target even when absent from `list_apps`. For

@@ -11,6 +11,7 @@ pub mod doctor;
 pub mod env_probe;
 pub mod focus;
 pub mod kwin;
+pub mod kwin_script;
 pub mod portal;
 pub mod session_env;
 pub mod setup;

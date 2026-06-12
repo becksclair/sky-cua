@@ -223,11 +223,11 @@ def main() -> int:
                 require_ok(activate_result, "pointer fixture window activation")
                 if fixture_window.get(
                     "backend"
-                ) == "kwin" and "WindowActivationSent" not in action_diagnostic_codes(
+                ) == "kwin" and "WindowFocusVerified" not in action_diagnostic_codes(
                     activate_result
                 ):
                     raise RuntimeError(
-                        "KWin activate_window did not report the degraded activation-sent contract. "
+                        "KWin activate_window did not report the focus-verified contract. "
                         f"result={json.dumps(activate_result, indent=2)}"
                     )
 
@@ -239,11 +239,9 @@ def main() -> int:
                 )
                 write_json(artifact_dir / "focused-window-after-activate.json", focused_result)
                 focused_window = (focused_result.get("structuredContent") or {}).get("window")
-                # KWin does not expose reliable active-window readback here; later entry-focus
-                # and text checks prove the fixture can receive input after activation is sent.
-                if fixture_window.get("backend") != "kwin" and (
-                    focused_window is None or focused_window.get("title") != "sky-cua pointer smoke"
-                ):
+                # All backends, including KWin (scripted active-window readback),
+                # must report the fixture as focused after verified activation.
+                if focused_window is None or focused_window.get("title") != "sky-cua pointer smoke":
                     raise RuntimeError(
                         "Fixture window did not gain focus after activation. "
                         f"focused={json.dumps(focused_window, indent=2)}"

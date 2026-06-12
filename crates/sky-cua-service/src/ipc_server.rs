@@ -141,6 +141,11 @@ pub async fn run_service() -> Result<()> {
         }
     }
 
+    // Unload this process's persistent KWin focus watcher so it does not
+    // keep firing callbacks at a dead bus name after the daemon exits.
+    #[cfg(target_os = "linux")]
+    sky_cua_linux::kwin_script::shutdown().await;
+
     // Holding the singleton lock proves this daemon still owns the socket
     // path, so removing it here cannot delete a successor's socket.
     let _ = tokio::fs::remove_file(&socket_path).await;

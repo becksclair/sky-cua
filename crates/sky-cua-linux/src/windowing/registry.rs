@@ -190,6 +190,16 @@ pub async fn verify_window_focused(
             }
             last_focused = Some(focused);
         }
+        // KWin fast path: the watcher-cached active-window uuid answers the
+        // poll without the full discovery fan-out (a /proc walk plus one
+        // gdbus subprocess per candidate query and per window, every tick).
+        // A mismatch or readback failure falls through to full discovery so
+        // cross-backend identity matching still applies.
+        if expected.backend == KWIN_BACKEND
+            && let Some(focused) = kwin_focused_window_matches(expected).await
+        {
+            return Ok(focused);
+        }
         let windows = discover_windows(environment).await?;
         if let Some(focused) = windows.into_iter().find(|window| window.focused) {
             if same_focus_target(&focused, expected) {
@@ -217,6 +227,29 @@ pub async fn verify_window_focused(
     ))
 }
 
+/// Compare the compositor-reported active-window uuid against the expected
+/// KWin window id. Returns the verified window on an exact match, `None` on
+/// mismatch or when readback is unavailable.
+///
+/// The returned window is the caller's `expected` snapshot with `focused`
+/// forced true — identity fields (backend, window_id) are authoritative, but
+/// bounds/title/workspace are activation-time state, not a fresh readback.
+/// The watcher cache can also lag the compositor by an in-flight
+/// `windowActivated` signal (sub-frame), bounded by the caller's poll
+/// deadline; full discovery on the next tick self-corrects.
+async fn kwin_focused_window_matches(expected: &LinuxWindowInfo) -> Option<LinuxWindowInfo> {
+    let active_uuid = crate::kwin_script::active_window_uuid()
+        .await
+        .ok()
+        .flatten()?;
+    let expected_uuid = expected.window_id.strip_prefix("kwin:")?;
+    (crate::kwin_script::normalize_uuid(expected_uuid) == active_uuid).then(|| {
+        let mut focused = expected.clone();
+        focused.focused = true;
+        focused
+    })
+}
+
 async fn list_windows_for(
     backend: BackendKind,
     environment: &EnvironmentInfo,
@@ -228,6 +261,7 @@ async fn list_windows_for(
         }
         BackendKind::Cosmic => cosmic::list_windows().map_err(anyhow_error),
         BackendKind::Kwin => kwin::discover_windows(environment)
+            .await
             .map(|windows| windows.into_iter().map(linux_window_from_kwin).collect()),
         BackendKind::Hyprland => hyprland::list_windows().map_err(anyhow_error),
         BackendKind::I3 => i3::list_windows().map_err(anyhow_error),
@@ -257,7 +291,7 @@ pub async fn activate_window(window: &LinuxWindowInfo) -> Result<(), BackendErro
                 .map_err(anyhow_error)
         }
         COSMIC_WAYLAND_BACKEND => cosmic::activate_window(&window.window_id),
-        KWIN_BACKEND => kwin::activate_window(&window.window_id),
+        KWIN_BACKEND => kwin::activate_window(&window.window_id).await,
         HYPRLAND_BACKEND => hyprland::activate_window(&window.window_id),
         I3_BACKEND => i3::activate_window(&window.window_id),
         X11_BACKEND => crate::x11::input_xtest::window_activate(&window.window_id),
@@ -266,10 +300,6 @@ pub async fn activate_window(window: &LinuxWindowInfo) -> Result<(), BackendErro
             format!("Unsupported window backend for activation: {backend}"),
         )),
     }
-}
-
-pub fn focus_verification_available(window: &LinuxWindowInfo) -> bool {
-    window.backend != KWIN_BACKEND
 }
 
 fn ensure_backend_can_exact_focus(window: &LinuxWindowInfo) -> Result<(), BackendError> {
@@ -387,11 +417,12 @@ fn probe_kwin(environment: &EnvironmentInfo) -> BackendProbe {
         ok: can_list,
         can_list_windows: can_list,
         can_focus_apps: can_activate,
-        can_focus_windows: false,
+        can_focus_windows: can_activate,
         detail: if can_activate {
-            "KWin window query and exact activation appear available; focused-window verification is unavailable".to_string()
+            "KWin window query, scripted exact activation, and active-window readback are available"
+                .to_string()
         } else if can_list {
-            "KWin window query is available, but exact activation requires qdbus6 or qdbus"
+            "KWin window query is available, but KWin scripting activation is unavailable"
                 .to_string()
         } else {
             "KWin window query is not available for this session".to_string()
@@ -769,7 +800,9 @@ mod tests {
         let kwin_probe = probe_backend(BackendKind::Kwin, &environment);
         assert_eq!(kwin_probe.id, KWIN_BACKEND);
         assert!(!kwin_probe.detail.contains("Skipped"));
-        assert!(!kwin_probe.can_focus_windows);
+        // Scripted activation and focused-window readback share the same
+        // availability: KWin scripting over the session bus.
+        assert_eq!(kwin_probe.can_focus_windows, kwin_probe.can_focus_apps);
     }
 
     #[test]

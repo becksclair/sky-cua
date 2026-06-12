@@ -79,11 +79,7 @@ pub fn build_doctor_report(
     } else if !can_build_accessibility_tree {
         "Run setup_accessibility, then restart target applications.".to_string()
     } else if kwin_can_list && !can_target_windows {
-        if kwin_can_activate {
-            "KWin/Plasma can list windows and send best-effort activate_window, but focused_window and verified targeted keyboard input are not supported on this backend today.".to_string()
-        } else {
-            "KWin/Plasma can list windows, but best-effort activate_window requires qdbus6 or qdbus; focused_window and verified targeted keyboard input are not supported on this backend today.".to_string()
-        }
+        "KWin/Plasma can list windows, but KWin scripting (org.kde.KWin /Scripting on the session bus) is unavailable, so activate_window, focused_window, and verified targeted keyboard input are not supported.".to_string()
     } else if !can_target_windows {
         "Run setup_window_targeting on GNOME or install the session-specific window backend tools."
             .to_string()
@@ -95,9 +91,9 @@ pub fn build_doctor_report(
         if window_probes.iter().any(|p| p.id == "cosmic" && p.ok) {
             "A COSMIC Wayland window backend is available for list_windows, focused_window, and targeted input verification.".to_string()
         } else if kwin_can_list && kwin_can_activate {
-            "A KWin/Plasma window backend is available for list_windows and best-effort activate_window; focused_window and targeted input verification are unavailable on this backend.".to_string()
+            "A KWin/Plasma window backend is available for list_windows, focused_window, and verified activate_window via KWin scripting.".to_string()
         } else if kwin_can_list {
-            "A KWin/Plasma window backend is available for list_windows; best-effort activate_window requires qdbus6 or qdbus, and focused_window plus targeted input verification are unavailable on this backend.".to_string()
+            "A KWin/Plasma window backend is available for list_windows; KWin scripting is unavailable, so activate_window, focused_window, and targeted input verification are unavailable.".to_string()
         } else if window_probes.iter().any(|p| p.id == "hyprland" && p.ok) {
             "A Hyprland window backend is available for list_windows, focused_window, and targeted input verification.".to_string()
         } else {

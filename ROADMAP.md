@@ -17,6 +17,7 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Non-Codex host smoke (OpenCode/Pi) once VM lane is live
 - [x] KWin and X11 workspace metadata — [`docs/features/kwin-x11-workspace-metadata.md`](docs/features/kwin-x11-workspace-metadata.md)
   - [ ] Capture a dedicated `list_windows` workspace artifact on real KWin and X11
+- [x] KWin window targeting (focused_window + verified activation via KWin scripting) — [`docs/features/kwin-window-targeting.md`](docs/features/kwin-window-targeting.md)
 - [x] Linux virtual input (`LinuxVirtualInput` backend) — [`docs/features/linux-virtual-input.md`](docs/features/linux-virtual-input.md)
 - [x] Native agent cursor overlay — [`docs/features/agent-cursor-overlay.md`](docs/features/agent-cursor-overlay.md)
 - [x] Compositor cursor hiding (KWin / X11 / GNOME / Hyprland / patched COSMIC) — [`docs/features/compositor-cursor-hiding.md`](docs/features/compositor-cursor-hiding.md)
