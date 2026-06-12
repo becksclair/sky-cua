@@ -35,7 +35,7 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 | ICA-012 | P2 | M | Medium | Medium | complete | Host portability: Browser MCP managed lifecycle | browser snapshot/diagnostic wire contract |
 | ICA-009 | P2 | M | Medium | High | complete | Host portability: Codex Desktop compatibility and deploy proof | `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py` |
 | ICA-013 | P3 | S | Low | High | complete | Enabler for roadmap-aligned work; not standalone roadmap scope | Python/Rust browser test fixture layout |
-| ICA-015 | P3 | M | Medium | High | candidate | Follow-up for Windows overlay IPC transport maintainability | overlay host IPC lifecycle and listener handling |
+| ICA-015 | P3 | M | Medium | High | complete | Follow-up for Windows overlay IPC transport maintainability | overlay host IPC lifecycle and listener handling |
 | ICA-016 | P3 | S | Low | High | complete | Follow-up for VM runner profile descriptor maintainability | `scripts/run_gui_testing_vm_smoke.py` profile metadata and helper boundaries |
 | ICA-017 | P3 | M | Medium | Medium | complete | Follow-up for Browser MCP contract hardening | browser snapshot typed contract activation |
 | ICA-018 | P3 | S | Low | High | complete | Follow-up for detached session-env health contract clarity | shared desktop/current env key naming |
@@ -58,6 +58,7 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 - [x] `ICA-016` VM smoke profile metadata made operational.
 - [x] `ICA-018` env-key contracts renamed by policy purpose.
 - [x] `ICA-013` broad helper tests split into subsystem modules.
+- [x] `ICA-015` overlay host IPC lifecycle and listener handling deepened.
 
 ## Tasks
 
@@ -278,8 +279,8 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   - [x] Continue moving groups in small reviewable patches.
   - [x] Remove stale imports and duplicate monkeypatch setup.
 
-- [ ] **ICA-015: Deepen overlay host IPC lifecycle and connection handling**
-  Priority: P3. Effort: M. Risk: Medium. Confidence: High. Status: candidate
+- [x] **ICA-015: Deepen overlay host IPC lifecycle and connection handling**
+  Priority: P3. Effort: M. Risk: Medium. Confidence: High. Status: complete
   Roadmap alignment: Follow-up for Windows parity -> Windows agent cursor overlay and host IPC.
   Cluster: `crates/sky-cua-service/src/overlay/host.rs`, `crates/sky-cua-overlay-host/src/main.rs`
   Dependency category: Remote but owned, using ports and adapters; Global, nondeterministic, or platform dependency
@@ -292,19 +293,21 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
   Why coupled: Overlay host IPC has two layers with the same failure semantics: service-side managed child lifecycle and host-side request/reply serving. Future Windows overlay work should not need to update Unix and TCP process supervision, request framing, shutdown, and timeout handling in parallel.
   Suggested first move: Extract a service-side managed overlay-host process helper parameterized by endpoint operations, plus a host-side client handler helper for read/write timeout setup and message dispatch. Keep Unix socket cleanup and TCP address resolution as endpoint-specific adapters.
   Testing impact: Preserve existing Unix/TCP round-trip tests. Add tests for shared lifecycle reset behavior, shutdown-on-Drop, idle-client bounded stall behavior, and cached/special-cased TCP address resolution if caching is introduced.
-  Needs human decision: Decide whether the bounded serial listener stall is acceptable for the supported single service-client model or whether the host should move accepted clients to short-lived workers/nonblocking handling.
+  Needs human decision: Resolved 2026-06-12. The bounded serial listener stall is accepted for the supported single service-client model; the bound (`CLIENT_IO_TIMEOUT`) is documented at the shared accept loop and pinned by the idle-client tests.
+  Completion note: Service side: `crates/sky-cua-service/src/overlay/host/lifecycle.rs` adds `ManagedOverlayHost<E: OverlayHostEndpoint>` owning child supervision, startup readiness polling, request/reset policy, diagnostic mapping, and Drop shutdown once; `UnixSocketEndpoint` and `TcpEndpoint` are thin adapters owning serve args, connect mechanics, and artifact cleanup. `TcpEndpoint` compiles into Unix test builds so Linux tests cover the shared lifecycle and the TCP adapter (missing-binary diagnostic redaction, bad-reply child reset). TCP address resolution parses the literal `host:port` form once at construction; hostname overrides resolve per connect by documented design. Host side: `serve_tcp` and `serve_unix_socket` now share `run_accept_loop` plus `accept_client` (per-client timeout setup, idle-hide watchdog, shutdown handling) behind a small `ClientStream` trait; the Unix wrapper keeps socket-file cleanup. Also fixed pre-existing non-Unix `crate::browser` fallback drift (`eval` missing, `BrowserScreenshotResponse` missing `screenshot_path`/`width`/`height`) found by the Windows-target check.
+  Verification: `cargo fmt --check`; `cargo clippy --workspace --all-targets` (clean); `cargo test` (343 passed); `cargo check -p sky-cua-service -p sky-cua-overlay-host --target x86_64-pc-windows-gnu`; live Windows proof on the devbox VM with a cross-built release `sky-cua-overlay-host.exe`: `probe`, `serve --tcp` SetCursor/Capabilities round-trips, a silent idle client followed by a successful request within the documented bound, and clean shutdown (exit code 0).
   Acceptance criteria:
-  - [ ] Unix and TCP service transports share child lifecycle, request failure mapping, reset, and Drop shutdown policy.
-  - [ ] Host-side Unix and TCP listeners share per-client timeout/message handling or have documented reasons for divergence.
-  - [ ] A stale accepted client cannot block later overlay requests longer than the documented bound, or worker/nonblocking handling removes the serial stall.
-  - [ ] TCP address resolution avoids repeated resolver work for the default literal address and has documented behavior for hostname overrides.
-  - [ ] Existing Linux Unix-socket behavior and non-Unix TCP behavior remain compatible.
+  - [x] Unix and TCP service transports share child lifecycle, request failure mapping, reset, and Drop shutdown policy.
+  - [x] Host-side Unix and TCP listeners share per-client timeout/message handling or have documented reasons for divergence.
+  - [x] A stale accepted client cannot block later overlay requests longer than the documented bound, or worker/nonblocking handling removes the serial stall. (Bound accepted and documented; pinned by idle-client tests and the live Windows smoke.)
+  - [x] TCP address resolution avoids repeated resolver work for the default literal address and has documented behavior for hostname overrides.
+  - [x] Existing Linux Unix-socket behavior and non-Unix TCP behavior remain compatible.
   Work checklist:
-  - [ ] Validate the residual review evidence against the current diff.
-  - [ ] Add characterization tests around Unix/TCP lifecycle and listener behavior.
-  - [ ] Extract the shared service-side process lifecycle helper.
-  - [ ] Extract or document the shared host-side client handling helper.
-  - [ ] Decide and implement address-resolution caching or literal-address fast path.
+  - [x] Validate the residual review evidence against the current diff.
+  - [x] Add characterization tests around Unix/TCP lifecycle and listener behavior.
+  - [x] Extract the shared service-side process lifecycle helper.
+  - [x] Extract or document the shared host-side client handling helper.
+  - [x] Decide and implement address-resolution caching or literal-address fast path.
 
 - [x] **ICA-016: Move VM smoke profile metadata into real profile operations**
   Priority: P3. Effort: S. Risk: Low. Confidence: High. Status: complete

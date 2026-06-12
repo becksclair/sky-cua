@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use sky_cua_platform::model::{
-    BrowserActionResponse, BrowserClaimTabResponse, BrowserIntegrationReport,
+    BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserIntegrationReport,
     BrowserListTabsResponse, BrowserMoveMouseResponse, BrowserNavigateResponse,
     BrowserOpenResponse, BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport,
     BrowserTargetAvailability, BrowserTargetKind, DiagnosticEntry,
@@ -90,6 +90,22 @@ pub(crate) async fn screenshot(
         tab_id,
         mime_type: "image/png".to_string(),
         data_base64: String::new(),
+        screenshot_path: None,
+        width: None,
+        height: None,
+        diagnostics: vec![browser_bridge_unsupported_diagnostic()],
+    }
+}
+
+pub(crate) async fn eval(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    _expression: String,
+) -> BrowserEvalResponse {
+    BrowserEvalResponse {
+        target: target.unwrap_or(BrowserTargetKind::UserChrome),
+        tab_id,
+        value: None,
         diagnostics: vec![browser_bridge_unsupported_diagnostic()],
     }
 }
