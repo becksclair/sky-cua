@@ -5,12 +5,13 @@ mod browser;
 mod service;
 
 pub use browser::{
-    BROWSER_EVAL_ENV, BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse,
-    BrowserListTabsResponse, BrowserMoveMouseResponse, BrowserNavigateResponse,
-    BrowserOpenResponse, BrowserRequest, BrowserResponse, BrowserScreenshotResponse,
-    BrowserSnapshotResponse, BrowserStatusReport, BrowserTab, BrowserTargetAvailability,
-    BrowserTargetKind, browser_diagnostic_is_error_code, browser_eval_enabled,
-    normalize_browser_open_url,
+    BROWSER_EVAL_ENV, BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT, BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT,
+    BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse,
+    BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
+    BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse, BrowserRequest,
+    BrowserResponse, BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport,
+    BrowserTab, BrowserTargetAvailability, BrowserTargetKind, browser_diagnostic_is_error_code,
+    browser_eval_enabled, normalize_browser_open_url,
 };
 pub use service::{ServiceRequest, ServiceResponse, SessionPresenceAction};
 

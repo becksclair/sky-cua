@@ -38,7 +38,15 @@ async fn bound_operation_routes_to_the_affinity_socket_only() {
 
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
-    let response = snapshot(Some(BrowserTargetKind::UserChrome), "515".to_string()).await;
+    let response = snapshot(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
     restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
     owner.await.unwrap();
 
@@ -85,7 +93,15 @@ async fn tab_not_found_drops_the_affinity_entry() {
 
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
-    let response = snapshot(Some(BrowserTargetKind::UserChrome), "515".to_string()).await;
+    let response = snapshot(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
     let stale = tab_socket_affinity("515", std::slice::from_ref(&owner_socket));
     restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
     server.await.unwrap();
@@ -159,7 +175,15 @@ async fn unknown_tab_falls_back_to_the_socket_that_has_it() {
 
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
-    let response = snapshot(Some(BrowserTargetKind::UserChrome), "515".to_string()).await;
+    let response = snapshot(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
     restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
     server_a.await.unwrap();
     server_b.await.unwrap();
@@ -219,13 +243,16 @@ async fn terminal_diagnostic_outranks_an_earlier_not_found() {
     let (a_done_tx, a_done_rx) = tokio::sync::oneshot::channel::<()>();
 
     let server_a = tokio::spawn(async move {
-        let (mut stream, mouse_move) = accept_until_non_info_request(&listener_a).await;
-        assert_eq!(mouse_move["params"]["method"], "Input.dispatchMouseEvent");
+        let (mut stream, cursor_move) = accept_until_non_info_request(&listener_a).await;
+        assert_eq!(
+            cursor_move.get("method").and_then(Value::as_str),
+            Some("moveMouse")
+        );
         write_frame(
             &mut stream,
             &json!({
                 "jsonrpc": "2.0",
-                "id": mouse_move["id"],
+                "id": cursor_move["id"],
                 "error": {"code": 1, "message": "No tab with id: 515."}
             }),
         )
@@ -253,7 +280,24 @@ async fn terminal_diagnostic_outranks_an_earlier_not_found() {
         .await
         .unwrap();
 
-        let mouse_move = read_frame(&mut stream).await.unwrap().unwrap();
+        let cursor_move = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(
+            cursor_move.get("method").and_then(Value::as_str),
+            Some("moveMouse")
+        );
+        assert_eq!(cursor_move["params"]["tabId"], 515);
+        assert_eq!(cursor_move["params"]["x"], 10.0);
+        assert_eq!(cursor_move["params"]["y"], 20.0);
+        assert_eq!(cursor_move["params"]["waitForArrival"], true);
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": cursor_move["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+        drop(stream);
+
+        let (mut stream, mouse_move) = accept_until_non_info_request(&listener_b).await;
         assert_eq!(mouse_move["params"]["commandParams"]["type"], "mouseMoved");
         write_frame(
             &mut stream,

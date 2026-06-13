@@ -572,7 +572,7 @@ mod annotation_tests {
         ("browser_click", (false, true, false, true)),
         ("browser_type_text", (false, true, false, true)),
         ("browser_press_key", (false, true, false, true)),
-        ("browser_scroll", (false, false, false, false)),
+        ("browser_scroll", (false, false, false, true)),
         ("browser_eval", (false, true, false, true)),
     ];
 

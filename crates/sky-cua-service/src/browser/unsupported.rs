@@ -70,6 +70,10 @@ pub(crate) async fn navigate(
 pub(crate) async fn snapshot(
     target: Option<BrowserTargetKind>,
     tab_id: String,
+    _text_limit: Option<usize>,
+    _element_offset: Option<usize>,
+    _element_limit: Option<usize>,
+    _element_query: Option<String>,
 ) -> BrowserSnapshotResponse {
     BrowserSnapshotResponse {
         target: target.unwrap_or(BrowserTargetKind::UserChrome),
@@ -84,6 +88,7 @@ pub(crate) async fn snapshot(
 pub(crate) async fn screenshot(
     target: Option<BrowserTargetKind>,
     tab_id: String,
+    _include_image_data: bool,
 ) -> BrowserScreenshotResponse {
     BrowserScreenshotResponse {
         target: target.unwrap_or(BrowserTargetKind::UserChrome),
@@ -140,8 +145,8 @@ pub(crate) async fn scroll(
     tab_id: String,
     _delta_x: f64,
     _delta_y: f64,
-    _x: f64,
-    _y: f64,
+    _x: Option<f64>,
+    _y: Option<f64>,
 ) -> BrowserActionResponse {
     unsupported_action_response(target, tab_id, "scroll")
 }

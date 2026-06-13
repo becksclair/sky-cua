@@ -3,10 +3,11 @@ use std::collections::VecDeque;
 
 use serde_json::json;
 use sky_cua_platform::model::{
-    BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
-    BrowserMoveMouseResponse, BrowserOpenResponse, BrowserRequest, BrowserResponse,
-    BrowserSnapshotResponse, BrowserStatusReport, BrowserTab, BrowserTargetAvailability,
-    BrowserTargetKind, DiagnosticEntry, ServiceRequest, ServiceResponse,
+    BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
+    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse, BrowserClaimTabResponse,
+    BrowserEvalResponse, BrowserListTabsResponse, BrowserMoveMouseResponse, BrowserOpenResponse,
+    BrowserRequest, BrowserResponse, BrowserSnapshotResponse, BrowserStatusReport, BrowserTab,
+    BrowserTargetAvailability, BrowserTargetKind, DiagnosticEntry, ServiceRequest, ServiceResponse,
 };
 
 use crate::heuristics::HeuristicsRegistry;
@@ -106,6 +107,64 @@ fn browser_scroll_schema_matches_delta_defaults() {
 }
 
 #[test]
+fn browser_action_schemas_explain_simple_control_contract() {
+    let definitions = build_tool_definitions(false);
+    let tools = definitions.as_array().expect("tools should be an array");
+    let find_tool = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("{name} tool is advertised"))
+    };
+
+    let list_description = find_tool("browser_list_tabs")["description"]
+        .as_str()
+        .expect("browser_list_tabs description");
+    assert!(list_description.contains("browser_claim_tab"));
+
+    let claim_description = find_tool("browser_claim_tab")["description"]
+        .as_str()
+        .expect("browser_claim_tab description");
+    assert!(claim_description.contains("before snapshot"));
+
+    let snapshot_description = find_tool("browser_snapshot")["description"]
+        .as_str()
+        .expect("browser_snapshot description");
+    assert!(snapshot_description.contains("token-bounded structured state"));
+    assert!(snapshot_description.contains("4000 text chars"));
+
+    let screenshot_description = find_tool("browser_screenshot")["description"]
+        .as_str()
+        .expect("browser_screenshot description");
+    assert!(screenshot_description.contains("text-only sessions get screenshot_path"));
+
+    let click_description = find_tool("browser_click")["description"]
+        .as_str()
+        .expect("browser_click description");
+    assert!(click_description.contains("visible browser agent cursor moves there first"));
+
+    let move_description = find_tool("browser_move_mouse")["description"]
+        .as_str()
+        .expect("browser_move_mouse description");
+    assert!(move_description.contains("without clicking"));
+    assert!(move_description.contains("browser_click"));
+
+    let scroll_description = find_tool("browser_scroll")["description"]
+        .as_str()
+        .expect("browser_scroll description");
+    assert!(scroll_description.contains("move the visible browser agent cursor"));
+    assert!(scroll_description.contains("Omit x/y for viewport scroll"));
+
+    let scroll_properties = &find_tool("browser_scroll")["inputSchema"]["properties"];
+    assert!(
+        !scroll_properties["x"]["description"]
+            .as_str()
+            .expect("browser_scroll x description")
+            .contains("Wheel event")
+    );
+}
+
+#[test]
 fn browser_snapshot_schema_advertises_element_filtering() {
     let definitions = build_tool_definitions(false);
     let snapshot_tool = definitions
@@ -119,6 +178,14 @@ fn browser_snapshot_schema_advertises_element_filtering() {
     assert!(properties.get("element_query").is_some());
     assert!(properties.get("element_offset").is_some());
     assert!(properties.get("element_limit").is_some());
+    assert_eq!(
+        properties["element_limit"]["maximum"],
+        BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT
+    );
+    assert_eq!(
+        properties["text_limit"]["maximum"],
+        BROWSER_SNAPSHOT_MAX_TEXT_LIMIT
+    );
 }
 
 #[test]
@@ -231,9 +298,14 @@ fn parses_browser_action_arguments() {
     );
     assert_eq!(
         parse_browser_scroll(&json!({"delta_y": 500, "x": 10, "y": 20})).unwrap(),
-        (0.0, 500.0, 10.0, 20.0)
+        (0.0, 500.0, Some(10.0), Some(20.0))
+    );
+    assert_eq!(
+        parse_browser_scroll(&json!({"delta_y": 500})).unwrap(),
+        (0.0, 500.0, None, None)
     );
     assert!(parse_browser_scroll(&json!({"delta_x": 0, "delta_y": 0})).is_err());
+    assert!(parse_browser_scroll(&json!({"delta_y": 500, "x": 10})).is_err());
 }
 
 #[test]
@@ -719,6 +791,177 @@ fn browser_snapshot_caps_structured_elements_by_default() {
 }
 
 #[test]
+fn browser_snapshot_limits_visible_text_by_default_and_preserves_metadata() {
+    let long_text = "abcdef".repeat(900);
+    let service_text = long_text
+        .chars()
+        .take(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT)
+        .collect::<String>();
+    let service = FakeService::with_response(browser_service_response!(Snapshot {
+        response: BrowserSnapshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            title: Some("Long".to_string()),
+            url: Some("https://long.example/".to_string()),
+            snapshot: Some(json!({
+                "title": "Long",
+                "url": "https://long.example/",
+                "viewport": {"width": 1440, "height": 900, "devicePixelRatio": 1},
+                "text": service_text,
+                "textCharCount": null,
+                "textLimit": BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT,
+                "textTruncated": true,
+                "elementCount": 0,
+                "elements": [],
+            })),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({"tab_id": "tab-1"}),
+    )
+    .unwrap();
+
+    assert_eq!(
+        service.take_requests()[0],
+        ServiceRequest::Browser {
+            request: BrowserRequest::Snapshot {
+                target: None,
+                tab_id: "tab-1".to_string(),
+                text_limit: Some(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT),
+                element_offset: None,
+                element_limit: Some(200),
+                element_query: None,
+            },
+        }
+    );
+    let text = result["structuredContent"]["snapshot"]["text"]
+        .as_str()
+        .expect("snapshot text");
+    assert_eq!(text.chars().count(), BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT);
+    assert_eq!(
+        result["structuredContent"]["snapshot"]["textCharCount"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        result["structuredContent"]["snapshot"]["textLimit"],
+        BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT
+    );
+    assert_eq!(
+        result["structuredContent"]["snapshot"]["textTruncated"],
+        true
+    );
+}
+
+#[test]
+fn browser_snapshot_accepts_zero_text_limit_to_omit_visible_text() {
+    let service = FakeService::with_response(browser_service_response!(Snapshot {
+        response: BrowserSnapshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            title: Some("No Text".to_string()),
+            url: Some("https://notext.example/".to_string()),
+            snapshot: Some(json!({
+                "title": "No Text",
+                "url": "https://notext.example/",
+                "text": "",
+                "textCharCount": null,
+                "textTruncated": null,
+                "elements": [],
+            })),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({"tab_id": "tab-1", "text_limit": 0}),
+    )
+    .unwrap();
+
+    assert_eq!(
+        service.take_requests()[0],
+        ServiceRequest::Browser {
+            request: BrowserRequest::Snapshot {
+                target: None,
+                tab_id: "tab-1".to_string(),
+                text_limit: Some(0),
+                element_offset: None,
+                element_limit: Some(200),
+                element_query: None,
+            },
+        }
+    );
+    assert_eq!(result["structuredContent"]["snapshot"]["text"], "");
+    assert_eq!(
+        result["structuredContent"]["snapshot"]["textTruncated"],
+        serde_json::Value::Null
+    );
+    assert!(
+        !result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Visible text:")
+    );
+}
+
+#[test]
+fn browser_snapshot_rejects_oversized_text_limit() {
+    let service = FakeService::default();
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({"tab_id": "tab-1", "text_limit": BROWSER_SNAPSHOT_MAX_TEXT_LIMIT + 1}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], true);
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains(&format!(
+                "text_limit must be at most {BROWSER_SNAPSHOT_MAX_TEXT_LIMIT}"
+            ))
+    );
+    assert!(service.take_requests().is_empty());
+}
+
+#[test]
+fn browser_snapshot_rejects_oversized_element_limit() {
+    let service = FakeService::default();
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({"tab_id": "tab-1", "element_limit": BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT + 1}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], true);
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains(&format!(
+                "element_limit must be at most {BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT}"
+            ))
+    );
+    assert!(service.take_requests().is_empty());
+}
+
+#[test]
 fn browser_snapshot_filters_structured_elements_for_deep_sidebar_controls() {
     let service = FakeService::with_response(browser_service_response!(Snapshot {
         response: BrowserSnapshotResponse {
@@ -764,6 +1007,117 @@ fn browser_snapshot_filters_structured_elements_for_deep_sidebar_controls() {
             .contains("Update Available")
     );
     assert!(!result.to_string().contains("New Session"));
+    assert_eq!(
+        service.take_requests(),
+        vec![ServiceRequest::Browser {
+            request: BrowserRequest::Snapshot {
+                target: None,
+                tab_id: "tab-1".to_string(),
+                text_limit: Some(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT),
+                element_offset: None,
+                element_limit: Some(1),
+                element_query: Some("update".to_string()),
+            },
+        }]
+    );
+}
+
+#[test]
+fn browser_snapshot_accepts_zero_element_limit_to_omit_elements() {
+    let service = FakeService::with_response(browser_service_response!(Snapshot {
+        response: BrowserSnapshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            title: Some("Text Only".to_string()),
+            url: Some("https://text.example/".to_string()),
+            snapshot: Some(json!({
+                "title": "Text Only",
+                "url": "https://text.example/",
+                "text": "Visible text",
+                "elementCount": 2,
+                "elements": [
+                    {"index": 0, "tag": "button", "role": "button", "name": "One"},
+                    {"index": 1, "tag": "button", "role": "button", "name": "Two"}
+                ]
+            })),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({"tab_id": "tab-1", "element_limit": 0}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], false);
+    assert_eq!(
+        result["structuredContent"]["snapshot"]["elements"]
+            .as_array()
+            .expect("elements")
+            .len(),
+        0
+    );
+    assert_eq!(
+        service.take_requests(),
+        vec![ServiceRequest::Browser {
+            request: BrowserRequest::Snapshot {
+                target: None,
+                tab_id: "tab-1".to_string(),
+                text_limit: Some(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT),
+                element_offset: None,
+                element_limit: Some(0),
+                element_query: None,
+            },
+        }]
+    );
+}
+
+#[test]
+fn browser_snapshot_offset_past_service_cap_requests_no_elements() {
+    let service = FakeService::with_response(browser_service_response!(Snapshot {
+        response: BrowserSnapshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            title: Some("Past Cap".to_string()),
+            url: Some("https://past-cap.example/".to_string()),
+            snapshot: Some(json!({
+                "title": "Past Cap",
+                "url": "https://past-cap.example/",
+                "text": "",
+                "elementCount": BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
+                "elements": []
+            })),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({"tab_id": "tab-1", "element_offset": BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], false);
+    assert_eq!(
+        service.take_requests(),
+        vec![ServiceRequest::Browser {
+            request: BrowserRequest::Snapshot {
+                target: None,
+                tab_id: "tab-1".to_string(),
+                text_limit: Some(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT),
+                element_offset: None,
+                element_limit: Some(0),
+                element_query: None,
+            },
+        }]
+    );
 }
 
 #[test]
@@ -941,6 +1295,16 @@ fn browser_screenshot_attaches_image_block_and_strips_base64() {
     assert_eq!(result["content"][1]["type"], "image");
     assert_eq!(result["content"][1]["data"], "aGVsbG8=");
     assert_eq!(result["content"][1]["mimeType"], "image/jpeg");
+    assert_eq!(
+        service.take_requests()[0],
+        ServiceRequest::Browser {
+            request: BrowserRequest::Screenshot {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                include_image_data: true,
+            },
+        }
+    );
 
     let structured = &result["structuredContent"];
     assert!(structured.get("data_base64").is_none());
@@ -973,6 +1337,101 @@ fn browser_screenshot_for_text_only_model_omits_image_block() {
     assert!(text.contains("does not support image input"));
     assert!(text.contains("browser_snapshot"));
     assert!(result["structuredContent"].get("data_base64").is_none());
+    assert_eq!(
+        service.take_requests()[0],
+        ServiceRequest::Browser {
+            request: BrowserRequest::Screenshot {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                include_image_data: false,
+            },
+        }
+    );
+}
+
+#[test]
+fn browser_screenshot_text_only_accepts_path_without_image_data() {
+    let service = FakeService::with_response(browser_service_response!(Screenshot {
+        response: sky_cua_platform::model::BrowserScreenshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "123".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            data_base64: String::new(),
+            screenshot_path: Some("/tmp/sky-cua/captures/browser-123-1.jpg".to_string()),
+            width: Some(1280),
+            height: Some(720),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo {
+            supports_images: Some(false),
+        },
+        "browser_screenshot",
+        json!({"target": "user_chrome", "tab_id": "123"}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["content"].as_array().unwrap().len(), 1);
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Image data was omitted"));
+    assert!(result["structuredContent"].get("data_base64").is_none());
+    assert_eq!(
+        result["structuredContent"]["screenshot_path"],
+        "/tmp/sky-cua/captures/browser-123-1.jpg"
+    );
+}
+
+#[test]
+fn browser_screenshot_text_only_rejects_base64_without_path() {
+    let service = FakeService::with_response(browser_service_response!(Screenshot {
+        response: sky_cua_platform::model::BrowserScreenshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "123".to_string(),
+            mime_type: "image/png".to_string(),
+            data_base64: "aGVsbG8=".to_string(),
+            screenshot_path: None,
+            width: Some(1280),
+            height: Some(720),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo {
+            supports_images: Some(false),
+        },
+        "browser_screenshot",
+        json!({"target": "user_chrome", "tab_id": "123"}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], true);
+    assert_eq!(result["content"].as_array().unwrap().len(), 1);
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Could not capture browser screenshot")
+    );
+    assert!(result["structuredContent"].get("data_base64").is_none());
+    assert!(result["structuredContent"].get("screenshot_path").is_none());
+    assert_eq!(
+        service.take_requests()[0],
+        ServiceRequest::Browser {
+            request: BrowserRequest::Screenshot {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                include_image_data: false,
+            },
+        }
+    );
 }
 
 #[test]

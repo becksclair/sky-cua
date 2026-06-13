@@ -69,7 +69,7 @@ pub(super) fn invalid_key_diagnostic() -> DiagnosticEntry {
 pub(super) fn invalid_scroll_diagnostic() -> DiagnosticEntry {
     DiagnosticEntry {
         code: "BrowserScrollInvalid".to_string(),
-        message: "browser_scroll coordinates and deltas must be finite browser screenshot pixels, and x/y must be non-negative.".to_string(),
+        message: "browser_scroll deltas must be finite with at least one non-zero value; x/y coordinates must be finite, non-negative, and provided together.".to_string(),
         details: None,
     }
 }

@@ -294,16 +294,19 @@ tools (`doctor`, `list_apps`, `list_windows`, `focused_window`,
 claims are non-destructive and idempotent; arbitrary input (`click`,
 `type_text`, `press_key`, `drag`, `perform_action`, `activate_element`,
 `browser_click`, `browser_type_text`, `browser_press_key`, `browser_eval`)
-stays destructive because it can trigger any in-app action, and live-web
-actions are additionally open-world. The full table is pinned by
-`mcp_tools::annotation_tests`; changing a row changes what hosts
-auto-approve and must be deliberate.
+stays destructive because it can trigger any in-app action. Live-web actions
+are additionally open-world; `browser_scroll` is non-destructive but still
+open-world because it mutates a real web page's viewport or scrollable DOM
+state. The full table is pinned by `mcp_tools::annotation_tests`; changing a
+row changes what hosts auto-approve and must be deliberate.
 
 Browser target names are not interchangeable. `user_chrome` is the user's
 already-running Chrome-family browser, reached through the extension/native-host
-bridge. `managed` is reserved for a future sky-cua-owned isolated browser
-context. Until sky-cua can launch and own that isolated context, browser tools
-accept `user_chrome` only and reject `managed` honestly. `browser_open(user_chrome)`
+bridge. A managed sky-cua-owned isolated browser context was once planned and
+was retired on 2026-06-11 because an isolated profile loses the logged-in
+sessions that make real-browser control useful. The `managed` target has been
+removed from the wire contract entirely; browser tools accept `user_chrome` only
+and reject any other `target` string at argument parsing. `browser_open(user_chrome)`
 creates a new session-owned tab and may navigate it to `http://`, `https://`, or
 `about:blank`. Existing tabs returned by `browser_list_tabs(user_chrome)` must be
 adopted with `browser_claim_tab` before browser actions can target them, and the
@@ -324,11 +327,22 @@ coordinates by DPR manually.
 desktop. The image is attached to the MCP result as an image content block for
 image-capable sessions, persisted to the file named in
 `structuredContent.screenshot_path`, and never repeated as base64 inside
-`structuredContent`. `browser_scroll` currently scrolls the page viewport through
-`window.scrollBy(...)` because CDP mouse-wheel dispatch timed out through the
-live extension bridge. `browser_snapshot` returns page title, URL, viewport,
-body text, and common actionable element summaries; it is not an accessibility
-tree and should not be treated as a replacement for desktop `get_app_state`.
+`structuredContent`. When the initialized model session cannot receive images,
+the MCP client requests a path-backed screenshot without response image data.
+`browser_scroll` currently uses `Runtime.evaluate` because CDP mouse-wheel
+dispatch timed out through the live extension bridge. When `x`/`y` are provided
+together, it moves the browser agent cursor to that point and scrolls the
+nearest scrollable DOM ancestor under it, falling back to the page viewport.
+When `x`/`y` are omitted, it scrolls the page viewport directly through
+`window.scrollBy(...)`. `browser_snapshot` returns page title, URL, viewport,
+bounded body text, and common actionable element summaries; `text_limit`
+defaults to 4000 for MCP calls, can be 0 to omit text, and can be raised to
+20000. Element query/offset/limit projection is applied in the service before
+the CDP result crosses the IPC boundary, with a maximum returned element budget
+of 5000. When page text is omitted or truncated before the service can count it
+exactly, `textCharCount` is `null` and `textTruncated` carries the known
+truncation state. It is not an accessibility tree and should not be treated as a
+replacement for desktop `get_app_state`.
 
 `doctor` includes Linux `session_env` repair details when the runtime had to
 recover detached desktop state. `repaired` records which keys were filled and
@@ -464,5 +478,6 @@ an adapter-specific file and keep the shared workflow guidance neutral.
 Do not make Chrome/Browser Use packaging behavior a dependency of the core MCP
 runtime. The native-host and bundled-plugin cache work is an adapter layer for
 Chrome-family browser access. First-class browser MCP behavior is exposed
-through the shared browser tool contract; `user_chrome` is implemented today,
-while managed browser lifecycle remains future work.
+through the shared browser tool contract; `user_chrome` is the only browser
+target, and the managed/isolated browser lifecycle was retired and removed from
+the wire contract.

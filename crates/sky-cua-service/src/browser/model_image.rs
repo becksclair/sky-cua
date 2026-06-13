@@ -64,12 +64,28 @@ pub(super) fn prepare_browser_capture(
     png_base64: &str,
     css_width: f64,
     css_height: f64,
+    include_image_data: bool,
 ) -> PreparedBrowserCapture {
-    match process_capture(tab_id, png_base64, css_width, css_height) {
+    match process_capture(
+        tab_id,
+        png_base64,
+        css_width,
+        css_height,
+        include_image_data,
+    ) {
         Ok(prepared) => prepared,
         Err(message) => {
+            let delivery = if include_image_data {
+                "returning the raw PNG capture"
+            } else {
+                "no path-backed capture can be delivered in path-only mode"
+            };
             let mut fallback = PreparedBrowserCapture {
-                data_base64: png_base64.to_string(),
+                data_base64: if include_image_data {
+                    png_base64.to_string()
+                } else {
+                    String::new()
+                },
                 mime_type: "image/png".to_string(),
                 screenshot_path: None,
                 width: 0,
@@ -77,7 +93,7 @@ pub(super) fn prepare_browser_capture(
                 diagnostics: vec![DiagnosticEntry {
                     code: "BrowserScreenshotDegraded".to_string(),
                     message: format!(
-                        "Browser screenshot post-processing failed; returning the raw PNG capture: {message}"
+                        "Browser screenshot post-processing failed; {delivery}: {message}"
                     ),
                     details: None,
                 }],
@@ -99,6 +115,25 @@ fn process_capture(
     png_base64: &str,
     css_width: f64,
     css_height: f64,
+    include_image_data: bool,
+) -> Result<PreparedBrowserCapture, String> {
+    process_capture_with_writer(
+        tab_id,
+        png_base64,
+        css_width,
+        css_height,
+        include_image_data,
+        write_capture_file,
+    )
+}
+
+fn process_capture_with_writer(
+    tab_id: &str,
+    png_base64: &str,
+    css_width: f64,
+    css_height: f64,
+    include_image_data: bool,
+    write_capture: impl FnOnce(&str, BrowserCaptureFormat, &[u8]) -> Result<PathBuf, String>,
 ) -> Result<PreparedBrowserCapture, String> {
     let png_bytes = BASE64
         .decode(png_base64)
@@ -161,13 +196,18 @@ fn process_capture(
         }
     }
 
-    let screenshot_path = match write_capture_file(tab_id, format, &encoded) {
+    let screenshot_path = match write_capture(tab_id, format, &encoded) {
         Ok(path) => Some(path.display().to_string()),
         Err(message) => {
+            let delivery = if include_image_data {
+                "image data is still attached"
+            } else {
+                "no path-backed capture can be delivered in path-only mode"
+            };
             diagnostics.push(DiagnosticEntry {
                 code: "BrowserScreenshotDegraded".to_string(),
                 message: format!(
-                    "Browser screenshot could not be persisted to disk; image data is still attached: {message}"
+                    "Browser screenshot could not be persisted to disk; {delivery}: {message}"
                 ),
                 details: None,
             });
@@ -175,8 +215,14 @@ fn process_capture(
         }
     };
 
+    let data_base64 = if include_image_data {
+        BASE64.encode(&encoded)
+    } else {
+        String::new()
+    };
+
     Ok(PreparedBrowserCapture {
-        data_base64: BASE64.encode(&encoded),
+        data_base64,
         mime_type: format.mime_type().to_string(),
         screenshot_path,
         width: rgb.width(),
@@ -372,7 +418,7 @@ mod tests {
 
     #[test]
     fn normalizes_hidpi_capture_to_css_dimensions() {
-        let prepared = prepare_browser_capture("tab-1", &png_base64(200, 160), 100.0, 80.0);
+        let prepared = prepare_browser_capture("tab-1", &png_base64(200, 160), 100.0, 80.0, true);
         assert_eq!(prepared.width, 100);
         assert_eq!(prepared.height, 80);
         assert_eq!(prepared.mime_type, "image/jpeg");
@@ -386,11 +432,27 @@ mod tests {
     }
 
     #[test]
+    fn omits_response_image_data_when_file_capture_is_enough() {
+        let prepared =
+            prepare_browser_capture("tab-path", &png_base64(200, 160), 100.0, 80.0, false);
+        assert_eq!(prepared.width, 100);
+        assert_eq!(prepared.height, 80);
+        assert_eq!(prepared.mime_type, "image/jpeg");
+        assert_eq!(prepared.data_base64, "");
+        let path = prepared
+            .screenshot_path
+            .as_deref()
+            .expect("path-backed capture");
+        assert!(std::path::Path::new(path).exists());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn upscales_zoomed_out_capture_to_css_dimensions() {
         // Browser zoom-out renders the capture smaller than the CSS viewport;
         // it must be upscaled so image pixels keep matching CSS-pixel
         // pointer coordinates.
-        let prepared = prepare_browser_capture("tab-zoom", &png_base64(50, 40), 100.0, 80.0);
+        let prepared = prepare_browser_capture("tab-zoom", &png_base64(50, 40), 100.0, 80.0, true);
         assert_eq!(prepared.width, 100);
         assert_eq!(prepared.height, 80);
         assert!(prepared.diagnostics.is_empty());
@@ -403,7 +465,8 @@ mod tests {
     fn implausible_css_metrics_keep_capture_dimensions_with_diagnostic() {
         // Metrics beyond the upscale bound abandon normalization, and the
         // broken coordinate-space guarantee must be surfaced, not silent.
-        let prepared = prepare_browser_capture("tab-wild", &png_base64(64, 48), 6400.0, 4800.0);
+        let prepared =
+            prepare_browser_capture("tab-wild", &png_base64(64, 48), 6400.0, 4800.0, true);
         assert_eq!(prepared.width, 64);
         assert_eq!(prepared.height, 48);
         assert_eq!(prepared.diagnostics.len(), 1);
@@ -416,7 +479,7 @@ mod tests {
 
     #[test]
     fn keeps_capture_dimensions_when_css_metrics_are_missing() {
-        let prepared = prepare_browser_capture("tab-2", &png_base64(64, 48), 0.0, 0.0);
+        let prepared = prepare_browser_capture("tab-2", &png_base64(64, 48), 0.0, 0.0, true);
         assert_eq!(prepared.width, 64);
         assert_eq!(prepared.height, 48);
         // The missing-metrics capture is unclipped and device-pixel sized;
@@ -431,12 +494,49 @@ mod tests {
 
     #[test]
     fn invalid_image_data_falls_back_to_raw_payload_with_diagnostic() {
-        let prepared = prepare_browser_capture("tab-3", "not-base64!!!", 100.0, 80.0);
+        let prepared = prepare_browser_capture("tab-3", "not-base64!!!", 100.0, 80.0, true);
         assert_eq!(prepared.data_base64, "not-base64!!!");
         assert_eq!(prepared.mime_type, "image/png");
         assert!(prepared.screenshot_path.is_none());
         assert_eq!(prepared.diagnostics.len(), 1);
         assert_eq!(prepared.diagnostics[0].code, "BrowserScreenshotDegraded");
+    }
+
+    #[test]
+    fn invalid_image_data_omits_raw_payload_when_image_data_is_disabled() {
+        let prepared = prepare_browser_capture("tab-4", "not-base64!!!", 100.0, 80.0, false);
+        assert_eq!(prepared.data_base64, "");
+        assert_eq!(prepared.mime_type, "image/png");
+        assert!(prepared.screenshot_path.is_none());
+        assert_eq!(prepared.diagnostics.len(), 1);
+        assert_eq!(prepared.diagnostics[0].code, "BrowserScreenshotDegraded");
+        assert!(prepared.diagnostics[0].message.contains("path-only mode"));
+        assert!(
+            !prepared.diagnostics[0]
+                .message
+                .contains("returning the raw PNG capture")
+        );
+    }
+
+    #[test]
+    fn path_only_capture_write_failure_omits_image_data() {
+        let prepared = process_capture_with_writer(
+            "tab-write-failure",
+            &png_base64(200, 160),
+            100.0,
+            80.0,
+            false,
+            |_, _, _| Err("forced write failure".to_string()),
+        )
+        .expect("process capture");
+
+        assert_eq!(prepared.width, 100);
+        assert_eq!(prepared.height, 80);
+        assert_eq!(prepared.data_base64, "");
+        assert!(prepared.screenshot_path.is_none());
+        assert_eq!(prepared.diagnostics.len(), 1);
+        assert_eq!(prepared.diagnostics[0].code, "BrowserScreenshotDegraded");
+        assert!(prepared.diagnostics[0].message.contains("path-only mode"));
     }
 
     #[test]

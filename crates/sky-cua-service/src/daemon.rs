@@ -6,7 +6,8 @@ use std::time::Duration;
 use sky_cua_platform::DESKTOP_LAUNCH_ENV_KEYS;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::model::{
-    ActionName, ActionRequest, AppStateSnapshot, BrowserRequest, BrowserResponse, CaptureInfo,
+    ActionName, ActionRequest, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
+    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, CaptureInfo,
     CaptureScreenMode, DiagnosticEntry, ServiceRequest, ServiceResponse, SessionPresenceAction,
     SessionPresenceIntent,
 };
@@ -205,19 +206,68 @@ impl ServiceDaemon {
                     },
                 }
             }
-            BrowserRequest::Snapshot { target, tab_id } => {
-                debug!(?target, ?tab_id, "handling browser_snapshot request");
+            BrowserRequest::Snapshot {
+                target,
+                tab_id,
+                text_limit,
+                element_offset,
+                element_limit,
+                element_query,
+            } => {
+                if text_limit.is_some_and(|value| value > BROWSER_SNAPSHOT_MAX_TEXT_LIMIT) {
+                    return ServiceResponse::Error {
+                        code: "InvalidRequest".to_string(),
+                        message: format!(
+                            "browser_snapshot text_limit must be at most {BROWSER_SNAPSHOT_MAX_TEXT_LIMIT}"
+                        ),
+                    };
+                }
+                if element_limit.is_some_and(|value| value > BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT) {
+                    return ServiceResponse::Error {
+                        code: "InvalidRequest".to_string(),
+                        message: format!(
+                            "browser_snapshot element_limit must be at most {BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT}"
+                        ),
+                    };
+                }
+                debug!(
+                    ?target,
+                    ?tab_id,
+                    ?text_limit,
+                    ?element_offset,
+                    ?element_limit,
+                    ?element_query,
+                    "handling browser_snapshot request"
+                );
                 ServiceResponse::Browser {
                     response: BrowserResponse::Snapshot {
-                        response: crate::browser::snapshot(target, tab_id).await,
+                        response: crate::browser::snapshot(
+                            target,
+                            tab_id,
+                            text_limit,
+                            element_offset,
+                            element_limit,
+                            element_query,
+                        )
+                        .await,
                     },
                 }
             }
-            BrowserRequest::Screenshot { target, tab_id } => {
-                debug!(?target, ?tab_id, "handling browser_screenshot request");
+            BrowserRequest::Screenshot {
+                target,
+                tab_id,
+                include_image_data,
+            } => {
+                debug!(
+                    ?target,
+                    ?tab_id,
+                    ?include_image_data,
+                    "handling browser_screenshot request"
+                );
                 ServiceResponse::Browser {
                     response: BrowserResponse::Screenshot {
-                        response: crate::browser::screenshot(target, tab_id).await,
+                        response: crate::browser::screenshot(target, tab_id, include_image_data)
+                            .await,
                     },
                 }
             }
@@ -929,7 +979,8 @@ mod tests {
     use sky_cua_platform::diagnostics::BackendError;
     use sky_cua_platform::model::{
         ActionName, ActionOutcome, ActionRequest, AgentCursorPoint, AgentCursorState, AppInfo,
-        AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse, BrowserTargetKind,
+        AppSelector, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
+        BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, BrowserTargetKind,
         CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, ElementNode,
         EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
         SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction,
@@ -1483,6 +1534,62 @@ mod tests {
         match action_task.await.expect("action task") {
             ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
             other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_snapshot_rejects_oversized_text_limit_at_service_boundary() {
+        let daemon = daemon_with(
+            snapshot(Some(capture_with_rect()), Vec::new()),
+            success_outcome(),
+        );
+
+        match daemon
+            .handle(ServiceRequest::Browser {
+                request: BrowserRequest::Snapshot {
+                    target: Some(BrowserTargetKind::UserChrome),
+                    tab_id: "tab-1".to_string(),
+                    text_limit: Some(BROWSER_SNAPSHOT_MAX_TEXT_LIMIT + 1),
+                    element_offset: None,
+                    element_limit: None,
+                    element_query: None,
+                },
+            })
+            .await
+        {
+            ServiceResponse::Error { code, message } => {
+                assert_eq!(code, "InvalidRequest");
+                assert!(message.contains(&BROWSER_SNAPSHOT_MAX_TEXT_LIMIT.to_string()));
+            }
+            other => panic!("expected invalid request response, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_snapshot_rejects_oversized_element_limit_at_service_boundary() {
+        let daemon = daemon_with(
+            snapshot(Some(capture_with_rect()), Vec::new()),
+            success_outcome(),
+        );
+
+        match daemon
+            .handle(ServiceRequest::Browser {
+                request: BrowserRequest::Snapshot {
+                    target: Some(BrowserTargetKind::UserChrome),
+                    tab_id: "tab-1".to_string(),
+                    text_limit: None,
+                    element_offset: None,
+                    element_limit: Some(BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT + 1),
+                    element_query: None,
+                },
+            })
+            .await
+        {
+            ServiceResponse::Error { code, message } => {
+                assert_eq!(code, "InvalidRequest");
+                assert!(message.contains(&BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT.to_string()));
+            }
+            other => panic!("expected invalid request response, got: {other:?}"),
         }
     }
 

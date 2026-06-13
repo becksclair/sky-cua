@@ -1,6 +1,9 @@
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
-use sky_cua_platform::model::{BrowserRequest, BrowserResponse, ServiceRequest, ServiceResponse};
+use sky_cua_platform::model::{
+    BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BrowserRequest,
+    BrowserResponse, ServiceRequest, ServiceResponse,
+};
 
 mod args;
 mod response;
@@ -248,9 +251,17 @@ pub(super) fn handle_tool_call(
                 Ok(options) => options,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
+            let service_element_limit = service_snapshot_element_limit(
+                snapshot_options.element_offset,
+                snapshot_options.element_limit,
+            );
             match service.call(&browser_service_request(BrowserRequest::Snapshot {
                 target,
                 tab_id,
+                text_limit: Some(snapshot_options.text_limit),
+                element_offset: None,
+                element_limit: Some(service_element_limit),
+                element_query: snapshot_options.element_query.clone(),
             }))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::Snapshot { response },
@@ -259,6 +270,7 @@ pub(super) fn handle_tool_call(
                     snapshot_options.element_offset,
                     snapshot_options.element_limit,
                     snapshot_options.element_query.as_deref(),
+                    snapshot_options.text_limit,
                 )),
                 ServiceResponse::Error { code, message } => tool_error(code, message),
                 other => Err(anyhow!(
@@ -275,9 +287,11 @@ pub(super) fn handle_tool_call(
                 Ok(tab_id) => tab_id,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
+            let include_image_data = model.can_receive_images();
             match service.call(&browser_service_request(BrowserRequest::Screenshot {
                 target,
                 tab_id,
+                include_image_data,
             }))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::Screenshot { response },
@@ -440,4 +454,23 @@ pub(super) fn handle_tool_call(
 
 fn browser_service_request(request: BrowserRequest) -> ServiceRequest {
     ServiceRequest::Browser { request }
+}
+
+fn service_snapshot_element_limit(
+    element_offset: Option<usize>,
+    element_limit: Option<usize>,
+) -> usize {
+    let offset = element_offset.unwrap_or(0);
+    if offset >= BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT {
+        return 0;
+    }
+    match element_limit {
+        Some(0) => 0,
+        Some(limit) => offset
+            .saturating_add(limit)
+            .min(BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT),
+        None => offset
+            .saturating_add(BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT)
+            .min(BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT),
+    }
 }

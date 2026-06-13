@@ -383,7 +383,7 @@ impl BoundTabOperation<'_> {
         match self {
             BoundTabOperation::Cdp { action } => matches!(
                 action,
-                BrowserCdpAction::Snapshot | BrowserCdpAction::Screenshot
+                BrowserCdpAction::Snapshot { .. } | BrowserCdpAction::Screenshot
             ),
             BoundTabOperation::MoveMouse { .. } => true,
         }

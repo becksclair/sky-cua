@@ -28,7 +28,7 @@ pub enum BrowserRequest {
         tab_id: String,
         x: f64,
         y: f64,
-        #[serde(default)]
+        #[serde(default = "default_wait_for_arrival")]
         wait_for_arrival: bool,
     },
     Navigate {
@@ -41,11 +41,24 @@ pub enum BrowserRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<BrowserTargetKind>,
         tab_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_limit: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        element_offset: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        element_limit: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        element_query: Option<String>,
     },
     Screenshot {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<BrowserTargetKind>,
         tab_id: String,
+        #[serde(
+            default = "default_include_image_data",
+            skip_serializing_if = "is_true"
+        )]
+        include_image_data: bool,
     },
     Click {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,10 +85,10 @@ pub enum BrowserRequest {
         tab_id: String,
         delta_x: f64,
         delta_y: f64,
-        #[serde(default)]
-        x: f64,
-        #[serde(default)]
-        y: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
     },
     Eval {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,6 +114,18 @@ pub enum BrowserResponse {
     PressKey { response: BrowserActionResponse },
     Scroll { response: BrowserActionResponse },
     Eval { response: BrowserEvalResponse },
+}
+
+fn default_wait_for_arrival() -> bool {
+    true
+}
+
+fn default_include_image_data() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// Browser automation targets. `user_chrome` (the user's real, logged-in
@@ -210,6 +235,21 @@ pub struct BrowserSnapshotResponse {
 /// must agree on, so the opt-in check lives here and is shared by both rather
 /// than duplicated per crate.
 pub const BROWSER_EVAL_ENV: &str = "SKY_CUA_BROWSER_EVAL";
+
+/// Default visible-text budget for MCP `browser_snapshot` calls. Direct
+/// service callers may omit the field to request the service maximum.
+pub const BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT: usize = 4_000;
+
+/// Default actionable-element budget for MCP `browser_snapshot` calls.
+pub const BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT: usize = 200;
+
+/// Maximum actionable-element budget for browser snapshots. This preserves
+/// the original service-side capture ceiling.
+pub const BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT: usize = 5_000;
+
+/// Maximum visible-text budget for browser snapshots across MCP and service
+/// boundaries.
+pub const BROWSER_SNAPSHOT_MAX_TEXT_LIMIT: usize = 20_000;
 
 /// Whether the operator has opted in to `browser_eval` page-JavaScript
 /// execution. Off unless `SKY_CUA_BROWSER_EVAL` is `on`, `1`, or `true`.

@@ -225,6 +225,10 @@ pub(crate) async fn navigate(
 pub(crate) async fn snapshot(
     target: Option<BrowserTargetKind>,
     tab_id: String,
+    text_limit: Option<usize>,
+    element_offset: Option<usize>,
+    element_limit: Option<usize>,
+    element_query: Option<String>,
 ) -> BrowserSnapshotResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
@@ -243,7 +247,12 @@ pub(crate) async fn snapshot(
     match run_cdp_action(
         resolved_target,
         &normalized_tab_id,
-        BrowserCdpAction::Snapshot,
+        BrowserCdpAction::Snapshot {
+            text_limit,
+            element_offset,
+            element_limit,
+            element_query,
+        },
     )
     .await
     {
@@ -274,6 +283,7 @@ pub(crate) async fn snapshot(
 pub(crate) async fn screenshot(
     target: Option<BrowserTargetKind>,
     tab_id: String,
+    include_image_data: bool,
 ) -> BrowserScreenshotResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
@@ -308,6 +318,7 @@ pub(crate) async fn screenshot(
                 &data_base64,
                 css_width,
                 css_height,
+                include_image_data,
             );
             BrowserScreenshotResponse {
                 target: resolved_target,
@@ -345,6 +356,7 @@ pub(crate) async fn click(
         tab_id,
         "click",
         validate_point(x, y),
+        Some((x, y)),
         BrowserCdpAction::Click { x, y },
     )
     .await
@@ -363,6 +375,7 @@ pub(crate) async fn type_text(
         tab_id,
         "type_text",
         validation,
+        None,
         BrowserCdpAction::TypeText { text },
     )
     .await
@@ -382,6 +395,7 @@ pub(crate) async fn press_key(
         tab_id,
         "press_key",
         validation,
+        None,
         BrowserCdpAction::PressKey { key },
     )
     .await
@@ -449,25 +463,35 @@ pub(crate) async fn scroll(
     tab_id: String,
     delta_x: f64,
     delta_y: f64,
-    x: f64,
-    y: f64,
+    x: Option<f64>,
+    y: Option<f64>,
 ) -> BrowserActionResponse {
+    let coordinates = match (x, y) {
+        (Some(x), Some(y)) if x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 => {
+            Ok(Some((x, y)))
+        }
+        (None, None) => Ok(None),
+        _ => Err(invalid_scroll_diagnostic()),
+    };
     let validation = if delta_x.is_finite()
         && delta_y.is_finite()
-        && x.is_finite()
-        && y.is_finite()
-        && x >= 0.0
-        && y >= 0.0
+        && (delta_x != 0.0 || delta_y != 0.0)
+        && coordinates.is_ok()
     {
         Ok(())
     } else {
         Err(invalid_scroll_diagnostic())
     };
+    let coordinates = coordinates.ok().flatten();
+    let (x, y) = coordinates
+        .map(|(x, y)| (Some(x), Some(y)))
+        .unwrap_or((None, None));
     browser_action_response(
         target,
         tab_id,
         "scroll",
         validation,
+        coordinates,
         BrowserCdpAction::Scroll {
             delta_x,
             delta_y,
@@ -483,6 +507,7 @@ async fn browser_action_response(
     tab_id: String,
     action_name: &'static str,
     action_validation: Result<(), DiagnosticEntry>,
+    cursor_before_action: Option<(f64, f64)>,
     action: BrowserCdpAction,
 ) -> BrowserActionResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
@@ -500,7 +525,32 @@ async fn browser_action_response(
         };
     }
 
-    match run_cdp_action(resolved_target, &normalized_tab_id, action).await {
+    let executor = match BrowserBridgeExecutor::from_env(TokioInstant::now() + BROWSER_OPEN_TIMEOUT)
+    {
+        Ok(executor) => executor,
+        Err(diagnostic) => {
+            return BrowserActionResponse {
+                target: resolved_target,
+                tab_id: normalized_tab_id,
+                action: action_name.to_string(),
+                diagnostics: vec![diagnostic],
+            };
+        }
+    };
+    let binding = executor.bind_tab(resolved_target, &normalized_tab_id);
+
+    if let Some((x, y)) = cursor_before_action {
+        if let Err(diagnostic) = binding.move_mouse(x, y, true).await {
+            return BrowserActionResponse {
+                target: resolved_target,
+                tab_id: normalized_tab_id,
+                action: action_name.to_string(),
+                diagnostics: vec![diagnostic],
+            };
+        }
+    }
+
+    match binding.run_cdp(action).await {
         Ok(BrowserCdpResult::Action) => BrowserActionResponse {
             target: resolved_target,
             tab_id: normalized_tab_id,

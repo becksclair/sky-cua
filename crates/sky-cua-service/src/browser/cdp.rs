@@ -19,7 +19,12 @@ pub(super) enum BrowserCdpAction {
     Navigate {
         url: String,
     },
-    Snapshot,
+    Snapshot {
+        text_limit: Option<usize>,
+        element_offset: Option<usize>,
+        element_limit: Option<usize>,
+        element_query: Option<String>,
+    },
     Screenshot,
     Click {
         x: f64,
@@ -37,8 +42,8 @@ pub(super) enum BrowserCdpAction {
     Scroll {
         delta_x: f64,
         delta_y: f64,
-        x: f64,
-        y: f64,
+        x: Option<f64>,
+        y: Option<f64>,
     },
 }
 
@@ -95,14 +100,24 @@ pub(super) async fn cdp_action_on_stream(
             }
             Ok(BrowserCdpResult::Navigate { url: url.clone() })
         }
-        BrowserCdpAction::Snapshot => {
+        BrowserCdpAction::Snapshot {
+            text_limit,
+            element_offset,
+            element_limit,
+            element_query,
+        } => {
             let response = execute_cdp_until(
                 stream,
                 socket,
                 SNAPSHOT_REQUEST_ID,
                 tab_id_value,
                 "Runtime.evaluate",
-                snapshot::snapshot_evaluate_params(),
+                snapshot::snapshot_evaluate_params(
+                    *text_limit,
+                    *element_offset,
+                    *element_limit,
+                    element_query.as_deref(),
+                ),
                 deadline,
             )
             .await?;
@@ -264,8 +279,9 @@ pub(super) async fn cdp_action_on_stream(
             x,
             y,
         } => {
-            let expression = format!(
-                r#"
+            let expression = match (*x, *y) {
+                (Some(x), Some(y)) => format!(
+                    r#"
 (() => {{
   const eventX = {x};
   const eventY = {y};
@@ -288,7 +304,18 @@ pub(super) async fn cdp_action_on_stream(
   return {{ target: "window", x: window.scrollX, y: window.scrollY, eventX, eventY }};
 }})()
 "#
-            );
+                ),
+                _ => format!(
+                    r#"
+(() => {{
+  const deltaX = {delta_x};
+  const deltaY = {delta_y};
+  window.scrollBy(deltaX, deltaY);
+  return {{ target: "window", x: window.scrollX, y: window.scrollY }};
+}})()
+"#
+                ),
+            };
             execute_cdp_until(
                 stream,
                 socket,

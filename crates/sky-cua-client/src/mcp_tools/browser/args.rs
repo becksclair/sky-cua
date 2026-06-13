@@ -1,6 +1,9 @@
 use anyhow::{Result, anyhow};
 use serde_json::Value;
-use sky_cua_platform::model::{BrowserTargetKind, normalize_browser_open_url};
+use sky_cua_platform::model::{
+    BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
+    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserTargetKind, normalize_browser_open_url,
+};
 
 use super::super::optional_non_empty_string;
 
@@ -96,16 +99,11 @@ pub(crate) fn parse_browser_point(arguments: &Value, label: &str) -> Result<(f64
     Ok((x, y))
 }
 
-pub(crate) fn parse_browser_scroll(arguments: &Value) -> Result<(f64, f64, f64, f64)> {
+pub(crate) fn parse_browser_scroll(
+    arguments: &Value,
+) -> Result<(f64, f64, Option<f64>, Option<f64>)> {
     let delta_x = parse_optional_number(arguments, "delta_x", 0.0, "browser_scroll delta_x")?;
     let delta_y = parse_optional_number(arguments, "delta_y", 0.0, "browser_scroll delta_y")?;
-    let x = parse_optional_number(arguments, "x", 0.0, "browser_scroll x")?;
-    let y = parse_optional_number(arguments, "y", 0.0, "browser_scroll y")?;
-    if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
-        return Err(anyhow!(
-            "browser_scroll x and y must be finite non-negative browser screenshot pixel coordinates"
-        ));
-    }
     if !delta_x.is_finite() || !delta_y.is_finite() {
         return Err(anyhow!("browser_scroll deltas must be finite numbers"));
     }
@@ -113,6 +111,11 @@ pub(crate) fn parse_browser_scroll(arguments: &Value) -> Result<(f64, f64, f64, 
         return Err(anyhow!(
             "browser_scroll requires non-zero delta_x or delta_y"
         ));
+    }
+    let x = parse_optional_scroll_coordinate(arguments, "x")?;
+    let y = parse_optional_scroll_coordinate(arguments, "y")?;
+    if x.is_some() != y.is_some() {
+        return Err(anyhow!("browser_scroll x and y must be provided together"));
     }
     Ok((delta_x, delta_y, x, y))
 }
@@ -122,21 +125,33 @@ pub(crate) struct BrowserSnapshotOptions {
     pub(crate) element_offset: Option<usize>,
     pub(crate) element_limit: Option<usize>,
     pub(crate) element_query: Option<String>,
+    pub(crate) text_limit: usize,
 }
 
 pub(crate) fn parse_browser_snapshot_options(arguments: &Value) -> Result<BrowserSnapshotOptions> {
+    let element_limit =
+        parse_optional_usize(arguments, "element_limit", "browser_snapshot element_limit")?;
+    if element_limit.is_some_and(|limit| limit > BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT) {
+        return Err(anyhow!(
+            "browser_snapshot element_limit must be at most {BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT}"
+        ));
+    }
+
     Ok(BrowserSnapshotOptions {
         element_offset: parse_optional_usize(
             arguments,
             "element_offset",
             "browser_snapshot element_offset",
         )?,
-        element_limit: parse_optional_usize(
-            arguments,
-            "element_limit",
-            "browser_snapshot element_limit",
-        )?,
+        element_limit,
         element_query: parse_optional_string_argument(arguments, "element_query")?,
+        text_limit: parse_optional_usize_with_max(
+            arguments,
+            "text_limit",
+            BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT,
+            BROWSER_SNAPSHOT_MAX_TEXT_LIMIT,
+            "browser_snapshot text_limit",
+        )?,
     })
 }
 
@@ -147,6 +162,25 @@ fn parse_optional_number(arguments: &Value, name: &str, default: f64, label: &st
     raw_value
         .as_f64()
         .ok_or_else(|| anyhow!("{label} must be a number"))
+}
+
+fn parse_optional_scroll_coordinate(arguments: &Value, name: &str) -> Result<Option<f64>> {
+    let Some(raw_value) = arguments.get(name) else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
+    }
+    let Some(value) = raw_value.as_f64() else {
+        return Err(anyhow!("browser_scroll {name} must be a number"));
+    };
+    if value.is_finite() && value >= 0.0 {
+        Ok(Some(value))
+    } else {
+        Err(anyhow!(
+            "browser_scroll {name} must be a finite non-negative browser screenshot pixel coordinate"
+        ))
+    }
 }
 
 fn parse_optional_usize(arguments: &Value, name: &str, label: &str) -> Result<Option<usize>> {
@@ -162,6 +196,29 @@ fn parse_optional_usize(arguments: &Value, name: &str, label: &str) -> Result<Op
     usize::try_from(value)
         .map(Some)
         .map_err(|_| anyhow!("{label} is too large"))
+}
+
+fn parse_optional_usize_with_max(
+    arguments: &Value,
+    name: &str,
+    default: usize,
+    max: usize,
+    label: &str,
+) -> Result<usize> {
+    let Some(raw_value) = arguments.get(name) else {
+        return Ok(default);
+    };
+    if raw_value.is_null() {
+        return Ok(default);
+    }
+    let Some(value) = raw_value.as_u64() else {
+        return Err(anyhow!("{label} must be a non-negative integer"));
+    };
+    let value = usize::try_from(value).map_err(|_| anyhow!("{label} is too large"))?;
+    if value > max {
+        return Err(anyhow!("{label} must be at most {max}"));
+    }
+    Ok(value)
 }
 
 fn parse_non_negative_finite_number(arguments: &Value, name: &str, label: &str) -> Result<f64> {

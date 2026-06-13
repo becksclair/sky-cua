@@ -99,7 +99,7 @@ async fn cdp_action_recovers_when_tab_is_not_in_browser_session() {
 
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
-    let response = screenshot(Some(BrowserTargetKind::UserChrome), "515".to_string()).await;
+    let response = screenshot(Some(BrowserTargetKind::UserChrome), "515".to_string(), true).await;
     restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
     server.await.unwrap();
     std::fs::remove_dir_all(socket_dir).unwrap();
@@ -223,7 +223,7 @@ async fn cdp_action_recovers_when_cdp_command_times_out() {
 
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
-    let response = screenshot(Some(BrowserTargetKind::UserChrome), "515".to_string()).await;
+    let response = screenshot(Some(BrowserTargetKind::UserChrome), "515".to_string(), true).await;
     restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
     server.await.unwrap();
     std::fs::remove_dir_all(socket_dir).unwrap();
@@ -308,7 +308,15 @@ async fn cdp_action_recovers_when_debugger_is_unattached() {
 
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
-    let response = snapshot(Some(BrowserTargetKind::UserChrome), "515".to_string()).await;
+    let response = snapshot(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
     restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
     server.await.unwrap();
     std::fs::remove_dir_all(socket_dir).unwrap();
@@ -419,7 +427,15 @@ async fn cdp_action_recovery_reclaims_stale_sky_cua_owner() {
 
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
-    let response = snapshot(Some(BrowserTargetKind::UserChrome), "515".to_string()).await;
+    let response = snapshot(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
     restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
     server.await.unwrap();
     std::fs::remove_dir_all(socket_dir).unwrap();
@@ -436,6 +452,19 @@ async fn cdp_command_timeout_resets_session_without_replaying_input_action() {
     let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
 
     let server = tokio::spawn(async move {
+        let (mut stream, cursor_move) = accept_until_non_info_request(&listener).await;
+        assert_eq!(
+            cursor_move.get("method").and_then(Value::as_str),
+            Some("moveMouse")
+        );
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": cursor_move["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+        drop(stream);
+
         let (mut stream, mouse_move) = accept_until_non_info_request(&listener).await;
         assert_eq!(
             mouse_move.get("method").and_then(Value::as_str),
@@ -543,6 +572,19 @@ async fn cdp_command_timeout_is_not_replayed_on_another_bridge_socket() {
     let (a_done_tx, a_done_rx) = tokio::sync::oneshot::channel::<()>();
 
     let server_a = tokio::spawn(async move {
+        let (mut stream, cursor_move) = accept_until_non_info_request(&listener_a).await;
+        assert_eq!(
+            cursor_move.get("method").and_then(Value::as_str),
+            Some("moveMouse")
+        );
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": cursor_move["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+        drop(stream);
+
         let (mut stream, mouse_move) = accept_until_non_info_request(&listener_a).await;
         assert_eq!(mouse_move["params"]["commandParams"]["type"], "mouseMoved");
         write_frame(
@@ -605,7 +647,7 @@ async fn cdp_command_timeout_is_not_replayed_on_another_bridge_socket() {
             Some("getInfo")
         );
         a_done_rx.await.unwrap();
-        write_frame(
+        let wrote_probe_response = write_frame(
             &mut stream,
             &json!({
                 "jsonrpc": "2.0",
@@ -614,14 +656,16 @@ async fn cdp_command_timeout_is_not_replayed_on_another_bridge_socket() {
             }),
         )
         .await
-        .unwrap();
-        // The terminal no-replay diagnostic must stop the responsive-socket
-        // loop from re-running the click here: the only traffic this socket
-        // ever sees is the probe.
-        assert!(
-            read_frame(&mut stream).await.unwrap().is_none(),
-            "operation was replayed on a second bridge socket after a CDP command timeout"
-        );
+        .is_ok();
+        // The successful cursor move has already established affinity to A,
+        // so B may only see a now-closed discovery probe. It must never see
+        // any part of the destructive click sequence.
+        if wrote_probe_response {
+            assert!(
+                read_frame(&mut stream).await.unwrap().is_none(),
+                "operation was replayed on a second bridge socket after a CDP command timeout"
+            );
+        }
     });
 
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);

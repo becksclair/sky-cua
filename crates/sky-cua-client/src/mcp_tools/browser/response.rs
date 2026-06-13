@@ -3,10 +3,11 @@ use std::fmt::Write as _;
 use anyhow::Result;
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
-    BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
-    BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport, BrowserTab,
-    BrowserTargetKind, DiagnosticEntry, browser_diagnostic_is_error_code,
+    BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT, BrowserActionResponse, BrowserClaimTabResponse,
+    BrowserEvalResponse, BrowserListTabsResponse, BrowserMoveMouseResponse,
+    BrowserNavigateResponse, BrowserOpenResponse, BrowserScreenshotResponse,
+    BrowserSnapshotResponse, BrowserStatusReport, BrowserTab, BrowserTargetKind, DiagnosticEntry,
+    browser_diagnostic_is_error_code,
 };
 
 use super::args::BrowserTabTextFilter;
@@ -335,18 +336,12 @@ pub(crate) fn browser_snapshot_result(response: BrowserSnapshotResponse) -> Resu
     }))
 }
 
-/// Default ceiling on the structured `elements` array when the caller does not
-/// pass `element_limit`. The capture itself returns up to 5000 elements so
-/// `element_query` can reach deep controls, but serializing all of them by
-/// default blows host output-token budgets; `snapshot.elementCount` still
-/// reports the true total.
-const DEFAULT_SNAPSHOT_ELEMENT_LIMIT: usize = 200;
-
 pub(crate) fn browser_snapshot_structured_response(
     mut response: BrowserSnapshotResponse,
     element_offset: Option<usize>,
     element_limit: Option<usize>,
     element_query: Option<&str>,
+    text_limit: usize,
 ) -> BrowserSnapshotResponse {
     let Some(snapshot) = response.snapshot.as_mut() else {
         return response;
@@ -354,6 +349,7 @@ pub(crate) fn browser_snapshot_structured_response(
     let Some(snapshot_object) = snapshot.as_object_mut() else {
         return response;
     };
+    limit_browser_snapshot_text(snapshot_object, text_limit);
     // Move the array out rather than cloning it: the capture can carry up to
     // 5000 elements and `response` is owned, so the clone was pure waste.
     let elements = match snapshot_object.get_mut("elements") {
@@ -370,10 +366,37 @@ pub(crate) fn browser_snapshot_structured_response(
                 .is_none_or(|query| browser_snapshot_element_search_text(element).contains(query))
         })
         .skip(element_offset.unwrap_or(0))
-        .take(element_limit.unwrap_or(DEFAULT_SNAPSHOT_ELEMENT_LIMIT))
+        .take(element_limit.unwrap_or(BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT))
         .collect::<Vec<_>>();
     snapshot_object.insert("elements".to_string(), Value::Array(filtered));
     response
+}
+
+fn limit_browser_snapshot_text(snapshot_object: &mut serde_json::Map<String, Value>, limit: usize) {
+    let Some(text) = snapshot_object.get("text").and_then(Value::as_str) else {
+        return;
+    };
+    let original_len = match snapshot_object.get("textCharCount") {
+        Some(Value::Null) => None,
+        Some(value) => value
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .or_else(|| Some(text.chars().count())),
+        None => Some(text.chars().count()),
+    };
+    let service_truncated = snapshot_object
+        .get("textTruncated")
+        .and_then(Value::as_bool);
+    let truncated = original_len
+        .map(|original_len| original_len > limit)
+        .or(service_truncated);
+    if truncated == Some(true) {
+        let limited = text.chars().take(limit).collect::<String>();
+        snapshot_object.insert("text".to_string(), Value::String(limited));
+    }
+    snapshot_object.insert("textCharCount".to_string(), json!(original_len));
+    snapshot_object.insert("textLimit".to_string(), json!(limit));
+    snapshot_object.insert("textTruncated".to_string(), json!(truncated));
 }
 
 pub(crate) fn browser_snapshot_summary(response: &BrowserSnapshotResponse) -> String {
@@ -524,11 +547,12 @@ fn format_browser_number(value: f64) -> String {
 }
 
 pub(crate) fn browser_screenshot_result(
-    response: BrowserScreenshotResponse,
+    mut response: BrowserScreenshotResponse,
     can_receive_images: bool,
 ) -> Result<Value> {
-    let is_error =
-        response.data_base64.is_empty() || browser_diagnostics_are_error(&response.diagnostics);
+    let has_capture_reference = response.screenshot_path.is_some()
+        || (can_receive_images && !response.data_base64.is_empty());
+    let is_error = !has_capture_reference || browser_diagnostics_are_error(&response.diagnostics);
     let mut text = if is_error {
         format!(
             "Could not capture browser screenshot for tab {}.",
@@ -549,22 +573,29 @@ pub(crate) fn browser_screenshot_result(
         text.push_str(
             " Image pixels, browser_snapshot element bounds, and browser_click/browser_move_mouse/browser_scroll coordinates all share the same CSS-pixel space.",
         );
-        if can_receive_images {
+        if can_receive_images && !response.data_base64.is_empty() {
             text.push_str(" The image is attached to this result.");
+        } else if can_receive_images {
+            text.push_str(" Image data was omitted; read screenshot_path if needed.");
         } else {
             text.push_str(
-                " This session's model does not support image input; use browser_snapshot for page details.",
+                " Image data was omitted because this session's model does not support image input; use browser_snapshot for page details.",
             );
         }
         text
     };
     append_first_diagnostic(&mut text, &response.diagnostics);
 
+    let image_data = if !is_error && can_receive_images {
+        std::mem::take(&mut response.data_base64)
+    } else {
+        String::new()
+    };
     let mut content = vec![json!({"type": "text", "text": text})];
-    if !is_error && can_receive_images {
+    if !image_data.is_empty() {
         content.push(json!({
             "type": "image",
-            "data": response.data_base64,
+            "data": image_data,
             "mimeType": response.mime_type,
         }));
     }

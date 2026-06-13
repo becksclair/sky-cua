@@ -5,8 +5,9 @@
 Shipped for `user_chrome`, the only browser target. The managed/isolated
 browser target was retired by decision on 2026-06-11 (controlling the user's
 real logged-in browser is the product) and its contract stub has been removed
-from the wire contract. Last verified: 2026-06-09 with focused Rust browser MCP tests and
-the 2026-06-08 live Brave MCP/native-host smokes. With
+from the wire contract. Last verified: 2026-06-13 with focused Rust browser
+MCP tests and root `cargo test`; live browser smoke remains the 2026-06-08
+Brave MCP/native-host smoke. With
 `SKY_CUA_BROWSER=brave`, a full isolated MCP smoke advertised the browser tools,
 opened a session-owned Brave tab, navigated it to a local HTTP fixture, captured
 a snapshot and screenshot, moved the browser cursor, clicked, typed, pressed a
@@ -44,37 +45,48 @@ MCP tools, always advertised by `sky-cua-client mcp`:
 - `browser_move_mouse` accepts `target=user_chrome`, `tab_id`, `x`, `y`, and
   optional `wait_for_arrival`. Coordinates are CSS pixels, the same space as
   `browser_screenshot` image pixels and `browser_snapshot` element bounds.
+  When omitted, `wait_for_arrival` defaults to true in both the MCP argument
+  parser and the service request contract.
 - `browser_navigate` accepts `target=user_chrome`, `tab_id`, and `url`. Allowed
   URL forms are `http://`, `https://`, and `about:blank`.
 - `browser_snapshot` accepts `target=user_chrome`, `tab_id`, and optional
-  `element_query`, `element_offset`, and `element_limit`, then returns the
-  current page title, URL, and a structured DOM snapshot payload when CDP access
-  succeeds. The element filters are applied to the MCP response so agents can
-  surface controls deep in dense sidebars without dumping every unrelated
-  element. The capture collects up to 5000 elements so `element_query` reaches
-  deep controls, but the structured `elements` array defaults to at most 200 so
-  untuned calls do not overflow host output-token budgets; `snapshot.elementCount`
-  always reports the full total, and `element_limit` raises or lowers the cap.
+  `element_query`, `element_offset`, `element_limit`, and `text_limit`, then
+  returns the current page title, URL, and a structured DOM snapshot payload
+  when CDP access succeeds. `text_limit` defaults to 4000 visible-text
+  characters for MCP calls, accepts 0 to omit page text, and allows up to 20000
+  for full text review. The response records `snapshot.textCharCount`,
+  `snapshot.textLimit`, and `snapshot.textTruncated`; `textCharCount` is
+  `null` when text extraction is skipped or the service stops counting after
+  the cap. The service applies element projection before returning the CDP
+  payload so agents can surface controls deep in dense sidebars without
+  dumping every unrelated element. The MCP tool requests only the projected
+  default slice, so the structured `elements` array defaults to at most 200;
+  `snapshot.elementCount` always reports the full total, and `element_limit`
+  raises or lowers the cap up to the service maximum of 5000.
 - `browser_screenshot` accepts `target=user_chrome` and `tab_id`, then captures
   the visible viewport, normalizes the image to CSS-pixel dimensions, and
   re-encodes it with the shared model-screenshot knobs (JPEG by default, WebP
   via `SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp`). The MCP result attaches the
   image as an MCP image content block when the session's model supports image
-  input, and `structuredContent` carries `mime_type`, `screenshot_path` (the
-  persisted capture under the runtime captures directory), and `width`/`height`.
-  The base64 payload is never repeated inside `structuredContent`.
+  input. For text-only sessions, the service still persists the capture but
+  omits response image data and returns `screenshot_path`, `mime_type`, and
+  `width`/`height` only. The base64 payload is never repeated inside
+  `structuredContent`.
 - `browser_click` accepts `target=user_chrome`, `tab_id`, `x`, and `y` in CSS
   pixels, matching `browser_screenshot` image pixels and `browser_snapshot`
-  element bounds.
+  element bounds. Before dispatching the CDP click, the service moves the
+  browser agent cursor to the same point and waits for arrival.
 - `browser_type_text` accepts `target=user_chrome`, `tab_id`, and non-empty
   `text`, then inserts text into the focused page control.
 - `browser_press_key` accepts `target=user_chrome`, `tab_id`, and non-empty
   `key`, then dispatches the key to the page. Single CDP key names and modifier
   chords such as `Ctrl+K`, `Ctrl+L`, `Shift+Tab`, and `Meta+K` are accepted.
 - `browser_scroll` accepts `target=user_chrome`, `tab_id`, `delta_x`, `delta_y`,
-  and optional CSS-pixel `x`/`y` context fields. sky-cua scrolls the nearest
-  scrollable DOM container under `x`/`y` when possible and falls back to the
-  page viewport.
+  and optional CSS-pixel `x`/`y` context fields. `x` and `y` must be provided
+  together. When they are provided, sky-cua first moves the browser agent cursor
+  to that point, then scrolls the nearest scrollable DOM container under it when
+  possible and falls back to the page viewport. When `x`/`y` are omitted, it
+  scrolls the page viewport directly.
 - `browser_eval` accepts `target=user_chrome`, `tab_id`, and `expression`, then
   evaluates JavaScript in the page with CDP `Runtime.evaluate`, awaits promises,
   and returns the serializable result by value. It is intended for diagnostics
@@ -156,10 +168,12 @@ Service IPC variants:
   `ClaimTab { target, tab_id }`,
   `MoveMouse { target, tab_id, x, y, wait_for_arrival }`,
   `Navigate { target, tab_id, url }`,
-  `Snapshot { target, tab_id, element_offset, element_limit, element_query }`,
-  `Screenshot { target, tab_id }`, `Click { target, tab_id, x, y }`,
-  `TypeText { target, tab_id, text }`, `PressKey { target, tab_id, key }`, and
-  `Scroll { target, tab_id, delta_x, delta_y, x, y }`, and
+  `Snapshot { target, tab_id, text_limit, element_offset, element_limit,
+  element_query }`,
+  `Screenshot { target, tab_id, include_image_data }`,
+  `Click { target, tab_id, x, y }`, `TypeText { target, tab_id, text }`,
+  `PressKey { target, tab_id, key }`,
+  `Scroll { target, tab_id, delta_x, delta_y, x: Option, y: Option }`, and
   `Eval { target, tab_id, expression }`.
 - Browser IPC responses use the matching envelope:
   `ServiceResponse::Browser { response: BrowserResponse }`.
@@ -272,8 +286,8 @@ the MCP call is marked as an error.
 
 `browser_move_mouse(user_chrome)` sends `moveMouse` with the same sky-cua MCP
 session id, target tab id, the CSS-pixel coordinates as provided, and
-`waitForArrival`. It moves the extension's webpage/browser cursor, not the
-sky-cua desktop synthetic cursor used for portal screenshots. If the bridge
+`waitForArrival`. It moves the visible browser agent cursor, not the sky-cua
+desktop synthetic cursor used for portal screenshots. If the bridge
 reports stale session ownership, an unattached debugger, or a CDP command
 timeout, sky-cua reclaims, detaches, re-attaches, enables Page, and retries
 once (the move is an absolute position, so a replay is safe).
@@ -321,10 +335,12 @@ before the service abandons the socket read.
 `browser_scroll` uses `Runtime.evaluate` rather than CDP
 `Input.dispatchMouseEvent(type="mouseWheel")`, because the live extension bridge
 timed out on the mouse-wheel CDP command during the 2026-06-06 full MCP smoke.
-When `x`/`y` are provided, the evaluated script finds
+When `x`/`y` are provided, the service first moves the visible browser agent
+cursor to that point. The evaluated script then finds
 `document.elementFromPoint(x, y)`, walks to the nearest scrollable ancestor, and
 scrolls that container. If no scrollable element is found, it scrolls the page
-viewport.
+viewport. When `x`/`y` are omitted, the evaluated script does not call
+`elementFromPoint(0, 0)`; it scrolls the page viewport directly.
 
 Socket discovery uses `/tmp/codex-browser-use/extension-<pid>-<nonce>.sock` by
 default. The service inspects `/proc` process ancestry to classify sockets as
@@ -413,7 +429,7 @@ cargo test -p sky-cua-service
   installed MCP client, including capture of a background tab and a minimized
   Brave window.
 
-Focused browser reliability checks from 2026-06-09:
+Focused browser reliability checks from 2026-06-13:
 
 ```bash
 cargo fmt --check
@@ -421,14 +437,24 @@ cargo test -p sky-cua-platform -p sky-cua-service -p sky-cua-client
 ```
 
 - Service regression tests prove CDP action recovery still handles
-  `Debugger is not attached` and stale session ownership, `browser_scroll`
-  targets the nearest scrollable DOM container under `x`/`y`, `browser_eval`
-  returns the CDP runtime value, and `browser_press_key` dispatches modifier
-  chords with CDP modifier bits.
+  `Debugger is not attached` and stale session ownership, `browser_click` moves
+  the browser agent cursor before dispatching the CDP click, targeted
+  `browser_scroll` moves the cursor before scrolling the nearest scrollable DOM
+  container under `x`/`y`, untargeted `browser_scroll` scrolls the viewport
+  without synthesizing an `(0,0)` target, `browser_eval` returns the CDP runtime
+  value, and `browser_press_key` dispatches modifier chords with CDP modifier
+  bits.
 - Client regression tests prove `browser_snapshot` advertises and applies
   `element_query`/`element_offset`/`element_limit`, including a dense
   OpenChamber-style sidebar case where `Update Available` is deep in the element
-  list.
+  list, and prove `text_limit` defaults to 4000, accepts 0 for controls-only
+  snapshots, rejects values above 20000, and preserves truncation metadata.
+- Client regression tests prove text-only `browser_screenshot` calls request a
+  path-backed capture without response image data while image-capable sessions
+  still receive an MCP image content block.
+- Platform contract tests prove direct service requests preserve omitted
+  `browser_scroll` target coordinates and default omitted
+  `browser_move_mouse.wait_for_arrival` to true.
 - Client registry tests prove `browser_eval` stays unadvertised by default, is
   advertised only with the explicit opt-in, rejects calls when disabled, and is
   routed through the Browser MCP service request/response envelope; a service

@@ -1,9 +1,34 @@
 use serde_json::{Value, json};
-use sky_cua_platform::model::DiagnosticEntry;
+use sky_cua_platform::model::{
+    BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, DiagnosticEntry,
+};
 
-pub(super) const BROWSER_SNAPSHOT_EXPRESSION: &str = r#"
+pub(super) const BROWSER_SNAPSHOT_EXPRESSION_TEMPLATE: &str = r#"
 (() => {
-  const text = (document.body?.innerText || '').slice(0, 20000);
+  const textLimit = __TEXT_LIMIT__;
+  const includeText = textLimit > 0;
+  const fullText = includeText ? (document.body?.innerText || '') : '';
+  const textChars = [];
+  let textCharCount = null;
+  let textTruncated = null;
+  if (includeText) {
+    textCharCount = 0;
+    textTruncated = false;
+    for (const char of fullText) {
+      if (textChars.length < textLimit) {
+        textChars.push(char);
+        textCharCount += 1;
+      } else {
+        textTruncated = true;
+        textCharCount = null;
+        break;
+      }
+    }
+  }
+  const text = textChars.join('');
+  const elementOffset = __ELEMENT_OFFSET__;
+  const elementLimit = __ELEMENT_LIMIT__;
+  const elementQuery = __ELEMENT_QUERY__;
   const sensitiveField = (el) => {
     const attr = (name) => String(el.getAttribute(name) || '').toLowerCase();
     const haystack = [attr('type'), attr('name'), attr('id'), attr('autocomplete'), attr('aria-label'), attr('placeholder')].join(' ');
@@ -26,25 +51,84 @@ pub(super) const BROWSER_SNAPSHOT_EXPRESSION: &str = r#"
       bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
     };
   };
+  const elementName = (el) => el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent?.trim()?.slice(0, 200) || '';
+  const elementSearchText = (el) => [
+    el.tagName.toLowerCase(),
+    el.getAttribute('role') || '',
+    elementName(el),
+    safeValue(el) || '',
+    el.href || ''
+  ].join('\n').toLowerCase();
+  const elementMatches = (el) => !elementQuery || elementSearchText(el).includes(elementQuery);
   const selector = 'a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]';
-  const elements = Array.from(document.querySelectorAll(selector));
+  const elements = document.querySelectorAll(selector);
+  const projectedElements = [];
+  if (elementLimit > 0) {
+    let matchedIndex = 0;
+    for (let index = 0; index < elements.length; index += 1) {
+      const el = elements[index];
+      if (!elementMatches(el)) continue;
+      if (matchedIndex >= elementOffset) {
+        projectedElements.push(elementFor(el, index));
+        if (projectedElements.length >= elementLimit) break;
+      }
+      matchedIndex += 1;
+    }
+  }
   return {
     title: document.title || '',
     url: location.href,
     viewport: { width: innerWidth, height: innerHeight, devicePixelRatio: devicePixelRatio || 1 },
     text,
+    textCharCount,
+    textLimit,
+    textTruncated,
     elementCount: elements.length,
-    elements: elements.slice(0, 5000).map(elementFor)
+    elements: projectedElements
   };
 })()
 "#;
 
-pub(super) fn snapshot_evaluate_params() -> Value {
+pub(super) fn snapshot_evaluate_params(
+    text_limit: Option<usize>,
+    element_offset: Option<usize>,
+    element_limit: Option<usize>,
+    element_query: Option<&str>,
+) -> Value {
+    let text_limit = text_limit
+        .unwrap_or(BROWSER_SNAPSHOT_MAX_TEXT_LIMIT)
+        .min(BROWSER_SNAPSHOT_MAX_TEXT_LIMIT);
+    let element_offset = element_offset.unwrap_or(0);
+    let element_limit = element_limit
+        .unwrap_or(BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT)
+        .min(BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT);
+    let element_query = element_query.unwrap_or("").to_lowercase();
     json!({
-        "expression": BROWSER_SNAPSHOT_EXPRESSION,
+        "expression": browser_snapshot_expression(
+            text_limit,
+            element_offset,
+            element_limit,
+            &element_query,
+        ),
         "awaitPromise": true,
         "returnByValue": true,
     })
+}
+
+fn browser_snapshot_expression(
+    text_limit: usize,
+    element_offset: usize,
+    element_limit: usize,
+    element_query: &str,
+) -> String {
+    BROWSER_SNAPSHOT_EXPRESSION_TEMPLATE
+        .replace("__TEXT_LIMIT__", &text_limit.to_string())
+        .replace("__ELEMENT_OFFSET__", &element_offset.to_string())
+        .replace("__ELEMENT_LIMIT__", &element_limit.to_string())
+        .replace(
+            "__ELEMENT_QUERY__",
+            &serde_json::to_string(element_query).expect("serialize element query"),
+        )
 }
 
 pub(super) fn snapshot_from_cdp_response(

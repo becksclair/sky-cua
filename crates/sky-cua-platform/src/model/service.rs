@@ -304,6 +304,138 @@ mod tests {
     }
 
     #[test]
+    fn browser_scroll_request_preserves_optional_target_point() {
+        let viewport_scroll = BrowserRequest::Scroll {
+            target: Some(BrowserTargetKind::UserChrome),
+            tab_id: "123".to_string(),
+            delta_x: 0.0,
+            delta_y: 400.0,
+            x: None,
+            y: None,
+        };
+        let rendered =
+            serde_json::to_value(&viewport_scroll).expect("browser request should serialize");
+        assert!(rendered.get("x").is_none());
+        assert!(rendered.get("y").is_none());
+
+        let parsed: BrowserRequest = serde_json::from_value(json!({
+            "type": "scroll",
+            "target": "user_chrome",
+            "tab_id": "123",
+            "delta_x": 0.0,
+            "delta_y": 400.0
+        }))
+        .expect("missing target point should deserialize");
+        assert_eq!(parsed, viewport_scroll);
+
+        let targeted_scroll = BrowserRequest::Scroll {
+            target: Some(BrowserTargetKind::UserChrome),
+            tab_id: "123".to_string(),
+            delta_x: 0.0,
+            delta_y: 400.0,
+            x: Some(10.0),
+            y: Some(20.0),
+        };
+        let rendered =
+            serde_json::to_value(targeted_scroll).expect("browser request should serialize");
+        assert_eq!(rendered["x"], 10.0);
+        assert_eq!(rendered["y"], 20.0);
+    }
+
+    #[test]
+    fn browser_snapshot_request_preserves_optional_text_limit() {
+        let default_snapshot = BrowserRequest::Snapshot {
+            target: Some(BrowserTargetKind::UserChrome),
+            tab_id: "123".to_string(),
+            text_limit: None,
+            element_offset: None,
+            element_limit: None,
+            element_query: None,
+        };
+        let rendered =
+            serde_json::to_value(&default_snapshot).expect("browser request should serialize");
+        assert!(rendered.get("text_limit").is_none());
+        assert!(rendered.get("element_offset").is_none());
+        assert!(rendered.get("element_limit").is_none());
+        assert!(rendered.get("element_query").is_none());
+
+        let parsed: BrowserRequest = serde_json::from_value(json!({
+            "type": "snapshot",
+            "target": "user_chrome",
+            "tab_id": "123"
+        }))
+        .expect("missing text_limit should deserialize");
+        assert_eq!(parsed, default_snapshot);
+
+        let limited_snapshot = BrowserRequest::Snapshot {
+            target: Some(BrowserTargetKind::UserChrome),
+            tab_id: "123".to_string(),
+            text_limit: Some(4000),
+            element_offset: Some(5),
+            element_limit: Some(25),
+            element_query: Some("settings".to_string()),
+        };
+        let rendered =
+            serde_json::to_value(limited_snapshot).expect("browser request should serialize");
+        assert_eq!(rendered["text_limit"], 4000);
+        assert_eq!(rendered["element_offset"], 5);
+        assert_eq!(rendered["element_limit"], 25);
+        assert_eq!(rendered["element_query"], "settings");
+    }
+
+    #[test]
+    fn browser_screenshot_request_defaults_to_returning_image_data() {
+        let default_screenshot = BrowserRequest::Screenshot {
+            target: Some(BrowserTargetKind::UserChrome),
+            tab_id: "123".to_string(),
+            include_image_data: true,
+        };
+        let rendered =
+            serde_json::to_value(&default_screenshot).expect("browser request should serialize");
+        assert!(rendered.get("include_image_data").is_none());
+
+        let parsed: BrowserRequest = serde_json::from_value(json!({
+            "type": "screenshot",
+            "target": "user_chrome",
+            "tab_id": "123"
+        }))
+        .expect("missing include_image_data should deserialize");
+        assert_eq!(parsed, default_screenshot);
+
+        let path_only_screenshot = BrowserRequest::Screenshot {
+            target: Some(BrowserTargetKind::UserChrome),
+            tab_id: "123".to_string(),
+            include_image_data: false,
+        };
+        let rendered =
+            serde_json::to_value(path_only_screenshot).expect("browser request should serialize");
+        assert_eq!(rendered["include_image_data"], false);
+    }
+
+    #[test]
+    fn browser_move_mouse_request_defaults_to_waiting_for_arrival() {
+        let parsed: BrowserRequest = serde_json::from_value(json!({
+            "type": "move_mouse",
+            "target": "user_chrome",
+            "tab_id": "123",
+            "x": 240.0,
+            "y": 160.0
+        }))
+        .expect("missing wait_for_arrival should deserialize");
+
+        assert_eq!(
+            parsed,
+            BrowserRequest::MoveMouse {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                x: 240.0,
+                y: 160.0,
+                wait_for_arrival: true,
+            }
+        );
+    }
+
+    #[test]
     fn service_response_variants_preserve_type_tags() {
         let environment = environment_info();
         let diagnostics = Vec::new();
