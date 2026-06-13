@@ -215,6 +215,8 @@ mod tests {
             wm_class: Some("com.mitchellh.ghostty".to_string()),
             pid: Some(100),
             bounds: None,
+            display: None,
+            display_intersections: Vec::new(),
             workspace: None,
             focused: false,
             hidden: false,

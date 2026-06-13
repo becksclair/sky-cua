@@ -1,0 +1,973 @@
+use std::collections::HashMap;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use serde::Deserialize;
+use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::model::{
+    CoordinateSpace, DisplayInfo, DisplayIntersection, DisplayRef, DisplayTarget, EnvironmentInfo,
+    PixelSize, RectF,
+};
+use zbus::Proxy;
+use zbus::zvariant::OwnedValue;
+
+use crate::windowing::types::LinuxWindowInfo;
+
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
+const GNOME_DISPLAY_CONFIG_BUS_NAME: &str = "org.gnome.Mutter.DisplayConfig";
+const GNOME_DISPLAY_CONFIG_OBJECT_PATH: &str = "/org/gnome/Mutter/DisplayConfig";
+const GNOME_DISPLAY_CONFIG_INTERFACE: &str = "org.gnome.Mutter.DisplayConfig";
+
+type Properties = HashMap<String, OwnedValue>;
+type MonitorSpec = (String, String, String, String);
+type MonitorMode = (String, i32, i32, f64, f64, Vec<f64>, Properties);
+type Monitor = (MonitorSpec, Vec<MonitorMode>, Properties);
+type LogicalMonitor = (i32, i32, f64, u32, bool, Vec<MonitorSpec>, Properties);
+type DisplayConfigState = (u32, Vec<Monitor>, Vec<LogicalMonitor>, Properties);
+
+pub(crate) async fn discover_displays(environment: &EnvironmentInfo) -> Vec<DisplayInfo> {
+    let mut displays = if environment_matches(environment, &["gnome"]) {
+        displays_from_gnome_display_config()
+            .await
+            .unwrap_or_default()
+    } else {
+        displays_from_environment_provider(environment).await
+    };
+
+    if displays.is_empty() {
+        displays = displays_from_xrandr_blocking().await;
+    }
+    normalize_displays(displays)
+}
+
+async fn displays_from_environment_provider(environment: &EnvironmentInfo) -> Vec<DisplayInfo> {
+    let environment = environment.clone();
+    tokio::task::spawn_blocking(move || {
+        if environment_matches(&environment, &["kde", "plasma", "kwin"]) {
+            displays_from_kscreen_doctor().unwrap_or_default()
+        } else if environment_matches(&environment, &["hyprland"]) {
+            displays_from_hyprland().unwrap_or_default()
+        } else if environment_matches(&environment, &["cosmic"]) {
+            displays_from_cosmic_randr().unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    })
+    .await
+    .unwrap_or_default()
+}
+
+async fn displays_from_xrandr_blocking() -> Vec<DisplayInfo> {
+    tokio::task::spawn_blocking(|| displays_from_xrandr().unwrap_or_default())
+        .await
+        .unwrap_or_default()
+}
+
+pub(crate) fn assign_window_displays(windows: &mut [LinuxWindowInfo], displays: &[DisplayInfo]) {
+    for window in windows {
+        let Some(bounds) = window.bounds.as_ref() else {
+            window.display = None;
+            window.display_intersections.clear();
+            continue;
+        };
+        let mut intersections = displays
+            .iter()
+            .filter_map(|display| DisplayIntersection::from_bounds(display, bounds))
+            .collect::<Vec<_>>();
+        intersections.sort_by(|left, right| {
+            right
+                .intersection_area
+                .total_cmp(&left.intersection_area)
+                .then_with(|| left.display.index.cmp(&right.display.index))
+        });
+        window.display = intersections
+            .first()
+            .map(|intersection| intersection.display.clone());
+        window.display_intersections = intersections;
+    }
+}
+
+pub(crate) fn resolve_display_target(
+    displays: &[DisplayInfo],
+    target: &DisplayTarget,
+) -> Result<DisplayInfo, BackendError> {
+    let matches = displays
+        .iter()
+        .filter(|display| display_matches_target(display, target))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [display] => Ok((*display).clone()),
+        [] => Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("no display matched requested screenshot target: {target:?}"),
+        )),
+        _ => Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("display target is ambiguous: {target:?}"),
+        )),
+    }
+}
+
+pub(crate) fn primary_display(displays: &[DisplayInfo]) -> Option<DisplayInfo> {
+    displays
+        .iter()
+        .find(|display| display.primary)
+        .or_else(|| displays.first())
+        .cloned()
+}
+
+fn display_matches_target(display: &DisplayInfo, target: &DisplayTarget) -> bool {
+    let mut matched = false;
+    if let Some(value) = target.display_id.as_ref() {
+        if !display.display_id.eq_ignore_ascii_case(value.trim()) {
+            return false;
+        }
+        matched = true;
+    }
+    if let Some(value) = target.display_name.as_ref() {
+        if !{
+            let value = value.trim();
+            display
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(value))
+                || display.display_id.eq_ignore_ascii_case(value)
+        } {
+            return false;
+        }
+        matched = true;
+    }
+    if let Some(index) = target.display_index {
+        if display.index != index {
+            return false;
+        }
+        matched = true;
+    }
+    matched
+}
+
+fn normalize_displays(mut displays: Vec<DisplayInfo>) -> Vec<DisplayInfo> {
+    displays.retain(|display| {
+        display.logical_rect.width > 0.0
+            && display.logical_rect.height > 0.0
+            && display.logical_rect.space == CoordinateSpace::DesktopLogical
+    });
+    displays.sort_by(|left, right| {
+        left.index
+            .cmp(&right.index)
+            .then_with(|| left.display_id.cmp(&right.display_id))
+    });
+    if !displays.iter().any(|display| display.primary)
+        && let Some(first) = displays.first_mut()
+    {
+        first.primary = true;
+    }
+    for (index, display) in displays.iter_mut().enumerate() {
+        display.index = u32::try_from(index).unwrap_or(u32::MAX);
+    }
+    displays
+}
+
+fn environment_matches(environment: &EnvironmentInfo, needles: &[&str]) -> bool {
+    let matches_value = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .is_some_and(|value| needles.iter().any(|needle| value.contains(needle)))
+    };
+    matches_value(&environment.desktop_environment) || matches_value(&environment.compositor)
+}
+
+fn displays_from_kscreen_doctor() -> Option<Vec<DisplayInfo>> {
+    let output = command_output_with_timeout(
+        Command::new("kscreen-doctor")
+            .arg("-o")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+        COMMAND_TIMEOUT,
+    )?;
+    output
+        .status
+        .success()
+        .then(|| parse_kscreen_doctor(&String::from_utf8_lossy(&output.stdout)))
+        .filter(|displays| !displays.is_empty())
+}
+
+async fn displays_from_gnome_display_config() -> Option<Vec<DisplayInfo>> {
+    let connection = zbus::Connection::session().await.ok()?;
+    let proxy = Proxy::new(
+        &connection,
+        GNOME_DISPLAY_CONFIG_BUS_NAME,
+        GNOME_DISPLAY_CONFIG_OBJECT_PATH,
+        GNOME_DISPLAY_CONFIG_INTERFACE,
+    )
+    .await
+    .ok()?;
+    let (_serial, monitors, logical_monitors, _properties): DisplayConfigState =
+        proxy.call("GetCurrentState", &()).await.ok()?;
+    Some(displays_from_gnome_state(&monitors, &logical_monitors))
+        .filter(|displays| !displays.is_empty())
+}
+
+fn displays_from_hyprland() -> Option<Vec<DisplayInfo>> {
+    let output = command_output_with_timeout(
+        Command::new("hyprctl")
+            .args(["monitors", "-j"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+        COMMAND_TIMEOUT,
+    )?;
+    output
+        .status
+        .success()
+        .then(|| parse_hyprland_monitors(&String::from_utf8_lossy(&output.stdout)).ok())
+        .flatten()
+        .filter(|displays| !displays.is_empty())
+}
+
+fn displays_from_cosmic_randr() -> Option<Vec<DisplayInfo>> {
+    let output = command_output_with_timeout(
+        Command::new("cosmic-randr")
+            .arg("list")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+        COMMAND_TIMEOUT,
+    )?;
+    output
+        .status
+        .success()
+        .then(|| parse_cosmic_randr(&String::from_utf8_lossy(&output.stdout)))
+        .filter(|displays| !displays.is_empty())
+}
+
+fn displays_from_xrandr() -> Option<Vec<DisplayInfo>> {
+    let output = command_output_with_timeout(
+        Command::new("xrandr")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+        COMMAND_TIMEOUT,
+    )?;
+    output
+        .status
+        .success()
+        .then(|| parse_xrandr(&String::from_utf8_lossy(&output.stdout)))
+        .filter(|displays| !displays.is_empty())
+}
+
+fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
+    let mut child = command.spawn().ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => return child.wait_with_output().ok(),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+fn display(
+    backend: &str,
+    name: String,
+    index: u32,
+    primary: bool,
+    logical_rect: RectF,
+    pixel_size: Option<PixelSize>,
+    scale_factor: Option<f64>,
+) -> DisplayInfo {
+    DisplayInfo {
+        display_id: format!("{backend}:{name}"),
+        name: Some(name),
+        index,
+        primary,
+        logical_rect,
+        pixel_size,
+        scale_factor,
+        backend: backend.to_string(),
+    }
+}
+
+fn parse_kscreen_doctor(output: &str) -> Vec<DisplayInfo> {
+    #[derive(Default)]
+    struct Block {
+        name: Option<String>,
+        enabled: bool,
+        connected: bool,
+        primary: bool,
+        rect: Option<RectF>,
+        scale: Option<f64>,
+        mode_size: Option<(u32, u32)>,
+    }
+
+    fn update_state_from_line(line: &str, block: &mut Block) {
+        for word in line.split_whitespace().map(|word| {
+            word.trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
+                .to_ascii_lowercase()
+        }) {
+            match word.as_str() {
+                "enabled" => block.enabled = true,
+                "disabled" => block.enabled = false,
+                "connected" => block.connected = true,
+                "disconnected" => block.connected = false,
+                "primary" => block.primary = true,
+                _ => {}
+            }
+        }
+    }
+
+    fn flush(block: &mut Block, out: &mut Vec<DisplayInfo>) {
+        let Some(name) = block.name.take() else {
+            *block = Block::default();
+            return;
+        };
+        if let Some(rect) = block.rect.take() {
+            if !block.enabled || !block.connected {
+                *block = Block::default();
+                return;
+            }
+            let pixel_size = block
+                .mode_size
+                .map(|(width, height)| PixelSize { width, height })
+                .or_else(|| pixel_size_for_logical_rect(&rect, block.scale));
+            out.push(display(
+                "kwin",
+                name,
+                u32::try_from(out.len()).unwrap_or(u32::MAX),
+                block.primary,
+                rect,
+                pixel_size,
+                block.scale,
+            ));
+        }
+        *block = Block::default();
+    }
+
+    let mut displays = Vec::new();
+    let mut block = Block::default();
+    for raw_line in output.lines() {
+        let line = strip_ansi(raw_line);
+        let line = line.trim();
+        if line.starts_with("Output:") {
+            flush(&mut block, &mut displays);
+            let parts = line.split_whitespace().collect::<Vec<_>>();
+            block.name = parts
+                .get(2)
+                .map(|value| value.trim_matches(',').to_string());
+            update_state_from_line(line, &mut block);
+            block.rect = parse_geometry_after_keyword(line, "Geometry:");
+            block.scale = parse_scale_after_keyword(line, "Scale:");
+            continue;
+        }
+        update_state_from_line(line, &mut block);
+        if block.rect.is_none() {
+            block.rect = parse_geometry_after_keyword(line, "Geometry:");
+        }
+        if block.scale.is_none() {
+            block.scale = parse_scale_after_keyword(line, "Scale:");
+        }
+        if block.mode_size.is_none() {
+            block.mode_size = parse_current_mode_size(line);
+        }
+    }
+    flush(&mut block, &mut displays);
+    displays
+}
+
+fn parse_geometry_after_keyword(line: &str, keyword: &str) -> Option<RectF> {
+    let value = line.split_once(keyword)?.1.trim();
+    let mut parts = value.split_whitespace();
+    let (x, y) = parse_position(parts.next()?.trim_end_matches(','))?;
+    let (width, height) = parse_size(parts.next()?)?;
+    Some(RectF {
+        x: f64::from(x),
+        y: f64::from(y),
+        width: f64::from(width),
+        height: f64::from(height),
+        space: CoordinateSpace::DesktopLogical,
+    })
+}
+
+fn parse_scale_after_keyword(line: &str, keyword: &str) -> Option<f64> {
+    let value = line.split_once(keyword)?.1.split_whitespace().next()?;
+    value
+        .trim_end_matches('%')
+        .parse::<f64>()
+        .ok()
+        .map(|scale| {
+            if value.ends_with('%') {
+                scale / 100.0
+            } else {
+                scale
+            }
+        })
+}
+
+fn parse_current_mode_size(line: &str) -> Option<(u32, u32)> {
+    line.split_whitespace().find_map(|token| {
+        if !token.contains('*') {
+            return None;
+        }
+        let mode = token.split('@').next()?;
+        let mode = mode.rsplit_once(':').map_or(mode, |(_, value)| value);
+        parse_size(mode)
+    })
+}
+
+fn displays_from_gnome_state(
+    monitors: &[Monitor],
+    logical_monitors: &[LogicalMonitor],
+) -> Vec<DisplayInfo> {
+    let modes_by_connector = monitors
+        .iter()
+        .filter_map(|monitor| {
+            let connector = monitor.0.0.clone();
+            let mode = current_or_first_mode(&monitor.1)?;
+            Some((connector, mode))
+        })
+        .collect::<HashMap<_, _>>();
+
+    logical_monitors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, logical)| {
+            let (x, y, scale, transform, primary, specs, _properties) = logical;
+            let connector = specs.first()?.0.clone();
+            let mode = modes_by_connector.get(&connector)?;
+            let mode_width = u32::try_from(mode.1).ok()?;
+            let mode_height = u32::try_from(mode.2).ok()?;
+            let (pixel_width, pixel_height) = if gnome_transform_swaps_axes(*transform) {
+                (mode_height, mode_width)
+            } else {
+                (mode_width, mode_height)
+            };
+            let scale = if *scale > 0.0 { *scale } else { 1.0 };
+            Some(display(
+                "gnome",
+                connector,
+                u32::try_from(index).unwrap_or(u32::MAX),
+                *primary,
+                RectF {
+                    x: f64::from(*x),
+                    y: f64::from(*y),
+                    width: f64::from(pixel_width) / scale,
+                    height: f64::from(pixel_height) / scale,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+                Some(PixelSize {
+                    width: pixel_width,
+                    height: pixel_height,
+                }),
+                Some(scale),
+            ))
+        })
+        .collect()
+}
+
+fn gnome_transform_swaps_axes(transform: u32) -> bool {
+    matches!(transform, 1 | 3 | 5 | 7)
+}
+
+fn current_or_first_mode(modes: &[MonitorMode]) -> Option<&MonitorMode> {
+    modes
+        .iter()
+        .find(|mode| property_bool(&mode.6, "is-current"))
+        .or_else(|| modes.first())
+}
+
+fn property_bool(properties: &Properties, name: &str) -> bool {
+    properties
+        .get(name)
+        .and_then(|value| bool::try_from(value.clone()).ok())
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Deserialize)]
+struct HyprlandMonitor {
+    name: String,
+    id: Option<i64>,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale: Option<f64>,
+    focused: Option<bool>,
+}
+
+fn parse_hyprland_monitors(json: &str) -> Result<Vec<DisplayInfo>, serde_json::Error> {
+    let monitors: Vec<HyprlandMonitor> = serde_json::from_str(json)?;
+    Ok(monitors
+        .into_iter()
+        .enumerate()
+        .map(|(index, monitor)| {
+            let scale = monitor.scale.filter(|scale| *scale > 0.0).unwrap_or(1.0);
+            display(
+                "hyprland",
+                monitor.name,
+                monitor
+                    .id
+                    .and_then(|id| u32::try_from(id).ok())
+                    .unwrap_or_else(|| u32::try_from(index).unwrap_or(u32::MAX)),
+                monitor.focused.unwrap_or(index == 0),
+                RectF {
+                    x: f64::from(monitor.x),
+                    y: f64::from(monitor.y),
+                    width: f64::from(monitor.width) / scale,
+                    height: f64::from(monitor.height) / scale,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+                Some(PixelSize {
+                    width: monitor.width,
+                    height: monitor.height,
+                }),
+                Some(scale),
+            )
+        })
+        .collect())
+}
+
+fn parse_cosmic_randr(output: &str) -> Vec<DisplayInfo> {
+    #[derive(Default)]
+    struct Block {
+        name: Option<String>,
+        position: Option<(i32, i32)>,
+        scale: Option<f64>,
+        size: Option<(u32, u32)>,
+    }
+
+    fn flush(block: &mut Block, out: &mut Vec<DisplayInfo>) {
+        let Some(name) = block.name.take() else {
+            *block = Block::default();
+            return;
+        };
+        if let (Some((x, y)), Some((width, height))) = (block.position, block.size) {
+            let scale = block.scale.filter(|scale| *scale > 0.0).unwrap_or(1.0);
+            out.push(display(
+                "cosmic",
+                name,
+                u32::try_from(out.len()).unwrap_or(u32::MAX),
+                out.is_empty(),
+                RectF {
+                    x: f64::from(x),
+                    y: f64::from(y),
+                    width: f64::from(width) / scale,
+                    height: f64::from(height) / scale,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+                Some(PixelSize { width, height }),
+                Some(scale),
+            ));
+        }
+        *block = Block::default();
+    }
+
+    let mut displays = Vec::new();
+    let mut block = Block::default();
+    for raw_line in output.lines() {
+        let line = strip_ansi(raw_line);
+        let trimmed = line.trim();
+        if trimmed.ends_with("(enabled)")
+            && !trimmed.starts_with("Position:")
+            && !trimmed.starts_with("Scale:")
+        {
+            flush(&mut block, &mut displays);
+            block.name = trimmed
+                .split_whitespace()
+                .next()
+                .map(|value| value.to_string());
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("Position:") {
+            block.position = parse_position(value.trim());
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("Scale:") {
+            block.scale = parse_scale_value(value.trim());
+            continue;
+        }
+        if trimmed.contains("(current)")
+            && let Some(size) = parse_first_mode_size(trimmed)
+        {
+            block.size = Some(size);
+        }
+    }
+    flush(&mut block, &mut displays);
+    displays
+}
+
+fn parse_xrandr(output: &str) -> Vec<DisplayInfo> {
+    let mut displays = Vec::new();
+    for line in output.lines() {
+        if !line.contains(" connected") {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(name) = parts.next().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let primary = line.contains(" primary ");
+        let geometry = parts.find_map(parse_xrandr_geometry);
+        if let Some(rect) = geometry {
+            let pixel_size = pixel_size_for_logical_rect(&rect, Some(1.0));
+            displays.push(display(
+                "x11",
+                name,
+                u32::try_from(displays.len()).unwrap_or(u32::MAX),
+                primary,
+                rect,
+                pixel_size,
+                Some(1.0),
+            ));
+        }
+    }
+    displays
+}
+
+fn parse_xrandr_geometry(value: &str) -> Option<RectF> {
+    let (width_text, rest) = value.split_once('x')?;
+    let offset_start = rest.find(['+', '-'])?;
+    let height_text = &rest[..offset_start];
+    let offsets = &rest[offset_start..];
+    let second_offset_start = offsets
+        .char_indices()
+        .skip(1)
+        .find_map(|(index, ch)| matches!(ch, '+' | '-').then_some(index))?;
+    Some(RectF {
+        x: offsets[..second_offset_start].parse::<f64>().ok()?,
+        y: offsets[second_offset_start..].parse::<f64>().ok()?,
+        width: f64::from(width_text.parse::<u32>().ok()?),
+        height: f64::from(height_text.parse::<u32>().ok()?),
+        space: CoordinateSpace::DesktopLogical,
+    })
+}
+
+fn parse_size(value: &str) -> Option<(u32, u32)> {
+    let (width, height) = value.split_once('x')?;
+    Some((width.parse().ok()?, height.parse().ok()?))
+}
+
+fn pixel_size_for_logical_rect(rect: &RectF, scale_factor: Option<f64>) -> Option<PixelSize> {
+    let scale = scale_factor.filter(|scale| *scale > 0.0).unwrap_or(1.0);
+    Some(PixelSize {
+        width: (rect.width * scale).round().max(1.0) as u32,
+        height: (rect.height * scale).round().max(1.0) as u32,
+    })
+}
+
+fn parse_position(value: &str) -> Option<(i32, i32)> {
+    let (x, y) = value.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
+fn parse_scale_value(value: &str) -> Option<f64> {
+    let value = value.trim();
+    let scale = value.trim_end_matches('%').parse::<f64>().ok()?;
+    Some(if value.ends_with('%') {
+        scale / 100.0
+    } else {
+        scale
+    })
+}
+
+fn parse_first_mode_size(value: &str) -> Option<(u32, u32)> {
+    value.split_whitespace().find_map(parse_size)
+}
+
+fn strip_ansi(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            let _ = chars.next();
+            for code in chars.by_ref() {
+                if code.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+    output
+}
+
+pub(crate) fn display_ref(display: &DisplayInfo) -> DisplayRef {
+    DisplayRef::from(display)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_xrandr_multiple_displays() {
+        let output = "Virtual-1 connected primary 1280x800+0+0 normal\nVirtual-2 connected 1024x768+1280+0 normal\n";
+        let displays = normalize_displays(parse_xrandr(output));
+
+        assert_eq!(displays.len(), 2);
+        assert_eq!(displays[0].display_id, "x11:Virtual-1");
+        assert!(displays[0].primary);
+        assert_eq!(displays[1].logical_rect.x, 1280.0);
+    }
+
+    #[test]
+    fn parses_xrandr_displays_with_negative_offsets() {
+        let output = "Virtual-1 connected primary 1280x800+0+0 normal\nVirtual-2 connected 1024x768-1024+0 normal\nVirtual-3 connected 800x600+0-600 normal\n";
+        let displays = normalize_displays(parse_xrandr(output));
+
+        assert_eq!(displays.len(), 3);
+        assert_eq!(displays[1].display_id, "x11:Virtual-2");
+        assert_eq!(displays[1].logical_rect.x, -1024.0);
+        assert_eq!(displays[1].logical_rect.y, 0.0);
+        assert_eq!(displays[2].display_id, "x11:Virtual-3");
+        assert_eq!(displays[2].logical_rect.x, 0.0);
+        assert_eq!(displays[2].logical_rect.y, -600.0);
+    }
+
+    #[test]
+    fn parses_cosmic_randr_multiple_displays() {
+        let output = "\u{1b}[1mVirtual-1\u{1b}[0m \u{1b}[1;32m(enabled)\u{1b}[0m\n  Position: 0,0\n  Scale: 100%\n  Modes:\n    1280x800 @ 60.000 Hz (current)\n\u{1b}[1mVirtual-2\u{1b}[0m \u{1b}[1;32m(enabled)\u{1b}[0m\n  Position: 1280,0\n  Scale: 125%\n  Modes:\n    1600x1200 @ 60.000 Hz (current)\n";
+        let displays = normalize_displays(parse_cosmic_randr(output));
+
+        assert_eq!(displays.len(), 2);
+        assert_eq!(displays[0].display_id, "cosmic:Virtual-1");
+        assert_eq!(displays[1].scale_factor, Some(1.25));
+        assert_eq!(displays[1].logical_rect.x, 1280.0);
+        assert_eq!(displays[1].logical_rect.width, 1280.0);
+        assert_eq!(
+            displays[1].pixel_size,
+            Some(PixelSize {
+                width: 1600,
+                height: 1200,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_hyprland_monitors() {
+        let displays = normalize_displays(
+            parse_hyprland_monitors(
+                r#"[{"id":0,"name":"DP-1","x":0,"y":0,"width":1920,"height":1080,"scale":1.0,"focused":false},{"id":1,"name":"HDMI-A-1","x":1920,"y":0,"width":2560,"height":1440,"scale":2.0,"focused":true}]"#,
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(displays.len(), 2);
+        assert!(displays[1].primary);
+        assert_eq!(displays[1].logical_rect.width, 1280.0);
+        assert_eq!(
+            displays[1].pixel_size,
+            Some(PixelSize {
+                width: 2560,
+                height: 1440,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_gnome_rotated_logical_monitor_axes() {
+        let spec: MonitorSpec = (
+            "DP-1".to_string(),
+            "Dell".to_string(),
+            "Portrait".to_string(),
+            "SERIAL".to_string(),
+        );
+        let monitors = vec![(
+            spec.clone(),
+            vec![(
+                "mode-1".to_string(),
+                1920,
+                1080,
+                60.0,
+                1.0,
+                Vec::new(),
+                Properties::new(),
+            )],
+            Properties::new(),
+        )];
+        let logical_monitors = vec![(0, 0, 1.0, 1, true, vec![spec], Properties::new())];
+
+        let displays = displays_from_gnome_state(&monitors, &logical_monitors);
+
+        assert_eq!(displays.len(), 1);
+        assert_eq!(displays[0].logical_rect.width, 1080.0);
+        assert_eq!(displays[0].logical_rect.height, 1920.0);
+        assert_eq!(
+            displays[0].pixel_size,
+            Some(PixelSize {
+                width: 1080,
+                height: 1920,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_kscreen_doctor_blocks() {
+        let output = "Output: 1 eDP-1 enabled connected primary\n  Modes: 1:1920x1080@60.00*\n  Geometry: 0,0 1920x1080\n  Scale: 1\nOutput: 2 DP-1 disabled connected\n  Modes: 2:2560x1440@60.00*\n  Geometry: -1280,0 1280x720\n  Scale: 2\nOutput: 3 HDMI-A-1 enabled connected\n  Modes: 3:\u{1b}[01;32m1600x900@60.00*\u{1b}[0m\n  Geometry: 1920,0 1280x720\n  Scale: 1.25\n";
+        let displays = normalize_displays(parse_kscreen_doctor(output));
+
+        assert_eq!(displays.len(), 2);
+        assert_eq!(displays[0].display_id, "kwin:eDP-1");
+        assert!(displays[0].primary);
+        assert!(
+            displays
+                .iter()
+                .all(|display| display.display_id != "kwin:DP-1")
+        );
+        assert_eq!(displays[1].logical_rect.x, 1920.0);
+        assert_eq!(
+            displays[1].pixel_size,
+            Some(PixelSize {
+                width: 1600,
+                height: 900,
+            })
+        );
+    }
+
+    #[test]
+    fn assigns_window_to_largest_display_intersection() {
+        let displays = normalize_displays(vec![
+            display(
+                "test",
+                "left".to_string(),
+                0,
+                true,
+                RectF {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+                Some(PixelSize {
+                    width: 100,
+                    height: 100,
+                }),
+                Some(1.0),
+            ),
+            display(
+                "test",
+                "right".to_string(),
+                1,
+                false,
+                RectF {
+                    x: 100.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+                Some(PixelSize {
+                    width: 100,
+                    height: 100,
+                }),
+                Some(1.0),
+            ),
+        ]);
+        let mut windows = vec![LinuxWindowInfo {
+            window_id: "w".to_string(),
+            title: None,
+            app_id: None,
+            wm_class: None,
+            pid: None,
+            bounds: Some(RectF {
+                x: 80.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            display: None,
+            display_intersections: Vec::new(),
+            workspace: None,
+            focused: false,
+            hidden: false,
+            client_type: None,
+            backend: "test".to_string(),
+            terminal: None,
+        }];
+
+        assign_window_displays(&mut windows, &displays);
+
+        assert_eq!(
+            windows[0]
+                .display
+                .as_ref()
+                .map(|display| display.display_id.as_str()),
+            Some("test:right")
+        );
+        assert_eq!(windows[0].display_intersections.len(), 2);
+    }
+
+    #[test]
+    fn display_target_fields_must_match_same_display() {
+        let displays = normalize_displays(vec![
+            display(
+                "test",
+                "left".to_string(),
+                0,
+                true,
+                RectF {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+                Some(PixelSize {
+                    width: 100,
+                    height: 100,
+                }),
+                Some(1.0),
+            ),
+            display(
+                "test",
+                "right".to_string(),
+                1,
+                false,
+                RectF {
+                    x: 100.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+                Some(PixelSize {
+                    width: 100,
+                    height: 100,
+                }),
+                Some(1.0),
+            ),
+        ]);
+
+        let resolved = resolve_display_target(
+            &displays,
+            &DisplayTarget {
+                display_id: Some("test:right".to_string()),
+                display_name: Some("right".to_string()),
+                display_index: Some(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(resolved.display_id, "test:right");
+
+        let error = resolve_display_target(
+            &displays,
+            &DisplayTarget {
+                display_id: Some("test:missing".to_string()),
+                display_name: None,
+                display_index: Some(0),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+    }
+}

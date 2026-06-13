@@ -7,6 +7,7 @@ pub mod backend;
 pub(crate) mod capture_plan;
 pub mod coords;
 pub mod cosmic_helper;
+pub(crate) mod displays;
 pub mod doctor;
 pub mod env_probe;
 pub mod focus;

@@ -333,6 +333,7 @@ mod tests {
                 xdg_session_type: Some("wayland".to_string()),
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
+                displays: Vec::new(),
             },
             checks: vec![],
             readiness: DoctorReadiness {

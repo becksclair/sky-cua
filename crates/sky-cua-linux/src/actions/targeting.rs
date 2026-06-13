@@ -1,6 +1,7 @@
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    ActionRequest, CaptureInfo, CoordinateSpace, ElementNode, InputBackendKind,
+    ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace, ElementNode, InputBackendKind,
+    RectF,
 };
 
 use crate::coords::{center_of, desktop_to_stream, logical_to_pixel};
@@ -83,19 +84,29 @@ pub(crate) fn action_point_for_backend(
         )
     })?;
 
-    point_for_element_for_backend(element, request.resolved_capture.as_ref(), backend)
+    point_for_element_for_backend(
+        element,
+        request.resolved_capture.as_ref(),
+        backend,
+        request.snapshot_id.is_some(),
+    )
 }
 
 pub(crate) fn point_for_element_for_backend(
     element: &ElementNode,
     capture: Option<&CaptureInfo>,
     backend: InputBackendKind,
+    snapshot_based: bool,
 ) -> Result<(f64, f64), BackendError> {
     match backend {
-        InputBackendKind::PortalRemoteDesktop if element_is_x11_fallback(element) => {
-            point_for_x11_element_through_portal(element, capture)
+        InputBackendKind::PortalRemoteDesktop => {
+            validate_portal_dispatch_source(capture, snapshot_based)?;
+            if element_is_x11_fallback(element) {
+                point_for_x11_element_through_portal(element, capture)
+            } else {
+                point_for_element(element, capture)
+            }
         }
-        InputBackendKind::PortalRemoteDesktop => point_for_element(element, capture),
         InputBackendKind::XTest => point_for_x11_element(element, capture),
         InputBackendKind::LinuxVirtualInput => point_for_linux_virtual_element(element, capture),
         InputBackendKind::SendInput
@@ -124,7 +135,12 @@ pub(crate) fn drag_from_point(
             "drag requires either element_index or explicit from_x/from_y coordinates",
         )
     })?;
-    point_for_element_for_backend(element, request.resolved_capture.as_ref(), backend)
+    point_for_element_for_backend(
+        element,
+        request.resolved_capture.as_ref(),
+        backend,
+        request.snapshot_id.is_some(),
+    )
 }
 
 pub(crate) fn drag_to_point(
@@ -150,8 +166,8 @@ fn point_for_element(
         )
     })?;
     let center = center_of(bounds);
-    if let Some(logical_rect) = capture.and_then(|capture| capture.logical_rect.as_ref())
-        && let Some(stream_point) = desktop_to_stream(center, logical_rect)
+    if let Some(capture) = capture
+        && let Some(stream_point) = portal_stream_point_from_desktop(center, capture)
     {
         return Ok(stream_point);
     }
@@ -266,6 +282,12 @@ fn point_from_action_pixels(
             request.snapshot_id.is_some(),
         );
     }
+    if backend == InputBackendKind::PortalRemoteDesktop {
+        validate_portal_dispatch_source(
+            request.resolved_capture.as_ref(),
+            request.snapshot_id.is_some(),
+        )?;
+    }
     Ok(point_from_screenshot_pixels(
         point,
         request.resolved_capture.as_ref(),
@@ -288,20 +310,20 @@ pub(crate) fn point_from_screenshot_pixels(
         return point;
     }
 
-    let rel_x = point.0 / f64::from(pixel_size.width);
-    let rel_y = point.1 / f64::from(pixel_size.height);
-
     match backend {
         InputBackendKind::PortalRemoteDesktop => {
-            if let Some(logical_rect) = capture.logical_rect.as_ref()
-                && logical_rect.width > 0.0
-                && logical_rect.height > 0.0
-            {
-                return (rel_x * logical_rect.width, rel_y * logical_rect.height);
+            if let Some(desktop_point) = desktop_point_from_screenshot_pixels(point, capture) {
+                return portal_stream_point_from_desktop(desktop_point, capture)
+                    .unwrap_or(desktop_point);
             }
             point
         }
         InputBackendKind::XTest => {
+            if let Some(desktop_point) = desktop_point_from_screenshot_pixels(point, capture) {
+                return desktop_point;
+            }
+            let rel_x = point.0 / f64::from(pixel_size.width);
+            let rel_y = point.1 / f64::from(pixel_size.height);
             if let Some(original_pixel_size) = capture.original_pixel_size.as_ref() {
                 return (
                     rel_x * f64::from(original_pixel_size.width),
@@ -311,20 +333,105 @@ pub(crate) fn point_from_screenshot_pixels(
             point
         }
         InputBackendKind::LinuxVirtualInput => {
-            if let Some(logical_rect) = capture.logical_rect.as_ref()
-                && logical_rect.width > 0.0
-                && logical_rect.height > 0.0
-            {
-                return (
-                    logical_rect.x + (rel_x * logical_rect.width),
-                    logical_rect.y + (rel_y * logical_rect.height),
-                );
+            if let Some(desktop_point) = desktop_point_from_screenshot_pixels(point, capture) {
+                return desktop_point;
             }
             point
         }
         InputBackendKind::SendInput | InputBackendKind::WindowsMessages => point,
         InputBackendKind::None => point,
     }
+}
+
+fn desktop_point_from_screenshot_pixels(
+    point: (f64, f64),
+    capture: &CaptureInfo,
+) -> Option<(f64, f64)> {
+    let pixel_size = capture.pixel_size.as_ref()?;
+    if pixel_size.width == 0 || pixel_size.height == 0 {
+        return None;
+    }
+    let logical_rect = capture.logical_rect.as_ref()?;
+    if logical_rect.width <= 0.0 || logical_rect.height <= 0.0 {
+        return None;
+    }
+    let rel_x = point.0 / f64::from(pixel_size.width);
+    let rel_y = point.1 / f64::from(pixel_size.height);
+    match logical_rect.space {
+        CoordinateSpace::DesktopLogical | CoordinateSpace::StreamLogical => Some((
+            logical_rect.x + (rel_x * logical_rect.width),
+            logical_rect.y + (rel_y * logical_rect.height),
+        )),
+        CoordinateSpace::StreamPixels => None,
+    }
+}
+
+fn portal_stream_point_from_desktop(
+    point: (f64, f64),
+    capture: &CaptureInfo,
+) -> Option<(f64, f64)> {
+    if let Some(source_logical_rect) = capture.source_logical_rect.as_ref()
+        && let Some(stream_point) = desktop_to_stream(point, source_logical_rect)
+    {
+        return Some(stream_point);
+    }
+    let logical_rect = capture.logical_rect.as_ref()?;
+    match logical_rect.space {
+        CoordinateSpace::DesktopLogical => desktop_to_stream(point, logical_rect),
+        CoordinateSpace::StreamLogical => Some(point),
+        CoordinateSpace::StreamPixels => None,
+    }
+}
+
+fn validate_portal_dispatch_source(
+    capture: Option<&CaptureInfo>,
+    snapshot_based: bool,
+) -> Result<(), BackendError> {
+    if !snapshot_based {
+        return Ok(());
+    }
+    let Some(capture) = capture else {
+        return Ok(());
+    };
+    if !portal_screenshot_capture_requires_dispatch_source(capture) {
+        return Ok(());
+    }
+    let Some(source_logical_rect) = capture.source_logical_rect.as_ref() else {
+        return Err(missing_portal_dispatch_source_error());
+    };
+    let Some(logical_rect) = capture.logical_rect.as_ref() else {
+        return Err(missing_portal_dispatch_source_error());
+    };
+    if rect_contains_rect(source_logical_rect, logical_rect) {
+        Ok(())
+    } else {
+        Err(missing_portal_dispatch_source_error())
+    }
+}
+
+fn portal_screenshot_capture_requires_dispatch_source(capture: &CaptureInfo) -> bool {
+    capture.image_backend == Some(CaptureBackendKind::PortalScreenshot)
+        || capture.backend == CaptureBackendKind::PortalScreenshot
+}
+
+fn missing_portal_dispatch_source_error() -> BackendError {
+    BackendError::new(
+        BackendErrorCode::InvalidRequest,
+        "Portal RemoteDesktop snapshot actions require capture source geometry that covers the screenshot; this snapshot image was produced outside the active RemoteDesktop stream",
+    )
+}
+
+fn rect_contains_rect(outer: &RectF, inner: &RectF) -> bool {
+    const EPSILON: f64 = 0.000_001;
+    outer.space == inner.space
+        && outer.width > 0.0
+        && outer.height > 0.0
+        && inner.width > 0.0
+        && inner.height > 0.0
+        && inner.x >= outer.x - EPSILON
+        && inner.y >= outer.y - EPSILON
+        && inner.x + inner.width <= outer.x + outer.width + EPSILON
+        && inner.y + inner.height <= outer.y + outer.height + EPSILON
 }
 
 fn linux_virtual_point_from_screenshot_pixels(
@@ -396,9 +503,9 @@ mod tests {
     use serde_json::json;
     use sky_cua_platform::diagnostics::BackendErrorCode;
     use sky_cua_platform::model::{
-        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace, ElementNode,
-        EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
-        SemanticBackendKind, SessionKind,
+        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
+        ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize,
+        PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
     };
 
     fn wayland_pipewire_environment() -> EnvironmentInfo {
@@ -420,6 +527,7 @@ mod tests {
             xdg_session_type: Some("wayland".to_string()),
             display: None,
             wayland_display: Some("wayland-0".to_string()),
+            displays: Vec::new(),
         }
     }
 
@@ -511,10 +619,13 @@ mod tests {
         let capture = CaptureInfo {
             backend: CaptureBackendKind::PortalPipeWire,
             image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: Some("116".to_string()),
             source_type: Some(1),
             mapping_id: None,
+            source_logical_rect: None,
             logical_rect: Some(RectF {
                 x: 100.0,
                 y: 50.0,
@@ -550,14 +661,63 @@ mod tests {
     }
 
     #[test]
+    fn maps_cropped_screenshot_pixels_to_portal_stream_coordinates() {
+        let capture = CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("116".to_string()),
+            source_type: Some(1),
+            mapping_id: None,
+            source_logical_rect: None,
+            logical_rect: Some(RectF {
+                x: 300.0,
+                y: 200.0,
+                width: 800.0,
+                height: 600.0,
+                space: CoordinateSpace::StreamLogical,
+            }),
+            pixel_size: Some(PixelSize {
+                width: 400,
+                height: 300,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 800,
+                height: 600,
+            }),
+            logical_to_pixel_scale: Some(0.5),
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
+        };
+
+        assert_eq!(
+            point_from_screenshot_pixels(
+                (200.0, 150.0),
+                Some(&capture),
+                InputBackendKind::PortalRemoteDesktop
+            ),
+            (700.0, 500.0)
+        );
+    }
+
+    #[test]
     fn maps_screenshot_pixels_to_original_x11_pixels() {
         let capture = CaptureInfo {
             backend: CaptureBackendKind::X11,
             image_backend: Some(CaptureBackendKind::X11),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: None,
             source_type: None,
             mapping_id: None,
+            source_logical_rect: None,
             logical_rect: None,
             pixel_size: Some(PixelSize {
                 width: 1920,
@@ -583,14 +743,59 @@ mod tests {
     }
 
     #[test]
-    fn maps_screenshot_pixels_to_linux_virtual_desktop_logical_coordinates() {
+    fn maps_cropped_screenshot_pixels_to_x11_root_pixels() {
         let capture = CaptureInfo {
-            backend: CaptureBackendKind::PortalScreenshot,
-            image_backend: Some(CaptureBackendKind::PortalScreenshot),
+            backend: CaptureBackendKind::X11,
+            image_backend: Some(CaptureBackendKind::X11),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: None,
             source_type: None,
             mapping_id: None,
+            source_logical_rect: None,
+            logical_rect: Some(RectF {
+                x: 640.0,
+                y: 360.0,
+                width: 800.0,
+                height: 600.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            pixel_size: Some(PixelSize {
+                width: 400,
+                height: 300,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 800,
+                height: 600,
+            }),
+            logical_to_pixel_scale: Some(0.5),
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
+        };
+
+        assert_eq!(
+            point_from_screenshot_pixels((200.0, 150.0), Some(&capture), InputBackendKind::XTest),
+            (1040.0, 660.0)
+        );
+    }
+
+    #[test]
+    fn maps_screenshot_pixels_to_linux_virtual_desktop_logical_coordinates() {
+        let capture = CaptureInfo {
+            backend: CaptureBackendKind::PortalScreenshot,
+            image_backend: Some(CaptureBackendKind::PortalScreenshot),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: None,
+            source_type: None,
+            mapping_id: None,
+            source_logical_rect: None,
             logical_rect: Some(RectF {
                 x: 1920.0,
                 y: 0.0,
@@ -626,6 +831,104 @@ mod tests {
     }
 
     #[test]
+    fn portal_snapshot_coordinates_fail_without_dispatch_source_for_screenshot_fallback() {
+        let request = ActionRequest {
+            action: ActionName::Click,
+            snapshot_id: Some("snapshot-1".to_string()),
+            element_index: None,
+            arguments: json!({"x": 1280.0, "y": 720.0}),
+            resolved_element: None,
+            resolved_target_element: None,
+            resolved_capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalScreenshot),
+                capture_scope: CaptureScope::Display,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: Some("116".to_string()),
+                source_type: Some(1),
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: Some(RectF {
+                    x: 1920.0,
+                    y: 0.0,
+                    width: 1280.0,
+                    height: 720.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                pixel_size: Some(PixelSize {
+                    width: 2560,
+                    height: 1440,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 2560,
+                    height: 1440,
+                }),
+                logical_to_pixel_scale: Some(2.0),
+                screenshot_path: Some("/tmp/capture.jpg".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: Some(ModelImageFormat::Jpeg),
+                model_image_quality: Some(85),
+                model_image_bytes: Some(1234),
+                model_image_encode_ms: Some(7),
+            }),
+            resolved_focused_app: None,
+            environment: Some(wayland_pipewire_environment()),
+        };
+
+        let error = drag_from_point(&request, InputBackendKind::PortalRemoteDesktop).unwrap_err();
+
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(error.message.contains("source geometry"));
+    }
+
+    #[test]
+    fn maps_cropped_screenshot_pixels_to_linux_virtual_desktop_logical_coordinates() {
+        let capture = CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("116".to_string()),
+            source_type: Some(1),
+            mapping_id: None,
+            source_logical_rect: None,
+            logical_rect: Some(RectF {
+                x: 640.0,
+                y: 360.0,
+                width: 800.0,
+                height: 600.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            pixel_size: Some(PixelSize {
+                width: 400,
+                height: 300,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 800,
+                height: 600,
+            }),
+            logical_to_pixel_scale: Some(0.5),
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
+        };
+
+        assert_eq!(
+            point_from_screenshot_pixels(
+                (200.0, 150.0),
+                Some(&capture),
+                InputBackendKind::LinuxVirtualInput
+            ),
+            (1040.0, 660.0)
+        );
+    }
+
+    #[test]
     fn linux_virtual_snapshot_coordinates_fail_without_logical_rect() {
         let request = ActionRequest {
             action: ActionName::Click,
@@ -637,10 +940,13 @@ mod tests {
             resolved_capture: Some(CaptureInfo {
                 backend: CaptureBackendKind::PortalScreenshot,
                 image_backend: Some(CaptureBackendKind::PortalScreenshot),
+                capture_scope: CaptureScope::Unknown,
+                display: None,
                 coordinate_space: Some(CoordinateSpace::StreamPixels),
                 stream_id: None,
                 source_type: None,
                 mapping_id: None,
+                source_logical_rect: None,
                 logical_rect: None,
                 pixel_size: Some(PixelSize {
                     width: 1280,
@@ -673,10 +979,13 @@ mod tests {
         let capture = CaptureInfo {
             backend: CaptureBackendKind::PortalPipeWire,
             image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: Some("166".to_string()),
             source_type: Some(1),
             mapping_id: None,
+            source_logical_rect: None,
             logical_rect: Some(RectF {
                 x: 100.0,
                 y: 50.0,
@@ -733,10 +1042,13 @@ mod tests {
         let capture = CaptureInfo {
             backend: CaptureBackendKind::PortalPipeWire,
             image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: Some("166".to_string()),
             source_type: Some(1),
             mapping_id: None,
+            source_logical_rect: None,
             logical_rect: Some(RectF {
                 x: 100.0,
                 y: 50.0,

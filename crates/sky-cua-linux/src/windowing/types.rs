@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use sky_cua_platform::model::{RectF, TerminalProcessInfo, TerminalWindowInfo, WindowInfo};
+use sky_cua_platform::model::{
+    DisplayIntersection, DisplayRef, RectF, TerminalProcessInfo, TerminalWindowInfo, WindowInfo,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LinuxWindowInfo {
@@ -9,6 +11,10 @@ pub struct LinuxWindowInfo {
     pub wm_class: Option<String>,
     pub pid: Option<u32>,
     pub bounds: Option<RectF>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<DisplayRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display_intersections: Vec<DisplayIntersection>,
     pub workspace: Option<i32>,
     pub focused: bool,
     pub hidden: bool,
@@ -109,6 +115,8 @@ impl From<LinuxWindowInfo> for WindowInfo {
             wm_class: window.wm_class,
             pid: window.pid,
             bounds: window.bounds,
+            display: window.display,
+            display_intersections: window.display_intersections,
             workspace: window.workspace,
             focused: window.focused,
             hidden: window.hidden,

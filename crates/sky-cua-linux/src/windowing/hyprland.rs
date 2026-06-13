@@ -297,6 +297,8 @@ impl TryFrom<HyprlandClient> for LinuxWindowInfo {
             wm_class: client.class_name,
             pid: client.pid.and_then(|pid| u32::try_from(pid).ok()),
             bounds,
+            display: None,
+            display_intersections: Vec::new(),
             workspace: client.workspace.and_then(|workspace| workspace.id),
             focused: client.focus_history_id == Some(0),
             hidden: client.hidden.unwrap_or(false),

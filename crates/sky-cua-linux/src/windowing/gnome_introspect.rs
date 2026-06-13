@@ -96,6 +96,8 @@ fn window_from_properties(
         wm_class: get_string(properties, "wm-class"),
         pid: get_u32(properties, "pid"),
         bounds,
+        display: None,
+        display_intersections: Vec::new(),
         workspace: get_i32(properties, "workspace"),
         focused: get_bool(properties, "has-focus").unwrap_or(false),
         hidden: get_bool(properties, "is-hidden").unwrap_or(false),

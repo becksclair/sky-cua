@@ -2,9 +2,10 @@ use atspi::AccessibilityConnection;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
-    ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureScreenMode,
-    DiagnosticEntry, DoctorReport, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind,
-    RectF, ScrollDirection, SemanticBackendKind, ToolAvailability, ToolCapabilities,
+    ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureScope, CaptureScreenMode,
+    DiagnosticEntry, DisplayInfo, DisplayTarget, DoctorReport, ElementNode, EnvironmentInfo,
+    FocusedApp, InputBackendKind, RectF, ScrollDirection, SemanticBackendKind, ToolAvailability,
+    ToolCapabilities, WindowTarget,
 };
 use sky_cua_platform::{AppInfo, new_snapshot_id};
 
@@ -33,8 +34,17 @@ use crate::x11::input_xtest::{self, X11MouseButton};
 use crate::x11::windowing::{self, X11WindowInfo};
 use sky_cua_platform::model::DoctorSessionEnvReport;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::warn;
+
+const DISPLAY_TOPOLOGY_CACHE_TTL: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone)]
+struct DisplayTopologyCache {
+    updated_at: Instant,
+    displays: Vec<DisplayInfo>,
+}
 
 #[derive(Debug, Clone)]
 pub struct LinuxDesktopBackend {
@@ -44,6 +54,7 @@ pub struct LinuxDesktopBackend {
     session_env: Arc<StdMutex<DoctorSessionEnvReport>>,
     session_presence: SessionPresenceManager,
     virtual_input: Arc<OnceLock<LinuxVirtualInput>>,
+    display_topology: Arc<StdMutex<Option<DisplayTopologyCache>>>,
 }
 
 impl Default for LinuxDesktopBackend {
@@ -82,7 +93,22 @@ impl LinuxDesktopBackend {
             session_env: Arc::new(StdMutex::new(session_env_report)),
             session_presence: SessionPresenceManager::new(),
             virtual_input: Arc::new(OnceLock::new()),
+            display_topology: Arc::new(StdMutex::new(None)),
         }
+    }
+
+    async fn enrich_environment_displays(&self, environment: &mut EnvironmentInfo) {
+        if !environment.displays.is_empty() {
+            return;
+        }
+        if let Some(displays) = cached_display_topology(&self.display_topology, Instant::now()) {
+            environment.displays = displays;
+            return;
+        }
+
+        let displays = crate::displays::discover_displays(environment).await;
+        store_display_topology(&self.display_topology, displays.clone());
+        environment.displays = displays;
     }
 
     fn cached_virtual_input(&self) -> Result<&LinuxVirtualInput, BackendError> {
@@ -288,6 +314,15 @@ impl LinuxDesktopBackend {
             window_handle: app.window_handle.clone(),
             toolkit_guess: app.toolkit_guess.clone(),
             window_title: app.window_title.clone(),
+            display: None,
+        }
+    }
+
+    fn focused_from_linux_window(window: &linux_windowing::LinuxWindowInfo) -> FocusedApp {
+        let app = app_from_linux_window(window);
+        FocusedApp {
+            display: window.display.clone(),
+            ..Self::focused_from_app(&app)
         }
     }
 }
@@ -306,6 +341,29 @@ fn merge_session_env_reports(current: &mut DoctorSessionEnvReport, latest: Docto
         if !current.notes.contains(&note) {
             current.notes.push(note);
         }
+    }
+}
+
+fn cached_display_topology(
+    cache: &Arc<StdMutex<Option<DisplayTopologyCache>>>,
+    now: Instant,
+) -> Option<Vec<DisplayInfo>> {
+    let cache = cache.lock().ok()?;
+    let cached = cache.as_ref()?;
+    now.checked_duration_since(cached.updated_at)
+        .is_some_and(|age| age <= DISPLAY_TOPOLOGY_CACHE_TTL)
+        .then(|| cached.displays.clone())
+}
+
+fn store_display_topology(
+    cache: &Arc<StdMutex<Option<DisplayTopologyCache>>>,
+    displays: Vec<DisplayInfo>,
+) {
+    if let Ok(mut cache) = cache.lock() {
+        *cache = Some(DisplayTopologyCache {
+            updated_at: Instant::now(),
+            displays,
+        });
     }
 }
 
@@ -339,6 +397,7 @@ impl DesktopBackend for LinuxDesktopBackend {
         } else {
             SemanticBackendKind::None
         };
+        self.enrich_environment_displays(&mut environment).await;
         Ok(environment)
     }
 
@@ -401,11 +460,13 @@ impl DesktopBackend for LinuxDesktopBackend {
     async fn focused_window(
         &self,
     ) -> Result<Option<sky_cua_platform::model::WindowInfo>, BackendError> {
-        if let Some(window) = linux_windowing::focused_window_override() {
-            return Ok(Some(window.into()));
-        }
         let environment = self.probe_environment().await?;
         require_supported_environment(&environment)?;
+        if let Some(window) = linux_windowing::focused_window_override() {
+            let mut windows = vec![window];
+            crate::displays::assign_window_displays(&mut windows, &environment.displays);
+            return Ok(windows.pop().map(Into::into));
+        }
         let windows = linux_windowing::discover_windows(&environment).await?;
         if let Some(window) = windows.iter().find(|window| window.focused) {
             return Ok(Some(window.clone().into()));
@@ -482,6 +543,9 @@ impl DesktopBackend for LinuxDesktopBackend {
             &snapshot_id,
             capture_screen,
             &environment,
+            None,
+            CaptureScope::Unknown,
+            None,
             &mut diagnostics,
         )
         .await?;
@@ -676,7 +740,12 @@ impl DesktopBackend for LinuxDesktopBackend {
             pick_focused_app_with_fallback(&connection, apps, &registry_windows, &mut diagnostics)
                 .await
         };
-        let focused_app = Some(Self::focused_from_app(&chosen_app.info));
+        let mut focused_app = Self::focused_from_app(&chosen_app.info);
+        focused_app.display = registry_windows
+            .iter()
+            .find(|window| linux_window_matches_app(window, &chosen_app.info))
+            .and_then(|window| window.display.clone());
+        let focused_app = Some(focused_app);
 
         let (elements, snapshot_diags) = snapshot_for_app(&connection, &chosen_app).await?;
         for entry in snapshot_diags {
@@ -711,6 +780,126 @@ impl DesktopBackend for LinuxDesktopBackend {
         })
     }
 
+    async fn screenshot(
+        &self,
+        target: Option<WindowTarget>,
+        display_target: Option<DisplayTarget>,
+        capture_all_displays: bool,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        let _ = self.portal.take_lifecycle_events().await;
+        let snapshot_id = new_snapshot_id();
+        let environment = self.probe_environment().await?;
+        require_supported_environment(&environment)?;
+        let capabilities = Self::capabilities(&environment);
+        let mut diagnostics = DiagnosticBuilder::new();
+
+        let mut target_window = None;
+        let mut capture_target = None;
+        let mut capture_scope = CaptureScope::Unknown;
+        let mut capture_display = None;
+        if let Some(target) = target {
+            let windows = linux_windowing::discover_activation_windows(&environment).await?;
+            let matched = linux_windowing::resolve_window_target(&windows, &target.into())?;
+            linux_windowing::activate_window(matched).await?;
+            let focused = linux_windowing::verify_window_focused(&environment, matched).await?;
+            diagnostics.push_code(
+                "WindowFocusVerified",
+                format!(
+                    "Focus verification matched {} window {} before screenshot capture.",
+                    focused.backend, focused.window_id
+                ),
+                None,
+            );
+            let bounds = focused.bounds.clone().ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::InvalidRequest,
+                    format!(
+                        "matched {} window {} did not report bounds for targeted screenshot capture",
+                        focused.backend, focused.window_id
+                    ),
+                )
+            })?;
+            capture_scope = CaptureScope::Window;
+            capture_display = focused.display.clone();
+            capture_target = Some(crate::capture_plan::CaptureRegionTarget {
+                desktop_logical_rect: bounds,
+                capture_scope: CaptureScope::Window,
+                display: focused.display.clone(),
+            });
+            target_window = Some(focused);
+        } else if let Some(display_target) = display_target {
+            let display =
+                crate::displays::resolve_display_target(&environment.displays, &display_target)?;
+            let display_ref = crate::displays::display_ref(&display);
+            capture_scope = CaptureScope::Display;
+            capture_display = Some(display_ref.clone());
+            capture_target = Some(crate::capture_plan::CaptureRegionTarget {
+                desktop_logical_rect: display.logical_rect.clone(),
+                capture_scope: CaptureScope::Display,
+                display: Some(display_ref),
+            });
+        } else if capture_all_displays {
+            capture_scope = CaptureScope::AllDisplays;
+        } else if let Some(display) = crate::displays::primary_display(&environment.displays) {
+            let display_ref = crate::displays::display_ref(&display);
+            capture_scope = CaptureScope::PrimaryDisplay;
+            capture_display = Some(display_ref.clone());
+            capture_target = Some(crate::capture_plan::CaptureRegionTarget {
+                desktop_logical_rect: display.logical_rect.clone(),
+                capture_scope: CaptureScope::PrimaryDisplay,
+                display: Some(display_ref),
+            });
+        } else {
+            diagnostics.push(
+                BackendErrorCode::CaptureBackendDowngraded,
+                "Display topology is unavailable, so screenshot fell back to the legacy raw desktop capture for an omitted selector.",
+                None,
+            );
+        }
+
+        let capture_plan = crate::capture_plan::plan_capture(
+            &self.portal,
+            &snapshot_id,
+            CaptureScreenMode::Always,
+            &environment,
+            capture_target.as_ref(),
+            capture_scope,
+            capture_display,
+            &mut diagnostics,
+        )
+        .await?;
+        let mut portal_lifecycle_events = self.portal.take_lifecycle_events().await;
+        crate::capture_plan::push_diagnostics(
+            &environment,
+            capture_plan.capture.as_ref(),
+            capture_plan.portal_session_error.as_ref(),
+            capture_plan.capture_error.as_ref(),
+            &mut diagnostics,
+        );
+        push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
+        require_screenshot_image(
+            capture_plan.capture.as_ref(),
+            capture_plan.portal_session_error.as_ref(),
+            capture_plan.capture_error.as_ref(),
+        )?;
+
+        let focused_app = target_window.as_ref().map(Self::focused_from_linux_window);
+
+        Ok(AppStateSnapshot {
+            snapshot_id,
+            created_at: chrono::Utc::now(),
+            environment,
+            capabilities,
+            focused_app,
+            capture: capture_plan.capture,
+            elements: Vec::new(),
+            diagnostics: diagnostics.finish(),
+            app_guidance: None,
+            doctor_report: None,
+            agent_cursor: None,
+        })
+    }
+
     async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
         let _ = self.portal.take_lifecycle_events().await;
         let environment = self.probe_environment().await?;
@@ -741,6 +930,29 @@ impl DesktopBackend for LinuxDesktopBackend {
     async fn session_presence_status(&self) -> sky_cua_platform::model::SessionPresenceStatus {
         self.session_presence.status().await
     }
+}
+
+fn require_screenshot_image(
+    capture: Option<&sky_cua_platform::model::CaptureInfo>,
+    portal_session_error: Option<&BackendError>,
+    capture_error: Option<&BackendError>,
+) -> Result<(), BackendError> {
+    if capture
+        .and_then(|capture| capture.screenshot_path.as_deref())
+        .is_some_and(|path| !path.trim().is_empty())
+    {
+        return Ok(());
+    }
+    if let Some(error) = capture_error.or(portal_session_error) {
+        return Err(BackendError {
+            code: error.code,
+            message: error.message.clone(),
+        });
+    }
+    Err(BackendError::new(
+        BackendErrorCode::Internal,
+        "screenshot capture did not produce an image",
+    ))
 }
 
 #[async_trait::async_trait]
@@ -1225,13 +1437,12 @@ fn linux_fallback_snapshot(
     doctor_report: Option<DoctorReport>,
     window: linux_windowing::LinuxWindowInfo,
 ) -> AppStateSnapshot {
-    let app = app_from_linux_window(&window);
     AppStateSnapshot {
         snapshot_id,
         created_at: chrono::Utc::now(),
         environment,
         capabilities,
-        focused_app: Some(LinuxDesktopBackend::focused_from_app(&app)),
+        focused_app: Some(LinuxDesktopBackend::focused_from_linux_window(&window)),
         capture,
         elements: fallback_window_elements(&window),
         diagnostics: diagnostics.finish(),
@@ -1783,9 +1994,11 @@ fn selector_or_window_summary(selector: Option<&AppSelector>, app: &AppInfo) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        AppInfo, AppSelector, LinuxDesktopBackend, fallback_window_elements_with_x11_detail,
+        AppInfo, AppSelector, DISPLAY_TOPOLOGY_CACHE_TTL, DisplayTopologyCache,
+        LinuxDesktopBackend, cached_display_topology, fallback_window_elements_with_x11_detail,
         linux_fallback_snapshot, linux_window_elements, merge_session_env_reports,
-        scroll_target_value, vertical_scrollbar_for_point, x11_window_elements,
+        require_screenshot_image, scroll_target_value, vertical_scrollbar_for_point,
+        x11_window_elements,
     };
     use crate::app_match::{
         app_from_linux_window, best_x11_window_match, matches_selector, select_x11_window,
@@ -1794,12 +2007,15 @@ mod tests {
     use crate::capture_plan::should_attempt_x11_capture;
     use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
-    use sky_cua_platform::diagnostics::DiagnosticBuilder;
+    use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::{
-        CaptureBackendKind, CaptureScreenMode, CoordinateSpace, DoctorSessionEnvRepair,
-        DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback, EnvironmentInfo,
-        InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
+        CaptureBackendKind, CaptureScreenMode, CoordinateSpace, DisplayInfo,
+        DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback,
+        EnvironmentInfo, InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind,
+        SessionKind,
     };
+    use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::{Duration, Instant};
 
     fn wayland_pipewire_environment() -> EnvironmentInfo {
         EnvironmentInfo {
@@ -1820,7 +2036,21 @@ mod tests {
             xdg_session_type: Some("wayland".to_string()),
             display: None,
             wayland_display: Some("wayland-0".to_string()),
+            displays: Vec::new(),
         }
+    }
+
+    #[test]
+    fn screenshot_no_image_preserves_portal_error() {
+        let portal_error = BackendError::new(
+            BackendErrorCode::PortalApprovalPending,
+            "operator approval is pending",
+        );
+
+        let error = require_screenshot_image(None, Some(&portal_error), None).unwrap_err();
+
+        assert_eq!(error.code, BackendErrorCode::PortalApprovalPending.as_str());
+        assert_eq!(error.message, "operator approval is pending");
     }
 
     fn test_element(
@@ -1853,6 +2083,19 @@ mod tests {
             width,
             height,
             space: CoordinateSpace::DesktopLogical,
+        }
+    }
+
+    fn test_display(display_id: &str) -> DisplayInfo {
+        DisplayInfo {
+            display_id: display_id.to_string(),
+            name: Some(display_id.to_string()),
+            index: 0,
+            primary: true,
+            logical_rect: rect(0.0, 0.0, 1920.0, 1080.0),
+            pixel_size: None,
+            scale_factor: Some(1.0),
+            backend: "test".to_string(),
         }
     }
 
@@ -1932,6 +2175,25 @@ mod tests {
     }
 
     #[test]
+    fn display_topology_cache_expires_after_short_ttl() {
+        let now = Instant::now();
+        let cache = Arc::new(StdMutex::new(Some(DisplayTopologyCache {
+            updated_at: now - Duration::from_millis(500),
+            displays: vec![test_display("test:primary")],
+        })));
+
+        let cached = cached_display_topology(&cache, now).expect("fresh cache should be used");
+        assert_eq!(cached[0].display_id, "test:primary");
+
+        *cache.lock().expect("cache lock") = Some(DisplayTopologyCache {
+            updated_at: now - DISPLAY_TOPOLOGY_CACHE_TTL - Duration::from_millis(1),
+            displays: vec![test_display("test:stale")],
+        });
+
+        assert!(cached_display_topology(&cache, now).is_none());
+    }
+
+    #[test]
     fn capture_never_disables_x11_still_capture() {
         let environment = EnvironmentInfo {
             session_kind: SessionKind::X11,
@@ -1951,6 +2213,7 @@ mod tests {
             xdg_session_type: Some("x11".to_string()),
             display: Some(":0".to_string()),
             wayland_display: None,
+            displays: Vec::new(),
         };
 
         assert!(!should_attempt_x11_capture(
@@ -2156,6 +2419,8 @@ mod tests {
                 height: 180.0,
                 space: CoordinateSpace::DesktopLogical,
             }),
+            display: None,
+            display_intersections: Vec::new(),
             workspace: None,
             focused: true,
             hidden: false,
@@ -2207,6 +2472,8 @@ mod tests {
                 height: 820.0,
                 space: CoordinateSpace::DesktopLogical,
             }),
+            display: None,
+            display_intersections: Vec::new(),
             workspace: None,
             focused: true,
             hidden: false,
@@ -2304,6 +2571,8 @@ mod tests {
                 height: 820.0,
                 space: CoordinateSpace::DesktopLogical,
             }),
+            display: None,
+            display_intersections: Vec::new(),
             workspace: None,
             focused: true,
             hidden: false,
@@ -2334,6 +2603,8 @@ mod tests {
             wm_class: Some("TIDAL".to_string()),
             pid: Some(4242),
             bounds: None,
+            display: None,
+            display_intersections: Vec::new(),
             workspace: None,
             focused: true,
             hidden: false,

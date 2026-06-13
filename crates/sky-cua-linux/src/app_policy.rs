@@ -89,6 +89,7 @@ mod tests {
                 window_handle: None,
                 toolkit_guess: Some("Qt".to_string()),
                 window_title: None,
+                display: None,
             }))
             .expect("kate should resolve a set_value fallback policy");
 
@@ -110,6 +111,7 @@ mod tests {
                 window_handle: None,
                 toolkit_guess: Some("Qt".to_string()),
                 window_title: None,
+                display: None,
             }))
             .expect("kwrite should resolve a set_value fallback policy");
 
@@ -130,6 +132,7 @@ mod tests {
             window_handle: None,
             toolkit_guess: Some("GTK".to_string()),
             window_title: None,
+            display: None,
         }));
 
         assert!(resolved.is_none());

@@ -357,6 +357,7 @@ where
                 element,
                 request.resolved_capture.as_ref(),
                 input_backend.clone(),
+                request.snapshot_id.is_some(),
             )?
         } else {
             drag_to_point(&request, input_backend.clone())?.ok_or_else(|| {
@@ -1122,7 +1123,7 @@ mod tests {
     use serde_json::json;
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
     use sky_cua_platform::model::{
-        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace,
+        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
         DiagnosticEntry, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind, PixelSize,
         PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
     };
@@ -1420,6 +1421,7 @@ mod tests {
             xdg_session_type: Some("wayland".to_string()),
             display: None,
             wayland_display: Some("wayland-0".to_string()),
+            displays: Vec::new(),
         }
     }
 
@@ -1511,10 +1513,13 @@ mod tests {
         request.resolved_capture = Some(CaptureInfo {
             backend: CaptureBackendKind::PortalScreenshot,
             image_backend: Some(CaptureBackendKind::PortalScreenshot),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: None,
             source_type: None,
             mapping_id: None,
+            source_logical_rect: None,
             logical_rect: Some(RectF {
                 x: 100.0,
                 y: 50.0,

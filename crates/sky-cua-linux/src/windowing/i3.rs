@@ -279,6 +279,8 @@ impl I3Node {
             wm_class,
             pid: None,
             bounds,
+            display: None,
+            display_intersections: Vec::new(),
             workspace,
             focused: self.focused,
             hidden: matches!(

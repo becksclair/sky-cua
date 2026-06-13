@@ -34,6 +34,14 @@ pub struct ModelCaptureImage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PixelRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelScreenshotFormat {
     Jpeg,
     Webp,
@@ -112,6 +120,64 @@ pub(crate) fn capture_output_path(snapshot_id: &str) -> PathBuf {
     runtime_root()
         .join("captures")
         .join(format!("{snapshot_id}.png"))
+}
+
+pub(crate) fn cropped_capture_output_path(snapshot_id: &str) -> PathBuf {
+    runtime_root()
+        .join("captures")
+        .join(format!("{snapshot_id}-window.png"))
+}
+
+pub(crate) fn crop_capture(
+    snapshot_id: &str,
+    source_path: &Path,
+    crop: PixelRect,
+) -> Result<PathBuf, BackendError> {
+    let target_path = cropped_capture_output_path(snapshot_id);
+    if let Some(parent) = target_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                format!(
+                    "failed to create cropped capture directory {}: {error}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+
+    let image = image::ImageReader::open(source_path)
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                format!(
+                    "failed to open raw capture {} for window crop: {error}",
+                    source_path.display()
+                ),
+            )
+        })?
+        .decode()
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                format!(
+                    "failed to decode raw capture {} for window crop: {error}",
+                    source_path.display()
+                ),
+            )
+        })?;
+
+    let cropped = image.crop_imm(crop.x, crop.y, crop.width, crop.height);
+    cropped.save(&target_path).map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            format!(
+                "failed to write cropped window capture {}: {error}",
+                target_path.display()
+            ),
+        )
+    })?;
+    Ok(target_path)
 }
 
 pub(crate) fn model_capture_output_path_for_format(

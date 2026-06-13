@@ -334,6 +334,8 @@ mod tests {
                 height: 600.0,
                 space: CoordinateSpace::DesktopLogical,
             }),
+            display: None,
+            display_intersections: Vec::new(),
             workspace: Some(0),
             focused: false,
             hidden: false,

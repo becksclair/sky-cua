@@ -615,6 +615,8 @@ mod tests {
                 height: 480.0,
                 space: sky_cua_platform::model::CoordinateSpace::DesktopLogical,
             }),
+            display: None,
+            display_intersections: Vec::new(),
             workspace: None,
             focused,
             hidden: false,

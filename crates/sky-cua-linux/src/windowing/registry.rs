@@ -137,6 +137,7 @@ async fn discover_all_windows(
     }
     if !windows.is_empty() {
         finalize_window_list(&mut windows, false);
+        crate::displays::assign_window_displays(&mut windows, &environment.displays);
         return Ok(windows);
     }
     Err(BackendError::new(
@@ -174,6 +175,7 @@ pub async fn discover_activation_windows(
         ));
     }
     finalize_window_list(&mut windows, true);
+    crate::displays::assign_window_displays(&mut windows, &environment.displays);
     Ok(windows)
 }
 
@@ -458,6 +460,8 @@ fn linux_window_from_kwin(window: KWinWindowInfo) -> LinuxWindowInfo {
         wm_class: window.resource_class.or(window.resource_name),
         pid: window.app.pid,
         bounds: window.bounds,
+        display: None,
+        display_intersections: Vec::new(),
         workspace: window.workspace,
         focused: window.app.is_focused_candidate,
         hidden: false,
@@ -479,6 +483,8 @@ fn linux_window_from_x11(window: X11WindowInfo) -> LinuxWindowInfo {
         wm_class: window.class_name.or(window.instance_name),
         pid: window.app.pid,
         bounds: window.bounds,
+        display: None,
+        display_intersections: Vec::new(),
         workspace: window.workspace,
         focused: window.app.is_focused_candidate,
         hidden: false,
@@ -617,6 +623,8 @@ mod tests {
                 height: 4.0,
                 space: CoordinateSpace::DesktopLogical,
             }),
+            display: None,
+            display_intersections: Vec::new(),
             workspace: None,
             focused: false,
             hidden: false,
@@ -645,6 +653,7 @@ mod tests {
             xdg_session_type: Some("wayland".to_string()),
             display: None,
             wayland_display: Some("wayland-0".to_string()),
+            displays: Vec::new(),
         }
     }
 
@@ -696,6 +705,8 @@ mod tests {
             wm_class: None,
             pid: None,
             bounds: None,
+            display: None,
+            display_intersections: Vec::new(),
             workspace: None,
             focused: false,
             hidden: false,

@@ -124,6 +124,8 @@ impl From<ExtensionWindowInfo> for LinuxWindowInfo {
             wm_class: window.wm_class,
             pid: window.pid,
             bounds: window.bounds.map(Into::into),
+            display: None,
+            display_intersections: Vec::new(),
             workspace: window.workspace,
             focused: window.focused,
             hidden: window.hidden,

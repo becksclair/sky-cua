@@ -32,6 +32,7 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
             xdg_session_type,
             display: display_var,
             wayland_display,
+            displays: Vec::new(),
         });
     }
 
@@ -82,6 +83,7 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
         xdg_session_type,
         display: display_var,
         wayland_display,
+        displays: Vec::new(),
     })
 }
 
@@ -411,6 +413,7 @@ mod tests {
             xdg_session_type: None,
             display: None,
             wayland_display: None,
+            displays: Vec::new(),
         };
 
         let error = require_supported_environment(&environment).expect_err("headless must error");
@@ -439,6 +442,7 @@ mod tests {
             xdg_session_type: None,
             display: None,
             wayland_display: None,
+            displays: Vec::new(),
         };
 
         let error = require_supported_environment(&environment).expect_err("headless must error");
