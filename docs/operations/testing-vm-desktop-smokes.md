@@ -74,6 +74,29 @@ uv run python scripts/run_gui_testing_vm_smoke.py \
   --desktop-env KDE --wayland-display wayland-0
 ```
 
+Window-targeted and display-targeted screenshot proof:
+
+```bash
+uv run python scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 --port 22222 --user skycua \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  --profile targeted-screenshot \
+  --desktop-env KDE --wayland-display wayland-0
+
+uv run python scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 --port 22222 --user skycua \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  --profile display-screenshot \
+  --desktop-env KDE --wayland-display wayland-0
+```
+
+For GNOME, Hyprland, and COSMIC, switch the guest session first and use that
+session's `--desktop-env` and `--wayland-display`. For i3/X11, switch to `i3`
+and run the same profiles with `--desktop-env i3`; the profile derives the
+real Xorg display inside the guest.
+
 Use `--skip-host-build` only when host release/dev artifacts were already rebuilt after the code under test. Otherwise let the runner rebuild and rsync the current checkout.
 
 ## False Trails

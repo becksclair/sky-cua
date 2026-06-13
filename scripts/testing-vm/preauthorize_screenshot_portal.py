@@ -9,27 +9,47 @@ automated tests.
 from __future__ import annotations
 
 import sys
-
-try:
-    import gi
-
-    gi.require_version("Gio", "2.0")
-    from gi.repository import Gio, GLib
-except ImportError:
-    print("GObject introspection not available; cannot preauthorize portal", file=sys.stderr)
-    sys.exit(1)
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 PERMISSION_STORE_BUS_NAME = "org.freedesktop.impl.portal.PermissionStore"
 PERMISSION_STORE_OBJECT_PATH = "/org/freedesktop/impl/portal/PermissionStore"
 PERMISSION_STORE_INTERFACE = "org.freedesktop.impl.portal.PermissionStore"
 SCREENSHOT_TABLE = "screenshot"
 SCREENSHOT_ID = "screenshot"
+ALLOW_PERMISSION = "yes"
+GENERIC_APP_IDS = ("", "desktop")
 
 
-def dbus_proxy(bus_name: str, object_path: str, interface: str) -> Gio.DBusProxy:
-    return Gio.DBusProxy.new_for_bus_sync(
-        Gio.BusType.SESSION,
-        Gio.DBusProxyFlags.NONE,
+def load_gi() -> tuple[Any, Any]:
+    try:
+        import gi  # type: ignore[import-not-found]
+
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio, GLib  # type: ignore[import-not-found]
+    except ImportError as error:
+        raise RuntimeError(
+            "GObject introspection not available; cannot preauthorize portal"
+        ) from error
+    return Gio, GLib
+
+
+def screenshot_permissions(app_ids: Sequence[str] = GENERIC_APP_IDS) -> dict[str, list[str]]:
+    return {app_id: [ALLOW_PERMISSION] for app_id in app_ids}
+
+
+def missing_screenshot_permissions(
+    permissions: Mapping[str, Sequence[str]],
+    app_ids: Sequence[str] = GENERIC_APP_IDS,
+) -> list[str]:
+    return [app_id for app_id in app_ids if ALLOW_PERMISSION not in permissions.get(app_id, [])]
+
+
+def dbus_proxy(bus_name: str, object_path: str, interface: str) -> Any:
+    gio, _glib = load_gi()
+    return gio.DBusProxy.new_for_bus_sync(
+        gio.BusType.SESSION,
+        gio.DBusProxyFlags.NONE,
         None,
         bus_name,
         object_path,
@@ -38,30 +58,42 @@ def dbus_proxy(bus_name: str, object_path: str, interface: str) -> Gio.DBusProxy
     )
 
 
-def preauthorize_screenshot(*, app_id: str = "") -> None:
+def preauthorize_screenshot(*, app_ids: Sequence[str] = GENERIC_APP_IDS) -> None:
+    gio, glib = load_gi()
     proxy = dbus_proxy(
         PERMISSION_STORE_BUS_NAME,
         PERMISSION_STORE_OBJECT_PATH,
         PERMISSION_STORE_INTERFACE,
     )
-    permissions = {app_id: ["yes"]}
     proxy.call_sync(
         "Set",
-        GLib.Variant(
+        glib.Variant(
             "(sbsa{sas}v)",
-            (SCREENSHOT_TABLE, True, SCREENSHOT_ID, permissions, GLib.Variant("s", "")),
+            (
+                SCREENSHOT_TABLE,
+                True,
+                SCREENSHOT_ID,
+                screenshot_permissions(app_ids),
+                glib.Variant("s", ""),
+            ),
         ),
-        Gio.DBusCallFlags.NONE,
+        gio.DBusCallFlags.NONE,
         -1,
         None,
     )
-    proxy.call_sync(
+    result = proxy.call_sync(
         "Lookup",
-        GLib.Variant("(ss)", (SCREENSHOT_TABLE, SCREENSHOT_ID)),
-        Gio.DBusCallFlags.NONE,
+        glib.Variant("(ss)", (SCREENSHOT_TABLE, SCREENSHOT_ID)),
+        gio.DBusCallFlags.NONE,
         -1,
         None,
     )
+    permissions, _data = result.unpack()
+    missing = missing_screenshot_permissions(permissions, app_ids)
+    if missing:
+        raise RuntimeError(
+            f"screenshot portal permission round-trip missing app_ids={missing!r}: {permissions!r}"
+        )
 
 
 def main() -> int:

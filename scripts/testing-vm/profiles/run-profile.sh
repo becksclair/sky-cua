@@ -75,6 +75,12 @@ i3)
 computer-use | wayland-pointer)
 	exec "$profile_dir/wayland-pointer.sh" "$@"
 	;;
+targeted-screenshot)
+	exec "$profile_dir/targeted-screenshot.sh" "$@"
+	;;
+display-screenshot)
+	exec "$profile_dir/display-screenshot.sh" "$@"
+	;;
 wayland-pointer-scaled)
 	exec "$profile_dir/wayland-pointer-scaled.sh" "$@"
 	;;

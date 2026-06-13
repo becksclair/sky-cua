@@ -121,6 +121,18 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
             preauthorize_gnome_remote_desktop=True,
             preauthorize_kde_remote_desktop=True,
         ),
+        VmProfileDescriptor(
+            "targeted-screenshot",
+            preauthorize_gnome_remote_desktop=True,
+            preauthorize_kde_remote_desktop=True,
+            preauthorize_screenshot_portal=True,
+        ),
+        VmProfileDescriptor(
+            "display-screenshot",
+            preauthorize_gnome_remote_desktop=True,
+            preauthorize_kde_remote_desktop=True,
+            preauthorize_screenshot_portal=True,
+        ),
         VmProfileDescriptor("wayland-pointer-scaled"),
         VmProfileDescriptor(
             "session-env",
@@ -152,6 +164,7 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
             "all",
             preauthorize_gnome_remote_desktop=True,
             preauthorize_kde_remote_desktop=True,
+            preauthorize_screenshot_portal=True,
         ),
     )
 }

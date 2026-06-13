@@ -167,6 +167,8 @@ python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile kde-kwin-effect
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile kde-kwin-effect-system-install --vm-name testing-vm --libvirt-uri qemu:///session
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile targeted-screenshot --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile display-screenshot --desktop-env COSMIC
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile codex-desktop --desktop-env COSMIC
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-helper --desktop-env COSMIC
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-patched-cursor-host-proof --desktop-env COSMIC
@@ -331,6 +333,15 @@ Profiles live under `scripts/testing-vm/profiles/`.
   `sky-cua-client mcp`.
 - `wayland-pointer`: explicit name for the same visible real-session pointer
   smoke used by `computer-use`.
+- `targeted-screenshot`: real-session window-targeted screenshot smoke. It
+  opens a target dialog plus an occluder, calls `screenshot` with `window_id`,
+  asserts focus/crop metadata, and clicks the target through the returned
+  cropped `snapshot_id`. The profile supports Wayland sessions and i3/X11.
+- `display-screenshot`: real-session display-targeted screenshot smoke. It
+  asserts `environment.displays`, primary-display default capture, explicit
+  display capture, all-displays opt-in, structured secondary-output skip when
+  only one monitor exists, and snapshot click landing through a display crop.
+  The profile supports Wayland sessions and i3/X11.
 - `session-env`: real-session stripped-env proof for detached session-env
   repair. It runs `scripts/live_session_env_smoke.py` on the guest: the MCP
   client starts with graphical session variables stripped and a minimal

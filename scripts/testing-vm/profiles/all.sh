@@ -5,6 +5,8 @@ profile_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 "$profile_dir/kde-kwin-effect.sh"
 "$profile_dir/wayland-pointer.sh"
+"$profile_dir/targeted-screenshot.sh"
+"$profile_dir/display-screenshot.sh"
 "$profile_dir/session-env.sh"
 "$profile_dir/text-readback.sh"
 "$profile_dir/codex-desktop.sh"

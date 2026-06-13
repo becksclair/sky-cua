@@ -265,6 +265,10 @@ The host-facing tools are the portable product contract. Current tools:
   `detail: "compact"` for repeated screenshot-first loops, and
   `screenshot_delivery: "inline"` to attach the captured screenshot as an MCP
   image content block for hosts that cannot read `screenshot_path` files
+- visual capture: `screenshot`, which defaults to the primary display, accepts
+  the same window target fields as `activate_window`, accepts
+  `display_id`/`display_name`/`display_index` from `environment.displays`, and
+  uses `capture_all_displays=true` as the explicit full-virtual-desktop opt-in
 - semantic element actions: `focus_element`, `activate_element`,
   `select_element`, `expand_element`, `collapse_element`, `toggle_element`,
   and `perform_action`
@@ -355,6 +359,9 @@ Action tools accept `snapshot_id` from the latest `get_app_state` result. With
 `snapshot_id`, explicit coordinates are screenshot pixel coordinates from that
 snapshot image. Without `snapshot_id`, supported coordinate actions use the
 current screen coordinate space exposed by the active input backend.
+Desktop snapshots may be cropped to a window or one display; callers should
+always pass the matching `snapshot_id` so the backend can translate screenshot
+pixels through `capture.logical_rect` and the backend-specific source rect.
 
 `get_app_state` elements may include readback fields when the backend can prove
 them. On Linux, focused or editable AT-SPI Text controls can populate
@@ -368,8 +375,11 @@ agents can verify text entry without switching back to full detail.
 `list_windows`, `focused_window`, and `activate_window` use native window
 metadata when available. Linux currently probes GNOME Shell extension, GNOME
 Shell Introspect, COSMIC helper, KWin/Plasma, Hyprland, i3, and X11 metadata
-backends. Window payloads may include bounds, workspace, PID, client type, and
-terminal metadata depending on what the backend can prove.
+backends. Window payloads may include bounds, workspace, PID, client type,
+display assignment, spanning-display intersections, and terminal metadata
+depending on what the backend can prove. `get_app_state` and `screenshot`
+surface `environment.displays`; agents should use those display IDs instead of
+guessing monitor names.
 
 ## Adapter split
 

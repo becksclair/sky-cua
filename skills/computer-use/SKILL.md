@@ -12,11 +12,23 @@ unrelated; never carry coordinates across them.
 ## Coordinates
 
 - `click`/`drag`/`perform_secondary_action` x/y are pixels of the screenshot
-  from the snapshot you pass as `snapshot_id`; the runtime maps them back to
-  the desktop. Without `snapshot_id`, x/y are live screen coordinates for the
-  active input backend.
-- When targeting one window inside a full-desktop screenshot, keep
-  coordinates in that screenshot's pixel space — do not rebase to the window.
+  from the `get_app_state` or `screenshot` snapshot you pass as `snapshot_id`;
+  the runtime maps them back to the desktop. Without `snapshot_id`, x/y are
+  live screen coordinates for the active input backend.
+- Desktops may have multiple displays. `environment.displays` lists display
+  ids, primary status, logical rects, scale, and backend; windows and focused
+  apps include their chosen `display` when the backend can assign one.
+- For visual work in a known window, prefer `screenshot` with `window_id` or
+  another window target field. It activates and focus-verifies the window, then
+  returns a cropped, unoccluded screenshot. Coordinates for follow-up actions
+  are pixels in that cropped screenshot.
+- With no selector, `screenshot` captures the primary display only. For a
+  monitor-specific view, pass `display_id`/`display_name`/`display_index` from
+  `environment.displays`. Use `capture_all_displays: true` only when the whole
+  virtual desktop is necessary.
+- For actions based on any screenshot, always pass that snapshot's
+  `snapshot_id`; this lets the backend translate screenshot pixels across
+  cropped windows, non-primary displays, and negative-origin monitor layouts.
 
 ## State
 
@@ -28,12 +40,19 @@ unrelated; never carry coordinates across them.
   `hold_session`/`unlock_session`/`release_session` calls are rejected with
   `ActionUnsupportedForEnvironment`, so treat that error as "not armed", not
   as a failure to retry.
-- `get_app_state` is the state source: diagnostics, element anchors, text
-  readback, and `screenshot_path`. Use full `detail` once for orientation,
-  then `detail: "compact"` for action loops. `capture_screen: "never"` for
-  structure-only passes; `"always"` before screenshot-coordinate targeting.
-  If you cannot read local files by path, pass
-  `screenshot_delivery: "inline"`.
+- Use `list_windows` to get exact `window_id` values, focus state, and native
+  window bounds plus each window's display assignment. Use `focused_window`
+  only when you already intend to work in the current focused window.
+- `get_app_state` is the structured state source: diagnostics, element
+  anchors, text readback, and optional `screenshot_path`. Use full `detail`
+  once for orientation, then `detail: "compact"` for action loops.
+  `capture_screen: "never"` for structure-only passes; `"always"` when you
+  need a full focused-app screenshot alongside the tree.
+- `screenshot` is the visual state source. Use it instead of `get_app_state`
+  when the primary need is to inspect or click within a specific window. Pass
+  the same target fields accepted by `activate_window` (`window_id`, `pid`,
+  `app_id`, `wm_class`, `title`, or terminal selectors). If you cannot read
+  local files by path, pass `screenshot_delivery: "inline"`.
 - The accessibility tree is structure, not truth. Fallback-only trees have
   real window bounds but blunt roles — treat their regions as visual anchors,
   not widgets. When tree and screenshot disagree, the screenshot wins.
@@ -62,6 +81,9 @@ unrelated; never carry coordinates across them.
 - `activate_window` targets by `window_id`, `pid`, `app_id`, `wm_class`,
   `title`, or terminal selectors (`tty`, `terminal_pid`, ...). `workspace`
   metadata is backend-native, not portable.
+- Do not call `activate_window` before a targeted `screenshot`; the screenshot
+  tool does the activation and focus verification itself. Use `activate_window`
+  directly only when you need focus without a fresh image.
 
 ## Linux notes
 

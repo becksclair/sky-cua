@@ -2,14 +2,31 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import run_gui_testing_vm_smoke
+
+
+def load_screenshot_preauth_module() -> Any:
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "testing-vm"
+        / "preauthorize_screenshot_portal.py"
+    )
+    spec = importlib.util.spec_from_file_location("preauthorize_screenshot_portal", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_testing_vm_provisioner_installs_arch_desktop_packages() -> None:
@@ -112,6 +129,7 @@ def test_gui_test_profiles_use_host_built_rust_artifacts() -> None:
     wayland_pointer = (profile_root / "wayland-pointer.sh").read_text(encoding="utf-8")
     kde = (profile_root / "kde-kwin-effect.sh").read_text(encoding="utf-8")
     cosmic_helper = (profile_root / "cosmic-helper.sh").read_text(encoding="utf-8")
+    display_screenshot = (profile_root / "display-screenshot.sh").read_text(encoding="utf-8")
     run_profile = (profile_root / "run-profile.sh").read_text(encoding="utf-8")
 
     assert "cargo build" not in wayland_pointer
@@ -122,6 +140,7 @@ def test_gui_test_profiles_use_host_built_rust_artifacts() -> None:
     assert "cargo build" not in kde
     assert "SKY_CUA_OVERLAY_HOST_PATH" in kde
     assert "/workspace/target/release/sky-cua-overlay-host" in kde
+    assert "SKY_CUA_DISPLAY_SCREENSHOT_REQUIRE_SECONDARY" in display_screenshot
     assert "${SKY_CUA_COPY_CODEX_SETTINGS:-0}" in run_profile
 
 
@@ -224,6 +243,9 @@ def test_testing_vm_profile_descriptors_carry_dispatch_and_curated_metadata() ->
     assert descriptors["cosmic-patched-cursor-host-proof"].dispatch == "cosmic-patched-host-proof"
     assert descriptors["cosmic-patched-cursor-host-proof"].host_framebuffer_proof
     assert descriptors["opencode-mcp"].preauthorize_screenshot_portal
+    assert descriptors["targeted-screenshot"].preauthorize_screenshot_portal
+    assert descriptors["display-screenshot"].preauthorize_screenshot_portal
+    assert descriptors["all"].preauthorize_screenshot_portal
     curated = {name for name, descriptor in descriptors.items() if descriptor.curated}
     assert curated == {
         "codex-desktop",
@@ -241,6 +263,14 @@ def test_testing_vm_profile_descriptors_carry_dispatch_and_curated_metadata() ->
     # Compositor-specific capture lanes stay outside the session-agnostic set.
     assert not descriptors["wayland-layer-shell-overlay"].curated
     assert not descriptors["desktop-smoke"].curated
+
+
+def test_screenshot_portal_preauth_seeds_all_generic_app_ids() -> None:
+    module = load_screenshot_preauth_module()
+
+    assert module.screenshot_permissions() == {"": ["yes"], "desktop": ["yes"]}
+    assert module.missing_screenshot_permissions({"": ["yes"], "desktop": ["yes"]}) == []
+    assert module.missing_screenshot_permissions({"": ["yes"]}) == ["desktop"]
 
 
 def test_testing_vm_host_framebuffer_proof_membership_comes_from_runner_registry() -> None:

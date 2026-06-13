@@ -98,6 +98,19 @@ and `terminal_cwd`. See
 [`docs/features/kwin-x11-workspace-metadata.md`](../features/kwin-x11-workspace-metadata.md)
 for workspace metadata specifics.
 
+### Display topology
+
+`crates/sky-cua-linux/src/displays.rs` discovers monitor topology and enriches
+both `EnvironmentInfo.displays` and native window records. Provider order is
+desktop-specific: KWin/Plasma through `kscreen-doctor`, GNOME through Mutter
+`DisplayConfig`, Hyprland through `hyprctl -j monitors`, COSMIC through
+`cosmic-randr list`, and generic X11 through `xrandr --query`.
+
+Display IDs are backend-prefixed connector IDs such as `kwin:HDMI-A-1`,
+`gnome:eDP-1`, `hyprland:DP-1`, `cosmic:Virtual-1`, and `x11:Virtual-1`.
+Each `WindowInfo` is assigned to the display with the largest intersection,
+with `display_intersections` retaining spanning-window truth.
+
 ### Capture lanes
 
 The Wayland primary lane is in-process PipeWire frame capture from the
@@ -111,12 +124,29 @@ PipeWire fails.
 
 - `capture.backend` — the selected primary lane.
 - `capture.image_backend` — the lane that actually produced the image.
+- `capture.capture_scope` — the model-facing scope:
+  `primary_display`, `display`, `window`, `all_displays`, or `unknown`.
+- `capture.logical_rect` — the screenshot rect exposed to the model in
+  `DesktopLogical` coordinates.
+- `capture.source_logical_rect` — the raw portal or capture-source rect used
+  when a backend must translate back into stream-local coordinates. When a
+  Screenshot-portal fallback is not covered by the active RemoteDesktop stream,
+  this stays unset so snapshot-based portal actions fail closed instead of
+  dispatching against the wrong stream.
 
 The split exists because a PipeWire snapshot can downgrade to
 Screenshot mid-call, and the agent needs both pieces of truth. The
 runtime emits `CaptureBackendDowngraded` diagnostics on downgrade. See
 [`docs/research/2026-04-pipewire-vs-screenshot-portal.md`](../research/2026-04-pipewire-vs-screenshot-portal.md)
 for the original investigation.
+
+The `screenshot` tool captures the primary display when no selector is
+provided. Explicit `display_id`/`display_name`/`display_index` captures crop to
+that monitor, window-targeted captures activate and focus-verify the window
+before cropping to its bounds, and `capture_all_displays=true` is the only
+virtual-desktop capture path. If display topology is unavailable only for an
+omitted selector, the Linux backend preserves the legacy raw capture and emits
+a downgrade diagnostic.
 
 X11 and XWayland have a fallback snapshot path with synthetic root
 bounds from `xwininfo` plus child-region recovery. The fallback
@@ -168,6 +198,12 @@ For snapshot-based actions, the runtime maps `StreamPixels` to
 `capture.logical_rect`, including monitor offsets. If `logical_rect`
 is missing, the runtime fails closed with a structured diagnostic
 rather than pretending screenshot pixels are desktop coordinates.
+`PortalRemoteDesktop` then subtracts `capture.source_logical_rect` to dispatch
+stream-local portal coordinates; if that dispatch source is missing for an
+independent Screenshot-portal snapshot, portal actions fail with a structured
+request error. `LinuxVirtualInput` and `XTest` dispatch the desktop-logical point
+directly. This keeps non-primary and negative-origin display actions aligned
+with cropped screenshots.
 
 The shared math helpers live in `crates/sky-cua-linux/src/coords.rs`; the
 action-specific decisions about portal stream coordinates, X11 original pixels,
