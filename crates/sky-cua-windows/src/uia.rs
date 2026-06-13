@@ -999,8 +999,8 @@ mod tests {
         role_for_control_type, uia_action_for_request,
     };
     use sky_cua_platform::model::{
-        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace, ElementNode,
-        PixelSize, RectF,
+        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
+        ElementNode, PixelSize, RectF,
     };
     use windows::Win32::UI::Accessibility::{
         UIA_ButtonControlTypeId, UIA_EditControlTypeId, UIA_PaneControlTypeId,
@@ -1521,6 +1521,8 @@ mod tests {
         CaptureInfo {
             backend: CaptureBackendKind::WindowsGdi,
             image_backend: Some(CaptureBackendKind::WindowsGdi),
+            capture_scope: CaptureScope::Window,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: None,
             source_type: None,
@@ -1532,6 +1534,7 @@ mod tests {
                 height,
                 space: CoordinateSpace::DesktopLogical,
             }),
+            source_logical_rect: None,
             pixel_size: Some(PixelSize {
                 width: width as u32,
                 height: height as u32,

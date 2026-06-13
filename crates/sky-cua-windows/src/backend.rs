@@ -2,28 +2,36 @@ use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 use std::path::PathBuf;
 use std::ptr::null_mut;
+use std::sync::Once;
 
 use image::{ImageBuffer, Rgb};
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
-    CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, DoctorReport, ElementNode,
-    EnvironmentInfo, FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities,
-    RectF, ScrollDirection, SemanticBackendKind, SessionKind, SessionPresenceIntent,
-    SessionPresenceStatus, ToolAvailability, ToolCapabilities,
+    CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace, DisplayInfo,
+    DisplayIntersection, DisplayRef, DisplayTarget, DoctorReport, ElementNode, EnvironmentInfo,
+    FocusedApp, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
+    ScrollDirection, SemanticBackendKind, SessionKind, SessionPresenceIntent,
+    SessionPresenceStatus, ToolAvailability, ToolCapabilities, WindowInfo as ModelWindowInfo,
+    WindowTarget,
 };
 use sky_cua_platform::{new_snapshot_id, sky_cua_state_dir};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
-    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDIBits, GetWindowDC, HBITMAP, HDC, HGDIOBJ,
-    ReleaseDC, SRCCOPY, SelectObject,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, EnumDisplayMonitors, GetDIBits, GetMonitorInfoW,
+    GetWindowDC, HBITMAP, HDC, HGDIOBJ, HMONITOR, MONITORINFO, MONITORINFOEXW, ReleaseDC, SRCCOPY,
+    SelectObject,
 };
 use windows_sys::Win32::Storage::Xps::PrintWindow;
 use windows_sys::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
 use windows_sys::Win32::System::Threading::{
     OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+};
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    GetDpiForMonitor, MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
@@ -35,9 +43,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GUITHREADINFO, GetCursorPos, GetDesktopWindow, GetForegroundWindow,
     GetGUIThreadInfo, GetSystemMetrics, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SM_CXVIRTUALSCREEN,
-    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursorPos, SetForegroundWindow,
-    WM_CHAR, WM_KEYDOWN, WM_KEYUP,
+    GetWindowThreadProcessId, IsWindowVisible, MONITORINFOF_PRIMARY, PostMessageW,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursorPos,
+    SetForegroundWindow, WM_CHAR, WM_KEYDOWN, WM_KEYUP,
 };
 
 use crate::{session_presence::SessionPresenceManager, uia};
@@ -78,6 +86,8 @@ struct WindowInfo {
     pid: Option<u32>,
     executable: Option<String>,
     bounds: RectF,
+    display: Option<DisplayRef>,
+    display_intersections: Vec<DisplayIntersection>,
     is_foreground: bool,
 }
 
@@ -89,6 +99,7 @@ pub struct WindowsDesktopBackend {
 impl WindowsDesktopBackend {
     #[must_use]
     pub fn new() -> Self {
+        ensure_dpi_awareness();
         Self {
             session_presence: SessionPresenceManager::new(),
         }
@@ -147,6 +158,15 @@ impl WindowsDesktopBackend {
             window_handle: app.window_handle.clone(),
             toolkit_guess: app.toolkit_guess.clone(),
             window_title: app.window_title.clone(),
+            display: None,
+        }
+    }
+
+    fn focused_from_window(window: &WindowInfo) -> FocusedApp {
+        let app = Self::window_to_app(window);
+        FocusedApp {
+            display: window.display.clone(),
+            ..Self::focused_from_app(&app)
         }
     }
 
@@ -179,6 +199,7 @@ impl WindowsDesktopBackend {
 #[async_trait::async_trait]
 impl DesktopBackend for WindowsDesktopBackend {
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+        ensure_dpi_awareness();
         let input_backend = select_input_backend().model_kind();
         let semantic_backend = if uia::is_available() {
             SemanticBackendKind::Uia
@@ -203,6 +224,7 @@ impl DesktopBackend for WindowsDesktopBackend {
             xdg_session_type: None,
             display: None,
             wayland_display: None,
+            displays: enumerate_displays(),
         })
     }
 
@@ -237,6 +259,30 @@ impl DesktopBackend for WindowsDesktopBackend {
             .into_iter()
             .map(|window| Self::window_to_app(&window))
             .collect())
+    }
+
+    async fn list_windows(&self) -> Result<Vec<ModelWindowInfo>, BackendError> {
+        Ok(enumerate_windows()
+            .into_iter()
+            .map(window_to_model)
+            .collect())
+    }
+
+    async fn focused_window(&self) -> Result<Option<ModelWindowInfo>, BackendError> {
+        Ok(enumerate_windows()
+            .into_iter()
+            .find(|window| window.is_foreground)
+            .map(window_to_model))
+    }
+
+    async fn activate_window(&self, target: WindowTarget) -> Result<ActionOutcome, BackendError> {
+        let windows = enumerate_windows();
+        let window = resolve_window_target(&windows, &target)?;
+        focus_window(window.hwnd)?;
+        Ok(success(&format!(
+            "Activated Windows window 0x{:x}.",
+            window.hwnd
+        )))
     }
 
     async fn get_app_state(
@@ -305,8 +351,7 @@ impl DesktopBackend for WindowsDesktopBackend {
         }
 
         let (focused_app, elements) = if let Some(window) = selected.as_ref() {
-            let app = Self::window_to_app(window);
-            let focused_app = Some(Self::focused_from_app(&app));
+            let focused_app = Some(Self::focused_from_window(window));
             let uia_elements = if environment.semantic_backend == SemanticBackendKind::Uia {
                 uia::collect_elements_for_hwnd(
                     window.hwnd,
@@ -364,6 +409,94 @@ impl DesktopBackend for WindowsDesktopBackend {
             focused_app,
             capture: capture_result.map(|result| result.capture),
             elements,
+            diagnostics: diagnostics.finish(),
+            app_guidance: None,
+            doctor_report: None,
+            agent_cursor: None,
+        })
+    }
+
+    async fn screenshot(
+        &self,
+        target: Option<WindowTarget>,
+        display_target: Option<DisplayTarget>,
+        capture_all_displays: bool,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        let snapshot_id = new_snapshot_id();
+        let environment = self.probe_environment().await?;
+        let capabilities = Self::capabilities(&environment);
+        let mut diagnostics = DiagnosticBuilder::new();
+
+        let mut focused_app = None;
+        let (source, scope, display) = if let Some(target) = target {
+            let windows = enumerate_windows();
+            let window = resolve_window_target(&windows, &target)?;
+            focus_window(window.hwnd)?;
+            diagnostics.push_code(
+                "WindowFocusRequested",
+                format!(
+                    "Requested foreground focus for Windows window 0x{:x}.",
+                    window.hwnd
+                ),
+                None,
+            );
+            focused_app = Some(Self::focused_from_window(&window));
+            (
+                capture_source_for_window(&window)?,
+                CaptureScope::Window,
+                window.display.clone(),
+            )
+        } else if let Some(display_target) = display_target {
+            let display = resolve_display_target(&environment.displays, &display_target)?;
+            let display_ref = DisplayRef::from(&display);
+            (
+                capture_source_for_rect(&display.logical_rect, Some(display_ref.clone()))?,
+                CaptureScope::Display,
+                Some(display_ref),
+            )
+        } else if capture_all_displays {
+            (
+                virtual_desktop_capture_source()?,
+                CaptureScope::AllDisplays,
+                None,
+            )
+        } else if let Some(display) = primary_display(&environment.displays) {
+            let display_ref = DisplayRef::from(&display);
+            (
+                capture_source_for_rect(&display.logical_rect, Some(display_ref.clone()))?,
+                CaptureScope::PrimaryDisplay,
+                Some(display_ref),
+            )
+        } else {
+            diagnostics.push(
+                BackendErrorCode::CaptureBackendDowngraded,
+                "Windows monitor topology is unavailable, so screenshot fell back to the virtual desktop capture for an omitted selector.",
+                None,
+            );
+            (
+                virtual_desktop_capture_source()?,
+                CaptureScope::Unknown,
+                None,
+            )
+        };
+
+        let capture_result = capture_desktop_with_source(&snapshot_id, source, scope, display)
+            .await
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Internal,
+                    format!("Windows GDI screenshot capture failed: {}", error.message),
+                )
+            })?;
+
+        Ok(AppStateSnapshot {
+            snapshot_id,
+            created_at: chrono::Utc::now(),
+            environment,
+            capabilities,
+            focused_app,
+            capture: Some(capture_result.capture),
+            elements: Vec::new(),
             diagnostics: diagnostics.finish(),
             app_guidance: None,
             doctor_report: None,
@@ -664,6 +797,183 @@ fn select_window(windows: &[WindowInfo], selector: &AppSelector) -> Option<Windo
         .cloned()
 }
 
+fn resolve_window_target(
+    windows: &[WindowInfo],
+    target: &WindowTarget,
+) -> Result<WindowInfo, BackendError> {
+    if let Some(window_id) = normalized_target(target.window_id.as_deref()) {
+        let matches = windows
+            .iter()
+            .filter(|window| window_id_matches(window, &window_id))
+            .collect::<Vec<_>>();
+        return unique_windows_match(matches, &format!("window_id {window_id}"));
+    }
+
+    if let Some(app_id) = normalized_target(target.app_id.as_deref()) {
+        let matches = windows
+            .iter()
+            .filter(|window| window_id_matches(window, &app_id))
+            .collect::<Vec<_>>();
+        return unique_windows_match(matches, &format!("app_id {app_id}"));
+    }
+
+    if let Some(pid) = target.pid {
+        let matches = windows
+            .iter()
+            .filter(|window| window.pid == Some(pid))
+            .collect::<Vec<_>>();
+        return unique_windows_match(matches, &format!("pid {pid}"));
+    }
+
+    if let Some(wm_class) = normalized_target(target.wm_class.as_deref()) {
+        let wm_class = wm_class.to_ascii_lowercase();
+        let matches = windows
+            .iter()
+            .filter(|window| {
+                window
+                    .executable
+                    .as_deref()
+                    .is_some_and(|exe| exe.to_ascii_lowercase().contains(&wm_class))
+            })
+            .collect::<Vec<_>>();
+        return unique_windows_match(matches, &format!("wm_class containing {wm_class}"));
+    }
+
+    if let Some(title) = normalized_target(target.title.as_deref()) {
+        let title_lower = title.to_ascii_lowercase();
+        let matches = windows
+            .iter()
+            .filter(|window| {
+                window.title.eq_ignore_ascii_case(&title)
+                    || window.title.to_ascii_lowercase().contains(&title_lower)
+            })
+            .collect::<Vec<_>>();
+        return unique_windows_match(matches, &format!("title containing {title}"));
+    }
+
+    Err(BackendError::new(
+        BackendErrorCode::InvalidRequest,
+        "Pass window_id, pid, app_id, wm_class, or title to target a Windows window.",
+    ))
+}
+
+fn window_id_matches(window: &WindowInfo, value: &str) -> bool {
+    let normalized = value.trim();
+    normalized.eq_ignore_ascii_case(&format!("hwnd:0x{:x}", window.hwnd))
+        || normalized.eq_ignore_ascii_case(&format!("0x{:x}", window.hwnd))
+}
+
+fn unique_windows_match(
+    matches: Vec<&WindowInfo>,
+    description: &str,
+) -> Result<WindowInfo, BackendError> {
+    match matches.as_slice() {
+        [window] => Ok((*window).clone()),
+        [] => Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("No Windows window matched {description}."),
+        )),
+        windows => {
+            let ids = windows
+                .iter()
+                .map(|window| format!("hwnd:0x{:x}", window.hwnd))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                format!(
+                    "{description} matched multiple Windows windows ({ids}); add window_id to disambiguate."
+                ),
+            ))
+        }
+    }
+}
+
+fn normalized_target(value: Option<&str>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
+}
+
+fn resolve_display_target(
+    displays: &[DisplayInfo],
+    target: &DisplayTarget,
+) -> Result<DisplayInfo, BackendError> {
+    let matches = displays
+        .iter()
+        .filter(|display| display_matches_target(display, target))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [display] => Ok((*display).clone()),
+        [] => Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("no Windows display matched requested screenshot target: {target:?}"),
+        )),
+        _ => Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("Windows display target is ambiguous: {target:?}"),
+        )),
+    }
+}
+
+fn display_matches_target(display: &DisplayInfo, target: &DisplayTarget) -> bool {
+    let mut matched = false;
+    if let Some(value) = target.display_id.as_ref() {
+        if !display.display_id.eq_ignore_ascii_case(value.trim()) {
+            return false;
+        }
+        matched = true;
+    }
+    if let Some(value) = target.display_name.as_ref() {
+        if !{
+            let value = value.trim();
+            display
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(value))
+                || display.display_id.eq_ignore_ascii_case(value)
+        } {
+            return false;
+        }
+        matched = true;
+    }
+    if let Some(index) = target.display_index {
+        if display.index != index {
+            return false;
+        }
+        matched = true;
+    }
+    matched
+}
+
+fn primary_display(displays: &[DisplayInfo]) -> Option<DisplayInfo> {
+    displays
+        .iter()
+        .find(|display| display.primary)
+        .or_else(|| displays.first())
+        .cloned()
+}
+
+fn window_to_model(window: WindowInfo) -> ModelWindowInfo {
+    ModelWindowInfo {
+        window_id: format!("hwnd:0x{:x}", window.hwnd),
+        title: Some(window.title),
+        app_id: Some(format!("hwnd:0x{:x}", window.hwnd)),
+        wm_class: window.executable.clone(),
+        pid: window.pid,
+        bounds: Some(window.bounds),
+        display: window.display,
+        display_intersections: window.display_intersections,
+        workspace: None,
+        focused: window.is_foreground,
+        hidden: false,
+        client_type: Some("win32".to_string()),
+        backend: "windows".to_string(),
+        terminal: None,
+    }
+}
+
 fn window_element(window: &WindowInfo, element_index: usize) -> ElementNode {
     ElementNode {
         element_index,
@@ -697,9 +1007,12 @@ fn window_element(window: &WindowInfo, element_index: usize) -> ElementNode {
 #[derive(Debug, Clone)]
 struct CaptureSource {
     hwnd: Option<usize>,
+    source_x: i32,
+    source_y: i32,
     width: i32,
     height: i32,
     logical_rect: Option<RectF>,
+    display: Option<DisplayRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -718,6 +1031,25 @@ async fn capture_desktop(
     snapshot_id: &str,
     window: Option<&WindowInfo>,
 ) -> Result<CaptureResult, BackendError> {
+    let source = match window {
+        Some(window) => capture_source_for_window(window)?,
+        None => virtual_desktop_capture_source()?,
+    };
+    let scope = if window.is_some() {
+        CaptureScope::Window
+    } else {
+        CaptureScope::AllDisplays
+    };
+    let display = source.display.clone();
+    capture_desktop_with_source(snapshot_id, source, scope, display).await
+}
+
+async fn capture_desktop_with_source(
+    snapshot_id: &str,
+    source: CaptureSource,
+    capture_scope: CaptureScope,
+    display: Option<DisplayRef>,
+) -> Result<CaptureResult, BackendError> {
     let output_path = capture_output_path(snapshot_id)?;
     if let Some(parent) = output_path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -731,7 +1063,6 @@ async fn capture_desktop(
         })?;
     }
     let path = output_path.clone();
-    let source = capture_source(window)?;
     let logical_rect = source.logical_rect.clone();
     let image_result = tokio::task::spawn_blocking(move || capture_desktop_blocking(&path, source))
         .await
@@ -745,10 +1076,13 @@ async fn capture_desktop(
     let capture = CaptureInfo {
         backend: CaptureBackendKind::WindowsGdi,
         image_backend: Some(CaptureBackendKind::WindowsGdi),
+        capture_scope,
+        display,
         coordinate_space: Some(CoordinateSpace::StreamPixels),
         stream_id: None,
         source_type: None,
         mapping_id: None,
+        source_logical_rect: logical_rect.clone(),
         logical_rect,
         pixel_size: Some(image_result.pixel_size.clone()),
         original_pixel_size: Some(image_result.pixel_size),
@@ -766,16 +1100,34 @@ async fn capture_desktop(
     })
 }
 
-fn capture_source(window: Option<&WindowInfo>) -> Result<CaptureSource, BackendError> {
-    if let Some(window) = window {
-        return Ok(CaptureSource {
-            hwnd: Some(window.hwnd),
-            width: rounded_positive_i32(window.bounds.width, "window width")?,
-            height: rounded_positive_i32(window.bounds.height, "window height")?,
-            logical_rect: Some(window.bounds.clone()),
-        });
-    }
+fn capture_source_for_window(window: &WindowInfo) -> Result<CaptureSource, BackendError> {
+    Ok(CaptureSource {
+        hwnd: Some(window.hwnd),
+        source_x: 0,
+        source_y: 0,
+        width: rounded_positive_i32(window.bounds.width, "window width")?,
+        height: rounded_positive_i32(window.bounds.height, "window height")?,
+        logical_rect: Some(window.bounds.clone()),
+        display: window.display.clone(),
+    })
+}
 
+fn capture_source_for_rect(
+    rect: &RectF,
+    display: Option<DisplayRef>,
+) -> Result<CaptureSource, BackendError> {
+    Ok(CaptureSource {
+        hwnd: None,
+        source_x: rounded_i32(rect.x, "display x")?,
+        source_y: rounded_i32(rect.y, "display y")?,
+        width: rounded_positive_i32(rect.width, "display width")?,
+        height: rounded_positive_i32(rect.height, "display height")?,
+        logical_rect: Some(rect.clone()),
+        display,
+    })
+}
+
+fn virtual_desktop_capture_source() -> Result<CaptureSource, BackendError> {
     unsafe {
         let width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
         let height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
@@ -785,19 +1137,34 @@ fn capture_source(window: Option<&WindowInfo>) -> Result<CaptureSource, BackendE
                 "Windows virtual screen dimensions are invalid",
             ));
         }
+        let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
         Ok(CaptureSource {
             hwnd: None,
+            source_x: x,
+            source_y: y,
             width,
             height,
             logical_rect: Some(RectF {
-                x: f64::from(GetSystemMetrics(SM_XVIRTUALSCREEN)),
-                y: f64::from(GetSystemMetrics(SM_YVIRTUALSCREEN)),
+                x: f64::from(x),
+                y: f64::from(y),
                 width: f64::from(width),
                 height: f64::from(height),
                 space: CoordinateSpace::DesktopLogical,
             }),
+            display: None,
         })
     }
+}
+
+fn rounded_i32(value: f64, label: &str) -> Result<i32, BackendError> {
+    if value < f64::from(i32::MIN) || value > f64::from(i32::MAX) {
+        return Err(BackendError::new(
+            BackendErrorCode::Internal,
+            format!("Windows capture {label} is invalid: {value}"),
+        ));
+    }
+    Ok(value.round() as i32)
 }
 
 fn rounded_positive_i32(value: f64, label: &str) -> Result<i32, BackendError> {
@@ -814,11 +1181,14 @@ fn empty_capture() -> CaptureInfo {
     CaptureInfo {
         backend: CaptureBackendKind::WindowsGdi,
         image_backend: None,
+        capture_scope: CaptureScope::Unknown,
+        display: None,
         coordinate_space: Some(CoordinateSpace::StreamPixels),
         stream_id: None,
         source_type: None,
         mapping_id: None,
         logical_rect: None,
+        source_logical_rect: None,
         pixel_size: None,
         original_pixel_size: None,
         logical_to_pixel_scale: Some(1.0),
@@ -845,6 +1215,7 @@ fn capture_desktop_blocking(
     path: &PathBuf,
     source: CaptureSource,
 ) -> Result<CaptureImageResult, BackendError> {
+    ensure_dpi_awareness();
     unsafe {
         let capture_window = if let Some(hwnd) = source.hwnd {
             hwnd as HWND
@@ -875,7 +1246,17 @@ fn capture_desktop_blocking(
         let copied = if source.hwnd.is_some() {
             PrintWindow(capture_window, memory_dc, 0)
         } else {
-            BitBlt(memory_dc, 0, 0, width, height, screen_dc, 0, 0, SRCCOPY)
+            BitBlt(
+                memory_dc,
+                0,
+                0,
+                width,
+                height,
+                screen_dc,
+                source.source_x,
+                source.source_y,
+                SRCCOPY,
+            )
         };
         if copied == 0 {
             SelectObject(memory_dc, old);
@@ -1001,6 +1382,7 @@ unsafe fn cleanup_capture_dc(window: HWND, screen_dc: HDC, memory_dc: HDC, bitma
 }
 
 fn enumerate_windows() -> Vec<WindowInfo> {
+    ensure_dpi_awareness();
     unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> i32 {
         let windows = unsafe { &mut *(lparam as *mut Vec<WindowInfo>) };
         if let Some(window) = unsafe { window_info(hwnd) } {
@@ -1016,7 +1398,145 @@ fn enumerate_windows() -> Vec<WindowInfo> {
             &mut windows as *mut Vec<WindowInfo> as LPARAM,
         );
     }
+    let displays = enumerate_displays();
+    assign_window_displays(&mut windows, &displays);
     windows
+}
+
+fn enumerate_displays() -> Vec<DisplayInfo> {
+    ensure_dpi_awareness();
+    unsafe extern "system" fn callback(
+        monitor: HMONITOR,
+        _hdc: HDC,
+        _rect: *mut RECT,
+        lparam: LPARAM,
+    ) -> i32 {
+        let displays = unsafe { &mut *(lparam as *mut Vec<DisplayInfo>) };
+        if let Some(display) = unsafe { display_info(monitor, displays.len()) } {
+            displays.push(display);
+        }
+        1
+    }
+
+    let mut displays = Vec::new();
+    unsafe {
+        EnumDisplayMonitors(
+            null_mut(),
+            std::ptr::null(),
+            Some(callback),
+            &mut displays as *mut Vec<DisplayInfo> as LPARAM,
+        );
+    }
+    normalize_displays(displays)
+}
+
+unsafe fn display_info(monitor: HMONITOR, index: usize) -> Option<DisplayInfo> {
+    let mut info: MONITORINFOEXW = unsafe { zeroed() };
+    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    if unsafe {
+        GetMonitorInfoW(
+            monitor,
+            &mut info as *mut MONITORINFOEXW as *mut MONITORINFO,
+        )
+    } == 0
+    {
+        return None;
+    }
+    let rect = info.monitorInfo.rcMonitor;
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let name = utf16_null_terminated(&info.szDevice)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("DISPLAY{}", index + 1));
+    let scale_factor = monitor_scale_factor(monitor);
+    Some(DisplayInfo {
+        display_id: format!("windows:{name}"),
+        name: Some(name),
+        index: u32::try_from(index).unwrap_or(u32::MAX),
+        primary: (info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0,
+        logical_rect: RectF {
+            x: f64::from(rect.left),
+            y: f64::from(rect.top),
+            width: f64::from(width),
+            height: f64::from(height),
+            space: CoordinateSpace::DesktopLogical,
+        },
+        pixel_size: Some(PixelSize {
+            width: width as u32,
+            height: height as u32,
+        }),
+        scale_factor: Some(scale_factor),
+        backend: "windows".to_string(),
+    })
+}
+
+fn ensure_dpi_awareness() {
+    static DPI_AWARENESS: Once = Once::new();
+    DPI_AWARENESS.call_once(|| unsafe {
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 {
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+        }
+    });
+}
+
+fn monitor_scale_factor(monitor: HMONITOR) -> f64 {
+    let mut dpi_x = 96u32;
+    let mut dpi_y = 96u32;
+    let ok = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+    if ok == 0 && dpi_x > 0 && dpi_y > 0 {
+        f64::from(dpi_x.max(dpi_y)) / 96.0
+    } else {
+        1.0
+    }
+}
+
+fn utf16_null_terminated(value: &[u16]) -> Option<String> {
+    let len = value.iter().position(|ch| *ch == 0).unwrap_or(value.len());
+    (len > 0).then(|| String::from_utf16_lossy(&value[..len]))
+}
+
+fn normalize_displays(mut displays: Vec<DisplayInfo>) -> Vec<DisplayInfo> {
+    displays.retain(|display| {
+        display.logical_rect.width > 0.0
+            && display.logical_rect.height > 0.0
+            && display.logical_rect.space == CoordinateSpace::DesktopLogical
+    });
+    displays.sort_by(|left, right| {
+        left.index
+            .cmp(&right.index)
+            .then_with(|| left.display_id.cmp(&right.display_id))
+    });
+    if !displays.iter().any(|display| display.primary)
+        && let Some(first) = displays.first_mut()
+    {
+        first.primary = true;
+    }
+    for (index, display) in displays.iter_mut().enumerate() {
+        display.index = u32::try_from(index).unwrap_or(u32::MAX);
+    }
+    displays
+}
+
+fn assign_window_displays(windows: &mut [WindowInfo], displays: &[DisplayInfo]) {
+    for window in windows {
+        let mut intersections = displays
+            .iter()
+            .filter_map(|display| DisplayIntersection::from_bounds(display, &window.bounds))
+            .collect::<Vec<_>>();
+        intersections.sort_by(|left, right| {
+            right
+                .intersection_area
+                .total_cmp(&left.intersection_area)
+                .then_with(|| left.display.index.cmp(&right.display.index))
+        });
+        window.display = intersections
+            .first()
+            .map(|intersection| intersection.display.clone());
+        window.display_intersections = intersections;
+    }
 }
 
 unsafe fn window_info(hwnd: HWND) -> Option<WindowInfo> {
@@ -1052,6 +1572,8 @@ unsafe fn window_info(hwnd: HWND) -> Option<WindowInfo> {
             height: f64::from(height),
             space: CoordinateSpace::DesktopLogical,
         },
+        display: None,
+        display_intersections: Vec::new(),
         is_foreground: std::ptr::eq(hwnd, unsafe { GetForegroundWindow() }),
     })
 }
@@ -1208,6 +1730,25 @@ fn focus_request_window(request: &ActionRequest) {
     unsafe {
         SetForegroundWindow(handle);
     }
+}
+
+fn focus_window(hwnd: usize) -> Result<(), BackendError> {
+    ensure_dpi_awareness();
+    let ok = unsafe { SetForegroundWindow(hwnd as HWND) };
+    if ok == 0 {
+        return Err(win32_error(
+            "SetForegroundWindow failed for Windows window target",
+        ));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let foreground = unsafe { GetForegroundWindow() };
+    if !std::ptr::eq(foreground, hwnd as HWND) {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!("Windows focus verification failed after activating window 0x{hwnd:x}"),
+        ));
+    }
+    Ok(())
 }
 
 fn request_hwnd(request: &ActionRequest) -> Result<HWND, BackendError> {
@@ -1665,13 +2206,15 @@ fn win32_error(message: &str) -> BackendError {
 mod tests {
     use super::{
         CaptureBlankFrame, WindowInfo, WindowsInputBackend, absolute_pointer_coord,
-        absolute_pointer_coords, desktop_action_point, desktop_drag_from_point,
-        detect_blank_rgb_frame, parse_hwnd, scroll_delta_y, uia_backend_ref_for_fallback,
-        virtual_key, window_element,
+        absolute_pointer_coords, assign_window_displays, capture_source_for_rect,
+        desktop_action_point, desktop_drag_from_point, detect_blank_rgb_frame, parse_hwnd,
+        primary_display, resolve_display_target, resolve_window_target, scroll_delta_y,
+        uia_backend_ref_for_fallback, virtual_key, window_element,
     };
+    use sky_cua_platform::diagnostics::BackendErrorCode;
     use sky_cua_platform::model::{
-        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace, ElementNode,
-        InputBackendKind, PixelSize, RectF,
+        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
+        DisplayInfo, DisplayTarget, ElementNode, InputBackendKind, PixelSize, RectF, WindowTarget,
     };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_RETURN};
 
@@ -1714,6 +2257,17 @@ mod tests {
         );
 
         assert_eq!(desktop_action_point(&request).unwrap(), (2560.0, 360.0));
+    }
+
+    #[test]
+    fn maps_secondary_negative_origin_stream_pixels_to_desktop_coordinates() {
+        let request = action_request(
+            serde_json::json!({ "x": 640.0, "y": 360.0 }),
+            Some(capture_with_rect(-1280.0, 0.0, 1280.0, 720.0, 1.0)),
+            None,
+        );
+
+        assert_eq!(desktop_action_point(&request).unwrap(), (-640.0, 360.0));
     }
 
     #[test]
@@ -1800,6 +2354,8 @@ mod tests {
                 height: 1070.0,
                 space: CoordinateSpace::DesktopLogical,
             },
+            display: None,
+            display_intersections: Vec::new(),
             is_foreground: true,
         };
 
@@ -1875,6 +2431,198 @@ mod tests {
         assert_eq!(detect_blank_rgb_frame(&pixels), None);
     }
 
+    #[test]
+    fn assigns_windows_to_largest_monitor_intersection() {
+        let displays = vec![
+            display("windows:\\\\.\\DISPLAY1", 0, true, 0.0, 0.0, 1920.0, 1080.0),
+            display(
+                "windows:\\\\.\\DISPLAY2",
+                1,
+                false,
+                -1280.0,
+                0.0,
+                1280.0,
+                720.0,
+            ),
+        ];
+        let mut windows = vec![WindowInfo {
+            hwnd: 0x20,
+            title: "Tool".to_string(),
+            pid: Some(22),
+            executable: None,
+            bounds: RectF {
+                x: -900.0,
+                y: 10.0,
+                width: 1000.0,
+                height: 500.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            display: None,
+            display_intersections: Vec::new(),
+            is_foreground: false,
+        }];
+
+        assign_window_displays(&mut windows, &displays);
+
+        assert_eq!(
+            windows[0]
+                .display
+                .as_ref()
+                .map(|display| display.display_id.as_str()),
+            Some("windows:\\\\.\\DISPLAY2")
+        );
+        assert_eq!(windows[0].display_intersections.len(), 2);
+    }
+
+    #[test]
+    fn resolves_primary_and_explicit_display_targets() {
+        let displays = vec![
+            display("windows:\\\\.\\DISPLAY1", 0, true, 0.0, 0.0, 1920.0, 1080.0),
+            display(
+                "windows:\\\\.\\DISPLAY2",
+                1,
+                false,
+                1920.0,
+                0.0,
+                1280.0,
+                720.0,
+            ),
+        ];
+
+        assert_eq!(
+            primary_display(&displays).map(|display| display.display_id),
+            Some("windows:\\\\.\\DISPLAY1".to_string())
+        );
+        let resolved = resolve_display_target(
+            &displays,
+            &DisplayTarget {
+                display_id: None,
+                display_name: None,
+                display_index: Some(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(resolved.display_id, "windows:\\\\.\\DISPLAY2");
+    }
+
+    #[test]
+    fn display_target_fields_must_match_same_windows_display() {
+        let displays = vec![
+            display("windows:\\\\.\\DISPLAY1", 0, true, 0.0, 0.0, 1920.0, 1080.0),
+            display(
+                "windows:\\\\.\\DISPLAY2",
+                1,
+                false,
+                1920.0,
+                0.0,
+                1280.0,
+                720.0,
+            ),
+        ];
+
+        let resolved = resolve_display_target(
+            &displays,
+            &DisplayTarget {
+                display_id: Some("windows:\\\\.\\DISPLAY2".to_string()),
+                display_name: Some("\\\\.\\DISPLAY2".to_string()),
+                display_index: Some(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(resolved.display_id, "windows:\\\\.\\DISPLAY2");
+
+        let error = resolve_display_target(
+            &displays,
+            &DisplayTarget {
+                display_id: Some("windows:missing".to_string()),
+                display_name: None,
+                display_index: Some(0),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+    }
+
+    #[test]
+    fn resolves_exact_window_id_before_broad_metadata() {
+        let windows = vec![
+            window_for_target(0x10, "Shared Title", Some(10), Some("shared.exe")),
+            window_for_target(0x20, "Shared Title", Some(20), Some("other.exe")),
+        ];
+
+        let resolved = resolve_window_target(
+            &windows,
+            &WindowTarget {
+                window_id: Some("hwnd:0x20".to_string()),
+                title: Some("Shared Title".to_string()),
+                wm_class: Some("shared".to_string()),
+                ..WindowTarget::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(resolved.hwnd, 0x20);
+    }
+
+    #[test]
+    fn reports_ambiguous_windows_title_targets() {
+        let windows = vec![
+            window_for_target(0x10, "Shared Title", Some(10), None),
+            window_for_target(0x20, "Shared Title", Some(20), None),
+        ];
+
+        let error = resolve_window_target(
+            &windows,
+            &WindowTarget {
+                title: Some("Shared Title".to_string()),
+                ..WindowTarget::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.message.contains("matched multiple Windows windows"));
+    }
+
+    #[test]
+    fn resolves_windows_title_substrings_case_insensitively() {
+        let windows = vec![window_for_target(
+            0x10,
+            "Untitled - Notepad",
+            Some(10),
+            None,
+        )];
+
+        let resolved = resolve_window_target(
+            &windows,
+            &WindowTarget {
+                title: Some("notepad".to_string()),
+                ..WindowTarget::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(resolved.hwnd, 0x10);
+    }
+
+    #[test]
+    fn display_capture_source_preserves_nonzero_origin() {
+        let rect = RectF {
+            x: -1280.0,
+            y: 0.0,
+            width: 1280.0,
+            height: 720.0,
+            space: CoordinateSpace::DesktopLogical,
+        };
+
+        let source = capture_source_for_rect(&rect, None).unwrap();
+
+        assert_eq!(source.source_x, -1280);
+        assert_eq!(source.source_y, 0);
+        assert_eq!(source.width, 1280);
+        assert_eq!(source.height, 720);
+        assert_eq!(source.logical_rect, Some(rect));
+    }
+
     fn action_request(
         arguments: serde_json::Value,
         resolved_capture: Option<CaptureInfo>,
@@ -1897,6 +2645,8 @@ mod tests {
         CaptureInfo {
             backend: CaptureBackendKind::WindowsGdi,
             image_backend: Some(CaptureBackendKind::WindowsGdi),
+            capture_scope: CaptureScope::Window,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: None,
             source_type: None,
@@ -1908,6 +2658,7 @@ mod tests {
                 height,
                 space: CoordinateSpace::DesktopLogical,
             }),
+            source_logical_rect: None,
             pixel_size: Some(PixelSize {
                 width: (width * scale) as u32,
                 height: (height * scale) as u32,
@@ -1920,6 +2671,60 @@ mod tests {
             model_image_quality: None,
             model_image_bytes: None,
             model_image_encode_ms: None,
+        }
+    }
+
+    fn display(
+        id: &str,
+        index: u32,
+        primary: bool,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) -> DisplayInfo {
+        DisplayInfo {
+            display_id: id.to_string(),
+            name: id.rsplit(':').next().map(ToOwned::to_owned),
+            index,
+            primary,
+            logical_rect: RectF {
+                x,
+                y,
+                width,
+                height,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            pixel_size: Some(PixelSize {
+                width: width as u32,
+                height: height as u32,
+            }),
+            scale_factor: Some(1.0),
+            backend: "windows".to_string(),
+        }
+    }
+
+    fn window_for_target(
+        hwnd: usize,
+        title: &str,
+        pid: Option<u32>,
+        executable: Option<&str>,
+    ) -> WindowInfo {
+        WindowInfo {
+            hwnd,
+            title: title.to_string(),
+            pid,
+            executable: executable.map(ToOwned::to_owned),
+            bounds: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            display: None,
+            display_intersections: Vec::new(),
+            is_foreground: false,
         }
     }
 }
