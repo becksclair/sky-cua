@@ -715,8 +715,8 @@ mod tests {
     use image::{ImageBuffer, Rgba};
     use sky_cua_overlay_host::{OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostReply};
     use sky_cua_platform::model::{
-        ActionName, ActionOutcome, ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace,
-        ElementNode, ModelImageFormat, PixelSize, RectF,
+        ActionName, ActionOutcome, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope,
+        CoordinateSpace, ElementNode, ModelImageFormat, PixelSize, RectF,
     };
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -1377,10 +1377,13 @@ mod tests {
         CaptureInfo {
             backend: CaptureBackendKind::PortalPipeWire,
             image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: None,
             source_type: None,
             mapping_id: Some("mapping".to_string()),
+            source_logical_rect: None,
             logical_rect: None,
             pixel_size: Some(PixelSize {
                 width: 31,
@@ -1404,10 +1407,13 @@ mod tests {
         CaptureInfo {
             backend: CaptureBackendKind::PortalPipeWire,
             image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: Some("stream".to_string()),
             source_type: Some(1),
             mapping_id: Some("mapping".to_string()),
+            source_logical_rect: None,
             logical_rect: Some(logical_rect),
             pixel_size: Some(PixelSize {
                 width: 400,
@@ -1428,10 +1434,13 @@ mod tests {
         CaptureInfo {
             backend: CaptureBackendKind::X11,
             image_backend: Some(CaptureBackendKind::X11),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: None,
             source_type: None,
             mapping_id: Some("x11-root".to_string()),
+            source_logical_rect: None,
             logical_rect: None,
             pixel_size: Some(PixelSize {
                 width: 1920,
@@ -1514,6 +1523,7 @@ mod tests {
             xdg_session_type: None,
             display: None,
             wayland_display: None,
+            displays: Vec::new(),
         }
     }
 

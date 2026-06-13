@@ -3,10 +3,10 @@ use async_trait::async_trait;
 use crate::diagnostics::BackendError;
 use crate::model::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
-    CaptureBackendKind, CaptureScreenMode, DiagnosticEntry, DoctorCheck, DoctorReadiness,
-    DoctorReport, EnvironmentInfo, HeuristicMatch, InputBackendKind, PortalTokenResetOutcome,
-    SemanticBackendKind, SessionPresenceIntent, SessionPresenceStatus, WindowInfo, WindowTarget,
-    WindowTargetingSetupReport,
+    CaptureBackendKind, CaptureScreenMode, DiagnosticEntry, DisplayTarget, DoctorCheck,
+    DoctorReadiness, DoctorReport, EnvironmentInfo, HeuristicMatch, InputBackendKind,
+    PortalTokenResetOutcome, SemanticBackendKind, SessionPresenceIntent, SessionPresenceStatus,
+    WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
 
 #[async_trait]
@@ -119,6 +119,20 @@ pub trait DesktopBackend: Send + Sync {
         selector: Option<AppSelector>,
         capture_screen: CaptureScreenMode,
     ) -> Result<AppStateSnapshot, BackendError>;
+    async fn screenshot(
+        &self,
+        target: Option<WindowTarget>,
+        display_target: Option<DisplayTarget>,
+        capture_all_displays: bool,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        if target.is_some() || display_target.is_some() || capture_all_displays {
+            return Err(BackendError::new(
+                crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+                "targeted screenshots are not available for this backend",
+            ));
+        }
+        self.get_app_state(None, CaptureScreenMode::Always).await
+    }
     async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError>;
     async fn reset_portal_tokens(&self) -> Result<PortalTokenResetOutcome, BackendError> {
         Err(BackendError::new(

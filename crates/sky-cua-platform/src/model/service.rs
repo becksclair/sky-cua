@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AgentCursorCapabilities,
     AgentCursorState, AppInfo, AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse,
-    CaptureScreenMode, DiagnosticEntry, DoctorReport, EnvironmentInfo, SessionPresenceIntent,
-    SessionPresenceStatus, WindowInfo, WindowTarget, WindowTargetingSetupReport,
+    CaptureScreenMode, DiagnosticEntry, DisplayTarget, DoctorReport, EnvironmentInfo,
+    SessionPresenceIntent, SessionPresenceStatus, WindowInfo, WindowTarget,
+    WindowTargetingSetupReport,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,6 +29,14 @@ pub enum ServiceRequest {
         selector: Option<AppSelector>,
         #[serde(default, skip_serializing_if = "is_default_capture_screen")]
         capture_screen: CaptureScreenMode,
+    },
+    Screenshot {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<WindowTarget>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_target: Option<DisplayTarget>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        capture_all_displays: bool,
     },
     ResetPortalTokens,
     AgentCursorStatus,
@@ -52,6 +61,10 @@ pub enum ServiceRequest {
 
 fn is_default_capture_screen(mode: &CaptureScreenMode) -> bool {
     *mode == CaptureScreenMode::default()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -93,6 +106,9 @@ pub enum ServiceResponse {
         outcome: ActionOutcome,
     },
     GetAppState {
+        snapshot: Box<AppStateSnapshot>,
+    },
+    Screenshot {
         snapshot: Box<AppStateSnapshot>,
     },
     ResetPortalTokens {
@@ -194,6 +210,17 @@ mod tests {
                 },
                 "get_app_state",
             ),
+            (
+                ServiceRequest::Screenshot {
+                    target: Some(WindowTarget {
+                        window_id: Some("w1".to_string()),
+                        ..Default::default()
+                    }),
+                    display_target: None,
+                    capture_all_displays: false,
+                },
+                "screenshot",
+            ),
             (ServiceRequest::ResetPortalTokens, "reset_portal_tokens"),
             (ServiceRequest::AgentCursorStatus, "agent_cursor_status"),
             (
@@ -285,6 +312,33 @@ mod tests {
             let rendered = serde_json::to_value(request).expect("request should serialize");
             assert_eq!(rendered["type"], expected_type);
         }
+    }
+
+    #[test]
+    fn screenshot_request_serializes_display_selectors() {
+        let rendered = serde_json::to_value(ServiceRequest::Screenshot {
+            target: None,
+            display_target: Some(DisplayTarget {
+                display_id: Some("kwin:HDMI-A-1".to_string()),
+                display_name: None,
+                display_index: None,
+            }),
+            capture_all_displays: false,
+        })
+        .expect("screenshot request should serialize");
+
+        assert_eq!(rendered["type"], "screenshot");
+        assert_eq!(rendered["display_target"]["display_id"], "kwin:HDMI-A-1");
+        assert!(rendered.get("capture_all_displays").is_none());
+
+        let rendered = serde_json::to_value(ServiceRequest::Screenshot {
+            target: None,
+            display_target: None,
+            capture_all_displays: true,
+        })
+        .expect("all-displays screenshot request should serialize");
+
+        assert_eq!(rendered["capture_all_displays"], true);
     }
 
     #[test]
@@ -519,6 +573,12 @@ mod tests {
                     snapshot: Box::new(app_state_snapshot()),
                 },
                 "get_app_state",
+            ),
+            (
+                ServiceResponse::Screenshot {
+                    snapshot: Box::new(app_state_snapshot()),
+                },
+                "screenshot",
             ),
             (
                 ServiceResponse::ResetPortalTokens {

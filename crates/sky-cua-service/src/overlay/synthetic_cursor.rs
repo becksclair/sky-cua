@@ -277,8 +277,8 @@ mod tests {
     use image::{ImageBuffer, Rgba};
     use sky_cua_overlay_host::cursor_asset;
     use sky_cua_platform::model::{
-        AgentCursorPoint, CaptureBackendKind, CaptureInfo, CoordinateSpace, ModelImageFormat,
-        PixelSize,
+        AgentCursorPoint, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
+        ModelImageFormat, PixelSize,
     };
 
     #[test]
@@ -413,10 +413,13 @@ mod tests {
         CaptureInfo {
             backend: CaptureBackendKind::PortalPipeWire,
             image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: None,
             source_type: None,
             mapping_id: Some("mapping".to_string()),
+            source_logical_rect: None,
             logical_rect: None,
             pixel_size: Some(PixelSize {
                 width: 31,

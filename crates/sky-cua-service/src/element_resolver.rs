@@ -369,6 +369,7 @@ mod tests {
                 xdg_session_type: None,
                 display: None,
                 wayland_display: None,
+                displays: Vec::new(),
             },
             capabilities: ToolCapabilities {
                 list_apps: unavailable(),

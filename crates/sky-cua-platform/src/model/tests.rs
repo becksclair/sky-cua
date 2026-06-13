@@ -2,12 +2,12 @@ use super::test_support::available_capabilities;
 use super::{
     ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
     AgentCursorPlane, AgentCursorPoint, AgentCursorState, AgentCursorSystemCursorBackendKind,
-    AppStateSnapshot, CaptureBackendKind, CaptureInfo, CoordinateSpace, DoctorCheck,
-    DoctorReadiness, DoctorReport, DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode,
-    ElementNumericValueReadback, ElementTextReadback, ElementTextSelection, EnvironmentInfo,
-    InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF, SemanticBackendKind,
-    ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport, WindowInfo, WindowTarget,
-    WindowTargetingSetupReport,
+    AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace, DisplayInfo,
+    DisplayIntersection, DisplayRef, DoctorCheck, DoctorReadiness, DoctorReport,
+    DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback,
+    ElementTextReadback, ElementTextSelection, EnvironmentInfo, InputBackendKind, ModelImageFormat,
+    PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
+    SessionKind, SetupCommandReport, WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
 use chrono::Utc;
 use serde_json::json;
@@ -41,6 +41,51 @@ fn boxed_execute_action_preserves_wire_shape() {
             }
         })
     );
+}
+
+#[test]
+fn display_contracts_round_trip() {
+    let display = DisplayInfo {
+        display_id: "kwin:HDMI-A-1".to_string(),
+        name: Some("HDMI-A-1".to_string()),
+        index: 1,
+        primary: false,
+        logical_rect: RectF {
+            x: 1920.0,
+            y: 0.0,
+            width: 1280.0,
+            height: 720.0,
+            space: CoordinateSpace::DesktopLogical,
+        },
+        pixel_size: Some(PixelSize {
+            width: 2560,
+            height: 1440,
+        }),
+        scale_factor: Some(2.0),
+        backend: "kwin".to_string(),
+    };
+    let display_ref = DisplayRef::from(&display);
+    let intersection = DisplayIntersection::from_bounds(
+        &display,
+        &RectF {
+            x: 1800.0,
+            y: 0.0,
+            width: 400.0,
+            height: 300.0,
+            space: CoordinateSpace::DesktopLogical,
+        },
+    )
+    .expect("window should intersect display");
+
+    let rendered = serde_json::to_value((&display, &display_ref, &intersection))
+        .expect("display contracts should serialize");
+    let parsed: (DisplayInfo, DisplayRef, DisplayIntersection) =
+        serde_json::from_value(rendered).expect("display contracts should deserialize");
+
+    assert_eq!(parsed.0, display);
+    assert_eq!(parsed.1, display_ref);
+    assert_eq!(parsed.2.display.display_id, "kwin:HDMI-A-1");
+    assert!(parsed.2.intersection_area > 0.0);
 }
 
 #[test]
@@ -239,6 +284,7 @@ fn boxed_get_app_state_preserves_wire_shape() {
                     available_cursor_modes: None,
                     available_device_types: None,
                 },
+                displays: Vec::new(),
             },
             capabilities: available_capabilities(),
             elements: Vec::new(),
@@ -246,6 +292,8 @@ fn boxed_get_app_state_preserves_wire_shape() {
             capture: Some(CaptureInfo {
                 backend: CaptureBackendKind::PortalPipeWire,
                 image_backend: Some(CaptureBackendKind::PortalPipeWire),
+                capture_scope: CaptureScope::Unknown,
+                display: None,
                 stream_id: Some("42".to_string()),
                 source_type: Some(1),
                 mapping_id: None,
@@ -267,6 +315,7 @@ fn boxed_get_app_state_preserves_wire_shape() {
                     height: 2160.0,
                     space: CoordinateSpace::DesktopLogical,
                 }),
+                source_logical_rect: None,
                 logical_to_pixel_scale: Some(0.5),
                 model_image_format: Some(ModelImageFormat::Jpeg),
                 model_image_quality: Some(85),
@@ -312,6 +361,7 @@ fn boxed_get_app_state_includes_doctor_report_when_present() {
             xdg_session_type: None,
             display: None,
             wayland_display: None,
+            displays: Vec::new(),
         },
         checks: vec![DoctorCheck {
             name: "semantic_backend".to_string(),
@@ -441,6 +491,8 @@ fn window_targeting_report_skips_permissions_hint_when_none() {
             wm_class: None,
             pid: Some(42),
             bounds: None,
+            display: None,
+            display_intersections: Vec::new(),
             workspace: None,
             focused: false,
             hidden: false,

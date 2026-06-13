@@ -175,6 +175,7 @@ mod tests {
             window_handle: None,
             toolkit_guess: Some("Qt".to_string()),
             window_title: None,
+            display: None,
         });
 
         assert_eq!(keys, vec!["org kde kate desktop", "kate", "qt"]);

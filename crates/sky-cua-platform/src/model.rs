@@ -166,10 +166,127 @@ pub struct RectF {
     pub space: CoordinateSpace,
 }
 
+impl RectF {
+    #[must_use]
+    pub fn right(&self) -> f64 {
+        self.x + self.width
+    }
+
+    #[must_use]
+    pub fn bottom(&self) -> f64 {
+        self.y + self.height
+    }
+
+    #[must_use]
+    pub fn area(&self) -> f64 {
+        if self.width <= 0.0 || self.height <= 0.0 {
+            0.0
+        } else {
+            self.width * self.height
+        }
+    }
+
+    #[must_use]
+    pub fn intersection(&self, other: &RectF) -> Option<RectF> {
+        if self.space != other.space {
+            return None;
+        }
+        let left = self.x.max(other.x);
+        let top = self.y.max(other.y);
+        let right = self.right().min(other.right());
+        let bottom = self.bottom().min(other.bottom());
+        (right > left && bottom > top).then(|| RectF {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+            space: self.space.clone(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PixelSize {
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DisplayInfo {
+    pub display_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub index: u32,
+    pub primary: bool,
+    pub logical_rect: RectF,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_size: Option<PixelSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_factor: Option<f64>,
+    pub backend: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DisplayRef {
+    pub display_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub index: u32,
+    pub primary: bool,
+    pub backend: String,
+}
+
+impl From<&DisplayInfo> for DisplayRef {
+    fn from(display: &DisplayInfo) -> Self {
+        Self {
+            display_id: display.display_id.clone(),
+            name: display.name.clone(),
+            index: display.index,
+            primary: display.primary,
+            backend: display.backend.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DisplayIntersection {
+    pub display: DisplayRef,
+    pub intersection_rect: RectF,
+    pub intersection_area: f64,
+    pub coverage_ratio: f64,
+}
+
+impl DisplayIntersection {
+    #[must_use]
+    pub fn from_bounds(display: &DisplayInfo, bounds: &RectF) -> Option<Self> {
+        let intersection_rect = bounds.intersection(&display.logical_rect)?;
+        let intersection_area = intersection_rect.area();
+        if intersection_area <= 0.0 {
+            return None;
+        }
+        let coverage_ratio = if bounds.area() > 0.0 {
+            intersection_area / bounds.area()
+        } else {
+            0.0
+        };
+        Some(Self {
+            display: DisplayRef::from(display),
+            intersection_rect,
+            intersection_area,
+            coverage_ratio,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureScope {
+    PrimaryDisplay,
+    Display,
+    Window,
+    AllDisplays,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -220,7 +337,7 @@ pub struct PortalCapabilities {
     pub available_device_types: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EnvironmentInfo {
     pub session_kind: SessionKind,
     pub compositor: Option<String>,
@@ -232,6 +349,8 @@ pub struct EnvironmentInfo {
     pub xdg_session_type: Option<String>,
     pub display: Option<String>,
     pub wayland_display: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub displays: Vec<DisplayInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -271,6 +390,8 @@ pub struct FocusedApp {
     pub toolkit_guess: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<DisplayRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -290,6 +411,10 @@ pub struct CaptureInfo {
     pub backend: CaptureBackendKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_backend: Option<CaptureBackendKind>,
+    #[serde(default, skip_serializing_if = "is_unknown_capture_scope")]
+    pub capture_scope: CaptureScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<DisplayRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coordinate_space: Option<CoordinateSpace>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -300,6 +425,8 @@ pub struct CaptureInfo {
     pub mapping_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logical_rect: Option<RectF>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_logical_rect: Option<RectF>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pixel_size: Option<PixelSize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -663,6 +790,10 @@ pub struct WindowInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectF>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<DisplayRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display_intersections: Vec<DisplayIntersection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<i32>,
     pub focused: bool,
     pub hidden: bool,
@@ -693,6 +824,58 @@ pub struct WindowTarget {
     pub wm_class: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_index: Option<u32>,
+}
+
+impl DisplayTarget {
+    pub const FIELD_NAMES: &'static [&'static str] =
+        &["display_id", "display_name", "display_index"];
+
+    pub fn from_argument_fields(
+        arguments: &serde_json::Value,
+    ) -> Result<Option<Self>, serde_json::Error> {
+        let Some(arguments) = arguments.as_object() else {
+            return Ok(None);
+        };
+
+        let mut target_arguments = serde_json::Map::new();
+        for field in Self::FIELD_NAMES {
+            if let Some(value) = arguments.get(*field)
+                && display_target_argument_is_present(*field, value)
+            {
+                target_arguments.insert((*field).to_string(), value.clone());
+            }
+        }
+
+        if target_arguments.is_empty() {
+            return Ok(None);
+        }
+
+        let mut target: Self = serde_json::from_value(serde_json::Value::Object(target_arguments))?;
+        target.normalize_empty_fields();
+        Ok(target.has_target().then_some(target))
+    }
+
+    #[must_use]
+    pub fn has_target(&self) -> bool {
+        self.display_id.as_deref().is_some_and(non_empty)
+            || self.display_name.as_deref().is_some_and(non_empty)
+            || self.display_index.is_some()
+    }
+
+    pub fn normalize_empty_fields(&mut self) {
+        self.display_id = normalize_optional_string(self.display_id.take());
+        self.display_name = normalize_optional_string(self.display_name.take());
+    }
 }
 
 impl WindowTarget {
@@ -787,6 +970,19 @@ fn target_argument_is_present(value: &serde_json::Value) -> bool {
         serde_json::Value::Number(value) => value.as_u64().is_none_or(|value| value != 0),
         _ => true,
     }
+}
+
+fn display_target_argument_is_present(field: &str, value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::String(value) => !value.trim().is_empty(),
+        serde_json::Value::Number(_) => field == "display_index",
+        _ => true,
+    }
+}
+
+fn is_unknown_capture_scope(value: &CaptureScope) -> bool {
+    *value == CaptureScope::Unknown
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

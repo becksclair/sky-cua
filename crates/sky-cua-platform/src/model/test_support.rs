@@ -53,6 +53,7 @@ pub(super) fn environment_info() -> EnvironmentInfo {
         xdg_session_type: Some("wayland".to_string()),
         display: None,
         wayland_display: Some("wayland-0".to_string()),
+        displays: Vec::new(),
     }
 }
 
@@ -98,6 +99,8 @@ pub(super) fn window_info() -> WindowInfo {
         wm_class: None,
         pid: Some(42),
         bounds: None,
+        display: None,
+        display_intersections: Vec::new(),
         workspace: None,
         focused: true,
         hidden: false,

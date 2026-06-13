@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use sky_cua_platform::DESKTOP_LAUNCH_ENV_KEYS;
 use sky_cua_platform::backend::DesktopBackend;
+use sky_cua_platform::diagnostics::BackendErrorCode;
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
     BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, CaptureInfo,
-    CaptureScreenMode, DiagnosticEntry, ServiceRequest, ServiceResponse, SessionPresenceAction,
-    SessionPresenceIntent,
+    CaptureScreenMode, DiagnosticEntry, DisplayTarget, ServiceRequest, ServiceResponse,
+    SessionPresenceAction, SessionPresenceIntent, WindowTarget,
 };
 
 use crate::action_router::route_action;
@@ -543,6 +544,66 @@ impl ServiceDaemon {
                     }
                 }
             }
+            ServiceRequest::Screenshot {
+                target,
+                display_target,
+                capture_all_displays,
+            } => {
+                if screenshot_selector_count(
+                    target.as_ref(),
+                    display_target.as_ref(),
+                    capture_all_displays,
+                ) > 1
+                {
+                    return error_response(
+                        BackendErrorCode::InvalidRequest.as_str(),
+                        "screenshot accepts exactly one capture selector: window target, display target, or capture_all_displays=true",
+                    );
+                }
+                debug!(
+                    target = ?target,
+                    display_target = ?display_target,
+                    capture_all_displays,
+                    "handling screenshot request"
+                );
+                let capture_guard = Some(self.overlay.lock().await.prepare_for_capture());
+                match self
+                    .backend
+                    .screenshot(target, display_target, capture_all_displays)
+                    .await
+                {
+                    Ok(mut snapshot) => {
+                        if let Some(capture_guard) = capture_guard.as_ref() {
+                            snapshot
+                                .diagnostics
+                                .extend(capture_guard.diagnostics.iter().cloned());
+                        }
+                        {
+                            let mut overlay = self.overlay.lock().await;
+                            overlay.apply_to_snapshot(&mut snapshot);
+                            if let Some(capture_guard) = capture_guard {
+                                snapshot
+                                    .diagnostics
+                                    .extend(overlay.restore_after_capture(capture_guard));
+                            }
+                        }
+                        self.snapshots.lock().await.store(snapshot.clone());
+                        ServiceResponse::Screenshot {
+                            snapshot: Box::new(snapshot),
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(capture_guard) = capture_guard {
+                            let _ = self
+                                .overlay
+                                .lock()
+                                .await
+                                .restore_after_capture(capture_guard);
+                        }
+                        error_response(error.code, error.message)
+                    }
+                }
+            }
             ServiceRequest::AgentCursorStatus => {
                 let status = self.overlay.lock().await.status();
                 agent_cursor_status_response(status, AgentCursorResponseKind::Status)
@@ -967,6 +1028,16 @@ fn request_should_hold_presence(request: &ServiceRequest) -> bool {
     }
 }
 
+fn screenshot_selector_count(
+    target: Option<&WindowTarget>,
+    display_target: Option<&DisplayTarget>,
+    capture_all_displays: bool,
+) -> usize {
+    usize::from(target.is_some())
+        + usize::from(display_target.is_some())
+        + usize::from(capture_all_displays)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -981,10 +1052,11 @@ mod tests {
         ActionName, ActionOutcome, ActionRequest, AgentCursorPoint, AgentCursorState, AppInfo,
         AppSelector, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
         BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, BrowserTargetKind,
-        CaptureBackendKind, CaptureInfo, CaptureScreenMode, CoordinateSpace, ElementNode,
-        EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
-        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction,
-        SessionPresenceIntent, SessionPresenceStatus, ToolAvailability, ToolCapabilities,
+        CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace,
+        DisplayTarget, ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize,
+        PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
+        SessionKind, SessionPresenceAction, SessionPresenceIntent, SessionPresenceStatus,
+        ToolAvailability, ToolCapabilities, WindowTarget,
     };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1144,11 +1216,43 @@ mod tests {
                 y: 2.0,
             },
         }));
+        assert!(request_should_hold_presence(&ServiceRequest::Screenshot {
+            target: None,
+            display_target: None,
+            capture_all_displays: false,
+        }));
         assert!(request_should_hold_presence(
             &ServiceRequest::ExecuteAction {
                 request: Box::new(request(ActionName::Click, json!({"x": 1.0, "y": 2.0}),)),
             },
         ));
+    }
+
+    #[tokio::test]
+    async fn screenshot_rejects_mixed_selectors_at_service_boundary() {
+        let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
+
+        match daemon
+            .handle(ServiceRequest::Screenshot {
+                target: Some(WindowTarget {
+                    window_id: Some("w1".to_string()),
+                    ..Default::default()
+                }),
+                display_target: Some(DisplayTarget {
+                    display_id: Some("kwin:HDMI-A-1".to_string()),
+                    display_name: None,
+                    display_index: None,
+                }),
+                capture_all_displays: false,
+            })
+            .await
+        {
+            ServiceResponse::Error { code, message } => {
+                assert_eq!(code, "InvalidRequest");
+                assert!(message.contains("exactly one capture selector"));
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
     }
 
     #[test]
@@ -1962,6 +2066,7 @@ mod tests {
             xdg_session_type: Some("wayland".to_string()),
             display: None,
             wayland_display: Some("wayland-0".to_string()),
+            displays: Vec::new(),
         }
     }
 
@@ -1969,10 +2074,13 @@ mod tests {
         CaptureInfo {
             backend: CaptureBackendKind::PortalPipeWire,
             image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: Some(CoordinateSpace::StreamPixels),
             stream_id: Some("stream".to_string()),
             source_type: Some(1),
             mapping_id: Some("mapping".to_string()),
+            source_logical_rect: None,
             logical_rect: Some(RectF {
                 x: 0.0,
                 y: 0.0,

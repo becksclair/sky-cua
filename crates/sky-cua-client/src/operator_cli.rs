@@ -919,6 +919,7 @@ mod tests {
                 window_handle: None,
                 toolkit_guess: Some("Qt".to_string()),
                 window_title: Some("notes.txt".to_string()),
+                display: None,
             }),
             capture: None,
             elements: vec![],
@@ -980,6 +981,7 @@ mod tests {
             xdg_session_type: Some("wayland".to_string()),
             display: None,
             wayland_display: Some("wayland-0".to_string()),
+            displays: Vec::new(),
         }
     }
 

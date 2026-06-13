@@ -77,6 +77,7 @@ mod tests {
             window_handle: None,
             toolkit_guess: None,
             window_title: None,
+            display: None,
         });
         assert!(resolved.is_some());
     }
@@ -93,6 +94,7 @@ mod tests {
             window_handle: None,
             toolkit_guess: None,
             window_title: None,
+            display: None,
         });
         assert!(resolved.is_some());
     }

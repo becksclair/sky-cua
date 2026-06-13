@@ -30,12 +30,12 @@ static TOOL_DEFINITIONS_CACHE: LazyLock<[Value; 2]> =
 
 pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
     let point_description = if can_receive_images {
-        "With snapshot_id, use screenshot pixel coordinates from that snapshot image; without snapshot_id, use current screen coordinates for the active input backend."
+        "With snapshot_id, use screenshot pixel coordinates from that get_app_state or screenshot image; without snapshot_id, use current screen coordinates for the active input backend."
     } else {
         "Use current screen coordinates for the active input backend. This session's model does not support image input, so screenshot-coordinate targeting is disabled."
     };
     let drag_point_description = if can_receive_images {
-        "With snapshot_id, use screenshot pixels; without snapshot_id, use current screen coordinates."
+        "With snapshot_id, use screenshot pixels from that get_app_state or screenshot image; without snapshot_id, use current screen coordinates."
     } else {
         "Use current screen coordinates for the active input backend. This session's model does not support image input, so screenshot-coordinate targeting is disabled."
     };
@@ -82,7 +82,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "list_windows",
-            "description": "List desktop windows from native windowing backends, including backend identity and terminal metadata when available.",
+            "description": "List desktop windows from native windowing backends, including backend identity, stable window_id values, bounds, focus state, display placement, and terminal metadata when available. Use this first when you need a window_id or display_id for a targeted screenshot or exact window activation.",
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -92,7 +92,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "focused_window",
-            "description": "Return the focused desktop window reported by native windowing backends, if one is available.",
+            "description": "Return the focused desktop window reported by native windowing backends, if one is available, including display placement when known.",
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -102,7 +102,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "activate_window",
-            "description": "Activate a desktop window by window_id or selector metadata. Supports exact window activation when the matched backend can target windows; otherwise reports unsupported backends honestly.",
+            "description": "Activate a desktop window by window_id or selector metadata. Supports exact window activation when the matched backend can target windows; otherwise reports unsupported backends honestly. For visual inspection of a specific window, prefer screenshot with the same target fields because it activates and focus-verifies before capture.",
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -111,11 +111,25 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
             }
         },
         {
+            "name": "screenshot",
+            "description": if can_receive_images {
+                "Capture a fresh screenshot for visual inspection and screenshot-coordinate actions. With no selector, captures the primary display only. For a known window, pass window_id or another window target field: the backend activates and focus-verifies that window first, then returns a cropped, unoccluded window screenshot. For a specific monitor, pass display_id from environment.displays. Use capture_all_displays=true only when the whole virtual desktop is required."
+            } else {
+                "Capture a fresh screenshot and return screenshot_path plus snapshot_id metadata. With no selector, captures the primary display only. For a known window, pass window_id or another window target field: the backend activates and focus-verifies that window first, then returns a cropped, unoccluded window screenshot. For a specific monitor, pass display_id from environment.displays. Use capture_all_displays=true only when the whole virtual desktop is required."
+            },
+            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
+            "inputSchema": {
+                "type": "object",
+                "properties": screenshot_properties(can_receive_images),
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "get_app_state",
             "description": if can_receive_images {
-                "Build a structured desktop app-state snapshot with environment and detached session-env diagnostics, flattened accessibility elements, optional screen capture, and readback for focused or editable text/value controls when the backend can prove it."
+                "Build a structured desktop app-state snapshot with environment displays, detached session-env diagnostics, flattened accessibility elements, optional focused-screen capture, and readback for focused or editable text/value controls when the backend can prove it. Use screenshot, not get_app_state, when the primary need is an unoccluded cropped capture of a known window or one display."
             } else {
-                "Build a structured desktop app-state snapshot with environment and detached session-env diagnostics, flattened accessibility elements, and readback for focused or editable text/value controls when the backend can prove it. This session's model does not support image input, so screen capture is disabled."
+                "Build a structured desktop app-state snapshot with environment displays, detached session-env diagnostics, flattened accessibility elements, and readback for focused or editable text/value controls when the backend can prove it. This session's model does not support image input, so screen capture is disabled; use screenshot for screenshot_path capture workflows."
             },
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
@@ -375,6 +389,55 @@ fn get_app_state_properties(can_receive_images: bool) -> Value {
     properties
 }
 
+fn screenshot_properties(can_receive_images: bool) -> Value {
+    let mut properties = window_target_schema();
+
+    if let Some(property_map) = properties.as_object_mut() {
+        property_map.insert(
+            "display_id".to_string(),
+            json!({
+                "type": "string",
+                "description": "Exact display_id from environment.displays. Use this to capture one monitor."
+            }),
+        );
+        property_map.insert(
+            "display_name".to_string(),
+            json!({
+                "type": "string",
+                "description": "Display name/connector from environment.displays. Prefer display_id when available."
+            }),
+        );
+        property_map.insert(
+            "display_index".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-based display index from environment.displays. Prefer display_id when available."
+            }),
+        );
+        property_map.insert(
+            "capture_all_displays".to_string(),
+            json!({
+                "type": "boolean",
+                "description": "Capture the full virtual desktop across all displays. Defaults to false; use only when all displays are required."
+            }),
+        );
+    }
+
+    if can_receive_images && let Some(property_map) = properties.as_object_mut() {
+        property_map.insert(
+            "screenshot_delivery".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["path", "inline"],
+                "description": "How the captured screenshot is delivered. path (default) returns only screenshot_path for reading the image file on demand; inline also attaches the image to this result for sessions that cannot read local files."
+            }),
+        );
+    }
+
+    properties
+}
+
 fn session_presence_hold_properties(include_unlock: bool) -> Value {
     let mut properties = json!({
         "inhibit_lock": {
@@ -496,7 +559,7 @@ fn action_tool(
         "snapshot_id".to_string(),
         json!({
             "type": "string",
-            "description": "Current snapshot_id returned by the latest get_app_state call."
+            "description": "Current snapshot_id returned by the latest get_app_state or screenshot call."
         }),
     );
     let input_schema = json!({
@@ -538,6 +601,7 @@ mod annotation_tests {
         ("list_windows", (true, false, true, false)),
         ("focused_window", (true, false, true, false)),
         ("activate_window", (false, false, true, false)),
+        ("screenshot", (false, false, true, false)),
         ("get_app_state", (true, false, true, false)),
         ("hold_session", (false, false, true, false)),
         ("unlock_session", (false, false, true, false)),

@@ -191,6 +191,49 @@ pub(crate) fn handle_tool_call(
                 )),
             }
         }
+        "screenshot" => {
+            let screenshot_target = match parse_screenshot_target(&arguments) {
+                Ok(target) => target,
+                Err(error) => return invalid_request_tool_error(error.to_string()),
+            };
+            let screenshot_delivery = parse_screenshot_delivery(&arguments);
+            match service.call(&ServiceRequest::Screenshot {
+                target: screenshot_target.window,
+                display_target: screenshot_target.display,
+                capture_all_displays: screenshot_target.capture_all_displays,
+            })? {
+                ServiceResponse::Screenshot { mut snapshot } => {
+                    enrich_snapshot(heuristics, &mut snapshot);
+                    let structured_content = compact_snapshot(&snapshot);
+                    let mut text_content = compact_snapshot_text_content(&snapshot);
+
+                    let mut content = Vec::with_capacity(2);
+                    if screenshot_delivery == ScreenshotDelivery::Inline
+                        && model.can_receive_images()
+                    {
+                        match inline_screenshot_block(&snapshot) {
+                            Some(Ok(image_block)) => content.push(image_block),
+                            Some(Err(message)) => {
+                                text_content.push_str(
+                                    "\nInline screenshot delivery failed; read screenshot_path instead: ",
+                                );
+                                text_content.push_str(&message);
+                            }
+                            None => {}
+                        }
+                    }
+                    content.insert(0, json!({"type": "text", "text": text_content}));
+
+                    Ok(json!({
+                        "content": content,
+                        "structuredContent": structured_content,
+                        "isError": false
+                    }))
+                }
+                ServiceResponse::Error { code, message } => tool_error(code, message),
+                other => Err(anyhow!("unexpected response for screenshot: {other:?}")),
+            }
+        }
         "get_app_state" => {
             let selector = parse_app_selector(&arguments);
             let detail = parse_app_state_detail(&arguments);
@@ -627,6 +670,47 @@ pub(crate) fn parse_window_target(
         })
 }
 
+fn parse_optional_window_target(
+    arguments: &Value,
+) -> Result<Option<sky_cua_platform::model::WindowTarget>> {
+    sky_cua_platform::model::WindowTarget::from_argument_fields(arguments)
+        .context("invalid screenshot window target arguments")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScreenshotTarget {
+    window: Option<sky_cua_platform::model::WindowTarget>,
+    display: Option<sky_cua_platform::model::DisplayTarget>,
+    capture_all_displays: bool,
+}
+
+fn parse_screenshot_target(arguments: &Value) -> Result<ScreenshotTarget> {
+    let window = parse_optional_window_target(arguments)?;
+    let display = sky_cua_platform::model::DisplayTarget::from_argument_fields(arguments)
+        .context("invalid screenshot display target arguments")?;
+    let capture_all_displays = match arguments.get("capture_all_displays") {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| anyhow!("capture_all_displays must be a boolean"))?,
+        None => false,
+    };
+
+    let selector_count = usize::from(window.is_some())
+        + usize::from(display.is_some())
+        + usize::from(capture_all_displays);
+    if selector_count > 1 {
+        return Err(anyhow!(
+            "screenshot accepts exactly one capture selector: window target fields, display_id/display_name/display_index, or capture_all_displays=true"
+        ));
+    }
+
+    Ok(ScreenshotTarget {
+        window,
+        display,
+        capture_all_displays,
+    })
+}
+
 pub(crate) fn action_summary(outcome: &sky_cua_platform::model::ActionOutcome) -> String {
     if outcome.code == "PortalApprovalPending" {
         return portal_approval_summary(&outcome.message);
@@ -823,7 +907,7 @@ mod tests {
     use serde_json::json;
     use sky_cua_platform::model::{
         AccessibilitySetupReport, ActionName, ActionOutcome, ActionRequest, AgentCursorPoint,
-        AgentCursorState, AppInfo, AppStateSnapshot, CaptureBackendKind, CaptureInfo,
+        AgentCursorState, AppInfo, AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope,
         CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorReadiness,
         DoctorReport, ElementNode, ElementTextReadback, EnvironmentInfo, FocusedApp,
         InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest,
@@ -844,8 +928,8 @@ mod tests {
     use super::{
         McpService, action_summary, build_tool_definitions, effective_capture_screen,
         handle_action_call, handle_tool_call, invalid_request_tool_error, list_apps_summary,
-        parse_app_selector, parse_app_state_detail, parse_window_target, tool_definitions,
-        tools_list_result,
+        parse_app_selector, parse_app_state_detail, parse_screenshot_target, parse_window_target,
+        tool_definitions, tools_list_result,
     };
 
     #[derive(Default)]
@@ -993,6 +1077,7 @@ mod tests {
                 xdg_session_type: None,
                 display: None,
                 wayland_display: None,
+                displays: Vec::new(),
             },
             checks: vec![DoctorCheck {
                 name: "semantic_backend".to_string(),
@@ -1116,6 +1201,7 @@ mod tests {
             }),
         };
         let compact = compact_snapshot(&snapshot);
+        assert_eq!(compact["environment"]["session_kind"], "wayland");
         assert!(compact.get("doctor_report").is_some());
         assert_eq!(
             compact["doctor_report"]["readiness"]["can_build_accessibility_tree"],
@@ -1175,6 +1261,36 @@ mod tests {
             .expect("type_text tool");
         assert_eq!(type_text["inputSchema"]["additionalProperties"], false);
         assert_eq!(type_text["inputSchema"]["required"], json!(["text"]));
+
+        let screenshot = tools
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["name"] == "screenshot")
+            .expect("screenshot tool");
+        let screenshot_schema = &screenshot["inputSchema"];
+        assert_eq!(screenshot_schema["additionalProperties"], false);
+        assert!(screenshot_schema["properties"].get("display_id").is_some());
+        assert!(
+            screenshot_schema["properties"]
+                .get("display_name")
+                .is_some()
+        );
+        assert!(
+            screenshot_schema["properties"]
+                .get("display_index")
+                .is_some()
+        );
+        assert!(
+            screenshot_schema["properties"]
+                .get("capture_all_displays")
+                .is_some()
+        );
+        assert!(
+            screenshot["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("primary display"))
+        );
     }
 
     #[test]
@@ -1206,6 +1322,49 @@ mod tests {
         assert_eq!(target.app_id.as_deref(), Some("chromium.desktop"));
         assert_eq!(target.pid, None);
         assert_eq!(target.terminal_pid, None);
+    }
+
+    #[test]
+    fn screenshot_parser_accepts_each_selector_shape() {
+        let omitted = parse_screenshot_target(&json!({})).expect("omitted target is valid");
+        assert!(omitted.window.is_none());
+        assert!(omitted.display.is_none());
+        assert!(!omitted.capture_all_displays);
+
+        let window = parse_screenshot_target(&json!({"window_id": "hwnd:0x1"}))
+            .expect("window target is valid");
+        assert_eq!(
+            window.window.unwrap().window_id.as_deref(),
+            Some("hwnd:0x1")
+        );
+
+        let display = parse_screenshot_target(&json!({"display_id": "kwin:HDMI-A-1"}))
+            .expect("display target is valid");
+        assert_eq!(
+            display.display.unwrap().display_id.as_deref(),
+            Some("kwin:HDMI-A-1")
+        );
+
+        let all = parse_screenshot_target(&json!({"capture_all_displays": true}))
+            .expect("all-displays target is valid");
+        assert!(all.capture_all_displays);
+    }
+
+    #[test]
+    fn screenshot_parser_rejects_mixed_selectors() {
+        let error = parse_screenshot_target(&json!({
+            "window_id": "kwin:{window}",
+            "display_id": "kwin:eDP-1"
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("exactly one capture selector"));
+
+        let error = parse_screenshot_target(&json!({
+            "display_index": 0,
+            "capture_all_displays": true
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("exactly one capture selector"));
     }
 
     #[test]
@@ -1389,6 +1548,7 @@ mod tests {
                 xdg_session_type: Some("wayland".to_string()),
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
+                displays: Vec::new(),
             },
             capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
@@ -1400,6 +1560,7 @@ mod tests {
                 window_handle: None,
                 toolkit_guess: Some("GTK".to_string()),
                 window_title: Some("sky-cua zenity smoke".to_string()),
+                display: None,
             }),
             capture: None,
             elements: Vec::new(),
@@ -1444,6 +1605,7 @@ mod tests {
                 xdg_session_type: Some("wayland".to_string()),
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
+                displays: Vec::new(),
             },
             capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
@@ -1455,6 +1617,7 @@ mod tests {
                 window_handle: None,
                 toolkit_guess: Some("Chromium".to_string()),
                 window_title: Some("Certificate Manager".to_string()),
+                display: None,
             }),
             capture: None,
             elements: vec![ElementNode {
@@ -1542,11 +1705,14 @@ mod tests {
         CaptureInfo {
             backend: CaptureBackendKind::PortalPipeWire,
             image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
             coordinate_space: None,
             stream_id: None,
             source_type: None,
             mapping_id: None,
             logical_rect: None,
+            source_logical_rect: None,
             pixel_size: None,
             original_pixel_size: None,
             logical_to_pixel_scale: None,
@@ -1692,6 +1858,7 @@ mod tests {
                 xdg_session_type: Some("wayland".to_string()),
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
+                displays: Vec::new(),
             },
             capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
@@ -1703,6 +1870,7 @@ mod tests {
                 window_handle: None,
                 toolkit_guess: Some("XWayland".to_string()),
                 window_title: Some("portal lifecycle probe".to_string()),
+                display: None,
             }),
             capture: None,
             elements: Vec::new(),
@@ -1781,6 +1949,7 @@ mod tests {
                 xdg_session_type: Some("wayland".to_string()),
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
+                displays: Vec::new(),
             },
             capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
@@ -1792,6 +1961,7 @@ mod tests {
                 window_handle: None,
                 toolkit_guess: Some("Qt".to_string()),
                 window_title: Some("Krita".to_string()),
+                display: None,
             }),
             capture: None,
             elements: Vec::new(),
@@ -1841,6 +2011,7 @@ mod tests {
                 xdg_session_type: Some("wayland".to_string()),
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
+                displays: Vec::new(),
             },
             capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
@@ -1852,6 +2023,7 @@ mod tests {
                 window_handle: None,
                 toolkit_guess: Some("Electron".to_string()),
                 window_title: Some("@Sky - Discord".to_string()),
+                display: None,
             }),
             capture: None,
             elements: Vec::new(),
@@ -1930,6 +2102,7 @@ mod tests {
                 xdg_session_type: Some("wayland".to_string()),
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
+                displays: Vec::new(),
             },
             capabilities: available_capabilities(),
             focused_app: Some(FocusedApp {
@@ -1941,6 +2114,7 @@ mod tests {
                 window_handle: None,
                 toolkit_guess: Some("Chromium".to_string()),
                 window_title: Some("Certificate Manager".to_string()),
+                display: None,
             }),
             capture: None,
             elements: vec![ElementNode {
@@ -1998,6 +2172,7 @@ mod tests {
                 xdg_session_type: Some("wayland".to_string()),
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
+                displays: Vec::new(),
             },
             checks: Vec::new(),
             readiness: DoctorReadiness {
@@ -2040,6 +2215,7 @@ mod tests {
                 "list_windows",
                 "focused_window",
                 "activate_window",
+                "screenshot",
                 "get_app_state",
                 "hold_session",
                 "unlock_session",
@@ -2539,6 +2715,7 @@ mod tests {
                 xdg_session_type: Some("wayland".to_string()),
                 display: None,
                 wayland_display: Some("wayland-0".to_string()),
+                displays: Vec::new(),
             },
             checks: vec![DoctorCheck {
                 name: "service".to_string(),

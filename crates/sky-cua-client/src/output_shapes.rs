@@ -3,8 +3,8 @@ use serde::Serialize;
 use serde_json::Value;
 use sky_cua_platform::model::{
     AccessibilitySetupReport, AgentCursorState, AppStateSnapshot, CaptureInfo, DiagnosticEntry,
-    DoctorReport, ElementNode, ElementNumericValueReadback, ElementTextReadback, FocusedApp,
-    HeuristicMatch, RectF, WindowTargetingSetupReport,
+    DoctorReport, ElementNode, ElementNumericValueReadback, ElementTextReadback, EnvironmentInfo,
+    FocusedApp, HeuristicMatch, RectF, WindowTargetingSetupReport,
 };
 use std::fmt::Write as _;
 
@@ -63,6 +63,7 @@ struct CompactSnapshot<'a> {
     detail: &'static str,
     snapshot_id: &'a str,
     created_at: &'a DateTime<Utc>,
+    environment: &'a EnvironmentInfo,
     focused_app: &'a Option<FocusedApp>,
     capture: &'a Option<CaptureInfo>,
     agent_cursor: &'a Option<AgentCursorState>,
@@ -83,6 +84,7 @@ pub(crate) fn compact_snapshot(snapshot: &AppStateSnapshot) -> Value {
         detail: "compact",
         snapshot_id: &snapshot.snapshot_id,
         created_at: &snapshot.created_at,
+        environment: &snapshot.environment,
         focused_app: &snapshot.focused_app,
         capture: &snapshot.capture,
         agent_cursor: &snapshot.agent_cursor,
