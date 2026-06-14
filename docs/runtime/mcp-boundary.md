@@ -259,10 +259,15 @@ forward compatibility; an unparseable file surfaces as a
 The host-facing tools are the portable product contract. Current tools:
 
 - readiness/setup: `doctor`, `setup_accessibility`, `setup_window_targeting`
+- session presence: `hold_session`, `unlock_session`, `release_session`, and
+  `session_presence_status`
 - app/window discovery: `list_apps`, `list_windows`, `focused_window`,
   `activate_window`
-- state capture: `get_app_state`, with `detail: "full"` by default,
-  `detail: "compact"` for repeated screenshot-first loops, and
+- state capture: `get_app_state`, with `detail: "compact"` by default and
+  `detail: "full"` as the exhaustive inspection mode. Compact MCP responses
+  default to 200 returned elements while preserving `element_count`/
+  `filtered_element_count` metadata; use `element_query`, `element_offset`,
+  and `element_limit` to page or narrow dense accessibility trees. Use
   `screenshot_delivery: "inline"` to attach the captured screenshot as an MCP
   image content block for hosts that cannot read `screenshot_path` files
 - visual capture: `screenshot`, which defaults to the primary display, accepts
@@ -279,12 +284,15 @@ The host-facing tools are the portable product contract. Current tools:
   `browser_list_tabs`, `browser_open`, `browser_claim_tab`,
   `browser_move_mouse`, `browser_navigate`, `browser_snapshot`,
   `browser_screenshot`, `browser_click`, `browser_type_text`,
-  `browser_press_key`, `browser_scroll`, and `browser_eval`
+  `browser_press_key`, and `browser_scroll`
 
-Browser tools do not require a host-specific enable flag. Codex Desktop may
-still use the companion Browser Use/Chrome plugin path until its adapter
-delegates to this shared browser surface, while host-specific configs emitted by
-`scripts/install_mcp_server.py` can pass browser-selection environment such as
+Browser tools do not require a host-specific enable flag. `browser_eval` is the
+security-gated exception and is advertised only when `SKY_CUA_BROWSER_EVAL` is
+`on`, `1`, or `true`.
+Codex Desktop may still use the companion Browser Use/Chrome plugin path until
+its adapter delegates to this shared browser surface, while host-specific
+configs emitted by `scripts/install_mcp_server.py` can pass browser-selection
+environment such as
 `SKY_CUA_BROWSER`.
 
 Every tool definition carries MCP `ToolAnnotations` (`readOnlyHint`,
@@ -294,15 +302,17 @@ tools and prompts for destructive or open-world ones, and treats unannotated
 tools as both. The hints are honest by policy, not flattering: observation
 tools (`doctor`, `list_apps`, `list_windows`, `focused_window`,
 `get_app_state`, `browser_status`, `browser_list_tabs`, `browser_snapshot`,
-`browser_screenshot`) are read-only; focus/selection/expansion moves and tab
+`browser_screenshot`, `session_presence_status`) are read-only;
+focus/selection/expansion moves, session hold/release/unlock requests, and tab
 claims are non-destructive and idempotent; arbitrary input (`click`,
 `type_text`, `press_key`, `drag`, `perform_action`, `activate_element`,
-`browser_click`, `browser_type_text`, `browser_press_key`, `browser_eval`)
-stays destructive because it can trigger any in-app action. Live-web actions
-are additionally open-world; `browser_scroll` is non-destructive but still
-open-world because it mutates a real web page's viewport or scrollable DOM
-state. The full table is pinned by `mcp_tools::annotation_tests`; changing a
-row changes what hosts auto-approve and must be deliberate.
+`browser_click`, `browser_type_text`, `browser_press_key`, and enabled
+`browser_eval`) stays destructive because it can trigger any in-app action.
+Live-web actions are additionally open-world; `browser_scroll` is
+non-destructive but still open-world because it mutates a real web page's
+viewport or scrollable DOM state. The full table is pinned by
+`mcp_tools::annotation_tests`; changing a row changes what hosts auto-approve
+and must be deliberate.
 
 Browser target names are not interchangeable. `user_chrome` is the user's
 already-running Chrome-family browser, reached through the extension/native-host
@@ -334,18 +344,19 @@ image-capable sessions, persisted to the file named in
 `structuredContent`. When the initialized model session cannot receive images,
 the MCP client requests a path-backed screenshot without response image data.
 `browser_scroll` currently uses `Runtime.evaluate` because CDP mouse-wheel
-dispatch timed out through the live extension bridge. When `x`/`y` are provided
-together, it moves the browser agent cursor to that point and scrolls the
-nearest scrollable DOM ancestor under it, falling back to the page viewport.
-When `x`/`y` are omitted, it scrolls the page viewport directly through
-`window.scrollBy(...)`. `browser_snapshot` returns page title, URL, viewport,
-bounded body text, and common actionable element summaries; `text_limit`
-defaults to 4000 for MCP calls, can be 0 to omit text, and can be raised to
-20000. Element query/offset/limit projection is applied in the service before
-the CDP result crosses the IPC boundary, with a maximum returned element budget
-of 5000. When page text is omitted or truncated before the service can count it
-exactly, `textCharCount` is `null` and `textTruncated` carries the known
-truncation state. It is not an accessibility tree and should not be treated as a
+dispatch timed out through the live extension bridge. Calls must provide a
+non-zero `delta_x` or `delta_y`. When `x`/`y` are provided together, it moves the
+browser agent cursor to that point and scrolls the nearest scrollable DOM
+ancestor under it, falling back to the page viewport. When `x`/`y` are omitted,
+it scrolls the page viewport directly through `window.scrollBy(...)`.
+`browser_snapshot` returns page title, URL, viewport, bounded body text, and
+common actionable element summaries; `text_limit` defaults to 4000 for MCP
+calls, can be 0 to omit text, and can be raised to 20000. Element
+query/offset/limit projection is applied in the service before the CDP result
+crosses the IPC boundary, with a maximum returned element budget of 5000. When
+page text is omitted or truncated before the service can count it exactly,
+`textCharCount` is `null` and `textTruncated` carries the known truncation
+state. It is not an accessibility tree and should not be treated as a
 replacement for desktop `get_app_state`.
 
 `doctor` includes Linux `session_env` repair details when the runtime had to
@@ -355,10 +366,13 @@ from which source, `path_changed` reports whether `PATH` was normalized, and
 snapshot/list diagnostics may include `SessionEnvRepaired`; treat that as
 useful context that the runtime recovered, not as an error by itself.
 
-Action tools accept `snapshot_id` from the latest `get_app_state` result. With
-`snapshot_id`, explicit coordinates are screenshot pixel coordinates from that
-snapshot image. Without `snapshot_id`, supported coordinate actions use the
-current screen coordinate space exposed by the active input backend.
+Action tools accept `snapshot_id` from the latest `get_app_state` or
+`screenshot` result. With a captured snapshot that includes capture metadata,
+explicit coordinates are screenshot pixels from that image. A structure-only
+`get_app_state` snapshot_id still scopes `element_index` lookups, but cannot
+translate screenshot pixels. Without capture metadata, supported coordinate
+actions use the current screen coordinate space exposed by the active input
+backend.
 Desktop snapshots may be cropped to a window or one display; callers should
 always pass the matching `snapshot_id` so the backend can translate screenshot
 pixels through `capture.logical_rect` and the backend-specific source rect.

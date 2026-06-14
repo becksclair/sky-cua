@@ -257,3 +257,24 @@ async fn scroll_without_coordinates_scrolls_viewport_without_cursor_move() {
     assert!(response.diagnostics.is_empty());
     assert_eq!(response.action, "scroll");
 }
+
+#[tokio::test]
+async fn scroll_rejects_zero_deltas_before_cdp_dispatch() {
+    let _env_guard = env_lock().await;
+
+    let response = scroll(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        0.0,
+        0.0,
+        None,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.action, "scroll");
+    assert_eq!(response.diagnostics.len(), 1);
+    let diagnostic = response.diagnostics.first().expect("diagnostic");
+    assert_eq!(diagnostic.code, "BrowserScrollInvalid");
+    assert!(diagnostic.message.contains("at least one non-zero value"));
+}

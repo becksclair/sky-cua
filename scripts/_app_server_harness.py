@@ -28,8 +28,8 @@ def with_plugin_mention(prompt: str, codex_home: Path) -> str:
         "When `get_app_state` returns a `screenshot_path`, inspect that image with `view_image` and"
         " treat it as the visual source of truth. If the control tree is sparse or fallback-only,"
         " you may still act by confirmed on-screen coordinates through the computer-use tools."
-        ' Use full `get_app_state` for the first orientation pass, then prefer `detail: "compact"`'
-        " for repeated screenshot/action verification loops unless verbose element details are needed."
+        " Prefer compact `get_app_state` snapshots; use `element_query`, `element_limit`,"
+        ' or `detail: "full"` only when the omitted fields are needed.'
         " If you know the target app or window, visually focus on that region of the full screenshot"
         " while keeping all click and drag coordinates in the current screenshot's pixel coordinate space."
         " When the next move is unclear, look for visible text-entry controls, action clusters,"

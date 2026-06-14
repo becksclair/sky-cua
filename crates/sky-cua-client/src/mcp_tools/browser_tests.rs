@@ -104,6 +104,23 @@ fn browser_scroll_schema_matches_delta_defaults() {
         .expect("browser_scroll tool is advertised");
 
     assert_eq!(scroll_tool["inputSchema"]["required"], json!(["tab_id"]));
+    let description = scroll_tool["description"]
+        .as_str()
+        .expect("browser_scroll description");
+    assert!(description.contains("non-zero delta_x or delta_y"));
+    let properties = &scroll_tool["inputSchema"]["properties"];
+    assert!(
+        properties["delta_x"]["description"]
+            .as_str()
+            .expect("delta_x description")
+            .contains("at least one delta must be non-zero")
+    );
+    assert!(
+        properties["delta_y"]["description"]
+            .as_str()
+            .expect("delta_y description")
+            .contains("at least one delta must be non-zero")
+    );
 }
 
 #[test]
@@ -154,6 +171,7 @@ fn browser_action_schemas_explain_simple_control_contract() {
         .expect("browser_scroll description");
     assert!(scroll_description.contains("move the visible browser agent cursor"));
     assert!(scroll_description.contains("Omit x/y for viewport scroll"));
+    assert!(scroll_description.contains("non-zero delta_x or delta_y"));
 
     let scroll_properties = &find_tool("browser_scroll")["inputSchema"]["properties"];
     assert!(
@@ -1023,6 +1041,63 @@ fn browser_snapshot_filters_structured_elements_for_deep_sidebar_controls() {
 }
 
 #[test]
+fn browser_snapshot_sends_offset_to_service_without_double_skipping_results() {
+    let service = FakeService::with_response(browser_service_response!(Snapshot {
+        response: BrowserSnapshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            title: Some("Paged".to_string()),
+            url: Some("https://paged.example/".to_string()),
+            snapshot: Some(json!({
+                "title": "Paged",
+                "url": "https://paged.example/",
+                "text": "",
+                "elementCount": 100,
+                "elements": [
+                    {"index": 7, "tag": "button", "role": "button", "name": "Result 7"},
+                    {"index": 8, "tag": "button", "role": "button", "name": "Result 8"}
+                ]
+            })),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({
+            "tab_id": "tab-1",
+            "element_query": "result",
+            "element_offset": 7,
+            "element_limit": 2
+        }),
+    )
+    .unwrap();
+
+    let elements = result["structuredContent"]["snapshot"]["elements"]
+        .as_array()
+        .expect("paged elements");
+    assert_eq!(elements.len(), 2);
+    assert_eq!(elements[0]["index"], 7);
+    assert_eq!(elements[1]["index"], 8);
+    assert_eq!(
+        service.take_requests(),
+        vec![ServiceRequest::Browser {
+            request: BrowserRequest::Snapshot {
+                target: None,
+                tab_id: "tab-1".to_string(),
+                text_limit: Some(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT),
+                element_offset: Some(7),
+                element_limit: Some(2),
+                element_query: Some("result".to_string()),
+            },
+        }]
+    );
+}
+
+#[test]
 fn browser_snapshot_accepts_zero_element_limit_to_omit_elements() {
     let service = FakeService::with_response(browser_service_response!(Snapshot {
         response: BrowserSnapshotResponse {
@@ -1049,7 +1124,7 @@ fn browser_snapshot_accepts_zero_element_limit_to_omit_elements() {
         &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
         &ModelSessionInfo::default(),
         "browser_snapshot",
-        json!({"tab_id": "tab-1", "element_limit": 0}),
+        json!({"tab_id": "tab-1", "element_offset": 7, "element_limit": 0}),
     )
     .unwrap();
 
@@ -1114,6 +1189,67 @@ fn browser_snapshot_offset_past_service_cap_requests_no_elements() {
                 text_limit: Some(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT),
                 element_offset: None,
                 element_limit: Some(0),
+                element_query: None,
+            },
+        }]
+    );
+}
+
+#[test]
+fn browser_snapshot_offset_near_service_cap_clamps_requested_window() {
+    let service = FakeService::with_response(browser_service_response!(Snapshot {
+        response: BrowserSnapshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            title: Some("Near Cap".to_string()),
+            url: Some("https://near-cap.example/".to_string()),
+            snapshot: Some(json!({
+                "title": "Near Cap",
+                "url": "https://near-cap.example/",
+                "text": "",
+                "elementCount": BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
+                "elements": [
+                    {
+                        "index": BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT - 1,
+                        "tag": "button",
+                        "role": "button",
+                        "name": "Last reachable control"
+                    }
+                ]
+            })),
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_snapshot",
+        json!({
+            "tab_id": "tab-1",
+            "element_offset": BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT - 1
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], false);
+    assert_eq!(
+        result["structuredContent"]["snapshot"]["elements"]
+            .as_array()
+            .expect("elements")
+            .len(),
+        1
+    );
+    assert_eq!(
+        service.take_requests(),
+        vec![ServiceRequest::Browser {
+            request: BrowserRequest::Snapshot {
+                target: None,
+                tab_id: "tab-1".to_string(),
+                text_limit: Some(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT),
+                element_offset: Some(BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT - 1),
+                element_limit: Some(1),
                 element_query: None,
             },
         }]

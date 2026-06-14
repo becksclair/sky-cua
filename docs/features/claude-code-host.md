@@ -90,8 +90,8 @@ matches Claude Code's vision-capable models.
   skip it with a reserved-name warning and use the user-scope `sky-cua`
   registration (or the plugin) instead.
 - Claude Code caps MCP tool output tokens (`MAX_MCP_OUTPUT_TOKENS`); prefer
-  `detail: "compact"` snapshots and `browser_snapshot` element filters on
-  dense pages.
+  compact `get_app_state` snapshots with `element_query`/`element_limit`, and
+  `browser_snapshot` element filters on dense pages.
 
 ## Related
 

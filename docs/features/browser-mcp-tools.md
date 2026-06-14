@@ -5,9 +5,9 @@
 Shipped for `user_chrome`, the only browser target. The managed/isolated
 browser target was retired by decision on 2026-06-11 (controlling the user's
 real logged-in browser is the product) and its contract stub has been removed
-from the wire contract. Last verified: 2026-06-13 with focused Rust browser
-MCP tests and root `cargo test`; live browser smoke remains the 2026-06-08
-Brave MCP/native-host smoke. With
+from the wire contract. Last verified: 2026-06-14 with focused Rust browser
+MCP tests, root `cargo test`, plugin build/install, and live app-server smoke;
+live browser smoke remains the 2026-06-08 Brave MCP/native-host smoke. With
 `SKY_CUA_BROWSER=brave`, a full isolated MCP smoke advertised the browser tools,
 opened a session-owned Brave tab, navigated it to a local HTTP fixture, captured
 a snapshot and screenshot, moved the browser cursor, clicked, typed, pressed a
@@ -18,12 +18,12 @@ key, scrolled, and navigated back to `about:blank`.
 `sky-cua` exposes browser readiness, real user-tab listing, session-owned tab
 creation, existing-tab claiming, browser snapshots/screenshots, and basic
 browser actions as first-class MCP tools for hosts such as OpenCode and Pi. The
-browser MCP surface is a core sky-cua capability and is always advertised by the
-MCP server.
+default browser MCP surface is a core sky-cua capability and is always
+advertised by the MCP server; `browser_eval` is an opt-in diagnostic exception.
 
 ## Contract surface
 
-MCP tools, always advertised by `sky-cua-client mcp`:
+MCP browser tools:
 
 - `browser_status` returns structured browser readiness, available targets,
   diagnostics, and optional known-tab count.
@@ -82,11 +82,15 @@ MCP tools, always advertised by `sky-cua-client mcp`:
   `key`, then dispatches the key to the page. Single CDP key names and modifier
   chords such as `Ctrl+K`, `Ctrl+L`, `Shift+Tab`, and `Meta+K` are accepted.
 - `browser_scroll` accepts `target=user_chrome`, `tab_id`, `delta_x`, `delta_y`,
-  and optional CSS-pixel `x`/`y` context fields. `x` and `y` must be provided
-  together. When they are provided, sky-cua first moves the browser agent cursor
-  to that point, then scrolls the nearest scrollable DOM container under it when
-  possible and falls back to the page viewport. When `x`/`y` are omitted, it
-  scrolls the page viewport directly.
+  and optional CSS-pixel `x`/`y` context fields. At least one delta must be
+  non-zero, and `x` and `y` must be provided together. When they are provided,
+  sky-cua first moves the browser agent cursor to that point, then scrolls the
+  nearest scrollable DOM container under it when possible and falls back to the
+  page viewport. When `x`/`y` are omitted, it scrolls the page viewport
+  directly.
+
+Opt-in diagnostic tool:
+
 - `browser_eval` accepts `target=user_chrome`, `tab_id`, and `expression`, then
   evaluates JavaScript in the page with CDP `Runtime.evaluate`, awaits promises,
   and returns the serializable result by value. It is intended for diagnostics
@@ -94,12 +98,12 @@ MCP tools, always advertised by `sky-cua-client mcp`:
   The tool is disabled by default: running arbitrary JavaScript in real
   signed-in user tabs crosses a stronger trust boundary than visible UI
   automation (hidden DOM, storage, same-origin requests) and amplifies prompt
-  injection. The operator enables it explicitly with `SKY_CUA_BROWSER_EVAL=on`,
-  enforced at both layers: when disabled the client does not advertise it in
-  `tools/list` and rejects direct calls, and the service — the real CDP
-  execution boundary — independently rejects `BrowserRequest::Eval` with a
-  `BrowserEvalDisabled` diagnostic so a direct service-socket caller cannot
-  bypass the opt-in. A thrown or rejected expression surfaces as a
+  injection. The operator enables it explicitly with `SKY_CUA_BROWSER_EVAL=on`
+  (or `1`/`true`), enforced at both layers: when disabled the client does not
+  advertise it in `tools/list` and rejects direct calls, and the service — the
+  real CDP execution boundary — independently rejects `BrowserRequest::Eval`
+  with a `BrowserEvalDisabled` diagnostic so a direct service-socket caller
+  cannot bypass the opt-in. A thrown or rejected expression surfaces as a
   `BrowserEvalException` diagnostic instead of a silent `null` value.
 
 Browser targets:
@@ -293,8 +297,9 @@ timeout, sky-cua reclaims, detaches, re-attaches, enables Page, and retries
 once (the move is an absolute position, so a replay is safe).
 
 `browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_click`,
-`browser_type_text`, `browser_press_key`, and `browser_eval` use extension
-`executeCdp` requests against tabs that are part of the sky-cua browser session.
+`browser_type_text`, `browser_press_key`, and enabled `browser_eval` use
+extension `executeCdp` requests against tabs that are part of the sky-cua
+browser session.
 Navigation uses `Page.navigate`. Snapshot uses `Runtime.evaluate` to return the
 page title, URL, viewport, body text up to 20,000 characters, total actionable
 element count, and up to 5,000 common actionable elements matching anchors,
@@ -307,8 +312,9 @@ it as JPEG or WebP per `SKY_CUA_MODEL_SCREENSHOT_FORMAT`/`*_QUALITY`, writes it
 under the runtime captures directory (`$XDG_RUNTIME_DIR/sky-cua/captures`,
 pruned to the eight most recent captures per tab), and reports the path and
 dimensions alongside the encoded data. Click, type, and key actions use CDP
-`Input.*` events with CSS-pixel coordinates passed through unchanged. `browser_eval` uses
-`Runtime.evaluate` with `awaitPromise=true` and `returnByValue=true`.
+`Input.*` events with CSS-pixel coordinates passed through unchanged. The
+enabled `browser_eval` path uses `Runtime.evaluate` with `awaitPromise=true`
+and `returnByValue=true`.
 Snapshot element values are suppressed for password/hidden/token/API-key/auth/
 credential/session/code/PIN-like fields; use desktop computer-use or explicit
 user-directed workflows for sensitive form inspection instead of relying on raw
@@ -335,8 +341,9 @@ before the service abandons the socket read.
 `browser_scroll` uses `Runtime.evaluate` rather than CDP
 `Input.dispatchMouseEvent(type="mouseWheel")`, because the live extension bridge
 timed out on the mouse-wheel CDP command during the 2026-06-06 full MCP smoke.
-When `x`/`y` are provided, the service first moves the visible browser agent
-cursor to that point. The evaluated script then finds
+The client and service both reject zero-delta scroll calls. When `x`/`y` are
+provided, the service first moves the visible browser agent cursor to that
+point. The evaluated script then finds
 `document.elementFromPoint(x, y)`, walks to the nearest scrollable ancestor, and
 scrolls that container. If no scrollable element is found, it scrolls the page
 viewport. When `x`/`y` are omitted, the evaluated script does not call
@@ -388,8 +395,9 @@ engage either browser; pinning `SKY_CUA_BROWSER` (or the machine config
   browser-family filtering, inventory caching, and stale-socket suppression.
 - `crates/sky-cua-service/src/daemon.rs` — service handlers for browser
   requests.
-- `crates/sky-cua-client/src/mcp_tools.rs` — MCP tool definitions, argument
-  parsing, and summaries.
+- `crates/sky-cua-client/src/mcp_tools/browser.rs` and
+  `crates/sky-cua-client/src/mcp_tools/browser/{args,schema,response}.rs` —
+  browser MCP handlers, argument parsing, tool definitions, and summaries.
 - `scripts/install_mcp_server.py` — OpenCode/Pi browser-tool installation.
 - `scripts/live_chrome_host_client_smoke.py` — bridge and MCP smoke helper.
 - `resources/chrome_preflight.py` — native-host manifest and env allowlist
@@ -429,21 +437,31 @@ cargo test -p sky-cua-service
   installed MCP client, including capture of a background tab and a minimized
   Brave window.
 
-Focused browser reliability checks from 2026-06-13:
+Focused browser reliability checks from 2026-06-14:
 
 ```bash
 cargo fmt --check
 cargo test -p sky-cua-platform -p sky-cua-service -p sky-cua-client
+cargo test
+uv run ruff format --check scripts
+uv run ruff check scripts
+uv run basedpyright
+uv run pytest
+python3 scripts/build_plugin.py
+python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
+python3 scripts/live_app_server_smoke.py
 ```
 
+- Live app-server smoke passed with artifact
+  `artifacts/codex-e2e/app-server-smoke/20260614T065607Z`.
 - Service regression tests prove CDP action recovery still handles
   `Debugger is not attached` and stale session ownership, `browser_click` moves
   the browser agent cursor before dispatching the CDP click, targeted
   `browser_scroll` moves the cursor before scrolling the nearest scrollable DOM
   container under `x`/`y`, untargeted `browser_scroll` scrolls the viewport
-  without synthesizing an `(0,0)` target, `browser_eval` returns the CDP runtime
-  value, and `browser_press_key` dispatches modifier chords with CDP modifier
-  bits.
+  without synthesizing an `(0,0)` target, enabled `browser_eval` returns the
+  CDP runtime value, and `browser_press_key` dispatches modifier chords with CDP
+  modifier bits.
 - Client regression tests prove `browser_snapshot` advertises and applies
   `element_query`/`element_offset`/`element_limit`, including a dense
   OpenChamber-style sidebar case where `Update Available` is deep in the element
@@ -454,7 +472,8 @@ cargo test -p sky-cua-platform -p sky-cua-service -p sky-cua-client
   still receive an MCP image content block.
 - Platform contract tests prove direct service requests preserve omitted
   `browser_scroll` target coordinates and default omitted
-  `browser_move_mouse.wait_for_arrival` to true.
+  `browser_move_mouse.wait_for_arrival` to true. Service regression tests prove
+  zero scroll deltas are rejected before CDP dispatch.
 - Client registry tests prove `browser_eval` stays unadvertised by default, is
   advertised only with the explicit opt-in, rejects calls when disabled, and is
   routed through the Browser MCP service request/response envelope; a service

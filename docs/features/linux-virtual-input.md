@@ -26,7 +26,8 @@ Public model in `crates/sky-cua-platform/src/model.rs`:
 
 The agent-facing coordinate contract is unchanged:
 
-1. With `snapshot_id`, coordinates are screenshot pixels for that snapshot.
+1. With a captured `snapshot_id`, coordinates are screenshot pixels for that
+   snapshot; structure-only snapshot ids still scope element indexes.
 2. Without `snapshot_id`, coordinates are interpreted as current desktop
    input coordinates.
 3. Tool schemas do not expose backend, compositor, monitor scale, or

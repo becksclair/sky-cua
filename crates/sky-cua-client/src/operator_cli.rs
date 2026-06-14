@@ -7,10 +7,11 @@ use sky_cua_platform::model::{
     SessionPresenceIntent,
 };
 
+use crate::app_state::AppStateDetail;
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_tools::enrich_snapshot;
 use crate::output_shapes::{
-    AppStateDetail, compact_snapshot, list_apps_error_diagnostic, setup_accessibility_is_error,
+    compact_snapshot, list_apps_error_diagnostic, setup_accessibility_is_error,
     setup_window_targeting_is_error,
 };
 use crate::service_launcher::ServiceClient;
@@ -176,7 +177,7 @@ fn command_name(command: &OperatorCommand) -> &'static str {
 
 fn parse_get_app_state_args(args: &[String]) -> Result<GetAppStateArgs> {
     let mut selector = AppSelector::default();
-    let mut detail = AppStateDetail::default();
+    let mut detail = AppStateDetail::Full;
     let mut capture_screen = CaptureScreenMode::default();
     let mut index = 0;
 

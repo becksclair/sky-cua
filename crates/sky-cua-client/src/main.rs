@@ -1,3 +1,4 @@
+mod app_state;
 mod heuristics;
 mod launch_environment;
 mod mcp_server;

@@ -5,7 +5,9 @@ use sky_cua_platform::model::{
     BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserTargetKind, normalize_browser_open_url,
 };
 
-use super::super::optional_non_empty_string;
+use super::super::{
+    optional_non_empty_string, parse_optional_string_argument, parse_optional_usize,
+};
 
 pub(crate) fn parse_browser_target(arguments: &Value) -> Result<Option<BrowserTargetKind>> {
     let Some(raw_target) = arguments.get("target") else {
@@ -144,7 +146,11 @@ pub(crate) fn parse_browser_snapshot_options(arguments: &Value) -> Result<Browse
             "browser_snapshot element_offset",
         )?,
         element_limit,
-        element_query: parse_optional_string_argument(arguments, "element_query")?,
+        element_query: parse_optional_string_argument(
+            arguments,
+            "element_query",
+            "browser_snapshot element_query",
+        )?,
         text_limit: parse_optional_usize_with_max(
             arguments,
             "text_limit",
@@ -181,21 +187,6 @@ fn parse_optional_scroll_coordinate(arguments: &Value, name: &str) -> Result<Opt
             "browser_scroll {name} must be a finite non-negative browser screenshot pixel coordinate"
         ))
     }
-}
-
-fn parse_optional_usize(arguments: &Value, name: &str, label: &str) -> Result<Option<usize>> {
-    let Some(raw_value) = arguments.get(name) else {
-        return Ok(None);
-    };
-    if raw_value.is_null() {
-        return Ok(None);
-    }
-    let Some(value) = raw_value.as_u64() else {
-        return Err(anyhow!("{label} must be a non-negative integer"));
-    };
-    usize::try_from(value)
-        .map(Some)
-        .map_err(|_| anyhow!("{label} is too large"))
 }
 
 fn parse_optional_usize_with_max(
@@ -259,15 +250,11 @@ impl BrowserTabTextFilter {
 
 pub(crate) fn parse_browser_tab_filter(arguments: &Value) -> Result<BrowserTabTextFilter> {
     Ok(BrowserTabTextFilter {
-        title_contains: parse_optional_string_argument(arguments, "title_contains")?,
-        url_contains: parse_optional_string_argument(arguments, "url_contains")?,
+        title_contains: parse_optional_string_argument(
+            arguments,
+            "title_contains",
+            "title_contains",
+        )?,
+        url_contains: parse_optional_string_argument(arguments, "url_contains", "url_contains")?,
     })
-}
-
-fn parse_optional_string_argument(arguments: &Value, name: &str) -> Result<Option<String>> {
-    match arguments.get(name) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value)) => Ok(optional_non_empty_string(value)),
-        Some(_) => Err(anyhow!("{name} must be a string when provided")),
-    }
 }

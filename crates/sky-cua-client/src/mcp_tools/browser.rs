@@ -251,7 +251,7 @@ pub(super) fn handle_tool_call(
                 Ok(options) => options,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
-            let service_element_limit = service_snapshot_element_limit(
+            let (service_element_offset, service_element_limit) = service_snapshot_element_window(
                 snapshot_options.element_offset,
                 snapshot_options.element_limit,
             );
@@ -259,7 +259,7 @@ pub(super) fn handle_tool_call(
                 target,
                 tab_id,
                 text_limit: Some(snapshot_options.text_limit),
-                element_offset: None,
+                element_offset: service_element_offset,
                 element_limit: Some(service_element_limit),
                 element_query: snapshot_options.element_query.clone(),
             }))? {
@@ -267,7 +267,7 @@ pub(super) fn handle_tool_call(
                     response: BrowserResponse::Snapshot { response },
                 } => browser_snapshot_result(browser_snapshot_structured_response(
                     response,
-                    snapshot_options.element_offset,
+                    None,
                     snapshot_options.element_limit,
                     snapshot_options.element_query.as_deref(),
                     snapshot_options.text_limit,
@@ -417,7 +417,7 @@ pub(super) fn handle_tool_call(
                     "BrowserEvalDisabled",
                     "browser_eval is disabled by default because it runs arbitrary \
                      JavaScript in real user tabs. The operator can enable it with \
-                     SKY_CUA_BROWSER_EVAL=on.",
+                     SKY_CUA_BROWSER_EVAL=on, 1, or true.",
                 );
             }
             let target = match parse_browser_target(&arguments) {
@@ -456,21 +456,19 @@ fn browser_service_request(request: BrowserRequest) -> ServiceRequest {
     ServiceRequest::Browser { request }
 }
 
-fn service_snapshot_element_limit(
+fn service_snapshot_element_window(
     element_offset: Option<usize>,
     element_limit: Option<usize>,
-) -> usize {
+) -> (Option<usize>, usize) {
     let offset = element_offset.unwrap_or(0);
-    if offset >= BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT {
-        return 0;
+    if element_limit == Some(0) || offset >= BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT {
+        return (None, 0);
     }
-    match element_limit {
-        Some(0) => 0,
-        Some(limit) => offset
-            .saturating_add(limit)
-            .min(BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT),
-        None => offset
-            .saturating_add(BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT)
-            .min(BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT),
-    }
+    let remaining = BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT - offset;
+    let limit = match element_limit {
+        Some(limit) => limit.min(remaining),
+        None => BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT.min(remaining),
+    };
+    let offset = (offset > 0).then_some(offset);
+    (offset, limit)
 }

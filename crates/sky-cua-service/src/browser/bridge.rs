@@ -416,7 +416,7 @@ pub(crate) async fn eval(
             diagnostics: vec![DiagnosticEntry {
                 code: "BrowserEvalDisabled".to_string(),
                 message: "browser_eval is disabled. The operator can enable arbitrary \
-                          page-JavaScript execution with SKY_CUA_BROWSER_EVAL=on."
+                          page-JavaScript execution with SKY_CUA_BROWSER_EVAL=on, 1, or true."
                     .to_string(),
                 details: None,
             }],

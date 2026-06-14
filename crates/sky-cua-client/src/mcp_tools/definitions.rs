@@ -6,6 +6,9 @@ use std::sync::LazyLock;
 
 use serde_json::{Value, json};
 
+use crate::app_state::{
+    APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_QUERY_CHARS,
+};
 use crate::mcp_server::ModelSessionInfo;
 
 use super::annotations::{
@@ -29,20 +32,12 @@ static TOOL_DEFINITIONS_CACHE: LazyLock<[Value; 2]> =
     LazyLock::new(|| [build_tool_definitions(false), build_tool_definitions(true)]);
 
 pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
-    let point_description = if can_receive_images {
-        "With snapshot_id, use screenshot pixel coordinates from that get_app_state or screenshot image; without snapshot_id, use current screen coordinates for the active input backend."
-    } else {
-        "Use current screen coordinates for the active input backend. This session's model does not support image input, so screenshot-coordinate targeting is disabled."
-    };
-    let drag_point_description = if can_receive_images {
-        "With snapshot_id, use screenshot pixels from that get_app_state or screenshot image; without snapshot_id, use current screen coordinates."
-    } else {
-        "Use current screen coordinates for the active input backend. This session's model does not support image input, so screenshot-coordinate targeting is disabled."
-    };
+    let point_description = "With snapshot_id from a captured get_app_state or screenshot result, x/y are pixels in that snapshot; otherwise live screen coordinates.";
+    let drag_point_description = "With snapshot_id from a captured get_app_state or screenshot result, coordinates are pixels in that snapshot; otherwise live screen coordinates.";
     let mut tools = json!([
         {
             "name": "doctor",
-            "description": "Report Computer Use desktop integration readiness, including environment, detached session-env repair diagnostics, semantic, capture, and input backend checks.",
+            "description": "Report desktop readiness: environment, session-env repair, semantic tree, capture, windows, input, browser, and presence diagnostics.",
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -52,7 +47,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "setup_accessibility",
-            "description": "Enable toolkit accessibility for AT-SPI-backed semantic app trees, then return a before/after doctor report. Target apps may need restart.",
+            "description": "Enable toolkit accessibility for AT-SPI semantic trees and return before/after readiness. Target apps may need restart.",
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -62,7 +57,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "setup_window_targeting",
-            "description": "Install and enable the bundled GNOME Shell window-control extension for exact GNOME window targeting, then report window backend status.",
+            "description": "Install/enable the bundled GNOME window-control extension and report exact window-targeting status.",
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -72,7 +67,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "list_apps",
-            "description": "List currently exposed desktop applications from the active platform window and accessibility backends, with diagnostics when detached session-env repair affected runtime readiness.",
+            "description": "List accessible desktop apps from window/accessibility backends plus session-env diagnostics.",
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -82,7 +77,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "list_windows",
-            "description": "List desktop windows from native windowing backends, including backend identity, stable window_id values, bounds, focus state, display placement, and terminal metadata when available. Use this first when you need a window_id or display_id for a targeted screenshot or exact window activation.",
+            "description": "List desktop windows with window_id, backend, bounds, focus, display, and terminal metadata. Use for targeted screenshots or exact activation.",
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -92,7 +87,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "focused_window",
-            "description": "Return the focused desktop window reported by native windowing backends, if one is available, including display placement when known.",
+            "description": "Return the focused desktop window from native windowing backends, including display placement when known.",
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -102,7 +97,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "activate_window",
-            "description": "Activate a desktop window by window_id or selector metadata. Supports exact window activation when the matched backend can target windows; otherwise reports unsupported backends honestly. For visual inspection of a specific window, prefer screenshot with the same target fields because it activates and focus-verifies before capture.",
+            "description": "Activate a desktop window by window_id or selector. Reports unsupported backends honestly. For visual inspection, use screenshot with the same target.",
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -113,9 +108,9 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "screenshot",
             "description": if can_receive_images {
-                "Capture a fresh screenshot for visual inspection and screenshot-coordinate actions. With no selector, captures the primary display only. For a known window, pass window_id or another window target field: the backend activates and focus-verifies that window first, then returns a cropped, unoccluded window screenshot. For a specific monitor, pass display_id from environment.displays. Use capture_all_displays=true only when the whole virtual desktop is required."
+                "Capture a fresh visual frame. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop. Use returned snapshot_id for pixel actions."
             } else {
-                "Capture a fresh screenshot and return screenshot_path plus snapshot_id metadata. With no selector, captures the primary display only. For a known window, pass window_id or another window target field: the backend activates and focus-verifies that window first, then returns a cropped, unoccluded window screenshot. For a specific monitor, pass display_id from environment.displays. Use capture_all_displays=true only when the whole virtual desktop is required."
+                "Capture a fresh visual frame and return screenshot_path plus snapshot_id. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop."
             },
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
@@ -127,9 +122,9 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "get_app_state",
             "description": if can_receive_images {
-                "Build a structured desktop app-state snapshot with environment displays, detached session-env diagnostics, flattened accessibility elements, optional focused-screen capture, and readback for focused or editable text/value controls when the backend can prove it. Use screenshot, not get_app_state, when the primary need is an unoccluded cropped capture of a known window or one display."
+                format!("Return token-bounded desktop state: app identity, displays, diagnostics, accessibility elements, text/value readback, optional screenshot. Defaults to compact detail and {APP_STATE_DEFAULT_ELEMENT_LIMIT} elements; use element_query/offset/limit or detail=full. Use screenshot for cropped window/display visuals.")
             } else {
-                "Build a structured desktop app-state snapshot with environment displays, detached session-env diagnostics, flattened accessibility elements, and readback for focused or editable text/value controls when the backend can prove it. This session's model does not support image input, so screen capture is disabled; use screenshot for screenshot_path capture workflows."
+                format!("Return token-bounded desktop state: app identity, displays, diagnostics, accessibility elements, and text/value readback. Defaults to compact detail and {APP_STATE_DEFAULT_ELEMENT_LIMIT} elements; use element_query/offset/limit or detail=full. Use screenshot for screenshot_path visuals.")
             },
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
@@ -140,7 +135,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "hold_session",
-            "description": "Hold session presence for remote automation by inhibiting lock and/or suspend; optionally unlock the session first.",
+            "description": "Hold session presence by inhibiting lock and/or suspend; optionally unlock first.",
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -150,7 +145,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "unlock_session",
-            "description": "Unlock the current session when supported, then hold session presence for remote automation.",
+            "description": "Unlock the session when supported, then hold lock/suspend inhibitors.",
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -160,14 +155,14 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "release_session",
-            "description": "Release held session-presence inhibitors and optionally re-lock the session when supported.",
+            "description": "Release session-presence inhibitors; optionally re-lock when supported.",
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "relock": {
                         "type": "boolean",
-                        "description": "Re-lock the session after releasing inhibitors. Defaults to false."
+                        "description": "Re-lock after releasing inhibitors. Defaults to false."
                     }
                 },
                 "additionalProperties": false
@@ -175,7 +170,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         {
             "name": "session_presence_status",
-            "description": "Report whether session presence is supported and whether lock/suspend inhibitors are currently held.",
+            "description": "Report session-presence support and current lock/suspend inhibitor state.",
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
                 "type": "object",
@@ -185,37 +180,37 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         },
         semantic_element_tool(
             "focus_element",
-            "Move semantic focus to an accessibility element from the current snapshot.",
+            "Move semantic focus to an accessibility element from the latest snapshot.",
             LOCAL_NAVIGATION_ACTION,
         ),
         semantic_element_tool(
             "activate_element",
-            "Perform the element's semantic default action, such as pressing an app-chrome button or opening a menu.",
+            "Run an element's default semantic action, such as pressing a button or opening a menu.",
             LOCAL_DESTRUCTIVE_ACTION,
         ),
         semantic_element_tool(
             "select_element",
-            "Select an accessibility element such as a tab, list item, radio item, or selectable row.",
+            "Select a tab, list item, radio item, row, or similar selectable element.",
             LOCAL_NAVIGATION_ACTION,
         ),
         semantic_element_tool(
             "expand_element",
-            "Expand an accessibility element such as a collapsed menu, combo box, disclosure, or tree item.",
+            "Expand a collapsed menu, combo box, disclosure, tree item, or similar element.",
             LOCAL_NAVIGATION_ACTION,
         ),
         semantic_element_tool(
             "collapse_element",
-            "Collapse an accessibility element such as an expanded menu, combo box, disclosure, or tree item.",
+            "Collapse an expanded menu, combo box, disclosure, tree item, or similar element.",
             LOCAL_NAVIGATION_ACTION,
         ),
         semantic_element_tool(
             "toggle_element",
-            "Toggle an accessibility element such as a checkbox, switch, or toggle button.",
+            "Toggle a checkbox, switch, toggle button, or similar binary element.",
             LOCAL_STATEFUL_ACTION,
         ),
         action_tool(
             "click",
-            "Click an element by index from the current snapshot, or explicit x/y screen coordinates without a snapshot.",
+            "Click a snapshot element_index, or x/y coordinates.",
             LOCAL_DESTRUCTIVE_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
@@ -226,13 +221,13 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         ),
         action_tool(
             "perform_action",
-            "Invoke a specific AT-SPI action by name or index on an element. Prefer named tools such as click, activate_element, select_element, expand_element, collapse_element, and toggle_element for common operations; use this for custom AT-SPI actions exposed in get_app_state.semantic_actions.",
+            "Invoke a named/indexed AT-SPI action. Prefer dedicated tools for common focus, activation, selection, expand/collapse, and toggles.",
             LOCAL_DESTRUCTIVE_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
                 "element_identifier": {
                     "type": "string",
-                    "description": "Direct AT-SPI backend_ref/object identifier from get_app_state, bypassing element_index lookup."
+                    "description": "Direct backend_ref from get_app_state; bypasses element_index lookup."
                 },
                 "role": { "type": "string" },
                 "name": { "type": "string" },
@@ -243,22 +238,22 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
                 },
                 "action_index": {
                     "type": ["integer", "string"],
-                    "description": "Zero-based AT-SPI action index. Defaults to 0 when action_name/action are omitted."
+                    "description": "Zero-based AT-SPI action index. Defaults to 0."
                 },
                 "action_name": {
                     "type": "string",
-                    "description": "AT-SPI action name to resolve against the target element's action list."
+                    "description": "AT-SPI action name from the target element."
                 },
                 "action": {
                     "type": "string",
-                    "description": "Compatibility alias: either an action name or numeric action index string."
+                    "description": "Compatibility alias: action name or numeric action-index string."
                 }
             }),
             json!([]),
         ),
         action_tool(
             "perform_secondary_action",
-            "Perform a secondary click or context action by element index from the current snapshot, or explicit x/y screen coordinates without a snapshot.",
+            "Perform secondary/context click on a snapshot element_index or x/y coordinates.",
             LOCAL_DESTRUCTIVE_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
@@ -270,7 +265,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         ),
         action_tool(
             "scroll",
-            "Scroll within an element from the current snapshot, or the focused area without a snapshot.",
+            "Scroll inside a snapshot element, or the focused area.",
             LOCAL_STATEFUL_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
@@ -284,7 +279,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         ),
         action_tool(
             "drag",
-            "Drag from one point or element to another; explicit coordinates can run without a snapshot.",
+            "Drag from one element/point to another.",
             LOCAL_DESTRUCTIVE_ACTION,
             json!({
                 "element_index": { "type": "integer", "minimum": 0 },
@@ -300,7 +295,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         ),
         action_tool(
             "type_text",
-            "Type literal text into the focused control; may use snapshot context or a window target when provided.",
+            "Type literal text into the focused control. Optional snapshot/window target activates first.",
             LOCAL_DESTRUCTIVE_ACTION,
             keyboard_target_properties(json!({
                 "text": { "type": "string" }
@@ -309,7 +304,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         ),
         action_tool(
             "press_key",
-            "Press a keyboard key or key chord in the focused control; may use snapshot context or a window target when provided.",
+            "Press a key or chord in the focused control. Optional snapshot/window target activates first.",
             LOCAL_DESTRUCTIVE_ACTION,
             keyboard_target_properties(json!({
                 "key": { "type": "string" }
@@ -318,7 +313,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         ),
         action_tool(
             "set_value",
-            "Set an editable element value semantically where supported. Target by element_index, element_identifier, or a semantic selector from the latest get_app_state snapshot, then reacquire get_app_state and inspect value/text readback to verify the edit landed.",
+            "Set an editable element through a proven semantic write path. Target by element_index, element_identifier, or selector; verify with get_app_state readback.",
             // Overwrites existing content (destructive), but writing the
             // same value twice converges to the same state (idempotent).
             ToolAnnotations {
@@ -331,7 +326,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
                 "element_index": { "type": "integer", "minimum": 0 },
                 "element_identifier": {
                     "type": "string",
-                    "description": "Direct AT-SPI backend_ref/object identifier from get_app_state, bypassing element_index lookup."
+                    "description": "Direct backend_ref from get_app_state; bypasses element_index lookup."
                 },
                 "role": { "type": "string" },
                 "name": { "type": "string" },
@@ -363,7 +358,23 @@ fn get_app_state_properties(can_receive_images: bool) -> Value {
         "detail": {
             "type": "string",
             "enum": ["full", "compact"],
-            "description": "Use compact after discovery. It keeps identifiers, diagnostics, app identity, and lean element anchors while omitting verbose element descriptions and static environment/capability details."
+            "description": "Defaults to compact. Use full for verbose element details and full capability data."
+        },
+        "element_query": {
+            "type": "string",
+            "maxLength": APP_STATE_MAX_ELEMENT_QUERY_CHARS,
+            "description": "Case-insensitive filter over element role/name/description/value/text/states/actions."
+        },
+        "element_offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based offset into matching elements."
+        },
+        "element_limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": APP_STATE_MAX_ELEMENT_LIMIT,
+            "description": format!("Maximum matching elements returned. compact defaults to {APP_STATE_DEFAULT_ELEMENT_LIMIT}; 0 keeps metadata only. element_count is the full total.")
         }
     });
 
@@ -373,7 +384,7 @@ fn get_app_state_properties(can_receive_images: bool) -> Value {
             json!({
                 "type": "string",
                 "enum": ["auto", "if_changed", "always", "never"],
-                "description": "Screen-capture policy for this state snapshot. Defaults to if_changed. Use always when a fresh visual frame is required, never for structure-only loops, and auto when the runtime should choose."
+                "description": "Screen-capture policy. Defaults to if_changed. Use always for a fresh frame, never for structure-only loops."
             }),
         );
         property_map.insert(
@@ -381,7 +392,7 @@ fn get_app_state_properties(can_receive_images: bool) -> Value {
             json!({
                 "type": "string",
                 "enum": ["path", "inline"],
-                "description": "How the captured screenshot is delivered. path (default) returns only screenshot_path for reading the image file on demand; inline also attaches the image to this result for sessions that cannot read local files."
+                "description": "path returns screenshot_path only; inline also attaches an image block."
             }),
         );
     }
@@ -397,14 +408,14 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
             "display_id".to_string(),
             json!({
                 "type": "string",
-                "description": "Exact display_id from environment.displays. Use this to capture one monitor."
+                "description": "Exact display_id from environment.displays."
             }),
         );
         property_map.insert(
             "display_name".to_string(),
             json!({
                 "type": "string",
-                "description": "Display name/connector from environment.displays. Prefer display_id when available."
+                "description": "Display name/connector from environment.displays. Prefer display_id."
             }),
         );
         property_map.insert(
@@ -412,14 +423,14 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
             json!({
                 "type": "integer",
                 "minimum": 0,
-                "description": "Zero-based display index from environment.displays. Prefer display_id when available."
+                "description": "Zero-based display index from environment.displays. Prefer display_id."
             }),
         );
         property_map.insert(
             "capture_all_displays".to_string(),
             json!({
                 "type": "boolean",
-                "description": "Capture the full virtual desktop across all displays. Defaults to false; use only when all displays are required."
+                "description": "Capture the full virtual desktop. Defaults to false."
             }),
         );
     }
@@ -430,7 +441,7 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
             json!({
                 "type": "string",
                 "enum": ["path", "inline"],
-                "description": "How the captured screenshot is delivered. path (default) returns only screenshot_path for reading the image file on demand; inline also attaches the image to this result for sessions that cannot read local files."
+                "description": "path returns screenshot_path only; inline also attaches an image block."
             }),
         );
     }
@@ -442,11 +453,11 @@ fn session_presence_hold_properties(include_unlock: bool) -> Value {
     let mut properties = json!({
         "inhibit_lock": {
             "type": "boolean",
-            "description": "Hold the desktop lock/screensaver inhibitor. Defaults to true."
+            "description": "Hold the lock/screensaver inhibitor. Defaults to true."
         },
         "inhibit_suspend": {
             "type": "boolean",
-            "description": "Hold the system suspend inhibitor. Defaults to true."
+            "description": "Hold the suspend inhibitor. Defaults to true."
         }
     });
 
@@ -455,7 +466,7 @@ fn session_presence_hold_properties(include_unlock: bool) -> Value {
             "unlock".to_string(),
             json!({
                 "type": "boolean",
-                "description": "Unlock the session before holding inhibitors when supported. Defaults to false."
+                "description": "Unlock before holding inhibitors when supported. Defaults to false."
             }),
         );
     }
@@ -479,7 +490,7 @@ fn window_target_schema() -> Value {
         "pid": {
             "type": "integer",
             "minimum": 0,
-            "description": "Process ID from list_windows. Omit unless known; 0 is ignored."
+            "description": "Process ID from list_windows. 0 is ignored."
         },
         "tty": {
             "type": "string",
@@ -488,7 +499,7 @@ fn window_target_schema() -> Value {
         "terminal_pid": {
             "type": "integer",
             "minimum": 0,
-            "description": "Terminal process ID from list_windows terminal metadata. Omit unless known; 0 is ignored."
+            "description": "Terminal process ID from list_windows terminal metadata. 0 is ignored."
         },
         "terminal_command": { "type": "string" },
         "terminal_cwd": { "type": "string" },
@@ -517,28 +528,28 @@ fn semantic_element_tool(name: &str, description: &str, annotations: ToolAnnotat
             "element_index": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Element index from the current get_app_state snapshot."
+                "description": "Element index from the latest get_app_state snapshot."
             },
             "element_identifier": {
                 "type": "string",
-                "description": "Direct AT-SPI backend_ref/object identifier from get_app_state, bypassing element_index lookup."
+                "description": "Direct backend_ref from get_app_state; bypasses element_index lookup."
             },
             "role": {
                 "type": "string",
-                "description": "Optional semantic selector role matched against the latest snapshot."
+                "description": "Semantic selector role from the latest snapshot."
             },
             "name": {
                 "type": "string",
-                "description": "Optional semantic selector name matched against the latest snapshot."
+                "description": "Semantic selector name from the latest snapshot."
             },
             "text": {
                 "type": "string",
-                "description": "Optional semantic selector text matched against name, description, or value."
+                "description": "Selector text matched against name, description, or value."
             },
             "states": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Optional semantic selector states; all listed states must match."
+                "description": "Selector states; all listed states must match."
             }
         }),
         json!([]),
@@ -559,7 +570,7 @@ fn action_tool(
         "snapshot_id".to_string(),
         json!({
             "type": "string",
-            "description": "Current snapshot_id returned by the latest get_app_state or screenshot call."
+            "description": "snapshot_id from get_app_state or screenshot; coordinate translation requires capture metadata."
         }),
     );
     let input_schema = json!({

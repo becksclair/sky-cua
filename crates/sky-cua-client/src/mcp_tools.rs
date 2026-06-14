@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppInfo, AppSelector, AppStateSnapshot, CaptureScreenMode,
-    DiagnosticEntry, ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent,
+    ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent,
     SessionPresenceStatus, WindowInfo,
 };
 use std::fmt::Write as _;
@@ -10,16 +10,19 @@ use std::fmt::Write as _;
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::ModelSessionInfo;
 use crate::output_shapes::{
-    AppStateDetail, compact_snapshot, compact_snapshot_text_content, informational_runtime_summary,
+    compact_snapshot, compact_snapshot_text_content, informational_runtime_summary,
     list_apps_error_diagnostic, portal_approval_summary, setup_accessibility_is_error,
-    setup_window_targeting_is_error, snapshot_text_content,
+    setup_window_targeting_is_error,
 };
 use crate::service_launcher::ServiceClient;
 
 mod annotations;
+mod app_state;
 mod browser;
 mod definitions;
 
+#[cfg(test)]
+use app_state::parse_app_state_detail;
 pub(crate) use definitions::tools_list_result;
 #[cfg(test)]
 pub(crate) use definitions::{build_tool_definitions, tool_definitions};
@@ -234,62 +237,7 @@ pub(crate) fn handle_tool_call(
                 other => Err(anyhow!("unexpected response for screenshot: {other:?}")),
             }
         }
-        "get_app_state" => {
-            let selector = parse_app_selector(&arguments);
-            let detail = parse_app_state_detail(&arguments);
-            let capture_screen = effective_capture_screen(&arguments, model);
-            let screenshot_delivery = parse_screenshot_delivery(&arguments);
-            match service.call(&ServiceRequest::GetAppState {
-                selector,
-                capture_screen,
-            })? {
-                ServiceResponse::GetAppState { mut snapshot } => {
-                    enrich_snapshot(heuristics, &mut snapshot);
-                    if !model.can_receive_images() {
-                        snapshot.diagnostics.push(DiagnosticEntry {
-                            code: "ModelImageInputUnsupported".to_string(),
-                            message: "Screen capture was disabled because the active model does not support image input.".to_string(),
-                            details: None,
-                        });
-                    }
-                    let structured_content = match detail {
-                        AppStateDetail::Full => serde_json::to_value(&snapshot)?,
-                        AppStateDetail::Compact => compact_snapshot(&snapshot),
-                    };
-                    let mut text_content =
-                        if detail == AppStateDetail::Compact && model.can_receive_images() {
-                            compact_snapshot_text_content(&snapshot)
-                        } else {
-                            snapshot_text_content(&snapshot)
-                        };
-
-                    let mut content = Vec::with_capacity(2);
-                    if screenshot_delivery == ScreenshotDelivery::Inline
-                        && model.can_receive_images()
-                    {
-                        match inline_screenshot_block(&snapshot) {
-                            Some(Ok(image_block)) => content.push(image_block),
-                            Some(Err(message)) => {
-                                text_content.push_str(
-                                    "\nInline screenshot delivery failed; read screenshot_path instead: ",
-                                );
-                                text_content.push_str(&message);
-                            }
-                            None => {}
-                        }
-                    }
-                    content.insert(0, json!({"type": "text", "text": text_content}));
-
-                    Ok(json!({
-                        "content": content,
-                        "structuredContent": structured_content,
-                        "isError": false
-                    }))
-                }
-                ServiceResponse::Error { code, message } => tool_error(code, message),
-                other => Err(anyhow!("unexpected response for get_app_state: {other:?}")),
-            }
-        }
+        "get_app_state" => app_state::handle_get_app_state(service, heuristics, arguments, model),
         name if browser::is_browser_tool(name) => {
             browser::handle_tool_call(service, name, arguments, model)
         }
@@ -787,11 +735,36 @@ fn push_input_diagnostics(
     }
 }
 
-pub(crate) fn parse_app_state_detail(arguments: &Value) -> AppStateDetail {
-    match arguments.get("detail").and_then(Value::as_str) {
-        Some("compact") => AppStateDetail::Compact,
-        _ => AppStateDetail::Full,
+fn parse_optional_usize(arguments: &Value, name: &str, label: &str) -> Result<Option<usize>> {
+    let Some(raw_value) = arguments.get(name) else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
     }
+    let Some(value) = raw_value.as_u64() else {
+        return Err(anyhow!("{label} must be a non-negative integer"));
+    };
+    usize::try_from(value)
+        .map(Some)
+        .map_err(|_| anyhow!("{label} is too large"))
+}
+
+fn parse_optional_string_argument(
+    arguments: &Value,
+    name: &str,
+    label: &str,
+) -> Result<Option<String>> {
+    let Some(raw_value) = arguments.get(name) else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
+    }
+    let Some(raw_value) = raw_value.as_str() else {
+        return Err(anyhow!("{label} must be a string"));
+    };
+    Ok(optional_non_empty_string(raw_value))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -909,18 +882,22 @@ mod tests {
         AccessibilitySetupReport, ActionName, ActionOutcome, ActionRequest, AgentCursorPoint,
         AgentCursorState, AppInfo, AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope,
         CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorReadiness,
-        DoctorReport, ElementNode, ElementTextReadback, EnvironmentInfo, FocusedApp,
-        InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest,
-        ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
-        SessionPresenceStatus, SetupCommandReport, ToolAvailability, ToolCapabilities,
-        WindowTargetingSetupReport,
+        DoctorReport, ElementNode, ElementNumericValueReadback, ElementTextReadback,
+        EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities, RectF,
+        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction,
+        SessionPresenceIntent, SessionPresenceStatus, SetupCommandReport, ToolAvailability,
+        ToolCapabilities, WindowTargetingSetupReport,
     };
 
+    use crate::app_state::{
+        APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT,
+        APP_STATE_MAX_ELEMENT_QUERY_CHARS, AppStateDetail,
+    };
     use crate::heuristics::HeuristicsRegistry;
     use crate::mcp_server::ModelSessionInfo;
 
     use crate::output_shapes::{
-        AppStateDetail, compact_element, compact_snapshot, list_apps_error_diagnostic,
+        compact_element, compact_snapshot, list_apps_error_diagnostic,
         setup_accessibility_is_error, setup_window_targeting_is_error, snapshot_summary,
         snapshot_text_content,
     };
@@ -931,6 +908,8 @@ mod tests {
         parse_app_selector, parse_app_state_detail, parse_screenshot_target, parse_window_target,
         tool_definitions, tools_list_result,
     };
+
+    const SNAPSHOT_TEXT_TEST_ELEMENT_COUNT: usize = 123;
 
     #[derive(Default)]
     struct FakeService {
@@ -989,14 +968,23 @@ mod tests {
     #[test]
     fn parses_compact_app_state_detail() {
         assert_eq!(
-            parse_app_state_detail(&json!({"detail": "compact"})),
+            parse_app_state_detail(&json!({"detail": "compact"})).unwrap(),
             AppStateDetail::Compact
         );
         assert_eq!(
-            parse_app_state_detail(&json!({"detail": "full"})),
+            parse_app_state_detail(&json!({"detail": "full"})).unwrap(),
             AppStateDetail::Full
         );
-        assert_eq!(parse_app_state_detail(&json!({})), AppStateDetail::Full);
+        assert_eq!(
+            parse_app_state_detail(&json!({"detail": null})).unwrap(),
+            AppStateDetail::Compact
+        );
+        assert_eq!(
+            parse_app_state_detail(&json!({})).unwrap(),
+            AppStateDetail::Compact
+        );
+        assert!(parse_app_state_detail(&json!({"detail": "verbose"})).is_err());
+        assert!(parse_app_state_detail(&json!({"detail": 1})).is_err());
     }
 
     #[test]
@@ -1261,6 +1249,37 @@ mod tests {
             .expect("type_text tool");
         assert_eq!(type_text["inputSchema"]["additionalProperties"], false);
         assert_eq!(type_text["inputSchema"]["required"], json!(["text"]));
+
+        let get_app_state = tools
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["name"] == "get_app_state")
+            .expect("get_app_state tool");
+        assert!(
+            get_app_state["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("Defaults to compact detail"))
+        );
+        let get_app_state_schema = &get_app_state["inputSchema"];
+        assert_eq!(
+            get_app_state_schema["properties"]["element_limit"]["maximum"],
+            APP_STATE_MAX_ELEMENT_LIMIT
+        );
+        assert!(
+            get_app_state_schema["properties"]
+                .get("element_query")
+                .is_some()
+        );
+        assert_eq!(
+            get_app_state_schema["properties"]["element_query"]["maxLength"],
+            APP_STATE_MAX_ELEMENT_QUERY_CHARS
+        );
+        assert!(
+            get_app_state_schema["properties"]
+                .get("element_offset")
+                .is_some()
+        );
 
         let screenshot = tools
             .as_array()
@@ -1686,7 +1705,7 @@ mod tests {
 
         let text = result["content"][0]["text"].as_str().expect("text content");
         assert!(text.contains("Snapshot snap-compact captured 1 elements"));
-        assert!(text.contains("Elements: 1 total."));
+        assert!(text.contains("Elements: 1 returned of 1 filtered, 1 total limit=200"));
         assert!(!text.contains("description=\"Verbose element description\""));
         assert!(!text.contains("backend_ref=\"atspi:/7\""));
         assert_eq!(result["structuredContent"]["detail"], "compact");
@@ -1699,6 +1718,377 @@ mod tests {
             result["structuredContent"]["elements"][0]["backend_ref"],
             "atspi:/7"
         );
+    }
+
+    #[test]
+    fn get_app_state_defaults_to_compact_limited_element_view_for_mcp() {
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.elements = (0..APP_STATE_DEFAULT_ELEMENT_LIMIT + 3)
+            .map(|index| test_element(index, "button", &format!("Element {index}")))
+            .collect();
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({}),
+        )
+        .unwrap();
+
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["detail"], "compact");
+        assert_eq!(
+            structured["element_count"],
+            APP_STATE_DEFAULT_ELEMENT_LIMIT + 3
+        );
+        assert_eq!(
+            structured["filtered_element_count"],
+            APP_STATE_DEFAULT_ELEMENT_LIMIT + 3
+        );
+        assert_eq!(
+            structured["elements_returned"],
+            APP_STATE_DEFAULT_ELEMENT_LIMIT
+        );
+        assert_eq!(structured["element_limit"], APP_STATE_DEFAULT_ELEMENT_LIMIT);
+        assert_eq!(
+            structured["elements"].as_array().expect("elements").len(),
+            APP_STATE_DEFAULT_ELEMENT_LIMIT
+        );
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        assert!(text.contains("Elements: 200 returned of 203 filtered, 203 total limit=200"));
+    }
+
+    #[test]
+    fn get_app_state_filters_and_paginates_elements() {
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.elements = vec![
+            test_element(0, "button", "Save"),
+            test_element(1, "entry", "Search field"),
+            test_element(2, "button", "Search submit"),
+            test_element(3, "button", "Cancel"),
+        ];
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({
+                "element_query": "search",
+                "element_offset": 1,
+                "element_limit": 1
+            }),
+        )
+        .unwrap();
+
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["element_count"], 4);
+        assert_eq!(structured["filtered_element_count"], 2);
+        assert_eq!(structured["elements_returned"], 1);
+        assert_eq!(structured["element_offset"], 1);
+        assert_eq!(structured["element_limit"], 1);
+        assert_eq!(structured["element_query"], "search");
+        assert_eq!(structured["elements"][0]["element_index"], 2);
+        assert_eq!(structured["elements"][0]["name"], "Search submit");
+    }
+
+    #[test]
+    fn get_app_state_element_query_matches_advertised_element_fields() {
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.elements = vec![
+            ElementNode {
+                description: Some("description-token".to_string()),
+                ..test_element(0, "button", "Description match")
+            },
+            ElementNode {
+                value: Some("value-token".to_string()),
+                ..test_element(1, "entry", "Value match")
+            },
+            ElementNode {
+                text: Some(ElementTextReadback {
+                    character_count: 10,
+                    caret_offset: None,
+                    content: Some("text-token".to_string()),
+                    content_suppressed: false,
+                    truncated: false,
+                    selections: Vec::new(),
+                }),
+                ..test_element(2, "text", "Text match")
+            },
+            ElementNode {
+                numeric_value: Some(ElementNumericValueReadback {
+                    current: 42.0,
+                    minimum: 0.0,
+                    maximum: 100.0,
+                    minimum_increment: 1.0,
+                    text: Some("numeric-token".to_string()),
+                }),
+                ..test_element(3, "slider", "Numeric match")
+            },
+            ElementNode {
+                state_flags: vec!["state-token".to_string()],
+                ..test_element(4, "checkbox", "State match")
+            },
+            ElementNode {
+                semantic_actions: vec!["action-token".to_string()],
+                ..test_element(5, "button", "Action match")
+            },
+            test_element(6, "role-token", "Role match"),
+        ];
+
+        let cases = [
+            ("DESCRIPTION-TOKEN", 0),
+            ("value-token", 1),
+            ("text-token", 2),
+            ("numeric-token", 3),
+            ("state-token", 4),
+            ("action-token", 5),
+            ("role-token", 6),
+        ];
+
+        for (query, expected_index) in cases {
+            let service = FakeService::with_response(ServiceResponse::GetAppState {
+                snapshot: Box::new(snapshot.clone()),
+            });
+
+            let result = handle_tool_call(
+                &service,
+                &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+                &ModelSessionInfo {
+                    supports_images: Some(true),
+                },
+                "get_app_state",
+                json!({"element_query": query}),
+            )
+            .unwrap();
+
+            let structured = &result["structuredContent"];
+            assert_eq!(structured["filtered_element_count"], 1, "query {query}");
+            assert_eq!(structured["elements_returned"], 1, "query {query}");
+            assert_eq!(
+                structured["elements"][0]["element_index"], expected_index,
+                "query {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn get_app_state_accepts_zero_element_limit_for_metadata_only_projection() {
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.elements = (0..3)
+            .map(|index| test_element(index, "button", &format!("Element {index}")))
+            .collect();
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({"element_limit": 0}),
+        )
+        .unwrap();
+
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["element_count"], 3);
+        assert_eq!(structured["filtered_element_count"], 3);
+        assert_eq!(structured["elements_returned"], 0);
+        assert_eq!(structured["element_limit"], 0);
+        assert_eq!(
+            structured["elements"].as_array().expect("elements").len(),
+            0
+        );
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        assert!(text.contains("Elements: 0 returned of 3 filtered, 3 total limit=0"));
+        assert!(!text.contains("\n- ["));
+    }
+
+    #[test]
+    fn get_app_state_rejects_invalid_element_projection_arguments() {
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot_with_verbose_element()),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({"element_limit": APP_STATE_MAX_ELEMENT_LIMIT + 1}),
+        )
+        .unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["code"], "InvalidRequest");
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("get_app_state element_limit must be at most"))
+        );
+        assert!(
+            service.take_requests().is_empty(),
+            "invalid element_limit should not reach the service"
+        );
+
+        let long_query = "q".repeat(APP_STATE_MAX_ELEMENT_QUERY_CHARS + 1);
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({"element_query": long_query}),
+        )
+        .unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["code"], "InvalidRequest");
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("get_app_state element_query must be at most"))
+        );
+        assert!(
+            service.take_requests().is_empty(),
+            "invalid element_query should not reach the service"
+        );
+    }
+
+    #[test]
+    fn full_get_app_state_element_limit_serializes_only_requested_elements() {
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.elements = (0..5)
+            .map(|index| test_element(index, "button", &format!("Element {index}")))
+            .collect();
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({
+                "detail": "full",
+                "element_offset": 2,
+                "element_limit": 1
+            }),
+        )
+        .unwrap();
+
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["element_count"], 5);
+        assert_eq!(structured["filtered_element_count"], 5);
+        assert_eq!(structured["elements_returned"], 1);
+        assert_eq!(structured["element_offset"], 2);
+        assert_eq!(structured["element_limit"], 1);
+        assert_eq!(
+            structured["elements"].as_array().expect("elements").len(),
+            1
+        );
+        assert_eq!(structured["elements"][0]["element_index"], 2);
+        assert_eq!(structured["elements"][0]["name"], "Element 2");
+    }
+
+    #[test]
+    fn full_get_app_state_preserves_snapshot_top_level_fields() {
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.elements = (0..3)
+            .map(|index| test_element(index, "button", &format!("Element {index}")))
+            .collect();
+        let canonical = serde_json::to_value(&snapshot).expect("canonical snapshot serializes");
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({
+                "detail": "full",
+                "element_limit": 1
+            }),
+        )
+        .unwrap();
+
+        let structured = result["structuredContent"]
+            .as_object()
+            .expect("structured content object");
+        for key in canonical
+            .as_object()
+            .expect("canonical snapshot object")
+            .keys()
+        {
+            assert!(structured.contains_key(key), "missing canonical key {key}");
+        }
+        assert_eq!(structured["element_count"], 3);
+        assert_eq!(structured["filtered_element_count"], 3);
+        assert_eq!(structured["elements_returned"], 1);
+        assert!(
+            !structured.contains_key("doctor_report"),
+            "empty doctor_report must keep platform skip_serializing_if behavior"
+        );
+        assert!(
+            !structured.contains_key("agent_cursor"),
+            "empty agent_cursor must keep platform skip_serializing_if behavior"
+        );
+    }
+
+    #[test]
+    fn full_get_app_state_text_keeps_hard_element_line_cap() {
+        let mut snapshot = snapshot_with_verbose_element();
+        snapshot.elements = (0..SNAPSHOT_TEXT_TEST_ELEMENT_COUNT)
+            .map(|index| test_element(index, "button", &format!("Element {index}")))
+            .collect();
+        let service = FakeService::with_response(ServiceResponse::GetAppState {
+            snapshot: Box::new(snapshot),
+        });
+
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "get_app_state",
+            json!({
+                "detail": "full",
+                "element_limit": APP_STATE_DEFAULT_ELEMENT_LIMIT
+            }),
+        )
+        .unwrap();
+
+        let structured = &result["structuredContent"];
+        assert_eq!(
+            structured["elements_returned"],
+            SNAPSHOT_TEXT_TEST_ELEMENT_COUNT
+        );
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        assert_eq!(text.matches("\n- [").count(), 120);
+        assert!(text.contains("- ... 3 more elements omitted"));
     }
 
     fn capture_info_with_screenshot(path: &std::path::Path) -> CaptureInfo {
@@ -2149,6 +2539,30 @@ mod tests {
             app_guidance: None,
             doctor_report: None,
             agent_cursor: None,
+        }
+    }
+
+    fn test_element(index: usize, role: &str, name: &str) -> ElementNode {
+        ElementNode {
+            element_index: index,
+            parent_index: None,
+            role: role.to_string(),
+            name: Some(name.to_string()),
+            description: Some(format!("{name} description")),
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: role == "entry",
+            state_flags: vec!["enabled".to_string(), "visible".to_string()],
+            semantic_actions: vec!["click".to_string()],
+            bounds: Some(RectF {
+                x: 1.0 + index as f64,
+                y: 2.0,
+                width: 100.0,
+                height: 30.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            backend_ref: Some(format!("atspi:/{index}")),
         }
     }
 
