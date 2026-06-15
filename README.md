@@ -71,10 +71,11 @@ packaged adapter around that runtime, not the runtime boundary itself.
 
 ## Install
 
-One command sets up a fresh clone end to end — system dependencies, the
-runtime build, the Heliasar Codex marketplace (with the computer-use compat
-plugin), MCP registration plus skills for every detected agent (Codex,
-Claude Code, Claude Desktop, OpenCode, Pi, OpenClaw), and health checks:
+One command sets up a fresh checkout end to end - system dependencies, the
+runtime build, the computer-use compat plugin (materialized from the bundled
+preflight, no marketplace), MCP registration plus skills for every detected
+agent (Codex, Claude Code, Claude Desktop, OpenCode, Pi, OpenClaw), and health
+checks:
 
 ```bash
 python3 install.py
@@ -83,6 +84,12 @@ python3 install.py
 Use `--dry-run` to preview the phases, `--agents` to pick hosts explicitly,
 and `--kwin-effect` to also install the KDE agent-cursor effect. Details in
 [`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md).
+
+To install on a machine without a checkout or toolchain, build a
+self-contained release tarball with `python3 scripts/package.py`, copy it
+over, extract it, and run `python3 install.py` from the extracted directory
+(bundle mode: no build, no cargo). See
+[`docs/features/release-package.md`](docs/features/release-package.md).
 
 ## Development
 
@@ -121,7 +128,7 @@ On Windows, use the `.exe` binaries:
 .\bin\sky-cua-service.exe daemon
 ```
 
-Build and install a Codex debug bundle:
+Build and install the local Codex payload:
 
 ```bash
 python3 scripts/build_plugin.py
@@ -130,12 +137,14 @@ python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
 
 On Linux, `install_plugin.py` also runs browser preflight when the built bundle
 contains `resources/chrome_preflight.py`. That preflight syncs the local
-OpenAI-bundled marketplace cache for `chrome`, `browser-use`, and a
+OpenAI-bundled marketplace cache for `chrome`, `browser-use`, and the
 `computer-use` compatibility entry, writes native-host manifests for Google
 Chrome, Brave, and Chromium, and enables `chrome@openai-bundled` plus
-`browser-use@openai-bundled` in `config.toml`. The compatibility
-`computer-use@openai-bundled` entry is staged but disabled so it does not
-collide with the active `sky-cua` MCP server.
+`browser-use@openai-bundled` in `config.toml`. When the compat root points at
+the installed sky-cua payload, `computer-use@openai-bundled` is the enabled
+Computer Use plugin id and `sky-cua@local` stays a disabled payload carrier; if
+the compat root cannot be materialized, the installer falls back to enabling
+`sky-cua@local` directly.
 
 Run the browser preflight directly when debugging Codex Desktop browser
 integration:
@@ -188,30 +197,36 @@ installs OpenCode, and `scripts/testing-vm/sync-opencode-to-vm.sh` copies the
 host OpenCode config/auth without copying the host OpenCode database, logs, or
 snapshots.
 
-Deploy local Codex plugin builds:
+Deploy and distribute Codex plugin builds:
 
 ```bash
-python3 scripts/deploy_debug_plugin.py
-python3 scripts/deploy_release_plugin.py
+python3 scripts/deploy_plugin.py   # fast local dev deploy (sky-cua@local)
+python3 scripts/package.py         # build a release tarball under dist/release
+python3 install.py                 # install on a clean machine (from the tarball)
 ```
 
-`deploy_debug_plugin.py` keeps the direct debug-cache install as
-`sky-cua@debug`. `deploy_release_plugin.py` stages a release bundle through the
-local Heliasar marketplace checkout under `~/projects/heliasar-marketplace`,
-installs it through Codex, and enables `sky-cua@Heliasar`. If
-`~/.codex/config.toml` already has a Heliasar marketplace source, release deploy
-preserves it; otherwise it configures the local checkout as
-`[marketplaces.Heliasar]`. The deploy scripts switch debug and release plugin
-ids mutually so Codex does not see duplicate `computer-use` MCP servers, and
-`computer-use@openai-bundled` should remain disabled when `sky-cua@Heliasar` is
-active. Deploys preserve already-staged binaries for other platforms, so
-rebuilding on Linux does not delete Windows `.exe` binaries from the local
-marketplace and vice versa.
+`deploy_plugin.py` is the fast local lane: it installs the built bundle into
+the local Codex payload as `sky-cua@local`, retargets the
+`computer-use@openai-bundled` compat plugin at it, and refreshes the installed
+MCP runtime - no git, no marketplace, no Codex `plugin/install`. In compat-first
+mode `computer-use@openai-bundled` is the single enabled `computer-use` plugin
+and `sky-cua@local` stays a disabled payload carrier; the active payload is
+chosen by retargeting the compat root, so Codex never sees duplicate
+`computer-use` MCP servers. Deploys preserve already-staged binaries for other
+platforms, so rebuilding on Linux does not delete Windows `.exe` binaries from
+the local payload and vice versa.
+
+`package.py` builds a self-contained
+`dist/release/sky-cua-<version>-<platform>.tar.gz` containing the plugin
+bundle, a pure-Python installer subset, mirrored skills, and a top-level
+`install.py`. Copy it to a clean machine, extract it, and run
+`python3 install.py` from the extracted directory; the installer runs in bundle
+mode (no build, no cargo) and materializes the compat plugin from the bundled
+preflight. See [`docs/features/release-package.md`](docs/features/release-package.md).
 
 If the local Codex config gets stale, the durable reset procedure is documented
-in `docs/runtime/mcp-boundary.md` under "Codex release deploy and config reset".
-`publish_marketplace_release.py` commits and pushes the marketplace checkout
-before upgrading the Codex Git marketplace.
+in `docs/runtime/mcp-boundary.md` under "Codex deploy, packaging, and config
+reset".
 
 Reset persisted portal restore tokens:
 

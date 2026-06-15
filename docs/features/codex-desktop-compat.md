@@ -62,18 +62,14 @@ enabled = true
 [plugins."computer-use@openai-bundled"]
 enabled = true    # the single enabled computer-use plugin id
 
-[plugins."sky-cua@Heliasar"]
+[plugins."sky-cua@local"]
 enabled = false   # payload carrier; the compat root points at its cache payload
-
-[marketplaces.Heliasar]
-source = "/home/bex/projects/heliasar-marketplace"
-source_type = "local"
 ```
 
 Codex Desktop detects Computer Use plugins by the built-in plugin name
 `computer-use`, so the `computer-use@openai-bundled` compat entry is the
-single enabled computer-use plugin; the sky-cua channel ids stay disabled so
-Codex never sees two active `computer-use` MCP servers.
+single enabled computer-use plugin; the `sky-cua@local` channel id stays
+disabled so Codex never sees two active `computer-use` MCP servers.
 
 ## Behavior
 
@@ -89,16 +85,17 @@ Build-time (`scripts/build_plugin.py`):
 - Embeds `sky-cua-chrome-host` under
   `resources/plugins/openai-bundled/plugins/chrome/extension-host/linux/<arch>/extension-host`.
 
-Install-time (`scripts/install_plugin.py`,
-`scripts/deploy_release_plugin.py`):
+Install-time (`scripts/install_plugin.py`, `scripts/deploy_plugin.py`,
+`scripts/installer.py`):
 
 - Installs the bundle and runs browser preflight on Linux when the
   built bundle contains `resources/chrome_preflight.py`.
-- The deploy scripts switch `sky-cua@debug` and `sky-cua@Heliasar`
-  mutually so Codex never sees duplicate computer-use servers.
+- The compat root's `.mcp.json` is retargeted at the installed
+  `sky-cua@local` payload, which stays disabled so Codex never sees
+  duplicate computer-use servers.
 - Deploys preserve already-staged binaries for other platforms:
   rebuilding on Linux does not delete Windows `.exe` binaries from
-  the local marketplace and vice versa.
+  the local payload and vice versa.
 
 Preflight (`resources/chrome_preflight.py`,
 `bin/sky-cua-browser-preflight`):
@@ -121,11 +118,14 @@ log so the extension's session lifecycle is honored.
 - `scripts/build_plugin.py` — release bundle builder (stages
   bundled-plugin cache, embeds Chrome host).
 - `scripts/install_plugin.py` — local install path.
-- `scripts/deploy_debug_plugin.py`, `scripts/deploy_release_plugin.py`
-  — debug-cache and Heliasar-marketplace deploys.
-- `scripts/publish_marketplace_release.py` — pushes the marketplace
-  checkout before upgrading the Codex Git marketplace source.
-- `resources/chrome_preflight.py` — preflight that syncs bundled
+- `scripts/deploy_plugin.py` - fast local deploy (`sky-cua@local`,
+  compat root retargeted at it).
+- `scripts/package.py` - builds the self-contained release tarball
+  (`dist/release/sky-cua-<version>-<platform>.tar.gz`).
+- `scripts/installer.py` / `install.py` - clean-machine installer
+  (repo and bundle modes); materializes the compat plugin from the
+  bundled preflight, no marketplace.
+- `resources/chrome_preflight.py` - preflight that syncs bundled
   cache, writes native-host manifests, enables companion plugins.
 - `crates/sky-cua-chrome-host/` — Linux native messaging host.
 - `resources/chrome-extension/codex/1.1.5_0/` — extracted upstream

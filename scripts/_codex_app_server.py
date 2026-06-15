@@ -1,8 +1,7 @@
 """Shared stdio JSON-RPC client for `codex app-server`.
 
-Both the rich smoke harness (`_app_server_harness.py`) and release deploy
-(`deploy_release_plugin.py`) drive `codex app-server` over line-oriented
-stdio JSON-RPC. This module owns the transport lifecycle they share:
+The rich smoke harness (`_app_server_harness.py`) drives `codex app-server`
+over line-oriented stdio JSON-RPC. This module owns the transport lifecycle:
 process spawn, queue-backed stdout/stderr readers, request id allocation,
 initialize/initialized sequencing, timeout reporting with stderr context,
 and bounded shutdown.
@@ -10,8 +9,8 @@ and bounded shutdown.
 Two consumption lanes are supported:
 
 - ``request()`` blocks until the matching response arrives, buffering other
-  inbound messages into ``notifications``. Used by release deploy, whose
-  operations are simple request/response pairs.
+  inbound messages into ``notifications`` - a convenience for simple
+  request/response callers.
 - ``read_message()`` streams every inbound message in arrival order. Used by
   the rich harness, which must record a full transcript and answer
   server-to-client requests itself.

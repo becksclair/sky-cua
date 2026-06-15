@@ -12,9 +12,11 @@ pytest.
   (codex exec harness), `_codex_app_server.py` (shared codex app-server
   stdio JSON-RPC client), `_app_server_harness.py` (rich app-server turn
   policy), `_kwin_effect.py` (KWin effect deploy).
-- Build/deploy entrypoints: `build_plugin.py`, `install_plugin.py`,
-  `install_mcp_server.py`, `deploy_debug_plugin.py`,
-  `deploy_release_plugin.py`, `install_kwin_effect.py`.
+- Build/deploy/distribution entrypoints: `build_plugin.py`,
+  `install_plugin.py`, `install_mcp_server.py`, `deploy_plugin.py` (fast local
+  dev deploy as `sky-cua@local`), `package.py` (self-contained release
+  tarball), `installer.py` / root `install.py` (clean-machine install, repo
+  and bundle modes; no marketplace), `install_kwin_effect.py`.
 - Live operator smokes are `live_*_smoke.py` and must fail honestly when app
   state is blocked. JSON schemas for final agent messages:
   `scripts/schemas/*.json`.

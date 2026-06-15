@@ -1,18 +1,28 @@
 ---
 name: cua-deploy
 description: >-
-  Use when asked to rebuild, deploy, restart, publish, or push sky-cua changes
-  — any combination of: build the plugin bundle, install it into Codex debug
-  cache or as a local release, publish to the Heliasar marketplace, restart the
-  MCP runtime, commit staged/unstaged changes semantically, and push. Also use
-  when someone says "deploy it", "rebuild and push", "ship it", or equivalent
-  shorthand.
+  Use when asked to rebuild, deploy, package, install, restart, or push sky-cua
+  changes - any combination of: build the plugin bundle, install it into the
+  local Codex payload, build a release tarball, install on a clean machine,
+  restart the MCP runtime, commit staged/unstaged changes semantically, and
+  push. Also use when someone says "deploy it", "rebuild and push", "ship it",
+  or equivalent shorthand.
 ---
 
 # cua-deploy
 
-Automates the sky-cua change-to-ship pipeline: build → deploy/publish → sync OpenClaw workspace skills → restart → commit → push.
+Automates the sky-cua change-to-ship pipeline: build -> deploy/package -> sync OpenClaw workspace skills -> commit -> push.
 Determine the appropriate lane from context and task scope; never run more pipeline than was asked.
+
+There is no marketplace and no publish flow. The two distribution lanes are:
+
+- Local deploy (`scripts/deploy_plugin.py`): updates *what runs locally, immediately* - installs
+  the built bundle as `sky-cua@local`, retargets the computer-use compat plugin at it, and
+  refreshes the installed MCP runtime (no separate restart step). Does not touch git.
+- Build + install a release package (`scripts/package.py`, then `python3 install.py` on the
+  target): builds a self-contained tarball under `dist/release/`, which a clean machine extracts
+  and installs in bundle mode (no build, no cargo). Materializes the compat plugin from the
+  bundled preflight.
 
 ## OpenClaw workspace skills sync
 
@@ -20,9 +30,8 @@ For any deploy or publish lane, also replace the bundled sky-cua skills in
 OpenClaw's workspace skill root. This keeps OpenClaw agents on the same
 browser/computer-use instructions as the deployed plugin.
 
-Run after the bundle build/deploy command succeeds and before any standalone
-MCP restart/reload command you invoke. The helper copies from the actual bundle
-payload at `dist/plugin/sky-cua/skills`, so `--no-build` lanes sync the
+Run after the deploy/publish command succeeds. The helper copies from the actual
+bundle payload at `dist/plugin/sky-cua/skills`, so `--no-build` lanes sync the
 existing bundle instead of the live source tree:
 
 ```bash
@@ -35,66 +44,48 @@ and rolls back prior destinations if replacement fails.
 
 ## Lanes
 
-### Debug deploy (local Codex cache)
+### Local deploy (default)
 
-Use when iterating on unreleased changes locally. Installs into `~/.codex` debug cache; does not touch the marketplace.
-After any command in this lane succeeds, run the OpenClaw workspace skills sync
-block before restarting the MCP runtime.
+Use when iterating on unreleased changes locally. Installs as `sky-cua@local` and refreshes the
+MCP runtime in one command; does not touch the marketplace.
 
 ```bash
-# Build + deploy debug bundle, then restart stale MCP runtime processes
-python3 scripts/deploy_debug_plugin.py
+# Build + deploy locally (also refreshes the installed MCP runtime)
+python3 scripts/deploy_plugin.py
 python3 scripts/sync_openclaw_workspace_skills.py
-python3 scripts/install_mcp_server.py --host claude-code --restart-runtime
 
 # Also rebuild and reload the KWin agent-cursor effect (Linux/KDE only)
-python3 scripts/deploy_debug_plugin.py --kwin-effect
+python3 scripts/deploy_plugin.py --kwin-effect
 python3 scripts/sync_openclaw_workspace_skills.py
-python3 scripts/install_mcp_server.py --host claude-code --restart-runtime
 
-# Install existing bundle without rebuilding, then restart
-python3 scripts/deploy_debug_plugin.py --no-build
+# Install existing bundle without rebuilding
+python3 scripts/deploy_plugin.py --no-build
 python3 scripts/sync_openclaw_workspace_skills.py
-python3 scripts/install_mcp_server.py --host claude-code --restart-runtime
 ```
 
-### Release deploy (local marketplace)
+### Build + install a release package
 
-Use when testing the full release install path against the local Heliasar checkout at `~/projects/heliasar-marketplace`.
-After any command in this lane succeeds, run the OpenClaw workspace skills sync
-block. If you also run a standalone MCP runtime restart, run the sync first.
+Use when shipping to a machine without a checkout or toolchain. Builds a self-contained tarball;
+the target extracts it and installs in bundle mode.
 
 ```bash
-# Deploy, then restart stale MCP runtime processes
-python3 scripts/deploy_release_plugin.py
-python3 scripts/sync_openclaw_workspace_skills.py
-python3 scripts/install_mcp_server.py --host claude-code --restart-runtime
+# Build the release tarball under dist/release/
+python3 scripts/package.py
 
-# Skip calling codex app-server plugin/install (just stage marketplace + config)
-python3 scripts/deploy_release_plugin.py --skip-codex-install
-python3 scripts/sync_openclaw_workspace_skills.py
-python3 scripts/install_mcp_server.py --host claude-code --restart-runtime
+# Use the existing bundle (no Cargo rebuild)
+python3 scripts/package.py --no-build
+
+# On the target machine: extract and install (no build, no cargo)
+tar xzf sky-cua-<version>-<platform>.tar.gz
+cd sky-cua-<version>
+python3 install.py
 ```
 
-### Publish (full release to Heliasar marketplace + local MCP install)
-
-Use when shipping a version. Builds, writes marketplace entries, commits/pushes the marketplace repo, and refreshes the local MCP install.
-After any command in this lane succeeds, run the OpenClaw workspace skills sync
-block.
-
-```bash
-# Full publish including local Claude Code MCP install restart
-python3 scripts/publish_marketplace_release.py --local-install-host claude-code
-python3 scripts/sync_openclaw_workspace_skills.py
-
-# Skip local MCP install (marketplace push only)
-python3 scripts/publish_marketplace_release.py --skip-local-install
-python3 scripts/sync_openclaw_workspace_skills.py
-
-# Use existing bundle (no Cargo rebuild)
-python3 scripts/publish_marketplace_release.py --local-install-host claude-code --no-build
-python3 scripts/sync_openclaw_workspace_skills.py
-```
+`package.py` flags: `--no-build`, `--platform`, `--version-from-tag [TAG]`,
+`--release-dir`. The packaged `install.py` accepts the installer flags
+(`--agents`, `--mode`, `--bundle-root`, `--target-dir`, `--kwin-effect`,
+`--skip-system-deps`, `--dry-run`). See
+`docs/features/release-package.md`.
 
 ## MCP runtime restart (standalone)
 
@@ -112,7 +103,7 @@ openclaw mcp reload
 
 ## Commit and push
 
-After the deploy succeeds, commit all relevant staged and unstaged changes with a semantic message and push. Use the `committer` subagent for this step — it writes diff-grounded commit messages and handles staging precisely.
+After the deploy succeeds, commit all relevant staged and unstaged changes with a semantic message and push. Use the `committer` subagent for this step - it writes diff-grounded commit messages and handles staging precisely.
 
 Key conventions:
 - Commit message prefix: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`, `test:` etc.
@@ -122,10 +113,9 @@ Key conventions:
 
 ## Decision tree
 
-1. **Is this a local dev iteration?** → debug deploy lane + MCP restart → commit + push.
-2. **Is this a local release test?** → release deploy lane → commit + push.
-3. **Is this shipping to the marketplace?** → publish lane (includes MCP restart) → commit + push.
-4. **Only need to restart the runtime?** → standalone MCP restart, no deploy.
+1. **Local dev iteration / unreleased changes?** -> local deploy lane -> commit + push.
+2. **Shipping to a clean machine?** -> build + install a release package (`package.py`, then `install.py` on the target) -> commit + push.
+3. **Only need to restart the runtime?** -> standalone MCP restart, no deploy.
 
 ## Checks before pushing
 
@@ -145,7 +135,7 @@ State any live-smoke gates not run (desktop/portal/KDE/COSMIC/Hyprland/GNOME).
 
 | Script | Key flags |
 |---|---|
-| `deploy_debug_plugin.py` | `--no-build`, `--symlink`, `--kwin-effect` |
-| `deploy_release_plugin.py` | `--no-build`, `--skip-codex-install`, `--codex-bin` |
-| `publish_marketplace_release.py` | `--no-build`, `--local-install-host`, `--skip-local-install`, `--skip-codex-install`, `--version-from-tag`, `--no-push` |
+| `deploy_plugin.py` | `--no-build`, `--symlink`, `--kwin-effect`, `--local-install-host` |
+| `package.py` | `--no-build`, `--platform`, `--version-from-tag [TAG]`, `--release-dir` |
+| `install.py` | `--agents`, `--mode {auto,repo,bundle}`, `--bundle-root`, `--target-dir`, `--kwin-effect`, `--skip-system-deps`, `--dry-run` |
 | `install_mcp_server.py` | `--host`, `--restart-runtime`, `--kwin-effect` |

@@ -97,10 +97,40 @@ Open boxes link to the active ExecPlan that owns the work.
       lifecycle was retired 2026-06-11: driving the user's real logged-in
       browser is the product; an isolated profile defeats that purpose) —
       [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
-- [x] One-shot installer (`install.py`): system deps, build, Heliasar
-      marketplace + compat plugin, MCP registration and skills for all
-      detected agents, health checks —
+- [x] One-shot installer (`install.py`): system deps, build (repo mode) or
+      prebuilt bundle (bundle mode), compat plugin materialized from the
+      bundled preflight, MCP registration and skills for all detected agents,
+      health checks -
       [`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md)
+- [x] Release package (`scripts/package.py` + `install.py`): self-contained
+      tarball for clean-machine install with no checkout, toolchain, or
+      marketplace -
+      [`docs/features/release-package.md`](docs/features/release-package.md)
+- [ ] Deduplicate the Codex compat-enablement sequence (`install_bundle` ->
+      `run_browser_preflight` ->
+      `update_codex_config(compat_enablement=compat_plugin_targets_payload(...))`),
+      currently triplicated across `install_plugin.py`,
+      `deploy_plugin.py:fast_deploy`, and `installer.py:run_codex_phase`. This
+      is the load-bearing compat-enablement (security) toggle; three copies
+      risk a future contract change silently diverging. Extract
+      `install_plugin.install_codex_payload(bundle_root, codex_home, *,
+      symlink=False, stop_processes=True)` and have the other two call it - as a
+      deliberate, separately-reviewed change, not a mechanical extract: the
+      sites differ (install_plugin skips the process-stop; installer wraps the
+      whole install->preflight->config sequence in `try/except`->`PhaseResult`;
+      deploy_plugin appends an installed-MCP refresh), so the helper's
+      process-stop and error-scope parameterization must preserve each caller's
+      behavior.
+- [ ] Wire the retained cross-build staging primitives
+      (`build_runtime_packages.py` -> `package_runtime_artifact.py` ->
+      `_plugin_bundle.merge_runtime_artifacts`) into `scripts/package.py` so it
+      can emit multi-platform / Windows tarballs from per-platform CI artifacts.
+      `package.py` is single-platform today (asserts current-host binaries); the
+      staging path builds each platform on its native host (no cross-compile),
+      stages one artifact per platform, and merges the full
+      `REQUIRED_RUNTIME_PLATFORMS` set into a fat bundle. The primitives have no
+      production caller since the Heliasar CI matrix was deleted - they are
+      retained marketplace-independent infrastructure, not dead code.
 - [ ] Detached launch breadth across more desktop/session launchers
 
 ## Phase: Performance and runtime tuning

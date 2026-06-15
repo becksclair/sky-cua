@@ -46,9 +46,9 @@ Linux bundles may also include a browser preflight wrapper:
 ```
 
 That wrapper is a Codex Desktop adapter helper, not part of the portable MCP
-runtime. It syncs the OpenAI-bundled `chrome` and `browser-use` plugins plus a
-disabled `computer-use` compatibility entry into the local Codex bundled
-marketplace cache and writes Chromium-family native-host manifests.
+runtime. It syncs the OpenAI-bundled `chrome` and `browser-use` plugins plus the
+`computer-use` compatibility entry into the local Codex bundled marketplace
+cache and writes Chromium-family native-host manifests.
 
 ## Required host responsibilities
 
@@ -81,80 +81,69 @@ For Codex Desktop compatibility, the shipped plugin presents one active
 `computer-use` MCP server while still launching the `sky-cua-client mcp`
 runtime. Browser Use remains a companion integration: the adapter syncs
 OpenAI-bundled `chrome` and `browser-use` resources and enables their plugin
-ids. It stages `computer-use@openai-bundled` for marketplace completeness but
-keeps it disabled so Codex does not see duplicate active `computer-use`
-servers. Other MCP hosts do not need these Codex bundled plugin cache steps.
+ids. On Linux, the adapter also enables `computer-use@openai-bundled` as the
+single Computer Use plugin id when its `.mcp.json` points at the installed
+sky-cua payload; `sky-cua@local` stays disabled as a payload carrier. Other MCP
+hosts do not need these Codex bundled plugin cache steps.
 
-## Codex release deploy and config reset
+## Codex deploy, packaging, and config reset
 
-The current local release lane is the Heliasar marketplace install, not direct
-cache editing:
+Local development uses a direct cache deploy, not a marketplace install:
 
 ```bash
-python3 scripts/deploy_release_plugin.py
+python3 scripts/deploy_plugin.py
 ```
 
-That command builds `dist/plugin/sky-cua`, stages the bundle into
-`~/projects/heliasar-marketplace/plugins/sky-cua`, writes
-`~/projects/heliasar-marketplace/.agents/plugins/marketplace.json`, asks
-`codex app-server` to install `sky-cua`, enables `sky-cua@Heliasar`, disables
-`sky-cua@debug`, and reloads MCP servers. The installed cache is an output of
-Codex's plugin install path:
+That command builds `dist/plugin/sky-cua`, installs the bundle as
+`sky-cua@local` into the local Codex cache, retargets the
+`computer-use@openai-bundled` compat plugin at it through the bundled
+`resources/chrome_preflight.py`, and refreshes the installed MCP runtime. No
+git, no marketplace, no Codex `plugin/install`. The installed cache lives at:
 
 ```text
-~/.codex/plugins/cache/Heliasar/sky-cua/<version>/
+~/.codex/plugins/cache/local/sky-cua/local/
 ```
+
+For a machine without a checkout or toolchain, build a self-contained tarball
+and install it there:
+
+```bash
+python3 scripts/package.py
+# copy dist/release/sky-cua-<version>-<platform>.tar.gz to the target, then:
+tar xzf sky-cua-<version>-<platform>.tar.gz
+cd sky-cua-<version>
+python3 install.py
+```
+
+`package.py` assembles the plugin bundle, a pure-Python installer subset,
+mirrored skills, and a top-level `install.py`; the package-root installer runs
+in bundle mode (no build, no cargo) and materializes the compat plugin from the
+bundled preflight. See
+[`docs/features/release-package.md`](../features/release-package.md) and
+[`docs/operations/plugin-release.md`](../operations/plugin-release.md).
 
 If `~/.codex/config.toml` has stale sky-cua state, clean only the plugin and
 compatibility entries before redeploying. Keep unrelated project trust, auth,
-model, and curated plugin settings intact. The stale entries to remove or
-normalize are:
-
-```toml
-notify = ["/Users/rebecca/.codex/reverse-engineering/computer-use-...", "turn-ended"]
-
-[plugins."sky-cua@debug"]
-enabled = false
-
-[plugins."sky-cua@Heliasar"]
-enabled = true
-
-[marketplaces.Heliasar]
-...
-
-[plugins."computer-use@openai-bundled"]
-enabled = true
-```
-
-After cleanup, rerun `python3 scripts/deploy_release_plugin.py`. If no
-`[marketplaces.Heliasar]` stanza exists, the deploy script configures the local
-marketplace source. If one already exists, the script preserves it so a
-Git-backed marketplace source is not silently replaced.
-
-The expected post-deploy config shape is:
+model, and curated plugin settings intact. The expected compat-first
+post-deploy shape on Linux is:
 
 ```toml
 [plugins."computer-use@openai-bundled"]
-enabled = false
-
-[plugins."sky-cua@Heliasar"]
 enabled = true
 
-[plugins."sky-cua@debug"]
+[plugins."sky-cua@local"]
 enabled = false
-
-[marketplaces.Heliasar]
-source = "/home/bex/projects/heliasar-marketplace"
-source_type = "local"
-last_updated = "..."
 ```
 
-The cheap control-plane proof is `mcpServerStatus/list` through `codex
-app-server`; it should show one `computer-use` server with tools such as
-`list_apps`, `get_app_state`, `click`, `scroll`, `type_text`, and `doctor`.
-If both `sky-cua@Heliasar` and `computer-use@openai-bundled` are enabled, Codex
-can skip one duplicate `computer-use` server, so fix the config before chasing
-runtime bugs.
+After cleanup, rerun `python3 scripts/deploy_plugin.py`. The cheap
+control-plane proof is `mcpServerStatus/list` through `codex app-server`; it
+should show one `computer-use` server with tools such as `list_apps`,
+`get_app_state`, `click`, `scroll`, `type_text`, and `doctor`. If both
+`sky-cua@local` and `computer-use@openai-bundled` are enabled, Codex can see a
+duplicate `computer-use` server, so fix the config before chasing runtime bugs.
+`deploy_plugin.py` also disables the retired `sky-cua@debug` and
+`sky-cua@Heliasar` stanzas and drops their cache payloads on every run, so those
+two never need a manual reset.
 
 For plain MCP hosts, build release binaries and emit a host-specific config:
 

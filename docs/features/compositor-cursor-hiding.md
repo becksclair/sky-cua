@@ -170,7 +170,7 @@ The same deploy runs from the plugin lanes:
 
 ```bash
 python3 scripts/install_mcp_server.py --host claude-code --restart-runtime --kwin-effect
-python3 scripts/deploy_debug_plugin.py --kwin-effect
+python3 scripts/deploy_plugin.py --kwin-effect
 ```
 
 Legacy installs without the `BuildId` slot report `unknown` and are treated as

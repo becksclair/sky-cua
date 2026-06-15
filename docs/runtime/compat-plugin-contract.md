@@ -121,11 +121,11 @@ Rules for the generator (lives in codex-desktop, not here):
 - `plugin.json` `name` carries the impersonated identity; everything it
   points at resolves into the packaged sky-cua payload.
 - Only one active `computer-use` MCP server per host. For the codex host the
-  compat root (`computer-use@openai-bundled`) is the enabled plugin id —
-  Codex Desktop detects Computer Use plugins by that built-in name — and the
-  direct `sky-cua@<marketplace>` channel entries stay installed but disabled.
-  Debug-versus-release selection retargets the compat root's `.mcp.json` at
-  the matching payload (see `docs/operations/plugin-release.md`).
+  compat root (`computer-use@openai-bundled`) is the enabled plugin id because
+  Codex Desktop detects Computer Use plugins by that built-in name. The direct
+  sky-cua channel id (`sky-cua@local`) stays installed but disabled as a payload
+  carrier. Payload selection retargets the compat root's `.mcp.json` at the
+  installed payload (see `docs/operations/plugin-release.md`).
 - The materialized root must remain a complete, CLI-readable plugin after
   sync; repair belongs to the desktop-side cache-sync/resync flow.
 

@@ -2,7 +2,7 @@
 """Shared primitives for building, installing, and reloading the sky-cua KWin effect.
 
 Used by the local deploy lanes (``install_kwin_effect.py``,
-``install_mcp_server.py --kwin-effect``, ``deploy_debug_plugin.py --kwin-effect``)
+``install_mcp_server.py --kwin-effect``, ``deploy_plugin.py --kwin-effect``)
 and by the KDE VM smoke. All subprocess calls accept an injectable runner so the
 decision logic stays unit-testable without a running KWin.
 

@@ -84,8 +84,9 @@ Capture:
 - `crates/sky-cua-client/src/mcp_server.rs` — canonical semantic action
   tool definitions (cross-platform)
 - `scripts/build_plugin.py` — Windows release bundle
-- `scripts/deploy_release_plugin.py` — installs the release bundle into
-  `%CODEX_HOME%/plugins/cache/sky-cua-local/sky-cua/<version>/`
+- `install.py` / `scripts/deploy_plugin.py` - installs the bundle into the
+  local Codex cache and (on Windows, which has no compat root) enables
+  `sky-cua@local` directly
 
 ## Verification
 
@@ -112,11 +113,11 @@ uv run basedpyright
 uv run pytest
 ```
 
-Release plugin install plus direct installed-cache MCP smoke:
+Bundle install plus direct installed-cache MCP smoke:
 
 ```powershell
 python scripts\build_plugin.py
-python scripts\deploy_release_plugin.py --no-build
+python install.py --mode bundle --agents codex --skip-build
 ```
 
 Latest accepted live smoke evidence (per

@@ -140,12 +140,14 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
   `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_SESSION_TYPE`,
   `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`); runtime repair is the fallback
   (`docs/features/session-env-repair.md`).
-- Marketplace entries keep the full scaffold (`source`, `policy.*`,
-  `category`; Heliasar defaults `AVAILABLE`/`ON_INSTALL`/`Coding`). Release
-  checkout is `~/projects/heliasar-marketplace` (`~/.agents/...` is legacy).
-  Local release deploy expects `sky-cua@Heliasar` enabled, `sky-cua@debug`
-  and `computer-use@openai-bundled` disabled; cheap proof is one
-  `computer-use` server in `codex app-server` `mcpServerStatus/list`.
+- Single channel id is `sky-cua@local`; the Heliasar marketplace and publish
+  flow were retired. On Linux `computer-use@openai-bundled` (the compat plugin)
+  is the enabled id and `sky-cua@local` stays a disabled payload carrier (the
+  compat root's `.mcp.json` points at it). The off-compat/Windows fallback
+  enables `sky-cua@local` directly. Cheap proof is one `computer-use` server in
+  `codex app-server` `mcpServerStatus/list`. Local dev deploy:
+  `scripts/deploy_plugin.py`; clean-machine install: `scripts/package.py` then
+  `python3 install.py` on the target.
   History: `docs/research/2026-04-codex-plugin-chatgpt-auth-expedition.md`.
 
 ## Smoke harnesses

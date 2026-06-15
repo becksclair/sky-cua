@@ -14,7 +14,8 @@ from _plugin_bundle import (
     DIST_PLUGIN_ROOT,
     INSTALLED_PLUGIN_ROOT,
     REPO_ROOT,
-    compat_plugin_available,
+    compat_plugin_targets_payload,
+    installed_plugin_root,
     update_codex_config,
 )
 from _smoke_config import LIVE_SMOKE_MODEL, LIVE_SMOKE_REASONING_EFFORT
@@ -23,7 +24,7 @@ DEFAULT_MODEL = LIVE_SMOKE_MODEL
 DEFAULT_REASONING_EFFORT = LIVE_SMOKE_REASONING_EFFORT
 FAST_SERVICE_TIER = "fast"
 COMPAT_PLUGIN_MENTION = "[@computer-use](plugin://computer-use@openai-bundled)"
-DEBUG_PLUGIN_MENTION = "[@sky-cua](plugin://sky-cua@debug)"
+LOCAL_PLUGIN_MENTION = "[@sky-cua](plugin://sky-cua@local)"
 COMPUTER_USE_NAMESPACE = "mcp__computer_use__"
 TOOL_VISIBILITY_SCHEMA = REPO_ROOT / "scripts" / "schemas" / "tool_visibility_result.json"
 DESKTOP_E2E_EXEC_ARGS = ["--dangerously-bypass-approvals-and-sandbox"]
@@ -46,12 +47,12 @@ def plugin_mention(codex_home: Path) -> str:
     """Mention for the computer-use plugin id enabled in the given home.
 
     Compat-first homes enable `computer-use@openai-bundled`; channel-fallback
-    homes enable `sky-cua@debug`. Mentioning a disabled plugin id would hand
+    homes enable `sky-cua@local`. Mentioning a disabled plugin id would hand
     the model a dead reference.
     """
-    if compat_plugin_available(codex_home):
+    if compat_plugin_targets_payload(codex_home, installed_plugin_root(codex_home)):
         return COMPAT_PLUGIN_MENTION
-    return DEBUG_PLUGIN_MENTION
+    return LOCAL_PLUGIN_MENTION
 
 
 def with_plugin_mention(prompt: str, codex_home: Path) -> str:
@@ -147,7 +148,9 @@ def prepare_chatgpt_plugin_test_home(*, artifact_dir: Path, symlink: bool = Fals
         codex_home / "config.toml",
         disable_apps=True,
         fast_service_tier=True,
-        compat_enablement=compat_plugin_available(codex_home),
+        compat_enablement=compat_plugin_targets_payload(
+            codex_home, installed_plugin_root(codex_home)
+        ),
     )
     return codex_home
 
