@@ -53,6 +53,13 @@ from _plugin_bundle import (
 
 CLAUDE_MCP_ADD_TIMEOUT_SECONDS = 30
 
+# Claude Code permission rules applied at install time: deny the built-in
+# computer-use MCP so desktop control routes through sky-cua, and pre-approve
+# sky-cua's own tools so they never prompt. Both the server-scope and wildcard
+# forms are written so the rules bite regardless of Claude Code's rule syntax.
+CLAUDE_CODE_DENY_RULES = ("mcp__computer-use", "mcp__computer-use__*")
+CLAUDE_CODE_ALLOW_RULES = ("mcp__sky-cua", "mcp__sky-cua__*")
+
 
 def current_platform() -> str:
     return current_runtime_platform()
@@ -289,6 +296,21 @@ def install_claude_code(
         install_sky_cua_skills(claude_dir / "skills")
         print(f"Installed sky-cua skills into {claude_dir / 'skills'}")
 
+    try:
+        settings_path = configure_claude_code_permissions(claude_dir)
+    except OSError as error:
+        print(
+            f"warning: could not configure Claude Code permissions in "
+            f"{claude_dir / 'settings.json'} ({error}).",
+            file=sys.stderr,
+        )
+    else:
+        if settings_path is not None:
+            print(
+                f"Configured Claude Code permissions in {settings_path} "
+                "(deny built-in computer-use, auto-approve sky-cua)."
+            )
+
     claude_bin = shutil.which("claude")
     if claude_bin is None:
         print(
@@ -351,6 +373,76 @@ def register_claude_code_server(
                 file=sys.stderr,
             )
             return
+
+
+def configure_claude_code_permissions(claude_dir: Path) -> Path | None:
+    """Deny the built-in computer-use MCP and auto-approve sky-cua tools.
+
+    Merges the deny/allow rules into ``<claude_dir>/settings.json`` (user
+    scope) without disturbing existing settings, creating the file when absent.
+    Idempotent: re-running adds no duplicate rules and does not rewrite an
+    already-correct file. Returns the settings path, or ``None`` when the
+    existing file is unreadable, not valid UTF-8, or cannot be parsed as a JSON
+    object with object-shaped ``permissions`` and array-shaped rule lists (left
+    untouched with a warning) so a malformed file never aborts the install.
+    """
+    settings_path = claude_dir / "settings.json"
+    try:
+        text = settings_path.read_text(encoding="utf-8") if settings_path.exists() else ""
+    except (OSError, UnicodeDecodeError) as error:
+        print(
+            f"warning: not updating {settings_path}: cannot read existing file "
+            f"({error}); fix it by hand.",
+            file=sys.stderr,
+        )
+        return None
+    if text.strip():
+        try:
+            settings = json.loads(text)
+        except json.JSONDecodeError as error:
+            print(
+                f"warning: not updating {settings_path}: existing file fails JSON "
+                f"validation ({error}); fix it by hand.",
+                file=sys.stderr,
+            )
+            return None
+        if not isinstance(settings, dict):
+            print(
+                f"warning: not updating {settings_path}: top-level value is not a JSON object.",
+                file=sys.stderr,
+            )
+            return None
+    else:
+        settings = {}
+
+    permissions = settings.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        print(
+            f"warning: not updating {settings_path}: 'permissions' is not a JSON object.",
+            file=sys.stderr,
+        )
+        return None
+
+    changed = False
+    for key, rules in (("deny", CLAUDE_CODE_DENY_RULES), ("allow", CLAUDE_CODE_ALLOW_RULES)):
+        entries = permissions.setdefault(key, [])
+        if not isinstance(entries, list):
+            print(
+                f"warning: not updating {settings_path}: permissions.{key} is not a JSON array.",
+                file=sys.stderr,
+            )
+            return None
+        for rule in rules:
+            if rule not in entries:
+                entries.append(rule)
+                changed = True
+
+    if not changed:
+        # changed is False only when the rules were read from an existing
+        # non-empty file, so there is nothing new to write.
+        return settings_path
+    write_text_atomically(settings_path, json.dumps(settings, indent=2) + "\n")
+    return settings_path
 
 
 def install_pi(
@@ -449,6 +541,7 @@ def install_local_mcp_server(
     openclaw_dir: Path = DEFAULT_OPENCLAW_DIR,
     restart_runtime: bool = False,
     bundle_root: Path | None = None,
+    claude_config_dir: Path | None = None,
 ) -> tuple[Path, Path]:
     """Install runtime binaries and host config; optionally restart installed runtimes.
 
@@ -474,7 +567,7 @@ def install_local_mcp_server(
     if host == "opencode":
         config_path = install_opencode(target_dir, client_path)
     elif host == "claude-code":
-        config_path = install_claude_code(target_dir, client_path)
+        config_path = install_claude_code(target_dir, client_path, claude_config_dir)
     elif host == "claude-desktop":
         config_path = install_claude_desktop(target_dir, client_path)
     elif host == "pi":
@@ -514,7 +607,9 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
         print("  2. If the claude CLI was found, the sky-cua server was registered at user scope;")
         print("     otherwise run the printed claude mcp add-json command")
         print("  3. If ~/.claude exists, sky-cua skills were copied into ~/.claude/skills")
-        print("  4. Run: claude mcp list, then ask Claude to use the sky-cua list_apps tool")
+        print("  4. ~/.claude/settings.json now denies the built-in computer-use MCP and")
+        print("     auto-approves the sky-cua tools (mcp__sky-cua__*)")
+        print("  5. Run: claude mcp list, then ask Claude to use the sky-cua list_apps tool")
     elif host == "claude-desktop":
         print("\nNext steps for Claude Desktop:")
         print(f"  1. Merge {config_path} into your Claude Desktop config:")
@@ -570,6 +665,12 @@ def main() -> int:
         help=f"OpenClaw state directory for --host openclaw (default: {DEFAULT_OPENCLAW_DIR}).",
     )
     parser.add_argument(
+        "--claude-config-dir",
+        type=Path,
+        default=None,
+        help="Claude Code config directory for --host claude-code (default: ~/.claude).",
+    )
+    parser.add_argument(
         "--bin-dir",
         type=Path,
         default=None,
@@ -599,6 +700,11 @@ def main() -> int:
         args.host,
         openclaw_dir=args.openclaw_dir.expanduser().resolve(),
         restart_runtime=args.restart_runtime,
+        claude_config_dir=(
+            args.claude_config_dir.expanduser().resolve()
+            if args.claude_config_dir is not None
+            else None
+        ),
     )
 
     if args.bin_dir:

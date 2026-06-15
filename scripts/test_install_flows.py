@@ -330,6 +330,162 @@ def test_host_installers_do_not_inject_browser_selection_env(
     assert _install_shared.BROWSER_SELECTION_ENV not in desktop_env
 
 
+def test_claude_code_permissions_deny_builtin_and_approve_sky_cua(tmp_path: Path) -> None:
+    claude_dir = tmp_path / ".claude"
+
+    settings_path = install_mcp_server.configure_claude_code_permissions(claude_dir)
+
+    assert settings_path == claude_dir / "settings.json"
+    settings = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+    assert settings["permissions"]["deny"] == list(install_mcp_server.CLAUDE_CODE_DENY_RULES)
+    assert settings["permissions"]["allow"] == list(install_mcp_server.CLAUDE_CODE_ALLOW_RULES)
+
+
+def test_claude_code_permissions_preserve_existing_and_idempotent(tmp_path: Path) -> None:
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    settings_path = claude_dir / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "model": "claude-fable-5",
+                "permissions": {"deny": ["Bash(rm -rf /)"], "allow": ["Read"]},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    assert install_mcp_server.configure_claude_code_permissions(claude_dir) == settings_path
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    # Unrelated keys and pre-existing rules survive; new rules are appended.
+    assert settings["model"] == "claude-fable-5"
+    assert settings["permissions"]["deny"] == [
+        "Bash(rm -rf /)",
+        *install_mcp_server.CLAUDE_CODE_DENY_RULES,
+    ]
+    assert settings["permissions"]["allow"] == ["Read", *install_mcp_server.CLAUDE_CODE_ALLOW_RULES]
+
+    # A second run adds no duplicates and does not rewrite the file.
+    before = settings_path.read_text(encoding="utf-8")
+    assert install_mcp_server.configure_claude_code_permissions(claude_dir) == settings_path
+    assert settings_path.read_text(encoding="utf-8") == before
+
+
+def test_claude_code_permissions_refuse_unparseable_settings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    settings_path = claude_dir / "settings.json"
+    settings_path.write_text("{ not json", encoding="utf-8")
+
+    assert install_mcp_server.configure_claude_code_permissions(claude_dir) is None
+
+    assert "fails JSON validation" in capsys.readouterr().err
+    assert settings_path.read_text(encoding="utf-8") == "{ not json"
+
+
+def test_claude_code_permissions_refuse_non_object_permissions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    settings_path = claude_dir / "settings.json"
+    settings_path.write_text(json.dumps({"permissions": ["not-an-object"]}), encoding="utf-8")
+    original = settings_path.read_text(encoding="utf-8")
+
+    assert install_mcp_server.configure_claude_code_permissions(claude_dir) is None
+
+    assert "'permissions' is not a JSON object" in capsys.readouterr().err
+    assert settings_path.read_text(encoding="utf-8") == original
+
+
+def test_claude_code_permissions_refuse_non_utf8_settings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    settings_path = claude_dir / "settings.json"
+    settings_path.write_bytes(b"\xff\xfe not utf-8")
+
+    assert install_mcp_server.configure_claude_code_permissions(claude_dir) is None
+
+    assert "cannot read existing file" in capsys.readouterr().err
+    assert settings_path.read_bytes() == b"\xff\xfe not utf-8"
+
+
+def test_claude_code_permissions_refuse_non_list_rules(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    settings_path = claude_dir / "settings.json"
+    settings_path.write_text(json.dumps({"permissions": {"deny": "all"}}), encoding="utf-8")
+    original = settings_path.read_text(encoding="utf-8")
+
+    assert install_mcp_server.configure_claude_code_permissions(claude_dir) is None
+
+    assert "permissions.deny is not a JSON array" in capsys.readouterr().err
+    assert settings_path.read_text(encoding="utf-8") == original
+
+
+def test_claude_code_permissions_refuse_non_object_top_level(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    settings_path = claude_dir / "settings.json"
+    settings_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    original = settings_path.read_text(encoding="utf-8")
+
+    assert install_mcp_server.configure_claude_code_permissions(claude_dir) is None
+
+    assert "top-level value is not a JSON object" in capsys.readouterr().err
+    assert settings_path.read_text(encoding="utf-8") == original
+
+
+def test_claude_code_install_writes_settings_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No claude CLI on PATH: registration is skipped but the settings.json
+    # permission policy is still written.
+    monkeypatch.setattr(install_mcp_server.shutil, "which", lambda _name: None)
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+    claude_dir = tmp_path / ".claude"  # absent -> skills copy skipped, settings created
+
+    install_mcp_server.install_claude_code(target_dir, client_path, claude_dir)
+
+    settings = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+    assert settings["permissions"]["deny"] == list(install_mcp_server.CLAUDE_CODE_DENY_RULES)
+    assert settings["permissions"]["allow"] == list(install_mcp_server.CLAUDE_CODE_ALLOW_RULES)
+
+
+def test_install_local_mcp_server_threads_claude_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The claude-code dispatch must forward claude_config_dir to install_claude_code.
+    monkeypatch.delenv(_install_shared.BROWSER_SELECTION_ENV, raising=False)
+    client_path = tmp_path / "bin" / "sky-cua-client"
+    monkeypatch.setattr(install_mcp_server, "install_binaries", lambda _target: client_path)
+    received: dict[str, object] = {}
+
+    def spy(target_dir: Path, client: Path, claude_config_dir: Path | None = None) -> Path:
+        received["claude_config_dir"] = claude_config_dir
+        return target_dir / "claude_code_mcp.json"
+
+    monkeypatch.setattr(install_mcp_server, "install_claude_code", spy)
+    config_dir = tmp_path / "custom-claude"
+
+    install_mcp_server.install_local_mcp_server(
+        tmp_path / "target", "claude-code", claude_config_dir=config_dir
+    )
+
+    assert received["claude_config_dir"] == config_dir
+
+
 def test_machine_config_seeding_writes_and_updates_browser(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

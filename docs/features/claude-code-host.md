@@ -11,10 +11,12 @@ rework.
 sky-cua installs into Claude Code two ways: as a Claude Code plugin
 (`.claude-plugin/plugin.json` with an inline MCP server entry plus bundled
 skills) or through `scripts/install_mcp_server.py --host claude-code`, which
-registers the `sky-cua` stdio server at user scope and syncs the
-`computer-use`/`browser-use` skills into `~/.claude/skills`. No
-Claude-specific runtime behavior exists; the same agent-agnostic MCP surface
-serves every host.
+registers the `sky-cua` stdio server at user scope, syncs the
+`computer-use`/`browser-use` skills into `~/.claude/skills`, and writes a
+`~/.claude/settings.json` permission policy that denies Claude Code's built-in
+`computer-use` MCP and auto-approves the sky-cua tools. No Claude-specific
+runtime behavior exists; the same agent-agnostic MCP surface serves every
+host.
 
 ## Contract surface
 
@@ -33,6 +35,19 @@ serves every host.
   `~/.claude` exists. The server is registered as `sky-cua` because Claude
   Code reserves the name `computer-use` for its native integration; the tool
   names are unchanged.
+- `scripts/install_mcp_server.py --host claude-code` also merges a permission
+  policy into `~/.claude/settings.json` (user scope, created when absent):
+  `permissions.deny` gains `mcp__computer-use` and `mcp__computer-use__*` so
+  Claude Code's built-in computer-use MCP cannot be called, and
+  `permissions.allow` gains `mcp__sky-cua` and `mcp__sky-cua__*` so the sky-cua
+  tools never prompt. The merge preserves existing settings and rules, is
+  idempotent (no duplicate rules, no rewrite when already correct), and is
+  non-fatal — a missing or malformed `settings.json` is reported and skipped,
+  never aborting the install. The Claude config directory defaults to
+  `~/.claude` and is overridable end to end with `--claude-config-dir` (on both
+  `install_mcp_server.py` and the `installer.py` orchestrator); the
+  `health:claude-code-permissions` check reads the same directory the install
+  wrote, so it attests the actual file rather than a hardcoded path.
 - Claude Code stdio MCP servers inherit the parent process environment, so
   the desktop-session env-var passthrough list required by Codex is
   unnecessary; the generated config pins only `SKY_CUA_REPO_ROOT` and an

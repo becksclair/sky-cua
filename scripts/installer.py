@@ -11,6 +11,7 @@ duplicating their logic, and the run ends with health checks.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -230,7 +231,13 @@ def run_codex_phase(
     return PhaseResult(name, "ok", "marketplace installed; compat plugin enabled")
 
 
-def run_agent_phase(host: str, *, target_dir: Path, runner: Runner = run_logged) -> PhaseResult:
+def run_agent_phase(
+    host: str,
+    *,
+    target_dir: Path,
+    claude_config_dir: Path | None = None,
+    runner: Runner = run_logged,
+) -> PhaseResult:
     name = f"agent:{host}"
     command = [
         sys.executable,
@@ -241,6 +248,8 @@ def run_agent_phase(host: str, *, target_dir: Path, runner: Runner = run_logged)
         str(target_dir),
         "--restart-runtime",
     ]
+    if host == "claude-code" and claude_config_dir is not None:
+        command.extend(["--claude-config-dir", str(claude_config_dir)])
     result = runner(command, cwd=REPO_ROOT)
     if result.returncode != 0:
         return PhaseResult(name, "failed", "install_mcp_server.py failed")
@@ -264,7 +273,11 @@ def run_kwin_phase(*, enabled: bool, target_dir: Path) -> PhaseResult:
 
 
 def run_health_phase(
-    *, agents: list[str], target_dir: Path, runner: Runner = run_logged
+    *,
+    agents: list[str],
+    target_dir: Path,
+    claude_dir: Path | None = None,
+    runner: Runner = run_logged,
 ) -> list[PhaseResult]:
     results: list[PhaseResult] = []
 
@@ -292,20 +305,55 @@ def run_health_phase(
             )
         )
 
-    if "claude-code" in agents and shutil.which("claude"):
-        listing = subprocess.run(
-            ["claude", "mcp", "list"], capture_output=True, text=True, check=False
-        )
-        ok = listing.returncode == 0 and "sky-cua" in listing.stdout
-        results.append(
-            PhaseResult(
-                "health:claude-code",
-                "ok" if ok else "failed",
-                "sky-cua registered" if ok else "sky-cua missing from claude mcp list",
+    if "claude-code" in agents:
+        # The MCP-list probe needs the claude CLI; the permission policy is a
+        # file the installer writes regardless of CLI presence, so attest it
+        # whenever claude-code is a target.
+        if shutil.which("claude"):
+            listing = subprocess.run(
+                ["claude", "mcp", "list"], capture_output=True, text=True, check=False
             )
-        )
+            ok = listing.returncode == 0 and "sky-cua" in listing.stdout
+            results.append(
+                PhaseResult(
+                    "health:claude-code",
+                    "ok" if ok else "failed",
+                    "sky-cua registered" if ok else "sky-cua missing from claude mcp list",
+                )
+            )
+        settings_path = (claude_dir or (Path.home() / ".claude")) / "settings.json"
+        status, detail = claude_code_permissions_status(settings_path)
+        results.append(PhaseResult("health:claude-code-permissions", status, detail))
 
     return results
+
+
+def claude_code_permissions_status(settings_path: Path) -> tuple[str, str]:
+    """Report whether ~/.claude/settings.json denies built-in computer-use and
+    auto-approves sky-cua. Returns a (status, detail) pair for the health summary."""
+    if not settings_path.exists():
+        return ("skipped", "settings.json not found")
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8") or "{}")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return ("failed", f"settings.json unreadable: {error}")
+    permissions = settings.get("permissions", {}) if isinstance(settings, dict) else {}
+    if not isinstance(permissions, dict):
+        permissions = {}
+    deny = permissions.get("deny", [])
+    allow = permissions.get("allow", [])
+    # Attest the server-scope rule each tuple leads with, not a loose prefix, so
+    # a partial hand-edit cannot read as a healthy install.
+    denied = isinstance(deny, list) and "mcp__computer-use" in deny
+    approved = isinstance(allow, list) and "mcp__sky-cua" in allow
+    if denied and approved:
+        return ("ok", "built-in computer-use denied, sky-cua auto-approved")
+    missing = []
+    if not denied:
+        missing.append("computer-use deny rule")
+    if not approved:
+        missing.append("sky-cua allow rule")
+    return ("failed", "missing " + ", ".join(missing))
 
 
 def print_summary(results: list[PhaseResult]) -> None:
@@ -335,6 +383,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_TARGET_DIR,
         help=f"Install directory for non-Codex agents (default: {DEFAULT_TARGET_DIR}).",
+    )
+    parser.add_argument(
+        "--claude-config-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Claude Code config directory (default: ~/.claude). Used for the "
+            "claude-code agent registration and its permission health check."
+        ),
     )
     parser.add_argument(
         "--codex-home",
@@ -422,16 +479,37 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
 
+    # Resolve to match install_mcp_server.py's own main: the subprocess writes
+    # settings.json to the resolved path, so the in-process health check must
+    # read the same resolved path or it would attest the wrong file.
+    claude_config_dir = (
+        args.claude_config_dir.expanduser().resolve()
+        if args.claude_config_dir is not None
+        else None
+    )
+
     for host in agents:
         if host == "codex":
             continue
-        results.append(run_agent_phase(host, target_dir=args.target_dir.expanduser()))
+        results.append(
+            run_agent_phase(
+                host,
+                target_dir=args.target_dir.expanduser(),
+                claude_config_dir=claude_config_dir,
+            )
+        )
 
     results.append(
         run_kwin_phase(enabled=args.kwin_effect, target_dir=args.target_dir.expanduser())
     )
 
-    results.extend(run_health_phase(agents=agents, target_dir=args.target_dir.expanduser()))
+    results.extend(
+        run_health_phase(
+            agents=agents,
+            target_dir=args.target_dir.expanduser(),
+            claude_dir=claude_config_dir,
+        )
+    )
 
     print_summary(results)
     return 1 if any(result.failed for result in results) else 0

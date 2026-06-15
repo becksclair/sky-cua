@@ -14,6 +14,220 @@ def completed(returncode: int = 0) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout="", stderr="")
 
 
+def test_claude_code_permissions_status_reports_states(tmp_path: Path) -> None:
+    import json
+
+    settings_path = tmp_path / "settings.json"
+
+    # Absent file -> skipped.
+    assert installer.claude_code_permissions_status(settings_path) == (
+        "skipped",
+        "settings.json not found",
+    )
+
+    # Both server-scope rules present -> ok.
+    settings_path.write_text(
+        json.dumps({"permissions": {"deny": ["mcp__computer-use"], "allow": ["mcp__sky-cua"]}}),
+        encoding="utf-8",
+    )
+    status, detail = installer.claude_code_permissions_status(settings_path)
+    assert status == "ok"
+    assert "denied" in detail and "auto-approved" in detail
+
+    # Missing deny rule -> failed naming the gap.
+    settings_path.write_text(
+        json.dumps({"permissions": {"allow": ["mcp__sky-cua"]}}), encoding="utf-8"
+    )
+    status, detail = installer.claude_code_permissions_status(settings_path)
+    assert status == "failed"
+    assert "computer-use deny rule" in detail
+
+
+def test_claude_code_permissions_status_unreadable(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text("{ not json", encoding="utf-8")
+    status, detail = installer.claude_code_permissions_status(settings_path)
+    assert status == "failed"
+    assert "unreadable" in detail
+
+
+def test_claude_code_permissions_status_handles_non_utf8(tmp_path: Path) -> None:
+    # A non-UTF-8 settings.json must report failed, not crash the health phase
+    # with an unhandled UnicodeDecodeError (a ValueError, not an OSError).
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_bytes(b"\xff\xfe not utf-8")
+    status, detail = installer.claude_code_permissions_status(settings_path)
+    assert status == "failed"
+    assert "unreadable" in detail
+
+
+def test_claude_code_health_attests_installer_rule_constants(tmp_path: Path) -> None:
+    # installer.py's health check re-encodes the server-scope rule literals
+    # rather than importing install_mcp_server (lean orchestrator, subprocess
+    # boundary). Pin the two sides through BEHAVIOR: a settings file written
+    # from the writer's canonical constants must read as healthy, so renaming
+    # either side without the other flips this status to "failed".
+    import json
+
+    import install_mcp_server
+
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "permissions": {
+                    "deny": list(install_mcp_server.CLAUDE_CODE_DENY_RULES),
+                    "allow": list(install_mcp_server.CLAUDE_CODE_ALLOW_RULES),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Pin the constants contract via status only; the detail wording is not the
+    # axis this test guards.
+    status, _detail = installer.claude_code_permissions_status(settings_path)
+    assert status == "ok"
+
+
+def test_run_health_phase_claude_cli_present_reports_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    # With the claude CLI present, the mcp-list probe runs AND the permissions
+    # attestation runs; both PhaseResults must appear (covers the CLI-present arm
+    # of the restructured health block).
+    monkeypatch.setattr(installer.shutil, "which", lambda _name: "/usr/bin/claude")
+    monkeypatch.setattr(
+        installer.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, stdout="sky-cua\n", stderr=""),
+    )
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text(
+        json.dumps({"permissions": {"deny": ["mcp__computer-use"], "allow": ["mcp__sky-cua"]}}),
+        encoding="utf-8",
+    )
+
+    results = installer.run_health_phase(
+        agents=["claude-code"],
+        target_dir=tmp_path / "empty",
+        claude_dir=claude_dir,
+        runner=lambda *_args, **_kwargs: completed(0),
+    )
+
+    by_name = {result.name: result.status for result in results}
+    assert by_name["health:claude-code"] == "ok"
+    assert by_name["health:claude-code-permissions"] == "ok"
+
+
+def test_main_resolves_relative_claude_config_dir_for_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A relative --claude-config-dir must reach run_health_phase as a resolved
+    # absolute path, matching how the install_mcp_server.py subprocess resolves
+    # it, so the health check attests the file the install actually wrote.
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(installer, "detect_agents", lambda: {"claude-code": True})
+    monkeypatch.setattr(
+        installer, "run_system_deps_phase", lambda **_k: installer.PhaseResult("system-deps", "ok")
+    )
+    monkeypatch.setattr(
+        installer, "run_build_phase", lambda **_k: installer.PhaseResult("build", "ok")
+    )
+    monkeypatch.setattr(
+        installer, "run_codex_phase", lambda **_k: installer.PhaseResult("codex", "skipped")
+    )
+    monkeypatch.setattr(
+        installer,
+        "run_agent_phase",
+        lambda host, **_k: installer.PhaseResult(f"agent:{host}", "ok"),
+    )
+    monkeypatch.setattr(
+        installer, "run_kwin_phase", lambda **_k: installer.PhaseResult("kwin-effect", "skipped")
+    )
+
+    def fake_health(**kwargs: object) -> list[installer.PhaseResult]:
+        captured["claude_dir"] = kwargs.get("claude_dir")
+        return []
+
+    monkeypatch.setattr(installer, "run_health_phase", fake_health)
+
+    installer.main(["--agents", "claude-code", "--claude-config-dir", "./relcfg"])
+
+    assert captured["claude_dir"] == (Path.cwd() / "relcfg").resolve()
+
+
+def test_claude_code_permissions_status_non_object_top_level(tmp_path: Path) -> None:
+    import json
+
+    # Top-level JSON that is not an object (e.g. a list) falls through to
+    # "failed, missing both rules" rather than crashing.
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    status, detail = installer.claude_code_permissions_status(settings_path)
+    assert status == "failed"
+    assert "computer-use deny rule" in detail
+    assert "sky-cua allow rule" in detail
+
+
+def test_run_health_phase_attests_permissions_at_claude_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    # No claude CLI -> the mcp-list probe is skipped; fake runner -> no real
+    # doctor subprocess. The permissions check must read the supplied claude_dir
+    # (not the real ~/.claude) and report ok.
+    monkeypatch.setattr(installer.shutil, "which", lambda _name: None)
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text(
+        json.dumps({"permissions": {"deny": ["mcp__computer-use"], "allow": ["mcp__sky-cua"]}}),
+        encoding="utf-8",
+    )
+
+    results = installer.run_health_phase(
+        agents=["claude-code"],
+        target_dir=tmp_path / "empty",
+        claude_dir=claude_dir,
+        runner=lambda *_args, **_kwargs: completed(0),
+    )
+
+    by_name = {result.name: result.status for result in results}
+    assert by_name["health:claude-code-permissions"] == "ok"
+    assert "health:claude-code" not in by_name  # CLI absent -> mcp-list probe skipped
+
+
+def test_run_agent_phase_threads_claude_config_dir(tmp_path: Path) -> None:
+    captured: list[list[str]] = []
+
+    def fake_runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.append(command)
+        return completed(0)
+
+    claude_dir = tmp_path / ".claude"
+    installer.run_agent_phase(
+        "claude-code",
+        target_dir=tmp_path / "t",
+        claude_config_dir=claude_dir,
+        runner=fake_runner,
+    )
+    assert captured[0][-2:] == ["--claude-config-dir", str(claude_dir)]
+
+    # Non-claude hosts never receive the flag.
+    captured.clear()
+    installer.run_agent_phase(
+        "opencode",
+        target_dir=tmp_path / "t",
+        claude_config_dir=claude_dir,
+        runner=fake_runner,
+    )
+    assert "--claude-config-dir" not in captured[0]
+
+
 def test_detect_package_manager_prefers_pacman() -> None:
     assert installer.detect_package_manager(lambda name: "/usr/bin/" + name) == "pacman"
     assert (
