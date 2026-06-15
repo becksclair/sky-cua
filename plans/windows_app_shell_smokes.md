@@ -76,11 +76,10 @@ fires today when GDI capture returns a black image, so smokes must
 treat that as evidence of a known limitation rather than a regression
 in the UIA path.
 
-The Windows release plugin install path is
-`%CODEX_HOME%/plugins/cache/sky-cua-local/sky-cua/<version>/`, set up
-by `scripts/deploy_release_plugin.py --no-build` after
-`scripts/build_plugin.py`. The first UIA smoke ran from that installed
-cache via a direct stdio probe.
+The Windows bundle install path is the local Codex cache, set up by
+`python install.py --mode bundle --agents codex --skip-build` (or
+`scripts/deploy_plugin.py`) after `scripts/build_plugin.py`. The first UIA
+smoke ran from an installed cache via a direct stdio probe.
 
 Sumwall app-shell launch question: can Sumwall be launched in a
 disposable smoke profile with accessibility-friendly flags, without
@@ -129,9 +128,9 @@ plugin host), the harness must clean them up before the next run.
 
 - `crates/sky-cua-client/src/mcp_server.rs` — canonical semantic action
   tool set used by the smokes.
-- `scripts/build_plugin.py` and `scripts/deploy_release_plugin.py` —
+- `scripts/build_plugin.py` and `install.py` / `scripts/deploy_plugin.py` -
   installed-plugin cache used by the smokes.
-- `docs/operations/` — destination for the harness documentation.
+- `docs/operations/` - destination for the harness documentation.
 - No new public model fields are expected; if the smokes uncover the
   need for new diagnostics, route them through the existing
   `DiagnosticEntry` shape.

@@ -24,7 +24,7 @@ cp "${target_dir}/opencode.json" "${remote_root}/opencode.json"
 
 # Ensure skills are discoverable by OpenCode
 # The plugin install already bundles them; verify path exists
-plugin_skills="${HOME}/.codex/plugins/cache/debug/sky-cua/local/skills"
+plugin_skills="${HOME}/.codex/plugins/cache/local/sky-cua/local/skills"
 if [[ ! -d "${plugin_skills}" ]]; then
 	# Fallback: copy skills directly into OpenCode skills path
 	mkdir -p "${HOME}/.codex/skills"

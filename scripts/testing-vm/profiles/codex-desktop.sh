@@ -28,6 +28,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+sky_cua_client="${SKY_CUA_CLIENT:-/workspace/target/release/sky-cua-client}"
+if [[ ! -x "$sky_cua_client" ]]; then
+  printf 'missing host-built sky-cua client artifact: %s\n' "$sky_cua_client" >&2
+  exit 66
+fi
+
 dbus-run-session -- codex-desktop \
   --no-sandbox \
   --disable-dev-shm-usage \
@@ -38,10 +44,34 @@ codex_pid=$!
 window_found=0
 for _ in $(seq 1 120); do
   pgrep -a codex >"$artifact_root/processes.txt" 2>&1 || true
-  "$SKY_CUA_COSMIC_HELPER" list-windows >"$artifact_root/cosmic-windows.json" 2>&1 || true
-  if grep -Eiq 'codex|Codex' "$artifact_root/cosmic-windows.json"; then
+  "$sky_cua_client" list-windows >"$artifact_root/windows.json" 2>&1 || true
+  if python3 - "$artifact_root/windows.json" >"$artifact_root/matched-window.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except json.JSONDecodeError:
+    raise SystemExit(1)
+
+for window in payload.get("windows", []):
+    haystack = " ".join(
+        str(window.get(key) or "") for key in ("title", "app_id", "wm_class", "name")
+    ).lower()
+    if "codex" in haystack:
+        print(json.dumps(window, indent=2))
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+  then
     window_found=1
     break
+  fi
+  if [[ -n "${SKY_CUA_COSMIC_HELPER:-}" && -x "${SKY_CUA_COSMIC_HELPER:-}" ]]; then
+    "$SKY_CUA_COSMIC_HELPER" list-windows >"$artifact_root/cosmic-windows.json" 2>&1 || true
   fi
   if ! kill -0 "$codex_pid" 2>/dev/null; then
     printf 'codex-desktop exited before opening a window\n' >&2
@@ -52,8 +82,10 @@ for _ in $(seq 1 120); do
 done
 
 if [[ "$window_found" != 1 ]]; then
-  printf 'codex-desktop did not expose a visible Wayland window through the COSMIC helper\n' >&2
+  printf 'codex-desktop did not expose a visible window through sky-cua list-windows\n' >&2
   cat "$artifact_root/codex-desktop.log" >&2
+  printf '\nlast list-windows output:\n' >&2
+  cat "$artifact_root/windows.json" >&2 || true
   exit 1
 fi
 
