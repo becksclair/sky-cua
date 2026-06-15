@@ -38,18 +38,22 @@ def install_openclaw(
     client_path: Path,
     openclaw_dir: Path | None = None,
     openclaw_bin: str = "openclaw",
+    resource_root: Path | None = None,
 ) -> Path:
     """Register sky-cua with OpenClaw and copy sky-cua skills into its workspace."""
     openclaw_state_dir = (openclaw_dir or DEFAULT_OPENCLAW_DIR).expanduser().resolve()
     openclaw_state_dir.mkdir(parents=True, exist_ok=True)
-    codex_home_updates = plan_openclaw_agent_codex_mcp_servers(openclaw_state_dir, client_path)
+    root = (resource_root or _install_shared.REPO_ROOT).resolve()
+    codex_home_updates = plan_openclaw_agent_codex_mcp_servers(
+        openclaw_state_dir, client_path, resource_root=root
+    )
     server: dict[str, object] = {
         "enabled": True,
         "command": str(client_path),
         "args": ["mcp"],
         "cwd": str(target_dir),
         "env": {
-            "SKY_CUA_REPO_ROOT": str(_install_shared.REPO_ROOT),
+            "SKY_CUA_REPO_ROOT": str(root),
         },
         # OpenClaw's native codex runtime projects this as Codex
         # default_tools_approval_mode; see CODEX_TOOLS_APPROVAL_MODE.
@@ -123,6 +127,7 @@ def openclaw_agent_codex_config_paths(openclaw_state_dir: Path) -> list[Path]:
 def install_openclaw_agent_codex_mcp_servers(
     openclaw_state_dir: Path,
     client_path: Path,
+    resource_root: Path | None = None,
 ) -> None:
     """Pin sky_cua into each agent's codex-home config.toml mcp_servers table.
 
@@ -133,13 +138,16 @@ def install_openclaw_agent_codex_mcp_servers(
     deploy pins the server in both places.
     """
     apply_openclaw_agent_codex_mcp_server_updates(
-        plan_openclaw_agent_codex_mcp_servers(openclaw_state_dir, client_path)
+        plan_openclaw_agent_codex_mcp_servers(
+            openclaw_state_dir, client_path, resource_root=resource_root
+        )
     )
 
 
 def plan_openclaw_agent_codex_mcp_servers(
     openclaw_state_dir: Path,
     client_path: Path,
+    resource_root: Path | None = None,
 ) -> list[tuple[Path, str]]:
     """Validate every OpenClaw agent codex-home config before any writes."""
     planned_updates: list[tuple[Path, str]] = []
@@ -153,7 +161,7 @@ def plan_openclaw_agent_codex_mcp_servers(
             )
             refused_paths.append(config_path)
             continue
-        planned = plan_codex_mcp_server_toml(config_path, client_path)
+        planned = plan_codex_mcp_server_toml(config_path, client_path, resource_root=resource_root)
         if planned is None:
             refused_paths.append(config_path)
         else:
@@ -217,8 +225,12 @@ def restore_openclaw_agent_codex_mcp_server_snapshots(
             write_text_atomically(path, original_text, mode=original_mode)
 
 
-def codex_mcp_server_toml_block(client_path: Path) -> str:
-    rendered_env = f"SKY_CUA_REPO_ROOT = {toml_basic_string(str(_install_shared.REPO_ROOT))}"
+def codex_mcp_server_toml_block(
+    client_path: Path,
+    resource_root: Path | None = None,
+) -> str:
+    root = (resource_root or _install_shared.REPO_ROOT).resolve()
+    rendered_env = f"SKY_CUA_REPO_ROOT = {toml_basic_string(str(root))}"
     return (
         f"{CODEX_MCP_SERVER_TOML_BEGIN}\n"
         "[mcp_servers.sky_cua]\n"
@@ -255,7 +267,11 @@ def has_stray_marker_line(text: str) -> bool:
     return any(line.strip() in markers for line in text.splitlines())
 
 
-def plan_codex_mcp_server_toml(config_path: Path, client_path: Path) -> str | None:
+def plan_codex_mcp_server_toml(
+    config_path: Path,
+    client_path: Path,
+    resource_root: Path | None = None,
+) -> str | None:
     """Return updated config text for a marker-delimited sky_cua mcp_servers block.
 
     Returns None when the existing file cannot be updated
@@ -264,7 +280,7 @@ def plan_codex_mcp_server_toml(config_path: Path, client_path: Path) -> str | No
     (a duplicate table would make the whole agent config unparseable), or a
     result that fails TOML validation.
     """
-    block = codex_mcp_server_toml_block(client_path)
+    block = codex_mcp_server_toml_block(client_path, resource_root=resource_root)
     text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
     begin = text.find(CODEX_MCP_SERVER_TOML_BEGIN)
     end = text.find(CODEX_MCP_SERVER_TOML_END)

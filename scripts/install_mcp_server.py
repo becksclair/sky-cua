@@ -171,13 +171,21 @@ def install_bundle_binaries(bundle_root: Path, target_dir: Path) -> Path:
     return installed_client
 
 
-def generate_mcp_config(client_path: Path, target_dir: Path) -> dict[str, object]:
+def generate_mcp_config(
+    client_path: Path,
+    target_dir: Path,
+    resource_root: Path | None = None,
+) -> dict[str, object]:
     """Build an MCP server config dict with absolute paths."""
+    root = runtime_resource_root(resource_root)
     return {
         "mcpServers": {
             "computer-use": {
                 "command": str(client_path),
                 "args": ["mcp"],
+                "env": {
+                    "SKY_CUA_REPO_ROOT": str(root),
+                },
                 "env_vars": [
                     "CODEX_COMPUTER_USE_COSMIC_HELPER",
                     "DBUS_SESSION_BUS_ADDRESS",
@@ -226,8 +234,18 @@ def write_mcp_json(target_dir: Path, config: dict[str, object]) -> Path:
     return path
 
 
-def install_opencode(target_dir: Path, client_path: Path) -> Path:
+def runtime_resource_root(bundle_root: Path | None) -> Path:
+    """Root containing runtime resources such as resources/app-instructions."""
+    return (bundle_root or _install_shared.REPO_ROOT).resolve()
+
+
+def install_opencode(
+    target_dir: Path,
+    client_path: Path,
+    resource_root: Path | None = None,
+) -> Path:
     """Update or create opencode.json in the target directory."""
+    root = runtime_resource_root(resource_root)
     opencode_config: dict[str, object] = {
         "$schema": "https://opencode.ai/config.json",
         "mcp": {
@@ -235,7 +253,7 @@ def install_opencode(target_dir: Path, client_path: Path) -> Path:
                 "type": "local",
                 "command": [str(client_path), "mcp"],
                 "environment": {
-                    "SKY_CUA_REPO_ROOT": str(_install_shared.REPO_ROOT),
+                    "SKY_CUA_REPO_ROOT": str(root),
                 },
                 "enabled": True,
                 "timeout": 30000,
@@ -248,15 +266,20 @@ def install_opencode(target_dir: Path, client_path: Path) -> Path:
     return path
 
 
-def install_claude_desktop(target_dir: Path, client_path: Path) -> Path:
+def install_claude_desktop(
+    target_dir: Path,
+    client_path: Path,
+    resource_root: Path | None = None,
+) -> Path:
     """Emit a Claude Desktop config snippet and print instructions."""
+    root = runtime_resource_root(resource_root)
     snippet: dict[str, object] = {
         "mcpServers": {
             "computer-use": {
                 "command": str(client_path),
                 "args": ["mcp"],
                 "env": {
-                    "SKY_CUA_REPO_ROOT": str(_install_shared.REPO_ROOT),
+                    "SKY_CUA_REPO_ROOT": str(root),
                 },
             }
         }
@@ -271,18 +294,20 @@ def install_claude_code(
     target_dir: Path,
     client_path: Path,
     claude_config_dir: Path | None = None,
+    resource_root: Path | None = None,
 ) -> Path:
     """Register sky-cua with Claude Code and copy skills into ~/.claude/skills.
 
     Claude Code stdio MCP servers inherit the parent process environment, so the
     config only pins SKY_CUA_REPO_ROOT plus any explicit browser selection.
     """
+    root = runtime_resource_root(resource_root)
     server: dict[str, object] = {
         "type": "stdio",
         "command": str(client_path),
         "args": ["mcp"],
         "env": {
-            "SKY_CUA_REPO_ROOT": str(_install_shared.REPO_ROOT),
+            "SKY_CUA_REPO_ROOT": str(root),
         },
     }
     # Claude Code reserves the MCP server name "computer-use" for its native
@@ -449,6 +474,7 @@ def install_pi(
     target_dir: Path,
     client_path: Path,
     pi_agent_dir: Path | None = None,
+    resource_root: Path | None = None,
 ) -> Path:
     """Emit a Pi mcp.json config snippet for merging into ~/.pi/agent/mcp.json.
 
@@ -457,10 +483,11 @@ def install_pi(
     client binary.
     """
     wrapper_path = target_dir / "pi_mcp_wrapper.sh"
+    root = runtime_resource_root(resource_root)
     wrapper_content = "".join(
         [
             "#!/usr/bin/env bash\n",
-            f"export SKY_CUA_REPO_ROOT={shlex.quote(str(_install_shared.REPO_ROOT))}\n",
+            f"export SKY_CUA_REPO_ROOT={shlex.quote(str(root))}\n",
             f'exec {shlex.quote(str(client_path))} mcp "$@"\n',
         ]
     )
@@ -556,8 +583,10 @@ def install_local_mcp_server(
         restart_runtime_processes(target_dir)
 
     if bundle_root is not None:
+        resource_root = runtime_resource_root(bundle_root)
         client_path = install_bundle_binaries(bundle_root, target_dir)
     else:
+        resource_root = runtime_resource_root(None)
         client_path = install_binaries(target_dir)
 
     seeded = _install_shared.seed_machine_config_from_environment()
@@ -565,17 +594,19 @@ def install_local_mcp_server(
         print(f"Seeded machine config browser selection: {seeded}")
 
     if host == "opencode":
-        config_path = install_opencode(target_dir, client_path)
+        config_path = install_opencode(target_dir, client_path, resource_root)
     elif host == "claude-code":
-        config_path = install_claude_code(target_dir, client_path, claude_config_dir)
+        config_path = install_claude_code(target_dir, client_path, claude_config_dir, resource_root)
     elif host == "claude-desktop":
-        config_path = install_claude_desktop(target_dir, client_path)
+        config_path = install_claude_desktop(target_dir, client_path, resource_root)
     elif host == "pi":
-        config_path = install_pi(target_dir, client_path)
+        config_path = install_pi(target_dir, client_path, resource_root=resource_root)
     elif host == "openclaw":
-        config_path = install_openclaw(target_dir, client_path, openclaw_dir=openclaw_dir)
+        config_path = install_openclaw(
+            target_dir, client_path, openclaw_dir=openclaw_dir, resource_root=resource_root
+        )
     else:
-        config = generate_mcp_config(client_path, target_dir)
+        config = generate_mcp_config(client_path, target_dir, resource_root)
         config_path = write_mcp_json(target_dir, config)
 
     if restart_runtime:

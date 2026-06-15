@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import _codex_exec
 import _install_shared
 import _kwin_effect as kwin_effect
 import _plugin_bundle as plugin_bundle
@@ -307,6 +308,99 @@ def test_opencode_install_configures_browser_tools_without_enable_flag(
     assert _install_shared.BROWSER_SELECTION_ENV not in env
 
 
+def test_bundle_mode_opencode_pins_bundle_resource_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(_install_shared.BROWSER_SELECTION_ENV, raising=False)
+    bundle_root = tmp_path / "package" / "plugin" / "sky-cua"
+    app_index = bundle_root / "resources" / "app-instructions" / "index.json"
+    app_index.parent.mkdir(parents=True)
+    app_index.write_text('{"entries":[]}\n', encoding="utf-8")
+    client_path = tmp_path / "installed" / "bin" / "sky-cua-client"
+    monkeypatch.setattr(
+        install_mcp_server,
+        "install_bundle_binaries",
+        lambda _bundle, _target: client_path,
+    )
+
+    _client, config_path = install_mcp_server.install_local_mcp_server(
+        tmp_path / "installed",
+        "opencode",
+        bundle_root=bundle_root,
+    )
+
+    env = json.loads(config_path.read_text(encoding="utf-8"))["mcp"]["sky_cua"]["environment"]
+    resource_root = Path(env["SKY_CUA_REPO_ROOT"])
+    assert resource_root == bundle_root.resolve()
+    assert (resource_root / "resources" / "app-instructions" / "index.json").exists()
+
+
+def test_bundle_mode_generic_mcp_config_pins_bundle_resource_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_root = tmp_path / "package" / "plugin" / "sky-cua"
+    app_index = bundle_root / "resources" / "app-instructions" / "index.json"
+    app_index.parent.mkdir(parents=True)
+    app_index.write_text('{"entries":[]}\n', encoding="utf-8")
+    client_path = tmp_path / "installed" / "bin" / "sky-cua-client"
+    monkeypatch.setattr(
+        install_mcp_server,
+        "install_bundle_binaries",
+        lambda _bundle, _target: client_path,
+    )
+
+    _client, config_path = install_mcp_server.install_local_mcp_server(
+        tmp_path / "installed",
+        "generic",
+        bundle_root=bundle_root,
+    )
+
+    server = json.loads(config_path.read_text(encoding="utf-8"))["mcpServers"]["computer-use"]
+    resource_root = Path(server["env"]["SKY_CUA_REPO_ROOT"])
+    assert resource_root == bundle_root.resolve()
+    assert "SKY_CUA_REPO_ROOT" in server["env_vars"]
+    assert (resource_root / "resources" / "app-instructions" / "index.json").exists()
+
+
+def test_codex_exec_plugin_mention_rejects_stale_compat_root(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    latest = codex_home / "plugins" / "cache" / "openai-bundled" / "computer-use" / "latest"
+    latest.mkdir(parents=True)
+    (latest / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "computer-use": {
+                        "command": str(tmp_path / "old" / "bin" / "sky-cua-client"),
+                        "args": ["mcp"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _codex_exec.plugin_mention(codex_home) == _codex_exec.LOCAL_PLUGIN_MENTION
+
+    payload = plugin_bundle.installed_plugin_root(codex_home)
+    (payload / "bin").mkdir(parents=True)
+    (latest / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "computer-use": {
+                        "command": str((payload / "bin" / "sky-cua-client").resolve()),
+                        "args": ["mcp"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _codex_exec.plugin_mention(codex_home) == _codex_exec.COMPAT_PLUGIN_MENTION
+
+
 def test_host_installers_do_not_inject_browser_selection_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -472,8 +566,14 @@ def test_install_local_mcp_server_threads_claude_config_dir(
     monkeypatch.setattr(install_mcp_server, "install_binaries", lambda _target: client_path)
     received: dict[str, object] = {}
 
-    def spy(target_dir: Path, client: Path, claude_config_dir: Path | None = None) -> Path:
+    def spy(
+        target_dir: Path,
+        client: Path,
+        claude_config_dir: Path | None = None,
+        resource_root: Path | None = None,
+    ) -> Path:
         received["claude_config_dir"] = claude_config_dir
+        received["resource_root"] = resource_root
         return target_dir / "claude_code_mcp.json"
 
     monkeypatch.setattr(install_mcp_server, "install_claude_code", spy)
@@ -484,6 +584,7 @@ def test_install_local_mcp_server_threads_claude_config_dir(
     )
 
     assert received["claude_config_dir"] == config_dir
+    assert received["resource_root"] == _install_shared.REPO_ROOT.resolve()
 
 
 def test_machine_config_seeding_writes_and_updates_browser(
@@ -636,7 +737,7 @@ def test_generic_mcp_main_can_install_openclaw_host(
     monkeypatch.setattr(
         install_mcp_server,
         "install_openclaw",
-        lambda target, client, openclaw_dir, openclaw_bin="openclaw": (
+        lambda target, client, openclaw_dir, openclaw_bin="openclaw", resource_root=None: (
             installed.append((target, client, openclaw_dir)) or target / "openclaw_mcp.json"
         ),
     )

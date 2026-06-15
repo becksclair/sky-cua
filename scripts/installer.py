@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """One-shot sky-cua installer.
 
-Runs the full setup for a fresh clone: system dependencies, the Rust runtime
-build, the Codex Heliasar marketplace install (with the computer-use compat
-plugin root), and MCP server registration plus skills for the other supported
-agents. Each phase delegates to the existing deploy scripts instead of
-duplicating their logic, and the run ends with health checks.
+Sets up sky-cua for every selected agent. Two modes:
+
+- repo: build the Rust runtime from a checkout (cargo + git), then install.
+- bundle: install from a prebuilt release bundle (no build, no cargo) - the
+  mode the release package's top-level install.py uses on a clean machine.
+
+The Codex setup materializes the computer-use compat plugin from the bundled
+preflight (no marketplace). Each phase reuses the existing install helpers, and
+the run ends with health checks.
 """
 
 from __future__ import annotations
@@ -19,9 +23,21 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from _plugin_bundle import (
+    DIST_PLUGIN_ROOT,
+    compat_plugin_targets_payload,
+    installed_plugin_root,
+    stop_unix_runtime_processes,
+    stop_windows_cache_processes,
+    update_codex_config,
+)
+from install_mcp_server import install_local_mcp_server
+from install_plugin import install_bundle, run_browser_preflight
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_ROOT = REPO_ROOT / "scripts"
 DEFAULT_TARGET_DIR = Path.home() / ".local" / "share" / "sky-cua"
+DEFAULT_BUNDLE_ROOT = DIST_PLUGIN_ROOT
 
 KNOWN_AGENTS = ("codex", "claude-code", "claude-desktop", "opencode", "pi", "openclaw")
 NON_CODEX_HOSTS = tuple(agent for agent in KNOWN_AGENTS if agent != "codex")
@@ -154,22 +170,46 @@ def missing_required_commands(
     return [command for command in commands if which(command) is None]
 
 
-def run_system_deps_phase(*, skip: bool, runner: Runner = run_logged) -> PhaseResult:
+def resolve_mode(
+    mode_arg: str,
+    *,
+    repo_root: Path = REPO_ROOT,
+    which: Callable[[str], str | None] = shutil.which,
+) -> str:
+    """Resolve `auto` to `repo` or `bundle`.
+
+    Bundle mode when there is no checkout to build from (no `.git`); a release
+    package is exactly that shape. A source checkout without cargo must stay in
+    repo mode so the system-deps phase reports the missing Rust toolchain
+    instead of silently installing a stale prebuilt bundle.
+    """
+    if mode_arg != "auto":
+        return mode_arg
+    if not (repo_root / ".git").exists():
+        return "bundle"
+    _ = which
+    return "repo"
+
+
+def run_system_deps_phase(*, mode: str, skip: bool, runner: Runner = run_logged) -> PhaseResult:
     name = "system-deps"
     if skip:
         return PhaseResult(name, "skipped", "--skip-system-deps")
     if sys.platform != "linux":
         return PhaseResult(name, "skipped", f"unsupported platform {sys.platform}")
 
-    missing_commands = missing_required_commands()
-    if missing_commands:
-        return PhaseResult(
-            name,
-            "failed",
-            "missing required commands: "
-            + ", ".join(missing_commands)
-            + " (install Rust via rustup and git via your package manager)",
-        )
+    # cargo/git are only needed to build from a checkout; bundle mode ships
+    # prebuilt binaries, so it requires only the runtime system libraries.
+    if mode == "repo":
+        missing_commands = missing_required_commands()
+        if missing_commands:
+            return PhaseResult(
+                name,
+                "failed",
+                "missing required commands: "
+                + ", ".join(missing_commands)
+                + " (install Rust via rustup and git via your package manager)",
+            )
 
     manager = detect_package_manager()
     if manager is None:
@@ -191,8 +231,10 @@ def run_system_deps_phase(*, skip: bool, runner: Runner = run_logged) -> PhaseRe
     return PhaseResult(name, "ok", f"{manager}: installed {', '.join(missing)}")
 
 
-def run_build_phase(*, skip: bool, runner: Runner = run_logged) -> PhaseResult:
+def run_build_phase(*, mode: str, skip: bool, runner: Runner = run_logged) -> PhaseResult:
     name = "build"
+    if mode == "bundle":
+        return PhaseResult(name, "skipped", "bundle mode: using prebuilt bundle")
     if skip:
         return PhaseResult(name, "skipped", "--skip-build")
     result = runner([sys.executable, str(SCRIPTS_ROOT / "build_plugin.py")], cwd=REPO_ROOT)
@@ -204,55 +246,62 @@ def run_build_phase(*, skip: bool, runner: Runner = run_logged) -> PhaseResult:
 def run_codex_phase(
     *,
     enabled: bool,
+    bundle_root: Path,
     codex_home: Path,
-    marketplace_root: Path | None,
-    marketplace_source: str | None,
-    runner: Runner = run_logged,
 ) -> PhaseResult:
     name = "codex"
     if not enabled:
         return PhaseResult(name, "skipped", "codex not selected")
-    if shutil.which("codex") is None:
-        return PhaseResult(name, "failed", "codex CLI not found on PATH")
+    if not bundle_root.exists():
+        return PhaseResult(name, "failed", f"bundle not found at {bundle_root}")
 
-    command = [
-        sys.executable,
-        str(SCRIPTS_ROOT / "setup_heliasar_marketplace.py"),
-        "--codex-home",
-        str(codex_home),
-    ]
-    if marketplace_root is not None:
-        command.extend(["--marketplace-root", str(marketplace_root)])
-    if marketplace_source is not None:
-        command.extend(["--marketplace-source", marketplace_source])
-    result = runner(command, cwd=REPO_ROOT)
-    if result.returncode != 0:
-        return PhaseResult(name, "failed", "setup_heliasar_marketplace.py failed")
-    return PhaseResult(name, "ok", "marketplace installed; compat plugin enabled")
+    # Install the payload into the local Codex cache and materialize the
+    # computer-use compat plugin from the bundled preflight - no marketplace,
+    # no codex CLI plugin/install. Every step that can raise stays inside the
+    # try so any failure becomes a failed PhaseResult and the per-phase summary
+    # still renders - matching the old subprocess lane, which surfaced failures
+    # as a nonzero exit rather than crashing the installer mid-run.
+    destination = installed_plugin_root(codex_home)
+    try:
+        stop_unix_runtime_processes([destination])
+        stop_windows_cache_processes(destination)
+        install_bundle(bundle_root, destination, symlink=False)
+        run_browser_preflight(destination, codex_home)
+        # Linux materializes the compat root (compat-first enablement); other
+        # platforms have no compat root, so enable the sky-cua@local channel id
+        # directly (Windows-Codex compat is not yet implemented).
+        compat = compat_plugin_targets_payload(codex_home, destination)
+        update_codex_config(codex_home / "config.toml", compat_enablement=compat)
+    except Exception as error:
+        return PhaseResult(name, "failed", str(error))
+
+    if compat:
+        return PhaseResult(name, "ok", "computer-use@openai-bundled compat plugin enabled")
+    return PhaseResult(
+        name,
+        "ok",
+        "sky-cua@local channel enabled (channel-id fallback; no compat root)",
+    )
 
 
 def run_agent_phase(
     host: str,
     *,
+    bundle_root: Path,
     target_dir: Path,
     claude_config_dir: Path | None = None,
-    runner: Runner = run_logged,
 ) -> PhaseResult:
     name = f"agent:{host}"
-    command = [
-        sys.executable,
-        str(SCRIPTS_ROOT / "install_mcp_server.py"),
-        "--host",
-        host,
-        "--target-dir",
-        str(target_dir),
-        "--restart-runtime",
-    ]
-    if host == "claude-code" and claude_config_dir is not None:
-        command.extend(["--claude-config-dir", str(claude_config_dir)])
-    result = runner(command, cwd=REPO_ROOT)
-    if result.returncode != 0:
-        return PhaseResult(name, "failed", "install_mcp_server.py failed")
+    try:
+        install_local_mcp_server(
+            target_dir,
+            host,
+            restart_runtime=True,
+            bundle_root=bundle_root,
+            claude_config_dir=claude_config_dir if host == "claude-code" else None,
+        )
+    except Exception as error:
+        return PhaseResult(name, "failed", str(error))
     return PhaseResult(name, "ok", f"MCP server registered for {host}")
 
 
@@ -400,15 +449,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Codex home directory (default: ~/.codex).",
     )
     parser.add_argument(
-        "--marketplace-root",
-        type=Path,
-        default=None,
-        help="Local Heliasar marketplace checkout (passed through to the Codex setup).",
+        "--mode",
+        choices=("auto", "repo", "bundle"),
+        default="auto",
+        help=(
+            "Install mode. 'repo' builds from a checkout (cargo+git); 'bundle' "
+            "installs a prebuilt bundle (no build); 'auto' picks bundle when "
+            "there is no .git checkout (default: auto)."
+        ),
     )
     parser.add_argument(
-        "--marketplace-source",
-        default=None,
-        help="Codex marketplace source (passed through to the Codex setup).",
+        "--bundle-root",
+        type=Path,
+        default=DEFAULT_BUNDLE_ROOT,
+        help=f"Prebuilt bundle to install from (default: {DEFAULT_BUNDLE_ROOT}).",
     )
     parser.add_argument(
         "--kwin-effect",
@@ -422,6 +476,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-build", action="store_true", help="Skip the Rust build/bundle phase."
     )
     parser.add_argument(
+        "--skip-health",
+        action="store_true",
+        help=(
+            "Skip installer health checks. Intended for headless package "
+            "validation that performs its own degraded assertions."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the resolved plan without changing anything.",
@@ -431,6 +493,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    mode = resolve_mode(args.mode)
+    bundle_root = args.bundle_root.expanduser().resolve()
 
     detected = detect_agents()
     try:
@@ -445,27 +509,30 @@ def main(argv: list[str] | None = None) -> int:
             "nothing to set up beyond the build.",
         )
 
-    print(f"Repo root: {REPO_ROOT}")
+    print(f"Mode: {mode}" + (f" (bundle: {bundle_root})" if mode == "bundle" else ""))
     print(f"Agents: {', '.join(agents) if agents else '(none)'}")
     if args.dry_run:
         print("Dry run; phases that would execute:")
-        phases = ["system-deps", "build"]
+        phases = ["system-deps"]
+        if mode == "repo":
+            phases.append("build")
         if "codex" in agents:
             phases.append("codex")
         phases.extend(f"agent:{host}" for host in agents if host != "codex")
-        phases.append("health")
+        if not args.skip_health:
+            phases.append("health")
         for phase in phases:
             print(f"  {phase}")
         return 0
 
     results: list[PhaseResult] = []
 
-    results.append(run_system_deps_phase(skip=args.skip_system_deps))
+    results.append(run_system_deps_phase(mode=mode, skip=args.skip_system_deps))
     if results[-1].failed:
         print_summary(results)
         return 1
 
-    results.append(run_build_phase(skip=args.skip_build))
+    results.append(run_build_phase(mode=mode, skip=args.skip_build))
     if results[-1].failed:
         print_summary(results)
         return 1
@@ -473,15 +540,13 @@ def main(argv: list[str] | None = None) -> int:
     results.append(
         run_codex_phase(
             enabled="codex" in agents,
+            bundle_root=bundle_root,
             codex_home=args.codex_home.expanduser(),
-            marketplace_root=args.marketplace_root,
-            marketplace_source=args.marketplace_source,
         )
     )
 
-    # Resolve to match install_mcp_server.py's own main: the subprocess writes
-    # settings.json to the resolved path, so the in-process health check must
-    # read the same resolved path or it would attest the wrong file.
+    # install_claude_code writes settings.json to the resolved config dir, so the
+    # health check must read the same resolved path or it would attest the wrong file.
     claude_config_dir = (
         args.claude_config_dir.expanduser().resolve()
         if args.claude_config_dir is not None
@@ -494,22 +559,31 @@ def main(argv: list[str] | None = None) -> int:
         results.append(
             run_agent_phase(
                 host,
+                bundle_root=bundle_root,
                 target_dir=args.target_dir.expanduser(),
                 claude_config_dir=claude_config_dir,
             )
         )
 
-    results.append(
-        run_kwin_phase(enabled=args.kwin_effect, target_dir=args.target_dir.expanduser())
-    )
-
-    results.extend(
-        run_health_phase(
-            agents=agents,
-            target_dir=args.target_dir.expanduser(),
-            claude_dir=claude_config_dir,
+    if mode == "bundle" and args.kwin_effect:
+        results.append(
+            PhaseResult("kwin-effect", "skipped", "requires a source checkout (repo mode)")
         )
-    )
+    else:
+        results.append(
+            run_kwin_phase(enabled=args.kwin_effect, target_dir=args.target_dir.expanduser())
+        )
+
+    if args.skip_health:
+        results.append(PhaseResult("health", "skipped", "--skip-health"))
+    else:
+        results.extend(
+            run_health_phase(
+                agents=agents,
+                target_dir=args.target_dir.expanduser(),
+                claude_dir=claude_config_dir,
+            )
+        )
 
     print_summary(results)
     return 1 if any(result.failed for result in results) else 0

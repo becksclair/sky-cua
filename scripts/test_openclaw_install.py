@@ -90,6 +90,51 @@ def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
     assert not (openclaw_dir / "workspace" / "skills" / SKY_CUA_SKILLS[0] / "obsolete.md").exists()
 
 
+def test_openclaw_bundle_mode_pins_bundle_resource_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tomllib
+
+    repo_root = tmp_path / "package-root"
+    for skill_name in SKY_CUA_SKILLS:
+        skill_dir = repo_root / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+    monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(
+        _openclaw_install.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+
+    resource_root = tmp_path / "package-root" / "plugin" / "sky-cua"
+    app_index = resource_root / "resources" / "app-instructions" / "index.json"
+    app_index.parent.mkdir(parents=True)
+    app_index.write_text('{"entries":[]}\n', encoding="utf-8")
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+    openclaw_dir = tmp_path / "openclaw"
+    agent_config = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    agent_config.parent.mkdir(parents=True)
+    agent_config.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+
+    config_path = _openclaw_install.install_openclaw(
+        target_dir,
+        client_path,
+        openclaw_dir=openclaw_dir,
+        resource_root=resource_root,
+    )
+
+    server = json.loads(config_path.read_text(encoding="utf-8"))["mcp"]["servers"]["sky_cua"]
+    assert Path(server["env"]["SKY_CUA_REPO_ROOT"]) == resource_root.resolve()
+    parsed = tomllib.loads(agent_config.read_text(encoding="utf-8"))
+    pinned_root = Path(parsed["mcp_servers"]["sky_cua"]["env"]["SKY_CUA_REPO_ROOT"])
+    assert pinned_root == resource_root.resolve()
+    assert (pinned_root / "resources" / "app-instructions" / "index.json").exists()
+
+
 def test_openclaw_codex_home_toml_upsert_is_idempotent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -201,31 +201,48 @@ def test_run_health_phase_attests_permissions_at_claude_dir(
     assert "health:claude-code" not in by_name  # CLI absent -> mcp-list probe skipped
 
 
-def test_run_agent_phase_threads_claude_config_dir(tmp_path: Path) -> None:
-    captured: list[list[str]] = []
+def test_run_agent_phase_threads_claude_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
 
-    def fake_runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        captured.append(command)
-        return completed(0)
+    def fake_install(
+        target_dir: Path,
+        host: str,
+        *,
+        restart_runtime: bool = False,
+        bundle_root: Path | None = None,
+        claude_config_dir: Path | None = None,
+        **_kwargs: object,
+    ) -> tuple[Path, Path]:
+        calls.append(
+            {
+                "host": host,
+                "claude_config_dir": claude_config_dir,
+                "bundle_root": bundle_root,
+                "restart_runtime": restart_runtime,
+            }
+        )
+        return target_dir / "bin" / "sky-cua-client", target_dir / "cfg.json"
+
+    monkeypatch.setattr(installer, "install_local_mcp_server", fake_install)
 
     claude_dir = tmp_path / ".claude"
+    bundle = tmp_path / "bundle"
     installer.run_agent_phase(
-        "claude-code",
-        target_dir=tmp_path / "t",
-        claude_config_dir=claude_dir,
-        runner=fake_runner,
+        "claude-code", bundle_root=bundle, target_dir=tmp_path / "t", claude_config_dir=claude_dir
     )
-    assert captured[0][-2:] == ["--claude-config-dir", str(claude_dir)]
+    assert calls[0]["host"] == "claude-code"
+    assert calls[0]["claude_config_dir"] == claude_dir
+    assert calls[0]["bundle_root"] == bundle
+    assert calls[0]["restart_runtime"] is True
 
-    # Non-claude hosts never receive the flag.
-    captured.clear()
+    # Non-claude hosts never receive the claude config dir.
+    calls.clear()
     installer.run_agent_phase(
-        "opencode",
-        target_dir=tmp_path / "t",
-        claude_config_dir=claude_dir,
-        runner=fake_runner,
+        "opencode", bundle_root=bundle, target_dir=tmp_path / "t", claude_config_dir=claude_dir
     )
-    assert "--claude-config-dir" not in captured[0]
+    assert calls[0]["claude_config_dir"] is None
 
 
 def test_detect_package_manager_prefers_pacman() -> None:
@@ -294,6 +311,30 @@ def test_missing_required_commands() -> None:
     assert installer.missing_required_commands(lambda name: "/usr/bin/" + name) == []
 
 
+def test_resolve_mode_explicit_overrides_detection() -> None:
+    assert (
+        installer.resolve_mode("repo", repo_root=Path("/no/git"), which=lambda _n: None) == "repo"
+    )
+    assert installer.resolve_mode("bundle") == "bundle"
+
+
+def test_resolve_mode_auto_picks_bundle_without_git(tmp_path: Path) -> None:
+    # No .git -> bundle (a release package has no checkout), even with cargo.
+    assert (
+        installer.resolve_mode("auto", repo_root=tmp_path, which=lambda _n: "/usr/bin/cargo")
+        == "bundle"
+    )
+    # .git present but no cargo -> repo, so the required-command check reports
+    # missing cargo/git instead of installing a stale dist/plugin bundle.
+    (tmp_path / ".git").mkdir()
+    assert installer.resolve_mode("auto", repo_root=tmp_path, which=lambda _n: None) == "repo"
+    # .git present and cargo present -> repo.
+    assert (
+        installer.resolve_mode("auto", repo_root=tmp_path, which=lambda _n: "/usr/bin/cargo")
+        == "repo"
+    )
+
+
 def test_build_phase_reports_failure() -> None:
     calls: list[list[str]] = []
 
@@ -301,62 +342,194 @@ def test_build_phase_reports_failure() -> None:
         calls.append(command)
         return completed(returncode=1)
 
-    result = installer.run_build_phase(skip=False, runner=runner)
+    result = installer.run_build_phase(mode="repo", skip=False, runner=runner)
     assert result.failed
     assert calls and calls[0][1].endswith("build_plugin.py")
 
 
 def test_build_phase_skip() -> None:
-    result = installer.run_build_phase(skip=True)
+    result = installer.run_build_phase(mode="repo", skip=True)
     assert result.status == "skipped"
 
 
-def test_codex_phase_skipped_when_not_selected() -> None:
-    result = installer.run_codex_phase(
-        enabled=False,
-        codex_home=Path("/tmp/codex"),
-        marketplace_root=None,
-        marketplace_source=None,
-    )
-    assert result.status == "skipped"
-
-
-def test_codex_phase_passes_marketplace_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(installer.shutil, "which", lambda name: "/usr/bin/codex")
+def test_build_phase_bundle_mode_skips_without_running() -> None:
     calls: list[list[str]] = []
 
     def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(command)
         return completed()
 
+    result = installer.run_build_phase(mode="bundle", skip=False, runner=runner)
+    assert result.status == "skipped"
+    assert not calls  # bundle mode never shells out to build_plugin.py
+
+
+def test_codex_phase_skipped_when_not_selected(tmp_path: Path) -> None:
     result = installer.run_codex_phase(
-        enabled=True,
-        codex_home=Path("/tmp/codex-home"),
-        marketplace_root=Path("/tmp/marketplace"),
-        marketplace_source="example/source",
-        runner=runner,
+        enabled=False, bundle_root=tmp_path / "bundle", codex_home=tmp_path / "codex"
     )
+    assert result.status == "skipped"
+
+
+def test_codex_phase_fails_when_bundle_missing(tmp_path: Path) -> None:
+    result = installer.run_codex_phase(
+        enabled=True, bundle_root=tmp_path / "nope", codex_home=tmp_path / "codex"
+    )
+    assert result.failed
+    assert "bundle not found" in result.detail
+
+
+def test_codex_phase_materializes_compat_plugin_from_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The Codex phase installs the bundle and runs the bundled browser preflight
+    # (which materializes the compat plugin) - no marketplace, no codex CLI.
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    codex_home = tmp_path / "codex-home"
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(installer, "stop_unix_runtime_processes", lambda _roots: None)
+    monkeypatch.setattr(installer, "stop_windows_cache_processes", lambda _root: None)
+    monkeypatch.setattr(
+        installer,
+        "installed_plugin_root",
+        lambda home: home / "plugins" / "cache" / "local" / "sky-cua" / "local",
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_bundle",
+        lambda src, dest, symlink: calls.update({"install_bundle_src": src, "install_dest": dest}),
+    )
+    monkeypatch.setattr(
+        installer,
+        "run_browser_preflight",
+        lambda dest, home: calls.update({"preflight": (dest, home)}),
+    )
+    monkeypatch.setattr(installer, "compat_plugin_targets_payload", lambda _home, _dest: True)
+    monkeypatch.setattr(
+        installer,
+        "update_codex_config",
+        lambda path, *, compat_enablement: calls.update(
+            {"config_path": path, "compat": compat_enablement}
+        ),
+    )
+
+    result = installer.run_codex_phase(enabled=True, bundle_root=bundle_root, codex_home=codex_home)
     assert result.status == "ok"
-    command = calls[0]
-    assert command[1].endswith("setup_heliasar_marketplace.py")
-    assert "--codex-home" in command and "/tmp/codex-home" in command
-    assert "--marketplace-root" in command and "/tmp/marketplace" in command
-    assert "--marketplace-source" in command and "example/source" in command
+    assert calls["install_bundle_src"] == bundle_root
+    assert "preflight" in calls
+    assert calls["compat"] is True
+    assert calls["config_path"] == codex_home / "config.toml"
 
 
-def test_agent_phase_invokes_install_mcp_server() -> None:
-    calls: list[list[str]] = []
+def test_codex_phase_channel_id_fallback_when_no_compat_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Off-compat (Windows / bundle without openai-bundled resources): no compat
+    # root materializes, so the phase enables sky-cua@local directly and says so
+    # in its detail. Linux CI never reaches this branch through a real install.
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    codex_home = tmp_path / "codex-home"
+    calls: dict[str, object] = {}
 
-    def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        calls.append(command)
-        return completed()
+    monkeypatch.setattr(installer, "stop_unix_runtime_processes", lambda _roots: None)
+    monkeypatch.setattr(installer, "stop_windows_cache_processes", lambda _root: None)
+    monkeypatch.setattr(installer, "installed_plugin_root", lambda home: home / "cache" / "local")
+    monkeypatch.setattr(installer, "install_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(installer, "run_browser_preflight", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(installer, "compat_plugin_targets_payload", lambda _home, _dest: False)
+    monkeypatch.setattr(
+        installer,
+        "update_codex_config",
+        lambda _path, *, compat_enablement: calls.update({"compat": compat_enablement}),
+    )
 
-    result = installer.run_agent_phase("pi", target_dir=Path("/tmp/target"), runner=runner)
+    result = installer.run_codex_phase(enabled=True, bundle_root=bundle_root, codex_home=codex_home)
     assert result.status == "ok"
-    command = calls[0]
-    assert command[1].endswith("install_mcp_server.py")
-    assert command[command.index("--host") : command.index("--host") + 2] == ["--host", "pi"]
-    assert "--restart-runtime" in command
+    assert calls["compat"] is False
+    assert "fallback" in result.detail
+
+
+def test_codex_phase_converges_retired_channels_on_in_place_upgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # In-place repo-mode upgrade of a box left in the old Heliasar-enabled state:
+    # the real update_codex_config must disable the retired stanza so Codex does
+    # not end up with two enabled computer-use plugin ids. update_codex_config is
+    # intentionally NOT monkeypatched here - this pins the live config write that
+    # routes the installer through the same convergence as deploy_plugin.
+    import tomllib
+
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        '[plugins."sky-cua@Heliasar"]\nenabled = true\n', encoding="utf-8"
+    )
+
+    monkeypatch.setattr(installer, "stop_unix_runtime_processes", lambda _roots: None)
+    monkeypatch.setattr(installer, "stop_windows_cache_processes", lambda _root: None)
+    monkeypatch.setattr(installer, "installed_plugin_root", lambda home: home / "cache" / "local")
+    monkeypatch.setattr(installer, "install_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(installer, "run_browser_preflight", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(installer, "compat_plugin_targets_payload", lambda _home, _dest: True)
+
+    result = installer.run_codex_phase(enabled=True, bundle_root=bundle_root, codex_home=codex_home)
+
+    assert result.status == "ok"
+    parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    assert parsed["plugins"]["sky-cua@Heliasar"]["enabled"] is False
+    assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is True
+
+
+def test_codex_phase_failed_result_when_config_write_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A config-write failure must surface as a failed PhaseResult - preserving the
+    # per-phase summary contract - not an unhandled exception that crashes the
+    # installer mid-run. The config write lives inside run_codex_phase's try/except
+    # alongside install+preflight, matching the old subprocess lane's behavior.
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    codex_home = tmp_path / "codex-home"
+
+    monkeypatch.setattr(installer, "stop_unix_runtime_processes", lambda _roots: None)
+    monkeypatch.setattr(installer, "stop_windows_cache_processes", lambda _root: None)
+    monkeypatch.setattr(installer, "installed_plugin_root", lambda home: home / "cache" / "local")
+    monkeypatch.setattr(installer, "install_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(installer, "run_browser_preflight", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(installer, "compat_plugin_targets_payload", lambda _home, _dest: True)
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("config write failed")
+
+    monkeypatch.setattr(installer, "update_codex_config", boom)
+
+    result = installer.run_codex_phase(enabled=True, bundle_root=bundle_root, codex_home=codex_home)
+
+    assert result.failed
+    assert "config write failed" in result.detail
+
+
+def test_agent_phase_failed_result_when_install_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The agent phase wraps install_local_mcp_server so a registration failure is a
+    # failed PhaseResult, not a crash that drops the summary and later phases.
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("registration failed")
+
+    monkeypatch.setattr(installer, "install_local_mcp_server", boom)
+
+    result = installer.run_agent_phase(
+        "opencode", bundle_root=tmp_path / "bundle", target_dir=tmp_path / "target"
+    )
+
+    assert result.failed
+    assert "registration failed" in result.detail
 
 
 def test_kwin_phase_skipped_by_default(tmp_path: Path) -> None:
@@ -377,6 +550,46 @@ def test_main_dry_run_lists_phases(
     assert "codex" in output
     assert "agent:pi" in output
     assert "health" in output
+
+
+def test_main_skip_health_does_not_run_health_phase(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    monkeypatch.setattr(installer, "detect_agents", lambda: {"opencode": True})
+    monkeypatch.setattr(
+        installer, "run_system_deps_phase", lambda **_k: installer.PhaseResult("system-deps", "ok")
+    )
+    monkeypatch.setattr(
+        installer, "run_build_phase", lambda **_k: installer.PhaseResult("build", "ok")
+    )
+    monkeypatch.setattr(
+        installer, "run_codex_phase", lambda **_k: installer.PhaseResult("codex", "skipped")
+    )
+    monkeypatch.setattr(
+        installer,
+        "run_agent_phase",
+        lambda host, **_k: installer.PhaseResult(f"agent:{host}", "ok"),
+    )
+    monkeypatch.setattr(
+        installer, "run_kwin_phase", lambda **_k: installer.PhaseResult("kwin-effect", "skipped")
+    )
+
+    def fake_health(**_kwargs: object) -> list[installer.PhaseResult]:
+        nonlocal called
+        called = True
+        return [installer.PhaseResult("health:doctor", "failed")]
+
+    monkeypatch.setattr(installer, "run_health_phase", fake_health)
+
+    exit_code = installer.main(["--agents", "opencode", "--skip-health"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert called is False
+    assert "health" in output
+    assert "--skip-health" in output
 
 
 def test_main_rejects_unknown_agent(capsys: pytest.CaptureFixture[str]) -> None:
