@@ -19,26 +19,22 @@ import build_plugin
 import live_agent_cursor_kde_smoke
 import live_chrome_host_client_smoke
 from _plugin_bundle import (
-    PLUGIN_CATEGORY,
-    RELEASE_PLUGIN_ID,
+    PLUGIN_ID,
     all_runtime_binary_names,
     bundle_entrypoint_paths,
-    codex_config_path,
+    compat_plugin_targets_payload,
     current_runtime_platform,
     ensure_apps_feature_disabled,
     ensure_fast_service_tier,
-    ensure_plugin_enabled,
     ensure_plugins_feature_enabled,
-    marketplace_manifest_path,
-    release_plugin_root,
     runtime_binary_names,
     runtime_binary_path,
+    set_plugin_enabled,
     stop_unix_runtime_processes,
     stop_windows_cache_processes,
     update_codex_config,
     update_plugin_manifest_version,
     version_from_tag,
-    write_release_marketplace,
 )
 from _test_support import (
     tracked_minimal_bundle_files,
@@ -66,7 +62,7 @@ def test_codex_config_helpers_update_existing_sections() -> None:
             "plugins = false",
             "apps = true",
             "",
-            '[plugins."sky-cua@debug"]',
+            '[plugins."sky-cua@local"]',
             "enabled = false",
             "",
             "[profiles.default]",
@@ -78,7 +74,7 @@ def test_codex_config_helpers_update_existing_sections() -> None:
     config = ensure_plugins_feature_enabled(config)
     config = ensure_apps_feature_disabled(config)
     config = ensure_fast_service_tier(config)
-    config = ensure_plugin_enabled(config)
+    config = set_plugin_enabled(config, PLUGIN_ID, enabled=True)
 
     assert 'service_tier = "fast"' in config
     assert "plugins = true" in config
@@ -704,6 +700,45 @@ def test_browser_preflight_computer_use_compat_plugin_preserves_env_allowlist(
     assert second_sync_stat.st_ino == first_sync_stat.st_ino
 
 
+def test_compat_plugin_targets_payload_rejects_stale_root(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    latest = codex_home / "plugins" / "cache" / "openai-bundled" / "computer-use" / "latest"
+    latest.mkdir(parents=True)
+    (latest / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "computer-use": {
+                        "command": str(tmp_path / "old" / "bin" / "sky-cua-client"),
+                        "args": ["mcp"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = tmp_path / "payload"
+    (payload / "bin").mkdir(parents=True)
+
+    assert not compat_plugin_targets_payload(codex_home, payload)
+
+    (latest / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "computer-use": {
+                        "command": str((payload / "bin" / "sky-cua-client").resolve()),
+                        "args": ["mcp"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert compat_plugin_targets_payload(codex_home, payload)
+
+
 def test_bundled_resource_root_accepts_upstream_codex_resource_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -830,88 +865,11 @@ def test_build_release_binaries_does_not_retry_unrelated_failure(
     assert calls == 1
 
 
-def test_release_marketplace_helpers_use_local_marketplace_shape(tmp_path: Path) -> None:
-    marketplace_root = tmp_path / "marketplace"
-    config_path = tmp_path / "codex-home" / "config.toml"
-
-    manifest_path = write_release_marketplace(marketplace_root)
-    manifest = json.loads(manifest_path.read_text())
-    update_codex_config(
-        config_path,
-        plugin_id=RELEASE_PLUGIN_ID,
-        disabled_plugin_ids=["sky-cua@debug"],
-        marketplace_root=marketplace_root,
-    )
-    config = config_path.read_text()
-
-    assert manifest_path == marketplace_manifest_path(marketplace_root)
-    assert manifest_path.exists()
-    assert manifest["plugins"][0]["source"] == {
-        "source": "local",
-        "path": "./plugins/sky-cua",
-    }
-    assert manifest["plugins"][0]["policy"] == {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL",
-    }
-    assert manifest["plugins"][0]["category"] == PLUGIN_CATEGORY
-    assert release_plugin_root(marketplace_root) == marketplace_root / "plugins" / "sky-cua"
-    assert "[marketplaces.Heliasar]" in config
-    assert str(marketplace_root.resolve()).replace("\\", "\\\\") in config
-    assert f'[plugins."{RELEASE_PLUGIN_ID}"]' in config
-    assert "enabled = true" in config
-    assert '[plugins."sky-cua@debug"]\nenabled = false' in config
-
-
-def test_codex_config_upsert_preserves_windows_backslashes(tmp_path: Path) -> None:
-    config_path = tmp_path / "codex-home" / "config.toml"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text(
-        "\n".join(
-            [
-                "[marketplaces.Heliasar]",
-                'source = "old"',
-                'source_type = "local"',
-                "",
-            ]
-        )
-    )
-    marketplace_root = Path(r"C:\Users\bex\projects\heliasar-marketplace")
-
-    update_codex_config(
-        config_path,
-        plugin_id=RELEASE_PLUGIN_ID,
-        marketplace_root=marketplace_root,
-    )
-    config = config_path.read_text()
-
-    parsed = tomllib.loads(config)
-    assert parsed["marketplaces"]["Heliasar"]["source"] == codex_config_path(marketplace_root)
-    assert "C:\\\\Users\\\\bex" in config
-
-
-def test_update_codex_config_can_stage_disabled_plugin_before_install(tmp_path: Path) -> None:
-    config_path = tmp_path / "codex-home" / "config.toml"
-
-    update_codex_config(
-        config_path,
-        plugin_id=RELEASE_PLUGIN_ID,
-        plugin_enabled=False,
-        disabled_plugin_ids=["sky-cua@debug"],
-        marketplace_root=tmp_path / "marketplace",
-    )
-    parsed = tomllib.loads(config_path.read_text())
-
-    assert parsed["plugins"][RELEASE_PLUGIN_ID]["enabled"] is False
-    assert parsed["plugins"]["sky-cua@debug"]["enabled"] is False
-    assert parsed["features"]["plugins"] is True
-
-
 def test_codex_config_upsert_updates_crlf_sections_without_duplicate_tables(tmp_path: Path) -> None:
     config_path = tmp_path / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        '[features]\r\nplugins = false\r\n\r\n[plugins."sky-cua@debug"]\r\nenabled = false\r\n'
+        '[features]\r\nplugins = false\r\n\r\n[plugins."sky-cua@local"]\r\nenabled = false\r\n'
     )
 
     update_codex_config(config_path)
@@ -919,9 +877,9 @@ def test_codex_config_upsert_updates_crlf_sections_without_duplicate_tables(tmp_
     parsed = tomllib.loads(config)
 
     assert config.count("[features]") == 1
-    assert config.count('[plugins."sky-cua@debug"]') == 1
+    assert config.count('[plugins."sky-cua@local"]') == 1
     assert parsed["features"]["plugins"] is True
-    assert parsed["plugins"]["sky-cua@debug"]["enabled"] is True
+    assert parsed["plugins"]["sky-cua@local"]["enabled"] is True
 
 
 def test_plugin_manifest_tracks_scaffold_metadata_contract() -> None:
@@ -935,7 +893,7 @@ def test_plugin_manifest_tracks_scaffold_metadata_contract() -> None:
     assert manifest["homepage"].startswith("https://")
     assert manifest["repository"].startswith("https://")
     assert "computer-use" in manifest["keywords"]
-    assert interface["category"] == PLUGIN_CATEGORY
+    assert interface["category"] == "Coding"
     assert interface["capabilities"] == ["Interactive", "Read", "Write"]
     assert interface["websiteURL"].startswith("https://")
     assert interface["privacyPolicyURL"].startswith("https://")

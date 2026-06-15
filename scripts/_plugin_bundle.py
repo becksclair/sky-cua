@@ -16,21 +16,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 PLUGIN_NAME = "sky-cua"
-PLUGIN_CHANNEL = "debug"
-RELEASE_MARKETPLACE_NAME = "Heliasar"
-RELEASE_PLUGIN_ID = f"{PLUGIN_NAME}@{RELEASE_MARKETPLACE_NAME}"
+PLUGIN_CHANNEL = "local"
 PLUGIN_ID = f"{PLUGIN_NAME}@{PLUGIN_CHANNEL}"
 # Codex Desktop detects Computer Use plugins by the built-in plugin name
 # "computer-use", so this compat id is the single enabled computer-use plugin
-# for the codex host. The sky-cua channel ids stay installed but disabled;
-# debug-vs-release selection happens by retargeting the compat plugin root's
-# .mcp.json at the matching payload (see docs/operations/plugin-release.md).
+# for the codex host. The sky-cua channel id stays installed but disabled; the
+# active payload is selected by retargeting the compat plugin root's .mcp.json
+# at the local cache payload (see docs/operations/plugin-release.md).
 COMPUTER_USE_COMPAT_PLUGIN_ID = "computer-use@openai-bundled"
-PLUGIN_CATEGORY = "Coding"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DIST_PLUGIN_ROOT = REPO_ROOT / "dist" / "plugin" / PLUGIN_NAME
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
-DEFAULT_MARKETPLACE_ROOT = Path.home() / "projects" / "heliasar-marketplace"
 INSTALLED_PLUGIN_ROOT = (
     DEFAULT_CODEX_HOME / "plugins" / "cache" / PLUGIN_CHANNEL / PLUGIN_NAME / "local"
 )
@@ -178,6 +174,16 @@ def update_plugin_manifest_version(bundle_root: Path, version: str) -> None:
 
 
 def merge_runtime_artifacts(bundle_root: Path, artifacts_root: Path) -> None:
+    """Merge per-platform runtime artifacts into one multi-platform bundle.
+
+    Copies each platform's staged binaries (`<artifacts_root>/<platform>/`,
+    produced by `package_runtime_artifact.py` on that platform's native host)
+    into the bundle's `bin/runtimes/<platform>/` layout, requiring the full
+    `REQUIRED_RUNTIME_PLATFORMS` set so a fat bundle is never shipped with a
+    platform silently missing. This is the cross-build assembly step with no
+    marketplace dependency; the single-platform `scripts/package.py` does not use
+    it, but a future multi-platform/Windows package would.
+    """
     missing: list[str] = []
     for platform_id in REQUIRED_RUNTIME_PLATFORMS:
         platform_root = artifacts_root / platform_id
@@ -406,41 +412,6 @@ def installed_plugin_root(codex_home: Path) -> Path:
     return codex_home / "plugins" / "cache" / PLUGIN_CHANNEL / PLUGIN_NAME / "local"
 
 
-def release_plugin_root(marketplace_root: Path) -> Path:
-    return marketplace_root / "plugins" / PLUGIN_NAME
-
-
-def marketplace_manifest_path(marketplace_root: Path) -> Path:
-    return marketplace_root / ".agents" / "plugins" / "marketplace.json"
-
-
-def write_release_marketplace(marketplace_root: Path) -> Path:
-    manifest_path = marketplace_manifest_path(marketplace_root)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest = {
-        "name": RELEASE_MARKETPLACE_NAME,
-        "interface": {
-            "displayName": RELEASE_MARKETPLACE_NAME,
-        },
-        "plugins": [
-            {
-                "name": PLUGIN_NAME,
-                "source": {
-                    "source": "local",
-                    "path": f"./plugins/{PLUGIN_NAME}",
-                },
-                "policy": {
-                    "installation": "AVAILABLE",
-                    "authentication": "ON_INSTALL",
-                },
-                "category": PLUGIN_CATEGORY,
-            }
-        ],
-    }
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return manifest_path
-
-
 def ensure_plugins_feature_enabled(config_text: str) -> str:
     return upsert_toml_key(config_text, "features", "plugins", "true")
 
@@ -458,40 +429,9 @@ def ensure_fast_service_tier(config_text: str) -> str:
     return upsert_top_level_toml_key(config_text, "service_tier", '"fast"')
 
 
-def ensure_plugin_enabled(config_text: str) -> str:
-    return set_plugin_enabled(config_text, PLUGIN_ID, enabled=True)
-
-
 def set_plugin_enabled(config_text: str, plugin_id: str, *, enabled: bool) -> str:
     rendered = "true" if enabled else "false"
     return upsert_toml_key(config_text, f'plugins."{plugin_id}"', "enabled", rendered)
-
-
-def ensure_release_marketplace_config(config_text: str, marketplace_root: Path) -> str:
-    header = f"marketplaces.{RELEASE_MARKETPLACE_NAME}"
-    config_text = upsert_toml_key(config_text, header, "last_updated", toml_string(utc_timestamp()))
-    config_text = upsert_toml_key(config_text, header, "source_type", '"local"')
-    return upsert_toml_key(
-        config_text,
-        header,
-        "source",
-        toml_string(codex_config_path(marketplace_root)),
-    )
-
-
-def toml_string(value: str) -> str:
-    return json.dumps(value)
-
-
-def codex_config_path(path: Path) -> str:
-    resolved = str(path.resolve())
-    if sys.platform == "win32" and not resolved.startswith("\\\\?\\"):
-        return f"\\\\?\\{resolved}"
-    return resolved
-
-
-def utc_timestamp() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def upsert_top_level_toml_key(config_text: str, key: str, rendered_value: str) -> str:
@@ -580,17 +520,49 @@ def compat_plugin_target(codex_home: Path) -> str | None:
     return command if isinstance(command, str) else None
 
 
+def compat_plugin_targets_payload(codex_home: Path, payload_root: Path) -> bool:
+    """Whether the materialized compat plugin launches this payload's client."""
+    expected = str((payload_root / "bin" / "sky-cua-client").resolve())
+    return compat_plugin_target(codex_home) == expected
+
+
 def apply_compat_plugin_enablement(config_text: str) -> str:
     """Apply compat-plugin-first enablement for the codex host.
 
     Enables `computer-use@openai-bundled` (the only computer-use plugin id the
-    Codex Desktop UI detects) and disables both sky-cua channel ids. The
-    active payload is selected by regenerating the compat plugin root against
-    the debug or Heliasar cache payload, not by toggling channel ids.
+    Codex Desktop UI detects) and disables the sky-cua channel id. The active
+    payload is selected by regenerating the compat plugin root against the
+    local cache payload, not by toggling the channel id.
     """
     config_text = set_plugin_enabled(config_text, COMPUTER_USE_COMPAT_PLUGIN_ID, enabled=True)
     config_text = set_plugin_enabled(config_text, PLUGIN_ID, enabled=False)
-    config_text = set_plugin_enabled(config_text, RELEASE_PLUGIN_ID, enabled=False)
+    return config_text
+
+
+# Retired sky-cua plugin ids: the old local dev channel (`debug`, now `local`)
+# and the retired private-marketplace publish id (`Heliasar`). Either stanza left
+# enabled would make Codex launch a second computer-use MCP server alongside the
+# active compat/local plugin, violating the single-active-server invariant. This
+# is the single source of truth for both the config neutralization below and the
+# cache-payload cleanup in the deploy loop. The marketplace cache dir for each id
+# is the part after `@` (cache/<marketplace>/sky-cua).
+RETIRED_PLUGIN_IDS: tuple[str, ...] = ("sky-cua@debug", "sky-cua@Heliasar")
+
+
+def disable_retired_channels(config_text: str) -> str:
+    """Disable any retired sky-cua channel stanzas present in the config.
+
+    Stanzas absent from the config are left untouched - never synthesized - so
+    this no-ops on machines that only ran the live channel. Folding this into
+    every ``update_codex_config`` write enforces the single-active-computer-use
+    invariant for all of its callers (``install_plugin``, ``deploy_plugin``,
+    ``installer``), so an in-place upgrade of a box still carrying a stale
+    ``sky-cua@debug``/``sky-cua@Heliasar`` stanza converges to one enabled id
+    instead of producing a duplicate computer-use server.
+    """
+    for plugin_id in RETIRED_PLUGIN_IDS:
+        if f'[plugins."{plugin_id}"]' in config_text:
+            config_text = set_plugin_enabled(config_text, plugin_id, enabled=False)
     return config_text
 
 
@@ -601,8 +573,6 @@ def update_codex_config(
     fast_service_tier: bool = False,
     plugin_id: str = PLUGIN_ID,
     plugin_enabled: bool = True,
-    disabled_plugin_ids: list[str] | None = None,
-    marketplace_root: Path | None = None,
     compat_enablement: bool = False,
 ) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -616,25 +586,24 @@ def update_codex_config(
     if fast_service_tier:
         config_text = ensure_fast_mode_enabled(config_text)
         config_text = ensure_fast_service_tier(config_text)
-    if marketplace_root is not None:
-        config_text = ensure_release_marketplace_config(config_text, marketplace_root)
     if compat_enablement:
-        # Compat-first mode owns all computer-use plugin toggles; per-channel
-        # plugin_id/plugin_enabled/disabled_plugin_ids arguments do not apply
-        # (the helper already disables both channel ids).
+        # Compat-first mode owns the computer-use plugin toggles; the helper
+        # enables the compat id and disables the sky-cua@local channel id, so
+        # the per-channel plugin_id/plugin_enabled arguments do not apply.
         config_text = apply_compat_plugin_enablement(config_text)
     else:
         config_text = set_plugin_enabled(config_text, plugin_id, enabled=plugin_enabled)
         if plugin_enabled:
             # Channel-id fallback is the symmetric inverse: exactly one
-            # enabled computer-use plugin id, so enabling a channel id turns
+            # enabled computer-use plugin id, so enabling the channel id turns
             # off a previously enabled compat id (e.g. after a cache wipe
             # removed its root). Disable-only staging calls leave the compat
             # id alone to avoid a transient zero-enabled window mid-deploy.
             config_text = set_plugin_enabled(
                 config_text, COMPUTER_USE_COMPAT_PLUGIN_ID, enabled=False
             )
-        for disabled_plugin_id in disabled_plugin_ids or []:
-            if disabled_plugin_id != plugin_id:
-                config_text = set_plugin_enabled(config_text, disabled_plugin_id, enabled=False)
+    # Retired channels are neutralized on every write so any caller converges to
+    # exactly one enabled computer-use plugin id, even on an in-place upgrade of a
+    # box left in the old debug/Heliasar-enabled state.
+    config_text = disable_retired_channels(config_text)
     config_path.write_text(config_text, encoding="utf-8")
