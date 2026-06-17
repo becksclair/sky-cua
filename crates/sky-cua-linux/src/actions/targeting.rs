@@ -1,10 +1,19 @@
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    ActionRequest, CaptureBackendKind, CaptureInfo, CoordinateSpace, ElementNode, InputBackendKind,
-    RectF,
+    ActionRequest, CaptureInfo, CoordinateSpace, ElementNode, InputBackendKind,
 };
 
-use crate::coords::{center_of, desktop_to_stream, logical_to_pixel};
+use crate::coords::{center_of, desktop_to_stream, logical_to_pixel, rect_contains_rect};
+
+fn missing_element_bounds_error(element: &ElementNode, target_kind: &str) -> BackendError {
+    BackendError::new(
+        BackendErrorCode::InvalidRequest,
+        format!(
+            "element {} did not include bounds, so a {target_kind} target cannot be derived",
+            element.element_index
+        ),
+    )
+}
 
 pub(crate) fn input_backend_for(request: &ActionRequest) -> InputBackendKind {
     request
@@ -100,10 +109,10 @@ pub(crate) fn point_for_element_for_backend(
 ) -> Result<(f64, f64), BackendError> {
     match backend {
         InputBackendKind::PortalRemoteDesktop => {
-            validate_portal_dispatch_source(capture, snapshot_based)?;
             if element_is_x11_fallback(element) {
-                point_for_x11_element_through_portal(element, capture)
+                point_for_x11_element_through_portal(element, capture, snapshot_based)
             } else {
+                validate_portal_dispatch_source(capture, snapshot_based)?;
                 point_for_element(element, capture)
             }
         }
@@ -156,15 +165,10 @@ fn point_for_element(
     element: &ElementNode,
     capture: Option<&CaptureInfo>,
 ) -> Result<(f64, f64), BackendError> {
-    let bounds = element.bounds.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!(
-                "element {} did not include bounds, so a physical action target cannot be derived",
-                element.element_index
-            ),
-        )
-    })?;
+    let bounds = element
+        .bounds
+        .as_ref()
+        .ok_or_else(|| missing_element_bounds_error(element, "physical action"))?;
     let center = center_of(bounds);
     if let Some(capture) = capture
         && let Some(stream_point) = portal_stream_point_from_desktop(center, capture)
@@ -178,15 +182,10 @@ fn point_for_x11_element(
     element: &ElementNode,
     capture: Option<&CaptureInfo>,
 ) -> Result<(f64, f64), BackendError> {
-    let bounds = element.bounds.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!(
-                "element {} did not include bounds, so a physical action target cannot be derived",
-                element.element_index
-            ),
-        )
-    })?;
+    let bounds = element
+        .bounds
+        .as_ref()
+        .ok_or_else(|| missing_element_bounds_error(element, "physical action"))?;
     let center = center_of(bounds);
     if bounds.space == CoordinateSpace::DesktopLogical
         && let Some(capture) = capture
@@ -204,16 +203,13 @@ fn point_for_x11_element(
 pub(crate) fn point_for_x11_element_through_portal(
     element: &ElementNode,
     capture: Option<&CaptureInfo>,
+    snapshot_based: bool,
 ) -> Result<(f64, f64), BackendError> {
-    let bounds = element.bounds.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!(
-                "element {} did not include bounds, so a physical action target cannot be derived",
-                element.element_index
-            ),
-        )
-    })?;
+    let bounds = element
+        .bounds
+        .as_ref()
+        .ok_or_else(|| missing_element_bounds_error(element, "physical action"))?;
+    validate_portal_dispatch_source(capture, snapshot_based)?;
     let center = center_of(bounds);
     if let Some(capture) = capture
         && let (Some(logical_rect), Some(original_pixel_size)) = (
@@ -229,6 +225,9 @@ pub(crate) fn point_for_x11_element_through_portal(
         let rel_y = center.1 / f64::from(original_pixel_size.height);
         return Ok((rel_x * logical_rect.width, rel_y * logical_rect.height));
     }
+    if snapshot_based && bounds.space == CoordinateSpace::DesktopLogical {
+        return Err(missing_portal_dispatch_source_error());
+    }
     Ok(center)
 }
 
@@ -236,15 +235,10 @@ fn point_for_linux_virtual_element(
     element: &ElementNode,
     capture: Option<&CaptureInfo>,
 ) -> Result<(f64, f64), BackendError> {
-    let bounds = element.bounds.as_ref().ok_or_else(|| {
-        BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!(
-                "element {} did not include bounds, so a Linux virtual input target cannot be derived",
-                element.element_index
-            ),
-        )
-    })?;
+    let bounds = element
+        .bounds
+        .as_ref()
+        .ok_or_else(|| missing_element_bounds_error(element, "Linux virtual input"))?;
     let center = center_of(bounds);
     match bounds.space {
         CoordinateSpace::DesktopLogical => Ok(center),
@@ -275,6 +269,9 @@ fn point_from_action_pixels(
     request: &ActionRequest,
     backend: InputBackendKind,
 ) -> Result<(f64, f64), BackendError> {
+    if request.snapshot_id.is_some() {
+        validate_snapshot_pixel_point(point, request.resolved_capture.as_ref())?;
+    }
     if backend == InputBackendKind::LinuxVirtualInput {
         return linux_virtual_point_from_screenshot_pixels(
             point,
@@ -343,6 +340,42 @@ pub(crate) fn point_from_screenshot_pixels(
     }
 }
 
+fn validate_snapshot_pixel_point(
+    point: (f64, f64),
+    capture: Option<&CaptureInfo>,
+) -> Result<(), BackendError> {
+    let capture = capture.ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "snapshot-based explicit coordinates require capture metadata",
+        )
+    })?;
+    let pixel_size = capture.pixel_size.as_ref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "snapshot-based explicit coordinates require capture pixel_size metadata",
+        )
+    })?;
+    if pixel_size.width == 0 || pixel_size.height == 0 {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "snapshot-based explicit coordinates cannot target a zero-sized capture",
+        ));
+    }
+    let width = f64::from(pixel_size.width);
+    let height = f64::from(pixel_size.height);
+    if point.0 < 0.0 || point.1 < 0.0 || point.0 >= width || point.1 >= height {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!(
+                "snapshot coordinates x={},y={} are outside the captured image bounds {}x{}; use pixel coordinates from this snapshot's screenshot_path image",
+                point.0, point.1, pixel_size.width, pixel_size.height
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn desktop_point_from_screenshot_pixels(
     point: (f64, f64),
     capture: &CaptureInfo,
@@ -393,25 +426,23 @@ fn validate_portal_dispatch_source(
     let Some(capture) = capture else {
         return Ok(());
     };
-    if !portal_screenshot_capture_requires_dispatch_source(capture) {
-        return Ok(());
-    }
-    let Some(source_logical_rect) = capture.source_logical_rect.as_ref() else {
-        return Err(missing_portal_dispatch_source_error());
-    };
     let Some(logical_rect) = capture.logical_rect.as_ref() else {
         return Err(missing_portal_dispatch_source_error());
     };
-    if rect_contains_rect(source_logical_rect, logical_rect) {
-        Ok(())
-    } else {
-        Err(missing_portal_dispatch_source_error())
+    match logical_rect.space {
+        CoordinateSpace::StreamLogical => Ok(()),
+        CoordinateSpace::DesktopLogical => {
+            let Some(source_logical_rect) = capture.source_logical_rect.as_ref() else {
+                return Err(missing_portal_dispatch_source_error());
+            };
+            if rect_contains_rect(source_logical_rect, logical_rect) {
+                Ok(())
+            } else {
+                Err(missing_portal_dispatch_source_error())
+            }
+        }
+        CoordinateSpace::StreamPixels => Err(missing_portal_dispatch_source_error()),
     }
-}
-
-fn portal_screenshot_capture_requires_dispatch_source(capture: &CaptureInfo) -> bool {
-    capture.image_backend == Some(CaptureBackendKind::PortalScreenshot)
-        || capture.backend == CaptureBackendKind::PortalScreenshot
 }
 
 fn missing_portal_dispatch_source_error() -> BackendError {
@@ -419,19 +450,6 @@ fn missing_portal_dispatch_source_error() -> BackendError {
         BackendErrorCode::InvalidRequest,
         "Portal RemoteDesktop snapshot actions require capture source geometry that covers the screenshot; this snapshot image was produced outside the active RemoteDesktop stream",
     )
-}
-
-fn rect_contains_rect(outer: &RectF, inner: &RectF) -> bool {
-    const EPSILON: f64 = 0.000_001;
-    outer.space == inner.space
-        && outer.width > 0.0
-        && outer.height > 0.0
-        && inner.width > 0.0
-        && inner.height > 0.0
-        && inner.x >= outer.x - EPSILON
-        && inner.y >= outer.y - EPSILON
-        && inner.x + inner.width <= outer.x + outer.width + EPSILON
-        && inner.y + inner.height <= outer.y + outer.height + EPSILON
 }
 
 fn linux_virtual_point_from_screenshot_pixels(
@@ -496,40 +514,18 @@ fn missing_linux_virtual_logical_rect_error() -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::{
-        drag_from_point, drag_to_point, effective_pointer_input_backend_for_target, explicit_point,
+        action_point_for_backend, drag_from_point, drag_to_point,
+        effective_pointer_input_backend_for_target, explicit_point,
         point_for_x11_element_through_portal, point_from_screenshot_pixels,
         virtual_scroll_steps_from_delta,
     };
     use serde_json::json;
     use sky_cua_platform::diagnostics::BackendErrorCode;
+    use sky_cua_platform::model::test_support::wayland_pipewire_environment;
     use sky_cua_platform::model::{
         ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
-        ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize,
-        PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
+        ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, RectF,
     };
-
-    fn wayland_pipewire_environment() -> EnvironmentInfo {
-        EnvironmentInfo {
-            session_kind: SessionKind::Wayland,
-            compositor: Some("kde-kwin-wayland".to_string()),
-            desktop_environment: Some("KDE".to_string()),
-            capture_backend: CaptureBackendKind::PortalPipeWire,
-            input_backend: InputBackendKind::PortalRemoteDesktop,
-            semantic_backend: SemanticBackendKind::Atspi,
-            portal_capabilities: PortalCapabilities {
-                screencast_version: Some(5),
-                remote_desktop_version: Some(2),
-                screenshot_version: Some(2),
-                available_source_types: None,
-                available_cursor_modes: None,
-                available_device_types: None,
-            },
-            xdg_session_type: Some("wayland".to_string()),
-            display: None,
-            wayland_display: Some("wayland-0".to_string()),
-            displays: Vec::new(),
-        }
-    }
 
     #[test]
     fn maps_scroll_delta_to_portal_discrete_steps() {
@@ -658,6 +654,139 @@ mod tests {
             ),
             (1280.0, 720.0)
         );
+    }
+
+    #[test]
+    fn portal_snapshot_pixels_without_logical_rect_are_not_remapped_to_raw_pixels() {
+        let capture = CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("64".to_string()),
+            source_type: Some(1),
+            mapping_id: None,
+            source_logical_rect: None,
+            logical_rect: None,
+            pixel_size: Some(PixelSize {
+                width: 914,
+                height: 900,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 2560,
+                height: 2520,
+            }),
+            logical_to_pixel_scale: None,
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
+        };
+
+        let point = point_from_screenshot_pixels(
+            (470.0, 280.0),
+            Some(&capture),
+            InputBackendKind::PortalRemoteDesktop,
+        );
+
+        assert_eq!(point, (470.0, 280.0));
+    }
+
+    #[test]
+    fn snapshot_explicit_coordinates_reject_points_outside_model_image_bounds() {
+        let request = ActionRequest {
+            action: ActionName::Click,
+            snapshot_id: Some("snapshot-1".to_string()),
+            element_index: None,
+            arguments: json!({"x": 1316.0, "y": 785.0}),
+            resolved_element: None,
+            resolved_target_element: None,
+            resolved_capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalPipeWire),
+                capture_scope: CaptureScope::Unknown,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: Some("64".to_string()),
+                source_type: Some(1),
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: None,
+                pixel_size: Some(PixelSize {
+                    width: 914,
+                    height: 900,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 2560,
+                    height: 2520,
+                }),
+                logical_to_pixel_scale: None,
+                screenshot_path: Some("/tmp/capture.jpg".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: Some(ModelImageFormat::Jpeg),
+                model_image_quality: Some(85),
+                model_image_bytes: Some(1234),
+                model_image_encode_ms: Some(7),
+            }),
+            resolved_focused_app: None,
+            environment: Some(wayland_pipewire_environment()),
+        };
+
+        let error =
+            action_point_for_backend(&request, InputBackendKind::PortalRemoteDesktop).unwrap_err();
+
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(error.message.contains("outside the captured image bounds"));
+    }
+
+    #[test]
+    fn snapshot_explicit_coordinates_reject_image_edge_coordinates() {
+        let request = ActionRequest {
+            action: ActionName::Click,
+            snapshot_id: Some("snapshot-1".to_string()),
+            element_index: None,
+            arguments: json!({"x": 914.0, "y": 899.0}),
+            resolved_element: None,
+            resolved_target_element: None,
+            resolved_capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalPipeWire),
+                capture_scope: CaptureScope::Unknown,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: Some("64".to_string()),
+                source_type: Some(1),
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: None,
+                pixel_size: Some(PixelSize {
+                    width: 914,
+                    height: 900,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 2560,
+                    height: 2520,
+                }),
+                logical_to_pixel_scale: None,
+                screenshot_path: Some("/tmp/capture.jpg".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: Some(ModelImageFormat::Jpeg),
+                model_image_quality: Some(85),
+                model_image_bytes: Some(1234),
+                model_image_encode_ms: Some(7),
+            }),
+            resolved_focused_app: None,
+            environment: Some(wayland_pipewire_environment()),
+        };
+
+        let error =
+            action_point_for_backend(&request, InputBackendKind::PortalRemoteDesktop).unwrap_err();
+
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(error.message.contains("outside the captured image bounds"));
     }
 
     #[test]
@@ -883,6 +1012,198 @@ mod tests {
     }
 
     #[test]
+    fn portal_snapshot_coordinates_fail_without_dispatch_source_for_pipewire_capture() {
+        let request = ActionRequest {
+            action: ActionName::Click,
+            snapshot_id: Some("snapshot-1".to_string()),
+            element_index: None,
+            arguments: json!({"x": 470.0, "y": 280.0}),
+            resolved_element: None,
+            resolved_target_element: None,
+            resolved_capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalPipeWire),
+                capture_scope: CaptureScope::Unknown,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: Some("64".to_string()),
+                source_type: Some(1),
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: None,
+                pixel_size: Some(PixelSize {
+                    width: 914,
+                    height: 900,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 2560,
+                    height: 2520,
+                }),
+                logical_to_pixel_scale: None,
+                screenshot_path: Some("/tmp/capture.jpg".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: Some(ModelImageFormat::Jpeg),
+                model_image_quality: Some(85),
+                model_image_bytes: Some(1234),
+                model_image_encode_ms: Some(7),
+            }),
+            resolved_focused_app: None,
+            environment: Some(wayland_pipewire_environment()),
+        };
+
+        let error =
+            action_point_for_backend(&request, InputBackendKind::PortalRemoteDesktop).unwrap_err();
+
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(error.message.contains("source geometry"));
+    }
+
+    #[test]
+    fn portal_snapshot_semantic_element_maps_when_dispatch_source_covers_capture() {
+        let request = ActionRequest {
+            action: ActionName::Click,
+            snapshot_id: Some("snapshot-1".to_string()),
+            element_index: Some(1),
+            arguments: json!({}),
+            resolved_element: Some(ElementNode {
+                element_index: 1,
+                parent_index: Some(0),
+                role: "button".to_string(),
+                name: Some("OK".to_string()),
+                description: None,
+                value: None,
+                text: None,
+                numeric_value: None,
+                supports_editable_text: false,
+                state_flags: Vec::new(),
+                semantic_actions: Vec::new(),
+                bounds: Some(RectF {
+                    x: 110.0,
+                    y: 70.0,
+                    width: 40.0,
+                    height: 20.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                backend_ref: None,
+            }),
+            resolved_target_element: None,
+            resolved_capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalPipeWire),
+                capture_scope: CaptureScope::Unknown,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: Some("116".to_string()),
+                source_type: Some(1),
+                mapping_id: None,
+                source_logical_rect: Some(RectF {
+                    x: 100.0,
+                    y: 50.0,
+                    width: 800.0,
+                    height: 600.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                logical_rect: Some(RectF {
+                    x: 100.0,
+                    y: 50.0,
+                    width: 800.0,
+                    height: 600.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                pixel_size: Some(PixelSize {
+                    width: 800,
+                    height: 600,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 800,
+                    height: 600,
+                }),
+                logical_to_pixel_scale: Some(1.0),
+                screenshot_path: Some("/tmp/capture.jpg".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: Some(ModelImageFormat::Jpeg),
+                model_image_quality: Some(85),
+                model_image_bytes: Some(1234),
+                model_image_encode_ms: Some(7),
+            }),
+            resolved_focused_app: None,
+            environment: Some(wayland_pipewire_environment()),
+        };
+
+        let point =
+            action_point_for_backend(&request, InputBackendKind::PortalRemoteDesktop).unwrap();
+
+        assert_eq!(point, (30.0, 30.0));
+    }
+
+    #[test]
+    fn portal_snapshot_element_fails_without_dispatch_source_for_pipewire_capture() {
+        let request = ActionRequest {
+            action: ActionName::Click,
+            snapshot_id: Some("snapshot-1".to_string()),
+            element_index: Some(1),
+            arguments: json!({}),
+            resolved_element: Some(ElementNode {
+                element_index: 1,
+                parent_index: Some(0),
+                role: "button".to_string(),
+                name: Some("Decode".to_string()),
+                description: None,
+                value: None,
+                text: None,
+                numeric_value: None,
+                supports_editable_text: false,
+                state_flags: Vec::new(),
+                semantic_actions: Vec::new(),
+                bounds: Some(RectF {
+                    x: 100.0,
+                    y: 50.0,
+                    width: 80.0,
+                    height: 24.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                backend_ref: None,
+            }),
+            resolved_target_element: None,
+            resolved_capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalPipeWire),
+                capture_scope: CaptureScope::Unknown,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: Some("116".to_string()),
+                source_type: Some(1),
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: None,
+                pixel_size: Some(PixelSize {
+                    width: 1920,
+                    height: 1080,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 1920,
+                    height: 1080,
+                }),
+                logical_to_pixel_scale: None,
+                screenshot_path: Some("/tmp/capture.jpg".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: Some(ModelImageFormat::Jpeg),
+                model_image_quality: Some(85),
+                model_image_bytes: Some(1234),
+                model_image_encode_ms: Some(7),
+            }),
+            resolved_focused_app: None,
+            environment: Some(wayland_pipewire_environment()),
+        };
+
+        let error =
+            action_point_for_backend(&request, InputBackendKind::PortalRemoteDesktop).unwrap_err();
+
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(error.message.contains("source geometry"));
+    }
+
+    #[test]
     fn maps_cropped_screenshot_pixels_to_linux_virtual_desktop_logical_coordinates() {
         let capture = CaptureInfo {
             backend: CaptureBackendKind::PortalPipeWire,
@@ -985,6 +1306,75 @@ mod tests {
             stream_id: Some("166".to_string()),
             source_type: Some(1),
             mapping_id: None,
+            source_logical_rect: Some(RectF {
+                x: 100.0,
+                y: 50.0,
+                width: 1536.0,
+                height: 864.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            logical_rect: Some(RectF {
+                x: 100.0,
+                y: 50.0,
+                width: 1536.0,
+                height: 864.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            pixel_size: Some(PixelSize {
+                width: 1440,
+                height: 810,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 1920,
+                height: 1080,
+            }),
+            logical_to_pixel_scale: Some(0.9375),
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
+        };
+        let element = ElementNode {
+            element_index: 4,
+            parent_index: Some(1),
+            role: "x11_action_region".to_string(),
+            name: None,
+            description: None,
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
+            state_flags: vec!["x11_fallback".to_string(), "physical_target".to_string()],
+            semantic_actions: Vec::new(),
+            bounds: Some(RectF {
+                x: 896.0,
+                y: 552.0,
+                width: 32.0,
+                height: 24.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            backend_ref: None,
+        };
+
+        let point = point_for_x11_element_through_portal(&element, Some(&capture), true).unwrap();
+
+        assert!((point.0 - 729.6).abs() < 0.000_001);
+        assert!((point.1 - 451.2).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn xwayland_portal_snapshot_element_fails_without_dispatch_source() {
+        let capture = CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("166".to_string()),
+            source_type: Some(1),
+            mapping_id: None,
             source_logical_rect: None,
             logical_rect: Some(RectF {
                 x: 100.0,
@@ -1031,10 +1421,11 @@ mod tests {
             backend_ref: None,
         };
 
-        let point = point_for_x11_element_through_portal(&element, Some(&capture)).unwrap();
+        let error =
+            point_for_x11_element_through_portal(&element, Some(&capture), true).unwrap_err();
 
-        assert!((point.0 - 729.6).abs() < 0.000_001);
-        assert!((point.1 - 451.2).abs() < 0.000_001);
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(error.message.contains("source geometry"));
     }
 
     #[test]
@@ -1048,7 +1439,13 @@ mod tests {
             stream_id: Some("166".to_string()),
             source_type: Some(1),
             mapping_id: None,
-            source_logical_rect: None,
+            source_logical_rect: Some(RectF {
+                x: 100.0,
+                y: 50.0,
+                width: 1536.0,
+                height: 864.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
             logical_rect: Some(RectF {
                 x: 100.0,
                 y: 50.0,

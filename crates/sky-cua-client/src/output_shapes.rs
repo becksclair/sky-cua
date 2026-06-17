@@ -622,7 +622,9 @@ pub(crate) fn informational_runtime_summary(diagnostics: &[DiagnosticEntry]) -> 
             | "PortalSessionRebuilt"
             | "PortalSessionTokenRotated"
             | "CaptureBackendDowngraded"
-            | "CaptureFrameBlank" => {
+            | "CaptureFrameBlank"
+            | "DisplayTopologyInferred"
+            | "DisplayTopologyUnavailable" => {
                 parts.push(match diagnostic.details.as_ref() {
                     Some(details) => {
                         format!("{} Details: {}", diagnostic.message, details)
@@ -641,7 +643,7 @@ pub(crate) fn informational_runtime_summary(diagnostics: &[DiagnosticEntry]) -> 
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn compact_element(element: &ElementNode) -> Value {
     serde_json::to_value(CompactElementNode::from(element))
         .expect("CompactElementNode serialization cannot fail")

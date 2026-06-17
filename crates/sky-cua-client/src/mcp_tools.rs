@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    ActionName, ActionRequest, AppInfo, AppSelector, AppStateSnapshot, CaptureScreenMode,
-    ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent,
-    SessionPresenceStatus, WindowInfo,
+    ActionName, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
+    CaptureScreenMode, DisplayTarget, DoctorDisplayTopologyReport, DoctorInputReport, DoctorReport,
+    DoctorSessionEnvReport, ServiceRequest, ServiceResponse, SessionPresenceAction,
+    SessionPresenceIntent, SessionPresenceStatus, WindowInfo, WindowTarget,
 };
 use std::fmt::Write as _;
 
@@ -606,10 +607,8 @@ fn focused_window_summary(window: Option<&WindowInfo>) -> String {
     )
 }
 
-pub(crate) fn parse_window_target(
-    arguments: Value,
-) -> Result<sky_cua_platform::model::WindowTarget> {
-    sky_cua_platform::model::WindowTarget::from_argument_fields(&arguments)
+pub(crate) fn parse_window_target(arguments: Value) -> Result<WindowTarget> {
+    WindowTarget::from_argument_fields(&arguments)
         .context("invalid activate_window target arguments")?
         .ok_or_else(|| {
             anyhow!(
@@ -618,23 +617,21 @@ pub(crate) fn parse_window_target(
         })
 }
 
-fn parse_optional_window_target(
-    arguments: &Value,
-) -> Result<Option<sky_cua_platform::model::WindowTarget>> {
-    sky_cua_platform::model::WindowTarget::from_argument_fields(arguments)
+fn parse_optional_window_target(arguments: &Value) -> Result<Option<WindowTarget>> {
+    WindowTarget::from_argument_fields(arguments)
         .context("invalid screenshot window target arguments")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ScreenshotTarget {
-    window: Option<sky_cua_platform::model::WindowTarget>,
-    display: Option<sky_cua_platform::model::DisplayTarget>,
+    window: Option<WindowTarget>,
+    display: Option<DisplayTarget>,
     capture_all_displays: bool,
 }
 
 fn parse_screenshot_target(arguments: &Value) -> Result<ScreenshotTarget> {
     let window = parse_optional_window_target(arguments)?;
-    let display = sky_cua_platform::model::DisplayTarget::from_argument_fields(arguments)
+    let display = DisplayTarget::from_argument_fields(arguments)
         .context("invalid screenshot display target arguments")?;
     let capture_all_displays = match arguments.get("capture_all_displays") {
         Some(value) => value
@@ -659,7 +656,7 @@ fn parse_screenshot_target(arguments: &Value) -> Result<ScreenshotTarget> {
     })
 }
 
-pub(crate) fn action_summary(outcome: &sky_cua_platform::model::ActionOutcome) -> String {
+pub(crate) fn action_summary(outcome: &ActionOutcome) -> String {
     if outcome.code == "PortalApprovalPending" {
         return portal_approval_summary(&outcome.message);
     }
@@ -682,14 +679,21 @@ fn tool_error(code: impl Into<String>, message: impl Into<String>) -> Result<Val
     } else {
         message.clone()
     };
+    let mut structured_content = json!({
+        "code": code,
+        "message": message
+    });
+    if code == "CaptureSourceGeometryMissing" {
+        structured_content["suggestion"] = json!(
+            "Retry the targeted screenshot once after refreshing the window/display state, then fall back to a broader capture only if subsequent pixel actions use that capture's snapshot_id."
+        );
+    }
     Ok(json!({
         "content": [{
             "type": "text",
             "text": text
         }],
-        "structuredContent": {
-            "code": code
-        },
+        "structuredContent": structured_content,
         "isError": true
     }))
 }
@@ -698,12 +702,12 @@ pub(crate) fn invalid_request_tool_error(message: impl Into<String>) -> Result<V
     tool_error("InvalidRequest", message)
 }
 
-fn doctor_summary(report: &sky_cua_platform::model::DoctorReport) -> String {
+fn doctor_summary(report: &DoctorReport) -> String {
     let mut summary = report.readiness.recommended_next_step.clone();
     if report
         .session_env
         .as_ref()
-        .is_some_and(sky_cua_platform::model::DoctorSessionEnvReport::changed)
+        .is_some_and(DoctorSessionEnvReport::changed)
     {
         summary.push_str(" SessionEnvRepaired: detached desktop session environment was repaired.");
     }
@@ -712,13 +716,28 @@ fn doctor_summary(report: &sky_cua_platform::model::DoctorReport) -> String {
         push_input_diagnostics(input, &mut summary);
     }
 
+    if let Some(display_topology) = &report.display_topology {
+        push_display_topology_summary(report, display_topology, &mut summary);
+    }
+
     summary
 }
 
-fn push_input_diagnostics(
-    input: &sky_cua_platform::model::DoctorInputReport,
+fn push_display_topology_summary(
+    report: &DoctorReport,
+    display_topology: &DoctorDisplayTopologyReport,
     summary: &mut String,
 ) {
+    if display_topology.display_count == 0 {
+        summary.push_str(" DisplayTopologyUnavailable: display-targeted screenshots cannot be authoritative until a display provider reports geometry; refresh desktop state, then retry the targeted screenshot once.");
+    } else if report.environment.session_kind == sky_cua_platform::model::SessionKind::Wayland
+        && display_topology.selected_provider.as_deref() == Some("xrandr")
+    {
+        summary.push_str(" DisplayTopologyInferred: display geometry came from XRandR fallback; prefer window-targeted screenshots with the returned snapshot_id for pixel actions.");
+    }
+}
+
+fn push_input_diagnostics(input: &DoctorInputReport, summary: &mut String) {
     let checks = [
         (&input.ydotool, "ydotool binary"),
         (&input.ydotoold, "ydotoold process"),
@@ -787,16 +806,13 @@ fn parse_screenshot_delivery(arguments: &Value) -> ScreenshotDelivery {
 /// Build an MCP image content block from the snapshot's persisted screenshot.
 /// Returns None when the snapshot has no capture, and Err text when the file
 /// cannot be read back.
-fn inline_screenshot_block(
-    snapshot: &sky_cua_platform::model::AppStateSnapshot,
-) -> Option<Result<Value, String>> {
+fn inline_screenshot_block(snapshot: &AppStateSnapshot) -> Option<Result<Value, String>> {
     let path = snapshot.capture.as_ref()?.screenshot_path.as_deref()?;
-    let mime_type = match std::path::Path::new(path)
+    let extension = std::path::Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
+        .map(str::to_ascii_lowercase);
+    let mime_type = match extension.as_deref() {
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
         _ => "image/png",
@@ -881,12 +897,13 @@ mod tests {
     use sky_cua_platform::model::{
         AccessibilitySetupReport, ActionName, ActionOutcome, ActionRequest, AgentCursorPoint,
         AgentCursorState, AppInfo, AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope,
-        CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorReadiness,
-        DoctorReport, ElementNode, ElementNumericValueReadback, ElementTextReadback,
-        EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities, RectF,
-        SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction,
-        SessionPresenceIntent, SessionPresenceStatus, SetupCommandReport, ToolAvailability,
-        ToolCapabilities, WindowTargetingSetupReport,
+        CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck,
+        DoctorDisplayTopologyReport, DoctorReadiness, DoctorReport, ElementNode,
+        ElementNumericValueReadback, ElementTextReadback, EnvironmentInfo, FocusedApp,
+        InputBackendKind, PortalCapabilities, RectF, ScrollDirection, SemanticBackendKind,
+        ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
+        SessionPresenceStatus, SetupCommandReport, ToolAvailability, ToolCapabilities,
+        WindowTargetingSetupReport,
     };
 
     use crate::app_state::{
@@ -1085,6 +1102,7 @@ mod tests {
                 blockers: Vec::new(),
             },
             platform: None,
+            display_topology: None,
             session_env: None,
             portal: None,
             accessibility: None,
@@ -1146,10 +1164,7 @@ mod tests {
                     available: true,
                     reason: None,
                 },
-                supported_scroll_directions: vec![
-                    sky_cua_platform::model::ScrollDirection::Up,
-                    sky_cua_platform::model::ScrollDirection::Down,
-                ],
+                supported_scroll_directions: vec![ScrollDirection::Up, ScrollDirection::Down],
                 drag: ToolAvailability {
                     available: true,
                     reason: None,
@@ -1310,6 +1325,14 @@ mod tests {
                 .as_str()
                 .is_some_and(|description| description.contains("primary display"))
         );
+        assert!(
+            screenshot["description"]
+                .as_str()
+                .is_some_and(|description| {
+                    description.contains("returned snapshot_id")
+                        && description.contains("capture source geometry")
+                })
+        );
     }
 
     #[test]
@@ -1395,10 +1418,41 @@ mod tests {
         assert_eq!(result["isError"], true);
         assert_eq!(result["structuredContent"]["code"], "InvalidRequest");
         assert!(
+            result["structuredContent"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("activate_window requires one of window_id")
+        );
+        assert!(
             result["content"][0]["text"]
                 .as_str()
                 .expect("text")
                 .contains("activate_window requires one of window_id")
+        );
+    }
+
+    #[test]
+    fn capture_source_geometry_tool_error_includes_retry_suggestion() {
+        let result = super::tool_error(
+            "CaptureSourceGeometryMissing",
+            "targeted screenshot requires capture source geometry",
+        )
+        .unwrap();
+
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"]["code"],
+            "CaptureSourceGeometryMissing"
+        );
+        assert_eq!(
+            result["structuredContent"]["message"],
+            "targeted screenshot requires capture source geometry"
+        );
+        assert!(
+            result["structuredContent"]["suggestion"]
+                .as_str()
+                .expect("suggestion")
+                .contains("snapshot_id")
         );
     }
 
@@ -2417,15 +2471,28 @@ mod tests {
             }),
             capture: None,
             elements: Vec::new(),
-            diagnostics: vec![DiagnosticEntry {
-                code: "CaptureBackendDowngraded".to_string(),
-                message:
-                    "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback"
-                        .to_string(),
-                details: Some(
-                    "primary_backend=portal_pipe_wire image_backend=portal_screenshot".to_string(),
-                ),
-            }],
+            diagnostics: vec![
+                DiagnosticEntry {
+                    code: "CaptureBackendDowngraded".to_string(),
+                    message:
+                        "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback"
+                            .to_string(),
+                    details: Some(
+                        "primary_backend=portal_pipe_wire image_backend=portal_screenshot"
+                            .to_string(),
+                    ),
+                },
+                DiagnosticEntry {
+                    code: "DisplayTopologyInferred".to_string(),
+                    message: "Display topology inferred from XRandR fallback.".to_string(),
+                    details: Some("provider=xrandr".to_string()),
+                },
+                DiagnosticEntry {
+                    code: "DisplayTopologyUnavailable".to_string(),
+                    message: "Display topology is unavailable.".to_string(),
+                    details: Some("kscreen-doctor timed out".to_string()),
+                },
+            ],
             app_guidance: None,
             doctor_report: None,
             agent_cursor: None,
@@ -2436,6 +2503,43 @@ mod tests {
             "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback"
         ));
         assert!(summary.contains("image_backend=portal_screenshot"));
+        assert!(summary.contains("Display topology inferred from XRandR fallback."));
+        assert!(summary.contains("provider=xrandr"));
+        assert!(summary.contains("Display topology is unavailable."));
+        assert!(summary.contains("kscreen-doctor timed out"));
+    }
+
+    #[test]
+    fn doctor_summary_mentions_display_topology_fallback() {
+        let mut report = registry_doctor_report();
+        report.display_topology = Some(DoctorDisplayTopologyReport {
+            display_count: 2,
+            selected_provider: Some("xrandr".to_string()),
+            probes: Vec::new(),
+            detail: "display topology discovered via xrandr fallback".to_string(),
+        });
+
+        let summary = super::doctor_summary(&report);
+
+        assert!(summary.contains("DisplayTopologyInferred"));
+        assert!(summary.contains("window-targeted screenshots"));
+    }
+
+    #[test]
+    fn doctor_summary_does_not_label_x11_xrandr_as_wayland_fallback() {
+        let mut report = registry_doctor_report();
+        report.environment.session_kind = SessionKind::X11;
+        report.display_topology = Some(DoctorDisplayTopologyReport {
+            display_count: 1,
+            selected_provider: Some("xrandr".to_string()),
+            probes: Vec::new(),
+            detail: "display topology discovered via xrandr".to_string(),
+        });
+
+        let summary = super::doctor_summary(&report);
+
+        assert!(!summary.contains("DisplayTopologyInferred"));
+        assert!(!summary.contains("fallback"));
     }
 
     fn available_capabilities() -> ToolCapabilities {
@@ -2459,10 +2563,7 @@ mod tests {
             perform_action: available(),
             perform_secondary_action: available(),
             scroll: available(),
-            supported_scroll_directions: vec![
-                sky_cua_platform::model::ScrollDirection::Up,
-                sky_cua_platform::model::ScrollDirection::Down,
-            ],
+            supported_scroll_directions: vec![ScrollDirection::Up, ScrollDirection::Down],
             drag: available(),
             type_text: available(),
             press_key: available(),
@@ -2602,6 +2703,7 @@ mod tests {
                 blockers: Vec::new(),
             },
             platform: None,
+            display_topology: None,
             session_env: None,
             portal: None,
             accessibility: None,
@@ -3149,6 +3251,7 @@ mod tests {
                 blockers: Vec::new(),
             },
             platform: None,
+            display_topology: None,
             session_env: None,
             portal: None,
             accessibility: None,

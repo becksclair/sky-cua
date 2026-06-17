@@ -132,7 +132,7 @@ pub(crate) fn crop_capture(
     snapshot_id: &str,
     source_path: &Path,
     crop: PixelRect,
-) -> Result<PathBuf, BackendError> {
+) -> Result<(PathBuf, image::DynamicImage), BackendError> {
     let target_path = cropped_capture_output_path(snapshot_id);
     if let Some(parent) = target_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
@@ -177,7 +177,7 @@ pub(crate) fn crop_capture(
             ),
         )
     })?;
-    Ok(target_path)
+    Ok((target_path, cropped))
 }
 
 pub(crate) fn model_capture_output_path_for_format(
@@ -199,6 +199,25 @@ pub fn prepare_model_capture(
         model_screenshot_format(),
         model_screenshot_bounds(),
         None,
+        None,
+        None,
+    )
+}
+
+pub(crate) fn prepare_model_capture_from_image(
+    snapshot_id: &str,
+    image: image::DynamicImage,
+    source_path: &Path,
+    original_pixel_size: Option<PixelSize>,
+) -> Result<ModelCaptureImage, BackendError> {
+    prepare_model_capture_with_format(
+        snapshot_id,
+        source_path,
+        model_screenshot_format(),
+        model_screenshot_bounds(),
+        None,
+        Some(image),
+        original_pixel_size,
     )
 }
 
@@ -208,8 +227,11 @@ fn prepare_model_capture_with_format(
     format: ModelScreenshotFormat,
     bounds: (u32, u32),
     quality_override: Option<u8>,
+    image: Option<image::DynamicImage>,
+    original_pixel_size_override: Option<PixelSize>,
 ) -> Result<ModelCaptureImage, BackendError> {
-    let original_pixel_size = pixel_size_from_path(source_path);
+    let original_pixel_size =
+        original_pixel_size_override.or_else(|| pixel_size_from_path(source_path));
     let quality = quality_override.unwrap_or_else(|| model_screenshot_quality(format));
     let target_path = model_capture_output_path_for_format(snapshot_id, format);
     if let Some(parent) = target_path.parent() {
@@ -224,26 +246,29 @@ fn prepare_model_capture_with_format(
         })?;
     }
 
-    let image = image::ImageReader::open(source_path)
-        .map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::Internal,
-                format!(
-                    "failed to open raw capture {} for model image preparation: {error}",
-                    source_path.display()
-                ),
-            )
-        })?
-        .decode()
-        .map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::Internal,
-                format!(
-                    "failed to decode raw capture {} for model image preparation: {error}",
-                    source_path.display()
-                ),
-            )
-        })?;
+    let image = match image {
+        Some(image) => image,
+        None => image::ImageReader::open(source_path)
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Internal,
+                    format!(
+                        "failed to open raw capture {} for model image preparation: {error}",
+                        source_path.display()
+                    ),
+                )
+            })?
+            .decode()
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Internal,
+                    format!(
+                        "failed to decode raw capture {} for model image preparation: {error}",
+                        source_path.display()
+                    ),
+                )
+            })?,
+    };
 
     let resized = image.resize(bounds.0, bounds.1, image::imageops::FilterType::Lanczos3);
     let rgb = resized.to_rgb8();
@@ -481,6 +506,8 @@ mod tests {
             ModelScreenshotFormat::Webp,
             (1440, 900),
             Some(80),
+            None,
+            None,
         )
         .expect("capture should scale");
         let pixel_size = prepared.pixel_size.expect("pixel size should be known");

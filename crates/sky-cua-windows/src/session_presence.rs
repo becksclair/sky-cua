@@ -89,6 +89,7 @@ pub fn windows_doctor_report(
             display: environment.display.clone(),
             wayland_display: environment.wayland_display.clone(),
         }),
+        display_topology: None,
         session_env: None,
         portal: None,
         accessibility: None,

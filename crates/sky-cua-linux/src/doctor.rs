@@ -1,8 +1,8 @@
 use std::{env, fs, path::Path, path::PathBuf, process::Command};
 
 use sky_cua_platform::model::{
-    BrowserIntegrationReport, DoctorAccessibilityReport, DoctorCheck, DoctorInputReport,
-    DoctorPlatformReport, DoctorPortalReport, DoctorReadiness, DoctorReport,
+    BrowserIntegrationReport, DoctorAccessibilityReport, DoctorCheck, DoctorDisplayTopologyReport,
+    DoctorInputReport, DoctorPlatformReport, DoctorPortalReport, DoctorReadiness, DoctorReport,
     DoctorSessionEnvReport, DoctorSessionPresenceReport, DoctorWindowingReport, EnvironmentInfo,
     InputBackendKind, WindowBackendProbe,
 };
@@ -15,6 +15,7 @@ pub fn build_doctor_report(
 ) -> DoctorReport {
     build_doctor_report_with_session_presence(
         environment,
+        None,
         session_env_report,
         Some(DoctorSessionPresenceReport::unsupported("none")),
     )
@@ -22,6 +23,7 @@ pub fn build_doctor_report(
 
 pub fn build_doctor_report_with_session_presence(
     environment: EnvironmentInfo,
+    display_topology: Option<DoctorDisplayTopologyReport>,
     session_env_report: DoctorSessionEnvReport,
     session_presence: Option<DoctorSessionPresenceReport>,
 ) -> DoctorReport {
@@ -64,6 +66,7 @@ pub fn build_doctor_report_with_session_presence(
                 .collect::<Vec<_>>()
                 .join(", "),
         },
+        display_topology_check(display_topology.as_ref(), &environment),
     ];
     checks.push(accessibility.toolkit_accessibility.clone());
     checks.push(accessibility.at_spi_enabled.clone());
@@ -146,6 +149,7 @@ pub fn build_doctor_report_with_session_presence(
             display: environment.display.clone(),
             wayland_display: environment.wayland_display.clone(),
         }),
+        display_topology,
         session_env: Some(session_env_report),
         portal: Some(portal),
         accessibility: Some(accessibility),
@@ -169,6 +173,23 @@ pub fn build_doctor_report_with_session_presence(
         input: Some(input),
         browser_integration: Some(browser_integration),
         session_presence,
+    }
+}
+
+fn display_topology_check(
+    display_topology: Option<&DoctorDisplayTopologyReport>,
+    environment: &EnvironmentInfo,
+) -> DoctorCheck {
+    let display_count =
+        display_topology.map_or(environment.displays.len(), |report| report.display_count);
+    let detail = display_topology.map_or_else(
+        || format!("{display_count} display(s) present; no probe report attached"),
+        |report| report.detail.clone(),
+    );
+    DoctorCheck {
+        name: "display_topology".to_string(),
+        ok: display_count > 0,
+        detail,
     }
 }
 
@@ -416,7 +437,9 @@ fn native_host_manifest_check() -> DoctorCheck {
 fn binary_check(binary: &str) -> DoctorCheck {
     let output = Command::new("sh")
         .arg("-c")
-        .arg(format!("command -v {binary}"))
+        .arg("command -v -- \"$1\"")
+        .arg("binary_check")
+        .arg(binary)
         .output();
     command_check(binary, output, &format!("{binary} is available"))
 }

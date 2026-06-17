@@ -539,15 +539,15 @@ async fn browser_action_response(
     };
     let binding = executor.bind_tab(resolved_target, &normalized_tab_id);
 
-    if let Some((x, y)) = cursor_before_action {
-        if let Err(diagnostic) = binding.move_mouse(x, y, true).await {
-            return BrowserActionResponse {
-                target: resolved_target,
-                tab_id: normalized_tab_id,
-                action: action_name.to_string(),
-                diagnostics: vec![diagnostic],
-            };
-        }
+    if let Some((x, y)) = cursor_before_action
+        && let Err(diagnostic) = binding.move_mouse(x, y, true).await
+    {
+        return BrowserActionResponse {
+            target: resolved_target,
+            tab_id: normalized_tab_id,
+            action: action_name.to_string(),
+            diagnostics: vec![diagnostic],
+        };
     }
 
     match binding.run_cdp(action).await {

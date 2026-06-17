@@ -142,27 +142,22 @@ fn run_gsettings_toolkit_accessibility() -> SetupCommandReport {
     }
 }
 
+fn write_extension_file(
+    extension_dir: &Path,
+    name: &str,
+    contents: impl AsRef<[u8]>,
+) -> Result<(), String> {
+    let path = extension_dir.join(name);
+    fs::write(&path, contents)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
 fn write_extension_files(extension_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(extension_dir)
         .map_err(|error| format!("failed to create {}: {error}", extension_dir.display()))?;
-    fs::write(extension_dir.join("metadata.json"), METADATA_JSON).map_err(|error| {
-        format!(
-            "failed to write {}: {error}",
-            extension_dir.join("metadata.json").display()
-        )
-    })?;
-    fs::write(extension_dir.join("extension.js"), EXTENSION_JS).map_err(|error| {
-        format!(
-            "failed to write {}: {error}",
-            extension_dir.join("extension.js").display()
-        )
-    })?;
-    fs::write(extension_dir.join("cursor-chat.png"), CURSOR_CHAT_PNG).map_err(|error| {
-        format!(
-            "failed to write {}: {error}",
-            extension_dir.join("cursor-chat.png").display()
-        )
-    })?;
+    write_extension_file(extension_dir, "metadata.json", METADATA_JSON)?;
+    write_extension_file(extension_dir, "extension.js", EXTENSION_JS)?;
+    write_extension_file(extension_dir, "cursor-chat.png", CURSOR_CHAT_PNG)?;
     Ok(())
 }
 
@@ -349,6 +344,7 @@ mod tests {
                 blockers: vec![],
             },
             platform: None,
+            display_topology: None,
             session_env: None,
             portal: Some(DoctorPortalReport {
                 screencast_version: Some(5),

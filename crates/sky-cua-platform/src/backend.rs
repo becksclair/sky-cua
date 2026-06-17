@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::diagnostics::BackendError;
+use crate::diagnostics::{BackendError, BackendErrorCode};
 use crate::model::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
     CaptureBackendKind, CaptureScreenMode, DiagnosticEntry, DisplayTarget, DoctorCheck,
@@ -70,6 +70,7 @@ pub trait DesktopBackend: Send + Sync {
                 blockers,
             },
             platform: None,
+            display_topology: None,
             session_env: None,
             portal: None,
             accessibility: None,
@@ -85,19 +86,19 @@ pub trait DesktopBackend: Send + Sync {
     }
     async fn setup_accessibility(&self) -> Result<AccessibilitySetupReport, BackendError> {
         Err(BackendError::new(
-            crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            BackendErrorCode::ActionUnsupportedForEnvironment,
             "accessibility setup is only available on Linux backends",
         ))
     }
     async fn setup_window_targeting(&self) -> Result<WindowTargetingSetupReport, BackendError> {
         Err(BackendError::new(
-            crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            BackendErrorCode::ActionUnsupportedForEnvironment,
             "window targeting setup is only available on Linux backends",
         ))
     }
     async fn list_windows(&self) -> Result<Vec<WindowInfo>, BackendError> {
         Err(BackendError::new(
-            crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            BackendErrorCode::ActionUnsupportedForEnvironment,
             "window listing is not available for this backend",
         ))
     }
@@ -110,7 +111,7 @@ pub trait DesktopBackend: Send + Sync {
     }
     async fn activate_window(&self, _target: WindowTarget) -> Result<ActionOutcome, BackendError> {
         Err(BackendError::new(
-            crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            BackendErrorCode::ActionUnsupportedForEnvironment,
             "window activation is not available for this backend",
         ))
     }
@@ -127,7 +128,7 @@ pub trait DesktopBackend: Send + Sync {
     ) -> Result<AppStateSnapshot, BackendError> {
         if target.is_some() || display_target.is_some() || capture_all_displays {
             return Err(BackendError::new(
-                crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+                BackendErrorCode::ActionUnsupportedForEnvironment,
                 "targeted screenshots are not available for this backend",
             ));
         }
@@ -136,7 +137,7 @@ pub trait DesktopBackend: Send + Sync {
     async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError>;
     async fn reset_portal_tokens(&self) -> Result<PortalTokenResetOutcome, BackendError> {
         Err(BackendError::new(
-            crate::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            BackendErrorCode::ActionUnsupportedForEnvironment,
             "portal token reset is only available on portal-backed Linux sessions",
         ))
     }

@@ -31,6 +31,20 @@ pub fn logical_to_pixel(
 }
 
 #[must_use]
+pub fn rect_contains_rect(outer: &RectF, inner: &RectF) -> bool {
+    const EPSILON: f64 = 0.000_001;
+    outer.space == inner.space
+        && outer.width > 0.0
+        && outer.height > 0.0
+        && inner.width > 0.0
+        && inner.height > 0.0
+        && inner.x >= outer.x - EPSILON
+        && inner.y >= outer.y - EPSILON
+        && inner.right() <= outer.right() + EPSILON
+        && inner.bottom() <= outer.bottom() + EPSILON
+}
+
+#[must_use]
 pub fn desktop_to_stream(point: (f64, f64), logical_rect: &RectF) -> Option<(f64, f64)> {
     if logical_rect.space != CoordinateSpace::DesktopLogical {
         return None;

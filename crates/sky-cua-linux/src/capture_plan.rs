@@ -4,7 +4,7 @@ use sky_cua_platform::model::{
     EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, RectF, SessionKind,
 };
 
-use crate::coords::logical_to_pixel;
+use crate::coords::{logical_to_pixel, rect_contains_rect};
 use crate::portal::remote_desktop::RemoteDesktopSessionManager;
 use crate::portal::screenshot::{self, PixelRect};
 use crate::x11::capture as x11_capture;
@@ -16,6 +16,38 @@ pub(crate) struct CapturePlanOutcome {
     pub(crate) capture_error: Option<BackendError>,
 }
 
+const CAPTURE_SOURCE_GEOMETRY_MISSING_STEM: &str =
+    "targeted screenshot requires capture source geometry";
+const CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE: &str = "targeted screenshot requires capture source geometry; refresh the window/display state and retry once, then fall back to a broader capture only if subsequent pixel actions use that capture's snapshot_id";
+const CAPTURE_BACKEND_DOWNGRADED_MESSAGE: &str =
+    "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback";
+const CAPTURE_BACKEND_DOWNGRADED_DETAILS: &str =
+    "primary_backend=portal_pipe_wire image_backend=portal_screenshot";
+
+pub(crate) fn is_capture_source_geometry_missing(error: &BackendError) -> bool {
+    error.code == BackendErrorCode::CaptureSourceGeometryMissing.as_str()
+        || error.message.contains(CAPTURE_SOURCE_GEOMETRY_MISSING_STEM)
+}
+
+pub(crate) fn outcome_missing_capture_source_geometry(outcome: &CapturePlanOutcome) -> bool {
+    if outcome.capture.as_ref().is_some_and(|capture_info| {
+        capture_info.screenshot_path.is_some()
+            && capture_info.backend == CaptureBackendKind::PortalPipeWire
+            && capture_info.image_backend == Some(CaptureBackendKind::PortalScreenshot)
+            && capture_info.source_logical_rect.is_none()
+    }) {
+        return true;
+    }
+    outcome
+        .capture_error
+        .as_ref()
+        .is_some_and(is_capture_source_geometry_missing)
+        && outcome
+            .capture
+            .as_ref()
+            .is_none_or(|capture_info| capture_info.screenshot_path.is_none())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CaptureRegionTarget {
     pub(crate) desktop_logical_rect: RectF,
@@ -23,6 +55,7 @@ pub(crate) struct CaptureRegionTarget {
     pub(crate) display: Option<DisplayRef>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn plan_capture(
     portal: &RemoteDesktopSessionManager,
     snapshot_id: &str,
@@ -31,6 +64,7 @@ pub(crate) async fn plan_capture(
     region_target: Option<&CaptureRegionTarget>,
     capture_scope: CaptureScope,
     display: Option<DisplayRef>,
+    defer_source_geometry_fallback: bool,
     diagnostics: &mut DiagnosticBuilder,
 ) -> Result<CapturePlanOutcome, BackendError> {
     let should_capture_screen = capture_screen != CaptureScreenMode::Never;
@@ -63,17 +97,23 @@ pub(crate) async fn plan_capture(
         }
     }
 
+    let can_crop_pipewire_capture = region_target.is_none()
+        || capture
+            .as_ref()
+            .and_then(|capture_info| capture_info.source_logical_rect.as_ref())
+            .is_some();
     if should_capture_screen
         && environment.capture_backend == CaptureBackendKind::PortalPipeWire
         && environment.input_backend == InputBackendKind::PortalRemoteDesktop
         && portal_session_error.is_none()
+        && can_crop_pipewire_capture
     {
         match portal.capture_frame(snapshot_id).await {
             Ok(frame) => {
                 if let Some(capture_info) = capture.as_mut() {
                     capture_info.image_backend = Some(CaptureBackendKind::PortalPipeWire);
                     if !pipewire_source_covers_all_displays(capture_info, environment) {
-                        clear_failed_image_capture(capture_info);
+                        capture_info.clear_image_fields();
                         capture_error = Some(BackendError::new(
                             BackendErrorCode::PipeWireStreamFailed,
                             "RemoteDesktop stream does not cover the virtual desktop required for an all-displays screenshot",
@@ -86,7 +126,7 @@ pub(crate) async fn plan_capture(
                         region_target,
                         environment,
                     ) {
-                        clear_failed_image_capture(capture_info);
+                        capture_info.clear_image_fields();
                         capture_error = Some(error);
                     }
                 }
@@ -95,6 +135,16 @@ pub(crate) async fn plan_capture(
                 capture_error = Some(error);
             }
         }
+    } else if should_capture_screen
+        && environment.capture_backend == CaptureBackendKind::PortalPipeWire
+        && environment.input_backend == InputBackendKind::PortalRemoteDesktop
+        && portal_session_error.is_none()
+        && region_target.is_some()
+    {
+        capture_error = Some(BackendError::new(
+            BackendErrorCode::CaptureSourceGeometryMissing,
+            CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE,
+        ));
     } else if should_attempt_x11_capture(capture_screen, environment) {
         match x11_capture::capture_still(snapshot_id).await {
             Ok(frame) => {
@@ -124,6 +174,7 @@ pub(crate) async fn plan_capture(
         portal_session_error.as_ref(),
         capture_error.as_ref(),
         region_target,
+        defer_source_geometry_fallback,
     ) {
         match screenshot::capture_still(snapshot_id).await {
             Ok(path) => {
@@ -208,10 +259,19 @@ fn should_fallback_to_screenshot(
     portal_session_error: Option<&BackendError>,
     capture_error: Option<&BackendError>,
     region_target: Option<&CaptureRegionTarget>,
+    defer_source_geometry_fallback: bool,
 ) -> bool {
     let has_unfilled_capture = capture
         .as_ref()
         .is_some_and(|capture_info| capture_info.screenshot_path.is_none());
+    if defer_source_geometry_fallback
+        && region_target.is_some()
+        && capture_error
+            .as_ref()
+            .is_some_and(|error| is_capture_source_geometry_missing(error))
+    {
+        return false;
+    }
     let has_retryable_target_error = region_target.is_some() && capture_error.is_some();
     let targeted_pipewire_attempt_can_still_fill_capture = region_target.is_some()
         && environment.capture_backend == CaptureBackendKind::PortalPipeWire
@@ -227,19 +287,6 @@ fn should_fallback_to_screenshot(
         && !portal_approval_pending(portal_session_error)
         && !portal_approval_pending(capture_error)
         && matches!(environment.session_kind, SessionKind::Wayland)
-}
-
-fn clear_failed_image_capture(capture_info: &mut CaptureInfo) {
-    capture_info.image_backend = None;
-    capture_info.screenshot_path = None;
-    capture_info.pixel_size = None;
-    capture_info.original_screenshot_path = None;
-    capture_info.original_pixel_size = None;
-    capture_info.logical_to_pixel_scale = None;
-    capture_info.model_image_format = None;
-    capture_info.model_image_quality = None;
-    capture_info.model_image_bytes = None;
-    capture_info.model_image_encode_ms = None;
 }
 
 fn apply_independent_model_capture(
@@ -275,19 +322,6 @@ fn compatible_dispatch_source(
     rect_contains_rect(&dispatch_source, final_logical_rect).then_some(dispatch_source)
 }
 
-fn rect_contains_rect(outer: &RectF, inner: &RectF) -> bool {
-    const EPSILON: f64 = 0.000_001;
-    outer.space == inner.space
-        && outer.width > 0.0
-        && outer.height > 0.0
-        && inner.width > 0.0
-        && inner.height > 0.0
-        && inner.x >= outer.x - EPSILON
-        && inner.y >= outer.y - EPSILON
-        && inner.right() <= outer.right() + EPSILON
-        && inner.bottom() <= outer.bottom() + EPSILON
-}
-
 fn pipewire_source_covers_all_displays(
     capture_info: &CaptureInfo,
     environment: &EnvironmentInfo,
@@ -318,9 +352,9 @@ fn apply_model_capture(
     if capture_info.source_logical_rect.is_none() {
         capture_info.source_logical_rect = source_logical_rect.clone();
     }
-    let (capture_path, raw_pixel_size) = match region_target {
+    let model_capture = match region_target {
         Some(target) => {
-            let raw_pixel_size = raw_pixel_size.ok_or_else(|| {
+            let raw_pixel_size = raw_pixel_size.clone().ok_or_else(|| {
                 BackendError::new(
                     BackendErrorCode::Internal,
                     "targeted screenshot capture requires raw capture pixel dimensions",
@@ -337,17 +371,21 @@ fn apply_model_capture(
                 &raw_pixel_size,
                 capture_info.image_backend.as_ref(),
             )?;
-            let cropped_path = screenshot::crop_capture(snapshot_id, raw_path, crop.pixel_rect)?;
+            let (cropped_path, cropped_image) =
+                screenshot::crop_capture(snapshot_id, raw_path, crop.pixel_rect)?;
             capture_info.logical_rect = Some(crop.logical_rect);
             capture_info.capture_scope = target.capture_scope.clone();
             capture_info.display = target.display.clone();
-            (
-                cropped_path,
-                Some(PixelSize {
-                    width: crop.pixel_rect.width,
-                    height: crop.pixel_rect.height,
-                }),
-            )
+            let cropped_pixel_size = PixelSize {
+                width: crop.pixel_rect.width,
+                height: crop.pixel_rect.height,
+            };
+            screenshot::prepare_model_capture_from_image(
+                snapshot_id,
+                cropped_image,
+                &cropped_path,
+                Some(cropped_pixel_size),
+            )?
         }
         None => {
             if capture_info.logical_rect.is_none()
@@ -359,17 +397,23 @@ fn apply_model_capture(
                 }
                 capture_info.logical_rect = Some(logical_rect);
             }
-            (raw_path.to_path_buf(), raw_pixel_size)
+            screenshot::prepare_model_capture(snapshot_id, raw_path)?
         }
     };
-    let model_capture = screenshot::prepare_model_capture(snapshot_id, &capture_path)?;
     capture_info.coordinate_space = Some(CoordinateSpace::StreamPixels);
     capture_info.screenshot_path = Some(model_capture.path.display().to_string());
+    let model_pixel_size = model_capture.pixel_size.clone();
     capture_info.pixel_size = model_capture.pixel_size;
     capture_info.original_screenshot_path = model_capture
         .original_path
         .map(|path| path.display().to_string());
-    capture_info.original_pixel_size = raw_pixel_size.or(model_capture.original_pixel_size);
+    capture_info.original_pixel_size = if region_target.is_some() {
+        model_capture
+            .original_pixel_size
+            .or_else(|| model_pixel_size.clone())
+    } else {
+        raw_pixel_size.or(model_capture.original_pixel_size)
+    };
     capture_info.model_image_format = Some(match model_capture.format {
         screenshot::ModelScreenshotFormat::Jpeg => ModelImageFormat::Jpeg,
         screenshot::ModelScreenshotFormat::Webp => ModelImageFormat::Webp,
@@ -485,8 +529,8 @@ fn pixel_crop_for_target(
     } else {
         let source = source_logical_rect.ok_or_else(|| {
             BackendError::new(
-                BackendErrorCode::Internal,
-                "targeted screenshot requires capture source geometry",
+                BackendErrorCode::CaptureSourceGeometryMissing,
+                CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE,
             )
         })?;
         (
@@ -601,22 +645,42 @@ pub(crate) fn push_diagnostics(
         let used_screenshot_fallback = capture.is_some_and(|capture_info| {
             capture_info.image_backend == Some(CaptureBackendKind::PortalScreenshot)
         });
-        diagnostics.push(
-            BackendErrorCode::PipeWireStreamFailed,
+        if is_capture_source_geometry_missing(error) {
+            diagnostics.push_code(
+                error.code,
+                if used_screenshot_fallback {
+                    "Capture source geometry was unavailable before the fallback snapshot image was produced"
+                } else {
+                    "Capture source geometry is unavailable for this targeted screenshot"
+                },
+                Some(error.message.clone()),
+            );
+            if used_screenshot_fallback {
+                diagnostics.push(
+                    BackendErrorCode::CaptureBackendDowngraded,
+                    CAPTURE_BACKEND_DOWNGRADED_MESSAGE,
+                    Some(CAPTURE_BACKEND_DOWNGRADED_DETAILS.to_string()),
+                );
+            }
+            return;
+        }
+        let diagnostic_message = if error.code == BackendErrorCode::PipeWireStreamFailed.as_str() {
             if used_screenshot_fallback {
                 "Live PipeWire frame capture failed before the snapshot image was produced"
             } else {
                 "Live PipeWire frame capture failed and no fallback image was produced"
-            },
-            Some(error.message.clone()),
-        );
+            }
+        } else if used_screenshot_fallback {
+            "Targeted capture failed before the fallback snapshot image was produced"
+        } else {
+            "Targeted capture failed and no fallback image was produced"
+        };
+        diagnostics.push_code(error.code, diagnostic_message, Some(error.message.clone()));
         if used_screenshot_fallback {
             diagnostics.push(
                 BackendErrorCode::CaptureBackendDowngraded,
-                "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback",
-                Some(
-                    "primary_backend=portal_pipe_wire image_backend=portal_screenshot".to_string(),
-                ),
+                CAPTURE_BACKEND_DOWNGRADED_MESSAGE,
+                Some(CAPTURE_BACKEND_DOWNGRADED_DETAILS.to_string()),
             );
         }
     } else if portal_session_error.is_none()
@@ -631,10 +695,8 @@ pub(crate) fn push_diagnostics(
             );
             diagnostics.push(
                 BackendErrorCode::CaptureBackendDowngraded,
-                "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback",
-                Some(
-                    "primary_backend=portal_pipe_wire image_backend=portal_screenshot".to_string(),
-                ),
+                CAPTURE_BACKEND_DOWNGRADED_MESSAGE,
+                Some(CAPTURE_BACKEND_DOWNGRADED_DETAILS.to_string()),
             );
         } else if capture.is_some_and(|capture_info| capture_info.screenshot_path.is_none()) {
             diagnostics.push(
@@ -653,39 +715,18 @@ fn portal_approval_pending(error: Option<&BackendError>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptureRegionTarget, compatible_dispatch_source, initial_capture,
+        CAPTURE_BACKEND_DOWNGRADED_DETAILS, CapturePlanOutcome, CaptureRegionTarget,
+        compatible_dispatch_source, display_matches_raw_size, infer_capture_source_rect,
+        infer_untargeted_capture_rect, initial_capture, outcome_missing_capture_source_geometry,
         pipewire_source_covers_all_displays, pixel_crop_for_target, push_diagnostics,
-        should_fallback_to_screenshot,
+        should_fallback_to_screenshot, virtual_desktop_rect,
     };
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
+    use sky_cua_platform::model::test_support::wayland_pipewire_environment;
     use sky_cua_platform::model::{
         CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace,
-        EnvironmentInfo, InputBackendKind, PixelSize, PortalCapabilities, RectF,
-        SemanticBackendKind, SessionKind,
+        DisplayInfo, DisplayRef, EnvironmentInfo, InputBackendKind, PixelSize, RectF,
     };
-
-    fn wayland_pipewire_environment() -> EnvironmentInfo {
-        EnvironmentInfo {
-            session_kind: SessionKind::Wayland,
-            compositor: Some("kde-kwin-wayland".to_string()),
-            desktop_environment: Some("KDE".to_string()),
-            capture_backend: CaptureBackendKind::PortalPipeWire,
-            input_backend: InputBackendKind::PortalRemoteDesktop,
-            semantic_backend: SemanticBackendKind::Atspi,
-            portal_capabilities: PortalCapabilities {
-                screencast_version: Some(5),
-                remote_desktop_version: Some(2),
-                screenshot_version: Some(2),
-                available_source_types: None,
-                available_cursor_modes: None,
-                available_device_types: None,
-            },
-            xdg_session_type: Some("wayland".to_string()),
-            display: None,
-            wayland_display: Some("wayland-0".to_string()),
-            displays: Vec::new(),
-        }
-    }
 
     fn capture_with_backend(
         backend: CaptureBackendKind,
@@ -798,7 +839,8 @@ mod tests {
             &environment,
             None,
             None,
-            None
+            None,
+            false,
         ));
     }
 
@@ -816,7 +858,8 @@ mod tests {
             &environment,
             Some(&error),
             None,
-            None
+            None,
+            false,
         ));
     }
 
@@ -856,7 +899,8 @@ mod tests {
             &environment,
             None,
             None,
-            Some(&target)
+            Some(&target),
+            false,
         ));
     }
 
@@ -888,7 +932,8 @@ mod tests {
             &environment,
             None,
             None,
-            Some(&target)
+            Some(&target),
+            false,
         ));
     }
 
@@ -922,7 +967,8 @@ mod tests {
             &environment,
             Some(&session_error),
             None,
-            Some(&target)
+            Some(&target),
+            false,
         ));
     }
 
@@ -966,7 +1012,51 @@ mod tests {
             &environment,
             None,
             Some(&crop_error),
-            Some(&target)
+            Some(&target),
+            false,
+        ));
+    }
+
+    #[test]
+    fn screenshot_fallback_is_deferred_for_targeted_missing_source_geometry_before_retry() {
+        let mut environment = wayland_pipewire_environment();
+        environment.displays = vec![test_display(
+            "kwin:eDP-1",
+            0,
+            true,
+            0.0,
+            0.0,
+            1920.0,
+            1080.0,
+        )];
+        let capture = capture_with_backend(CaptureBackendKind::PortalPipeWire, None, None);
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: environment.displays[0].logical_rect.clone(),
+            capture_scope: CaptureScope::PrimaryDisplay,
+            display: Some(sky_cua_platform::model::DisplayRef::from(
+                &environment.displays[0],
+            )),
+        };
+        let source_geometry_error = BackendError::new(
+            BackendErrorCode::CaptureSourceGeometryMissing,
+            super::CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE,
+        );
+
+        assert!(!should_fallback_to_screenshot(
+            Some(&capture),
+            &environment,
+            None,
+            Some(&source_geometry_error),
+            Some(&target),
+            true,
+        ));
+        assert!(should_fallback_to_screenshot(
+            Some(&capture),
+            &environment,
+            None,
+            Some(&source_geometry_error),
+            Some(&target),
+            false,
         ));
     }
 
@@ -1053,6 +1143,108 @@ mod tests {
     }
 
     #[test]
+    fn target_crop_missing_source_geometry_has_specific_error_code() {
+        let target = RectF {
+            x: 10.0,
+            y: 10.0,
+            width: 100.0,
+            height: 100.0,
+            space: CoordinateSpace::DesktopLogical,
+        };
+
+        let error = pixel_crop_for_target(
+            &target,
+            None,
+            &PixelSize {
+                width: 1920,
+                height: 1080,
+            },
+            Some(&CaptureBackendKind::PortalPipeWire),
+        )
+        .expect_err("missing source geometry should be machine-readable");
+
+        assert_eq!(error.code, "CaptureSourceGeometryMissing");
+        assert!(super::is_capture_source_geometry_missing(&error));
+    }
+
+    #[test]
+    fn missing_source_geometry_outcome_is_retryable_when_image_is_unfilled() {
+        let capture = capture_with_backend(CaptureBackendKind::PortalPipeWire, None, None);
+        let outcome = CapturePlanOutcome {
+            capture: Some(capture),
+            portal_session_error: None,
+            capture_error: Some(BackendError::new(
+                BackendErrorCode::CaptureSourceGeometryMissing,
+                super::CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE,
+            )),
+        };
+
+        assert!(outcome_missing_capture_source_geometry(&outcome));
+    }
+
+    #[test]
+    fn missing_source_geometry_outcome_is_retryable_for_independent_fallback_without_dispatch_source()
+     {
+        let capture = capture_with_backend(
+            CaptureBackendKind::PortalPipeWire,
+            Some(CaptureBackendKind::PortalScreenshot),
+            Some("/tmp/fallback.png"),
+        );
+        let outcome = CapturePlanOutcome {
+            capture: Some(capture),
+            portal_session_error: None,
+            capture_error: Some(BackendError::new(
+                BackendErrorCode::CaptureSourceGeometryMissing,
+                super::CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE,
+            )),
+        };
+
+        assert!(outcome_missing_capture_source_geometry(&outcome));
+    }
+
+    #[test]
+    fn missing_source_geometry_outcome_is_not_retryable_for_direct_screenshot_capture() {
+        let capture = capture_with_backend(
+            CaptureBackendKind::PortalScreenshot,
+            Some(CaptureBackendKind::PortalScreenshot),
+            Some("/tmp/screenshot.png"),
+        );
+        let outcome = CapturePlanOutcome {
+            capture: Some(capture),
+            portal_session_error: None,
+            capture_error: None,
+        };
+
+        assert!(!outcome_missing_capture_source_geometry(&outcome));
+    }
+
+    #[test]
+    fn missing_source_geometry_outcome_is_not_retryable_for_fallback_with_dispatch_source() {
+        let mut capture = capture_with_backend(
+            CaptureBackendKind::PortalPipeWire,
+            Some(CaptureBackendKind::PortalScreenshot),
+            Some("/tmp/fallback.png"),
+        );
+        capture.source_logical_rect = Some(RectF {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+            space: CoordinateSpace::DesktopLogical,
+        });
+        let outcome = CapturePlanOutcome {
+            capture: Some(capture),
+            portal_session_error: None,
+            capture_error: Some(BackendError::new(
+                BackendErrorCode::CaptureSourceGeometryMissing,
+                super::CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE,
+            )),
+        };
+
+        assert!(!outcome_missing_capture_source_geometry(&outcome));
+    }
+
+    #[test]
     fn display_source_inference_trusts_physical_pixel_size_when_present() {
         let display = sky_cua_platform::model::DisplayInfo {
             display_id: "hyprland:DP-1".to_string(),
@@ -1125,7 +1317,7 @@ mod tests {
         assert!(downgrade.message.contains("downgraded from PipeWire"));
         assert_eq!(
             downgrade.details.as_deref(),
-            Some("primary_backend=portal_pipe_wire image_backend=portal_screenshot")
+            Some(CAPTURE_BACKEND_DOWNGRADED_DETAILS)
         );
     }
 
@@ -1158,5 +1350,283 @@ mod tests {
                 .iter()
                 .any(|entry| entry.code == "CaptureBackendDowngraded")
         );
+    }
+
+    #[test]
+    fn capture_diagnostics_surface_missing_source_geometry_without_pipewire_claim() {
+        let environment = wayland_pipewire_environment();
+        let capture = capture_with_backend(CaptureBackendKind::PortalPipeWire, None, None);
+        let error = BackendError::new(
+            BackendErrorCode::CaptureSourceGeometryMissing,
+            super::CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE,
+        );
+        let mut diagnostics = DiagnosticBuilder::new();
+
+        push_diagnostics(
+            &environment,
+            Some(&capture),
+            None,
+            Some(&error),
+            &mut diagnostics,
+        );
+
+        let entries = diagnostics.finish();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.code == "CaptureSourceGeometryMissing")
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.code == "PipeWireStreamFailed")
+        );
+    }
+
+    #[test]
+    fn capture_diagnostics_preserve_crop_error_code_with_fallback_image() {
+        let environment = wayland_pipewire_environment();
+        let capture = capture_with_backend(
+            CaptureBackendKind::PortalPipeWire,
+            Some(CaptureBackendKind::PortalScreenshot),
+            Some("/tmp/fallback.png"),
+        );
+        let error = BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "targeted screenshot window bounds do not intersect the captured source",
+        );
+        let mut diagnostics = DiagnosticBuilder::new();
+
+        push_diagnostics(
+            &environment,
+            Some(&capture),
+            None,
+            Some(&error),
+            &mut diagnostics,
+        );
+
+        let entries = diagnostics.finish();
+        assert!(entries.iter().any(|entry| entry.code == "InvalidRequest"));
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.code == "PipeWireStreamFailed")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.code == "CaptureBackendDowngraded")
+        );
+    }
+
+    fn env_with_displays(displays: Vec<DisplayInfo>) -> EnvironmentInfo {
+        EnvironmentInfo {
+            displays,
+            ..wayland_pipewire_environment()
+        }
+    }
+
+    fn display(id: &str, logical_rect: RectF, pixel_size: Option<PixelSize>) -> DisplayInfo {
+        DisplayInfo {
+            display_id: id.to_string(),
+            name: Some(id.to_string()),
+            index: 0,
+            primary: id == "primary",
+            logical_rect,
+            pixel_size,
+            scale_factor: None,
+            backend: "test".to_string(),
+        }
+    }
+
+    fn display_ref(id: &str) -> DisplayRef {
+        DisplayRef {
+            display_id: id.to_string(),
+            name: Some(id.to_string()),
+            index: 0,
+            primary: id == "primary",
+            backend: "test".to_string(),
+        }
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> RectF {
+        RectF {
+            x,
+            y,
+            width,
+            height,
+            space: CoordinateSpace::DesktopLogical,
+        }
+    }
+
+    #[test]
+    fn infer_capture_source_rect_prefers_matching_display() {
+        let target_rect = rect(0.0, 0.0, 1920.0, 1080.0);
+        let display_pixel = PixelSize {
+            width: 1920,
+            height: 1080,
+        };
+        let env = env_with_displays(vec![
+            display("left", target_rect.clone(), Some(display_pixel.clone())),
+            display("right", rect(1920.0, 0.0, 1920.0, 1080.0), None),
+        ]);
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: target_rect.clone(),
+            capture_scope: CaptureScope::Display,
+            display: Some(display_ref("left")),
+        };
+
+        assert_eq!(
+            infer_capture_source_rect(&target, &env, &display_pixel),
+            Some(target_rect)
+        );
+    }
+
+    #[test]
+    fn infer_capture_source_rect_falls_back_to_desktop_logical_rect() {
+        let desktop_rect = rect(0.0, 0.0, 1920.0, 1080.0);
+        let env = env_with_displays(vec![display(
+            "primary",
+            desktop_rect.clone(),
+            Some(PixelSize {
+                width: 3840,
+                height: 2160,
+            }),
+        )]);
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: desktop_rect.clone(),
+            capture_scope: CaptureScope::Display,
+            display: None,
+        };
+
+        assert_eq!(
+            infer_capture_source_rect(
+                &target,
+                &env,
+                &PixelSize {
+                    width: 1920,
+                    height: 1080,
+                }
+            ),
+            Some(desktop_rect)
+        );
+    }
+
+    #[test]
+    fn infer_capture_source_rect_falls_back_to_virtual_desktop_union() {
+        let left = rect(0.0, 0.0, 1920.0, 1080.0);
+        let right = rect(1920.0, 0.0, 1920.0, 1080.0);
+        let union = rect(0.0, 0.0, 3840.0, 1080.0);
+        let env = env_with_displays(vec![
+            display("left", left, None),
+            display("right", right, None),
+        ]);
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: union.clone(),
+            capture_scope: CaptureScope::AllDisplays,
+            display: None,
+        };
+
+        assert_eq!(
+            infer_capture_source_rect(
+                &target,
+                &env,
+                &PixelSize {
+                    width: 3840,
+                    height: 1080,
+                }
+            ),
+            Some(union)
+        );
+    }
+
+    #[test]
+    fn infer_capture_source_rect_returns_none_when_nothing_matches() {
+        let env = env_with_displays(vec![display(
+            "primary",
+            rect(0.0, 0.0, 1920.0, 1080.0),
+            Some(PixelSize {
+                width: 1920,
+                height: 1080,
+            }),
+        )]);
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: rect(0.0, 0.0, 800.0, 600.0),
+            capture_scope: CaptureScope::Display,
+            display: None,
+        };
+
+        assert_eq!(
+            infer_capture_source_rect(
+                &target,
+                &env,
+                &PixelSize {
+                    width: 1024,
+                    height: 768,
+                }
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn display_matches_raw_size_uses_pixel_size_within_tolerance() {
+        let d = display(
+            "d",
+            rect(0.0, 0.0, 1920.0, 1080.0),
+            Some(PixelSize {
+                width: 1920,
+                height: 1080,
+            }),
+        );
+        assert!(display_matches_raw_size(
+            &d,
+            &PixelSize {
+                width: 1921,
+                height: 1080,
+            }
+        ));
+        assert!(!display_matches_raw_size(
+            &d,
+            &PixelSize {
+                width: 2000,
+                height: 1080,
+            }
+        ));
+    }
+
+    #[test]
+    fn display_matches_raw_size_falls_back_to_logical_rect() {
+        let d = display("d", rect(0.0, 0.0, 1920.0, 1080.0), None);
+        assert!(display_matches_raw_size(
+            &d,
+            &PixelSize {
+                width: 1920,
+                height: 1080,
+            }
+        ));
+    }
+
+    #[test]
+    fn virtual_desktop_rect_unions_all_display_logical_rects() {
+        let rects = [
+            rect(-100.0, 0.0, 100.0, 100.0),
+            rect(0.0, -50.0, 200.0, 200.0),
+        ];
+        let displays = vec![
+            display("a", rects[0].clone(), None),
+            display("b", rects[1].clone(), None),
+        ];
+        assert_eq!(
+            virtual_desktop_rect(&displays),
+            Some(rect(-100.0, -50.0, 300.0, 200.0))
+        );
+    }
+
+    #[test]
+    fn infer_untargeted_capture_rect_only_for_all_displays() {
+        let env = env_with_displays(vec![display("only", rect(0.0, 0.0, 1920.0, 1080.0), None)]);
+        assert!(infer_untargeted_capture_rect(&CaptureScope::AllDisplays, &env).is_some());
+        assert!(infer_untargeted_capture_rect(&CaptureScope::Display, &env).is_none());
     }
 }

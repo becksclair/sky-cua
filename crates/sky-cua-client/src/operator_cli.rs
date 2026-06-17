@@ -1007,6 +1007,7 @@ mod tests {
                 blockers: vec![],
             },
             platform: None,
+            display_topology: None,
             session_env: None,
             portal: None,
             accessibility: None,

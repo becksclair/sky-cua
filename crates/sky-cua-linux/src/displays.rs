@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    CoordinateSpace, DisplayInfo, DisplayIntersection, DisplayRef, DisplayTarget, EnvironmentInfo,
-    PixelSize, RectF,
+    CoordinateSpace, DisplayInfo, DisplayIntersection, DisplayTarget, DoctorDisplayProbeReport,
+    DoctorDisplayTopologyReport, EnvironmentInfo, PixelSize, RectF,
 };
 use zbus::Proxy;
 use zbus::zvariant::OwnedValue;
@@ -26,42 +26,109 @@ type Monitor = (MonitorSpec, Vec<MonitorMode>, Properties);
 type LogicalMonitor = (i32, i32, f64, u32, bool, Vec<MonitorSpec>, Properties);
 type DisplayConfigState = (u32, Vec<Monitor>, Vec<LogicalMonitor>, Properties);
 
-pub(crate) async fn discover_displays(environment: &EnvironmentInfo) -> Vec<DisplayInfo> {
-    let mut displays = if environment_matches(environment, &["gnome"]) {
-        displays_from_gnome_display_config()
-            .await
-            .unwrap_or_default()
+#[derive(Debug)]
+struct CommandProbeOutput {
+    output: Option<Output>,
+    timed_out: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DisplayDiscoveryOutcome {
+    pub(crate) displays: Vec<DisplayInfo>,
+    pub(crate) report: DoctorDisplayTopologyReport,
+}
+
+pub(crate) async fn discover_display_topology(
+    environment: &EnvironmentInfo,
+) -> DisplayDiscoveryOutcome {
+    let (displays, probes) = discover_displays_with_probes(environment).await;
+    let report = display_topology_report(displays.as_slice(), probes);
+    DisplayDiscoveryOutcome { displays, report }
+}
+
+pub(crate) fn display_topology_report_from_environment(
+    environment: &EnvironmentInfo,
+) -> DoctorDisplayTopologyReport {
+    display_topology_report_from_displays(&environment.displays)
+}
+
+fn display_topology_report_from_displays(displays: &[DisplayInfo]) -> DoctorDisplayTopologyReport {
+    display_topology_report(displays, Vec::new())
+}
+
+fn display_topology_report(
+    displays: &[DisplayInfo],
+    probes: Vec<DoctorDisplayProbeReport>,
+) -> DoctorDisplayTopologyReport {
+    let selected_provider = selected_provider_from_displays(displays);
+    DoctorDisplayTopologyReport {
+        display_count: displays.len(),
+        selected_provider: selected_provider.clone(),
+        probes,
+        detail: match selected_provider {
+            Some(provider) => format!("{} display(s) available via {provider}", displays.len()),
+            None => format!("{} display(s) available", displays.len()),
+        },
+    }
+}
+
+fn selected_provider_from_displays(displays: &[DisplayInfo]) -> Option<String> {
+    let provider = displays.first()?.backend.as_str();
+    if provider.is_empty() {
+        return None;
+    }
+    Some(
+        match provider {
+            "x11" => "xrandr",
+            value => value,
+        }
+        .to_string(),
+    )
+}
+
+async fn discover_displays_with_probes(
+    environment: &EnvironmentInfo,
+) -> (Vec<DisplayInfo>, Vec<DoctorDisplayProbeReport>) {
+    let (mut displays, mut probes) = if environment_matches(environment, &["gnome"]) {
+        let (displays, probe) = displays_from_gnome_display_config().await;
+        (displays, vec![probe])
+    } else if let Some((displays, probe)) = displays_from_environment_provider(environment).await {
+        (displays, vec![probe])
     } else {
-        displays_from_environment_provider(environment).await
+        (Vec::new(), Vec::new())
     };
 
     if displays.is_empty() {
-        displays = displays_from_xrandr_blocking().await;
+        let (fallback_displays, probe) = displays_from_xrandr_blocking().await;
+        probes.push(probe);
+        displays = fallback_displays;
     }
-    normalize_displays(displays)
+    (normalize_displays(displays), probes)
 }
 
-async fn displays_from_environment_provider(environment: &EnvironmentInfo) -> Vec<DisplayInfo> {
+async fn displays_from_environment_provider(
+    environment: &EnvironmentInfo,
+) -> Option<(Vec<DisplayInfo>, DoctorDisplayProbeReport)> {
     let environment = environment.clone();
     tokio::task::spawn_blocking(move || {
         if environment_matches(&environment, &["kde", "plasma", "kwin"]) {
-            displays_from_kscreen_doctor().unwrap_or_default()
+            Some(displays_from_kscreen_doctor())
         } else if environment_matches(&environment, &["hyprland"]) {
-            displays_from_hyprland().unwrap_or_default()
+            Some(displays_from_hyprland())
         } else if environment_matches(&environment, &["cosmic"]) {
-            displays_from_cosmic_randr().unwrap_or_default()
+            Some(displays_from_cosmic_randr())
         } else {
-            Vec::new()
+            None
         }
     })
     .await
     .unwrap_or_default()
 }
 
-async fn displays_from_xrandr_blocking() -> Vec<DisplayInfo> {
-    tokio::task::spawn_blocking(|| displays_from_xrandr().unwrap_or_default())
+async fn displays_from_xrandr_blocking() -> (Vec<DisplayInfo>, DoctorDisplayProbeReport) {
+    tokio::task::spawn_blocking(displays_from_xrandr)
         .await
-        .unwrap_or_default()
+        .unwrap_or_else(|_| command_probe_result("xrandr", None, true, Vec::new()))
 }
 
 pub(crate) fn assign_window_displays(windows: &mut [LinuxWindowInfo], displays: &[DisplayInfo]) {
@@ -92,21 +159,25 @@ pub(crate) fn resolve_display_target(
     displays: &[DisplayInfo],
     target: &DisplayTarget,
 ) -> Result<DisplayInfo, BackendError> {
-    let matches = displays
+    let mut matched_display = None;
+    for display in displays
         .iter()
         .filter(|display| display_matches_target(display, target))
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [display] => Ok((*display).clone()),
-        [] => Err(BackendError::new(
+    {
+        if matched_display.is_some() {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                format!("display target is ambiguous: {target:?}"),
+            ));
+        }
+        matched_display = Some(display);
+    }
+    matched_display.cloned().ok_or_else(|| {
+        BackendError::new(
             BackendErrorCode::InvalidRequest,
             format!("no display matched requested screenshot target: {target:?}"),
-        )),
-        _ => Err(BackendError::new(
-            BackendErrorCode::InvalidRequest,
-            format!("display target is ambiguous: {target:?}"),
-        )),
-    }
+        )
+    })
 }
 
 pub(crate) fn primary_display(displays: &[DisplayInfo]) -> Option<DisplayInfo> {
@@ -179,23 +250,50 @@ fn environment_matches(environment: &EnvironmentInfo, needles: &[&str]) -> bool 
     matches_value(&environment.desktop_environment) || matches_value(&environment.compositor)
 }
 
-fn displays_from_kscreen_doctor() -> Option<Vec<DisplayInfo>> {
+fn displays_from_kscreen_doctor() -> (Vec<DisplayInfo>, DoctorDisplayProbeReport) {
     let output = command_output_with_timeout(
         Command::new("kscreen-doctor")
             .arg("-o")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null()),
+            .stderr(Stdio::piped()),
         COMMAND_TIMEOUT,
-    )?;
-    output
-        .status
-        .success()
-        .then(|| parse_kscreen_doctor(&String::from_utf8_lossy(&output.stdout)))
-        .filter(|displays| !displays.is_empty())
+    );
+    let displays = output
+        .output
+        .as_ref()
+        .filter(|output| output.status.success())
+        .map(|output| parse_kscreen_doctor(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default();
+    command_probe_result("kscreen-doctor", output.output, output.timed_out, displays)
 }
 
-async fn displays_from_gnome_display_config() -> Option<Vec<DisplayInfo>> {
+async fn displays_from_gnome_display_config() -> (Vec<DisplayInfo>, DoctorDisplayProbeReport) {
+    let displays = match gnome_display_config_state().await {
+        Some((monitors, logical_monitors)) => {
+            displays_from_gnome_state(&monitors, &logical_monitors)
+        }
+        None => Vec::new(),
+    };
+    let probe = DoctorDisplayProbeReport {
+        provider: "gnome-display-config".to_string(),
+        attempted: true,
+        ok: !displays.is_empty(),
+        timed_out: false,
+        exit_status: None,
+        stdout_bytes: 0,
+        stderr_snippet: None,
+        display_count: displays.len(),
+        detail: if displays.is_empty() {
+            "GNOME DisplayConfig returned no displays".to_string()
+        } else {
+            format!("GNOME DisplayConfig returned {} display(s)", displays.len())
+        },
+    };
+    (displays, probe)
+}
+
+async fn gnome_display_config_state() -> Option<(Vec<Monitor>, Vec<LogicalMonitor>)> {
     let connection = zbus::Connection::session().await.ok()?;
     let proxy = Proxy::new(
         &connection,
@@ -207,69 +305,129 @@ async fn displays_from_gnome_display_config() -> Option<Vec<DisplayInfo>> {
     .ok()?;
     let (_serial, monitors, logical_monitors, _properties): DisplayConfigState =
         proxy.call("GetCurrentState", &()).await.ok()?;
-    Some(displays_from_gnome_state(&monitors, &logical_monitors))
-        .filter(|displays| !displays.is_empty())
+    Some((monitors, logical_monitors))
 }
 
-fn displays_from_hyprland() -> Option<Vec<DisplayInfo>> {
+fn displays_from_hyprland() -> (Vec<DisplayInfo>, DoctorDisplayProbeReport) {
     let output = command_output_with_timeout(
         Command::new("hyprctl")
             .args(["monitors", "-j"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null()),
+            .stderr(Stdio::piped()),
         COMMAND_TIMEOUT,
-    )?;
-    output
-        .status
-        .success()
-        .then(|| parse_hyprland_monitors(&String::from_utf8_lossy(&output.stdout)).ok())
-        .flatten()
-        .filter(|displays| !displays.is_empty())
+    );
+    let displays = output
+        .output
+        .as_ref()
+        .filter(|output| output.status.success())
+        .and_then(|output| parse_hyprland_monitors(&String::from_utf8_lossy(&output.stdout)).ok())
+        .unwrap_or_default();
+    command_probe_result("hyprland", output.output, output.timed_out, displays)
 }
 
-fn displays_from_cosmic_randr() -> Option<Vec<DisplayInfo>> {
+fn displays_from_cosmic_randr() -> (Vec<DisplayInfo>, DoctorDisplayProbeReport) {
     let output = command_output_with_timeout(
         Command::new("cosmic-randr")
             .arg("list")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null()),
+            .stderr(Stdio::piped()),
         COMMAND_TIMEOUT,
-    )?;
-    output
-        .status
-        .success()
-        .then(|| parse_cosmic_randr(&String::from_utf8_lossy(&output.stdout)))
-        .filter(|displays| !displays.is_empty())
+    );
+    let displays = output
+        .output
+        .as_ref()
+        .filter(|output| output.status.success())
+        .map(|output| parse_cosmic_randr(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default();
+    command_probe_result("cosmic-randr", output.output, output.timed_out, displays)
 }
 
-fn displays_from_xrandr() -> Option<Vec<DisplayInfo>> {
+fn displays_from_xrandr() -> (Vec<DisplayInfo>, DoctorDisplayProbeReport) {
     let output = command_output_with_timeout(
         Command::new("xrandr")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null()),
+            .stderr(Stdio::piped()),
         COMMAND_TIMEOUT,
-    )?;
-    output
-        .status
-        .success()
-        .then(|| parse_xrandr(&String::from_utf8_lossy(&output.stdout)))
-        .filter(|displays| !displays.is_empty())
+    );
+    let displays = output
+        .output
+        .as_ref()
+        .filter(|output| output.status.success())
+        .map(|output| parse_xrandr(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default();
+    command_probe_result("xrandr", output.output, output.timed_out, displays)
 }
 
-fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
-    let mut child = command.spawn().ok()?;
+fn command_probe_result(
+    provider: &str,
+    output: Option<Output>,
+    timed_out: bool,
+    displays: Vec<DisplayInfo>,
+) -> (Vec<DisplayInfo>, DoctorDisplayProbeReport) {
+    let exit_status = output.as_ref().and_then(|output| output.status.code());
+    let stdout_bytes = output.as_ref().map_or(0, |output| output.stdout.len());
+    let stderr_snippet = output.as_ref().and_then(|output| {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        (!stderr.is_empty()).then_some(stderr.chars().take(240).collect())
+    });
+    let display_count = displays.len();
+    let ok = output
+        .as_ref()
+        .is_some_and(|output| output.status.success() && display_count > 0);
+    let detail = if timed_out {
+        format!("{provider} timed out after {}s", COMMAND_TIMEOUT.as_secs())
+    } else if output.is_none() {
+        format!("{provider} could not be started")
+    } else if ok {
+        format!("{provider} returned {display_count} display(s)")
+    } else if let Some(status) = exit_status {
+        format!("{provider} exited with status {status} and returned {display_count} display(s)")
+    } else {
+        format!("{provider} returned {display_count} display(s)")
+    };
+    (
+        displays,
+        DoctorDisplayProbeReport {
+            provider: provider.to_string(),
+            attempted: true,
+            ok,
+            timed_out,
+            exit_status,
+            stdout_bytes,
+            stderr_snippet,
+            display_count,
+            detail,
+        },
+    )
+}
+
+fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> CommandProbeOutput {
+    let Ok(mut child) = command.spawn() else {
+        return CommandProbeOutput {
+            output: None,
+            timed_out: false,
+        };
+    };
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
-            Ok(Some(_status)) => return child.wait_with_output().ok(),
+            Ok(Some(_status)) => {
+                return CommandProbeOutput {
+                    output: child.wait_with_output().ok(),
+                    timed_out: false,
+                };
+            }
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
             Ok(None) | Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return CommandProbeOutput {
+                    output: None,
+                    timed_out: true,
+                };
             }
         }
     }
@@ -699,13 +857,10 @@ fn strip_ansi(value: &str) -> String {
     output
 }
 
-pub(crate) fn display_ref(display: &DisplayInfo) -> DisplayRef {
-    DisplayRef::from(display)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::ExitStatusExt;
 
     #[test]
     fn parses_xrandr_multiple_displays() {
@@ -730,6 +885,108 @@ mod tests {
         assert_eq!(displays[2].display_id, "x11:Virtual-3");
         assert_eq!(displays[2].logical_rect.x, 0.0);
         assert_eq!(displays[2].logical_rect.y, -600.0);
+    }
+
+    #[test]
+    fn display_topology_report_marks_xrandr_provider_without_changing_display_ids() {
+        let output = "Virtual-1 connected primary 1280x800+0+0 normal\n";
+        let displays = normalize_displays(parse_xrandr(output));
+        let report = display_topology_report_from_displays(&displays);
+
+        assert_eq!(displays[0].display_id, "x11:Virtual-1");
+        assert_eq!(report.selected_provider.as_deref(), Some("xrandr"));
+        assert!(report.detail.contains("xrandr"));
+    }
+
+    #[test]
+    fn display_topology_report_omits_provider_for_empty_topology() {
+        let report = display_topology_report_from_displays(&[]);
+
+        assert_eq!(report.display_count, 0);
+        assert_eq!(report.selected_provider, None);
+    }
+
+    #[test]
+    fn display_topology_report_preserves_empty_probe_evidence() {
+        let report = display_topology_report(
+            &[],
+            vec![DoctorDisplayProbeReport {
+                provider: "xrandr".to_string(),
+                attempted: true,
+                ok: false,
+                timed_out: true,
+                exit_status: None,
+                stdout_bytes: 0,
+                stderr_snippet: None,
+                display_count: 0,
+                detail: "xrandr timed out after 3s".to_string(),
+            }],
+        );
+
+        assert_eq!(report.display_count, 0);
+        assert_eq!(report.selected_provider, None);
+        assert_eq!(report.probes.len(), 1);
+        assert!(report.probes[0].timed_out);
+    }
+
+    #[test]
+    fn display_topology_report_preserves_failed_primary_and_xrandr_fallback() {
+        let displays = normalize_displays(parse_xrandr(
+            "Virtual-1 connected primary 1280x800+0+0 normal\n",
+        ));
+        let report = display_topology_report(
+            &displays,
+            vec![
+                DoctorDisplayProbeReport {
+                    provider: "kscreen-doctor".to_string(),
+                    attempted: true,
+                    ok: false,
+                    timed_out: false,
+                    exit_status: Some(1),
+                    stdout_bytes: 0,
+                    stderr_snippet: Some("not available".to_string()),
+                    display_count: 0,
+                    detail: "kscreen-doctor exited with status 1".to_string(),
+                },
+                DoctorDisplayProbeReport {
+                    provider: "xrandr".to_string(),
+                    attempted: true,
+                    ok: true,
+                    timed_out: false,
+                    exit_status: Some(0),
+                    stdout_bytes: 52,
+                    stderr_snippet: None,
+                    display_count: 1,
+                    detail: "xrandr returned 1 display(s)".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(report.display_count, 1);
+        assert_eq!(report.selected_provider.as_deref(), Some("xrandr"));
+        assert_eq!(report.probes.len(), 2);
+        assert_eq!(report.probes[0].provider, "kscreen-doctor");
+        assert_eq!(report.probes[1].provider, "xrandr");
+    }
+
+    #[test]
+    fn command_probe_result_preserves_stderr_snippet() {
+        let (_displays, report) = command_probe_result(
+            "xrandr",
+            Some(Output {
+                status: std::process::ExitStatus::from_raw(256),
+                stdout: Vec::new(),
+                stderr: b"cannot open display\n".to_vec(),
+            }),
+            false,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            report.stderr_snippet.as_deref(),
+            Some("cannot open display")
+        );
+        assert_eq!(report.exit_status, Some(1));
     }
 
     #[test]
@@ -969,5 +1226,263 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> RectF {
+        RectF {
+            x,
+            y,
+            width,
+            height,
+            space: CoordinateSpace::DesktopLogical,
+        }
+    }
+
+    #[test]
+    fn normalize_displays_rejects_non_positive_and_wrong_space() {
+        let good = display(
+            "test",
+            "good".to_string(),
+            0,
+            false,
+            rect(0.0, 0.0, 1920.0, 1080.0),
+            Some(PixelSize {
+                width: 1920,
+                height: 1080,
+            }),
+            Some(1.0),
+        );
+        let zero_width = display(
+            "test",
+            "zero-w".to_string(),
+            1,
+            false,
+            rect(0.0, 0.0, 0.0, 1080.0),
+            None,
+            None,
+        );
+        let stream_space = display(
+            "test",
+            "stream".to_string(),
+            2,
+            false,
+            RectF {
+                space: CoordinateSpace::StreamPixels,
+                ..rect(0.0, 0.0, 1920.0, 1080.0)
+            },
+            None,
+            None,
+        );
+        let mut out_of_order = vec![
+            display(
+                "test",
+                "second".to_string(),
+                5,
+                false,
+                rect(1920.0, 0.0, 1920.0, 1080.0),
+                None,
+                None,
+            ),
+            good.clone(),
+        ];
+        out_of_order.push(zero_width);
+        out_of_order.push(stream_space);
+
+        let normalized = normalize_displays(out_of_order);
+        assert_eq!(normalized.len(), 2);
+        assert_eq!(normalized[0].display_id, "test:good");
+        assert_eq!(normalized[0].index, 0);
+        assert!(normalized[0].primary);
+        assert_eq!(normalized[1].display_id, "test:second");
+        assert_eq!(normalized[1].index, 1);
+    }
+
+    #[test]
+    fn primary_display_prefers_flag_then_first() {
+        let d1 = display(
+            "test",
+            "d1".to_string(),
+            0,
+            false,
+            rect(0.0, 0.0, 100.0, 100.0),
+            None,
+            None,
+        );
+        let d2 = display(
+            "test",
+            "d2".to_string(),
+            1,
+            true,
+            rect(100.0, 0.0, 100.0, 100.0),
+            None,
+            None,
+        );
+        assert_eq!(
+            primary_display(&[d1.clone(), d2.clone()]).map(|d| d.display_id),
+            Some("test:d2".to_string())
+        );
+        assert_eq!(
+            primary_display(std::slice::from_ref(&d1)).map(|d| d.display_id),
+            Some("test:d1".to_string())
+        );
+        assert_eq!(primary_display(&[]), None);
+    }
+
+    #[test]
+    fn display_matches_target_by_id_name_and_index() {
+        let d = display(
+            "test",
+            "Monitor A".to_string(),
+            2,
+            false,
+            rect(0.0, 0.0, 1920.0, 1080.0),
+            None,
+            None,
+        );
+        assert!(display_matches_target(
+            &d,
+            &DisplayTarget {
+                display_id: Some("test:monitor a".to_string()),
+                display_name: None,
+                display_index: None,
+            }
+        ));
+        assert!(!display_matches_target(
+            &d,
+            &DisplayTarget {
+                display_id: Some("test:DP-2".to_string()),
+                display_name: None,
+                display_index: None,
+            }
+        ));
+        assert!(display_matches_target(
+            &d,
+            &DisplayTarget {
+                display_id: None,
+                display_name: Some("monitor a".to_string()),
+                display_index: None,
+            }
+        ));
+        assert!(display_matches_target(
+            &d,
+            &DisplayTarget {
+                display_id: None,
+                display_name: None,
+                display_index: Some(2),
+            }
+        ));
+        assert!(!display_matches_target(
+            &d,
+            &DisplayTarget {
+                display_id: None,
+                display_name: None,
+                display_index: Some(3),
+            }
+        ));
+        assert!(!display_matches_target(
+            &d,
+            &DisplayTarget {
+                display_id: None,
+                display_name: None,
+                display_index: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn resolve_display_target_rejects_missing_and_ambiguous() {
+        let d1 = display(
+            "test",
+            "d1".to_string(),
+            0,
+            false,
+            rect(0.0, 0.0, 100.0, 100.0),
+            None,
+            None,
+        );
+        let d2 = display(
+            "test",
+            "d2".to_string(),
+            1,
+            false,
+            rect(100.0, 0.0, 100.0, 100.0),
+            None,
+            None,
+        );
+        let target = DisplayTarget {
+            display_id: Some("test:d1".to_string()),
+            display_name: None,
+            display_index: None,
+        };
+        assert_eq!(
+            resolve_display_target(&[d1.clone(), d2.clone()], &target)
+                .unwrap()
+                .display_id,
+            "test:d1"
+        );
+
+        let missing = DisplayTarget {
+            display_id: Some("none".to_string()),
+            display_name: None,
+            display_index: None,
+        };
+        assert_eq!(
+            resolve_display_target(&[d1.clone(), d2.clone()], &missing)
+                .unwrap_err()
+                .code,
+            BackendErrorCode::InvalidRequest.as_str()
+        );
+
+        let ambiguous = DisplayTarget {
+            display_id: None,
+            display_name: None,
+            display_index: None,
+        };
+        assert!(resolve_display_target(&[d1, d2], &ambiguous).is_err());
+    }
+
+    #[test]
+    fn assign_window_displays_picks_largest_intersection() {
+        let left = display(
+            "test",
+            "left".to_string(),
+            0,
+            false,
+            rect(0.0, 0.0, 100.0, 100.0),
+            None,
+            None,
+        );
+        let right = display(
+            "test",
+            "right".to_string(),
+            1,
+            false,
+            rect(100.0, 0.0, 100.0, 100.0),
+            None,
+            None,
+        );
+        let window = LinuxWindowInfo {
+            window_id: "w".to_string(),
+            title: None,
+            app_id: None,
+            wm_class: None,
+            pid: None,
+            bounds: Some(rect(50.0, 0.0, 100.0, 100.0)),
+            display: None,
+            display_intersections: Vec::new(),
+            workspace: None,
+            focused: false,
+            hidden: false,
+            client_type: None,
+            backend: "test".to_string(),
+            terminal: None,
+        };
+        let windows = &mut [window];
+        assign_window_displays(windows, &[left, right]);
+        assert_eq!(
+            windows[0].display.as_ref().map(|d| d.display_id.as_str()),
+            Some("test:left")
+        );
+        assert_eq!(windows[0].display_intersections.len(), 2);
     }
 }

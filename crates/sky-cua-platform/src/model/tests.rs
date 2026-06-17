@@ -381,6 +381,7 @@ fn boxed_get_app_state_includes_doctor_report_when_present() {
             blockers: Vec::new(),
         },
         platform: None,
+        display_topology: None,
         session_env: None,
         portal: None,
         accessibility: None,
@@ -415,7 +416,7 @@ fn boxed_get_app_state_includes_doctor_report_when_present() {
 
 #[test]
 fn doctor_report_deserializes_without_session_env() {
-    let value = serde_json::json!({
+    let value = json!({
         "environment": {
             "session_kind": "unsupported",
             "compositor": null,

@@ -2,9 +2,10 @@ use atspi::AccessibilityConnection;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
-    ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureScope, CaptureScreenMode,
-    DiagnosticEntry, DisplayInfo, DisplayTarget, DoctorReport, ElementNode, EnvironmentInfo,
-    FocusedApp, InputBackendKind, RectF, ScrollDirection, SemanticBackendKind, ToolAvailability,
+    ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind, CaptureScope,
+    CaptureScreenMode, DiagnosticEntry, DisplayInfo, DisplayRef, DisplayTarget,
+    DoctorDisplayTopologyReport, DoctorReport, ElementNode, EnvironmentInfo, FocusedApp,
+    InputBackendKind, RectF, ScrollDirection, SemanticBackendKind, ToolAvailability,
     ToolCapabilities, WindowTarget,
 };
 use sky_cua_platform::{AppInfo, new_snapshot_id};
@@ -12,7 +13,7 @@ use sky_cua_platform::{AppInfo, new_snapshot_id};
 use crate::actions::runtime::{
     SemanticActionInvocation, SemanticAtspiAction, SemanticSetValueResult,
 };
-use crate::actions::{LinuxActionExecutor, runtime::LinuxActionRuntime};
+use crate::actions::{LinuxActionExecutor, runtime::LinuxActionRuntime, success_with_diagnostics};
 use crate::app_match::{
     app_from_linux_window, best_x11_window_match, enrich_accessible_apps_from_windows,
     linux_window_matches_app, merge_app_lists, preferred_linux_window, select_app,
@@ -38,12 +39,13 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::warn;
 
-const DISPLAY_TOPOLOGY_CACHE_TTL: Duration = Duration::from_secs(2);
+const DISPLAY_TOPOLOGY_CACHE_TTL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 struct DisplayTopologyCache {
     updated_at: Instant,
     displays: Vec<DisplayInfo>,
+    report: DoctorDisplayTopologyReport,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +57,7 @@ pub struct LinuxDesktopBackend {
     session_presence: SessionPresenceManager,
     virtual_input: Arc<OnceLock<LinuxVirtualInput>>,
     display_topology: Arc<StdMutex<Option<DisplayTopologyCache>>>,
+    environment_cache: Arc<StdMutex<Option<(EnvironmentInfo, Instant)>>>,
 }
 
 impl Default for LinuxDesktopBackend {
@@ -94,21 +97,72 @@ impl LinuxDesktopBackend {
             session_presence: SessionPresenceManager::new(),
             virtual_input: Arc::new(OnceLock::new()),
             display_topology: Arc::new(StdMutex::new(None)),
+            environment_cache: Arc::new(StdMutex::new(None)),
         }
     }
 
-    async fn enrich_environment_displays(&self, environment: &mut EnvironmentInfo) {
+    async fn enrich_environment_displays(
+        &self,
+        environment: &mut EnvironmentInfo,
+    ) -> DoctorDisplayTopologyReport {
         if !environment.displays.is_empty() {
-            return;
+            return crate::displays::display_topology_report_from_environment(environment);
         }
-        if let Some(displays) = cached_display_topology(&self.display_topology, Instant::now()) {
-            environment.displays = displays;
-            return;
+        if let Some(cached) = cached_display_topology(&self.display_topology, Instant::now()) {
+            environment.displays = cached.displays;
+            return cached.report;
         }
 
-        let displays = crate::displays::discover_displays(environment).await;
-        store_display_topology(&self.display_topology, displays.clone());
-        environment.displays = displays;
+        let outcome = crate::displays::discover_display_topology(environment).await;
+        store_display_topology(
+            &self.display_topology,
+            outcome.displays.clone(),
+            outcome.report.clone(),
+        );
+        environment.displays = outcome.displays;
+        outcome.report
+    }
+
+    async fn probe_environment_base(&self) -> Result<EnvironmentInfo, BackendError> {
+        self.refresh_session_env();
+        const ENVIRONMENT_CACHE_TTL: Duration = Duration::from_secs(10);
+        let now = Instant::now();
+        if let Some((cached, cached_at)) = self.environment_cache.lock().unwrap().as_ref()
+            && now.duration_since(*cached_at) < ENVIRONMENT_CACHE_TTL
+        {
+            return Ok(cached.clone());
+        }
+        let mut environment = probe_environment().await?;
+        environment.semantic_backend = if require_supported_environment(&environment).is_ok()
+            && self.accessibility_connection().await.is_ok()
+        {
+            SemanticBackendKind::Atspi
+        } else {
+            SemanticBackendKind::None
+        };
+        *self.environment_cache.lock().unwrap() = Some((environment.clone(), now));
+        // Warm the KWin scripting-reachability cache off-worker once, awaited
+        // so the cache is guaranteed seeded before any downstream sync
+        // capability probe could run the cold-start gdbus subprocess on a
+        // runtime worker. After the first call this returns immediately.
+        if crate::kwin::kwin_window_query_available(&environment) {
+            static SCRIPTING_PROBE_WARMUP: tokio::sync::OnceCell<()> =
+                tokio::sync::OnceCell::const_new();
+            SCRIPTING_PROBE_WARMUP
+                .get_or_init(|| async {
+                    let _ = tokio::task::spawn_blocking(crate::kwin::warm_scripting_probe).await;
+                })
+                .await;
+        }
+        Ok(environment)
+    }
+
+    async fn probe_environment_with_display_report(
+        &self,
+    ) -> Result<(EnvironmentInfo, DoctorDisplayTopologyReport), BackendError> {
+        let mut environment = self.probe_environment_base().await?;
+        let display_topology = self.enrich_environment_displays(&mut environment).await;
+        Ok((environment, display_topology))
     }
 
     fn cached_virtual_input(&self) -> Result<&LinuxVirtualInput, BackendError> {
@@ -347,24 +401,77 @@ fn merge_session_env_reports(current: &mut DoctorSessionEnvReport, latest: Docto
 fn cached_display_topology(
     cache: &Arc<StdMutex<Option<DisplayTopologyCache>>>,
     now: Instant,
-) -> Option<Vec<DisplayInfo>> {
+) -> Option<DisplayTopologyCache> {
     let cache = cache.lock().ok()?;
     let cached = cache.as_ref()?;
     now.checked_duration_since(cached.updated_at)
         .is_some_and(|age| age <= DISPLAY_TOPOLOGY_CACHE_TTL)
-        .then(|| cached.displays.clone())
+        .then(|| cached.clone())
 }
 
 fn store_display_topology(
     cache: &Arc<StdMutex<Option<DisplayTopologyCache>>>,
     displays: Vec<DisplayInfo>,
+    report: DoctorDisplayTopologyReport,
 ) {
     if let Ok(mut cache) = cache.lock() {
         *cache = Some(DisplayTopologyCache {
             updated_at: Instant::now(),
             displays,
+            report,
         });
     }
+}
+
+fn push_display_topology_diagnostics(
+    environment: &EnvironmentInfo,
+    display_topology: &DoctorDisplayTopologyReport,
+    diagnostics: &mut DiagnosticBuilder,
+) {
+    if environment.displays.is_empty() {
+        diagnostics.push_code(
+            "DisplayTopologyUnavailable",
+            "Display topology is unavailable; targeted screenshot crops may not be able to infer capture source geometry.",
+            Some(display_probe_details(display_topology)),
+        );
+    } else if environment.session_kind == sky_cua_platform::model::SessionKind::Wayland
+        && display_topology.selected_provider.as_deref() == Some("xrandr")
+    {
+        diagnostics.push_code(
+            "DisplayTopologyInferred",
+            "Display topology was inferred from XWayland xrandr while running a Wayland session.",
+            Some(display_probe_details(display_topology)),
+        );
+    }
+}
+
+fn display_probe_details(display_topology: &DoctorDisplayTopologyReport) -> String {
+    if display_topology.probes.is_empty() {
+        return display_topology.detail.clone();
+    }
+    let probes = display_topology
+        .probes
+        .iter()
+        .map(|probe| {
+            let exit_status = probe
+                .exit_status
+                .map_or_else(|| "none".to_string(), |status| status.to_string());
+            let stderr = probe.stderr_snippet.as_deref().unwrap_or("none");
+            format!(
+                "{}: ok={} timeout={} exit_status={} displays={} stdout_bytes={} stderr={} detail={}",
+                probe.provider,
+                probe.ok,
+                probe.timed_out,
+                exit_status,
+                probe.display_count,
+                probe.stdout_bytes,
+                stderr,
+                probe.detail
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("{}; {probes}", display_topology.detail)
 }
 
 #[async_trait::async_trait]
@@ -375,37 +482,17 @@ impl DesktopBackend for LinuxDesktopBackend {
     }
 
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
-        self.refresh_session_env();
-        let mut environment = probe_environment().await?;
-        // Warm the KWin scripting-reachability cache off-worker once, awaited
-        // so the cache is guaranteed seeded before any downstream sync
-        // capability probe could run the cold-start gdbus subprocess on a
-        // runtime worker. After the first call this returns immediately.
-        if crate::kwin::kwin_window_query_available(&environment) {
-            static SCRIPTING_PROBE_WARMUP: tokio::sync::OnceCell<()> =
-                tokio::sync::OnceCell::const_new();
-            SCRIPTING_PROBE_WARMUP
-                .get_or_init(|| async {
-                    let _ = tokio::task::spawn_blocking(crate::kwin::warm_scripting_probe).await;
-                })
-                .await;
-        }
-        environment.semantic_backend = if require_supported_environment(&environment).is_ok()
-            && self.accessibility_connection().await.is_ok()
-        {
-            SemanticBackendKind::Atspi
-        } else {
-            SemanticBackendKind::None
-        };
-        self.enrich_environment_displays(&mut environment).await;
-        Ok(environment)
+        self.probe_environment_with_display_report()
+            .await
+            .map(|(environment, _display_topology)| environment)
     }
 
     async fn doctor(&self) -> Result<sky_cua_platform::model::DoctorReport, BackendError> {
-        let environment = self.probe_environment().await?;
+        let (environment, display_topology) = self.probe_environment_with_display_report().await?;
         let session_presence = self.session_presence.doctor_report().await;
         Ok(crate::doctor::build_doctor_report_with_session_presence(
             environment,
+            Some(display_topology),
             self.session_env_report(),
             Some(session_presence),
         ))
@@ -510,16 +597,18 @@ impl DesktopBackend for LinuxDesktopBackend {
     ) -> Result<AppStateSnapshot, BackendError> {
         let _ = self.portal.take_lifecycle_events().await;
         let snapshot_id = new_snapshot_id();
-        let environment = self.probe_environment().await?;
+        let (environment, display_topology) = self.probe_environment_with_display_report().await?;
         require_supported_environment(&environment)?;
         let capabilities = Self::capabilities(&environment);
         let session_presence = self.session_presence.doctor_report().await;
         let doctor_report = crate::doctor::build_doctor_report_with_session_presence(
             environment.clone(),
+            Some(display_topology.clone()),
             self.session_env_report(),
             Some(session_presence),
         );
         let mut diagnostics = DiagnosticBuilder::new();
+        push_display_topology_diagnostics(&environment, &display_topology, &mut diagnostics);
         if let Some(diagnostic) = doctor_report
             .session_env
             .as_ref()
@@ -546,6 +635,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             None,
             CaptureScope::Unknown,
             None,
+            false,
             &mut diagnostics,
         )
         .await?;
@@ -788,10 +878,12 @@ impl DesktopBackend for LinuxDesktopBackend {
     ) -> Result<AppStateSnapshot, BackendError> {
         let _ = self.portal.take_lifecycle_events().await;
         let snapshot_id = new_snapshot_id();
-        let environment = self.probe_environment().await?;
+        let mut environment = self.probe_environment_base().await?;
+        let display_topology = self.enrich_environment_displays(&mut environment).await;
         require_supported_environment(&environment)?;
         let capabilities = Self::capabilities(&environment);
         let mut diagnostics = DiagnosticBuilder::new();
+        push_display_topology_diagnostics(&environment, &display_topology, &mut diagnostics);
 
         let mut target_window = None;
         let mut capture_target = None;
@@ -830,7 +922,7 @@ impl DesktopBackend for LinuxDesktopBackend {
         } else if let Some(display_target) = display_target {
             let display =
                 crate::displays::resolve_display_target(&environment.displays, &display_target)?;
-            let display_ref = crate::displays::display_ref(&display);
+            let display_ref = DisplayRef::from(&display);
             capture_scope = CaptureScope::Display;
             capture_display = Some(display_ref.clone());
             capture_target = Some(crate::capture_plan::CaptureRegionTarget {
@@ -841,7 +933,7 @@ impl DesktopBackend for LinuxDesktopBackend {
         } else if capture_all_displays {
             capture_scope = CaptureScope::AllDisplays;
         } else if let Some(display) = crate::displays::primary_display(&environment.displays) {
-            let display_ref = crate::displays::display_ref(&display);
+            let display_ref = DisplayRef::from(&display);
             capture_scope = CaptureScope::PrimaryDisplay;
             capture_display = Some(display_ref.clone());
             capture_target = Some(crate::capture_plan::CaptureRegionTarget {
@@ -857,17 +949,74 @@ impl DesktopBackend for LinuxDesktopBackend {
             );
         }
 
-        let capture_plan = crate::capture_plan::plan_capture(
+        let mut retried_capture_source_geometry = false;
+        let mut capture_plan = match crate::capture_plan::plan_capture(
             &self.portal,
             &snapshot_id,
             CaptureScreenMode::Always,
             &environment,
             capture_target.as_ref(),
-            capture_scope,
-            capture_display,
+            capture_scope.clone(),
+            capture_display.clone(),
+            true,
             &mut diagnostics,
         )
-        .await?;
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(error)
+                if capture_target.is_some()
+                    && crate::capture_plan::is_capture_source_geometry_missing(&error) =>
+            {
+                retried_capture_source_geometry = true;
+                diagnostics.push_code(
+                    "CaptureSourceGeometryRetry",
+                    "RemoteDesktop capture source geometry was missing; resetting the capture session and retrying the targeted screenshot once",
+                    Some(error.message.clone()),
+                );
+                self.portal.reset_session().await;
+                crate::capture_plan::plan_capture(
+                    &self.portal,
+                    &snapshot_id,
+                    CaptureScreenMode::Always,
+                    &environment,
+                    capture_target.as_ref(),
+                    capture_scope.clone(),
+                    capture_display.clone(),
+                    false,
+                    &mut diagnostics,
+                )
+                .await?
+            }
+            Err(error) => return Err(error),
+        };
+        if !retried_capture_source_geometry
+            && capture_target.is_some()
+            && crate::capture_plan::outcome_missing_capture_source_geometry(&capture_plan)
+            && environment.input_backend == InputBackendKind::PortalRemoteDesktop
+        {
+            diagnostics.push_code(
+                "CaptureSourceGeometryRetry",
+                "RemoteDesktop capture source geometry was missing; resetting the capture session and retrying the targeted screenshot once",
+                capture_plan
+                    .capture_error
+                    .as_ref()
+                    .map(|error| error.message.clone()),
+            );
+            self.portal.reset_session().await;
+            capture_plan = crate::capture_plan::plan_capture(
+                &self.portal,
+                &snapshot_id,
+                CaptureScreenMode::Always,
+                &environment,
+                capture_target.as_ref(),
+                capture_scope.clone(),
+                capture_display.clone(),
+                false,
+                &mut diagnostics,
+            )
+            .await?;
+        }
         let mut portal_lifecycle_events = self.portal.take_lifecycle_events().await;
         crate::capture_plan::push_diagnostics(
             &environment,
@@ -877,6 +1026,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             &mut diagnostics,
         );
         push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
+        reject_unactionable_targeted_capture(capture_target.as_ref(), &capture_plan, &environment)?;
         require_screenshot_image(
             capture_plan.capture.as_ref(),
             capture_plan.portal_session_error.as_ref(),
@@ -952,6 +1102,47 @@ fn require_screenshot_image(
     Err(BackendError::new(
         BackendErrorCode::Internal,
         "screenshot capture did not produce an image",
+    ))
+}
+
+fn reject_unactionable_targeted_capture(
+    capture_target: Option<&crate::capture_plan::CaptureRegionTarget>,
+    capture_plan: &crate::capture_plan::CapturePlanOutcome,
+    environment: &EnvironmentInfo,
+) -> Result<(), BackendError> {
+    if capture_target.is_none() {
+        return Ok(());
+    }
+    let screenshot_fallback_without_source_geometry =
+        capture_plan.capture.as_ref().is_some_and(|capture| {
+            capture.screenshot_path.is_some()
+                && capture.image_backend == Some(CaptureBackendKind::PortalScreenshot)
+                && capture.source_logical_rect.is_none()
+        });
+    if screenshot_fallback_without_source_geometry {
+        if environment.input_backend == InputBackendKind::PortalRemoteDesktop {
+            return Err(BackendError::new(
+                BackendErrorCode::CaptureSourceGeometryMissing,
+                "targeted screenshot produced an image without capture source geometry for subsequent pixel actions",
+            ));
+        }
+        // LinuxVirtualInput and other non-portal input backends can act on the
+        // fallback screenshot using its own pixel_size, so the missing
+        // source_logical_rect is not fatal.
+        return Ok(());
+    }
+    if !crate::capture_plan::outcome_missing_capture_source_geometry(capture_plan) {
+        return Ok(());
+    }
+    if let Some(error) = capture_plan.capture_error.as_ref() {
+        return Err(BackendError {
+            code: error.code,
+            message: error.message.clone(),
+        });
+    }
+    Err(BackendError::new(
+        BackendErrorCode::CaptureSourceGeometryMissing,
+        "targeted screenshot produced an image without capture source geometry for subsequent pixel actions",
     ))
 }
 
@@ -1264,19 +1455,6 @@ fn keyboard_input_unavailable_reason(environment: &EnvironmentInfo) -> &'static 
                  so keyboard_input_unavailable_reason should never be called for them"
             )
         }
-    }
-}
-
-fn success_with_diagnostics(
-    message: impl Into<String>,
-    diagnostics: Vec<sky_cua_platform::model::DiagnosticEntry>,
-) -> ActionOutcome {
-    ActionOutcome {
-        success: true,
-        message: message.into(),
-        code: "Ok".to_string(),
-        diagnostics,
-        agent_cursor: None,
     }
 }
 
@@ -1997,48 +2175,28 @@ mod tests {
         AppInfo, AppSelector, DISPLAY_TOPOLOGY_CACHE_TTL, DisplayTopologyCache,
         LinuxDesktopBackend, cached_display_topology, fallback_window_elements_with_x11_detail,
         linux_fallback_snapshot, linux_window_elements, merge_session_env_reports,
-        require_screenshot_image, scroll_target_value, vertical_scrollbar_for_point,
-        x11_window_elements,
+        reject_unactionable_targeted_capture, require_screenshot_image, scroll_target_value,
+        vertical_scrollbar_for_point, x11_window_elements,
     };
     use crate::app_match::{
         app_from_linux_window, best_x11_window_match, matches_selector, select_x11_window,
         selector_summary, x11_window_matches_app,
     };
-    use crate::capture_plan::should_attempt_x11_capture;
+    use crate::capture_plan::{
+        CapturePlanOutcome, CaptureRegionTarget, should_attempt_x11_capture,
+    };
     use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
+    use sky_cua_platform::model::test_support::wayland_pipewire_environment;
     use sky_cua_platform::model::{
-        CaptureBackendKind, CaptureScreenMode, CoordinateSpace, DisplayInfo,
-        DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback,
-        EnvironmentInfo, InputBackendKind, PortalCapabilities, RectF, SemanticBackendKind,
-        SessionKind,
+        CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace,
+        DisplayInfo, DoctorDisplayTopologyReport, DoctorSessionEnvRepair, DoctorSessionEnvReport,
+        ElementNode, ElementNumericValueReadback, EnvironmentInfo, InputBackendKind, PixelSize,
+        PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
     };
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::{Duration, Instant};
-
-    fn wayland_pipewire_environment() -> EnvironmentInfo {
-        EnvironmentInfo {
-            session_kind: SessionKind::Wayland,
-            compositor: Some("kde-kwin-wayland".to_string()),
-            desktop_environment: Some("KDE".to_string()),
-            capture_backend: CaptureBackendKind::PortalPipeWire,
-            input_backend: InputBackendKind::PortalRemoteDesktop,
-            semantic_backend: SemanticBackendKind::Atspi,
-            portal_capabilities: PortalCapabilities {
-                screencast_version: Some(5),
-                remote_desktop_version: Some(2),
-                screenshot_version: Some(2),
-                available_source_types: None,
-                available_cursor_modes: None,
-                available_device_types: None,
-            },
-            xdg_session_type: Some("wayland".to_string()),
-            display: None,
-            wayland_display: Some("wayland-0".to_string()),
-            displays: Vec::new(),
-        }
-    }
 
     #[test]
     fn screenshot_no_image_preserves_portal_error() {
@@ -2096,6 +2254,15 @@ mod tests {
             pixel_size: None,
             scale_factor: Some(1.0),
             backend: "test".to_string(),
+        }
+    }
+
+    fn test_display_topology_report(display_count: usize) -> DoctorDisplayTopologyReport {
+        DoctorDisplayTopologyReport {
+            display_count,
+            selected_provider: Some("test".to_string()),
+            probes: Vec::new(),
+            detail: format!("test topology with {display_count} display(s)"),
         }
     }
 
@@ -2180,17 +2347,36 @@ mod tests {
         let cache = Arc::new(StdMutex::new(Some(DisplayTopologyCache {
             updated_at: now - Duration::from_millis(500),
             displays: vec![test_display("test:primary")],
+            report: test_display_topology_report(1),
         })));
 
         let cached = cached_display_topology(&cache, now).expect("fresh cache should be used");
-        assert_eq!(cached[0].display_id, "test:primary");
+        assert_eq!(cached.displays[0].display_id, "test:primary");
+        assert_eq!(cached.report.display_count, 1);
 
         *cache.lock().expect("cache lock") = Some(DisplayTopologyCache {
             updated_at: now - DISPLAY_TOPOLOGY_CACHE_TTL - Duration::from_millis(1),
             displays: vec![test_display("test:stale")],
+            report: test_display_topology_report(1),
         });
 
         assert!(cached_display_topology(&cache, now).is_none());
+    }
+
+    #[test]
+    fn display_topology_cache_preserves_empty_probe_report() {
+        let now = Instant::now();
+        let report = test_display_topology_report(0);
+        let cache = Arc::new(StdMutex::new(Some(DisplayTopologyCache {
+            updated_at: now,
+            displays: Vec::new(),
+            report: report.clone(),
+        })));
+
+        let cached = cached_display_topology(&cache, now).expect("empty topology is cached");
+
+        assert!(cached.displays.is_empty());
+        assert_eq!(cached.report, report);
     }
 
     #[test]
@@ -2224,6 +2410,312 @@ mod tests {
             CaptureScreenMode::Always,
             &environment
         ));
+    }
+
+    #[test]
+    fn targeted_screenshot_rejects_unactionable_fallback_snapshot() {
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 720.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            capture_scope: CaptureScope::Window,
+            display: None,
+        };
+        let outcome = CapturePlanOutcome {
+            capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalScreenshot),
+                capture_scope: CaptureScope::Window,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: Some("116".to_string()),
+                source_type: Some(1),
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: Some(RectF {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1280.0,
+                    height: 720.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                logical_to_pixel_scale: Some(1.0),
+                screenshot_path: Some("/tmp/capture.jpg".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: None,
+                model_image_quality: None,
+                model_image_bytes: None,
+                model_image_encode_ms: None,
+            }),
+            portal_session_error: None,
+            capture_error: Some(BackendError::new(
+                BackendErrorCode::CaptureSourceGeometryMissing,
+                "targeted screenshot requires capture source geometry",
+            )),
+        };
+
+        let environment = wayland_pipewire_environment();
+        let error = reject_unactionable_targeted_capture(Some(&target), &outcome, &environment)
+            .expect_err("must reject");
+
+        assert_eq!(
+            error.code,
+            BackendErrorCode::CaptureSourceGeometryMissing.as_str()
+        );
+        assert!(error.message.contains("source geometry"));
+    }
+
+    #[test]
+    fn targeted_screenshot_rejects_unactionable_pipewire_failure_fallback() {
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 720.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            capture_scope: CaptureScope::Window,
+            display: None,
+        };
+        let outcome = CapturePlanOutcome {
+            capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalScreenshot),
+                capture_scope: CaptureScope::Window,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: Some("116".to_string()),
+                source_type: Some(1),
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: Some(RectF {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1280.0,
+                    height: 720.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                logical_to_pixel_scale: Some(1.0),
+                screenshot_path: Some("/tmp/capture.jpg".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: None,
+                model_image_quality: None,
+                model_image_bytes: None,
+                model_image_encode_ms: None,
+            }),
+            portal_session_error: None,
+            capture_error: Some(BackendError::new(
+                BackendErrorCode::PipeWireStreamFailed,
+                "remote fd closed unexpectedly",
+            )),
+        };
+
+        let environment = wayland_pipewire_environment();
+        let error = reject_unactionable_targeted_capture(Some(&target), &outcome, &environment)
+            .expect_err("must reject");
+
+        assert_eq!(
+            error.code,
+            BackendErrorCode::CaptureSourceGeometryMissing.as_str()
+        );
+        assert!(error.message.contains("source geometry"));
+    }
+
+    #[test]
+    fn targeted_screenshot_rejects_direct_screenshot_portal_capture_for_remote_desktop_input() {
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 720.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            capture_scope: CaptureScope::Window,
+            display: None,
+        };
+        let outcome = CapturePlanOutcome {
+            capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalScreenshot,
+                image_backend: Some(CaptureBackendKind::PortalScreenshot),
+                capture_scope: CaptureScope::Window,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: None,
+                source_type: None,
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: Some(RectF {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1280.0,
+                    height: 720.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                logical_to_pixel_scale: Some(1.0),
+                screenshot_path: Some("/tmp/capture.png".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: None,
+                model_image_quality: None,
+                model_image_bytes: None,
+                model_image_encode_ms: None,
+            }),
+            portal_session_error: None,
+            capture_error: None,
+        };
+        let environment = wayland_pipewire_environment();
+
+        let error = reject_unactionable_targeted_capture(Some(&target), &outcome, &environment)
+            .expect_err("Portal RemoteDesktop screenshot capture should be rejected");
+
+        assert_eq!(
+            error.code,
+            BackendErrorCode::CaptureSourceGeometryMissing.as_str()
+        );
+        assert!(error.message.contains("source geometry"));
+    }
+
+    #[test]
+    fn targeted_screenshot_allows_direct_screenshot_portal_capture_for_linux_virtual_input() {
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 720.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            capture_scope: CaptureScope::Window,
+            display: None,
+        };
+        let outcome = CapturePlanOutcome {
+            capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalScreenshot,
+                image_backend: Some(CaptureBackendKind::PortalScreenshot),
+                capture_scope: CaptureScope::Window,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: None,
+                source_type: None,
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: Some(RectF {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1280.0,
+                    height: 720.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                logical_to_pixel_scale: Some(1.0),
+                screenshot_path: Some("/tmp/capture.png".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: None,
+                model_image_quality: None,
+                model_image_bytes: None,
+                model_image_encode_ms: None,
+            }),
+            portal_session_error: None,
+            capture_error: None,
+        };
+        let mut environment = wayland_pipewire_environment();
+        environment.input_backend = InputBackendKind::LinuxVirtualInput;
+
+        reject_unactionable_targeted_capture(Some(&target), &outcome, &environment)
+            .expect("direct Screenshot portal capture should remain actionable");
+    }
+
+    #[test]
+    fn targeted_screenshot_allows_pipewire_to_screenshot_fallback_for_linux_virtual_input() {
+        let target = CaptureRegionTarget {
+            desktop_logical_rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 720.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            capture_scope: CaptureScope::Window,
+            display: None,
+        };
+        let outcome = CapturePlanOutcome {
+            capture: Some(CaptureInfo {
+                backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalScreenshot),
+                capture_scope: CaptureScope::Window,
+                display: None,
+                coordinate_space: Some(CoordinateSpace::StreamPixels),
+                stream_id: Some("116".to_string()),
+                source_type: Some(1),
+                mapping_id: None,
+                source_logical_rect: None,
+                logical_rect: Some(RectF {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1280.0,
+                    height: 720.0,
+                    space: CoordinateSpace::DesktopLogical,
+                }),
+                pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                original_pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 720,
+                }),
+                logical_to_pixel_scale: Some(1.0),
+                screenshot_path: Some("/tmp/capture.png".to_string()),
+                original_screenshot_path: Some("/tmp/capture.png".to_string()),
+                model_image_format: None,
+                model_image_quality: None,
+                model_image_bytes: None,
+                model_image_encode_ms: None,
+            }),
+            portal_session_error: None,
+            capture_error: None,
+        };
+        let mut environment = wayland_pipewire_environment();
+        environment.input_backend = InputBackendKind::LinuxVirtualInput;
+
+        reject_unactionable_targeted_capture(Some(&target), &outcome, &environment)
+            .expect("PipeWire-primary Screenshot-fallback capture should remain actionable with LinuxVirtualInput");
     }
 
     #[test]

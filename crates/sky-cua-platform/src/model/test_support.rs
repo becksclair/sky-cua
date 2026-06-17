@@ -8,7 +8,7 @@ use super::{
     ToolAvailability, ToolCapabilities, WindowInfo,
 };
 
-pub(super) fn available_capabilities() -> ToolCapabilities {
+pub fn available_capabilities() -> ToolCapabilities {
     let available = || ToolAvailability {
         available: true,
         reason: None,
@@ -34,7 +34,7 @@ pub(super) fn available_capabilities() -> ToolCapabilities {
     }
 }
 
-pub(super) fn environment_info() -> EnvironmentInfo {
+pub fn environment_info() -> EnvironmentInfo {
     EnvironmentInfo {
         session_kind: SessionKind::Wayland,
         compositor: Some("KWin".to_string()),
@@ -57,7 +57,30 @@ pub(super) fn environment_info() -> EnvironmentInfo {
     }
 }
 
-pub(super) fn doctor_report() -> DoctorReport {
+pub fn wayland_pipewire_environment() -> EnvironmentInfo {
+    EnvironmentInfo {
+        session_kind: SessionKind::Wayland,
+        compositor: Some("kde-kwin-wayland".to_string()),
+        desktop_environment: Some("KDE".to_string()),
+        capture_backend: CaptureBackendKind::PortalPipeWire,
+        input_backend: InputBackendKind::PortalRemoteDesktop,
+        semantic_backend: SemanticBackendKind::Atspi,
+        portal_capabilities: PortalCapabilities {
+            screencast_version: Some(5),
+            remote_desktop_version: Some(2),
+            screenshot_version: Some(2),
+            available_source_types: None,
+            available_cursor_modes: None,
+            available_device_types: None,
+        },
+        xdg_session_type: Some("wayland".to_string()),
+        display: None,
+        wayland_display: Some("wayland-0".to_string()),
+        displays: Vec::new(),
+    }
+}
+
+pub fn doctor_report() -> DoctorReport {
     DoctorReport {
         environment: environment_info(),
         checks: Vec::new(),
@@ -74,6 +97,7 @@ pub(super) fn doctor_report() -> DoctorReport {
             blockers: Vec::new(),
         },
         platform: None,
+        display_topology: None,
         session_env: None,
         portal: None,
         accessibility: None,
@@ -84,14 +108,14 @@ pub(super) fn doctor_report() -> DoctorReport {
     }
 }
 
-pub(super) fn setup_command_report() -> SetupCommandReport {
+pub fn setup_command_report() -> SetupCommandReport {
     SetupCommandReport {
         ok: true,
         detail: "ok".to_string(),
     }
 }
 
-pub(super) fn window_info() -> WindowInfo {
+pub fn window_info() -> WindowInfo {
     WindowInfo {
         window_id: "w1".to_string(),
         title: Some("Test".to_string()),
@@ -110,7 +134,7 @@ pub(super) fn window_info() -> WindowInfo {
     }
 }
 
-pub(super) fn action_outcome() -> ActionOutcome {
+pub fn action_outcome() -> ActionOutcome {
     ActionOutcome {
         success: true,
         message: "ok".to_string(),
@@ -120,7 +144,7 @@ pub(super) fn action_outcome() -> ActionOutcome {
     }
 }
 
-pub(super) fn cursor_state() -> AgentCursorState {
+pub fn cursor_state() -> AgentCursorState {
     AgentCursorState {
         visible: true,
         sequence: 1,
@@ -137,7 +161,7 @@ pub(super) fn cursor_state() -> AgentCursorState {
     }
 }
 
-pub(super) fn cursor_capabilities() -> AgentCursorCapabilities {
+pub fn cursor_capabilities() -> AgentCursorCapabilities {
     AgentCursorCapabilities {
         backend: AgentCursorBackendKind::WaylandLayerShell,
         visible_overlay: true,
@@ -152,7 +176,7 @@ pub(super) fn cursor_capabilities() -> AgentCursorCapabilities {
     }
 }
 
-pub(super) fn app_state_snapshot() -> AppStateSnapshot {
+pub fn app_state_snapshot() -> AppStateSnapshot {
     AppStateSnapshot {
         snapshot_id: "snap-1".to_string(),
         created_at: Utc::now(),

@@ -447,6 +447,21 @@ pub struct CaptureInfo {
     pub model_image_encode_ms: Option<u64>,
 }
 
+impl CaptureInfo {
+    pub fn clear_image_fields(&mut self) {
+        self.image_backend = None;
+        self.screenshot_path = None;
+        self.pixel_size = None;
+        self.original_screenshot_path = None;
+        self.original_pixel_size = None;
+        self.logical_to_pixel_scale = None;
+        self.model_image_format = None;
+        self.model_image_quality = None;
+        self.model_image_bytes = None;
+        self.model_image_encode_ms = None;
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ElementNode {
     pub element_index: usize,
@@ -660,6 +675,34 @@ pub struct DoctorPortalReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DoctorDisplayProbeReport {
+    pub provider: String,
+    pub attempted: bool,
+    pub ok: bool,
+    #[serde(default)]
+    pub timed_out: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<i32>,
+    #[serde(default)]
+    pub stdout_bytes: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_snippet: Option<String>,
+    #[serde(default)]
+    pub display_count: usize,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DoctorDisplayTopologyReport {
+    pub display_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_provider: Option<String>,
+    #[serde(default)]
+    pub probes: Vec<DoctorDisplayProbeReport>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DoctorAccessibilityReport {
     pub atspi_bus: DoctorCheck,
     pub toolkit_accessibility: DoctorCheck,
@@ -712,6 +755,8 @@ pub struct DoctorReport {
     pub readiness: DoctorReadiness,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<DoctorPlatformReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_topology: Option<DoctorDisplayTopologyReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_env: Option<DoctorSessionEnvReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -848,11 +893,11 @@ impl DisplayTarget {
         };
 
         let mut target_arguments = serde_json::Map::new();
-        for field in Self::FIELD_NAMES {
-            if let Some(value) = arguments.get(*field)
-                && display_target_argument_is_present(*field, value)
+        for &field in Self::FIELD_NAMES {
+            if let Some(value) = arguments.get(field)
+                && display_target_argument_is_present(field, value)
             {
-                target_arguments.insert((*field).to_string(), value.clone());
+                target_arguments.insert(field.to_string(), value.clone());
             }
         }
 
@@ -1076,8 +1121,8 @@ impl ActionOutcome {
     }
 }
 
-#[cfg(test)]
-mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 #[cfg(test)]
 mod tests;

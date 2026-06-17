@@ -14,7 +14,8 @@ use sky_cua_platform::{SetValueFallbackMode, SetValueRouting};
 use targeting::{
     action_point_for_backend, drag_from_point, drag_to_point, effective_keyboard_input_backend,
     effective_keyboard_input_backend_for_target, effective_pointer_input_backend_for_target,
-    input_backend_for, point_for_element_for_backend, virtual_scroll_steps_from_delta,
+    explicit_point, input_backend_for, point_for_element_for_backend,
+    virtual_scroll_steps_from_delta,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -26,6 +27,9 @@ use crate::portal::remote_desktop::MouseButton;
 use crate::windowing::common::command_exists;
 use crate::x11::windowing::X11WindowInfo;
 use key_sequence::parse_key_sequence;
+
+pub(crate) const SET_VALUE_PHYSICAL_FALLBACK_MESSAGE: &str =
+    "Set the value through a heuristics-backed physical typing fallback.";
 
 pub(crate) struct LinuxActionExecutor<'a, R> {
     runtime: &'a R,
@@ -273,7 +277,12 @@ where
 
     async fn scroll(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
         let input_backend = input_backend_for(&request);
-        if let Ok((x, y)) = action_point_for_backend(&request, input_backend.clone()) {
+        let target_point = match action_point_for_backend(&request, input_backend.clone()) {
+            Ok(point) => Some(point),
+            Err(error) if scroll_target_requested(&request) => return Err(error),
+            Err(_) => None,
+        };
+        if let Some((x, y)) = target_point {
             match input_backend {
                 InputBackendKind::PortalRemoteDesktop => {}
                 InputBackendKind::XTest => self.runtime.xtest_pointer_move_absolute(x, y)?,
@@ -294,7 +303,7 @@ where
 
         match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
-                if let Ok((x, y)) = action_point_for_backend(&request, input_backend) {
+                if let Some((x, y)) = target_point {
                     self.runtime
                         .portal_scroll_vertical_at(x, y, delta_y, steps)
                         .await?;
@@ -313,8 +322,7 @@ where
                 Ok(success("Scrolled through the X11 input fallback."))
             }
             InputBackendKind::LinuxVirtualInput => {
-                let steps = virtual_scroll_steps_from_delta(delta_y).unwrap_or(steps);
-                if let Ok((x, y)) = action_point_for_backend(&request, input_backend) {
+                if let Some((x, y)) = target_point {
                     if self
                         .runtime
                         .semantic_scroll_vertical_at(
@@ -697,10 +705,28 @@ where
                         tokio::time::sleep(Duration::from_millis(40)).await;
                         self.runtime.portal_press_key_sequence(&select_all).await?;
                         tokio::time::sleep(Duration::from_millis(25)).await;
-                        self.runtime.portal_send_text(value).await?;
+                        if should_prefer_kde_clipboard_text_backend(request) {
+                            match run_kde_clipboard_paste_text(self.runtime, value).await {
+                                Ok(_) => {}
+                                Err(error) => {
+                                    if error.clear_portal_session {
+                                        self.runtime.portal_reset_session().await;
+                                    }
+                                    if !error.can_fallback_to_portal_keysym {
+                                        return Err(BackendError::new(
+                                            BackendErrorCode::ActionUnsupportedForEnvironment,
+                                            error.message,
+                                        ));
+                                    }
+                                    self.runtime.portal_send_text(value).await?;
+                                }
+                            }
+                        } else {
+                            self.runtime.portal_send_text(value).await?;
+                        }
                         diagnostics.extend(self.runtime.portal_take_lifecycle_diagnostics().await);
                         Ok(success_with_diagnostics(
-                            "Set the value through a heuristics-backed physical typing fallback.",
+                            SET_VALUE_PHYSICAL_FALLBACK_MESSAGE,
                             diagnostics,
                         ))
                     }
@@ -719,7 +745,7 @@ where
                             value,
                         )?;
                         Ok(success_with_diagnostics(
-                            "Set the value through a heuristics-backed physical typing fallback.",
+                            SET_VALUE_PHYSICAL_FALLBACK_MESSAGE,
                             diagnostics,
                         ))
                     }
@@ -730,7 +756,7 @@ where
                         tokio::time::sleep(Duration::from_millis(25)).await;
                         self.runtime.virtual_type_text(value)?;
                         Ok(success_with_diagnostics(
-                            "Set the value through a heuristics-backed physical typing fallback.",
+                            SET_VALUE_PHYSICAL_FALLBACK_MESSAGE,
                             diagnostics,
                         ))
                     }
@@ -745,6 +771,12 @@ where
             }
         }
     }
+}
+
+fn scroll_target_requested(request: &ActionRequest) -> bool {
+    explicit_point(&request.arguments).is_some()
+        || request.element_index.is_some()
+        || request.resolved_element.is_some()
 }
 
 fn semantic_backend_ref<'a>(
@@ -820,7 +852,7 @@ fn success(message: impl Into<String>) -> ActionOutcome {
     }
 }
 
-fn success_with_diagnostics(
+pub(crate) fn success_with_diagnostics(
     message: impl Into<String>,
     diagnostics: Vec<DiagnosticEntry>,
 ) -> ActionOutcome {
@@ -924,6 +956,7 @@ where
     let mut paste_once = wl_copy_sensitive_paste_once(text)
         .await
         .map_err(KdeClipboardPasteError::before_text_input)?;
+    paste_once.wait_until_serving().await;
 
     let paste_chord = ["Ctrl".to_string(), "v".to_string()];
     let paste_result = runtime
@@ -931,7 +964,7 @@ where
         .await
         .map_err(|error| error.message);
 
-    match paste_result.and(paste_once.wait_for_consumption().await.map(|_| ())) {
+    match paste_result.and(paste_once.stop_after_paste().await.map(|_| ())) {
         Ok(()) => match kde_set_clipboard_contents(&previous).await {
             Ok(()) => Ok("Typed text through the KDE clipboard portal fallback.".to_string()),
             Err(restore_error) => Ok(format!(
@@ -1035,7 +1068,11 @@ struct WlCopyPasteOnce {
 }
 
 impl WlCopyPasteOnce {
-    async fn wait_for_consumption(&mut self) -> Result<(), String> {
+    async fn wait_until_serving(&mut self) {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    async fn stop_after_paste(&mut self) -> Result<(), String> {
         match tokio::time::timeout(
             Duration::from_millis(WL_COPY_PASTE_ONCE_TIMEOUT_MS),
             self.child.wait(),
@@ -1043,10 +1080,13 @@ impl WlCopyPasteOnce {
         .await
         {
             Ok(Ok(status)) if status.success() => Ok(()),
-            Ok(Ok(status)) => Err(format!("wl-copy exited with {status}")),
+            Ok(Ok(status)) => Err(format!(
+                "wl-copy exited before serving a paste request with {status}"
+            )),
             Ok(Err(error)) => Err(format!("failed to wait for wl-copy paste request: {error}")),
             Err(_) => {
                 let _ = self.child.kill().await;
+                let _ = self.child.wait().await;
                 Err("timed out waiting for wl-copy paste request".to_string())
             }
         }
@@ -1108,9 +1148,9 @@ async fn kde_klipper_proxy(connection: &zbus::Connection) -> Result<Proxy<'_>, S
 #[cfg(test)]
 mod tests {
     use super::{
-        KdeClipboardPasteError, LinuxActionExecutor, action_name_matches,
-        clipboard_mime_types_are_plain_text_only, should_prefer_kde_clipboard_text_backend,
-        wl_paste_reports_empty_clipboard,
+        KdeClipboardPasteError, LinuxActionExecutor, SET_VALUE_PHYSICAL_FALLBACK_MESSAGE,
+        action_name_matches, clipboard_mime_types_are_plain_text_only,
+        should_prefer_kde_clipboard_text_backend, wl_paste_reports_empty_clipboard,
     };
     use crate::actions::runtime::{
         LinuxActionRuntime, SemanticActionInvocation, SemanticAtspiAction, SemanticSetValueResult,
@@ -1122,10 +1162,11 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+    use sky_cua_platform::model::test_support::wayland_pipewire_environment;
     use sky_cua_platform::model::{
         ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
         DiagnosticEntry, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind, PixelSize,
-        PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
+        RectF,
     };
     use sky_cua_platform::{SetValueFallbackMode, SetValueRouting};
     use std::sync::Mutex;
@@ -1402,29 +1443,6 @@ mod tests {
         }
     }
 
-    fn wayland_pipewire_environment() -> EnvironmentInfo {
-        EnvironmentInfo {
-            session_kind: SessionKind::Wayland,
-            compositor: Some("kde-kwin-wayland".to_string()),
-            desktop_environment: Some("KDE".to_string()),
-            capture_backend: CaptureBackendKind::PortalPipeWire,
-            input_backend: InputBackendKind::PortalRemoteDesktop,
-            semantic_backend: SemanticBackendKind::Atspi,
-            portal_capabilities: PortalCapabilities {
-                screencast_version: Some(5),
-                remote_desktop_version: Some(2),
-                screenshot_version: Some(2),
-                available_source_types: None,
-                available_cursor_modes: None,
-                available_device_types: None,
-            },
-            xdg_session_type: Some("wayland".to_string()),
-            display: None,
-            wayland_display: Some("wayland-0".to_string()),
-            displays: Vec::new(),
-        }
-    }
-
     fn action_request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
         ActionRequest {
             action,
@@ -1659,6 +1677,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn executor_scroll_rejects_invalid_snapshot_coordinates_instead_of_global_scroll() {
+        let runtime = FakeRuntime::default();
+        let mut request = action_request(
+            ActionName::Scroll,
+            json!({"x": 1316.0, "y": 785.0, "delta_y": -120.0}),
+        );
+        request.snapshot_id = Some("snapshot-1".to_string());
+        request.resolved_capture = Some(CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("64".to_string()),
+            source_type: Some(1),
+            mapping_id: None,
+            source_logical_rect: None,
+            logical_rect: None,
+            pixel_size: Some(PixelSize {
+                width: 914,
+                height: 900,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 2560,
+                height: 2520,
+            }),
+            logical_to_pixel_scale: None,
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: None,
+            model_image_quality: None,
+            model_image_bytes: None,
+            model_image_encode_ms: None,
+        });
+
+        let error = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect_err("scroll should reject invalid targeted coordinates");
+
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(error.message.contains("outside the captured image bounds"));
+        assert!(runtime.take_events().is_empty());
+    }
+
+    #[tokio::test]
     async fn executor_type_text_uses_portal_keysym_path_outside_kde() {
         let runtime = FakeRuntime::default();
         let mut request = action_request(ActionName::TypeText, json!({"text": "hello"}));
@@ -1697,10 +1761,7 @@ mod tests {
             .await
             .expect("set_value fallback should succeed");
 
-        assert_eq!(
-            outcome.message,
-            "Set the value through a heuristics-backed physical typing fallback."
-        );
+        assert_eq!(outcome.message, SET_VALUE_PHYSICAL_FALLBACK_MESSAGE);
         assert_eq!(
             runtime.take_events(),
             vec![

@@ -108,9 +108,9 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "screenshot",
             "description": if can_receive_images {
-                "Capture a fresh visual frame. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop. Use returned snapshot_id for pixel actions."
+                "Capture a fresh visual frame. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop. Use the returned snapshot_id for pixel actions; if capture source geometry is missing, retry the targeted screenshot once before broad fallbacks."
             } else {
-                "Capture a fresh visual frame and return screenshot_path plus snapshot_id. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop."
+                "Capture a fresh visual frame and return screenshot_path plus snapshot_id. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop. Use the returned snapshot_id for pixel actions; if capture source geometry is missing, retry the targeted screenshot once before broad fallbacks."
             },
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
