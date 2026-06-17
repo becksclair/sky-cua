@@ -3,7 +3,6 @@ set -euo pipefail
 
 profile_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-"$profile_dir/kde-kwin-effect.sh"
 "$profile_dir/wayland-pointer.sh"
 "$profile_dir/targeted-screenshot.sh"
 "$profile_dir/display-screenshot.sh"
@@ -12,6 +11,7 @@ profile_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 "$profile_dir/codex-desktop.sh"
 "$profile_dir/opencode-mcp.sh"
 "$profile_dir/pi-mcp.sh"
+"$profile_dir/kde-kwin-effect.sh"
 
 if [[ -n "${HOST_WAYLAND_DISPLAY:-}" ]]; then
 	for headed in kde-plasma gnome cosmic hyprland; do

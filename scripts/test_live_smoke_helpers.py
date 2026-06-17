@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
+import _agent_mcp_smoke
+import live_agent_mcp_smoke
+import live_agentic_loop_smoke
 import live_desktop_smoke
 import live_openclaw_mcp_smoke
 import live_portal_downgrade_smoke
@@ -22,6 +26,15 @@ def test_live_smoke_model_config_is_centralized() -> None:
     assert LIVE_SMOKE_REASONING_EFFORT == "low"
     assert DEFAULT_MODEL == LIVE_SMOKE_MODEL
     assert DEFAULT_REASONING_EFFORT == LIVE_SMOKE_REASONING_EFFORT
+
+
+def test_agentic_loop_default_uses_tool_evidence_enforced_agent() -> None:
+    assert live_agentic_loop_smoke.DEFAULT_AGENT in {"opencode", "pi"}
+    assert set(live_agentic_loop_smoke.ACCEPTANCE_AGENTS) == {"opencode", "pi"}
+
+
+def test_agent_smoke_fixtures_are_dialog_dismissal_flows() -> None:
+    assert set(live_agent_mcp_smoke.FIXTURES) == {"kdialog", "zenity"}
 
 
 def test_pointer_fixture_adjusts_origin_when_fullscreen_allocation_is_clipped() -> None:
@@ -182,6 +195,349 @@ def test_wayland_pointer_smoke_requires_gnome_eis_diagnostics() -> None:
             {"structuredContent": {"diagnostics": []}}, "click", is_gnome=True
         )
     del os.environ["SKY_CUA_REQUIRE_EIS"]
+
+
+def test_agent_smoke_accepts_opencode_tool_use_event_shape() -> None:
+    event = {
+        "type": "tool_use",
+        "part": {
+            "type": "tool",
+            "tool": "sky_cua_click",
+            "state": {
+                "status": "completed",
+                "output": "Invoked the element semantically through AT-SPI.",
+            },
+        },
+    }
+
+    assert live_agent_mcp_smoke._tool_evidence_from_stdout_line(json.dumps(event)) is True
+
+
+def test_agent_smoke_accepts_action_tool_evidence(tmp_path: Path) -> None:
+    stdout = tmp_path / "agent.stdout.log"
+    stdout.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "type": "tool",
+                    "tool": "sky_cua_click",
+                    "state": {"status": "completed", "output": "clicked"},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(stdout) is True
+
+
+def test_agent_smoke_rejects_read_only_tool_as_action_evidence(tmp_path: Path) -> None:
+    stdout = tmp_path / "agent.stdout.log"
+    stdout.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "tool_execution_start",
+                        "tool": "sky_cua_get_app_state",
+                        "toolCallId": "tool-1",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_execution_end",
+                        "result": {"redacted": True},
+                        "toolCallId": "tool-1",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_tool_evidence(stdout) is True
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(stdout) is False
+
+
+def test_agent_smoke_rejects_server_only_tool_result(tmp_path: Path) -> None:
+    stdout = tmp_path / "agent.stdout.log"
+    stdout.write_text(
+        json.dumps(
+            {
+                "type": "tool_execution_end",
+                "server": "sky_cua",
+                "result": {"redacted": True},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_tool_evidence(stdout) is False
+
+
+def test_agent_smoke_redacted_opencode_event_preserves_tool_evidence(tmp_path: Path) -> None:
+    raw = tmp_path / "opencode.raw.jsonl"
+    redacted = tmp_path / "opencode.redacted.jsonl"
+    raw.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "type": "tool",
+                    "tool": "sky_cua_click",
+                    "state": {
+                        "status": "completed",
+                        "output": "secret desktop text",
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    _agent_mcp_smoke.redact_pi_json_stdout(raw, redacted)
+
+    redacted_text = redacted.read_text(encoding="utf-8")
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_tool_evidence(redacted) is True
+    assert "secret desktop text" not in redacted_text
+    assert "sky_cua_click" in redacted_text
+
+
+def test_agent_smoke_accepts_payload_after_non_payload_state() -> None:
+    event = {
+        "type": "tool_use",
+        "part": {
+            "type": "tool",
+            "tool": "sky_cua_click",
+            "state": {"status": "completed"},
+            "toolResult": {"content": [{"type": "text", "text": "clicked"}]},
+        },
+    }
+
+    assert live_agent_mcp_smoke._tool_evidence_from_stdout_line(json.dumps(event)) is True
+
+
+def test_agent_smoke_rejects_status_only_completed_state() -> None:
+    event = {
+        "type": "tool_use",
+        "tool": "sky_cua_click",
+        "state": "completed",
+    }
+
+    assert live_agent_mcp_smoke._tool_evidence_from_stdout_line(json.dumps(event)) is False
+
+
+def test_agent_smoke_rejects_opencode_failed_tool_use_event_shape() -> None:
+    event = {
+        "type": "tool_use",
+        "part": {
+            "type": "tool",
+            "tool": "sky_cua_click",
+            "state": {
+                "status": "failed",
+                "error": "boom",
+            },
+        },
+    }
+
+    assert live_agent_mcp_smoke._tool_evidence_from_stdout_line(json.dumps(event)) is False
+
+
+def test_agent_smoke_redacted_top_level_error_rejects_tool_evidence(tmp_path: Path) -> None:
+    raw = tmp_path / "opencode.raw.jsonl"
+    redacted = tmp_path / "opencode.redacted.jsonl"
+    raw.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "tool": "sky_cua_click",
+                "error": "boom",
+                "result": {"content": [{"type": "text", "text": "clicked"}]},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    _agent_mcp_smoke.redact_pi_json_stdout(raw, redacted)
+
+    redacted_text = redacted.read_text(encoding="utf-8")
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_tool_evidence(redacted) is False
+    assert "boom" not in redacted_text
+    assert "clicked" not in redacted_text
+    assert "result_declares_failure" in redacted_text
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"status": "failed", "output": "boom"},
+        {"status": "failed", "content": [{"type": "text", "text": "boom"}]},
+        {"isError": True, "output": "boom"},
+    ],
+)
+def test_agent_smoke_rejects_opencode_failed_state_with_payload(
+    state: dict[str, object],
+) -> None:
+    event = {
+        "type": "tool_use",
+        "part": {
+            "type": "tool",
+            "tool": "sky_cua_click",
+            "state": state,
+        },
+    }
+
+    assert live_agent_mcp_smoke._tool_evidence_from_stdout_line(json.dumps(event)) is False
+
+
+def test_agent_smoke_accepts_pi_split_tool_start_and_end_events(tmp_path: Path) -> None:
+    stdout = tmp_path / "pi.stdout.log"
+    stdout.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "server": "sky_cua",
+                        "tool": "sky_cua_get_app_state",
+                        "toolCallId": "tool-1",
+                        "toolName": "mcp",
+                        "type": "tool_execution_start",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "isError": False,
+                        "result": {"redacted": True},
+                        "toolCallId": "tool-1",
+                        "toolName": "mcp",
+                        "type": "tool_execution_end",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_tool_evidence(stdout) is True
+
+
+def test_agent_smoke_rejects_mismatched_split_tool_completion(tmp_path: Path) -> None:
+    stdout = tmp_path / "pi.stdout.log"
+    stdout.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "tool": "sky_cua_click",
+                        "toolCallId": "sky",
+                        "type": "tool_execution_start",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "result": {"redacted": True},
+                        "toolCallId": "other",
+                        "type": "tool_execution_end",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(stdout) is False
+
+
+def test_agent_smoke_rejects_pi_failed_split_tool_before_unrelated_success(
+    tmp_path: Path,
+) -> None:
+    stdout = tmp_path / "pi.stdout.log"
+    stdout.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "server": "sky_cua",
+                        "tool": "sky_cua_get_app_state",
+                        "toolCallId": "tool-1",
+                        "toolName": "mcp",
+                        "type": "tool_execution_start",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "isError": True,
+                        "result": {"redacted": True, "result_declares_failure": True},
+                        "toolCallId": "tool-1",
+                        "toolName": "mcp",
+                        "type": "tool_execution_end",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "isError": False,
+                        "result": {"redacted": True},
+                        "toolName": "mcp",
+                        "type": "tool_execution_end",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_tool_evidence(stdout) is False
+
+
+def test_agent_smoke_fails_without_action_tool_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ClosedFixtureProcess:
+        def poll(self) -> int:
+            return 0
+
+    def fake_popen(_argv: list[str]) -> ClosedFixtureProcess:
+        return ClosedFixtureProcess()
+
+    def fake_run_agent(
+        agent: str,
+        _prompt: str,
+        artifact_dir: Path,
+        **_kwargs: object,
+    ) -> object:
+        stdout = artifact_dir / f"{agent}.stdout.log"
+        stdout.write_text(
+            json.dumps(
+                {
+                    "type": "tool_use",
+                    "tool": "sky_cua_get_app_state",
+                    "result": {"redacted": True},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return live_agent_mcp_smoke.subprocess.CompletedProcess([agent], returncode=0)
+
+    monkeypatch.setattr(live_agent_mcp_smoke, "make_artifact_dir", lambda *_args: tmp_path)
+    monkeypatch.setattr(live_agent_mcp_smoke.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(live_agent_mcp_smoke, "run_agent", fake_run_agent)
+
+    assert live_agent_mcp_smoke.run_fixture_smoke(agent="pi", fixture_name="zenity") == 1
+
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["tool_evidence"] is True
+    assert result["action_tool_evidence"] is False
 
 
 def test_openclaw_smoke_show_config_accepts_installed_approve_mode(tmp_path: Path) -> None:
@@ -462,6 +818,78 @@ def test_openclaw_smoke_detects_browser_status_tool_event() -> None:
         {"reply": {"sky_cua_smoke": {"tool_called": True, "tools_visible": True, "error": None}}}
     )
     assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(report_only)
+
+
+def test_opencode_agent_runner_preserves_status_and_redacts_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> object:
+        captured["argv"] = argv
+        captured["env"] = kwargs["env"]
+        stdout = cast(Any, kwargs["stdout"])
+        stdout.write(
+            json.dumps(
+                {
+                    "type": "tool_use",
+                    "tool": "sky_cua_click",
+                    "output": "secret desktop text",
+                }
+            )
+            + "\n"
+        )
+        return _agent_mcp_smoke.subprocess.CompletedProcess(argv, returncode=7)
+
+    monkeypatch.setenv("OPENCODE_API_KEY", "opencode-secret")
+    monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-secret")
+    monkeypatch.setenv("CONTEXT7_API_KEY", "context-secret")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+    monkeypatch.delenv("SKY_CUA_SMOKE_KEEP_RAW_AGENT_LOG", raising=False)
+    monkeypatch.setattr(_agent_mcp_smoke.subprocess, "run", fake_run)
+
+    proc = _agent_mcp_smoke.run_agent(
+        "opencode", "use sky cua", tmp_path, model="opencode-go/test-model"
+    )
+
+    assert proc.returncode == 7
+    assert captured["argv"][:3] == ["script", "-q", "-e"]
+    assert "--model opencode-go/test-model" in captured["argv"][4]
+    env = cast(dict[str, str], captured["env"])
+    assert env["OPENCODE_API_KEY"] == "opencode-secret"
+    assert env["MOONSHOT_API_KEY"] == "moonshot-secret"
+    assert env["CONTEXT7_API_KEY"] == "context-secret"
+    assert "SSH_AUTH_SOCK" not in env
+    stdout = (tmp_path / "opencode.stdout.log").read_text(encoding="utf-8")
+    assert "secret desktop text" not in stdout
+    assert '"result": {"redacted": true}' in stdout
+
+
+def test_openclaw_agent_runner_preserves_state_and_auth_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> object:
+        captured["argv"] = argv
+        captured["env"] = kwargs["env"]
+        return _agent_mcp_smoke.subprocess.CompletedProcess(argv, returncode=0)
+
+    monkeypatch.setenv("OPENCLAW_STATE_DIR", "/tmp/openclaw-state")
+    monkeypatch.setenv("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-state/openclaw.json")
+    monkeypatch.setenv("OPENCLAW_GATEWAY_PASSWORD", "gateway-secret")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+    monkeypatch.setattr(_agent_mcp_smoke.subprocess, "run", fake_run)
+
+    proc = _agent_mcp_smoke.run_agent("openclaw", "use sky cua", tmp_path)
+
+    assert proc.returncode == 0
+    assert captured["argv"][:2] == ["openclaw", "agent"]
+    env = cast(dict[str, str], captured["env"])
+    assert env["OPENCLAW_STATE_DIR"] == "/tmp/openclaw-state"
+    assert env["OPENCLAW_CONFIG_PATH"] == "/tmp/openclaw-state/openclaw.json"
+    assert env["OPENCLAW_GATEWAY_PASSWORD"] == "gateway-secret"
+    assert "SSH_AUTH_SOCK" not in env
 
 
 def test_openclaw_smoke_gateway_auth_fallback(

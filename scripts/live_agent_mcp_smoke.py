@@ -13,12 +13,22 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import subprocess
 import sys
 import time
+from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 
-from _agent_mcp_smoke import make_artifact_dir, run_agent, write_result
+from _agent_mcp_smoke import (
+    DEFAULT_PI_SMOKE_MODEL,
+    TOOL_FAILURE_STATUSES,
+    dismissed_json_from_text,
+    make_artifact_dir,
+    run_agent,
+    write_result,
+)
 
 FIXTURES = {
     "zenity": {
@@ -46,16 +56,26 @@ FIXTURES = {
         "title": "sky-cua agent smoke",
         "prompt_suffix": "dismiss it by clicking OK",
     },
-    "kate": {
-        "argv": ["kate", "--new"],
-        "title": "Untitled",
-        "prompt_suffix": "type 'hello from sky-cua' into the editor, then save the file",
-    },
-    "ghostty": {
-        "argv": ["ghostty"],
-        "title": "Ghostty",
-        "prompt_suffix": "type 'hello from sky-cua' into the terminal",
-    },
+}
+SKY_CUA_ACTION_TOOL_NAMES = {
+    "activate_element",
+    "browser_click",
+    "browser_press_key",
+    "browser_scroll",
+    "browser_type_text",
+    "click",
+    "collapse_element",
+    "drag",
+    "expand_element",
+    "focus_element",
+    "perform_action",
+    "perform_secondary_action",
+    "press_key",
+    "scroll",
+    "select_element",
+    "set_value",
+    "toggle_element",
+    "type_text",
 }
 
 
@@ -63,40 +83,479 @@ def _parse_dismissed_from_stdout(stdout_path: Path) -> bool | None:
     """Scan the agent's stdout for a JSON object with a 'dismissed' key."""
     if not stdout_path.exists():
         return None
-    text = stdout_path.read_text(encoding="utf-8")
-    # Look for the last JSON code block or bare JSON object
-    for block in reversed(text.split("```json")):
-        json_text = block.split("```")[0] if "```" in block else block
-        # Try the whole block first (multi-line JSON)
-        stripped = json_text.strip()
-        if stripped:
-            try:
-                obj = json.loads(stripped)
-                if isinstance(obj, dict) and "dismissed" in obj:
-                    return bool(obj["dismissed"])
-            except json.JSONDecodeError:
-                pass
-        # Fall back to line-by-line for inline JSON
-        for line in reversed(stripped.splitlines()):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-                if isinstance(obj, dict) and "dismissed" in obj:
-                    return bool(obj["dismissed"])
-            except json.JSONDecodeError:
-                # Try to extract the last {} object on the line
-                start = line.rfind("{")
-                end = line.rfind("}")
-                if start != -1 and end != -1 and start < end:
-                    try:
-                        obj = json.loads(line[start : end + 1])
-                        if isinstance(obj, dict) and "dismissed" in obj:
-                            return bool(obj["dismissed"])
-                    except json.JSONDecodeError:
-                        pass
+    latest: bool | None = None
+    tail: deque[str] = deque(maxlen=512)
+    with stdout_path.open(encoding="utf-8") as stdout_file:
+        for line in stdout_file:
+            tail.append(line)
+            parsed = _dismissed_from_stdout_line(line)
+            if parsed is not None:
+                latest = parsed
+    if latest is not None:
+        return latest
+    return dismissed_json_from_text("".join(tail))
+
+
+def _dismissed_from_stdout_line(line: str) -> bool | None:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return dismissed_json_from_text(line)
+    if isinstance(event, dict):
+        latest: bool | None = None
+        for payload in _assistant_text_payloads_from_event(event):
+            parsed = dismissed_json_from_text(payload)
+            if parsed is not None:
+                latest = parsed
+        if latest is not None:
+            return latest
+    return dismissed_json_from_text(line)
+
+
+def _assistant_text_payloads_from_event(event: dict[str, object]) -> list[str]:
+    message = event.get("message")
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return []
+    payloads: list[str] = []
+    content = message.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text")
+                if isinstance(text, str):
+                    payloads.append(text)
+    return payloads
+
+
+def _stdout_has_sky_cua_tool_evidence(stdout_path: Path) -> bool | None:
+    """Return true when JSON-mode stdout records a sky-cua/computer-use tool call."""
+    return _stdout_has_sky_cua_tool_evidence_matching(
+        stdout_path,
+        start_predicate=_is_sky_cua_tool_start,
+        record_predicate=_record_has_successful_sky_cua_tool_identity,
+    )
+
+
+def _stdout_has_sky_cua_action_tool_evidence(stdout_path: Path) -> bool | None:
+    """Return true when stdout records a successful sky-cua action tool call."""
+    return _stdout_has_sky_cua_tool_evidence_matching(
+        stdout_path,
+        start_predicate=_is_sky_cua_action_tool_start,
+        record_predicate=_record_has_successful_sky_cua_action_tool_identity,
+    )
+
+
+def _stdout_has_sky_cua_tool_evidence_matching(
+    stdout_path: Path,
+    *,
+    start_predicate: Callable[[dict[str, object]], bool],
+    record_predicate: Callable[[object], bool],
+) -> bool | None:
+    if not stdout_path.exists():
+        return None
+    saw_json_event = False
+    pending_matching_tool_ids: set[str] = set()
+    with stdout_path.open(encoding="utf-8") as stdout_file:
+        for line in stdout_file:
+            event = _json_object_from_stdout_line(line)
+            if event is not None:
+                saw_json_event = True
+                if start_predicate(event):
+                    call_id = _tool_call_id_from_event(event)
+                    if call_id is not None:
+                        pending_matching_tool_ids.add(call_id)
+                elif _is_tool_completion_event(event):
+                    call_id = _tool_call_id_from_event(event)
+                    if (
+                        call_id is not None
+                        and call_id in pending_matching_tool_ids
+                        and _is_successful_tool_completion_event(event)
+                    ):
+                        return True
+                    if call_id is not None:
+                        pending_matching_tool_ids.discard(call_id)
+            found = _tool_evidence_from_stdout_line_matching(line, record_predicate)
+            if found is True:
+                return True
+            if found is False:
+                saw_json_event = True
+    return False if saw_json_event else None
+
+
+def _tool_evidence_from_stdout_line(line: str) -> bool | None:
+    return _tool_evidence_from_stdout_line_matching(
+        line,
+        _record_has_successful_sky_cua_tool_identity,
+    )
+
+
+def _tool_evidence_from_stdout_line_matching(
+    line: str,
+    record_predicate: Callable[[object], bool],
+) -> bool | None:
+    event = _json_object_from_stdout_line(line)
+    if event is None:
+        return None
+    event_type = event.get("type")
+    if _is_completed_tool_event(event_type) and record_predicate(event):
+        return True
+    tool_results = event.get("toolResults")
+    return isinstance(tool_results, list) and record_predicate(tool_results)
+
+
+def _json_object_from_stdout_line(line: str) -> dict[str, object] | None:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict):
+        return None
+    return event
+
+
+def _tool_call_id_from_event(event: dict[str, object]) -> str | None:
+    for key in ("toolCallId", "tool_call_id", "callId", "call_id", "id"):
+        value = event.get(key)
+        if isinstance(value, str) and value:
+            return value
     return None
+
+
+def _is_sky_cua_tool_start(event: dict[str, object]) -> bool:
+    event_type = event.get("type")
+    if not isinstance(event_type, str) or event_type.lower().replace("-", "_") not in {
+        "tool_execution_start",
+        "tool_use_start",
+    }:
+        return False
+    tool = event.get("tool")
+    return isinstance(tool, str) and _field_names_sky_cua_tool("tool", tool)
+
+
+def _is_sky_cua_action_tool_start(event: dict[str, object]) -> bool:
+    event_type = event.get("type")
+    if not isinstance(event_type, str) or event_type.lower().replace("-", "_") not in {
+        "tool_execution_start",
+        "tool_use_start",
+    }:
+        return False
+    tool = event.get("tool")
+    return isinstance(tool, str) and _field_names_sky_cua_action_tool("tool", tool)
+
+
+def _is_successful_tool_completion_event(event: dict[str, object]) -> bool:
+    if not _is_tool_completion_event(event):
+        return False
+    return not _record_is_failed_tool_result(event) and _record_has_tool_result_payload(event)
+
+
+def _is_tool_completion_event(event: dict[str, object]) -> bool:
+    event_type = event.get("type")
+    if not isinstance(event_type, str):
+        return False
+    return event_type.lower().replace("-", "_") in {
+        "tool_result",
+        "tool_execution_end",
+        "tool_use_end",
+    }
+
+
+def _is_completed_tool_event(event_type: object) -> bool:
+    if not isinstance(event_type, str):
+        return False
+    normalized = event_type.lower().replace("-", "_")
+    return normalized in {"tool_result", "tool_execution_end", "tool_use"}
+
+
+def _record_has_successful_sky_cua_tool_identity(
+    value: object,
+    *,
+    parent_failed: bool = False,
+    parent_has_tool_result_payload: bool = False,
+) -> bool:
+    if isinstance(value, list):
+        return any(
+            _record_has_successful_sky_cua_tool_identity(
+                item,
+                parent_failed=parent_failed,
+                parent_has_tool_result_payload=parent_has_tool_result_payload,
+            )
+            for item in value
+        )
+    if not isinstance(value, dict):
+        return False
+    current_has_payload = parent_has_tool_result_payload or _record_has_tool_result_payload(value)
+    current_failed = parent_failed or _record_is_failed_tool_result(value)
+    if _record_directly_names_sky_cua_tool(value):
+        return not current_failed and current_has_payload
+    for key, item in value.items():
+        normalized_key = key.lower().replace("-", "_")
+        if normalized_key in {
+            "arguments",
+            "args",
+            "details",
+            "input",
+            "metadata",
+            "meta",
+            "parameters",
+            "part",
+            "state",
+            "toolcall",
+            "tool_call",
+        } and _record_has_successful_sky_cua_tool_identity(
+            item,
+            parent_failed=current_failed,
+            parent_has_tool_result_payload=current_has_payload,
+        ):
+            return True
+    return False
+
+
+def _record_directly_names_sky_cua_tool(record: dict[str, object]) -> bool:
+    for key, item in record.items():
+        normalized_key = key.lower().replace("-", "_")
+        if (
+            normalized_key in {"toolname", "tool_name", "tool", "name"}
+            and isinstance(item, str)
+            and _field_names_sky_cua_tool(normalized_key, item)
+        ):
+            return True
+    return False
+
+
+def _record_has_successful_sky_cua_action_tool_identity(
+    value: object,
+    *,
+    parent_failed: bool = False,
+    parent_has_tool_result_payload: bool = False,
+) -> bool:
+    if isinstance(value, list):
+        return any(
+            _record_has_successful_sky_cua_action_tool_identity(
+                item,
+                parent_failed=parent_failed,
+                parent_has_tool_result_payload=parent_has_tool_result_payload,
+            )
+            for item in value
+        )
+    if not isinstance(value, dict):
+        return False
+    current_has_payload = parent_has_tool_result_payload or _record_has_tool_result_payload(value)
+    current_failed = parent_failed or _record_is_failed_tool_result(value)
+    if _record_directly_names_sky_cua_action_tool(value):
+        return not current_failed and current_has_payload
+    for key, item in value.items():
+        normalized_key = key.lower().replace("-", "_")
+        if normalized_key in {
+            "arguments",
+            "args",
+            "details",
+            "input",
+            "metadata",
+            "meta",
+            "parameters",
+            "part",
+            "state",
+            "toolcall",
+            "tool_call",
+        } and _record_has_successful_sky_cua_action_tool_identity(
+            item,
+            parent_failed=current_failed,
+            parent_has_tool_result_payload=current_has_payload,
+        ):
+            return True
+    return False
+
+
+def _record_directly_names_sky_cua_action_tool(record: dict[str, object]) -> bool:
+    for key, item in record.items():
+        normalized_key = key.lower().replace("-", "_")
+        if (
+            normalized_key in {"toolname", "tool_name", "tool", "name"}
+            and isinstance(item, str)
+            and _field_names_sky_cua_action_tool(normalized_key, item)
+        ):
+            return True
+    return False
+
+
+def _field_names_sky_cua_tool(normalized_key: str, value: str) -> bool:
+    if normalized_key in {"toolname", "tool_name", "tool", "name"}:
+        return value.startswith(
+            ("sky_cua_", "mcp__computer_use__", "mcp__sky-cua__", "mcp__sky_cua__")
+        )
+    if normalized_key in {"server", "server_name", "mcp_server", "servername"}:
+        return value in {"sky_cua", "sky-cua", "computer-use", "mcp__computer_use"}
+    return False
+
+
+def _field_names_sky_cua_action_tool(normalized_key: str, value: str) -> bool:
+    if normalized_key not in {"toolname", "tool_name", "tool", "name"}:
+        return False
+    return _sky_cua_tool_base_name(value) in SKY_CUA_ACTION_TOOL_NAMES
+
+
+def _sky_cua_tool_base_name(value: str) -> str | None:
+    for prefix in (
+        "sky_cua_",
+        "mcp__computer_use__",
+        "mcp__sky-cua__",
+        "mcp__sky_cua__",
+    ):
+        if value.startswith(prefix):
+            return value.removeprefix(prefix)
+    return None
+
+
+def _record_is_failed_tool_result(record: dict[str, object]) -> bool:
+    if record.get("is_error") is True or record.get("isError") is True:
+        return True
+    if _record_declares_failure(record):
+        return True
+    for key, item in record.items():
+        normalized_key = key.lower().replace("-", "_")
+        if (
+            normalized_key in {"status", "phase", "state", "result"}
+            and isinstance(item, str)
+            and item.lower() in TOOL_FAILURE_STATUSES
+        ):
+            return True
+    for key in (
+        "content",
+        "output",
+        "result",
+        "structuredContent",
+        "structured_content",
+        "toolResult",
+        "tool_result",
+        "state",
+    ):
+        item = record.get(key)
+        if isinstance(item, dict) and _record_is_failed_tool_result(item):
+            return True
+    return False
+
+
+def _record_declares_failure(record: dict[str, object]) -> bool:
+    if record.get("is_error") is True or record.get("isError") is True:
+        return True
+    if record.get("result_declares_failure") is True:
+        return True
+    error = record.get("error")
+    if isinstance(error, str) and error.strip():
+        return True
+    if isinstance(error, (dict, list)) and error:
+        return True
+    for key in ("status", "phase", "state"):
+        item = record.get(key)
+        if isinstance(item, str) and item.lower() in TOOL_FAILURE_STATUSES:
+            return True
+    return False
+
+
+def _record_has_tool_result_payload(record: dict[str, object]) -> bool:
+    for key in (
+        "output",
+        "content",
+        "structuredContent",
+        "structured_content",
+        "toolResult",
+        "tool_result",
+    ):
+        item = record.get(key)
+        if item is not None:
+            return True
+    state = record.get("state")
+    if isinstance(state, dict) and _record_has_tool_result_payload(state):
+        return True
+    result = record.get("result")
+    return isinstance(result, (dict, list))
+
+
+def run_fixture_smoke(
+    *,
+    agent: str,
+    fixture_name: str,
+    model: str | None = None,
+    profile_name: str | None = None,
+) -> int:
+    fixture = FIXTURES[fixture_name]
+    smoke_name = profile_name or fixture_name
+    artifact_dir = make_artifact_dir(agent, smoke_name)
+    effective_model = model
+    if agent == "pi" and effective_model is None:
+        effective_model = os.environ.get("SKY_CUA_SMOKE_PI_MODEL", DEFAULT_PI_SMOKE_MODEL)
+
+    dialog = subprocess.Popen(fixture["argv"])
+
+    try:
+        prompt = (
+            f"Use the sky-cua MCP tools (server name sky_cua, sky-cua, or computer-use). "
+            f"Find the dialog titled '{fixture['title']}' and {fixture['prompt_suffix']}. "
+            f"Keep the interaction simple and direct; use window/state/click tools only as needed. "
+            f"Do not use shell commands, process inspection, OCR, window-manager commands, "
+            f"keyboard shortcuts, or non-sky-cua desktop shortcuts as substitutes for sky-cua MCP tools. "
+            f"Return a JSON object with keys: dialog_text (string or null), dismissed (boolean)."
+        )
+
+        proc = run_agent(agent, prompt, artifact_dir, model=effective_model)
+
+        # Parse the agent's stdout for a JSON result with a "dismissed" field.
+        # The observed fixture state is the acceptance signal; the self-report
+        # is retained as diagnostic evidence because small models can dismiss a
+        # dialog with a real tool action and still summarize it poorly.
+        stdout_path = artifact_dir / f"{agent}.stdout.log"
+        agent_dismissed = _parse_dismissed_from_stdout(stdout_path)
+        tool_evidence = _stdout_has_sky_cua_tool_evidence(stdout_path)
+        action_tool_evidence = _stdout_has_sky_cua_action_tool_evidence(stdout_path)
+        requires_tool_evidence = agent in {"opencode", "pi"}
+
+        time.sleep(1)
+        dialog_alive = dialog.poll() is None
+        dialog_dismissed = not dialog_alive
+
+        ok = proc.returncode == 0 and dialog_dismissed
+        if requires_tool_evidence:
+            ok = ok and action_tool_evidence is True
+
+        result = write_result(
+            artifact_dir,
+            agent,
+            proc,
+            dialog_alive,
+            extra={
+                "agent_dismissed": agent_dismissed,
+                "dialog_dismissed": dialog_dismissed,
+                "fixture": fixture_name,
+                "model": effective_model,
+                "ok": ok,
+                "action_tool_evidence": action_tool_evidence,
+                "requires_tool_evidence": requires_tool_evidence,
+                "tool_evidence": tool_evidence,
+            },
+        )
+
+        if not ok:
+            print(
+                f"{agent} {smoke_name} smoke FAILED: {artifact_dir}",
+                file=sys.stderr,
+            )
+            print(json.dumps(result, indent=2), file=sys.stderr)
+            return 1
+
+        print(f"{agent} {smoke_name} smoke passed: {artifact_dir}")
+        print(json.dumps(result, indent=2))
+        return 0
+
+    finally:
+        if dialog.poll() is None:
+            dialog.terminate()
+            try:
+                dialog.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                dialog.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    dialog.wait(timeout=5)
 
 
 def main() -> int:
@@ -113,62 +572,13 @@ def main() -> int:
         default="zenity",
         help="Desktop fixture to launch.",
     )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=(f"Agent model override. Pi defaults to {DEFAULT_PI_SMOKE_MODEL} when omitted."),
+    )
     args = parser.parse_args()
-
-    fixture = FIXTURES[args.fixture]
-    artifact_dir = make_artifact_dir(args.agent, args.fixture)
-
-    dialog = subprocess.Popen(fixture["argv"])
-
-    try:
-        prompt = (
-            f"Use the sky-cua MCP tools (server name sky_cua, sky-cua, or computer-use). "
-            f"Load the computer-use skill if available. "
-            f"Find the dialog titled '{fixture['title']}', "
-            f"read its text, {fixture['prompt_suffix']}, and confirm it is gone. "
-            f"Return a JSON object with keys: dialog_text (string), dismissed (boolean)."
-        )
-
-        proc = run_agent(args.agent, prompt, artifact_dir)
-
-        # Parse the agent's stdout for a JSON result with a "dismissed" field;
-        # this is the authoritative signal that the agent completed its task.
-        stdout_path = artifact_dir / f"{args.agent}.stdout.log"
-        agent_dismissed = _parse_dismissed_from_stdout(stdout_path)
-
-        time.sleep(1)
-        dialog_alive = dialog.poll() is None
-
-        result = write_result(
-            artifact_dir, args.agent, proc, dialog_alive, extra={"agent_dismissed": agent_dismissed}
-        )
-
-        # Trust the agent's reported result when available; fall back to
-        # process-poll when the agent didn't produce a parseable result.
-        ok = agent_dismissed if agent_dismissed is not None else not dialog_alive
-        ok = ok and proc.returncode == 0
-
-        if not ok:
-            print(
-                f"{args.agent} {args.fixture} smoke FAILED: {artifact_dir}",
-                file=sys.stderr,
-            )
-            print(json.dumps(result, indent=2), file=sys.stderr)
-            return 1
-
-        print(f"{args.agent} {args.fixture} smoke passed: {artifact_dir}")
-        print(json.dumps(result, indent=2))
-        return 0
-
-    finally:
-        if dialog.poll() is None:
-            dialog.terminate()
-            try:
-                dialog.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                dialog.kill()
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    dialog.wait(timeout=5)
+    return run_fixture_smoke(agent=args.agent, fixture_name=args.fixture, model=args.model)
 
 
 if __name__ == "__main__":

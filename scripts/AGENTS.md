@@ -28,12 +28,16 @@ pytest.
 
 ## Conventions
 
-- Installed-plugin acceptance goes through
-  `_app_server_harness.run_rich_app_server_turn` (see
-  `live_app_server_smoke.py`); `codex exec` is a diagnostic probe only.
-- Validate actual transcript tool calls with `require_computer_use_item`,
-  not only the final JSON — harnesses must not fake plugin success through
-  shell/process inspection when the test is about computer-use tools.
+- Installed-plugin agent-loop acceptance goes through
+  `live_agentic_loop_smoke.py`, which drives the installed MCP server through
+  an external agent CLI. `codex exec` and `codex app-server` harnesses are
+  diagnostic probes only.
+- Pi agent-loop acceptance enforces MCP use with the JSON/stdout tool-evidence
+  checks in `live_agent_mcp_smoke.py`, not only the final JSON. Other agent
+  lanes must add equivalent enforcement before being treated as acceptance.
+  For app-server diagnostic transcripts, use `require_computer_use_item`.
+  Harnesses must not fake plugin success through shell/process inspection when
+  the test is about computer-use tools.
 - New live smokes must name the target app, artifact directory, and proof
   condition.
 - Never read a child process stderr pipe before terminating a child that may
