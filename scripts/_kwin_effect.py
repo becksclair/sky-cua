@@ -82,6 +82,24 @@ class ReloadOutcome:
     steps: list[dict[str, Any]] = field(default_factory=list)
 
 
+def print_kwin_effect_deploy_outcome(outcome: ReloadOutcome) -> None:
+    """Print the standard user-facing message after a KWin effect deploy."""
+    if not outcome.session_restart_required:
+        return
+    if outcome.notification_delivered:
+        print(
+            "KWin effect updated; the new build activates after the next "
+            "Plasma session restart (a desktop notification was shown)."
+        )
+    else:
+        print(
+            "KWin effect updated; the new build activates after the next "
+            "Plasma session restart. The desktop notification could not "
+            "be delivered - tell the user to restart their session when "
+            "convenient."
+        )
+
+
 def compute_effect_build_id(
     source_dir: Path = KWIN_EFFECT_SOURCE_DIR,
     cursor_asset: Path = KWIN_EFFECT_CURSOR_ASSET,

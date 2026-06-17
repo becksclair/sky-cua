@@ -16,7 +16,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from _kwin_effect import deploy_kwin_effect
+from _install_shared import DEFAULT_LOCAL_INSTALL_DIR, MCP_HOST_CHOICES
+from _kwin_effect import deploy_kwin_effect, print_kwin_effect_deploy_outcome
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DIST_PLUGIN_ROOT,
@@ -30,11 +31,8 @@ from _plugin_bundle import (
     stop_windows_cache_processes,
     update_codex_config,
 )
-from install_mcp_server import install_local_mcp_server
+from install_mcp_server import install_local_mcp_server, refresh_accessibility_bus
 from install_plugin import install_bundle, run_browser_preflight
-
-DEFAULT_LOCAL_INSTALL_DIR = Path.home() / ".local" / "share" / "sky-cua"
-LOCAL_INSTALL_HOSTS = ("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw")
 
 
 def drop_retired_channel_caches(
@@ -85,6 +83,7 @@ def fast_deploy(args: argparse.Namespace) -> int:
     destination = installed_plugin_root(args.codex_home)
     stale_roots = retired_channel_cache_roots(args.codex_home)
     if sys.platform != "win32":
+        refresh_accessibility_bus()
         stop_unix_runtime_processes([*stale_roots, destination])
     drop_retired_channel_caches(args.codex_home, stale_roots=stale_roots, stop_unix=False)
     stop_windows_cache_processes(destination)
@@ -109,23 +108,12 @@ def fast_deploy(args: argparse.Namespace) -> int:
         args.local_install_host,
         restart_runtime=True,
         bundle_root=bundle_root,
+        refresh_accessibility=False,
     )
 
     if args.kwin_effect:
         outcome = deploy_kwin_effect(build_dir=destination.parent / "kwin-effect-build")
-        if outcome.session_restart_required:
-            if outcome.notification_delivered:
-                print(
-                    "KWin effect updated; the new build activates after the next "
-                    "Plasma session restart (a desktop notification was shown)."
-                )
-            else:
-                print(
-                    "KWin effect updated; the new build activates after the next "
-                    "Plasma session restart. The desktop notification could not "
-                    "be delivered - tell the user to restart their session when "
-                    "convenient."
-                )
+        print_kwin_effect_deploy_outcome(outcome)
 
     print(f"installed_path={destination}")
     print(f"config_path={config_path}")
@@ -175,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--local-install-host",
         default="claude-code",
-        choices=LOCAL_INSTALL_HOSTS,
+        choices=MCP_HOST_CHOICES,
         help="Host config format for the installed MCP-server runtime (default: claude-code).",
     )
     args = parser.parse_args(argv)

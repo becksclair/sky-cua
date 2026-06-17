@@ -184,6 +184,12 @@ def test_generic_mcp_bin_links_copy_when_symlinks_are_unavailable(
     assert (bin_dir / "sky-cua-overlay-host.exe").read_text(encoding="utf-8") == "overlay"
 
 
+def test_install_mcp_server_has_no_top_level_pwd_import() -> None:
+    source = Path(install_mcp_server.__file__).read_text(encoding="utf-8")
+
+    assert "\nimport pwd\n" not in source
+
+
 def test_generic_mcp_restart_runtime_stops_installed_processes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -191,10 +197,20 @@ def test_generic_mcp_restart_runtime_stops_installed_processes(
     target_dir = tmp_path / "installed"
     target_dir.mkdir()
     calls: list[list[Path]] = []
+    atspi_refreshes = 0
 
     def fake_stop_unix_runtime_processes(search_roots: list[Path]) -> None:
         calls.append(search_roots)
 
+    def fake_refresh_accessibility_bus() -> None:
+        nonlocal atspi_refreshes
+        atspi_refreshes += 1
+
+    monkeypatch.setattr(
+        install_mcp_server,
+        "refresh_accessibility_bus",
+        fake_refresh_accessibility_bus,
+    )
     monkeypatch.setattr(
         install_mcp_server,
         "stop_unix_runtime_processes",
@@ -204,7 +220,151 @@ def test_generic_mcp_restart_runtime_stops_installed_processes(
 
     install_mcp_server.restart_runtime_processes(target_dir)
 
+    assert atspi_refreshes == 1
     assert calls == [[target_dir]]
+
+
+def test_refresh_accessibility_bus_restarts_user_atspi(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_which(name: str) -> str | None:
+        return f"/usr/bin/{name}" if name in {"pkill", "systemctl"} else None
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install_mcp_server.sys, "platform", "linux")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("USER", "bex")
+    monkeypatch.setattr(install_mcp_server.shutil, "which", fake_which)
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    install_mcp_server.refresh_accessibility_bus()
+
+    assert calls == [
+        [
+            "/usr/bin/pkill",
+            "-u",
+            "bex",
+            "-f",
+            r"(^|/)at-spi2-registryd( |$)",
+        ],
+        ["/usr/bin/systemctl", "--user", "restart", "at-spi-dbus-bus.service"],
+    ]
+    assert "Refreshed user AT-SPI accessibility bus." in capsys.readouterr().out
+
+
+def test_refresh_accessibility_bus_skips_without_user_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install_mcp_server.sys, "platform", "linux")
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setattr(install_mcp_server.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    install_mcp_server.refresh_accessibility_bus()
+
+    assert calls == []
+
+
+def test_refresh_accessibility_bus_skips_on_non_linux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install_mcp_server.sys, "platform", "darwin")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("USER", "bex")
+    monkeypatch.setattr(install_mcp_server.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    install_mcp_server.refresh_accessibility_bus()
+
+    assert calls == []
+
+
+def test_refresh_accessibility_bus_skips_pkill_when_systemctl_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install_mcp_server.sys, "platform", "linux")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("USER", "bex")
+    monkeypatch.setattr(
+        install_mcp_server.shutil,
+        "which",
+        lambda name: "/usr/bin/pkill" if name == "pkill" else None,
+    )
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    install_mcp_server.refresh_accessibility_bus()
+
+    assert calls == []
+
+
+def test_refresh_accessibility_bus_warns_when_systemctl_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if argv[0] == "/usr/bin/systemctl":
+            return subprocess.CompletedProcess(
+                argv, returncode=1, stdout="", stderr="unit not found"
+            )
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install_mcp_server.sys, "platform", "linux")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("USER", "bex")
+    monkeypatch.setattr(
+        install_mcp_server.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in {"pkill", "systemctl"} else None,
+    )
+    monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
+
+    install_mcp_server.refresh_accessibility_bus()
+
+    assert calls == [
+        [
+            "/usr/bin/pkill",
+            "-u",
+            "bex",
+            "-f",
+            r"(^|/)at-spi2-registryd( |$)",
+        ],
+        ["/usr/bin/systemctl", "--user", "restart", "at-spi-dbus-bus.service"],
+    ]
+    outerr = capsys.readouterr()
+    assert "warning: could not refresh user AT-SPI accessibility bus" in outerr.err
+    assert "unit not found" in outerr.err
 
 
 def test_generic_mcp_main_can_restart_runtime_after_install(
@@ -227,7 +387,7 @@ def test_generic_mcp_main_can_restart_runtime_after_install(
     monkeypatch.setattr(
         install_mcp_server,
         "restart_runtime_processes",
-        lambda target: restarted.append(target),
+        lambda target, **_kwargs: restarted.append(target),
     )
     monkeypatch.setattr(install_mcp_server, "print_next_steps", lambda *_args: None)
 
@@ -252,7 +412,7 @@ def test_generic_mcp_main_stops_windows_runtime_before_binary_copy(
     monkeypatch.setattr(
         install_mcp_server,
         "restart_runtime_processes",
-        lambda _target: events.append("restart"),
+        lambda _target, **_kwargs: events.append("restart"),
     )
 
     def fake_install_binaries(_target_dir: Path) -> Path:

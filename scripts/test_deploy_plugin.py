@@ -128,6 +128,7 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     codex_home = tmp_path / "codex-home"
     config_path = codex_home / "config.toml"
     calls: dict[str, object] = {}
+    atspi_refreshes = 0
 
     monkeypatch.setattr(deploy_plugin, "build_bundle", lambda: None)
     monkeypatch.setattr(deploy_plugin, "ensure_bundle_structure", lambda _root: None)
@@ -142,16 +143,24 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     monkeypatch.setattr(deploy_plugin, "stop_windows_cache_processes", lambda _root: None)
     monkeypatch.setattr(deploy_plugin, "compat_plugin_targets_payload", lambda _home, _dest: False)
 
+    def fake_refresh_accessibility_bus() -> None:
+        nonlocal atspi_refreshes
+        atspi_refreshes += 1
+
+    monkeypatch.setattr(deploy_plugin, "refresh_accessibility_bus", fake_refresh_accessibility_bus)
+
     def fake_install_local(
         target: Path,
         host: str,
         *,
         restart_runtime: bool = False,
         bundle_root: Path | None = None,
+        refresh_accessibility: bool = True,
     ) -> tuple[Path, Path]:
         calls["restart_runtime"] = restart_runtime
         calls["host"] = host
         calls["bundle_root"] = bundle_root
+        calls["refresh_accessibility"] = refresh_accessibility
         return target / "bin" / "sky-cua-client", target / "claude_code_mcp.json"
 
     monkeypatch.setattr(deploy_plugin, "install_local_mcp_server", fake_install_local)
@@ -170,5 +179,7 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert parsed["plugins"][PLUGIN_ID]["enabled"] is True
     assert parsed["plugins"][COMPUTER_USE_COMPAT_PLUGIN_ID]["enabled"] is False
+    assert atspi_refreshes == 1
     assert calls["restart_runtime"] is True
+    assert calls["refresh_accessibility"] is False
     assert calls["host"] == "claude-code"

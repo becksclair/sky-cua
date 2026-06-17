@@ -16,6 +16,8 @@ from _plugin_bundle import remove_path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BROWSER_SELECTION_ENV = "SKY_CUA_BROWSER"
 SKY_CUA_SKILLS = ("computer-use", "browser-use")
+DEFAULT_LOCAL_INSTALL_DIR = Path.home() / ".local" / "share" / "sky-cua"
+MCP_HOST_CHOICES = ("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw")
 
 
 def subprocess_error_detail(error: Exception) -> str:

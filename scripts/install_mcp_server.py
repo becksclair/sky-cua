@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shlex
@@ -30,13 +31,15 @@ from pathlib import Path
 import _install_shared
 from _install_shared import (
     BROWSER_SELECTION_ENV,
+    DEFAULT_LOCAL_INSTALL_DIR,
+    MCP_HOST_CHOICES,
     atomic_sibling_path,
     ensure_parent,
     install_sky_cua_skills,
     subprocess_error_detail,
     write_text_atomically,
 )
-from _kwin_effect import deploy_kwin_effect
+from _kwin_effect import deploy_kwin_effect, print_kwin_effect_deploy_outcome
 from _openclaw_install import DEFAULT_OPENCLAW_DIR, install_openclaw
 from _plugin_bundle import (
     LINUX_ARM64,
@@ -59,6 +62,7 @@ CLAUDE_MCP_ADD_TIMEOUT_SECONDS = 30
 # forms are written so the rules bite regardless of Claude Code's rule syntax.
 CLAUDE_CODE_DENY_RULES = ("mcp__computer-use", "mcp__computer-use__*")
 CLAUDE_CODE_ALLOW_RULES = ("mcp__sky-cua", "mcp__sky-cua__*")
+AT_SPI_RESTART_TIMEOUT_SECONDS = 5
 
 
 def current_platform() -> str:
@@ -553,12 +557,68 @@ def link_current_platform_binaries(target_dir: Path, bin_dir: Path) -> None:
             print(f"Copied {src} -> {dst}")
 
 
-def restart_runtime_processes(target_dir: Path) -> None:
+def restart_runtime_processes(target_dir: Path, *, refresh_accessibility: bool = True) -> None:
     """Stop installed sky-cua runtime processes so hosts respawn fresh binaries."""
+    if refresh_accessibility:
+        refresh_accessibility_bus()
     if sys.platform == "win32":
         stop_windows_cache_processes(target_dir)
     else:
         stop_unix_runtime_processes([target_dir])
+
+
+def refresh_accessibility_bus() -> None:
+    """Best-effort reset of a wedged user AT-SPI bus before sky-cua reconnects."""
+    if not sys.platform.startswith("linux"):
+        return
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") or not os.environ.get("XDG_RUNTIME_DIR"):
+        return
+    systemctl = shutil.which("systemctl")
+    if systemctl is None:
+        return
+    import pwd
+
+    user = os.environ.get("USER")
+    try:
+        expected_user = pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        expected_user = None
+    if user and expected_user and user != expected_user:
+        print(
+            f"warning: USER={user!r} does not match current uid {os.getuid()}; "
+            "skipping AT-SPI registry pkill",
+            file=sys.stderr,
+        )
+        user = None
+    pkill = shutil.which("pkill")
+    if pkill and user:
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            subprocess.run(
+                [pkill, "-u", user, "-f", r"(^|/)at-spi2-registryd( |$)"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=AT_SPI_RESTART_TIMEOUT_SECONDS,
+            )
+    try:
+        result = subprocess.run(
+            [systemctl, "--user", "restart", "at-spi-dbus-bus.service"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=AT_SPI_RESTART_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"warning: could not refresh user AT-SPI accessibility bus: {error}", file=sys.stderr)
+        return
+    if result.returncode == 0:
+        print("Refreshed user AT-SPI accessibility bus.")
+        return
+    detail = (result.stderr or result.stdout).strip()
+    if detail:
+        print(
+            f"warning: could not refresh user AT-SPI accessibility bus: {detail}", file=sys.stderr
+        )
 
 
 def install_local_mcp_server(
@@ -569,6 +629,7 @@ def install_local_mcp_server(
     restart_runtime: bool = False,
     bundle_root: Path | None = None,
     claude_config_dir: Path | None = None,
+    refresh_accessibility: bool = True,
 ) -> tuple[Path, Path]:
     """Install runtime binaries and host config; optionally restart installed runtimes.
 
@@ -580,7 +641,7 @@ def install_local_mcp_server(
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if restart_runtime and sys.platform == "win32":
-        restart_runtime_processes(target_dir)
+        restart_runtime_processes(target_dir, refresh_accessibility=refresh_accessibility)
 
     if bundle_root is not None:
         resource_root = runtime_resource_root(bundle_root)
@@ -610,7 +671,7 @@ def install_local_mcp_server(
         config_path = write_mcp_json(target_dir, config)
 
     if restart_runtime:
-        restart_runtime_processes(target_dir)
+        restart_runtime_processes(target_dir, refresh_accessibility=refresh_accessibility)
         print(f"Stopped installed sky-cua runtime processes rooted under: {target_dir}")
 
     return client_path, config_path
@@ -674,18 +735,16 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
 
 
 def main() -> int:
-    default_target = Path.home() / ".local" / "share" / "sky-cua"
-
     parser = argparse.ArgumentParser(description="Install sky-cua as a generic MCP server.")
     parser.add_argument(
         "--target-dir",
         type=Path,
-        default=default_target,
-        help=f"Installation directory (default: {default_target})",
+        default=DEFAULT_LOCAL_INSTALL_DIR,
+        help=f"Installation directory (default: {DEFAULT_LOCAL_INSTALL_DIR})",
     )
     parser.add_argument(
         "--host",
-        choices=("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw"),
+        choices=MCP_HOST_CHOICES,
         default="generic",
         help="Host-specific MCP config format to emit.",
     )
@@ -711,8 +770,8 @@ def main() -> int:
         "--restart-runtime",
         action="store_true",
         help=(
-            "After installing, stop sky-cua runtime processes rooted under --target-dir "
-            "so MCP hosts respawn the updated binaries on the next tool call."
+            "After installing, refresh the user AT-SPI bus on Linux and stop sky-cua runtime "
+            "processes rooted under --target-dir so MCP hosts respawn updated binaries."
         ),
     )
     parser.add_argument(
@@ -743,19 +802,7 @@ def main() -> int:
 
     if args.kwin_effect:
         outcome = deploy_kwin_effect(build_dir=target_dir / "kwin-effect-build")
-        if outcome.session_restart_required:
-            if outcome.notification_delivered:
-                print(
-                    "KWin effect updated; the new build activates after the next "
-                    "Plasma session restart (a desktop notification was shown)."
-                )
-            else:
-                print(
-                    "KWin effect updated; the new build activates after the next "
-                    "Plasma session restart. The desktop notification could not "
-                    "be delivered - tell the user to restart their session when "
-                    "convenient."
-                )
+        print_kwin_effect_deploy_outcome(outcome)
 
     print_next_steps(args.host, target_dir, client_path, config_path)
     return 0
