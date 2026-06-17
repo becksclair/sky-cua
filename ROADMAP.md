@@ -30,7 +30,7 @@ Open boxes link to the active ExecPlan that owns the work.
   - [ ] Long-term unpatched COSMIC path or accepted upstream integration
 - [ ] Wayland fallback vision anchors — [`plans/wayland_fallback_vision_anchors.md`](plans/wayland_fallback_vision_anchors.md)
   - [ ] Choose a current fallback-only target app to replace the retired TIDAL flow
-  - [ ] Live app-server proof on the new target
+  - [ ] Live agent-loop or app-server proof on the new target
 - [x] CDUL-inspired Linux enhancements (terminal `command_line` fidelity,
       granular input doctor diagnostics, AT-SPI app-root prefiltering,
       GNOME setup-message polish) —
@@ -150,6 +150,52 @@ Open boxes link to the active ExecPlan that owns the work.
         pixel matrix is inherently per-compositor and stays in the full
         per-session matrix rather than the one-session trimmed gate.
 - [ ] Doctor/setup wording improvements as new launch environments expose blockers
+
+## Code quality / Ultra-review backlog
+
+Residual findings from the latest ultra-review pass. These are behavior-preserving
+structural cleanups, performance fixes, and test gaps, not user-facing features;
+pick them off between feature work.
+
+- [ ] Split or reduce god files past the ~800–1000 line threshold:
+  - `crates/sky-cua-linux/src/backend.rs`
+  - `crates/sky-cua-linux/src/capture_plan.rs`
+  - `crates/sky-cua-client/src/mcp_tools.rs`
+- [ ] Extract KDE clipboard fallback from the generic action executor and
+      introduce a backend-abstracted text-input strategy
+- [ ] Centralize `input_backend` dispatch and coordinate-mapping helpers
+      (currently scattered across `actions/targeting.rs`, `coords.rs`, etc.)
+- [ ] Refactor per-backend input sequences in `actions/mod.rs`
+      (`type_text`, `set_value_with_fallback_policy`) into backend strategy
+      objects with a single transaction/rollback point
+- [ ] Refactor `capture_plan::plan_capture` to replace its 9 positional arguments
+      with a config struct and make `CaptureInfo` fallback transitions immutable
+- [ ] Reduce repeated discovery on action hot paths:
+  - `semantic_scroll_vertical_at` snapshots the full AT-SPI tree for every
+    candidate app (N+1)
+  - `matched_x11_window_for_request` re-runs X11 window discovery on every
+    action request
+  - `linux_fallback_snapshot` re-discovers X11 windows after `get_app_state`
+    already fetched them
+- [ ] Replace the 10 ms busy-poll in `command_output_with_timeout` with
+      exponential backoff or `tokio::process::Command` + `tokio::time::timeout`
+- [ ] Deduplicate agent stdout JSON parsing in `live_agent_mcp_smoke.py` and
+      consolidate failure-status / tool-identity predicates with
+      `_agent_mcp_smoke.py`
+- [ ] Reduce `scripts/install_mcp_server.py` god file by extracting helpers
+      (preserving install semantics and error handling)
+- [ ] Split the agent-smoke cases in `scripts/test_live_smoke_helpers.py` into
+      focused test files
+- [ ] Add targeted unit tests for high-risk branches:
+  - targeted-screenshot retry loop in `backend.rs::capture_screen`
+  - XTest and `LinuxVirtualInput` scroll-with-target paths
+  - `crop_capture` / `prepare_model_capture_from_image`
+  - `reject_unactionable_targeted_capture` short-circuits and non-geometry errors
+  - `require_screenshot_image` OK / generic-error branches
+  - browser bridge `type_text` and `claim_tab`
+  - Windows `windows_doctor_report`
+- [ ] Finish or drop the intended `displays/providers.rs` / `displays/tests.rs`
+      split if display topology code keeps growing
 
 ## Backlog / Ideas
 
