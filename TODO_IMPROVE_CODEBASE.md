@@ -33,7 +33,7 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 | ICA-010 | P2 | M | Medium | High | complete | Linux desktop parity / Host portability: detached launch breadth | `crates/sky-cua-client/src/service_launcher.rs`, service health env contracts |
 | ICA-011 | P2 | M | Medium | High | complete | Diagnostics and operator UX: curated VM runner profile set | `scripts/run_gui_testing_vm_smoke.py` |
 | ICA-012 | P2 | M | Medium | Medium | complete | Host portability: Browser MCP managed lifecycle | browser snapshot/diagnostic wire contract |
-| ICA-009 | P2 | M | Medium | High | complete | Host portability: Codex Desktop compatibility and deploy proof | `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py` |
+| ICA-009 | P2 | M | Medium | High | complete | Host portability: Codex Desktop compatibility and deploy proof | `scripts/_app_server_harness.py`, `scripts/deploy_plugin.py` |
 | ICA-013 | P3 | S | Low | High | complete | Enabler for roadmap-aligned work; not standalone roadmap scope | Python/Rust browser test fixture layout |
 | ICA-015 | P3 | M | Medium | High | complete | Follow-up for Windows overlay IPC transport maintainability | overlay host IPC lifecycle and listener handling |
 | ICA-016 | P3 | S | Low | High | complete | Follow-up for VM runner profile descriptor maintainability | `scripts/run_gui_testing_vm_smoke.py` profile metadata and helper boundaries |
@@ -223,20 +223,20 @@ Architecture work should serve the roadmap phases in `ROADMAP.md`:
 - [x] **ICA-009: Extract a shared Codex app-server JSON-RPC client**
   Priority: P2. Effort: M. Risk: Medium. Confidence: High. Status: complete
   Roadmap alignment: Host portability -> Codex Desktop compatibility; Diagnostics and operator UX proof quality.
-  Cluster: `scripts/_app_server_harness.py`, `scripts/deploy_release_plugin.py`, `scripts/test_python_harness_helpers.py`
+  Cluster: `scripts/_app_server_harness.py`, `scripts/deploy_plugin.py`, `scripts/test_deploy_plugin.py`
   Dependency category: Evented or asynchronous boundary; Local-substitutable
   Problem: Rich smokes and release deploy both drive `codex app-server` over stdio JSON-RPC, but they implement separate process readers, request id handling, initialization sequencing, timeout behavior, stderr capture, and shutdown policy.
   Evidence:
   - `ROADMAP.md`: Codex Desktop compatibility is shipped, and remaining diagnostics/operator UX work depends on honest proof harnesses rather than process-only checks.
   - `scripts/_app_server_harness.py`: `JsonRpcProcess` owns line-oriented app-server stdio, while `run_rich_app_server_turn` builds env, starts the server, records transcripts/timing, handles server requests, and performs initialize/status/thread/turn sequencing.
-  - `scripts/deploy_release_plugin.py`: `AppServerClient` independently starts `codex app-server --listen stdio://`, spawns stdout/stderr reader threads, tracks notifications, sends initialize/initialized, and performs plugin install/reload requests.
-  - `scripts/AGENTS.md`: rich `codex app-server` is the current installed-plugin acceptance lane, so protocol drift here affects both deploy and proof harnesses.
+  - Historical release-deploy code independently started `codex app-server --listen stdio://`, spawned stdout/stderr reader threads, tracked notifications, sent initialize/initialized, and performed plugin install/reload requests. The current deploy entrypoint is `scripts/deploy_plugin.py`.
+  - `scripts/AGENTS.md`: installed-plugin acceptance now goes through `live_agentic_loop_smoke.py`; rich `codex app-server` remains diagnostic transport coverage, so protocol drift here affects deploy and diagnostic proof harnesses rather than the current acceptance lane.
   Why coupled: Both flows share the same transport lifecycle and failure modes, but only the smoke harness has transcript/timing artifacts and only release deploy has queue-backed stderr handling.
-  Suggested first move: Create `_codex_app_server.py` with request/notify, initialize/initialized, timeout/error handling, stderr capture, transcript hooks, and clean shutdown; keep turn policy in `_app_server_harness.py` and release operations in `deploy_release_plugin.py`.
+  Suggested first move: Create `_codex_app_server.py` with request/notify, initialize/initialized, timeout/error handling, stderr capture, transcript hooks, and clean shutdown; keep turn policy in `_app_server_harness.py` and deploy operations in `deploy_plugin.py`.
   Testing impact: Add pure tests for request id matching, notification buffering, server-request handling hooks, timeout stderr reporting, and close/kill behavior with fake subprocess streams. Existing deploy and rich-smoke helper tests should migrate to the shared client.
   Needs human decision: None; release deploy keeps `--listen stdio://` and the rich harness keeps the bare `codex app-server` invocation, both passed as explicit commands to the shared client.
   Completion note: Added `scripts/_codex_app_server.py` with one `CodexAppServerClient` owning process spawn, queue-backed stdout/stderr reader threads, request-id matching, notification buffering, initialize/initialized sequencing, timeout/exit errors with stderr context, and bounded terminate/kill shutdown. Two consumption lanes: blocking `request()` for release deploy and streaming `read_message()` for the rich harness transcript loop. `JsonRpcProcess` and `AppServerClient` are removed. The rich harness deadline now also bounds individual reads, so a silent hung server times out instead of blocking forever on `readline`.
-  Verification: `uv run ruff format --check scripts`; `uv run ruff check scripts`; `uv run basedpyright`; `uv run pytest` (176 passed); live transport proof: initialize/initialized round-trip and clean shutdown against real `codex app-server --listen stdio://` (codex 0.137.0). Not run: a full rich app-server turn smoke (`live_app_server_smoke.py`) and a full release deploy (`deploy_release_plugin.py`); both should ride the next routine deploy/smoke pass.
+  Verification: `uv run ruff format --check scripts`; `uv run ruff check scripts`; `uv run basedpyright`; `uv run pytest` (176 passed); live transport proof: initialize/initialized round-trip and clean shutdown against real `codex app-server --listen stdio://` (codex 0.137.0). Not run: a full rich app-server diagnostic transcript through `_app_server_harness.py` and a full deploy proof through `scripts/deploy_plugin.py`; both should ride the next routine deploy/smoke pass. Installed-MCP agent-loop acceptance (`live_agentic_loop_smoke.py`) is a separate proof lane and does not cover the app-server transport.
   Acceptance criteria:
   - [x] Rich smokes and release deploy use one app-server transport/client implementation.
   - [x] Release deploy keeps plugin install and MCP reload behavior unchanged.

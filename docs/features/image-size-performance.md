@@ -36,24 +36,26 @@ The plugin backend was not the bottleneck in either run. MCP tool time stayed un
 
 ## Format and Size Overrides
 
-For an A/B run or an app that needs more visual detail, override the cap through
-the plugin MCP environment when running an active live-smoke entrypoint:
+For an active smoke sanity check with more visual detail, override the cap
+through the plugin MCP environment when running an installed-agent entrypoint:
 
 ```bash
 SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH=1920 \
 SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT=1080 \
-python3 scripts/live_app_server_smoke.py
+python3 scripts/live_agentic_loop_smoke.py
 ```
 
 The installed plugin receives these variables because `.mcp.json` includes them in `env_vars`. Invalid values and values outside the safe range fall back to the compiled default.
 
 JPEG remains the default because it is the safest cross-host screenshot format
-and produced the proven TIDAL win above. WebP is available for profiling:
+and produced the proven TIDAL win above. WebP is available for direct capture
+profiling and future workflow-level A/B runners. Export these variables before
+running a direct capture/profile command that asserts returned screenshot
+metadata:
 
 ```bash
-SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp \
-SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY=85 \
-python3 scripts/live_app_server_smoke.py
+export SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp
+export SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY=85
 ```
 
 JPEG quality can also be varied:
@@ -61,13 +63,13 @@ JPEG quality can also be varied:
 ```bash
 SKY_CUA_MODEL_SCREENSHOT_FORMAT=jpeg \
 SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY=75 \
-python3 scripts/live_app_server_smoke.py
+python3 scripts/live_agentic_loop_smoke.py
 ```
 
-The WebP path uses lossy WebP encoding so quality-level A/B runs are meaningful.
-The model still receives a real image input once the screenshot path is inspected;
-the file format only changes local encoding, transport size, and decode/ingest
-behavior.
+The WebP path uses lossy WebP encoding, so quality settings remain meaningful
+for future workflow-level A/B runners. The model still receives a real image
+input once the screenshot path is inspected; the file format only changes local
+encoding, transport size, and decode/ingest behavior.
 
 The former TIDAL A/B runner has been removed. For future multi-run comparisons,
 add a new active workflow-specific runner with isolated state and the same
@@ -79,11 +81,15 @@ Relevant checks:
 
 ```bash
 cargo test -p sky-cua-linux portal::screenshot
-SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY=85 python3 scripts/live_app_server_smoke.py
 python3 scripts/build_plugin.py
 ```
 
-For workflow-level performance, compare `timing-summary.json` fields:
+The Rust screenshot tests cover encoding behavior. `live_agentic_loop_smoke.py`
+is installed-MCP tool-use acceptance, not screenshot-format validation; do not
+count WebP as live-smoked unless a direct capture smoke asserts returned
+metadata such as `model_image_format`, quality, pixel size, and output file.
+For workflow-level performance comparisons, use or add a workflow-specific
+runner that emits `timing-summary.json` with:
 
 - `elapsed_ms`
 - `completed_mcp_tool_calls`

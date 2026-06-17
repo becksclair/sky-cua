@@ -47,7 +47,10 @@ and rolls back prior destinations if replacement fails.
 ### Local deploy (default)
 
 Use when iterating on unreleased changes locally. Installs as `sky-cua@local` and refreshes the
-MCP runtime in one command; does not touch the marketplace.
+MCP runtime in one command; in Linux desktop sessions this also attempts a
+best-effort refresh of the user AT-SPI accessibility bus before sky-cua
+reconnects so wedged semantic trees do not survive deploys. Does not touch the
+marketplace.
 
 ```bash
 # Build + deploy locally (also refreshes the installed MCP runtime)
@@ -89,7 +92,9 @@ python3 install.py
 
 ## MCP runtime restart (standalone)
 
-Refresh the local MCP server install and bounce the runtime without a full deploy:
+Refresh the local MCP server install and bounce the runtime without a full deploy. In Linux
+desktop sessions this also attempts a best-effort refresh of the user AT-SPI
+accessibility bus before sky-cua reconnects:
 
 ```bash
 python3 scripts/install_mcp_server.py --host claude-code --restart-runtime
@@ -105,11 +110,8 @@ openclaw mcp reload
 
 After the deploy succeeds, commit all relevant staged and unstaged changes with a semantic message and push. Use the `committer` subagent for this step - it writes diff-grounded commit messages and handles staging precisely.
 
-Key conventions:
-- Commit message prefix: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`, `test:` etc.
-- One logical unit per commit; do not bundle unrelated changes.
-- Do not push until Rust and Python checks pass (`cargo fmt --check && cargo test`, `uv run ruff check scripts && uv run basedpyright && uv run pytest`).
-- Branch names use `bex/` unless otherwise specified.
+Follow the commit, branch, and pre-push conventions in the repo root
+[`AGENTS.md`](../../../AGENTS.md).
 
 ## Decision tree
 

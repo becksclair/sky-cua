@@ -157,8 +157,9 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
 - For `codex exec` plugin tests, validate the JSONL transcript for an actual
   `mcp_tool_call` against server `computer-use`; the final JSON blob alone
   can describe shell-hack completions. The acceptance harness is
-  `scripts/live_app_server_smoke.py`; `codex exec` is diagnostic. Close the
-  `codex app-server` child before draining `stderr` or cleanup hangs.
+  `scripts/live_agentic_loop_smoke.py`; `codex exec` is diagnostic. For
+  app-server diagnostic harnesses, close the `codex app-server` child before
+  draining `stderr` or cleanup hangs.
 - OpenClaw native-codex turns: `mcp.servers.<name>.codex.defaultToolsApprovalMode`
   must be `approve` (codex semantics: always approved, no user interaction).
   `auto` prompts on every sky-cua call because codex treats unannotated MCP

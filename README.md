@@ -176,9 +176,10 @@ python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host
 ```
 
 During local sky-cua development, add `--restart-runtime` after rebuilding and
-installing so OpenCode, Pi, or another MCP host stops any already-running
-installed `sky-cua-service`/helper processes and respawns from the new binaries
-on the next tool call:
+installing so OpenCode, Pi, or another MCP host respawns from the new binaries
+on the next tool call. On Linux desktop sessions this also attempts to refresh
+the user AT-SPI accessibility bus before stopping any already-running installed
+`sky-cua-service`/helper processes:
 
 ```bash
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode --bin-dir ~/.local/bin --restart-runtime
@@ -244,7 +245,7 @@ python3 scripts/live_desktop_smoke.py
 python3 scripts/live_portal_downgrade_smoke.py
 python3 scripts/live_kate_smoke.py
 python3 scripts/live_krita_smoke.py
-python3 scripts/live_app_server_smoke.py
+python3 scripts/live_agentic_loop_smoke.py
 python3 scripts/live_wayland_pointer_smoke.py
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use
 ```
@@ -296,11 +297,8 @@ Use / Chrome companion plugin coverage and the native messaging host, see
   machine. The reliable path is hybrid: AT-SPI for app/window anchors and
   screenshot-guided physical actions for dialog and canvas steps.
 - Installed-plugin harnesses are opt-in acceptance tools, not default regression
-  tests. The rich-client path uses `codex app-server`; `codex exec` remains a
-  diagnostic probe.
-- Browser Use support currently relies on Codex Desktop's bundled `chrome` and
-  `browser-use` plugins plus the Linux native-host preflight. `sky-cua` does not
-  yet expose first-class `browser_*` MCP tools of its own.
+  tests. Agent-loop acceptance uses `scripts/live_agentic_loop_smoke.py`;
+  `codex exec` and `codex app-server` remain diagnostic probes.
 - GNOME Shell extension setup installs files and asks GNOME to enable the
   extension, but GNOME may still require a Shell reload or login restart before
   the extension DBus backend appears.

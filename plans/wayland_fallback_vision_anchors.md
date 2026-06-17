@@ -29,11 +29,12 @@ After this change, native Wayland apps that expose only a KWin fallback window i
 
 ## Outcomes & Retrospective
 
-Pending implementation.
+Implemented in source and unit-covered; still pending current live workflow
+proof against an active fallback-only target.
 
 ## Context and Orientation
 
-The KWin fallback lives in `crates/sky-cua-linux/src/backend.rs` inside `kwin_fallback_snapshot`. Right now that function returns a single `ElementNode` with role `window`. That is enough to prove a Wayland window exists and can be targeted physically, but it is not enough to guide a model through a custom UI like TIDAL.
+The KWin fallback lives in `crates/sky-cua-linux/src/backend.rs` inside `kwin_fallback_snapshot`. Current source returns a root window plus `vision_anchor` fallback regions such as `wayland_header_band`, giving screenshot-guided models structural anchors without pretending geometry alone knows real widgets.
 
 The element model is defined in `crates/sky-cua-platform/src/model.rs` as `ElementNode`. The only fields available for richer fallback guidance are `role`, `name`, `description`, `state_flags`, `bounds`, and the tree relation via `parent_index`. That means the fallback must encode its extra guidance through names, descriptions, and state flags.
 
@@ -45,27 +46,26 @@ First, replace the one-node KWin fallback with a helper that emits a root window
 
 Second, add app-specific Markdown guidance only for active target apps that still need special handling. The retired TIDAL proof should not drive new command or prompt surface unless TIDAL becomes an active target again.
 
-Finally, prove the change with the narrowest meaningful validators. The unit tests should confirm the fallback tree shape. Any future workflow proof should use the active app-server smoke infrastructure with a current app target, not the retired TIDAL runner.
+Finally, prove the remaining workflow gap with the narrowest meaningful validators. The unit tests already confirm the fallback tree shape. Any future workflow proof should use the active agent-loop or app-server smoke infrastructure with a current app target, not the retired TIDAL runner.
 
 ## Concrete Steps
 
 Run from `/home/bex/projects/sky-cua`.
 
-1. Edit `crates/sky-cua-linux/src/backend.rs` to factor KWin fallback elements into a helper that returns multiple nodes.
-2. Add or update unit tests in the `#[cfg(test)]` section of the same file.
-3. Add or update app guidance only for the current target app, then register it in `resources/app-instructions/index.json`.
-4. Run:
+1. Choose a current fallback-only target app with isolated, resettable state.
+2. Add or update app guidance only for that target app, then register it in `resources/app-instructions/index.json` if source evidence shows the target needs app-specific guidance.
+3. Run:
 
     cargo fmt --all
     cargo test -p sky-cua-linux
-    python3 scripts/live_app_server_smoke.py
+    python3 scripts/live_agentic_loop_smoke.py
 
 ## Validation and Acceptance
 
 Acceptance for the code change is behavioral, not cosmetic:
 
 - `cargo test -p sky-cua-linux` passes.
-- A current rich app-server transcript shows `list_apps` finding the target app and `get_app_state` for the focused fallback-only window returning more than one fallback element instead of a single `window` node.
+- A current agent-loop or rich app-server transcript shows `list_apps` finding the target app and `get_app_state` for the focused fallback-only window returning the `vision_anchor` fallback regions.
 - If the full playlist flow still cannot complete, the failure message must be more informative than “no app visible”; it should clearly reflect the next real blocker.
 
 ## Idempotence and Recovery

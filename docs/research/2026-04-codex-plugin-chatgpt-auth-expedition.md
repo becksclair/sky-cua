@@ -45,7 +45,7 @@ The lightweight installed-plugin smoke is now live-proven with that recipe:
 
 - `artifacts/codex-e2e/plugin-smoke/20260423T161421Z/last-message.json`
 
-That said, `codex exec` is no longer the acceptance harness after this expedition. It stays useful as a cheap diagnostic probe, but the richer installed-plugin acceptance lane is now `scripts/live_app_server_smoke.py`, which talks to `codex app-server` directly and exercises the plugin through the same approval/event contract rich Codex clients use.
+That said, `codex exec` is no longer the acceptance harness after this expedition. It stays useful as a cheap diagnostic probe. The 2026-04 installed-plugin acceptance lane used `scripts/live_app_server_smoke.py`; current acceptance has since moved to `scripts/live_agentic_loop_smoke.py`, which drives the installed MCP server through an external agent CLI.
 
 ## What we had to prove
 
@@ -253,10 +253,8 @@ What is now proven:
 - ChatGPT-auth live turns can expose the local plugin tools when `apps = false`
 - exec-based installed-plugin desktop smoke now passes live when run with the
   dedicated no-apps home plus `--dangerously-bypass-approvals-and-sandbox`
-- a minimal rich-client `codex app-server` harness now passes live too:
-  - `scripts/live_app_server_smoke.py`
-  - proving artifact: `artifacts/codex-e2e/app-server-smoke/20260423T163318Z/last-message.json`
-  - transcript proof: `artifacts/codex-e2e/app-server-smoke/20260423T163318Z/app-server-output.jsonl`
+- a minimal rich-client `codex app-server` harness was retired; agent-loop
+  acceptance now uses `scripts/live_agentic_loop_smoke.py`.
 
 ## 2026-05-13 Codex Desktop Bundled-Plugin Addendum
 
@@ -294,7 +292,7 @@ installed-plugin E2E recipe above; it proves a different adapter path.
 
 The former TIDAL rich-client workflow remains useful as historical proof for
 fallback-only screenshot interaction, but its live harness has been retired.
-Current installed-plugin acceptance should use `scripts/live_app_server_smoke.py`
+Current installed-plugin acceptance should use `scripts/live_agentic_loop_smoke.py`
 and other active `live_*_smoke.py` entrypoints.
 
 ## 2026-05-17 Detached Session-Env Addendum
@@ -336,5 +334,4 @@ prove both the repair signal and the actual submitted value.
 - `scripts/live_session_env_smoke.py`
 - `scripts/live_codex_exec_session_env_smoke.py`
 - `scripts/live_app_server_session_env_smoke.py`
-- `CONTINUITY.md`
 - `NOTES.md`

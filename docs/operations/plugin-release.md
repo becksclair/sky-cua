@@ -142,12 +142,12 @@ uv run basedpyright
 uv run pytest
 python3 scripts/build_plugin.py
 codex mcp list --json
-python3 scripts/live_app_server_smoke.py
+python3 scripts/live_agentic_loop_smoke.py
 ```
 
 For pure script or metadata edits, the Python gates and `build_plugin.py` are
 usually enough. For install or runtime registration changes, include
-`codex mcp list --json`; for behavior acceptance, run `live_app_server_smoke.py`.
+`codex mcp list --json`; for behavior acceptance, run `live_agentic_loop_smoke.py`.
 
 For local deploy changes, prove the deploy lane itself:
 

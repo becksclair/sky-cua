@@ -5,9 +5,10 @@
 Shipped for `user_chrome`, the only browser target. The managed/isolated
 browser target was retired by decision on 2026-06-11 (controlling the user's
 real logged-in browser is the product) and its contract stub has been removed
-from the wire contract. Last verified: 2026-06-14 with focused Rust browser
-MCP tests, root `cargo test`, plugin build/install, and live app-server smoke;
-live browser smoke remains the 2026-06-08 Brave MCP/native-host smoke. With
+from the wire contract. Last verified: 2026-06-15 with focused Rust browser
+MCP tests, root `cargo test`, and plugin build/install. Installed-MCP
+agent-loop liveness was separately verified on 2026-06-15; live browser smoke
+remains the 2026-06-08 Brave MCP/native-host smoke. With
 `SKY_CUA_BROWSER=brave`, a full isolated MCP smoke advertised the browser tools,
 opened a session-owned Brave tab, navigated it to a local HTTP fixture, captured
 a snapshot and screenshot, moved the browser cursor, clicked, typed, pressed a
@@ -111,13 +112,8 @@ Browser targets:
 - `user_chrome` means an already-running user Chrome-family browser: Brave,
   Google Chrome, or Chromium. sky-cua reaches it through the Codex Chrome
   extension and native-host socket, then calls `getUserTabs` to enumerate the
-  user's real tabs.
-A managed sky-cua-owned isolated browser context was once planned and was
-retired on 2026-06-11: an isolated profile loses the logged-in sessions that
-make real-browser control useful. The `managed` target has been removed from
-the wire contract entirely; `browser_status` reports only `user_chrome`, and
-any other `target` string is rejected at argument parsing with an explicit
-error.
+  user's real tabs. Any other `target` string is rejected at argument parsing
+  with an explicit error.
 
 `browser_claim_tab` is the explicit adoption seam for existing `user_chrome`
 tabs from `browser_list_tabs`. Browser actions should target tabs returned by
@@ -229,7 +225,8 @@ Install outputs:
   a built checkout or staged bundle can be installed directly as a Claude Code
   plugin.
 - `scripts/install_mcp_server.py --restart-runtime` is an opt-in development
-  deploy helper. After copying new installed binaries, it stops sky-cua runtime
+  deploy helper. After copying new installed binaries, it attempts to refresh
+  the user AT-SPI accessibility bus on Linux desktop sessions and stops sky-cua runtime
   processes rooted under the install target so OpenCode, Pi, or another MCP host
   can respawn from the updated `sky-cua-client`/`sky-cua-service` on the next
   tool call. If the host does not reconnect automatically, reload the host
@@ -437,7 +434,7 @@ cargo test -p sky-cua-service
   installed MCP client, including capture of a background tab and a minimized
   Brave window.
 
-Focused browser reliability checks from 2026-06-14:
+Focused browser reliability checks from 2026-06-15:
 
 ```bash
 cargo fmt --check
@@ -449,11 +446,13 @@ uv run basedpyright
 uv run pytest
 python3 scripts/build_plugin.py
 python3 scripts/install_plugin.py --bundle-root dist/plugin/sky-cua
-python3 scripts/live_app_server_smoke.py
+python3 scripts/live_agentic_loop_smoke.py
 ```
 
-- Live app-server smoke passed with artifact
-  `artifacts/codex-e2e/app-server-smoke/20260614T065607Z`.
+- Installed-MCP agent-loop liveness smoke passed with artifact
+  `artifacts/pi-agentic-loop-smoke/20260615T211914Z`; this proves the
+  installed MCP server is reachable through an external agent, not
+  browser-specific tool behavior.
 - Service regression tests prove CDP action recovery still handles
   `Debugger is not attached` and stale session ownership, `browser_click` moves
   the browser agent cursor before dispatching the CDP click, targeted
