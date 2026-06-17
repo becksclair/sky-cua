@@ -75,6 +75,27 @@ def diagnostic_codes(result: Mapping[str, Any]) -> set[str]:
     }
 
 
+def require_doctor_display_topology(result: Mapping[str, Any]) -> Mapping[str, Any]:
+    structured = result.get("structuredContent")
+    if not isinstance(structured, Mapping):
+        raise RuntimeError("doctor did not return structuredContent")
+    topology = structured.get("display_topology")
+    if not isinstance(topology, Mapping):
+        raise RuntimeError(
+            "doctor did not include display_topology; screenshot smoke cannot prove display discovery diagnostics"
+        )
+    display_count = topology.get("display_count")
+    if not isinstance(display_count, int):
+        raise RuntimeError(f"doctor display_topology missing display_count: {topology!r}")
+    if display_count == 0:
+        probes = topology.get("probes")
+        if not isinstance(probes, list) or not probes:
+            raise RuntimeError(
+                "doctor display_topology reported no displays without provider probe diagnostics"
+            )
+    return topology
+
+
 def require_number(mapping: Mapping[str, Any], key: str) -> float:
     value = mapping.get(key)
     if not isinstance(value, int | float):
@@ -240,6 +261,11 @@ def main() -> int:
                     raise RuntimeError(
                         f"MCP server did not advertise required tools: {sorted(missing)}"
                     )
+
+                doctor_result = client.tools_call(19, "doctor", {})
+                write_json(artifact_dir / "doctor-display-topology.json", doctor_result)
+                require_ok(doctor_result, "doctor display topology")
+                require_doctor_display_topology(doctor_result)
 
                 app_snapshot = wait_for_app_snapshot(
                     client, TARGET_TITLE, deadline=time.time() + 30

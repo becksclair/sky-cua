@@ -13,10 +13,12 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from _smoke_config import env_flag
 from live_desktop_smoke import CLIENT, McpClient, require_ok, run_zenity_input
 from live_targeted_screenshot_smoke import (
     gtk_session_env,
     require_capture,
+    require_doctor_display_topology,
     require_mapping,
     require_number,
     require_real_graphical_session,
@@ -29,10 +31,6 @@ from live_targeted_screenshot_smoke import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TARGET_TITLE = "sky-cua display screenshot target"
 STRICT_SECONDARY_DISPLAY_ENV = "SKY_CUA_DISPLAY_SCREENSHOT_REQUIRE_SECONDARY"
-
-
-def env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def require_capture_scope(capture: Mapping[str, Any], expected: str, label: str) -> None:
@@ -199,6 +197,11 @@ def main() -> int:
                     raise RuntimeError(
                         f"MCP server did not advertise required tools: {sorted(missing)}"
                     )
+
+                doctor_result = client.tools_call(19, "doctor", {})
+                write_json(artifact_dir / "doctor-display-topology.json", doctor_result)
+                require_ok(doctor_result, "doctor display topology")
+                require_doctor_display_topology(doctor_result)
 
                 time.sleep(0.8)
                 windows_result = client.tools_call(20, "list_windows", {})

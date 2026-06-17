@@ -156,8 +156,9 @@ def wait_for_state(
     deadline: float,
     description: str,
 ) -> dict[str, Any]:
+    monotonic_deadline = time.monotonic() + max(0.0, deadline - time.time())
     sleep_seconds = 0.05
-    while time.time() < deadline:
+    while time.monotonic() < monotonic_deadline:
         state = load_state(state_path)
         if state is not None and predicate(state):
             return state
@@ -167,8 +168,9 @@ def wait_for_state(
 
 
 def wait_for_stable_pointer_fixture(state_path: Path, *, deadline: float) -> dict[str, Any]:
+    monotonic_deadline = time.monotonic() + max(0.0, deadline - time.time())
     candidate: dict[str, Any] | None = None
-    while time.time() < deadline:
+    while time.monotonic() < monotonic_deadline:
         state = load_state(state_path)
         if state is None:
             time.sleep(0.15)

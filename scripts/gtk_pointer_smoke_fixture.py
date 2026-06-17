@@ -168,6 +168,8 @@ class PointerSmokeWindow(Gtk.Window):
         self.show_all()
         self.present()
         self.write_state()
+        GLib.idle_add(self.on_geometry_probe)
+        GLib.timeout_add(250, self.on_geometry_probe)
 
     def make_region(self, title: str, subtitle: str) -> Gtk.EventBox:
         box = Gtk.EventBox()
@@ -221,6 +223,18 @@ class PointerSmokeWindow(Gtk.Window):
         self._size_allocate_timeout_id = GLib.timeout_add(
             50, self._apply_size_allocate, width, height
         )
+
+    def on_geometry_probe(self) -> bool:
+        if self.state.get("ready"):
+            return False
+        width = self.get_allocated_width()
+        height = self.get_allocated_height()
+        if width <= 1 or height <= 1:
+            width, height = self.visible_monitor_size(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+            self.resize(width, height)
+            self.present()
+        self._apply_size_allocate(width, height)
+        return not self.state.get("ready")
 
     def _apply_size_allocate(self, width: int, height: int) -> bool:
         visible_width, visible_height = self.visible_monitor_size(width, height)

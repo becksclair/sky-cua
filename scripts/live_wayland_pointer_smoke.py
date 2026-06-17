@@ -146,6 +146,9 @@ def main() -> int:
 
     step_delay = float(os.environ.get("SKY_CUA_VISIBLE_STEP_DELAY_SECONDS", "2.5"))
     final_hold = float(os.environ.get("SKY_CUA_VISIBLE_FINAL_HOLD_SECONDS", "20"))
+    fixture_ready_timeout = float(
+        os.environ.get("SKY_CUA_POINTER_FIXTURE_READY_TIMEOUT_SECONDS", "45")
+    )
     is_gnome = "gnome" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
     fixture_env = {
@@ -167,7 +170,10 @@ def main() -> int:
         client_env["SKY_CUA_SERVICE_SOCKET_PATH"] = str(service_socket_path)
         fixture = run_pointer_fixture(state_path, extra_env=fixture_env)
         try:
-            state = wait_for_stable_pointer_fixture(state_path, deadline=time.time() + 20)
+            state = wait_for_stable_pointer_fixture(
+                state_path,
+                deadline=time.time() + fixture_ready_timeout,
+            )
             write_json(artifact_dir / "initial-state.json", state)
             print(f"Visible Wayland pointer fixture ready; artifacts: {artifact_dir}")
             print(f"points={json.dumps(state['points'], sort_keys=True)}")

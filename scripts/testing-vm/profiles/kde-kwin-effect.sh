@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cleanup_nested_portals() {
+  systemctl --user stop \
+    xdg-desktop-portal.service \
+    xdg-desktop-portal-kde.service \
+    xdg-desktop-portal-gtk.service \
+    xdg-document-portal.service \
+    xdg-permission-store.service >/dev/null 2>&1 || true
+  pkill -u "$(id -u)" -f '/usr/lib/xdg-desktop-portal-kde' >/dev/null 2>&1 || true
+  pkill -u "$(id -u)" -f '/usr/lib/xdg-desktop-portal-gtk' >/dev/null 2>&1 || true
+  pkill -u "$(id -u)" -f '/usr/lib/xdg-desktop-portal($| )' >/dev/null 2>&1 || true
+}
+
 if [[ "${1:-}" == "--headed" ]]; then
   shift
 
@@ -101,5 +113,7 @@ EOF
   exit $?
 fi
 
+cleanup_nested_portals
 SKY_CUA_KWIN_NESTED_ACCEPT_IPC_ONLY=1 python scripts/live_agent_cursor_kde_smoke.py --mode kwin-effect-nested
 python scripts/live_agent_cursor_kde_smoke.py --mode kwin-effect-nested-user-install
+cleanup_nested_portals
