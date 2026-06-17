@@ -42,9 +42,13 @@ rsync -aL --delete \
 
 ssh "${ssh_options[@]}" "${target}" 'set -euo pipefail
 export PATH="${HOME}/.local/bin:${PATH}"
-# Update Pi to latest (best-effort; may require root for global npm)
-npm install -g @earendil-works/pi-coding-agent@latest 2>/dev/null || npm install --prefix ~/.local @earendil-works/pi-coding-agent@latest 2>/dev/null || printf "warning: pi update failed; continuing with existing install\n" >&2
-npm install -g pi-mcp-adapter@latest 2>/dev/null || npm install --prefix ~/.local pi-mcp-adapter@latest 2>/dev/null || printf "warning: pi-mcp-adapter update failed; continuing with existing install\n" >&2
+# Update Pi and its MCP adapter to latest. The provisioner installs global npm
+# packages as root, so prefer passwordless sudo before using a local fallback.
+sudo -n npm install -g @earendil-works/pi-coding-agent@latest || npm install -g --prefix ~/.local @earendil-works/pi-coding-agent@latest
+sudo -n npm install -g pi-mcp-adapter@latest || npm install -g --prefix ~/.local pi-mcp-adapter@latest
+if [[ -f ~/.pi/agent/git/github.com/BlackBeltTechnology/pi-flows/package.json ]]; then
+    npm install --prefix ~/.pi/agent/git/github.com/BlackBeltTechnology/pi-flows 2>/dev/null || printf "warning: pi-flows dependency restore failed; continuing with existing install\n" >&2
+fi
 # Ensure binaries are discoverable even with local install
 if command -v pi >/dev/null; then
     pi --version

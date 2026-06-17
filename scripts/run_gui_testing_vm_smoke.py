@@ -39,18 +39,8 @@ RSYNC_EXCLUDES = (
     "target/tmp/",
 )
 CODEX_SETTING_PATHS = (
-    "auth.json",
-    "cap_sid",
     "config.json",
     "config.toml",
-    ".codex-global-state.json",
-    "installation_id",
-    "internal_storage.json",
-    "models_cache.json",
-    "state_5.sqlite",
-    "state_5.sqlite-shm",
-    "state_5.sqlite-wal",
-    "version.json",
     "keybindings.json",
     "browser/config.toml",
 )
@@ -174,6 +164,14 @@ CURATED_PROFILE_NAMES = tuple(
 )
 
 PROFILES = tuple(VM_PROFILE_DESCRIPTORS)
+AGENT_AUTH_PROFILES = {"all", "opencode-mcp", "pi-mcp"}
+AGENT_AUTH_ENV_KEYS = (
+    "FIREWORKS_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENCODE_API_KEY",
+    "MOONSHOT_API_KEY",
+    "CONTEXT7_API_KEY",
+)
 
 
 @dataclass(frozen=True)
@@ -362,7 +360,7 @@ def main() -> int:
     parser.add_argument(
         "--sync-codex-settings",
         action="store_true",
-        help="Copy selected host ~/.codex settings into the VM for authenticated Codex smokes.",
+        help="Copy selected non-auth host ~/.codex settings into the VM; use VM-local device login for auth.",
     )
     parser.add_argument(
         "--codex-home",
@@ -543,6 +541,8 @@ def preauthorize_for_profiles(
             port,
             ssh_options,
             remote_root,
+            wayland_display=wayland_display,
+            desktop_env=desktop_env,
         )
 
 
@@ -1077,12 +1077,19 @@ def preauthorize_screenshot_portal(
     port: int,
     ssh_options: list[str],
     remote_root: Path,
+    *,
+    wayland_display: str,
+    desktop_env: str,
 ) -> None:
+    desktop_exports = desktop_environment_exports(desktop_env)
     remote_script = (
         f"cd {shlex.quote(str(remote_root))} && "
         'runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" && '
         'if [ ! -d "$runtime_dir" ]; then runtime_dir=/tmp/sky-cua-runtime; mkdir -p "$runtime_dir"; chmod 700 "$runtime_dir"; fi && '
         'export XDG_RUNTIME_DIR="$runtime_dir" && '
+        f'export WAYLAND_DISPLAY="${{WAYLAND_DISPLAY:-{shlex.quote(wayland_display)}}}" && '
+        "export XDG_SESSION_TYPE=wayland && "
+        f"{desktop_exports}"
         "python3 scripts/testing-vm/preauthorize_screenshot_portal.py"
     )
     subprocess.run(
@@ -1135,11 +1142,11 @@ def run_remote_profile(
         f"SKY_CUA_COSMIC_HELPER={remote_root}/target/release/sky-cua-cosmic-helper",
         f"PATH={remote_root}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ]
-    # Forward API keys for OpenCode/Pi harnesses when available on the host
-    for key in ("FIREWORKS_API_KEY", "OPENAI_API_KEY", "MOONSHOT_API_KEY", "CONTEXT7_API_KEY"):
-        value = os.environ.get(key)
-        if value:
-            profile_command.append(f"{key}={value}")
+    if profile in AGENT_AUTH_PROFILES:
+        for key in AGENT_AUTH_ENV_KEYS:
+            value = os.environ.get(key)
+            if value:
+                profile_command.append(f"{key}={value}")
     profile_command.extend(
         [
             "bash",

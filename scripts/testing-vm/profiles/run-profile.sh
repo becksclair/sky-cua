@@ -22,18 +22,8 @@ copy_codex_path() {
 if [ "${SKY_CUA_COPY_CODEX_SETTINGS:-0}" != "0" ] && [ -d /mnt/host-codex ]; then
 	mkdir -p "$HOME/.codex"
 	for relative_path in \
-		auth.json \
-		cap_sid \
 		config.json \
 		config.toml \
-		.codex-global-state.json \
-		installation_id \
-		internal_storage.json \
-		models_cache.json \
-		state_5.sqlite \
-		state_5.sqlite-shm \
-		state_5.sqlite-wal \
-		version.json \
 		keybindings.json \
 		browser/config.toml; do
 		copy_codex_path "$relative_path"

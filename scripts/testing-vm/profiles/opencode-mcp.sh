@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="${HOME}/.local/bin:${PATH}"
+
 if ! command -v opencode >/dev/null; then
 	printf 'opencode is not installed in the testing VM\n' >&2
 	exit 66

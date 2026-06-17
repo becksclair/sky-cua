@@ -113,15 +113,40 @@ def test_gui_test_profile_copies_essential_codex_settings() -> None:
     content = run_profile.read_text(encoding="utf-8")
 
     assert "SKY_CUA_COPY_CODEX_SETTINGS" in content
-    assert "auth.json" in content
+    assert "auth.json" not in content
     assert "config.toml" in content
     assert "config.json" in content
-    assert "installation_id" in content
-    assert "internal_storage.json" in content
-    assert "cap_sid" in content
+    assert "installation_id" not in content
+    assert "internal_storage.json" not in content
+    assert "cap_sid" not in content
+    assert "state_5.sqlite" not in content
     assert "browser/config.toml" in content
     assert "for relative_dir in plugins skills" in content
     assert "/mnt/host-codex" in content
+
+
+def test_testing_vm_opencode_sync_has_user_writable_latest_fallback() -> None:
+    script_root = Path(__file__).resolve().parents[1] / "scripts" / "testing-vm"
+    sync_script = (script_root / "sync-opencode-to-vm.sh").read_text(encoding="utf-8")
+    profile = (script_root / "profiles" / "opencode-mcp.sh").read_text(encoding="utf-8")
+
+    assert 'export PATH="$HOME/.local/bin:$PATH"' in sync_script
+    assert "sudo -n npm install -g opencode-ai@latest" in sync_script
+    assert "npm install -g --prefix ~/.local opencode-ai@latest" in sync_script
+    assert "warning: opencode update failed; continuing with existing install" in sync_script
+    assert 'export PATH="${HOME}/.local/bin:${PATH}"' in profile
+
+
+def test_testing_vm_pi_sync_has_user_writable_latest_fallback() -> None:
+    sync_script = (
+        Path(__file__).resolve().parents[1] / "scripts" / "testing-vm" / "sync-pi-to-vm.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'export PATH="${HOME}/.local/bin:${PATH}"' in sync_script
+    assert "sudo -n npm install -g @earendil-works/pi-coding-agent@latest" in sync_script
+    assert "npm install -g --prefix ~/.local @earendil-works/pi-coding-agent@latest" in sync_script
+    assert "sudo -n npm install -g pi-mcp-adapter@latest" in sync_script
+    assert "npm install -g --prefix ~/.local pi-mcp-adapter@latest" in sync_script
 
 
 def test_gui_test_profiles_use_host_built_rust_artifacts() -> None:
@@ -161,6 +186,7 @@ def test_testing_vm_runner_runs_remote_arch_profile(
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
 
     assert (
         run_gui_testing_vm_smoke.run_remote_profile(
@@ -192,9 +218,82 @@ def test_testing_vm_runner_runs_remote_arch_profile(
     assert "systemctl --user import-environment" in command_text
     assert "scripts/testing-vm/profiles/run-profile.sh" in command_text
     assert "kde-kwin-effect" in command_text
+    assert "OPENAI_API_KEY" not in command_text
     assert "kde-plasma" in run_gui_testing_vm_smoke.PROFILES
     assert "mcp-x11" not in run_gui_testing_vm_smoke.PROFILES
     assert "computer-use" in run_gui_testing_vm_smoke.PROFILES
+
+
+def test_testing_vm_runner_forwards_auth_only_to_agent_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is False
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+    monkeypatch.setenv("OPENCODE_API_KEY", "opencode-secret")
+    monkeypatch.setenv("CONTEXT7_API_KEY", "context-secret")
+
+    assert (
+        run_gui_testing_vm_smoke.run_remote_profile(
+            "skycua@testing-vm",
+            2222,
+            [],
+            Path("/workspace"),
+            "opencode-mcp",
+        )
+        == 0
+    )
+
+    command_text = " ".join(commands[0])
+    assert "OPENCODE_API_KEY=opencode-secret" in command_text
+    assert "CONTEXT7_API_KEY=context-secret" in command_text
+
+
+def test_testing_vm_runner_forwards_auth_to_all_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
+        assert check is False
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+    monkeypatch.setenv("OPENCODE_API_KEY", "opencode-secret")
+    monkeypatch.setenv("CONTEXT7_API_KEY", "context-secret")
+
+    assert (
+        run_gui_testing_vm_smoke.run_remote_profile(
+            "skycua@testing-vm",
+            2222,
+            [],
+            Path("/workspace"),
+            "all",
+        )
+        == 0
+    )
+
+    command_text = " ".join(commands[0])
+    assert "OPENCODE_API_KEY=opencode-secret" in command_text
+    assert "CONTEXT7_API_KEY=context-secret" in command_text
 
 
 def test_testing_vm_runner_remote_profile_opts_into_codex_settings(
@@ -1109,7 +1208,7 @@ def test_testing_vm_runner_syncs_essential_codex_settings(
     assert "ControlMaster=auto" in command_text
     assert "StrictHostKeyChecking=no" in command_text
     assert "skycua@testing-vm mkdir -p .codex" in command_text
-    assert "auth.json skycua@testing-vm:.codex/auth.json" in command_text
+    assert "auth.json skycua@testing-vm:.codex/auth.json" not in command_text
     assert "config.toml skycua@testing-vm:.codex/config.toml" in command_text
     assert "browser/config.toml" in command_text
     assert "--delete" in command_text

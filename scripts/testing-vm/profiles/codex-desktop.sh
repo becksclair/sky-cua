@@ -21,12 +21,17 @@ export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-COSMIC}"
 export DESKTOP_SESSION="${DESKTOP_SESSION:-COSMIC}"
 export XDG_SESSION_TYPE=wayland
 
-cleanup() {
-  if [[ -n "${codex_pid:-}" ]] && kill -0 "$codex_pid" 2>/dev/null; then
-    kill "$codex_pid" 2>/dev/null || true
-  fi
+cleanup_codex_desktop() {
+  pkill -u "$(id -u)" -f '^/opt/codex-desktop/Codex' 2>/dev/null || true
+  pkill -u "$(id -u)" -f '^/opt/codex-desktop/chrome_crashpad_handler' 2>/dev/null || true
+  pkill -u "$(id -u)" -f '^/opt/codex-desktop/resources/codex app-server' 2>/dev/null || true
 }
-trap cleanup EXIT
+trap cleanup_codex_desktop EXIT
+
+# A previous launch can leave Electron children behind after the profile exits.
+# Start from a clean process tree so window discovery proves this run.
+cleanup_codex_desktop
+sleep 1
 
 sky_cua_client="${SKY_CUA_CLIENT:-/workspace/target/release/sky-cua-client}"
 if [[ ! -x "$sky_cua_client" ]]; then

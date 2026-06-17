@@ -56,9 +56,9 @@ same dependency intent:
   Linux package
 - Codex Desktop: installed from the local CodexDesktop-Rebuild Arch package
   when `CODEX_DESKTOP_PACKAGE` is set
-- OpenCode CLI: installed from npm with `OPENCODE_NPM_SPEC`, defaulting to the
-  host-proven `opencode-ai@1.14.51`, so future non-Codex harness work can run
-  in the same production-like VM
+- OpenCode CLI: installed from npm with `OPENCODE_NPM_SPEC`, defaulting to
+  `opencode-ai@latest`, so future non-Codex harness work can run in the same
+  production-like VM
 
 The VM should have a visible virt-manager/virt-viewer console and SSH access.
 If libvirt's default network is absent, direct QEMU user networking with an SSH
@@ -106,9 +106,15 @@ Run profiles from the host with:
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-helper --desktop-env COSMIC
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-patched-cursor-host-proof --desktop-env COSMIC
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-transparent-xcursor-host-proof --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile targeted-screenshot --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile display-screenshot --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile codex-desktop --desktop-env COSMIC
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile kde-kwin-effect
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile kde-kwin-effect-system-install --vm-name testing-vm --libvirt-uri qemu:///session
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile opencode-mcp --sync-opencode-settings
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile pi-mcp --sync-pi-settings
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all --sync-opencode-settings --sync-pi-settings
 ```
 
 List the profile registry without a VM, including dispatch type, curated-set
@@ -156,25 +162,11 @@ The runner:
 - syncs the checkout into `/workspace` with `rsync`
 - excludes heavy/generated host state such as `.git/`, `.venv/`, `dist/`,
   `artifacts/`, and irrelevant `target/` subtrees
-- copies selected `~/.codex` settings, auth, browser config, plugins, and
-  skills into the VM user account only when `--sync-codex-settings` is set
+- copies selected non-auth `~/.codex` settings, browser config, plugins, and
+  skills into the VM user account only when `--sync-codex-settings` is set;
+  Codex authentication must be created inside the VM with
+  `/opt/codex-desktop/resources/codex login --device-auth`
 - runs `scripts/testing-vm/profiles/run-profile.sh` over SSH
-
-Useful commands:
-
-```bash
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile kde-kwin-effect
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile kde-kwin-effect-system-install --vm-name testing-vm --libvirt-uri qemu:///session
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use --desktop-env COSMIC
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile targeted-screenshot --desktop-env COSMIC
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile display-screenshot --desktop-env COSMIC
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile codex-desktop --desktop-env COSMIC
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-helper --desktop-env COSMIC
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-patched-cursor-host-proof --desktop-env COSMIC
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile cosmic-transparent-xcursor-host-proof --desktop-env COSMIC
-python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile all
-```
 
 Detached session-env repair runs in the VM as the `session-env` profile (a
 curated-set member). The local live smokes remain the fastest loop when
@@ -366,7 +358,9 @@ Profiles live under `scripts/testing-vm/profiles/`.
   then hidden cursor pixels.
 - `opencode-mcp`: real-session OpenCode MCP smoke. Installs sky-cua as an MCP
   server for OpenCode, deploys skills, and exercises dialog dismissal through
-  OpenCode's tool-calling loop against visible desktop fixtures.
+  OpenCode's tool-calling loop against visible desktop fixtures. It is part of
+  `all`; keep it there only while it enforces MCP tool evidence equivalent to
+  the Pi agent-loop acceptance lane.
 - `pi-mcp`: real-session Pi MCP smoke. Installs sky-cua as an MCP server for Pi
   via `pi-mcp-adapter`, deploys skills, and exercises dialog dismissal through
   Pi's tool-calling loop.
@@ -403,8 +397,14 @@ Profiles live under `scripts/testing-vm/profiles/`.
   proof for the VM session matrix. For COSMIC/GNOME/Plasma/Hyprland acceptance,
   boot the VM into that desktop and run the app/plugin smoke against the real
   guest session.
-- `all`: runs the fast non-session-specific profiles. It does not claim that
-  every desktop session has been proved.
+- `all`: runs the standard VM smoke gate: direct computer-use profiles, Codex
+  Desktop launch proof, OpenCode/Pi installed-MCP agent harnesses, and
+  KWin-effect proof. When `HOST_WAYLAND_DISPLAY` is set it also runs the
+  legacy nested compositor debug profiles with `--headed`; otherwise those
+  headed profiles are skipped. Treat `all` as the routine full smoke gate for
+  agent closeout, but keep per-desktop real-session acceptance separate by
+  booting the VM into the target desktop and running that profile against the
+  real guest session.
 
 ## Current Verification Status
 
@@ -601,20 +601,6 @@ with `system_cursor_hidden=true`; host libvirt framebuffer diff finds the cursor
 at `(420,260)`; cleanup removes the system files and KWin no longer lists the
 effect after restart. Latest proof:
 `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T100852814643Z/host-summary.json`.
-
-Progress ledger:
-
-| Area | Status | Current proof | Remaining proof |
-| --- | --- | --- | --- |
-| VM provisioner | First live proof | `scripts/testing-vm/provision-arch-testing-vm.sh` provisioned a QEMU/libvirt Arch guest with COSMIC Wayland, Chrome, OpenCode, Codex Desktop, SSH, rsync, matching terminal apps, and the desktop matrix. | Re-run from a fully fresh guest after future package-list changes. |
-| VM runner | Accepted matrix runner | `scripts/run_gui_testing_vm_smoke.py` now owns the accepted real-session matrix for COSMIC helper/input, patched COSMIC cursor bridge, transparent COSMIC, KDE/KWin system-install, GNOME, Hyprland, and i3/X11 cursor proof profiles. | Add host-side artifact pullback or index generation if repeated VM runs need easier local browsing. |
-| OpenCode | Config/auth prep proof | `scripts/testing-vm/sync-opencode-to-vm.sh` synced host OpenCode config/auth without DB/log/snapshot state; VM `opencode --version` returned `1.14.51`, and `opencode models openai` succeeded. | Register and smoke the sky-cua MCP runtime under OpenCode when the non-Codex harness lane starts. |
-| Text readback | Direct MCP plus agent harness accepted on Plasma | In the Plasma `testing-vm`, `scripts/live_desktop_smoke.py` proved initial `zenity` entry value readback, post-`set_value` readback, and post-`type_text` readback through fresh `get_app_state` snapshots. `scripts/live_codex_exec_text_readback_smoke.py` produced `/workspace/artifacts/codex-e2e/codex-text-readback-smoke/20260517T041212Z`, and `scripts/live_app_server_text_readback_smoke.py` produced `/workspace/artifacts/codex-e2e/app-server-text-readback-smoke/20260517T041242Z`; both transcript checks require one `get_app_state` result with `stale-readback` and a later one with `verified-readback`. | The direct lane now rides the curated VM runner set as the `text-readback` profile (the strict-capture `desktop-smoke` profile remains a per-session lane); agent-harness readback smokes remain manual. Extend native readback proof to Windows/UIA only after that backend extracts equivalent metadata. |
-| COSMIC | Helper, app launch, pointer, text/key, patched cursor bridge, and transparent no-patch mode accepted | Real COSMIC Wayland guest session was active with `cosmic-session`, `cosmic-comp`, and `/run/user/1000/wayland-1`; `cosmic-helper` proved helper listing, activation, and focused-window readback at `/workspace/artifacts/gui-desktop-smoke/cosmic-helper/20260515T034206Z/`. Full input artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T092606Z` proves `LinuxVirtualInput` direct uinput click, drag, scroll plus ydotool-backed `type_text`/`press_key`; repeatable scaled profile artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T093737Z` proves the same path at 125%. Patched compositor proof `artifacts/cosmic-framebuffer-cursor-proof/20260515T142538562074Z/host-summary.json` reports `ok=true` with `system_cursor_backend=cosmic_comp_bridge`. No-patch transparent session proof `artifacts/cosmic-transparent-xcursor-cursor-proof/20260516T073232164704Z/host-summary.json` reports `ok=true` with `system_cursor_backend=cosmic_transparent_xcursor`. | Keep this in the session-matrix gate; broaden later to multi-output and richer list/focus coverage when the VM exposes more than one real output. |
-| KDE/KWin | Layer-shell, pointer input, and KWin effect system path accepted | Real Plasma Wayland VM proofs: clean cursor sequence `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100302670580-syn`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100303845615-vis`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100305142807-hide`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click`, full pointer `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T100113Z/`, user-level effect discovery blocker `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515075621741796-kwin`, and automated system-install proof `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T132649888064Z/host-summary.json`. | Keep this profile in the pre-merge/live-smoke gate for future KWin effect changes; broader registry/list/focus proof is still a separate seam. |
-| GNOME | Pointer/text input and Shell-extension cursor proof accepted | Real GNOME Wayland VM pointer artifact `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260518T025611Z` proves click, secondary-click, drag, scroll, `type_text`, and `press_key` through GNOME RemoteDesktop EIS, with keyboard input backed by the compositor-provided XKB keymap. The GNOME Shell extension cursor artifact `artifacts/gnome-framebuffer-cursor-proof/20260515T140437893805720Z/host-summary.json` reports `ok=true` with `backend=gnome_shell_extension` and `system_cursor_backend=gnome_shell_extension`. | Broaden GNOME registry/listing/focus proof beyond the current cursor and pointer seams, and re-run after Shell or session-launch changes. |
-| Hyprland | Layer-shell overlay and compositor cursor hide accepted | Real Hyprland VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-wayland-layer-shell/20260515T142710878162Z` proves `wayland_layer_shell`, `system_cursor_backend=hyprland_config`, visible overlay capture, click-through capability, hide-for-capture, and restore of `cursor:invisible`. The same slice fixed the unconfigured layer-surface buffer attach protocol bug. | Broaden Hyprland registry/list/focus/terminal-enrichment proof and full pointer-input matrix as those paths mature. |
-| i3/X11 | X11 overlay and XFixes system cursor hide accepted | Real i3/X11 VM artifact `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T142731049499Z` proves visible overlay capture, hide, re-show, click-through, and XFixes system cursor hide/show. | Broaden the i3 profile later for `i3-msg -t get_tree`, app focus activation, terminal enrichment, and X11/XTest input beyond the cursor overlay proof. |
 
 Do not mark any live-smoke gap complete until the command, desktop profile, and
 artifact directory are recorded.

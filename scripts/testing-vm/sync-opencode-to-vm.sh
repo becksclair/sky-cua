@@ -57,12 +57,14 @@ if [[ -d "${opencode_desktop_config}" ]]; then
 fi
 
 ssh "${ssh_options[@]}" "${target}" 'set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
 rm -rf ~/.config/opencode
 ln -s "$HOME/.agents/opencode" "$HOME/.config/opencode"
 chmod 700 ~/.local/share/opencode ~/.config/@opencode-ai || true
 chmod 600 ~/.local/share/opencode/auth.json
-# Update OpenCode to latest version (best-effort; may require root for global npm)
-npm install -g opencode-ai@latest || printf "warning: global npm update failed; continuing with existing install\n" >&2
+# Update OpenCode to latest. The provisioner installs it globally as root, so
+# prefer passwordless sudo before falling back to a user-writable prefix.
+sudo -n npm install -g opencode-ai@latest || npm install -g --prefix ~/.local opencode-ai@latest || printf "warning: opencode update failed; continuing with existing install\n" >&2
 
 if [[ -f ~/.agents/opencode/package.json ]]; then
   cd ~/.agents/opencode

@@ -9,9 +9,9 @@ fi
 vm_user="${SKY_CUA_TESTING_VM_USER:-skycua}"
 codex_desktop_package="${CODEX_DESKTOP_PACKAGE:-}"
 autologin_session="${SKY_CUA_TESTING_VM_SESSION:-cosmic}"
-# Keep this pinned to the host-proven OpenCode version unless deliberately
-# refreshing the non-Codex harness test surface.
-opencode_npm_spec="${OPENCODE_NPM_SPEC:-opencode-ai@1.14.51}"
+# Default to the latest OpenCode harness; override OPENCODE_NPM_SPEC when a
+# reproduction needs a pinned version.
+opencode_npm_spec="${OPENCODE_NPM_SPEC:-opencode-ai@latest}"
 
 pacman-key --init
 pacman-key --populate archlinux
@@ -127,15 +127,27 @@ pacman -S --noconfirm --needed \
 	xorg-xinit \
 	xorg-xmessage \
 	xorg-xwayland \
-	xorg-xwininfo
+	xorg-xwininfo \
+	zenity
+
+cat >/etc/mkinitcpio.conf.d/sky-cua-testing-vm.conf <<'EOF'
+MODULES+=(virtio_pci virtio_blk virtio_net virtio_rng virtio_balloon virtio_gpu btrfs 9p 9pnet 9pnet_virtio)
+EOF
+chown root:root /etc/mkinitcpio.conf.d/sky-cua-testing-vm.conf
+chmod 0644 /etc/mkinitcpio.conf.d/sky-cua-testing-vm.conf
+mkinitcpio -P
 
 if ! id -u "${vm_user}" >/dev/null 2>&1; then
 	useradd --create-home --shell /bin/bash --groups wheel,video,render,seat,input "${vm_user}"
 fi
 usermod -aG wheel,video,render,seat,input "${vm_user}"
 
-chmod 0755 /
+chmod 0755 / /run
 install -d -m 0700 -o "${vm_user}" -g "${vm_user}" "/home/${vm_user}/.ssh"
+if [[ -f "/home/${vm_user}/.ssh/authorized_keys" ]]; then
+	chown "${vm_user}:${vm_user}" "/home/${vm_user}/.ssh/authorized_keys"
+	chmod 0600 "/home/${vm_user}/.ssh/authorized_keys"
+fi
 install -d -m 0755 -o "${vm_user}" -g "${vm_user}" /workspace
 install -d -m 0755 /usr/local/share/sky-cua-testing-vm/profiles
 
@@ -199,14 +211,16 @@ npm install -g @earendil-works/pi-coding-agent pi-mcp-adapter || {
 	printf 'warning: Pi global install failed; smoke tests will need local fallback\n' >&2
 }
 
-runuser -u "${vm_user}" -- dbus-run-session -- bash -lc '
+if ! runuser -u "${vm_user}" -- dbus-run-session -- bash -lc '
 set -euo pipefail
 gsettings set org.gnome.desktop.session idle-delay 0 || true
 gsettings set org.gnome.desktop.screensaver lock-enabled false || true
 gsettings set org.gnome.desktop.screensaver idle-activation-enabled false || true
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing || true
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0 || true
-'
+'; then
+	printf 'warning: could not apply GNOME idle/lock gsettings for %s\n' "${vm_user}" >&2
+fi
 
 cat >/usr/local/bin/sky-cua-testing-vm-session <<'EOF'
 #!/usr/bin/env bash
