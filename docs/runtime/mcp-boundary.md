@@ -123,27 +123,9 @@ bundled preflight. See
 [`docs/operations/plugin-release.md`](../operations/plugin-release.md).
 
 If `~/.codex/config.toml` has stale sky-cua state, clean only the plugin and
-compatibility entries before redeploying. Keep unrelated project trust, auth,
-model, and curated plugin settings intact. The expected compat-first
-post-deploy shape on Linux is:
-
-```toml
-[plugins."computer-use@openai-bundled"]
-enabled = true
-
-[plugins."sky-cua@local"]
-enabled = false
-```
-
-After cleanup, rerun `python3 scripts/deploy_plugin.py`. The cheap
-control-plane proof is `mcpServerStatus/list` through `codex app-server`; it
-should show one `computer-use` server with tools such as `list_apps`,
-`get_app_state`, `click`, `scroll`, `type_text`, and `doctor`. If both
-`sky-cua@local` and `computer-use@openai-bundled` are enabled, Codex can see a
-duplicate `computer-use` server, so fix the config before chasing runtime bugs.
-`deploy_plugin.py` also disables the retired `sky-cua@debug` and
-`sky-cua@Heliasar` stanzas and drops their cache payloads on every run, so those
-two never need a manual reset.
+compatibility entries before redeploying; the exact reset stanza and
+post-deploy verification are documented in
+[`docs/operations/plugin-release.md`](../operations/plugin-release.md).
 
 For plain MCP hosts, build release binaries and emit a host-specific config:
 
@@ -169,8 +151,9 @@ python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw --bin-dir ~/.local/bin --restart-runtime
 ```
 
-`--restart-runtime` stops installed sky-cua runtime processes rooted under the
-target directory, including `sky-cua-client`, `sky-cua-service`,
+`--restart-runtime` attempts to refresh the user AT-SPI accessibility bus on Linux
+desktop sessions, then stops installed sky-cua runtime processes rooted under the target
+directory, including `sky-cua-client`, `sky-cua-service`,
 `sky-cua-overlay-host`, `sky-cua-chrome-host`, and `sky-cua-cosmic-helper`. This
 is deliberately opt-in so an install does not interrupt an active MCP session by
 surprise. OpenCode and Pi usually respawn the lazy MCP process on the next tool
@@ -303,50 +286,9 @@ viewport or scrollable DOM state. The full table is pinned by
 `mcp_tools::annotation_tests`; changing a row changes what hosts auto-approve
 and must be deliberate.
 
-Browser target names are not interchangeable. `user_chrome` is the user's
-already-running Chrome-family browser, reached through the extension/native-host
-bridge. A managed sky-cua-owned isolated browser context was once planned and
-was retired on 2026-06-11 because an isolated profile loses the logged-in
-sessions that make real-browser control useful. The `managed` target has been
-removed from the wire contract entirely; browser tools accept `user_chrome` only
-and reject any other `target` string at argument parsing. `browser_open(user_chrome)`
-creates a new session-owned tab and may navigate it to `http://`, `https://`, or
-`about:blank`. Existing tabs returned by `browser_list_tabs(user_chrome)` must be
-adopted with `browser_claim_tab` before browser actions can target them, and the
-extension may reject tabs already claimed by another browser session. For stale
-owners whose session id starts with `sky-cua-`, `browser_claim_tab` finalizes the
-stale session with `keep=[]`, retries the claim once, then attaches and enables
-Page CDP so action tools can use the tab. It does not reclaim tabs owned by
-non-sky-cua sessions.
-
-Browser tool coordinates are CSS pixels in one shared space:
-`browser_screenshot` image pixels, `browser_snapshot` element bounds, and
-`browser_click`/`browser_move_mouse`/`browser_scroll` coordinates line up
-one-to-one. They are not desktop screen coordinates and they are not
-coordinates from `get_app_state` screenshots. The service normalizes high-DPI
-captures to CSS-pixel dimensions at capture time, so callers never divide
-coordinates by DPR manually.
-`browser_screenshot` captures the browser page's visible viewport, not the
-desktop. The image is attached to the MCP result as an image content block for
-image-capable sessions, persisted to the file named in
-`structuredContent.screenshot_path`, and never repeated as base64 inside
-`structuredContent`. When the initialized model session cannot receive images,
-the MCP client requests a path-backed screenshot without response image data.
-`browser_scroll` currently uses `Runtime.evaluate` because CDP mouse-wheel
-dispatch timed out through the live extension bridge. Calls must provide a
-non-zero `delta_x` or `delta_y`. When `x`/`y` are provided together, it moves the
-browser agent cursor to that point and scrolls the nearest scrollable DOM
-ancestor under it, falling back to the page viewport. When `x`/`y` are omitted,
-it scrolls the page viewport directly through `window.scrollBy(...)`.
-`browser_snapshot` returns page title, URL, viewport, bounded body text, and
-common actionable element summaries; `text_limit` defaults to 4000 for MCP
-calls, can be 0 to omit text, and can be raised to 20000. Element
-query/offset/limit projection is applied in the service before the CDP result
-crosses the IPC boundary, with a maximum returned element budget of 5000. When
-page text is omitted or truncated before the service can count it exactly,
-`textCharCount` is `null` and `textTruncated` carries the known truncation
-state. It is not an accessibility tree and should not be treated as a
-replacement for desktop `get_app_state`.
+Browser tools are documented in
+[`docs/features/browser-mcp-tools.md`](../features/browser-mcp-tools.md); the
+runtime exposes the same contract to every host.
 
 `doctor` includes Linux `session_env` repair details when the runtime had to
 recover detached desktop state. `repaired` records which keys were filled and
@@ -392,9 +334,9 @@ Use these lanes when validating changes:
   `scripts/live_desktop_smoke.py`, `scripts/live_portal_downgrade_smoke.py`,
   `scripts/live_wayland_pointer_smoke.py`, `scripts/live_kate_smoke.py`, and
   `scripts/live_krita_smoke.py`.
-- Codex adapter lane: bundle/install checks and app-server smokes such as
+- Installed-agent lane: bundle/install checks and agentic-loop smokes such as
   `scripts/build_plugin.py`, `scripts/install_plugin.py`, and
-  `scripts/live_app_server_smoke.py`.
+  `scripts/live_agentic_loop_smoke.py`.
 - Detached Linux session-env lane: `scripts/live_session_env_smoke.py` proves
   direct MCP recovery from a stripped desktop environment, while
   `scripts/live_codex_exec_session_env_smoke.py` and
@@ -446,24 +388,12 @@ opencode run --dir /home/bex/projects/sky-cua \
 ```
 
 For VM-based non-Codex harness work, use the Arch testing VM documented in
-`docs/operations/gui-desktop-test-harness.md`. The provisioner installs OpenCode from npm
-with `OPENCODE_NPM_SPEC` defaulting to `opencode-ai@1.14.51`; then sync host
-OpenCode config/auth into the VM without copying the host DB, logs, snapshots,
-or tool-output history:
-
-```bash
-scripts/testing-vm/sync-opencode-to-vm.sh
-ssh -p 22222 \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
-  skycua@127.0.0.1 'opencode --version && opencode models openai | head'
-```
-
-The current live VM proof is `opencode 1.14.51` with copied
-`~/.config/opencode` and `~/.local/share/opencode/auth.json`; `opencode models
-openai` succeeds in the guest. This proves the OpenCode auth/config surface,
-not sky-cua MCP behavior under OpenCode yet. For that, install/register the MCP
-runtime with `scripts/install_mcp_server.py --host opencode` and then run an
+`docs/operations/gui-desktop-test-harness.md`. It installs OpenCode from npm and
+syncs host OpenCode config/auth into the VM without copying the host DB, logs,
+snapshots, or tool-output history, then verifies `opencode --version` and
+`opencode models openai` in the guest. That proves the OpenCode auth/config
+surface, not sky-cua MCP behavior under OpenCode yet. For that, install/register
+the MCP runtime with `scripts/install_mcp_server.py --host opencode` and then run an
 OpenCode MCP tool smoke.
 
 For the LAN server at `https://opencode.heliasar.com`, restart the

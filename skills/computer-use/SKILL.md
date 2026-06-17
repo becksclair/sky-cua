@@ -20,8 +20,14 @@ coordinates across them.
   `pid`, `app_id`, `wm_class`, `title`, terminal selectors) activate,
   focus-verify, and crop. `display_*` captures one monitor;
   `capture_all_displays` captures the virtual desktop.
-- Always pass the source `snapshot_id` for screenshot-based actions, especially
-  with cropped windows, non-primary displays, scaling, or negative origins.
+- Always pass the `snapshot_id` returned by the specific `get_app_state` or
+  `screenshot` call that produced the image for screenshot-based actions,
+  especially with cropped windows, non-primary displays, scaling, or negative
+  origins. If a targeted `screenshot` fails with
+  `CaptureSourceGeometryMissing` or `targeted screenshot requires capture
+  source geometry`, refresh the relevant window/display state and retry the
+  targeted capture once. Fall back to `capture_all_displays` only when the
+  next pixel action uses that broader capture's returned `snapshot_id`.
 - `environment.displays` lists display ids, primary status, logical rects,
   scale, and backend; windows/focused apps include `display` when known.
 
@@ -46,12 +52,19 @@ coordinates across them.
 - The accessibility tree is structure, not truth. Fallback trees have real
   window bounds but blunt roles; treat them as visual anchors. When tree and
   screenshot disagree, the screenshot wins.
-- Tool success means input was injected, not that UI changed. Reacquire state
-  and screenshot before chaining through menus, popovers, renames, or fallback
-  surfaces.
+- Pixel actions are scoped to the `snapshot_id` whose image supplied the
+  target. Reacquire after visible transitions such as menus, popovers, renames,
+  or submenus instead of chaining from stale captures.
 - `SessionEnvRepaired` is context, not error. On Linux, check
   `doctor.session_env` before judging a thin app list or missing capture/input
   as desktop unavailable.
+- Check `doctor.display_topology` before judging display-targeted screenshots:
+  `display_count=0` or `DisplayTopologyUnavailable` means targeted display
+  geometry is not authoritative yet; `selected_provider="xrandr"` or
+  `DisplayTopologyInferred` means geometry came from fallback and window
+  targets plus returned `snapshot_id` are safer for pixel actions.
+- For a window-targeted screenshot, pass the exact `window_id` directly; the
+  tool handles activation/focus verification where the backend can prove it.
 
 ## Actions
 
@@ -75,6 +88,9 @@ coordinates across them.
 
 - `activate_window` success is focus-verified on Linux, including KDE/KWin;
   `focused_window` works on KWin too. Errors name the missing backend seam.
+- On KDE/KWin Wayland, prefer `window_id` over `pid` when both are available.
+  `window_id` identifies the exact window, while `pid` can be ambiguous for
+  multi-window apps and compositor-managed surfaces.
 - XWayland editors may need keyboard input via the X11 lane rather than the
   portal keyboard lane.
 - Native Wayland apps can expose good structure yet report wrong actionable

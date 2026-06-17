@@ -25,4 +25,4 @@ runtime: every line costs tokens and competes with task context.
 ## Acceptance
 
 After skill edits: `python3 scripts/build_plugin.py`, install, and run
-`python3 scripts/live_app_server_smoke.py` for real proof.
+`python3 scripts/live_agentic_loop_smoke.py` for real proof.
