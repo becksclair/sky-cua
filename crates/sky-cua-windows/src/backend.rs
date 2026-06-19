@@ -948,9 +948,7 @@ fn display_matches_target(display: &DisplayInfo, target: &DisplayTarget) -> bool
 }
 
 fn primary_display(displays: &[DisplayInfo]) -> Option<DisplayInfo> {
-    displays
-        .iter()
-        .find(|display| display.primary)
+    sky_cua_platform::model::primary_flagged_display(displays)
         .or_else(|| displays.first())
         .cloned()
 }

@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::diagnostics::{BackendError, BackendErrorCode};
 use crate::model::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
-    CaptureBackendKind, CaptureScreenMode, DiagnosticEntry, DisplayTarget, DoctorCheck,
-    DoctorReadiness, DoctorReport, EnvironmentInfo, HeuristicMatch, InputBackendKind,
+    CaptureBackendKind, CaptureScreenMode, DiagnosticEntry, DisplayInfo, DisplayTarget,
+    DoctorCheck, DoctorReadiness, DoctorReport, EnvironmentInfo, HeuristicMatch, InputBackendKind,
     PortalTokenResetOutcome, SemanticBackendKind, SessionPresenceIntent, SessionPresenceStatus,
     WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
@@ -108,6 +108,15 @@ pub trait DesktopBackend: Send + Sync {
             .await?
             .into_iter()
             .find(|window| window.focused))
+    }
+    /// Enumerate the host display topology (logical rects, pixel sizes, scale).
+    ///
+    /// Defaults to an empty list for backends without display discovery; callers
+    /// that derive geometry from the host displays (e.g. phone-scale scrcpy mirror
+    /// sizing) must treat an empty result as "topology unknown" and fall back,
+    /// never as "no displays exist".
+    async fn list_displays(&self) -> Result<Vec<DisplayInfo>, BackendError> {
+        Ok(Vec::new())
     }
     async fn activate_window(&self, _target: WindowTarget) -> Result<ActionOutcome, BackendError> {
         Err(BackendError::new(

@@ -226,6 +226,16 @@ pub struct DisplayInfo {
     pub backend: String,
 }
 
+/// The display whose `primary` flag is set, if any.
+///
+/// Resolves only the primary flag so the "which display is primary" rule lives
+/// in one place rather than being re-spelled per backend. Callers layer their
+/// own fallback (first display, tallest, ...) when nothing is flagged primary.
+/// Returns a borrow; clone if an owned value is needed.
+pub fn primary_flagged_display(displays: &[DisplayInfo]) -> Option<&DisplayInfo> {
+    displays.iter().find(|display| display.primary)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DisplayRef {
     pub display_id: String,

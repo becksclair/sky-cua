@@ -181,9 +181,7 @@ pub(crate) fn resolve_display_target(
 }
 
 pub(crate) fn primary_display(displays: &[DisplayInfo]) -> Option<DisplayInfo> {
-    displays
-        .iter()
-        .find(|display| display.primary)
+    sky_cua_platform::model::primary_flagged_display(displays)
         .or_else(|| displays.first())
         .cloned()
 }
@@ -251,7 +249,30 @@ fn environment_matches(environment: &EnvironmentInfo, needles: &[&str]) -> bool 
 }
 
 fn displays_from_kscreen_doctor() -> (Vec<DisplayInfo>, DoctorDisplayProbeReport) {
-    let output = command_output_with_timeout(
+    // Prefer the structured `-j` JSON: its schema is stable across KDE versions
+    // and immune to the ANSI-colored `-o` status rows (`HDR: disabled`, `Wide
+    // Color Gamut: disabled`) that the legacy text scanner misread as the
+    // output's own disabled state, dropping every enabled monitor. Fall back to
+    // `-o` only when `-j` yields nothing (e.g. a kscreen build without JSON).
+    let json = command_output_with_timeout(
+        Command::new("kscreen-doctor")
+            .arg("-j")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        COMMAND_TIMEOUT,
+    );
+    let json_displays = json
+        .output
+        .as_ref()
+        .filter(|output| output.status.success())
+        .and_then(|output| parse_kscreen_doctor_json(&String::from_utf8_lossy(&output.stdout)).ok())
+        .unwrap_or_default();
+    if !json_displays.is_empty() {
+        return command_probe_result("kscreen-doctor", json.output, json.timed_out, json_displays);
+    }
+
+    let text = command_output_with_timeout(
         Command::new("kscreen-doctor")
             .arg("-o")
             .stdin(Stdio::null())
@@ -259,13 +280,13 @@ fn displays_from_kscreen_doctor() -> (Vec<DisplayInfo>, DoctorDisplayProbeReport
             .stderr(Stdio::piped()),
         COMMAND_TIMEOUT,
     );
-    let displays = output
+    let text_displays = text
         .output
         .as_ref()
         .filter(|output| output.status.success())
         .map(|output| parse_kscreen_doctor(&String::from_utf8_lossy(&output.stdout)))
         .unwrap_or_default();
-    command_probe_result("kscreen-doctor", output.output, output.timed_out, displays)
+    command_probe_result("kscreen-doctor", text.output, text.timed_out, text_displays)
 }
 
 async fn displays_from_gnome_display_config() -> (Vec<DisplayInfo>, DoctorDisplayProbeReport) {
@@ -467,6 +488,13 @@ fn parse_kscreen_doctor(output: &str) -> Vec<DisplayInfo> {
     }
 
     fn update_state_from_line(line: &str, block: &mut Block) {
+        // Output-level state (enabled/disabled/connected) appears on the
+        // `Output:` line or on standalone word lines. Capability rows such as
+        // `HDR: disabled` and `Wide Color Gamut: disabled` are `Key: value`
+        // rows whose value must never be read as the output's own state.
+        if line.contains(':') && !line.trim_start().starts_with("Output:") {
+            return;
+        }
         for word in line.split_whitespace().map(|word| {
             word.trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
                 .to_ascii_lowercase()
@@ -538,6 +566,111 @@ fn parse_kscreen_doctor(output: &str) -> Vec<DisplayInfo> {
     }
     flush(&mut block, &mut displays);
     displays
+}
+
+#[derive(Deserialize)]
+struct KscreenDoctorJson {
+    #[serde(default)]
+    outputs: Vec<KscreenDoctorOutput>,
+}
+
+#[derive(Deserialize)]
+struct KscreenDoctorOutput {
+    name: String,
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    connected: bool,
+    #[serde(default)]
+    priority: i64,
+    #[serde(default)]
+    scale: Option<f64>,
+    #[serde(default)]
+    rotation: Option<i64>,
+    #[serde(default)]
+    pos: Option<KscreenDoctorPoint>,
+    #[serde(default)]
+    size: Option<KscreenDoctorSize>,
+}
+
+#[derive(Deserialize)]
+struct KscreenDoctorPoint {
+    #[serde(default)]
+    x: i32,
+    #[serde(default)]
+    y: i32,
+}
+
+#[derive(Deserialize)]
+struct KscreenDoctorSize {
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
+}
+
+/// Parse `kscreen-doctor -j` output into the desktop-logical display set.
+///
+/// Preferred over the legacy `-o` text parse: the JSON schema is stable across
+/// KDE versions and immune to the status rows (`HDR: disabled`, `Wide Color
+/// Gamut: disabled`) the text scanner misread as the output's own disabled
+/// state. Logical geometry is the current mode's pixel size divided by the
+/// fractional scale, with width/height swapped for quarter rotations; the
+/// `pos` is the desktop-logical origin and `priority == 1` marks the primary
+/// output. Disabled, disconnected, or geometry-less outputs are excluded.
+fn parse_kscreen_doctor_json(json: &str) -> Result<Vec<DisplayInfo>, serde_json::Error> {
+    let parsed: KscreenDoctorJson = serde_json::from_str(json)?;
+    let mut displays = Vec::new();
+    for output in parsed.outputs {
+        if !output.enabled || !output.connected {
+            continue;
+        }
+        let (Some(pos), Some(size)) = (output.pos, output.size) else {
+            continue;
+        };
+        if size.width == 0 || size.height == 0 {
+            continue;
+        }
+        let scale = output.scale.filter(|scale| *scale > 0.0).unwrap_or(1.0);
+        // KScreen rotation enum: 1=None, 2=Left(90), 4=Inverted(180), 8=Right(270).
+        // Quarter turns swap the logical footprint and the framebuffer extent.
+        let quarter_turn = matches!(output.rotation, Some(2) | Some(8));
+        let (logical_width, logical_height) = if quarter_turn {
+            (
+                f64::from(size.height) / scale,
+                f64::from(size.width) / scale,
+            )
+        } else {
+            (
+                f64::from(size.width) / scale,
+                f64::from(size.height) / scale,
+            )
+        };
+        let (pixel_width, pixel_height) = if quarter_turn {
+            (size.height, size.width)
+        } else {
+            (size.width, size.height)
+        };
+        displays.push(display(
+            "kwin",
+            output.name,
+            u32::try_from(displays.len()).unwrap_or(u32::MAX),
+            output.priority == 1,
+            RectF {
+                x: f64::from(pos.x),
+                y: f64::from(pos.y),
+                width: logical_width,
+                height: logical_height,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            Some(PixelSize {
+                width: pixel_width,
+                height: pixel_height,
+            }),
+            Some(scale),
+        ));
+    }
+    Ok(displays)
 }
 
 fn parse_geometry_after_keyword(line: &str, keyword: &str) -> Option<RectF> {
@@ -1087,6 +1220,94 @@ mod tests {
                 height: 900,
             })
         );
+    }
+
+    #[test]
+    fn parses_kscreen_doctor_json_mixed_scale() {
+        // Real KDE Plasma 6 shape: eDP-1 disabled (excluded); DP-3 enabled
+        // scale 1.0 primary (priority 1); HDMI-A-3 enabled scale 1.5 -> logical
+        // 1920x1080 / 1.5 = 1280x720 at desktop-logical origin (336,1440).
+        let json = r#"{
+            "outputs": [
+                {"name":"eDP-1","enabled":false,"connected":true,"priority":-1,
+                 "pos":{"x":0,"y":373},"scale":1.5,"rotation":1,
+                 "size":{"width":2560,"height":1600}},
+                {"name":"DP-3","enabled":true,"connected":true,"priority":1,
+                 "pos":{"x":0,"y":0},"scale":1.0,"rotation":1,
+                 "size":{"width":2560,"height":1440}},
+                {"name":"HDMI-A-3","enabled":true,"connected":true,"priority":2,
+                 "pos":{"x":336,"y":1440},"scale":1.5,"rotation":1,
+                 "size":{"width":1920,"height":1080}}
+            ]
+        }"#;
+        let displays = normalize_displays(parse_kscreen_doctor_json(json).expect("valid json"));
+
+        assert_eq!(displays.len(), 2, "disabled eDP-1 must be excluded");
+        let dp = displays
+            .iter()
+            .find(|display| display.display_id == "kwin:DP-3")
+            .expect("DP-3 present");
+        assert!(dp.primary, "priority 1 is primary");
+        assert_eq!(dp.scale_factor, Some(1.0));
+        assert_eq!(dp.logical_rect.x, 0.0);
+        assert_eq!(dp.logical_rect.y, 0.0);
+        assert_eq!(dp.logical_rect.width, 2560.0);
+        assert_eq!(dp.logical_rect.height, 1440.0);
+        assert_eq!(
+            dp.pixel_size,
+            Some(PixelSize {
+                width: 2560,
+                height: 1440,
+            })
+        );
+        let hdmi = displays
+            .iter()
+            .find(|display| display.display_id == "kwin:HDMI-A-3")
+            .expect("HDMI-A-3 present");
+        assert!(!hdmi.primary);
+        assert_eq!(hdmi.scale_factor, Some(1.5));
+        assert_eq!(hdmi.logical_rect.x, 336.0);
+        assert_eq!(hdmi.logical_rect.y, 1440.0);
+        assert_eq!(hdmi.logical_rect.width, 1280.0);
+        assert_eq!(hdmi.logical_rect.height, 720.0);
+        assert_eq!(
+            hdmi.pixel_size,
+            Some(PixelSize {
+                width: 1920,
+                height: 1080,
+            })
+        );
+    }
+
+    #[test]
+    fn kscreen_doctor_json_swaps_logical_extent_for_quarter_rotation() {
+        // rotation 2 (Left/90) swaps the logical footprint and framebuffer extent.
+        let json = r#"{"outputs":[{"name":"DP-1","enabled":true,"connected":true,
+            "priority":1,"pos":{"x":0,"y":0},"scale":1.0,"rotation":2,
+            "size":{"width":1920,"height":1080}}]}"#;
+        let displays = normalize_displays(parse_kscreen_doctor_json(json).expect("valid json"));
+        assert_eq!(displays.len(), 1);
+        assert_eq!(displays[0].logical_rect.width, 1080.0);
+        assert_eq!(displays[0].logical_rect.height, 1920.0);
+        assert_eq!(
+            displays[0].pixel_size,
+            Some(PixelSize {
+                width: 1080,
+                height: 1920,
+            })
+        );
+    }
+
+    #[test]
+    fn kscreen_doctor_text_ignores_hdr_disabled_capability_rows() {
+        // Regression: newer kscreen-doctor -o emits `HDR: disabled` / `Wide Color
+        // Gamut: disabled` rows; the scanner must not read those as the output's
+        // own disabled state and drop the monitor.
+        let output = "Output: 2 DP-3 2a6c3921\n\tenabled\n\tconnected\n\tGeometry: 0,0 2560x1440\n\tScale: 1\n\tHDR: disabled\n\tWide Color Gamut: disabled\n";
+        let displays = normalize_displays(parse_kscreen_doctor(output));
+        assert_eq!(displays.len(), 1, "enabled DP-3 must survive HDR rows");
+        assert_eq!(displays[0].display_id, "kwin:DP-3");
+        assert_eq!(displays[0].logical_rect.width, 2560.0);
     }
 
     #[test]

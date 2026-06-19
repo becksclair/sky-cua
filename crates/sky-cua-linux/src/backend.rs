@@ -544,6 +544,14 @@ impl DesktopBackend for LinuxDesktopBackend {
             .map(|windows| windows.into_iter().map(Into::into).collect())
     }
 
+    async fn list_displays(&self) -> Result<Vec<DisplayInfo>, BackendError> {
+        // Reuse the same discovery (and cache) the doctor/screenshot paths use.
+        // An unsupported environment yields an empty topology rather than an
+        // error, which callers treat as "topology unknown" and fall back from.
+        let (environment, _report) = self.probe_environment_with_display_report().await?;
+        Ok(environment.displays)
+    }
+
     async fn focused_window(
         &self,
     ) -> Result<Option<sky_cua_platform::model::WindowInfo>, BackendError> {
