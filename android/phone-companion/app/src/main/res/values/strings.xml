@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sky Phone Companion</string>
+    <string name="accessibility_service_label">Sky Phone Companion</string>
+    <string name="accessibility_service_description">Lets the sky-cua host draw the agent cursor, read on-screen content, dispatch taps and swipes, and capture screenshots over a local ADB-forwarded connection.</string>
+    <string name="notification_listener_label">Sky Phone Companion notifications</string>
+    <string name="open_accessibility_settings">Open Accessibility settings</string>
+    <string name="open_notification_settings">Open Notification access settings</string>
+    <string name="refresh_status">Refresh status</string>
+    <string name="open_pointer_playground">Pointer playground</string>
+
+    <!-- Home screen -->
+    <string name="companion_subtitle">Computer-use companion for sky-cua</string>
+    <string name="section_connection">Connection</string>
+    <string name="section_permissions">Permissions</string>
+    <string name="status_rpc_server">RPC server</string>
+    <string name="status_setup_token">Setup token</string>
+    <string name="status_accessibility">Accessibility service</string>
+    <string name="status_gestures">Gestures</string>
+    <string name="status_window_content">Window content</string>
+    <string name="status_screenshot">Screenshot</string>
+    <string name="status_native_overlay">Native overlay</string>
+    <string name="status_overlay_passthrough">Overlay pass-through</string>
+    <string name="status_notification_listener">Notification listener</string>
+    <string name="chip_running">Running</string>
+    <string name="chip_idle">Idle</string>
+    <string name="chip_present">Present</string>
+    <string name="chip_absent">Absent</string>
+    <string name="state_enabled">Enabled</string>
+    <string name="state_disabled">Disabled</string>
+</resources>

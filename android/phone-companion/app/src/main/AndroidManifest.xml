@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Package inventory for app_list. QUERY_ALL_PACKAGES is the operator-mode
+      visibility path; the host acknowledges a pm-list fallback for apps that
+      remain hidden. INTERNET is required only to bind the loopback RPC socket;
+      the server binds 127.0.0.1 and never accepts off-device connections.
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.SkyPhoneCompanion">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          ADB-reachable setup endpoint for the host bootstrap. The shell UID can
+          start it by explicit component; ordinary co-resident apps lack the
+          platform DUMP permission and cannot use it to replace the RPC token.
+        -->
+        <activity
+            android:name=".SetupActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <!--
+          Neutral white+grid canvas for exercising the agent overlay (cursor
+          glide / taps / swipes) without touching real apps. Exported so `am
+          start` can launch it for testing; it shows only a static grid and
+          performs no actions, so it carries no privilege/data risk.
+        -->
+        <activity
+            android:name=".ui.GridTestActivity"
+            android:exported="true"
+            android:label="Overlay Grid"
+            android:theme="@style/Theme.SkyPhoneCompanion" />
+
+        <!--
+          Interactive playground for feeling the agent overlay's pointer motion
+          and feedback (tap to move/click, double-tap for the "no-no" shake,
+          swipe to drag) without the host or ADB. Launched from the main screen;
+          exported so `am start` can launch it for testing. It dispatches no real
+          input and touches no other app, so it carries no privilege/data risk.
+        -->
+        <activity
+            android:name=".ui.PointerPlaygroundActivity"
+            android:exported="true"
+            android:label="Pointer Playground"
+            android:theme="@style/Theme.SkyPhoneCompanion" />
+
+        <service
+            android:name=".service.SkyAccessibilityService"
+            android:exported="false"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <service
+            android:name=".service.SkyNotificationListenerService"
+            android:exported="false"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

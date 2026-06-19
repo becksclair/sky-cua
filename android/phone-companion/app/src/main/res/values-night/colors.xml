@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark equivalents of the sky pink palette (skycode dark theme). -->
+<resources>
+    <color name="sky_bg">#FF1A0E1E</color>
+    <color name="sky_surface">#FF221428</color>
+    <color name="sky_border">#FF3A2240</color>
+    <color name="sky_card_border">#FF77467E</color>
+    <color name="sky_ok_border">#FF245C46</color>
+    <color name="sky_off_border">#FF5C3242</color>
+    <color name="sky_neutral_border">#FF5C3365</color>
+
+    <color name="sky_primary">#FFF06AA8</color>
+    <color name="sky_on_primary">#FFFFFFFF</color>
+    <color name="sky_ripple_on_primary">#55FFFFFF</color>
+
+    <color name="sky_secondary">#FF3D1F44</color>
+    <color name="sky_on_secondary">#FFE8B8D8</color>
+    <color name="sky_ripple_on_secondary">#44F06AA8</color>
+
+    <color name="sky_heading">#FFF0C0D8</color>
+    <color name="sky_text">#FFF0DDF4</color>
+    <color name="sky_muted">#FFA888A0</color>
+
+    <color name="sky_ok">#FF6EE7B7</color>
+    <color name="sky_ok_bg">#FF14392C</color>
+    <color name="sky_off">#FFF0A0C0</color>
+    <color name="sky_off_bg">#FF3A1A2A</color>
+</resources>

@@ -1,0 +1,20 @@
+<!--
+  Agent pointer glyph: the same rounded-triangle "cursor-chat" pointer the
+  desktop agent uses, as a vector so it stays crisp at any rendered size. Black
+  fill with a centred white outline (the halo separation), traced from the
+  original 46x48 cursor-chat raster. Viewport matches that 46x48 source so the
+  hotspot fractions in AgentOverlayView stay valid.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="46dp"
+    android:height="48dp"
+    android:viewportWidth="46"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.3"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:pathData="M10.00,11.00Q10.50,9.50 11.99,10.03L37.01,18.97Q38.50,19.50 38.00,21.00L38.00,21.00Q37.50,22.50 36.00,23.00L29.77,25.08Q25.50,26.50 24.08,30.77L22.29,36.13Q21.50,38.50 19.50,37.00L19.50,37.00Q17.50,35.50 16.68,33.14L10.02,13.99Q9.50,12.50 10.00,11.00Z" />
+</vector>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sky pink palette, taken from the skycode design system (apps/web light theme).
+  Dark equivalents live in values-night/colors.xml under the same names so the UI
+  adapts automatically. Hex is ARGB.
+-->
+<resources>
+    <color name="sky_bg">#FFF2E1F4</color>
+    <color name="sky_surface">#FFFAF3FB</color>
+    <color name="sky_border">#FFEAD7E9</color>
+    <color name="sky_card_border">#FFC193BF</color>
+    <color name="sky_ok_border">#FFB2DCC7</color>
+    <color name="sky_off_border">#FFEDBCD3</color>
+    <color name="sky_neutral_border">#FFE0A9D2</color>
+
+    <color name="sky_primary">#FFE33F86</color>
+    <color name="sky_on_primary">#FFFFFFFF</color>
+    <color name="sky_ripple_on_primary">#55FFFFFF</color>
+
+    <color name="sky_secondary">#FFF3C9E6</color>
+    <color name="sky_on_secondary">#FF77347C</color>
+    <color name="sky_ripple_on_secondary">#33E33F86</color>
+
+    <color name="sky_heading">#FF560F2B</color>
+    <color name="sky_text">#FF501854</color>
+    <color name="sky_muted">#FF94648A</color>
+
+    <color name="sky_ok">#FF0F7A52</color>
+    <color name="sky_ok_bg">#FFD9F1E6</color>
+    <color name="sky_off">#FFC0185F</color>
+    <color name="sky_off_bg">#FFF9DCEA</color>
+</resources>

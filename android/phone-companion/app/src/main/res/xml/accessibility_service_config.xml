@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AccessibilityService configuration for the Sky Phone Companion.
+
+  canPerformGestures      -> dispatchGesture for native tap/swipe.
+  canRetrieveWindowContent -> getRootInActiveWindow for accessibility snapshots.
+  canTakeScreenshot       -> display-wide takeScreenshot(DEFAULT_DISPLAY).
+                             An overlay-excluding takeScreenshotOfWindow path
+                             (API 34+) is not yet implemented, so a visible
+                             cursor overlay is included in the captured frame.
+  canControlMagnification is not requested; the companion only needs an
+  accessibility overlay window for the cursor.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100" />

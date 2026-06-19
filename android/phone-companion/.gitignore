@@ -1,0 +1,14 @@
+# Generated Gradle/Android build state. The APK and build-metadata.json are
+# produced by assembleDebug and consumed by the packaging lane at build time;
+# they are not committed.
+.gradle/
+build/
+*/build/
+local.properties
+build-metadata.json
+
+# Android Studio / IDE noise.
+.idea/
+*.iml
+captures/
+.cxx/
