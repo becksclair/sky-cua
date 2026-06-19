@@ -956,8 +956,8 @@ def test_bundled_chrome_extension_cursor_overlay_contract() -> None:
             live_agent_cursor_kde_smoke.CURSOR_ASSET_SOURCE_WIDTH,
             live_agent_cursor_kde_smoke.CURSOR_ASSET_SOURCE_HEIGHT,
         )
-    assert live_agent_cursor_kde_smoke.CURSOR_ASSET_WIDTH == 23
-    assert live_agent_cursor_kde_smoke.CURSOR_ASSET_HEIGHT == 24
+    assert live_agent_cursor_kde_smoke.CURSOR_ASSET_WIDTH == 46
+    assert live_agent_cursor_kde_smoke.CURSOR_ASSET_HEIGHT == 48
     assert any(
         "images/cursor-chat.png" in entry.get("resources", [])
         for entry in manifest["web_accessible_resources"]
