@@ -24,6 +24,7 @@ def test_sync_openclaw_workspace_skills_copies_bundled_skills_and_preserves_othe
     dest_root = tmp_path / "openclaw" / "skills"
     write_skill(source_root, "browser-use", "new browser")
     write_skill(source_root, "computer-use", "new computer")
+    write_skill(source_root, "phone-use", "new phone")
     write_skill(dest_root, "browser-use", "old browser")
     write_skill(dest_root, "computer-use", "old computer")
     write_skill(dest_root, "unrelated", "keep me")
@@ -32,6 +33,7 @@ def test_sync_openclaw_workspace_skills_copies_bundled_skills_and_preserves_othe
 
     assert "new browser" in read_marker(dest_root, "browser-use")
     assert "new computer" in read_marker(dest_root, "computer-use")
+    assert "new phone" in read_marker(dest_root, "phone-use")
     assert "keep me" in read_marker(dest_root, "unrelated")
     assert not (dest_root / sync_skills.STAGE_DIR_NAME).exists()
 
@@ -79,6 +81,7 @@ def test_sync_openclaw_workspace_skills_rolls_back_partial_replacement(
     dest_root = tmp_path / "openclaw" / "skills"
     write_skill(source_root, "browser-use", "new browser")
     write_skill(source_root, "computer-use", "new computer")
+    write_skill(source_root, "phone-use", "new phone")
     write_skill(dest_root, "browser-use", "old browser")
     write_skill(dest_root, "computer-use", "old computer")
     original_move_path = sync_skills._move_path
@@ -105,6 +108,7 @@ def test_sync_openclaw_workspace_skills_does_not_clobber_user_backup_paths(
     dest_root = tmp_path / "openclaw" / "skills"
     write_skill(source_root, "browser-use", "new browser")
     write_skill(source_root, "computer-use", "new computer")
+    write_skill(source_root, "phone-use", "new phone")
     write_skill(dest_root, "browser-use", "old browser")
     write_skill(dest_root, "computer-use", "old computer")
     user_backup = dest_root / ".browser-use.backup"
@@ -124,6 +128,7 @@ def test_sync_openclaw_workspace_skills_recovers_uncommitted_stage(
     dest_root = tmp_path / "openclaw" / "skills"
     write_skill(source_root, "browser-use", "fresh browser")
     write_skill(source_root, "computer-use", "fresh computer")
+    write_skill(source_root, "phone-use", "fresh phone")
     write_skill(dest_root, "browser-use", "interrupted browser")
     write_skill(dest_root, "computer-use", "old computer")
     stage_root = dest_root / sync_skills.STAGE_DIR_NAME
@@ -143,6 +148,7 @@ def test_sync_openclaw_workspace_skills_recovers_new_destination_without_backup(
     dest_root = tmp_path / "openclaw" / "skills"
     write_skill(source_root, "browser-use", "fresh browser")
     write_skill(source_root, "computer-use", "fresh computer")
+    write_skill(source_root, "phone-use", "fresh phone")
     write_skill(dest_root, "browser-use", "interrupted browser")
     stage_root = dest_root / sync_skills.STAGE_DIR_NAME
     stage_root.mkdir(parents=True)
@@ -166,6 +172,7 @@ def test_sync_openclaw_workspace_skills_rolls_back_new_destination_after_move_fa
     dest_root = tmp_path / "openclaw" / "skills"
     write_skill(source_root, "browser-use", "new browser")
     write_skill(source_root, "computer-use", "new computer")
+    write_skill(source_root, "phone-use", "new phone")
     original_move_path = sync_skills._move_path
 
     def move_browser_then_fail(source: Path, destination: Path) -> None:
