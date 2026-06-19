@@ -190,6 +190,13 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
   cleanup must match `sky-cua-service`, the full overlay-host argv, and the
   truncated comm name `sky-cua-overlay`. If the live KDE smoke fails
   mysteriously, kill stale `sky-cua-service` and re-run first.
+- Desktop cursor preview/testing: `sky-cua-overlay-host playground [--backdrop
+  transparent|grid|dark|light]` opens an interactive Wayland layer-shell surface
+  that hides the system cursor and draws the real agent cursor at the pointer
+  (Ctrl-C to quit). Wayland-only; previews the layer-shell render path, not the
+  KWin effect. Bounded capture: wrap in `timeout -k 2 4 ...`, shoot with
+  `spectacle -b -n -f -o` (grim has no wlr-screencopy on KWin). Full notes:
+  `docs/features/agent-cursor-overlay.md` → Pointer playground.
 
 ## Portal state
 

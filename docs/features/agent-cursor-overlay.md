@@ -132,6 +132,7 @@ other.
   - `src/gnome_shell.rs` — GNOME Shell extension client
   - `src/cosmic_bridge.rs` — COSMIC compositor bridge client
   - `src/system_cursor.rs` — system cursor adapter trait
+  - `src/playground.rs` — interactive desktop pointer playground (preview tool)
   - `assets/cursor-chat.png` — cursor asset, byte-identical to the Chrome
     extension's
 - `resources/kwin/effects/sky-cua-agent-cursor/` — C++ KWin effect plugin
@@ -174,6 +175,37 @@ Latest accepted artifacts (2026-05-15 session):
 - GNOME Shell extension: `artifacts/gnome-framebuffer-cursor-proof/20260515T140437893805720Z/host-summary.json`
 - COSMIC patched bridge: `artifacts/cosmic-framebuffer-cursor-proof/20260515T142538562074Z/host-summary.json`
 - COSMIC transparent Xcursor: `artifacts/cosmic-transparent-xcursor-cursor-proof/20260516T073232164704Z/host-summary.json`
+
+## Pointer playground
+
+`sky-cua-overlay-host playground` is an interactive desktop preview of the agent
+cursor — the desktop analogue of the Android `PointerPlaygroundActivity`. It opens
+a maximized, input-capturing Wayland layer-shell surface, hides the system cursor,
+and draws the real agent cursor glyph wherever the pointer moves, so the
+computer-use pointer can be eyeballed over live content or a controlled backdrop.
+
+```bash
+# transparent: the agent cursor over your live desktop content
+./target/release/sky-cua-overlay-host playground
+
+# controlled backdrops for contrast checks (grid mirrors the Android playground)
+./target/release/sky-cua-overlay-host playground --backdrop grid
+./target/release/sky-cua-overlay-host playground --backdrop dark
+./target/release/sky-cua-overlay-host playground --backdrop light
+```
+
+- Wayland-only, via the layer-shell renderer (`src/playground.rs`), which reuses
+  the production `CursorImage` and `draw_cursor_asset`, so the previewed glyph is
+  the real desktop cursor at the 2x desktop render size. It is a distinct
+  production path from the KWin compositor effect, so on KDE it previews the
+  layer-shell rendering of the same asset rather than the effect's.
+- It owns pointer input while open (you cannot click the apps behind it). Move
+  the mouse to preview; quit with Ctrl-C — the compositor restores the real
+  cursor on exit.
+- For a non-disruptive bounded check, wrap it: `timeout -k 2 4
+  ./target/release/sky-cua-overlay-host playground --backdrop grid` and capture
+  with `spectacle -b -n -f -o <path>` (grim needs wlr-screencopy, which KWin does
+  not expose).
 
 ## Known limitations
 

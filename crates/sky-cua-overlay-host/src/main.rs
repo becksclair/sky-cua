@@ -95,6 +95,7 @@ fn main() -> Result<()> {
         "probe" => print_reply(&probe_environment_reply()),
         "set-cursor" => set_cursor_from_args(std::env::args().skip(2).collect()),
         "serve" => serve_from_args(std::env::args().skip(2).collect()),
+        "playground" => sky_cua_overlay_host::run_playground(std::env::args().skip(2).collect()),
         other => anyhow::bail!("unsupported sky-cua-overlay-host mode: {other}"),
     }
 }

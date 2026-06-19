@@ -10,11 +10,25 @@ mod gnome_shell;
 mod kwin_effect;
 #[cfg(target_os = "linux")]
 mod layer_shell;
+#[cfg(target_os = "linux")]
+mod playground;
 mod system_cursor;
 #[cfg(target_os = "linux")]
 mod x11;
 
 pub const OVERLAY_HOST_PROTOCOL_VERSION: u32 = 1;
+
+/// Run the interactive desktop pointer playground (Wayland layer-shell only).
+#[cfg(target_os = "linux")]
+pub fn run_playground(args: Vec<String>) -> anyhow::Result<()> {
+    playground::run_from_args(args)
+}
+
+/// Run the interactive desktop pointer playground (unsupported off Linux).
+#[cfg(not(target_os = "linux"))]
+pub fn run_playground(_args: Vec<String>) -> anyhow::Result<()> {
+    anyhow::bail!("sky-cua-overlay-host playground requires a Linux/Wayland session")
+}
 const OVERLAY_BACKEND_ENV: &str = "SKY_CUA_OVERLAY_BACKEND";
 
 pub mod cursor_asset {
