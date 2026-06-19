@@ -133,6 +133,42 @@ Open boxes link to the active ExecPlan that owns the work.
       retained marketplace-independent infrastructure, not dead code.
 - [ ] Detached launch breadth across more desktop/session launchers
 
+## Phase: Android phone control (phone-use)
+
+Active ExecPlan: [`plans/phone-use.md`](plans/phone-use.md). Adds a `phone_*`
+tool family and `skills/phone-use` to the existing `sky-cua-client mcp`
+process for controlling a real Android phone over USB/wireless ADB, with an
+optional companion app (native overlay, accessibility tree, gestures,
+notifications) and optional scrcpy acceleration.
+
+- [x] Phase 0 build/host survey — [`docs/research/2026-06-phone-use-android-build-survey.md`](docs/research/2026-06-phone-use-android-build-survey.md)
+- [x] Phase 1 contract spine: platform model, service routing, config/env,
+      MCP tool family, fakes (source landed, green)
+- [x] Phase 2 ADB baseline + wireless control (source landed; live device
+      proof pending)
+- [x] Phase 3 snapshots, coordinate mapping, cursor planes (source landed)
+- [x] Phase 4 Android companion backend host + RPC contract (Rust host and
+      `docs/runtime/phone-companion-protocol.md` landed; companion APK build
+      and live proof pending)
+- [x] Phase 4b phone-native agent overlay (source landed): the companion draws
+      the agent cursor and a persistent "agent in control" edge glow on the
+      device via a single full-screen pass-through `TYPE_ACCESSIBILITY_OVERLAY`,
+      animated per action (`overlay_active`/`overlay_gesture` RPCs) and hidden
+      around model-facing captures. The host-desktop phone-cursor draw
+      (`host_cursor_state`/`HostCursorDraw`) was removed; live device proof
+      pending
+- [x] Phase 5 scrcpy acceleration + host-visible overlay (source landed; live
+      proof pending). Mid-session crash detection (2s watchdog downgrades the
+      capability and hides the host overlay), remap-on-window-resize, and
+      explicit-serial window adoption are implemented in source; live-smoke
+      proof of these scrcpy paths remains pending.
+- [ ] Phase 6 packaging, `skills/phone-use`, docs, installed MCP proof
+      (skill, docs, and bundling landed — [`docs/features/phone-use.md`](docs/features/phone-use.md);
+      installed-MCP `tools/list` proof pending)
+- [ ] Phase 7 adversarial testing
+- [ ] Phase 8 full live-smoke and release proof (Redmi/API-36 tablet lane
+      blocked until that device is connected)
+
 ## Phase: Performance and runtime tuning
 
 - [x] Model screenshot size and format tuning — [`docs/features/image-size-performance.md`](docs/features/image-size-performance.md)

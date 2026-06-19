@@ -392,6 +392,7 @@ def ensure_bundle_structure(root: Path) -> None:
         root / ".mcp.json",
         root / "skills" / "computer-use" / "SKILL.md",
         root / "skills" / "browser-use" / "SKILL.md",
+        root / "skills" / "phone-use" / "SKILL.md",
         root / "docs" / "operations" / "testing-vm-desktop-smokes.md",
         root / "resources" / "app-instructions" / "index.json",
     ]

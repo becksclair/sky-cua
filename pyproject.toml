@@ -42,6 +42,7 @@ known-first-party = [
     "_codex_exec",
     "_plugin_bundle",
     "live_desktop_smoke",
+    "live_phone_use_smoke",
 ]
 
 [tool.pytest.ini_options]

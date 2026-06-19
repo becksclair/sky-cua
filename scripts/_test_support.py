@@ -59,6 +59,11 @@ def write_minimal_bundle_sources(root: Path) -> None:
         "skill",
         encoding="utf-8",
     )
+    (root / "skills" / "phone-use").mkdir(parents=True)
+    (root / "skills" / "phone-use" / "SKILL.md").write_text(
+        "skill",
+        encoding="utf-8",
+    )
     (root / "docs" / "operations").mkdir(parents=True)
     (root / "docs" / "operations" / "testing-vm-desktop-smokes.md").write_text(
         "testing vm desktop smoke notes\n",
@@ -82,6 +87,7 @@ def tracked_minimal_bundle_files() -> list[Path]:
         Path("bin/sky-cua-browser-preflight"),
         Path("skills/computer-use/SKILL.md"),
         Path("skills/browser-use/SKILL.md"),
+        Path("skills/phone-use/SKILL.md"),
         Path("docs/operations/testing-vm-desktop-smokes.md"),
         Path("resources/app-instructions/index.json"),
     ]

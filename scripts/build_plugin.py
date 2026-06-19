@@ -49,6 +49,8 @@ WORKTREE_BUNDLE_FILES = (
     Path("docs") / "operations" / "isolated-daemon-smokes.md",
     Path("docs") / "operations" / "plugin-release.md",
     Path("docs") / "operations" / "testing-vm-desktop-smokes.md",
+    Path("docs") / "features" / "phone-use.md",
+    Path("docs") / "runtime" / "phone-companion-protocol.md",
 )
 WORKTREE_BUNDLE_DIRS = (
     Path("resources") / "chrome-extension",
@@ -56,12 +58,23 @@ WORKTREE_BUNDLE_DIRS = (
     Path("resources") / "kwin",
     Path("skills") / "computer-use",
     Path("skills") / "browser-use",
+    Path("skills") / "phone-use",
 )
 RETIRED_BUNDLE_SOURCE_PREFIXES = (
     Path("skills") / "computer-use-workflows",
     Path("skills") / "sky-cua-isolated-daemon",
     Path("skills") / "sky-cua-plugin-release",
 )
+
+# The phone companion APK and its identity metadata are built by a separate
+# Android lane and may not exist yet. They are bundled conditionally (present →
+# staged, absent → skipped with a logged note) and are never part of the
+# hard-required bundle structure, so `phone-use` packaging does not block on the
+# Android toolchain. The metadata sidecar carries the package id, version, APK
+# SHA-256, and signing certificate fingerprint that `phone_connect` verifies.
+COMPANION_APK_DIR = Path("resources") / "android"
+COMPANION_APK_FILE = COMPANION_APK_DIR / "phone-companion.apk"
+COMPANION_APK_METADATA_FILE = COMPANION_APK_DIR / "phone-companion.json"
 
 CARGO_BUILD_PACKAGES = [
     "sky-cua-client",
@@ -184,6 +197,42 @@ def copy_worktree_bundle_dirs(temp_root: Path) -> None:
             shutil.rmtree(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, destination)
+
+
+def copy_companion_apk_if_present(temp_root: Path) -> None:
+    """Stage the phone companion APK and its identity metadata when present.
+
+    The APK and `phone-companion.json` sidecar are produced by the separate
+    Android build lane and are optional packaging inputs. When the APK is
+    missing the bundle is still valid (ADB baseline phone-use needs no
+    companion), so this skips with a logged note instead of failing. The
+    metadata sidecar is staged whenever it exists so the host can verify the
+    installed package signature/hash against packaged expectations.
+    """
+    source_apk = REPO_ROOT / COMPANION_APK_FILE
+    if not source_apk.exists():
+        print(
+            f"note: phone companion APK not found at {source_apk}; "
+            "skipping companion bundling (ADB baseline phone-use is unaffected)",
+            file=sys.stderr,
+        )
+        return
+
+    destination_dir = temp_root / COMPANION_APK_DIR
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_apk, temp_root / COMPANION_APK_FILE)
+    print(f"Staged phone companion APK from {source_apk}.")
+
+    source_metadata = REPO_ROOT / COMPANION_APK_METADATA_FILE
+    if source_metadata.exists():
+        shutil.copy2(source_metadata, temp_root / COMPANION_APK_METADATA_FILE)
+        print(f"Staged phone companion metadata from {source_metadata}.")
+    else:
+        print(
+            f"note: phone companion metadata not found at {source_metadata}; "
+            "staging APK without packaged identity sidecar",
+            file=sys.stderr,
+        )
 
 
 def remove_macos_sidecar_files(root: Path) -> None:
@@ -518,6 +567,7 @@ def stage_bundle(bundle_root: Path) -> None:
     copy_tracked_bundle_sources(temp_root)
     copy_worktree_bundle_files(temp_root)
     copy_worktree_bundle_dirs(temp_root)
+    copy_companion_apk_if_present(temp_root)
     stage_openai_bundled_plugins(temp_root)
     shutil.copy2(mcp_config_source(), temp_root / ".mcp.json")
 
