@@ -221,9 +221,12 @@ browser = "brave"
 
 Environment variables stay per-process overrides on top of the file:
 `SKY_CUA_BROWSER` beats the file's `browser`, and `SKY_CUA_CONFIG_PATH`
-relocates the file itself (tests, fixtures). The file is read on use, so
-changes apply without restarting the daemon. Unknown keys are tolerated for
-forward compatibility; an unparseable file surfaces as a
+relocates the file itself (tests, fixtures). Browser selection is read on use,
+so browser changes apply without restarting the daemon. Longer-lived subsystem
+managers can resolve their own config at construction time; for example,
+phone-use changes apply after reconnecting/restarting the runtime that owns the
+phone manager. Unknown keys are tolerated for forward compatibility; an
+unparseable file surfaces as a
 `MachineConfigInvalid` diagnostic instead of being silently ignored.
 
 ## MCP tool surface

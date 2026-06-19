@@ -21,6 +21,7 @@ mod annotations;
 mod app_state;
 mod browser;
 mod definitions;
+mod phone;
 
 #[cfg(test)]
 use app_state::parse_app_state_detail;
@@ -29,6 +30,8 @@ pub(crate) use definitions::tools_list_result;
 pub(crate) use definitions::{build_tool_definitions, tool_definitions};
 #[cfg(test)]
 mod browser_tests;
+#[cfg(test)]
+mod phone_tests;
 
 pub(crate) trait McpService {
     fn call(&self, request: &ServiceRequest) -> Result<ServiceResponse>;
@@ -241,6 +244,9 @@ pub(crate) fn handle_tool_call(
         "get_app_state" => app_state::handle_get_app_state(service, heuristics, arguments, model),
         name if browser::is_browser_tool(name) => {
             browser::handle_tool_call(service, name, arguments, model)
+        }
+        name if phone::is_phone_tool(name) => {
+            phone::handle_tool_call(service, name, arguments, model)
         }
         "hold_session" | "unlock_session" | "release_session" | "session_presence_status" => {
             handle_session_presence_call(service, tool_name, arguments)
@@ -2763,6 +2769,33 @@ mod tests {
                 "browser_type_text",
                 "browser_press_key",
                 "browser_scroll",
+                "phone_observe",
+                "phone_status",
+                "phone_list_devices",
+                "phone_refresh_capabilities",
+                "phone_pair_wireless",
+                "phone_connect",
+                "phone_disconnect",
+                "phone_screenshot",
+                "phone_tap",
+                "phone_swipe",
+                "phone_type_text",
+                "phone_press_key",
+                "phone_install_companion",
+                "phone_companion_status",
+                "phone_accessibility_tree",
+                "phone_notifications",
+                "phone_notification_open",
+                "phone_notification_dismiss",
+                "phone_notification_action",
+                "phone_notification_reply",
+                "phone_app_current",
+                "phone_app_list",
+                "phone_app_launch",
+                "phone_app_open_intent",
+                "phone_app_force_stop",
+                "phone_app_install",
+                "phone_open_settings",
             ]
         );
 

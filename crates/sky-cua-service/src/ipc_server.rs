@@ -91,6 +91,7 @@ pub async fn run_service() -> Result<()> {
     let daemon = Arc::new(ServiceDaemon::new(socket_path.clone()).await?);
     let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let _session_presence_watchdog = daemon.spawn_session_presence_watchdog();
+    let _scrcpy_liveness_watchdog = daemon.spawn_scrcpy_liveness_watchdog();
     let connections = Arc::new(ConnectionTracker::default());
     info!("sky-cua-service listening on {}", socket_path.display());
 
@@ -287,6 +288,7 @@ pub async fn run_service() -> Result<()> {
     let daemon = Arc::new(ServiceDaemon::new(local_addr.clone().into()).await?);
     let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let _session_presence_watchdog = daemon.spawn_session_presence_watchdog();
+    let _scrcpy_liveness_watchdog = daemon.spawn_scrcpy_liveness_watchdog();
     let connections = Arc::new(ConnectionTracker::default());
     info!("sky-cua-service listening on {}", local_addr);
 

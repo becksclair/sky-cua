@@ -11,6 +11,11 @@ mod diagnostics;
 mod element_resolver;
 mod ipc_server;
 mod overlay;
+#[cfg(unix)]
+mod phone;
+#[cfg(not(unix))]
+#[path = "phone/unsupported.rs"]
+mod phone;
 mod session_store;
 mod snapshot_manager;
 

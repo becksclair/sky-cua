@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 mod browser;
+mod phone;
 mod service;
 
 pub use browser::{
@@ -12,6 +13,28 @@ pub use browser::{
     BrowserResponse, BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport,
     BrowserTab, BrowserTargetAvailability, BrowserTargetKind, browser_diagnostic_is_error_code,
     browser_eval_enabled, normalize_browser_open_url,
+};
+pub use phone::{
+    PhoneAccessibilityNode, PhoneAccessibilitySummary, PhoneAccessibilityTreeRequest,
+    PhoneAccessibilityTreeResponse, PhoneActionResponse, PhoneAppCurrentRequest,
+    PhoneAppForceStopRequest, PhoneAppInfo, PhoneAppInstallMode, PhoneAppInstallRequest,
+    PhoneAppLaunchRequest, PhoneAppListRequest, PhoneAppOpenIntentRequest, PhoneAppResponse,
+    PhoneAppResponseKind, PhoneAvailableAction, PhoneBackendCapabilities, PhoneBackendKind,
+    PhoneCapabilityProfile, PhoneCapabilityRefreshState, PhoneCompanionCapabilities,
+    PhoneCompanionStatusRequest, PhoneCompanionStatusResponse, PhoneConnectRequest,
+    PhoneConnectionKind, PhoneCoordinateMapping, PhoneCursorCapabilities, PhoneCursorState,
+    PhoneDevice, PhoneDeviceState, PhoneDisconnectRequest, PhoneDisconnectResponse, PhoneImage,
+    PhoneInstallCompanionRequest, PhoneInstallStrategy, PhoneListDevicesRequest,
+    PhoneListDevicesResponse, PhoneNotificationAction, PhoneNotificationActionRequest,
+    PhoneNotificationDismissRequest, PhoneNotificationEvent, PhoneNotificationOpenRequest,
+    PhoneNotificationRedaction, PhoneNotificationReplyRequest, PhoneNotificationsRequest,
+    PhoneNotificationsResponse, PhoneObserveRequest, PhoneObserveResponse,
+    PhoneOpenSettingsRequest, PhonePairWirelessRequest, PhonePairWirelessResponse, PhonePoint,
+    PhonePressKeyRequest, PhoneRefreshCapabilitiesRequest, PhoneRequest, PhoneResponse,
+    PhoneScrcpyCapabilities, PhoneScreenshotRequest, PhoneScreenshotResponse, PhoneSession,
+    PhoneSessionSelector, PhoneSettingsScreen, PhoneStatusReport, PhoneStatusRequest,
+    PhoneSwipeRequest, PhoneTapRequest, PhoneTargetDeviceKind, PhoneTypeTextRequest,
+    PhoneUnavailableAction,
 };
 pub use service::{ServiceRequest, ServiceResponse, SessionPresenceAction};
 

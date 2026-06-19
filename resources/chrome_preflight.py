@@ -27,6 +27,7 @@ DEFAULT_COMPUTER_USE_ENV_VARS = [
     "DBUS_SESSION_BUS_ADDRESS",
     "DESKTOP_SESSION",
     "DISPLAY",
+    "SKY_CUA_ADB",
     "SKY_CUA_AGENT_CURSOR",
     "SKY_CUA_BROWSER",
     "SKY_CUA_BROWSER_EVAL",
@@ -41,6 +42,25 @@ DEFAULT_COMPUTER_USE_ENV_VARS = [
     "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE",
     "SKY_CUA_OVERLAY_HOST_PATH",
     "SKY_CUA_OVERLAY_HOST_TCP_ADDR",
+    "SKY_CUA_PHONE",
+    "SKY_CUA_PHONE_BACKEND",
+    "SKY_CUA_PHONE_CAPABILITY_CACHE_TTL_MS",
+    "SKY_CUA_PHONE_COMPANION",
+    "SKY_CUA_PHONE_COMPANION_ALLOW_DOWNGRADE",
+    "SKY_CUA_PHONE_COMPANION_APK",
+    "SKY_CUA_PHONE_COMPANION_APK_SHA256",
+    "SKY_CUA_PHONE_COMPANION_AUTO_INSTALL",
+    "SKY_CUA_PHONE_COMPANION_CERT_SHA256",
+    "SKY_CUA_PHONE_COMPANION_OPERATOR_MODE",
+    "SKY_CUA_PHONE_COMPANION_PACKAGE",
+    "SKY_CUA_PHONE_COMPANION_RPC_PORT",
+    "SKY_CUA_PHONE_COMPANION_RPC_TOKEN_TTL_MS",
+    "SKY_CUA_PHONE_SCREENSHOT_CURSOR",
+    "SKY_CUA_PHONE_SERIAL",
+    "SKY_CUA_PHONE_TARGET_MODELS",
+    "SKY_CUA_PHONE_V4L2_SINK",
+    "SKY_CUA_PHONE_VISIBLE_OVERLAY",
+    "SKY_CUA_PHONE_WIRELESS_AUTO_CONNECT",
     "SKY_CUA_PORTAL_EIS",
     "SKY_CUA_PRESENCE_ENABLED",
     "SKY_CUA_PRESENCE_IDLE_RELEASE_SECS",
@@ -49,6 +69,7 @@ DEFAULT_COMPUTER_USE_ENV_VARS = [
     "SKY_CUA_PRESENCE_RELOCK",
     "SKY_CUA_PRESENCE_UNLOCK",
     "SKY_CUA_REPO_ROOT",
+    "SKY_CUA_SCRCPY",
     "SKY_CUA_SCREENSHOT_CURSOR",
     "SKY_CUA_SERVICE_PATH",
     "SKY_CUA_SERVICE_TCP_ADDR",
@@ -357,9 +378,9 @@ def compat_plugin_root_is_current(
     cache_plugin: Path, manifest_text: str, mcp_text: str, skills_source: Path
 ) -> bool:
     try:
-        manifest_current = (
-            cache_plugin / ".codex-plugin" / "plugin.json"
-        ).read_text(encoding="utf-8") == manifest_text
+        manifest_current = (cache_plugin / ".codex-plugin" / "plugin.json").read_text(
+            encoding="utf-8"
+        ) == manifest_text
         mcp_current = (cache_plugin / ".mcp.json").read_text(encoding="utf-8") == mcp_text
     except OSError:
         return False

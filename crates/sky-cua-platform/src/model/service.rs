@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AgentCursorCapabilities,
     AgentCursorState, AppInfo, AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse,
-    CaptureScreenMode, DiagnosticEntry, DisplayTarget, DoctorReport, EnvironmentInfo,
-    SessionPresenceIntent, SessionPresenceStatus, WindowInfo, WindowTarget,
+    CaptureScreenMode, DiagnosticEntry, DisplayTarget, DoctorReport, EnvironmentInfo, PhoneRequest,
+    PhoneResponse, SessionPresenceIntent, SessionPresenceStatus, WindowInfo, WindowTarget,
     WindowTargetingSetupReport,
 };
 
@@ -50,6 +50,9 @@ pub enum ServiceRequest {
     ShowAgentCursor,
     Browser {
         request: BrowserRequest,
+    },
+    Phone {
+        request: PhoneRequest,
     },
     SessionPresence {
         action: SessionPresenceAction,
@@ -143,6 +146,9 @@ pub enum ServiceResponse {
     Browser {
         response: BrowserResponse,
     },
+    Phone {
+        response: PhoneResponse,
+    },
     SessionPresence {
         status: SessionPresenceStatus,
     },
@@ -177,7 +183,8 @@ mod tests {
         AccessibilitySetupReport, ActionName, BrowserClaimTabResponse, BrowserListTabsResponse,
         BrowserMoveMouseResponse, BrowserOpenResponse, BrowserRequest, BrowserResponse,
         BrowserStatusReport, BrowserTab, BrowserTargetAvailability, BrowserTargetKind,
-        WindowTargetingSetupReport,
+        PhoneBackendKind, PhoneListDevicesRequest, PhoneListDevicesResponse, PhoneRequest,
+        PhoneResponse, PhoneStatusReport, PhoneStatusRequest, WindowTargetingSetupReport,
     };
     use serde_json::json;
 
@@ -279,6 +286,18 @@ mod tests {
                     },
                 },
                 "browser",
+            ),
+            (
+                ServiceRequest::Phone {
+                    request: PhoneRequest::Status(PhoneStatusRequest::default()),
+                },
+                "phone",
+            ),
+            (
+                ServiceRequest::Phone {
+                    request: PhoneRequest::ListDevices(PhoneListDevicesRequest::default()),
+                },
+                "phone",
             ),
             (
                 ServiceRequest::SessionPresence {
@@ -672,6 +691,18 @@ mod tests {
                 },
                 "browser",
             ),
+            (phone_status_response(), "phone"),
+            (
+                ServiceResponse::Phone {
+                    response: PhoneResponse::Devices(PhoneListDevicesResponse {
+                        devices: Vec::new(),
+                        adb_path: None,
+                        adb_version: None,
+                        diagnostics: Vec::new(),
+                    }),
+                },
+                "phone",
+            ),
             (
                 ServiceResponse::SessionPresence {
                     status: SessionPresenceStatus::unsupported("none"),
@@ -707,6 +738,52 @@ mod tests {
         assert_eq!(rendered["type"], "browser");
         assert_eq!(rendered["response"]["type"], "status");
         assert_eq!(rendered["response"]["report"]["enabled"], true);
+    }
+
+    #[test]
+    fn phone_service_request_uses_nested_type_tag() {
+        let rendered = serde_json::to_value(ServiceRequest::Phone {
+            request: PhoneRequest::ListDevices(PhoneListDevicesRequest::default()),
+        })
+        .expect("phone request should serialize");
+
+        assert_eq!(rendered["type"], "phone");
+        assert_eq!(rendered["request"]["type"], "list_devices");
+    }
+
+    #[test]
+    fn phone_service_response_uses_nested_type_tag() {
+        let rendered =
+            serde_json::to_value(phone_status_response()).expect("phone response should serialize");
+
+        // `ServiceResponse::Phone` wraps the inner enum under `response`. The
+        // inner `PhoneResponse` is an internally-tagged newtype enum, so the
+        // payload's own fields flatten next to its `type` tag.
+        assert_eq!(rendered["type"], "phone");
+        assert_eq!(rendered["response"]["type"], "status");
+        assert_eq!(rendered["response"]["enabled"], true);
+    }
+
+    fn phone_status_response() -> ServiceResponse {
+        ServiceResponse::Phone {
+            response: PhoneResponse::Status(PhoneStatusReport {
+                enabled: true,
+                adb_available: false,
+                adb_path: None,
+                adb_version: None,
+                adb_server_running: None,
+                scrcpy_available: false,
+                scrcpy_path: None,
+                scrcpy_version: None,
+                companion_enabled: true,
+                mdns_available: false,
+                default_serial: None,
+                default_backend: PhoneBackendKind::Auto,
+                sessions: Vec::new(),
+                devices: Vec::new(),
+                diagnostics: Vec::new(),
+            }),
+        }
     }
 
     fn browser_status_response() -> ServiceResponse {

@@ -1,0 +1,769 @@
+//! Companion lifecycle: install/update decisioning, `adb forward` + token
+//! provisioning, the capability probe, and the `phone_companion_status` /
+//! `phone_install_companion` tools.
+//!
+//! `phone_connect`/`phone_refresh_capabilities` call [`PhoneManager::bootstrap_companion`]
+//! to decide install/update from installed-vs-expected identity (never trusting a
+//! same-name package with a different signature), optionally run `adb install -r`,
+//! set up port forwarding, deliver an ephemeral token through the setup intent,
+//! and probe `capabilities`. Any failure degrades to ADB baseline without
+//! aborting the session.
+
+use std::fs;
+use std::path::PathBuf;
+
+use sky_cua_platform::model::{
+    DiagnosticEntry, PhoneActionResponse, PhoneBackendKind, PhoneCapabilityProfile,
+    PhoneCapabilityRefreshState, PhoneCompanionStatusResponse, PhoneInstallCompanionRequest,
+    PhoneSessionSelector,
+};
+
+use super::{CompanionRuntime, PhoneManager, no_session_diagnostic, selector_ids};
+use crate::phone::adb::{InstallOutcome, forward_tcp, install_replace};
+use crate::phone::companion;
+use crate::phone::companion::client::CompanionClient;
+use crate::phone::companion::identity::{
+    self, CompanionBootstrapOptions, CompanionInstallDecision, ExpectedCompanion,
+    InstalledCompanion,
+};
+
+impl PhoneManager {
+    // ===================================================================
+    // Phone-side agent overlay lifecycle (companion-reachable sessions only)
+    // ===================================================================
+
+    /// Toggle the companion's persistent "agent in control" breathing edge glow
+    /// for a session, best-effort.
+    ///
+    /// The glow is drawn on the device by the companion's accessibility-service
+    /// overlay; it is a purely visual signal that a phone session is held, so a
+    /// failure must never abort the connect/disconnect that triggered it. A
+    /// transport failure drops the companion runtime and marks the profile so
+    /// later routing falls back to ADB, mirroring `companion_gesture`. A
+    /// per-method error (e.g. the accessibility service unavailable, reported via
+    /// `glow_supported=false`) is swallowed: the session is still usable without
+    /// the glow. A session with no reachable companion is a no-op.
+    pub(super) async fn set_companion_overlay_active(&mut self, session_id: &str, active: bool) {
+        // When the on-device visible overlay is disabled in config, the host never
+        // issues the companion's visible-overlay calls, so the edge glow stays off.
+        // The cursor capability report (`cursor_capabilities`) carries the resolved
+        // `visible_overlay=false` state honestly. Default is enabled, so this is a
+        // no-op unless the operator opted out.
+        if !self.selection.visible_overlay {
+            return;
+        }
+        let Some(entry) = self.sessions.get_mut(session_id) else {
+            return;
+        };
+        let Some(runtime) = entry.companion.as_mut() else {
+            return;
+        };
+        if let Err(error) = runtime.client.overlay_active(active).await
+            && error.is_fallback()
+        {
+            entry.companion = None;
+            self.invalidate_companion(session_id);
+        }
+    }
+
+    // ===================================================================
+    // Companion bootstrap (called from connect/refresh)
+    // ===================================================================
+
+    /// Bootstrap the companion for a serial: decide install/update from installed
+    /// vs. expected identity, optionally `adb install -r`, set up `adb forward`,
+    /// provision an ephemeral token through the setup intent, and probe
+    /// `capabilities`. On success the profile's companion fields are populated and
+    /// a [`CompanionRuntime`] is returned; any failure degrades to ADB baseline
+    /// (companion fields stay absent, `rpc_reachable=false`) without aborting the
+    /// session.
+    ///
+    /// Returns the live runtime (when reachable) plus the structured diagnostics
+    /// the bootstrap produced. The companion install/update goes through the
+    /// shared ADB-lane [`install_replace`] primitive and the captured
+    /// [`InstallOutcome`] is surfaced as a structured diagnostic (success class or
+    /// `INSTALL_FAILED_*` failure class) rather than being discarded, and the RPC
+    /// port forward goes through the shared [`forward_tcp`] primitive.
+    /// Bootstrap the companion for a connecting session: read the installed
+    /// identity, optionally install/update the APK (`allow_install`), set up the
+    /// RPC forward, deliver a fresh session token through the setup intent, and
+    /// probe capabilities. Only the install/update step is gated by
+    /// `allow_install`; the forward + token + probe always run so an
+    /// already-installed companion is connected whenever it is enabled.
+    pub(super) async fn bootstrap_companion_with_options(
+        &mut self,
+        serial: &str,
+        profile: &mut PhoneCapabilityProfile,
+        now: u64,
+        options: CompanionBootstrapOptions,
+    ) -> (Option<CompanionRuntime>, Vec<DiagnosticEntry>) {
+        let package = self.selection.companion_package.clone();
+        let allow_downgrade = options
+            .allow_downgrade
+            .unwrap_or(self.selection.companion_allow_downgrade);
+        let expected = ExpectedCompanion {
+            package_name: package.clone(),
+            version_name: None,
+            version_code: None,
+            cert_sha256: self.selection.companion_expected_cert_sha256.clone(),
+            // Expected packaged-APK SHA-256 from build metadata. This is
+            // report-only metadata: it surfaces on the capability report so the
+            // operator can confirm which packaged APK the host expects, but it is
+            // NOT a live install gate (the installed APK's hash is generally not
+            // obtainable from `dumpsys`; only the signing cert is). The cert gate
+            // in `decide_install` remains the real security check.
+            apk_sha256: self.selection.companion_apk_sha256.clone(),
+            apk_path: self.selection.companion_apk_path.clone(),
+            allow_downgrade,
+        };
+
+        let mut diagnostics = Vec::new();
+
+        // Read installed identity (best-effort). A missing package yields the
+        // default "absent" InstalledCompanion via None.
+        let installed = self.read_installed_companion(serial, &package).await;
+        let mut decision = identity::decide_install(installed.as_ref(), &expected);
+        if options.force_reinstall && matches!(decision, CompanionInstallDecision::UpToDate) {
+            decision = CompanionInstallDecision::Update {
+                reason: "explicit force_reinstall requested".to_string(),
+            };
+        }
+
+        let mut auto_install_attempted = false;
+        if decision.requires_install() && options.allow_install {
+            auto_install_attempted = true;
+            // Reuse the shared ADB-lane install primitive and CAPTURE the outcome.
+            let adb_path = self.configured_adb_path();
+            match install_replace(
+                self.runner.as_ref(),
+                adb_path,
+                serial,
+                &expected.apk_path,
+                expected.allow_downgrade,
+            )
+            .await
+            {
+                Ok(outcome) => diagnostics.push(install_outcome_diagnostic(&decision, &outcome)),
+                Err(error) => diagnostics.push(crate::phone::adb::command_error_diagnostic(
+                    "adb install -r",
+                    &error,
+                )),
+            }
+        }
+
+        if matches!(
+            decision,
+            CompanionInstallDecision::RefuseSignatureMismatch { .. }
+                | CompanionInstallDecision::RefuseSignatureUnverified { .. }
+        ) {
+            // Never trust a same-name package without a verified matching signature.
+            diagnostics.push(DiagnosticEntry {
+                code: decision.code().to_string(),
+                message: "refusing to trust a same-name companion package without a verified \
+                          matching signing certificate; explicit operator reinstall required"
+                    .to_string(),
+                details: None,
+            });
+            profile.companion = companion::capabilities_unreachable(
+                &package,
+                installed.as_ref().unwrap_or(&InstalledCompanion::default()),
+                self.selection.companion_expected_cert_sha256.as_deref(),
+                expected.apk_sha256.as_deref(),
+                false,
+            );
+            return (None, diagnostics);
+        }
+
+        // Set up the forward through the shared ADB-lane primitive and deliver the
+        // token through the setup intent.
+        let port = self.selection.companion_rpc_port;
+        match forward_tcp(
+            self.runner.as_ref(),
+            self.configured_adb_path(),
+            serial,
+            port,
+            port,
+        )
+        .await
+        {
+            Ok(outcome) if outcome.success => {}
+            Ok(outcome) => {
+                diagnostics.push(DiagnosticEntry {
+                    code: "PhoneCompanionForwardFailed".to_string(),
+                    message: format!(
+                        "adb forward for the companion RPC port failed: {}",
+                        outcome.message
+                    ),
+                    details: None,
+                });
+                profile.companion = companion::absent_companion(&package);
+                return (None, diagnostics);
+            }
+            Err(error) => {
+                diagnostics.push(crate::phone::adb::command_error_diagnostic(
+                    "adb forward",
+                    &error,
+                ));
+                profile.companion = companion::absent_companion(&package);
+                return (None, diagnostics);
+            }
+        }
+
+        let token = identity::generate_token(now, self.selection.companion_rpc_token_ttl_ms);
+        let local_token_path = write_setup_token_file(serial, now, &token.token);
+        let mut setup_intent_ok = false;
+        if let Some(local_token_path) = local_token_path.as_ref() {
+            let push_argv = identity::setup_token_push_argv(
+                serial,
+                local_token_path.to_string_lossy().as_ref(),
+                &package,
+            );
+            let push_ref: Vec<&str> = push_argv.iter().map(String::as_str).collect();
+            match self.runner.run(&self.adb_program(), &push_ref).await {
+                Ok(output) if output.success() => {
+                    let setup_argv = identity::setup_intent_argv(serial, &package, &token);
+                    let setup_ref: Vec<&str> = setup_argv.iter().map(String::as_str).collect();
+                    setup_intent_ok = match self.runner.run(&self.adb_program(), &setup_ref).await {
+                        Ok(output) if output.success() => true,
+                        Ok(output) => {
+                            diagnostics.push(DiagnosticEntry {
+                                code: "PhoneCompanionSetupIntentFailed".to_string(),
+                                message: format!(
+                                    "companion setup intent (am start .SetupActivity) exited with status {}; \
+                                     the session token may not have been delivered",
+                                    output.status.map_or(-1, |c| c)
+                                ),
+                                details: None,
+                            });
+                            false
+                        }
+                        Err(error) => {
+                            diagnostics.push(DiagnosticEntry {
+                                code: "PhoneCompanionSetupIntentFailed".to_string(),
+                                message: format!(
+                                    "companion setup intent (am start .SetupActivity) could not run: {error}; \
+                                     the session token may not have been delivered"
+                                ),
+                                details: None,
+                            });
+                            false
+                        }
+                    };
+                }
+                Ok(output) => diagnostics.push(DiagnosticEntry {
+                    code: "PhoneCompanionSetupIntentFailed".to_string(),
+                    message: format!(
+                        "companion setup token push exited with status {}; the session token may not have been delivered",
+                        output.status.map_or(-1, |c| c)
+                    ),
+                    details: None,
+                }),
+                Err(error) => diagnostics.push(DiagnosticEntry {
+                    code: "PhoneCompanionSetupIntentFailed".to_string(),
+                    message: format!(
+                        "companion setup token push could not run: {error}; the session token may not have been delivered"
+                    ),
+                    details: None,
+                }),
+            }
+            let _ = fs::remove_file(local_token_path);
+        } else {
+            diagnostics.push(DiagnosticEntry {
+                code: "PhoneCompanionSetupIntentFailed".to_string(),
+                message:
+                    "could not create a local setup token file; the session token was not delivered"
+                        .to_string(),
+                details: None,
+            });
+        }
+        // Capture the setup-intent result. A failed `am start` means the token was
+        // never delivered to the companion, so surface a distinct diagnostic now
+        // rather than letting it resurface as a confusing later `unauthorized`. The
+        // token itself is never logged or echoed into any diagnostic.
+
+        // Probe capabilities over the forwarded RPC endpoint. When the setup
+        // intent ran, the companion starts its RPC server and installs the token
+        // asynchronously, so the first probe can race the server's bind or the
+        // token install. Retry a few times on a transport (connection refused) or
+        // `unauthorized` failure in that case, so an installed companion comes up
+        // on the first connect instead of only on a later reconnect. If the setup
+        // intent failed there is no server coming up, so skip the wait.
+        let mut client = CompanionClient::new(port, token.token.clone());
+        let mut caps_result = client.capabilities().await;
+        if setup_intent_ok {
+            for _ in 0..5 {
+                let racing = matches!(
+                    &caps_result,
+                    Err(error) if error.is_fallback() || error.code() == "unauthorized"
+                );
+                if !racing {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                caps_result = client.capabilities().await;
+            }
+        }
+        match caps_result {
+            Ok(caps) => {
+                profile.companion = companion::capabilities_from_response(
+                    &caps,
+                    &decision,
+                    Some(&token),
+                    // The installed cert the host parsed during
+                    // `read_installed_companion`, so the reachable report carries
+                    // `installed_cert_sha256` like the unreachable path.
+                    installed.as_ref().and_then(|c| c.cert_sha256.as_deref()),
+                    self.selection.companion_expected_cert_sha256.as_deref(),
+                    expected.apk_sha256.as_deref(),
+                    auto_install_attempted,
+                    allow_downgrade,
+                );
+                (Some(CompanionRuntime { client }), diagnostics)
+            }
+            Err(caps_error) if !caps_error.is_fallback() => {
+                // The companion is reachable and answered, but could not serve the
+                // richer `capabilities` method (e.g. an older companion build that
+                // only implements `health`). Fall back to the lightweight `health`
+                // probe and build capabilities from its permission booleans, with
+                // screenshot/gesture support unknown.
+                diagnostics.push(DiagnosticEntry {
+                    code: caps_error.code().to_string(),
+                    message: format!(
+                        "companion capabilities probe unavailable; retrying health: {caps_error}"
+                    ),
+                    details: None,
+                });
+                match client.health().await {
+                    Ok(health) => {
+                        profile.companion = companion::capabilities_from_health(
+                            &health,
+                            installed.as_ref().and_then(|c| c.version_name.clone()),
+                        );
+                        (Some(CompanionRuntime { client }), diagnostics)
+                    }
+                    Err(health_error) => {
+                        diagnostics.push(DiagnosticEntry {
+                            code: health_error.code().to_string(),
+                            message: format!("companion health probe failed: {health_error}"),
+                            details: None,
+                        });
+                        profile.companion = companion::capabilities_unreachable(
+                            &package,
+                            installed.as_ref().unwrap_or(&InstalledCompanion::default()),
+                            self.selection.companion_expected_cert_sha256.as_deref(),
+                            expected.apk_sha256.as_deref(),
+                            true,
+                        );
+                        (None, diagnostics)
+                    }
+                }
+            }
+            Err(error) => {
+                // Transport/auth/version failure: the RPC is unreachable. Degrade
+                // to ADB baseline without claiming companion success.
+                diagnostics.push(DiagnosticEntry {
+                    code: error.code().to_string(),
+                    message: format!("companion capability probe failed: {error}"),
+                    details: None,
+                });
+                profile.companion = companion::capabilities_unreachable(
+                    &package,
+                    installed.as_ref().unwrap_or(&InstalledCompanion::default()),
+                    self.selection.companion_expected_cert_sha256.as_deref(),
+                    expected.apk_sha256.as_deref(),
+                    true,
+                );
+                (None, diagnostics)
+            }
+        }
+    }
+
+    /// Best-effort read of the installed companion's version/cert. Returns `None`
+    /// when the package is not installed.
+    ///
+    /// Presence is confirmed via `pm path`; identity (versionCode + signing
+    /// certificate SHA-256) is then extracted from `dumpsys package <pkg>` so the
+    /// install decision's cert/downgrade guards have real metadata to compare
+    /// against. Extraction is conservative: a missing or unparseable field stays
+    /// `None`, so the happy path (no expected cert configured) is never regressed
+    /// and a configured `companion_expected_cert_sha256` only enforces a refusal
+    /// when an installed cert is actually read and differs.
+    async fn read_installed_companion(
+        &self,
+        serial: &str,
+        package: &str,
+    ) -> Option<InstalledCompanion> {
+        let path_argv = ["-s", serial, "shell", "pm", "path", package];
+        let path_output = self
+            .runner
+            .run(&self.adb_program(), &path_argv)
+            .await
+            .ok()?;
+        if !path_output.success() || !path_output.stdout_string().contains("package:") {
+            return None;
+        }
+
+        // Best-effort identity extraction. A failure to run or parse leaves the
+        // fields `None` (the prior behavior) rather than blocking the install.
+        let dump_argv = ["-s", serial, "shell", "dumpsys", "package", package];
+        let installed = match self.runner.run(&self.adb_program(), &dump_argv).await {
+            Ok(output) if output.success() => parse_installed_companion(&output.stdout_string()),
+            _ => InstalledCompanion::default(),
+        };
+        Some(installed)
+    }
+
+    /// The resolved adb program string (config/env/PATH), used for the companion
+    /// bootstrap calls that build their own argv.
+    fn adb_program(&self) -> String {
+        crate::phone::command::resolve_adb_path(self.configured_adb_path())
+    }
+
+    // ===================================================================
+    // Companion status / install
+    // ===================================================================
+
+    /// `phone_companion_status`: report the cached companion identity/capability
+    /// for a session, or the configured-expected absent shape when no session
+    /// resolves.
+    pub(super) async fn companion_status(
+        &self,
+        selector: &PhoneSessionSelector,
+    ) -> PhoneCompanionStatusResponse {
+        if let Some(session_id) = self.resolve_session_id(selector)
+            && let Some(cached) = self.profiles.get(&session_id)
+        {
+            // Surface the most recent companion bootstrap diagnostics (install
+            // outcome class, forward/probe failures) rather than discarding them.
+            let diagnostics = self.companion_bootstrap_diagnostics(&session_id);
+            return PhoneCompanionStatusResponse {
+                session_id,
+                serial: cached.profile.serial.clone(),
+                companion: cached.profile.companion.clone(),
+                diagnostics,
+            };
+        }
+        let (session_id, serial) = selector_ids(selector);
+        PhoneCompanionStatusResponse {
+            session_id,
+            serial,
+            companion: companion::absent_companion(&self.selection.companion_package),
+            diagnostics: vec![companion::not_implemented_diagnostic()],
+        }
+    }
+
+    /// `phone_install_companion`: explicit reinstall/update + re-bootstrap.
+    pub(super) async fn install_companion(
+        &mut self,
+        request: PhoneInstallCompanionRequest,
+    ) -> PhoneActionResponse {
+        let Some(session_id) = self.resolve_session_id(&request.session) else {
+            return self.app_action_to_action_response(&request.session, "phone_install_companion");
+        };
+        let Some(serial) = self
+            .sessions
+            .get(&session_id)
+            .map(|entry| entry.session.serial.clone())
+        else {
+            return self.app_action_to_action_response(&request.session, "phone_install_companion");
+        };
+        let now = super::now_ms();
+        let mut profile = crate::phone::device::detect_profile_with_path(
+            self.runner.as_ref(),
+            self.configured_adb_path(),
+            &session_id,
+            &serial,
+            &self.selection.companion_package,
+            now,
+            PhoneCapabilityRefreshState::Refreshed,
+        )
+        .await;
+        profile.scrcpy = self.detect_scrcpy_capabilities().await;
+        let (companion_runtime, companion_diagnostics) = if self.selection.companion_enabled {
+            self.bootstrap_companion_with_options(
+                &serial,
+                &mut profile,
+                now,
+                CompanionBootstrapOptions {
+                    allow_install: true,
+                    force_reinstall: request.force_reinstall,
+                    allow_downgrade: Some(
+                        request.allow_downgrade || self.selection.companion_allow_downgrade,
+                    ),
+                },
+            )
+            .await
+        } else {
+            (None, Vec::new())
+        };
+        let capabilities = self.backend_capabilities(&profile);
+        super::routing::populate_actions(&mut profile, &capabilities);
+        let reachable = companion_runtime.is_some();
+        if let Some(entry) = self.sessions.get_mut(&session_id) {
+            entry.session.capability_profile = profile.clone();
+            entry.session.capabilities = capabilities;
+            entry.session.companion = Some(profile.companion.clone());
+            entry.companion = companion_runtime;
+            entry.companion_diagnostics = companion_diagnostics;
+        }
+        self.profiles.insert(
+            session_id.clone(),
+            super::CachedProfile {
+                profile: profile.clone(),
+                detected_at_ms: now,
+            },
+        );
+        if reachable {
+            self.set_companion_overlay_active(&session_id, true).await;
+        }
+        let (serial, profile_id, reachable) = self
+            .profiles
+            .get(&session_id)
+            .map(|cached| {
+                (
+                    cached.profile.serial.clone(),
+                    cached.profile.profile_id.clone(),
+                    cached.profile.companion.rpc_reachable,
+                )
+            })
+            .unwrap_or_default();
+
+        // Surface the structured install/forward/probe outcome captured during the
+        // re-bootstrap (the install class is the load-bearing diagnostic here),
+        // then the unreachable summary when the RPC endpoint did not come up.
+        let mut diagnostics = self.companion_bootstrap_diagnostics(&session_id);
+        if !reachable {
+            diagnostics.push(DiagnosticEntry {
+                code: "PhoneCompanionUnreachable".to_string(),
+                message: "companion reinstall ran but the RPC endpoint is not reachable"
+                    .to_string(),
+                details: None,
+            });
+        }
+        PhoneActionResponse {
+            session_id,
+            serial,
+            action: "phone_install_companion".to_string(),
+            backend: if reachable {
+                PhoneBackendKind::Companion
+            } else {
+                PhoneBackendKind::Adb
+            },
+            capability_profile_id: profile_id,
+            profile_refresh_state: PhoneCapabilityRefreshState::Refreshed,
+            phone_snapshot_id: None,
+            cursor: None,
+            diagnostics,
+        }
+    }
+
+    /// The structured diagnostics the most recent companion bootstrap produced for
+    /// a session (install outcome class, forward/probe failures), cloned from the
+    /// session entry. Empty when no session or no bootstrap diagnostics exist.
+    fn companion_bootstrap_diagnostics(&self, session_id: &str) -> Vec<DiagnosticEntry> {
+        self.sessions
+            .get(session_id)
+            .map(|entry| entry.companion_diagnostics.clone())
+            .unwrap_or_default()
+    }
+
+    fn app_action_to_action_response(
+        &self,
+        selector: &PhoneSessionSelector,
+        action: &str,
+    ) -> PhoneActionResponse {
+        let (session_id, serial) = selector_ids(selector);
+        PhoneActionResponse {
+            session_id,
+            serial,
+            action: action.to_string(),
+            backend: PhoneBackendKind::None,
+            capability_profile_id: String::new(),
+            profile_refresh_state: PhoneCapabilityRefreshState::Stale,
+            phone_snapshot_id: None,
+            cursor: None,
+            diagnostics: vec![no_session_diagnostic(selector)],
+        }
+    }
+}
+
+/// Build a structured diagnostic for a captured companion [`InstallOutcome`].
+///
+/// On success the code is the install decision code (`CompanionInstall`/
+/// `CompanionUpdate`); on failure the load-bearing `INSTALL_FAILED_*` class from
+/// adb is used as the code so clients route on the field, with the bounded adb
+/// message in `details`.
+fn install_outcome_diagnostic(
+    decision: &CompanionInstallDecision,
+    outcome: &InstallOutcome,
+) -> DiagnosticEntry {
+    if outcome.success {
+        DiagnosticEntry {
+            code: decision.code().to_string(),
+            message: "companion APK install/update succeeded".to_string(),
+            details: None,
+        }
+    } else {
+        DiagnosticEntry {
+            code: outcome
+                .failure_class
+                .clone()
+                .unwrap_or_else(|| "PhoneCompanionInstallFailed".to_string()),
+            message: "companion APK install/update failed".to_string(),
+            details: (!outcome.message.is_empty()).then(|| outcome.message.clone()),
+        }
+    }
+}
+
+fn write_setup_token_file(serial: &str, now: u64, token: &str) -> Option<PathBuf> {
+    let safe_serial = serial
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>();
+    let path = std::env::temp_dir().join(format!("sky-cua-phone-token-{safe_serial}-{now}"));
+    fs::write(&path, token).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+    Some(path)
+}
+
+/// Best-effort parse of `dumpsys package <pkg>` output into an
+/// [`InstalledCompanion`]. Conservative by design: any field that is absent or
+/// unparseable stays `None`, matching the prior "presence only" behavior and
+/// keeping the no-expected-cert default path unchanged. Only when both an
+/// installed cert and a configured expected cert are present (and differ) does
+/// the install decision refuse on signature mismatch.
+fn parse_installed_companion(dump: &str) -> InstalledCompanion {
+    InstalledCompanion {
+        version_name: parse_version_name(dump),
+        version_code: parse_version_code(dump),
+        cert_sha256: parse_signing_cert_sha256(dump),
+    }
+}
+
+/// Extract `versionCode=<digits>` (the first occurrence). `dumpsys package`
+/// renders it as e.g. `versionCode=4201 minSdk=26 targetSdk=34`.
+fn parse_version_code(dump: &str) -> Option<u64> {
+    for line in dump.lines() {
+        if let Some(rest) = line.split("versionCode=").nth(1) {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            if let Ok(code) = digits.parse::<u64>() {
+                return Some(code);
+            }
+        }
+    }
+    None
+}
+
+/// Extract `versionName=<token>` (the first occurrence), trimmed to the first
+/// whitespace. `dumpsys package` renders it as e.g. `versionName=1.4.2`.
+fn parse_version_name(dump: &str) -> Option<String> {
+    for line in dump.lines() {
+        if let Some(rest) = line.split("versionName=").nth(1) {
+            let value = rest.split_whitespace().next().unwrap_or_default();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract a signing-certificate SHA-256 digest. `dumpsys package` cert lines
+/// vary by Android version; this looks for a line that references a certificate/
+/// signature/SHA-256 label and pulls the first 64-hex-character token out of it
+/// (separators like `:` are stripped). Returns a lowercase hex string, or `None`
+/// when no such token is present.
+fn parse_signing_cert_sha256(dump: &str) -> Option<String> {
+    for line in dump.lines() {
+        let lower = line.to_ascii_lowercase();
+        let cert_context = lower.contains("sha-256")
+            || lower.contains("sha256")
+            || lower.contains("cert")
+            || lower.contains("signature")
+            || lower.contains("signing");
+        if !cert_context {
+            continue;
+        }
+        if let Some(digest) = extract_hex64(line) {
+            return Some(digest);
+        }
+    }
+    None
+}
+
+/// Find a 64-hex-character digest on a line, ignoring `:` separators between
+/// bytes. Returns the lowercase hex (no separators) for the first maximal hex
+/// run that is exactly 64 nibbles long; a shorter or longer run is rejected so an
+/// 80-hex blob does not yield a bogus 64-char prefix.
+fn extract_hex64(line: &str) -> Option<String> {
+    let mut run = String::new();
+    for ch in line.chars() {
+        if ch.is_ascii_hexdigit() {
+            run.push(ch.to_ascii_lowercase());
+        } else if ch == ':' {
+            // Byte separator inside a digest; keep accumulating the run.
+            continue;
+        } else {
+            if run.len() == 64 {
+                return Some(run);
+            }
+            run.clear();
+        }
+    }
+    // A digest at end-of-line has no trailing separator to flush it.
+    (run.len() == 64).then_some(run)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DUMP_WITH_CERT_AND_VERSION: &str = "\
+Packages:
+  Package [com.sky.companion] (a1b2c3):
+    userId=10234
+    versionCode=4201 minSdk=26 targetSdk=34
+    versionName=1.4.2
+    signatures=[Signature]
+    Signing KeySet: 12
+    SHA-256 cert digest: aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99
+    dataDir=/data/user/0/com.sky.companion
+";
+
+    #[test]
+    fn parses_version_code_and_name() {
+        let installed = parse_installed_companion(DUMP_WITH_CERT_AND_VERSION);
+        assert_eq!(installed.version_code, Some(4201));
+        assert_eq!(installed.version_name.as_deref(), Some("1.4.2"));
+    }
+
+    #[test]
+    fn parses_signing_cert_sha256_stripping_separators() {
+        let installed = parse_installed_companion(DUMP_WITH_CERT_AND_VERSION);
+        assert_eq!(
+            installed.cert_sha256.as_deref(),
+            Some("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
+        );
+    }
+
+    #[test]
+    fn missing_fields_stay_none_conservatively() {
+        // Presence-only dump with no versionCode and no cert digest: every
+        // optional field is None, so the happy path is never regressed.
+        let dump = "Packages:\n  Package [com.sky.companion] (deadbeef):\n    dataDir=/data\n";
+        let installed = parse_installed_companion(dump);
+        assert_eq!(installed, InstalledCompanion::default());
+    }
+
+    #[test]
+    fn ignores_non_digest_hex_in_unrelated_lines() {
+        // A 64-hex token only counts when its line references a cert/signature.
+        let dump = "    userId=10234\n    randomBlob=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
+        assert_eq!(parse_signing_cert_sha256(dump), None);
+    }
+}

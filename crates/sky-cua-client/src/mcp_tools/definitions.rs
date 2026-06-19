@@ -16,6 +16,7 @@ use super::annotations::{
     ToolAnnotations,
 };
 use super::browser;
+use super::phone;
 
 pub(crate) fn tool_definitions(model: &ModelSessionInfo) -> Value {
     let index = usize::from(model.can_receive_images());
@@ -345,6 +346,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         .as_array_mut()
         .expect("tool definition registry should be a JSON array");
     browser::push_tool_definitions(tool_array, browser::browser_eval_enabled());
+    phone::push_tool_definitions(tool_array);
 
     tools
 }
@@ -649,6 +651,40 @@ mod annotation_tests {
         ("browser_press_key", (false, true, false, true)),
         ("browser_scroll", (false, false, false, true)),
         ("browser_eval", (false, true, false, true)),
+        // Phone Use: read-only observation tools.
+        ("phone_observe", (true, false, true, false)),
+        ("phone_status", (true, false, true, false)),
+        ("phone_list_devices", (true, false, true, false)),
+        ("phone_companion_status", (true, false, true, false)),
+        ("phone_accessibility_tree", (true, false, true, false)),
+        ("phone_notifications", (true, false, true, false)),
+        ("phone_app_current", (true, false, true, false)),
+        ("phone_app_list", (true, false, true, false)),
+        // Phone Use: local navigation actions — reversible, idempotent, and
+        // unable to trigger arbitrary in-app behavior. force_stop terminates an
+        // app but re-running converges to the same stopped state, so it is
+        // pinned idempotent rather than worst-case destructive.
+        ("phone_refresh_capabilities", (false, false, true, false)),
+        ("phone_pair_wireless", (false, false, true, false)),
+        ("phone_connect", (false, false, true, false)),
+        ("phone_disconnect", (false, false, true, false)),
+        ("phone_install_companion", (false, false, true, false)),
+        ("phone_app_force_stop", (false, false, true, false)),
+        ("phone_app_install", (false, false, true, false)),
+        ("phone_open_settings", (false, false, true, false)),
+        // Phone Use: arbitrary device input and app/notification actions that
+        // can press any control in any app, so the destructive hint stays true.
+        ("phone_screenshot", (true, false, true, false)),
+        ("phone_tap", (false, true, false, false)),
+        ("phone_swipe", (false, true, false, false)),
+        ("phone_type_text", (false, true, false, false)),
+        ("phone_press_key", (false, true, false, false)),
+        ("phone_app_launch", (false, true, false, false)),
+        ("phone_app_open_intent", (false, true, false, false)),
+        ("phone_notification_open", (false, true, false, false)),
+        ("phone_notification_dismiss", (false, true, false, false)),
+        ("phone_notification_action", (false, true, false, false)),
+        ("phone_notification_reply", (false, true, false, false)),
     ];
 
     #[test]
