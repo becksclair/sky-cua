@@ -301,9 +301,16 @@ mod tests {
         let black_source_y = 8_i32;
         let black_dest_x = 48_i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_X + black_source_x;
         let black_dest_y = 48_i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_Y + black_source_y;
-        assert_eq!(
-            rendered.get_pixel(black_dest_x as u32, black_dest_y as u32),
-            &Rgba([0u8, 0, 0, 255])
+        // The cursor's opaque body is composited at the hotspot-offset location.
+        // Assert it is opaque and near-black rather than byte-exact (0,0,0): the
+        // vector cursor glyph anti-aliases its black fill against the thicker
+        // white outline, so an interior pixel reads a few levels off pure black
+        // while staying strongly distinct from the 240 background and 255 outline.
+        let body = rendered.get_pixel(black_dest_x as u32, black_dest_y as u32);
+        assert_eq!(body.0[3], 255, "cursor body is opaque: {body:?}");
+        assert!(
+            body.0[0] < 32 && body.0[1] < 32 && body.0[2] < 32,
+            "cursor body is near-black at the hotspot offset: {body:?}"
         );
         assert_eq!(rendered.get_pixel(95, 95), &Rgba([240u8, 240, 240, 255]));
         assert!(updated.model_image_bytes.unwrap_or_default() > 0);

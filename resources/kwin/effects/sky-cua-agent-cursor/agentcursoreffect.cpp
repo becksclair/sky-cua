@@ -1,5 +1,6 @@
 #include "agentcursoreffect.h"
 
+#include "core/output.h"
 #include "core/renderviewport.h"
 #include "effect/effecthandler.h"
 #include "effect/offscreenquickview.h"
@@ -27,10 +28,12 @@ namespace KWin
 namespace
 {
 
-constexpr int CursorWidth = 23;
-constexpr int CursorHeight = 24;
-constexpr int CursorHotspotX = 10;
-constexpr int CursorHotspotY = 11;
+// The desktop agent cursor renders at 2x the browser/synthetic size (the full
+// 46x48 source) for on-screen legibility, with a doubled hotspot.
+constexpr int CursorWidth = 46;
+constexpr int CursorHeight = 48;
+constexpr int CursorHotspotX = 20;
+constexpr int CursorHotspotY = 22;
 constexpr auto QmlPath = "kwin/effects/sky-cua-agent-cursor/qml/main.qml";
 constexpr auto CursorPath = "kwin/effects/sky-cua-agent-cursor/assets/cursor-chat.png";
 constexpr auto DBusObjectPath = "/com/skycua/AgentCursor";
@@ -134,6 +137,24 @@ void SkyCuaAgentCursorEffect::paintScreen(const RenderTarget &renderTarget,
     const QPointF cursorPoint = m_hasCursorPoint
         ? m_cursorPoint
         : QPointF(rect.x() + (rect.width() / 2.0), rect.y() + (rect.height() / 2.0));
+    // The agent cursor exists at exactly one desktop-logical location, so draw it
+    // only on the output that contains it. paintScreen() runs once per output;
+    // renderRect() is this output's global-logical geometry (origin included), so
+    // a point outside it belongs to another output and is skipped here. The
+    // centered fallback (no cursor point) keeps drawing per output unchanged.
+    if (m_hasCursorPoint
+        && (cursorPoint.x() < rect.x() || cursorPoint.x() >= rect.x() + rect.width()
+            || cursorPoint.y() < rect.y() || cursorPoint.y() >= rect.y() + rect.height())) {
+        return;
+    }
+    // Pin the offscreen scene's devicePixelRatio to this output's compositor scale
+    // rather than the QScreen DPR, which KWin quantizes for fractional scales. The
+    // viewport already maps global-logical geometry to device pixels through its
+    // projection matrix; the DPR only governs the cursor texture's own resolution,
+    // so a mismatch on a mixed-scale secondary output skews the rendered position.
+    if (screen) {
+        m_scene->setDevicePixelRatio(screen->scale());
+    }
     const int left = static_cast<int>(std::round(cursorPoint.x())) - CursorHotspotX;
     const int top = static_cast<int>(std::round(cursorPoint.y())) - CursorHotspotY;
     m_scene->setGeometry(QRect(left, top, CursorWidth, CursorHeight));

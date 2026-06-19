@@ -305,8 +305,8 @@ impl LayerShellApp {
                 draw_debug_fill(canvas, width, height, visible_point);
             }
             if let Some((x, y)) = visible_point {
-                let left = x.round() as i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_X;
-                let top = y.round() as i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_Y;
+                let left = x.round() as i32 - cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X;
+                let top = y.round() as i32 - cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y;
                 draw_cursor_asset(canvas, width, height, &self.cursor, left, top);
             }
 
@@ -469,7 +469,7 @@ fn output_local_point(
     (x >= 0.0 && y >= 0.0 && x < f64::from(size.0) && y < f64::from(size.1)).then_some((x, y))
 }
 
-fn ensure_layer_pool_capacity(
+pub(crate) fn ensure_layer_pool_capacity(
     pool: &mut SlotPool,
     width: u32,
     height: u32,
@@ -482,7 +482,7 @@ fn ensure_layer_pool_capacity(
     Ok(())
 }
 
-fn layer_buffer_pool_size(width: u32, height: u32, layer_count: usize) -> Result<usize> {
+pub(crate) fn layer_buffer_pool_size(width: u32, height: u32, layer_count: usize) -> Result<usize> {
     let layer_count = layer_count.max(1);
     let bytes_per_buffer = (width as usize)
         .checked_mul(height as usize)
@@ -495,7 +495,7 @@ fn layer_buffer_pool_size(width: u32, height: u32, layer_count: usize) -> Result
         .context("layer-shell cursor buffer pool size overflowed usize")
 }
 
-fn draw_cursor_asset(
+pub(crate) fn draw_cursor_asset(
     canvas: &mut [u8],
     width: u32,
     height: u32,
@@ -573,14 +573,14 @@ fn premultiply(channel: u8, alpha: u8) -> u8 {
 }
 
 #[derive(Debug)]
-struct CursorImage {
-    width: u32,
-    height: u32,
-    rgba: Vec<u8>,
+pub(crate) struct CursorImage {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) rgba: Vec<u8>,
 }
 
 impl CursorImage {
-    fn load() -> Result<Self> {
+    pub(crate) fn load() -> Result<Self> {
         let image = image::load_from_memory(cursor_asset::AGENT_CURSOR_PNG)
             .context("failed to decode bundled agent cursor image")?
             .to_rgba8();
@@ -598,8 +598,8 @@ impl CursorImage {
         }
         let image = image::imageops::resize(
             &image,
-            cursor_asset::AGENT_CURSOR_WIDTH,
-            cursor_asset::AGENT_CURSOR_HEIGHT,
+            cursor_asset::AGENT_CURSOR_DESKTOP_WIDTH,
+            cursor_asset::AGENT_CURSOR_DESKTOP_HEIGHT,
             FilterType::Lanczos3,
         );
         let (width, height) = image.dimensions();
@@ -676,12 +676,12 @@ impl LayerShellHandler for LayerShellApp {
         if let Some(entry) = self.layers.iter_mut().find(|entry| &entry.layer == layer) {
             entry.configured = true;
             entry.width = if configure.new_size.0 == 0 {
-                cursor_asset::AGENT_CURSOR_WIDTH
+                cursor_asset::AGENT_CURSOR_DESKTOP_WIDTH
             } else {
                 configure.new_size.0
             };
             entry.height = if configure.new_size.1 == 0 {
-                cursor_asset::AGENT_CURSOR_HEIGHT
+                cursor_asset::AGENT_CURSOR_DESKTOP_HEIGHT
             } else {
                 configure.new_size.1
             };
@@ -819,10 +819,12 @@ mod tests {
 
         draw_cursor_asset(&mut canvas, cursor.width, cursor.height, &cursor, 0, 0);
 
+        // Top-left corner stays transparent; the hotspot lands on the opaque body.
         let corner_alpha = canvas[3];
-        let source_black = (8 * cursor_asset::AGENT_CURSOR_WIDTH + 8) as usize * 4;
-        let source_black_alpha = canvas[source_black + 3];
+        let hotspot_offset = ((cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y as u32 * cursor.width
+            + cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X as u32)
+            * 4) as usize;
         assert_eq!(corner_alpha, 0);
-        assert_eq!(source_black_alpha, 255);
+        assert_eq!(canvas[hotspot_offset + 3], 255);
     }
 }

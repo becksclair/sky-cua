@@ -60,10 +60,13 @@ MODE_ARTIFACT_SLUGS = {
 }
 CURSOR_ASSET_SOURCE_WIDTH = 46
 CURSOR_ASSET_SOURCE_HEIGHT = 48
-CURSOR_ASSET_WIDTH = 23
-CURSOR_ASSET_HEIGHT = 24
-CURSOR_ASSET_HOTSPOT_X = 10
-CURSOR_ASSET_HOTSPOT_Y = 11
+# The desktop overlay renders the cursor at 2x the browser/synthetic size (the
+# full 46x48 source, 1:1) with a doubled hotspot; the asset-presence probe sizes
+# its template/window to this rendered size.
+CURSOR_ASSET_WIDTH = 46
+CURSOR_ASSET_HEIGHT = 48
+CURSOR_ASSET_HOTSPOT_X = 20
+CURSOR_ASSET_HOTSPOT_Y = 22
 KWIN_EFFECT_NESTED_POINT = (420.0, 260.0)
 
 

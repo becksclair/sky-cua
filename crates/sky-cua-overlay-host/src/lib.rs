@@ -27,6 +27,15 @@ pub mod cursor_asset {
     // The Chrome extension renders the 2x PNG at 23x24 CSS pixels.
     pub const AGENT_CURSOR_HOTSPOT_X: i32 = 10;
     pub const AGENT_CURSOR_HOTSPOT_Y: i32 = 11;
+
+    // The desktop overlay (layer-shell, X11, KWin effect, playground) draws the
+    // cursor at 2x the browser/synthetic size for on-screen legibility: the full
+    // 46x48 source rendered 1:1, with a doubled hotspot. The screenshot-synthetic
+    // and phone cursor planes keep the base 23x24 size above.
+    pub const AGENT_CURSOR_DESKTOP_WIDTH: u32 = 46;
+    pub const AGENT_CURSOR_DESKTOP_HEIGHT: u32 = 48;
+    pub const AGENT_CURSOR_DESKTOP_HOTSPOT_X: i32 = 20;
+    pub const AGENT_CURSOR_DESKTOP_HOTSPOT_Y: i32 = 22;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

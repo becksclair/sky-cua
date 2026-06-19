@@ -203,8 +203,8 @@ impl X11OverlayBackend {
             return Ok(());
         };
 
-        let left = rounded_i16(x, cursor_asset::AGENT_CURSOR_HOTSPOT_X)?;
-        let top = rounded_i16(y, cursor_asset::AGENT_CURSOR_HOTSPOT_Y)?;
+        let left = rounded_i16(x, cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X)?;
+        let top = rounded_i16(y, cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y)?;
         self.conn
             .configure_window(
                 self.window,
@@ -368,8 +368,8 @@ impl CursorImage {
         }
         let image = image::imageops::resize(
             &image,
-            cursor_asset::AGENT_CURSOR_WIDTH,
-            cursor_asset::AGENT_CURSOR_HEIGHT,
+            cursor_asset::AGENT_CURSOR_DESKTOP_WIDTH,
+            cursor_asset::AGENT_CURSOR_DESKTOP_HEIGHT,
             FilterType::Lanczos3,
         );
         let (width, height) = image.dimensions();
