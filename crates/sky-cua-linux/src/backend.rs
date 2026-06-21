@@ -1220,7 +1220,7 @@ impl DesktopBackend for LinuxDesktopBackend {
         } else {
             diagnostics.push(
                 BackendErrorCode::CaptureBackendDowngraded,
-                "Display topology is unavailable, so screenshot fell back to the legacy raw desktop capture for an omitted selector.",
+                "Display topology is unavailable, so screenshot fell back to an unscoped desktop capture for an omitted selector.",
                 None,
             );
         }
@@ -1719,7 +1719,7 @@ fn keyboard_input_ready(environment: &EnvironmentInfo) -> bool {
 fn keyboard_input_unavailable_reason(environment: &EnvironmentInfo) -> &'static str {
     match environment.input_backend {
         InputBackendKind::LinuxVirtualInput => {
-            "Linux virtual input is pointer-only; text and key actions require a usable ydotool daemon"
+            "Linux virtual input keyboard actions require the privileged input helper or a usable ydotool daemon"
         }
         InputBackendKind::None => "No physical input backend is available",
         InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
@@ -1739,7 +1739,7 @@ fn activate_x11_window(window: Option<&X11WindowInfo>) {
         && let Err(error) = input_xtest::window_activate(&window.window_id)
     {
         warn!(
-            "X11 window activation failed before input fallback; continuing with pointer injection: {}",
+            "X11 window activation failed before input fallback; continuing with physical input fallback: {}",
             error.message
         );
     }

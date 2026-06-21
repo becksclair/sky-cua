@@ -46,6 +46,7 @@ WORKTREE_BUNDLE_FILES = (
     Path(".claude-plugin") / "plugin.json",
     Path(".claude-plugin") / "marketplace.json",
     Path("resources") / "chrome_preflight.py",
+    Path("resources") / "systemd" / "sky-cua-input-helper.service",
     Path("docs") / "operations" / "isolated-daemon-smokes.md",
     Path("docs") / "operations" / "plugin-release.md",
     Path("docs") / "operations" / "testing-vm-desktop-smokes.md",
@@ -64,6 +65,8 @@ RETIRED_BUNDLE_SOURCE_PREFIXES = (
     Path("skills") / "computer-use-workflows",
     Path("skills") / "sky-cua-isolated-daemon",
     Path("skills") / "sky-cua-plugin-release",
+    Path("resources") / "kwin" / "effects" / "sky-cua-agent-cursor" / "metadata.json",
+    Path("resources") / "kwin" / "effects" / "sky-cua-agent-cursor" / "qml",
 )
 
 # The phone companion APK and its identity metadata are built by a separate
@@ -81,7 +84,7 @@ CARGO_BUILD_PACKAGES = [
     "sky-cua-service",
     "sky-cua-overlay-host",
     "sky-cua-chrome-host",
-    *([] if sys.platform == "win32" else ["sky-cua-cosmic-helper"]),
+    *([] if sys.platform == "win32" else ["sky-cua-cosmic-helper", "sky-cua-input-helper"]),
 ]
 
 CARGO_BUILD_COMMAND = [

@@ -1,0 +1,15 @@
+[Unit]
+Description=sky-cua privileged uinput helper
+After=systemd-udevd.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/sky-cua/input-helper.env
+ExecStart=/usr/bin/sky-cua-input-helper serve
+Restart=on-failure
+RestartSec=1s
+RuntimeDirectory=sky-cua
+RuntimeDirectoryMode=0775
+
+[Install]
+WantedBy=multi-user.target

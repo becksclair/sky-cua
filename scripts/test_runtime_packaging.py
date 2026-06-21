@@ -34,6 +34,7 @@ def test_runtime_binary_names_match_host_platform() -> None:
     if suffix == "":
         expected.append("sky-cua-cosmic-helper")
         expected.append("sky-cua-chrome-host")
+        expected.append("sky-cua-input-helper")
 
     assert runtime_binary_names() == expected
 
@@ -45,11 +46,13 @@ def test_all_runtime_binary_names_include_linux_and_windows_binaries() -> None:
         "runtimes/linux-x64/sky-cua-overlay-host",
         "runtimes/linux-x64/sky-cua-cosmic-helper",
         "runtimes/linux-x64/sky-cua-chrome-host",
+        "runtimes/linux-x64/sky-cua-input-helper",
         "runtimes/linux-arm64/sky-cua-client",
         "runtimes/linux-arm64/sky-cua-service",
         "runtimes/linux-arm64/sky-cua-overlay-host",
         "runtimes/linux-arm64/sky-cua-cosmic-helper",
         "runtimes/linux-arm64/sky-cua-chrome-host",
+        "runtimes/linux-arm64/sky-cua-input-helper",
         "sky-cua-client.exe",
         "sky-cua-service.exe",
         "sky-cua-overlay-host.exe",
@@ -164,6 +167,7 @@ def test_package_runtime_artifact_uses_platform_binary_contract(
         "sky-cua-chrome-host",
         "sky-cua-client",
         "sky-cua-cosmic-helper",
+        "sky-cua-input-helper",
         "sky-cua-overlay-host",
         "sky-cua-service",
     ]
@@ -231,6 +235,8 @@ def test_build_runtime_packages_uses_packaging_contract(
             "sky-cua-cosmic-helper",
             "--package",
             "sky-cua-chrome-host",
+            "--package",
+            "sky-cua-input-helper",
         ],
         [
             "cargo",

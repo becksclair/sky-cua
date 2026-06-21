@@ -39,6 +39,7 @@ LINUX_RUNTIME_BINARY_BASE_NAMES = (
     *RUNTIME_BINARY_BASE_NAMES,
     "sky-cua-cosmic-helper",
     "sky-cua-chrome-host",
+    "sky-cua-input-helper",
 )
 UNIX_RUNTIME_ENTRYPOINT_PATHS = tuple(Path("bin") / name for name in RUNTIME_BINARY_BASE_NAMES)
 UNIX_PRE_FLIGHT_ENTRYPOINT_PATHS = (Path("bin") / "sky-cua-browser-preflight",)
@@ -362,6 +363,7 @@ def _is_sky_cua_runtime_process(
         "sky-cua-service",
         "sky-cua-chrome-host",
         "sky-cua-cosmic-helper",
+        "sky-cua-input-helper",
     }:
         return False
     candidates = [candidate for candidate in [exe, cwd, cmdline] if candidate]

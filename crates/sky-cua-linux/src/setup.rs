@@ -363,6 +363,11 @@ mod tests {
             }),
             input: Some(DoctorInputReport {
                 backend: sky_cua_platform::model::InputBackendKind::PortalRemoteDesktop,
+                linux_virtual_input: DoctorCheck {
+                    name: "linux_virtual_input".to_string(),
+                    ok: false,
+                    detail: String::new(),
+                },
                 ydotool: DoctorCheck {
                     name: "ydotool".to_string(),
                     ok: false,

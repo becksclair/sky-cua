@@ -7,7 +7,7 @@ use sky_cua_platform::model::{
     InputBackendKind, WindowBackendProbe,
 };
 
-use crate::{session_env, windowing};
+use crate::{session_env, virtual_input, windowing};
 
 pub fn build_doctor_report(
     environment: EnvironmentInfo,
@@ -339,11 +339,42 @@ fn screen_reader_check() -> DoctorCheck {
 fn input_report(backend: InputBackendKind) -> DoctorInputReport {
     DoctorInputReport {
         backend,
+        linux_virtual_input: linux_virtual_input_check(),
         ydotool: binary_check("ydotool"),
         ydotoold: process_check("ydotoold"),
         ydotool_socket: ydotool_socket_check(),
         xdotool: binary_check("xdotool"),
         uinput: path_check("uinput", "/dev/uinput"),
+    }
+}
+
+fn linux_virtual_input_check() -> DoctorCheck {
+    match virtual_input::probe_virtual_input() {
+        Ok(probe) => {
+            let mut details = vec![format!(
+                "adapter={}",
+                match probe.adapter {
+                    virtual_input::VirtualInputAdapterKind::PrivilegedHelper => "privileged_helper",
+                    virtual_input::VirtualInputAdapterKind::Ydotool => "ydotool",
+                }
+            )];
+            if let Some(path) = probe.helper_socket_path.as_ref() {
+                details.push(format!("helper_socket={}", path.display()));
+            }
+            if let Some(path) = probe.socket_path.as_ref() {
+                details.push(format!("ydotool_socket={}", path.display()));
+            }
+            DoctorCheck {
+                name: "linux_virtual_input".to_string(),
+                ok: true,
+                detail: details.join(", "),
+            }
+        }
+        Err(unavailable) => DoctorCheck {
+            name: "linux_virtual_input".to_string(),
+            ok: false,
+            detail: unavailable.reason,
+        },
     }
 }
 

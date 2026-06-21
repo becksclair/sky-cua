@@ -169,10 +169,10 @@ fn select_input_backend(
             }
         }
         SessionKind::Wayland => {
-            if portal_capabilities.remote_desktop_version.is_some() {
-                InputBackendKind::PortalRemoteDesktop
-            } else if virtual_input_available {
+            if virtual_input_available {
                 InputBackendKind::LinuxVirtualInput
+            } else if portal_capabilities.remote_desktop_version.is_some() {
+                InputBackendKind::PortalRemoteDesktop
             } else {
                 InputBackendKind::None
             }
@@ -473,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn wayland_session_prefers_portal_backends() {
+    fn wayland_session_prefers_portal_capture_and_virtual_input() {
         let capabilities = PortalCapabilities {
             screencast_version: Some(5),
             remote_desktop_version: Some(2),
@@ -489,7 +489,7 @@ mod tests {
         );
         assert_eq!(
             select_input_backend(SessionKind::Wayland, &capabilities, true, true),
-            InputBackendKind::PortalRemoteDesktop
+            InputBackendKind::LinuxVirtualInput
         );
     }
 

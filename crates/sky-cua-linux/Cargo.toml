@@ -18,6 +18,7 @@ libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 reis.workspace = true
+sky-cua-input-helper = { path = "../sky-cua-input-helper" }
 sky-cua-platform = { path = "../sky-cua-platform" }
 tokio = { workspace = true, features = ["process"] }
 tracing.workspace = true

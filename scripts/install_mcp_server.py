@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import grp
 import json
 import os
 import shlex
@@ -39,7 +40,11 @@ from _install_shared import (
     subprocess_error_detail,
     write_text_atomically,
 )
-from _kwin_effect import deploy_kwin_effect, print_kwin_effect_deploy_outcome
+from _kwin_effect import (
+    deploy_kwin_effect,
+    kwin_effect_deploy_failed,
+    print_kwin_effect_deploy_outcome,
+)
 from _openclaw_install import DEFAULT_OPENCLAW_DIR, install_openclaw
 from _plugin_bundle import (
     LINUX_ARM64,
@@ -199,6 +204,7 @@ def generate_mcp_config(
                     BROWSER_SELECTION_ENV,
                     "SKY_CUA_COSMIC_HELPER",
                     "SKY_CUA_INPUT_BACKEND",
+                    "SKY_CUA_INPUT_HELPER_SOCKET",
                     "SKY_CUA_MODEL_SCREENSHOT_FORMAT",
                     "SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY",
                     "SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT",
@@ -220,6 +226,11 @@ def generate_mcp_config(
                     "SKY_CUA_SERVICE_PATH",
                     "SKY_CUA_SERVICE_TCP_ADDR",
                     "SKY_CUA_SERVICE_SOCKET_PATH",
+                    "SKY_CUA_XKB_LAYOUT",
+                    "SKY_CUA_XKB_MODEL",
+                    "SKY_CUA_XKB_OPTIONS",
+                    "SKY_CUA_XKB_RULES",
+                    "SKY_CUA_XKB_VARIANT",
                     "WAYLAND_DISPLAY",
                     "XDG_CURRENT_DESKTOP",
                     "XDG_RUNTIME_DIR",
@@ -567,6 +578,87 @@ def restart_runtime_processes(target_dir: Path, *, refresh_accessibility: bool =
         stop_unix_runtime_processes([target_dir])
 
 
+def install_input_helper_service(
+    target_dir: Path,
+    *,
+    socket_group: str | None = None,
+) -> None:
+    if not sys.platform.startswith("linux"):
+        print("warning: --input-helper is only supported on Linux; skipping", file=sys.stderr)
+        return
+    helper_path = target_dir / entrypoint_path(current_platform(), "sky-cua-input-helper")
+    if not helper_path.exists():
+        raise FileNotFoundError(
+            f"sky-cua-input-helper binary not found at {helper_path}; build/install binaries first"
+        )
+    group = socket_group or default_input_helper_group()
+    env_path = target_dir / "input-helper.env"
+    service_path = target_dir / "sky-cua-input-helper.service"
+    env_path.write_text(
+        "\n".join(
+            [
+                "SKY_CUA_INPUT_HELPER_SOCKET=/run/sky-cua/input-helper.sock",
+                "SKY_CUA_INPUT_HELPER_SOCKET_MODE=0660",
+                f"SKY_CUA_INPUT_HELPER_SOCKET_GROUP={group}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    service_path.write_text(
+        "\n".join(
+            [
+                "[Unit]",
+                "Description=sky-cua privileged uinput helper",
+                "After=systemd-udevd.service",
+                "",
+                "[Service]",
+                "Type=simple",
+                "EnvironmentFile=/etc/sky-cua/input-helper.env",
+                f"ExecStart={helper_path} serve",
+                "Restart=on-failure",
+                "RestartSec=1s",
+                "RuntimeDirectory=sky-cua",
+                "RuntimeDirectoryMode=0775",
+                "",
+                "[Install]",
+                "WantedBy=multi-user.target",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    run_sudo(["install", "-D", "-m", "0644", str(env_path), "/etc/sky-cua/input-helper.env"])
+    run_sudo(
+        [
+            "install",
+            "-D",
+            "-m",
+            "0644",
+            str(service_path),
+            "/etc/systemd/system/sky-cua-input-helper.service",
+        ]
+    )
+    run_sudo(["systemctl", "daemon-reload"])
+    run_sudo(["systemctl", "enable", "--now", "sky-cua-input-helper.service"])
+    run_sudo(["systemctl", "restart", "sky-cua-input-helper.service"])
+    print(
+        "Installed and started sky-cua-input-helper.service "
+        f"(socket group: {group}, socket: /run/sky-cua/input-helper.sock)."
+    )
+
+
+def default_input_helper_group() -> str:
+    value = os.environ.get("SKY_CUA_INPUT_HELPER_SOCKET_GROUP")
+    if value:
+        return value
+    return grp.getgrgid(os.getgid()).gr_name
+
+
+def run_sudo(args: list[str]) -> None:
+    subprocess.run(["sudo", *args], check=True)
+
+
 def refresh_accessibility_bus() -> None:
     """Best-effort reset of a wedged user AT-SPI bus before sky-cua reconnects."""
     if not sys.platform.startswith("linux"):
@@ -630,6 +722,8 @@ def install_local_mcp_server(
     bundle_root: Path | None = None,
     claude_config_dir: Path | None = None,
     refresh_accessibility: bool = True,
+    install_input_helper: bool = False,
+    input_helper_group: str | None = None,
 ) -> tuple[Path, Path]:
     """Install runtime binaries and host config; optionally restart installed runtimes.
 
@@ -673,6 +767,9 @@ def install_local_mcp_server(
     if restart_runtime:
         restart_runtime_processes(target_dir, refresh_accessibility=refresh_accessibility)
         print(f"Stopped installed sky-cua runtime processes rooted under: {target_dir}")
+
+    if install_input_helper:
+        install_input_helper_service(target_dir, socket_group=input_helper_group)
 
     return client_path, config_path
 
@@ -775,6 +872,23 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--input-helper",
+        action="store_true",
+        help=(
+            "On Linux, install and start the privileged root sky-cua-input-helper "
+            "systemd service for uinput keyboard injection and raw pointer observation."
+        ),
+    )
+    parser.add_argument(
+        "--input-helper-group",
+        default=None,
+        help=(
+            "Group allowed to connect to /run/sky-cua/input-helper.sock when "
+            "--input-helper is used (default: current user's primary group, or "
+            "SKY_CUA_INPUT_HELPER_SOCKET_GROUP)."
+        ),
+    )
+    parser.add_argument(
         "--kwin-effect",
         action="store_true",
         help=(
@@ -795,6 +909,8 @@ def main() -> int:
             if args.claude_config_dir is not None
             else None
         ),
+        install_input_helper=args.input_helper,
+        input_helper_group=args.input_helper_group,
     )
 
     if args.bin_dir:
@@ -803,6 +919,13 @@ def main() -> int:
     if args.kwin_effect:
         outcome = deploy_kwin_effect(build_dir=target_dir / "kwin-effect-build")
         print_kwin_effect_deploy_outcome(outcome)
+        if kwin_effect_deploy_failed(outcome):
+            print(
+                f"error: KWin effect {outcome.effect_id} did not converge; "
+                f"restored {outcome.rollback_effect_id or 'no previous effect'}",
+                file=sys.stderr,
+            )
+            return 1
 
     print_next_steps(args.host, target_dir, client_path, config_path)
     return 0

@@ -1,47 +1,34 @@
+use std::collections::HashMap;
 use std::env;
-use std::fs::{File, OpenOptions};
-use std::io::Write;
-use std::os::fd::AsRawFd;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use sky_cua_input_helper::protocol::{
+    HelperCommand, KeyEventCommand, parse_response_line, request_line,
+};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use xkbcommon::xkb;
 
+use crate::portal::eis_keymap::{
+    EisKeyStroke, build_keysym_cache, clear_modifiers_already_present_in_chord,
+    find_keycodes_from_cache, keysym_for_char, keysym_for_key_name, required_modifier_keycodes,
+    resolve_eis_keystroke,
+};
 use crate::portal::remote_desktop::MouseButton;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
-const UINPUT_PATH: &str = "/dev/uinput";
-const UINPUT_SETTLE_DELAY: Duration = Duration::from_millis(650);
-const POINTER_ACTION_SETTLE_DELAY: Duration = Duration::from_millis(180);
-const BUTTON_HOLD_DELAY: Duration = Duration::from_millis(120);
-
-const EV_SYN: i32 = 0x00;
-const EV_KEY: i32 = 0x01;
-const EV_REL: i32 = 0x02;
-const EV_ABS: i32 = 0x03;
-const SYN_REPORT: i32 = 0;
-const REL_WHEEL: i32 = 0x08;
-const REL_WHEEL_HI_RES: i32 = 0x0b;
-const ABS_X: i32 = 0x00;
-const ABS_Y: i32 = 0x01;
-const BTN_LEFT: i32 = 0x110;
-const BTN_RIGHT: i32 = 0x111;
-const BTN_MIDDLE: i32 = 0x112;
-const BUS_USB: u16 = 0x03;
-const UI_SET_EVBIT: libc::c_ulong = 0x40045564;
-const UI_SET_KEYBIT: libc::c_ulong = 0x40045565;
-const UI_SET_RELBIT: libc::c_ulong = 0x40045566;
-const UI_SET_ABSBIT: libc::c_ulong = 0x40045567;
-const UI_DEV_CREATE: libc::c_ulong = 0x5501;
-const UI_DEV_DESTROY: libc::c_ulong = 0x5502;
+const HELPER_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
+const DEFAULT_HELPER_SOCKET_PATH: &str = "/run/sky-cua/input-helper.sock";
+const SKY_CUA_INPUT_HELPER_SOCKET: &str = "SKY_CUA_INPUT_HELPER_SOCKET";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VirtualInputAdapterKind {
-    DirectUinput,
+    PrivilegedHelper,
     Ydotool,
 }
 
@@ -56,7 +43,7 @@ pub struct VirtualInputProbe {
     pub coordinate_plane: VirtualInputCoordinatePlane,
     pub ydotool_path: Option<PathBuf>,
     pub socket_path: Option<PathBuf>,
-    pub desktop_bounds: Option<DesktopBounds>,
+    pub helper_socket_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,12 +51,12 @@ pub struct VirtualInputUnavailable {
     pub reason: String,
     pub ydotool_path: Option<PathBuf>,
     pub socket_path: Option<PathBuf>,
+    pub helper_socket_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LinuxVirtualInput {
     probe: VirtualInputProbe,
-    uinput_device: Arc<std::sync::Mutex<Option<UinputPointerDevice>>>,
 }
 
 impl LinuxVirtualInput {
@@ -80,41 +67,19 @@ impl LinuxVirtualInput {
                 format!("Linux virtual input is unavailable: {}", unavailable.reason),
             )
         })?;
-        Ok(Self {
-            probe,
-            uinput_device: Arc::new(std::sync::Mutex::new(None)),
-        })
-    }
-
-    fn with_uinput_device<F, R>(&self, f: F) -> Result<R, BackendError>
-    where
-        F: FnOnce(&mut UinputPointerDevice) -> Result<R, BackendError>,
-    {
-        let bounds = self.desktop_bounds()?;
-        let mut guard = self
-            .uinput_device
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if guard.as_ref().is_none_or(|d| d.bounds != bounds) {
-            *guard = Some(UinputPointerDevice::create(bounds)?);
-        }
-        f(guard.as_mut().expect("uinput device was just created"))
+        Ok(Self { probe })
     }
 
     pub fn move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                self.with_uinput_device(|device| device.move_absolute(x, y))
-            }
+            VirtualInputAdapterKind::PrivilegedHelper => Err(pointer_requires_ydotool_error()),
             VirtualInputAdapterKind::Ydotool => self.run_ydotool(move_absolute_args(x, y)),
         }
     }
 
     pub fn click(&self, button: MouseButton) -> Result<(), BackendError> {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                self.with_uinput_device(|device| device.click(button))
-            }
+            VirtualInputAdapterKind::PrivilegedHelper => Err(pointer_requires_ydotool_error()),
             VirtualInputAdapterKind::Ydotool => {
                 self.run_ydotool(["click".to_string(), click_code(button, ClickAction::Click)])
             }
@@ -123,9 +88,7 @@ impl LinuxVirtualInput {
 
     pub fn pointer_button(&self, button: MouseButton, pressed: bool) -> Result<(), BackendError> {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                self.with_uinput_device(|device| device.pointer_button(button, pressed))
-            }
+            VirtualInputAdapterKind::PrivilegedHelper => Err(pointer_requires_ydotool_error()),
             VirtualInputAdapterKind::Ydotool => self.run_ydotool([
                 "click".to_string(),
                 click_code(
@@ -142,11 +105,7 @@ impl LinuxVirtualInput {
 
     pub fn click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => self.with_uinput_device(|device| {
-                device.move_absolute(x, y)?;
-                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                device.click(button)
-            }),
+            VirtualInputAdapterKind::PrivilegedHelper => Err(pointer_requires_ydotool_error()),
             VirtualInputAdapterKind::Ydotool => {
                 self.move_absolute(x, y)?;
                 self.click(button)
@@ -156,18 +115,16 @@ impl LinuxVirtualInput {
 
     pub fn pointer_mapping_details(&self, x: f64, y: f64) -> String {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                if let Some(bounds) = self.probe.desktop_bounds {
-                    let (absolute_x, absolute_y) = bounds.logical_to_absolute(x, y);
-                    format!(
-                        "adapter=direct_uinput coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) emitted_absolute=({absolute_x},{absolute_y}) bounds=x:{} y:{} width:{} height:{} scale_milli:{}",
-                        bounds.x, bounds.y, bounds.width, bounds.height, bounds.scale_milli
-                    )
-                } else {
-                    format!(
-                        "adapter=direct_uinput coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) bounds=missing"
-                    )
-                }
+            VirtualInputAdapterKind::PrivilegedHelper => {
+                let socket = self
+                    .probe
+                    .helper_socket_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                format!(
+                    "adapter=privileged_helper socket={socket} coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) pointer=unsupported"
+                )
             }
             VirtualInputAdapterKind::Ydotool => format!(
                 "adapter=ydotool coordinate_plane=desktop_logical requested=({x:.1},{y:.1}) emitted_absolute=({},{})",
@@ -179,15 +136,7 @@ impl LinuxVirtualInput {
 
     pub fn drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => self.with_uinput_device(|device| {
-                device.move_absolute(from.0, from.1)?;
-                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                device.pointer_button(MouseButton::Left, true)?;
-                thread::sleep(Duration::from_millis(40));
-                device.move_absolute(to.0, to.1)?;
-                thread::sleep(Duration::from_millis(40));
-                device.pointer_button(MouseButton::Left, false)
-            }),
+            VirtualInputAdapterKind::PrivilegedHelper => Err(pointer_requires_ydotool_error()),
             VirtualInputAdapterKind::Ydotool => {
                 self.move_absolute(from.0, from.1)?;
                 self.pointer_button(MouseButton::Left, true)?;
@@ -208,20 +157,14 @@ impl LinuxVirtualInput {
             return Ok(());
         }
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => {
-                self.with_uinput_device(|device| device.scroll_vertical(steps))
-            }
+            VirtualInputAdapterKind::PrivilegedHelper => Err(pointer_requires_ydotool_error()),
             VirtualInputAdapterKind::Ydotool => self.run_ydotool(scroll_vertical_args(steps)),
         }
     }
 
     pub fn scroll_vertical_at(&self, x: f64, y: f64, steps: i32) -> Result<(), BackendError> {
         match self.probe.adapter {
-            VirtualInputAdapterKind::DirectUinput => self.with_uinput_device(|device| {
-                device.move_absolute(x, y)?;
-                thread::sleep(POINTER_ACTION_SETTLE_DELAY);
-                device.scroll_vertical(steps)
-            }),
+            VirtualInputAdapterKind::PrivilegedHelper => Err(pointer_requires_ydotool_error()),
             VirtualInputAdapterKind::Ydotool => {
                 self.move_absolute(x, y)?;
                 self.scroll_vertical(steps)
@@ -230,16 +173,32 @@ impl LinuxVirtualInput {
     }
 
     pub fn type_text(&self, text: &str) -> Result<(), BackendError> {
-        self.require_keyboard_adapter()?;
-        self.run_ydotool(type_text_args(text))
+        match self.probe.adapter {
+            VirtualInputAdapterKind::PrivilegedHelper => {
+                let events = LinuxKeyResolver::from_environment()?.text_events(text)?;
+                self.run_helper(HelperCommand::KeyEvents { events })
+            }
+            VirtualInputAdapterKind::Ydotool => {
+                self.require_keyboard_adapter()?;
+                self.run_ydotool(type_text_args(text))
+            }
+        }
     }
 
     pub fn press_key_sequence(&self, keys: &[String]) -> Result<(), BackendError> {
-        self.require_keyboard_adapter()?;
-        let events = key_sequence_events(keys)?;
-        let mut args = vec!["key".to_string()];
-        args.extend(events);
-        self.run_ydotool(args)
+        match self.probe.adapter {
+            VirtualInputAdapterKind::PrivilegedHelper => {
+                let events = LinuxKeyResolver::from_environment()?.key_sequence_events(keys)?;
+                self.run_helper(HelperCommand::KeyEvents { events })
+            }
+            VirtualInputAdapterKind::Ydotool => {
+                self.require_keyboard_adapter()?;
+                let events = key_sequence_events(keys)?;
+                let mut args = vec!["key".to_string()];
+                args.extend(events);
+                self.run_ydotool(args)
+            }
+        }
     }
 
     fn run_ydotool<I>(&self, args: I) -> Result<(), BackendError>
@@ -249,11 +208,15 @@ impl LinuxVirtualInput {
         run_ydotool_command(&self.probe, args)
     }
 
-    fn desktop_bounds(&self) -> Result<DesktopBounds, BackendError> {
-        self.probe.desktop_bounds.ok_or_else(|| {
+    fn run_helper(&self, command: HelperCommand) -> Result<(), BackendError> {
+        run_helper_command(self.helper_socket_path()?, command)
+    }
+
+    fn helper_socket_path(&self) -> Result<&Path, BackendError> {
+        self.probe.helper_socket_path.as_deref().ok_or_else(|| {
             BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
-                "Linux direct uinput requires detected desktop bounds",
+                "Linux privileged input helper socket path is missing",
             )
         })
     }
@@ -271,48 +234,58 @@ impl LinuxVirtualInput {
         Err(BackendError::new(
             BackendErrorCode::ActionUnsupportedForEnvironment,
             format!(
-                "Linux virtual input keyboard actions require a usable ydotool daemon; direct uinput only supports pointer actions.{socket_detail}"
+                "Linux virtual input keyboard actions require the privileged input helper or a usable ydotool daemon.{socket_detail}"
             ),
         ))
     }
 }
 
 pub fn probe_virtual_input() -> Result<VirtualInputProbe, VirtualInputUnavailable> {
-    if uinput_is_writable()
-        && let Some(bounds) = detect_desktop_bounds()
-    {
-        return Ok(VirtualInputProbe {
-            adapter: VirtualInputAdapterKind::DirectUinput,
-            coordinate_plane: VirtualInputCoordinatePlane::DesktopLogical,
-            ydotool_path: find_executable("ydotool"),
-            socket_path: configured_socket_path(),
-            desktop_bounds: Some(bounds),
-        });
-    }
+    let helper_socket_path = configured_helper_socket_path();
+    let helper_available = helper_is_available(&helper_socket_path);
+    let ydotool_path = find_executable("ydotool");
+    let socket_path = configured_socket_path();
 
-    let Some(ydotool_path) = find_executable("ydotool") else {
+    let Some(ydotool_path) = ydotool_path else {
+        if helper_available {
+            return Ok(helper_keyboard_only_probe(
+                helper_socket_path,
+                None,
+                socket_path,
+            ));
+        }
         return Err(VirtualInputUnavailable {
-            reason: if uinput_is_writable() {
-                "direct uinput is writable but no desktop bounds could be detected, and ydotool executable was not found on PATH".to_string()
-            } else {
-                "direct uinput is unavailable and ydotool executable was not found on PATH"
-                    .to_string()
-            },
+            reason: "ydotool executable was not found on PATH and the privileged input helper is unavailable".to_string(),
             ydotool_path: None,
-            socket_path: preferred_socket_path(None, socket_path_candidates()),
+            socket_path,
+            helper_socket_path: Some(helper_socket_path),
         });
     };
 
-    let socket_path = configured_socket_path();
     if let Some(path) = socket_path.as_ref() {
         if !path.exists() {
+            if helper_available {
+                return Ok(helper_keyboard_only_probe(
+                    helper_socket_path,
+                    Some(ydotool_path),
+                    socket_path,
+                ));
+            }
             return Err(VirtualInputUnavailable {
                 reason: format!("ydotool socket does not exist: {}", path.display()),
                 ydotool_path: Some(ydotool_path),
                 socket_path,
+                helper_socket_path: Some(helper_socket_path),
             });
         }
         if !socket_is_connectable(path) {
+            if helper_available {
+                return Ok(helper_keyboard_only_probe(
+                    helper_socket_path,
+                    Some(ydotool_path),
+                    socket_path,
+                ));
+            }
             return Err(VirtualInputUnavailable {
                 reason: format!(
                     "ydotool socket path is not a Unix socket: {}",
@@ -320,6 +293,7 @@ pub fn probe_virtual_input() -> Result<VirtualInputProbe, VirtualInputUnavailabl
                 ),
                 ydotool_path: Some(ydotool_path),
                 socket_path,
+                helper_socket_path: Some(helper_socket_path),
             });
         }
     }
@@ -329,8 +303,22 @@ pub fn probe_virtual_input() -> Result<VirtualInputProbe, VirtualInputUnavailabl
         coordinate_plane: VirtualInputCoordinatePlane::DesktopLogical,
         ydotool_path: Some(ydotool_path),
         socket_path,
-        desktop_bounds: None,
+        helper_socket_path: Some(helper_socket_path),
     })
+}
+
+fn helper_keyboard_only_probe(
+    helper_socket_path: PathBuf,
+    ydotool_path: Option<PathBuf>,
+    socket_path: Option<PathBuf>,
+) -> VirtualInputProbe {
+    VirtualInputProbe {
+        adapter: VirtualInputAdapterKind::PrivilegedHelper,
+        coordinate_plane: VirtualInputCoordinatePlane::DesktopLogical,
+        ydotool_path,
+        socket_path,
+        helper_socket_path: Some(helper_socket_path),
+    }
 }
 
 pub fn virtual_input_keyboard_available() -> bool {
@@ -339,216 +327,17 @@ pub fn virtual_input_keyboard_available() -> bool {
 
 impl VirtualInputProbe {
     pub fn supports_keyboard(&self) -> bool {
-        self.ydotool_path.is_some()
-            && self
-                .socket_path
-                .as_ref()
-                .is_none_or(|path| socket_is_connectable(path))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DesktopBounds {
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-    pub scale_milli: u32,
-}
-
-impl DesktopBounds {
-    pub fn logical_to_absolute(&self, x: f64, y: f64) -> (i32, i32) {
-        let scale = f64::from(self.scale_milli) / 1000.0;
-        let max_x = i32::try_from(self.width.saturating_sub(1)).unwrap_or(i32::MAX);
-        let max_y = i32::try_from(self.height.saturating_sub(1)).unwrap_or(i32::MAX);
-        (
-            clamp_round_to_i32((x - f64::from(self.x)) * scale, 0, max_x),
-            clamp_round_to_i32((y - f64::from(self.y)) * scale, 0, max_y),
-        )
-    }
-}
-
-#[derive(Debug)]
-struct UinputPointerDevice {
-    file: File,
-    bounds: DesktopBounds,
-}
-
-impl UinputPointerDevice {
-    fn create(bounds: DesktopBounds) -> Result<Self, BackendError> {
-        if bounds.width == 0 || bounds.height == 0 {
-            return Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                "direct uinput pointer requires nonzero desktop bounds",
-            ));
+        match self.adapter {
+            VirtualInputAdapterKind::PrivilegedHelper => true,
+            VirtualInputAdapterKind::Ydotool => {
+                self.ydotool_path.is_some()
+                    && self
+                        .socket_path
+                        .as_ref()
+                        .is_none_or(|path| socket_is_connectable(path))
+            }
         }
-        let file = OpenOptions::new()
-            .write(true)
-            .open(UINPUT_PATH)
-            .map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::ActionUnsupportedForEnvironment,
-                    format!("failed to open {UINPUT_PATH} for direct uinput pointer: {error}"),
-                )
-            })?;
-        let fd = file.as_raw_fd();
-        ioctl_set(fd, UI_SET_EVBIT, EV_KEY, "UI_SET_EVBIT EV_KEY")?;
-        ioctl_set(fd, UI_SET_EVBIT, EV_REL, "UI_SET_EVBIT EV_REL")?;
-        ioctl_set(fd, UI_SET_EVBIT, EV_ABS, "UI_SET_EVBIT EV_ABS")?;
-        ioctl_set(fd, UI_SET_KEYBIT, BTN_LEFT, "UI_SET_KEYBIT BTN_LEFT")?;
-        ioctl_set(fd, UI_SET_KEYBIT, BTN_RIGHT, "UI_SET_KEYBIT BTN_RIGHT")?;
-        ioctl_set(fd, UI_SET_KEYBIT, BTN_MIDDLE, "UI_SET_KEYBIT BTN_MIDDLE")?;
-        ioctl_set(fd, UI_SET_RELBIT, REL_WHEEL, "UI_SET_RELBIT REL_WHEEL")?;
-        ioctl_set(
-            fd,
-            UI_SET_RELBIT,
-            REL_WHEEL_HI_RES,
-            "UI_SET_RELBIT REL_WHEEL_HI_RES",
-        )?;
-        ioctl_set(fd, UI_SET_ABSBIT, ABS_X, "UI_SET_ABSBIT ABS_X")?;
-        ioctl_set(fd, UI_SET_ABSBIT, ABS_Y, "UI_SET_ABSBIT ABS_Y")?;
-
-        let mut user_dev = UinputUserDev::named("sky-cua absolute pointer");
-        user_dev.id.bustype = BUS_USB;
-        user_dev.id.vendor = 0x5c1a;
-        user_dev.id.product = 0x0002;
-        user_dev.id.version = 1;
-        user_dev.absmin[ABS_X as usize] = 0;
-        user_dev.absmin[ABS_Y as usize] = 0;
-        user_dev.absmax[ABS_X as usize] =
-            i32::try_from(bounds.width.saturating_sub(1)).unwrap_or(i32::MAX);
-        user_dev.absmax[ABS_Y as usize] =
-            i32::try_from(bounds.height.saturating_sub(1)).unwrap_or(i32::MAX);
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                (&user_dev as *const UinputUserDev).cast::<u8>(),
-                std::mem::size_of::<UinputUserDev>(),
-            )
-        };
-        (&file).write_all(bytes).map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                format!("failed to write uinput pointer device definition: {error}"),
-            )
-        })?;
-        ioctl_no_arg(fd, UI_DEV_CREATE, "UI_DEV_CREATE")?;
-        thread::sleep(UINPUT_SETTLE_DELAY);
-        Ok(Self { file, bounds })
     }
-
-    fn move_absolute(&mut self, x: f64, y: f64) -> Result<(), BackendError> {
-        let (x, y) = self.bounds.logical_to_absolute(x, y);
-        self.emit(EV_ABS, ABS_X, x)?;
-        self.emit(EV_ABS, ABS_Y, y)?;
-        self.syn()
-    }
-
-    fn click(&mut self, button: MouseButton) -> Result<(), BackendError> {
-        self.pointer_button(button, true)?;
-        thread::sleep(BUTTON_HOLD_DELAY);
-        self.pointer_button(button, false)
-    }
-
-    fn pointer_button(&mut self, button: MouseButton, pressed: bool) -> Result<(), BackendError> {
-        self.emit(
-            EV_KEY,
-            linux_button_code(button),
-            if pressed { 1 } else { 0 },
-        )?;
-        self.syn()
-    }
-
-    fn scroll_vertical(&mut self, steps: i32) -> Result<(), BackendError> {
-        let uinput_steps = -steps;
-        self.emit(EV_REL, REL_WHEEL_HI_RES, uinput_steps.saturating_mul(120))?;
-        self.emit(EV_REL, REL_WHEEL, uinput_steps)?;
-        self.syn()
-    }
-
-    fn emit(&mut self, event_type: i32, code: i32, value: i32) -> Result<(), BackendError> {
-        let event = InputEvent {
-            time: libc::timeval {
-                tv_sec: 0,
-                tv_usec: 0,
-            },
-            type_: u16::try_from(event_type).unwrap_or(0),
-            code: u16::try_from(code).unwrap_or(0),
-            value,
-        };
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                (&event as *const InputEvent).cast::<u8>(),
-                std::mem::size_of::<InputEvent>(),
-            )
-        };
-        self.file.write_all(bytes).map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                format!("failed to write direct uinput event: {error}"),
-            )
-        })
-    }
-
-    fn syn(&mut self) -> Result<(), BackendError> {
-        self.emit(EV_SYN, SYN_REPORT, 0)
-    }
-}
-
-impl Drop for UinputPointerDevice {
-    fn drop(&mut self) {
-        let _ = unsafe { libc::ioctl(self.file.as_raw_fd(), UI_DEV_DESTROY) };
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct InputId {
-    bustype: u16,
-    vendor: u16,
-    product: u16,
-    version: u16,
-}
-
-#[repr(C)]
-struct UinputUserDev {
-    name: [u8; 80],
-    id: InputId,
-    ff_effects_max: u32,
-    absmax: [i32; 64],
-    absmin: [i32; 64],
-    absfuzz: [i32; 64],
-    absflat: [i32; 64],
-}
-
-impl UinputUserDev {
-    fn named(name: &str) -> Self {
-        let mut device = Self {
-            name: [0; 80],
-            id: InputId {
-                bustype: 0,
-                vendor: 0,
-                product: 0,
-                version: 0,
-            },
-            ff_effects_max: 0,
-            absmax: [0; 64],
-            absmin: [0; 64],
-            absfuzz: [0; 64],
-            absflat: [0; 64],
-        };
-        let name_bytes = name.as_bytes();
-        let len = name_bytes.len().min(device.name.len().saturating_sub(1));
-        device.name[..len].copy_from_slice(&name_bytes[..len]);
-        device
-    }
-}
-
-#[repr(C)]
-struct InputEvent {
-    time: libc::timeval,
-    type_: u16,
-    code: u16,
-    value: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -572,12 +361,388 @@ fn click_code(button: MouseButton, action: ClickAction) -> String {
     format!("0x{:02X}", base | mask)
 }
 
-fn linux_button_code(button: MouseButton) -> i32 {
-    match button {
-        MouseButton::Left => BTN_LEFT,
-        MouseButton::Right => BTN_RIGHT,
-        MouseButton::Middle => BTN_MIDDLE,
+fn pointer_requires_ydotool_error() -> BackendError {
+    BackendError::new(
+        BackendErrorCode::ActionUnsupportedForEnvironment,
+        "Linux virtual input pointer actions require ydotool; uinput pointer injection has been removed",
+    )
+}
+
+fn run_helper_command(path: &Path, command: HelperCommand) -> Result<(), BackendError> {
+    let mut stream = UnixStream::connect(path).map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            format!(
+                "failed to connect to privileged input helper {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    stream
+        .set_read_timeout(Some(HELPER_COMMAND_TIMEOUT))
+        .map_err(|error| helper_io_error("configure helper read timeout", error))?;
+    stream
+        .set_write_timeout(Some(HELPER_COMMAND_TIMEOUT))
+        .map_err(|error| helper_io_error("configure helper write timeout", error))?;
+    let line = request_line(command).map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            format!("failed to encode privileged input helper request: {error}"),
+        )
+    })?;
+    stream
+        .write_all(line.as_bytes())
+        .map_err(|error| helper_io_error("write helper request", error))?;
+    let mut reader = BufReader::new(stream);
+    let mut response = String::new();
+    reader
+        .read_line(&mut response)
+        .map_err(|error| helper_io_error("read helper response", error))?;
+    let response = parse_response_line(response.trim_end()).map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            format!("failed to parse privileged input helper response: {error}"),
+        )
+    })?;
+    if response.ok {
+        Ok(())
+    } else {
+        let message = response
+            .error
+            .map(|error| format!("{}: {}", error.code, error.message))
+            .unwrap_or_else(|| "helper returned an unknown error".to_string());
+        Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            format!("privileged input helper failed: {message}"),
+        ))
     }
+}
+
+fn helper_io_error(context: &str, error: std::io::Error) -> BackendError {
+    BackendError::new(
+        BackendErrorCode::ActionUnsupportedForEnvironment,
+        format!("failed to {context}: {error}"),
+    )
+}
+
+fn helper_is_available(path: &Path) -> bool {
+    if !socket_is_connectable(path) {
+        return false;
+    }
+    run_helper_command(path, HelperCommand::Hello).is_ok()
+}
+
+#[derive(Debug, Clone)]
+struct LinuxKeyResolver {
+    keysym_cache: HashMap<u32, EisKeyStroke>,
+    shift_keycodes: Vec<u32>,
+    level3_keycodes: Vec<u32>,
+}
+
+impl LinuxKeyResolver {
+    fn from_environment() -> Result<Self, BackendError> {
+        let context = xkb::Context::new(0);
+        let names = XkbNames::from_environment();
+        let keymap = xkb::Keymap::new_from_names(
+            &context,
+            &names.rules,
+            &names.model,
+            &names.layout,
+            &names.variant,
+            Some(names.options),
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                format!(
+                    "failed to compile XKB keymap rules={:?} model={:?} layout={:?} variant={:?}",
+                    names.rules, names.model, names.layout, names.variant
+                ),
+            )
+        })?;
+        let keysym_cache = build_keysym_cache(&keymap);
+        let shift_keycodes = find_keycodes_from_cache(
+            &keysym_cache,
+            &[xkb::keysyms::KEY_Shift_L, xkb::keysyms::KEY_Shift_R],
+        );
+        let level3_keycodes = find_keycodes_from_cache(
+            &keysym_cache,
+            &[
+                xkb::keysyms::KEY_ISO_Level3_Shift,
+                xkb::keysyms::KEY_Mode_switch,
+            ],
+        );
+        Ok(Self {
+            keysym_cache,
+            shift_keycodes,
+            level3_keycodes,
+        })
+    }
+
+    fn text_events(&self, text: &str) -> Result<Vec<KeyEventCommand>, BackendError> {
+        let mut events = Vec::with_capacity(text.len().saturating_mul(4));
+        for character in text.chars() {
+            let keysym = keysym_for_char(character).ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::InvalidRequest,
+                    format!("cannot type unsupported character {character:?} through uinput"),
+                )
+            })?;
+            let stroke = resolve_eis_keystroke(&self.keysym_cache, keysym)?;
+            self.push_key_stroke(&mut events, stroke)?;
+        }
+        Ok(events)
+    }
+
+    fn key_sequence_events(&self, keys: &[String]) -> Result<Vec<KeyEventCommand>, BackendError> {
+        if keys.is_empty() {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                "press_key requires at least one key",
+            ));
+        }
+        let mut resolved = Vec::with_capacity(keys.len());
+        for key in keys {
+            let keysym = keysym_for_key_name(key).ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::InvalidRequest,
+                    format!("unsupported key name {key:?}"),
+                )
+            })?;
+            resolved.push(resolve_eis_keystroke(&self.keysym_cache, keysym)?);
+        }
+
+        let mut events = Vec::with_capacity(resolved.len() * 4);
+        if resolved.len() == 1 {
+            self.push_key_stroke(&mut events, resolved[0])?;
+            return Ok(events);
+        }
+
+        clear_modifiers_already_present_in_chord(
+            &mut resolved,
+            &self.shift_keycodes,
+            &self.level3_keycodes,
+        );
+        for stroke in &resolved[..resolved.len() - 1] {
+            self.push_key_state(&mut events, *stroke, true)?;
+        }
+        self.push_key_stroke(&mut events, *resolved.last().expect("chord has a last key"))?;
+        for stroke in resolved[..resolved.len() - 1].iter().rev() {
+            self.push_key_state(&mut events, *stroke, false)?;
+        }
+        Ok(events)
+    }
+
+    fn push_key_stroke(
+        &self,
+        events: &mut Vec<KeyEventCommand>,
+        stroke: EisKeyStroke,
+    ) -> Result<(), BackendError> {
+        self.push_key_state(events, stroke, true)?;
+        self.push_key_state(events, stroke, false)
+    }
+
+    fn push_key_state(
+        &self,
+        events: &mut Vec<KeyEventCommand>,
+        stroke: EisKeyStroke,
+        pressed: bool,
+    ) -> Result<(), BackendError> {
+        let modifier_keycodes =
+            required_modifier_keycodes(stroke, &self.shift_keycodes, &self.level3_keycodes)?;
+        if pressed {
+            for keycode in &modifier_keycodes {
+                events.push(key_event(*keycode, true)?);
+            }
+            events.push(key_event(stroke.keycode, true)?);
+        } else {
+            events.push(key_event(stroke.keycode, false)?);
+            for keycode in modifier_keycodes.iter().rev() {
+                events.push(key_event(*keycode, false)?);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct XkbNames {
+    rules: String,
+    model: String,
+    layout: String,
+    variant: String,
+    options: String,
+}
+
+impl XkbNames {
+    fn from_environment() -> Self {
+        let probed = probe_xkb_names();
+        Self {
+            rules: xkb_env("RULES")
+                .or_else(|| {
+                    probed
+                        .as_ref()
+                        .and_then(|names| non_empty_string(&names.rules))
+                })
+                .unwrap_or_else(|| "evdev".to_string()),
+            model: xkb_env("MODEL")
+                .or_else(|| {
+                    probed
+                        .as_ref()
+                        .and_then(|names| non_empty_string(&names.model))
+                })
+                .unwrap_or_else(|| "pc105".to_string()),
+            layout: xkb_env("LAYOUT")
+                .or_else(|| {
+                    probed
+                        .as_ref()
+                        .and_then(|names| non_empty_string(&names.layout))
+                })
+                .unwrap_or_else(|| "us".to_string()),
+            variant: xkb_env("VARIANT")
+                .or_else(|| {
+                    probed
+                        .as_ref()
+                        .and_then(|names| non_empty_string(&names.variant))
+                })
+                .unwrap_or_default(),
+            options: xkb_env("OPTIONS")
+                .or_else(|| {
+                    probed
+                        .as_ref()
+                        .and_then(|names| non_empty_string(&names.options))
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
+fn xkb_env(suffix: &str) -> Option<String> {
+    env::var(format!("SKY_CUA_XKB_{suffix}"))
+        .ok()
+        .and_then(|value| non_empty_string(&value))
+        .or_else(|| {
+            env::var(format!("XKB_DEFAULT_{suffix}"))
+                .ok()
+                .and_then(|value| non_empty_string(&value))
+        })
+}
+
+fn probe_xkb_names() -> Option<XkbNames> {
+    probe_setxkbmap_names().or_else(probe_localectl_xkb_names)
+}
+
+fn probe_setxkbmap_names() -> Option<XkbNames> {
+    let output = command_output_with_timeout(
+        Command::new("setxkbmap")
+            .arg("-query")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+        COMMAND_TIMEOUT,
+    )?;
+    output
+        .status
+        .success()
+        .then(|| parse_setxkbmap_query(&String::from_utf8_lossy(&output.stdout)))
+        .flatten()
+}
+
+fn probe_localectl_xkb_names() -> Option<XkbNames> {
+    let output = command_output_with_timeout(
+        Command::new("localectl")
+            .arg("status")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+        COMMAND_TIMEOUT,
+    )?;
+    output
+        .status
+        .success()
+        .then(|| parse_localectl_status(&String::from_utf8_lossy(&output.stdout)))
+        .flatten()
+}
+
+fn parse_setxkbmap_query(output: &str) -> Option<XkbNames> {
+    let mut names = XkbNames::empty();
+    for line in output.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().to_string();
+        match key.trim() {
+            "rules" => names.rules = value,
+            "model" => names.model = value,
+            "layout" => names.layout = value,
+            "variant" => names.variant = value,
+            "options" => names.options = value,
+            _ => {}
+        }
+    }
+    names.has_any_value().then_some(names)
+}
+
+fn parse_localectl_status(output: &str) -> Option<XkbNames> {
+    let mut names = XkbNames::empty();
+    for line in output.lines() {
+        let Some((key, value)) = line.trim().split_once(':') else {
+            continue;
+        };
+        let value = value.trim().to_string();
+        match key.trim() {
+            "X11 Model" => names.model = value,
+            "X11 Layout" => names.layout = value,
+            "X11 Variant" => names.variant = value,
+            "X11 Options" => names.options = value,
+            _ => {}
+        }
+    }
+    names.has_any_value().then_some(names)
+}
+
+impl XkbNames {
+    fn empty() -> Self {
+        Self {
+            rules: String::new(),
+            model: String::new(),
+            layout: String::new(),
+            variant: String::new(),
+            options: String::new(),
+        }
+    }
+
+    fn has_any_value(&self) -> bool {
+        [
+            &self.rules,
+            &self.model,
+            &self.layout,
+            &self.variant,
+            &self.options,
+        ]
+        .iter()
+        .any(|value| !value.trim().is_empty())
+    }
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn key_event(keycode: u32, pressed: bool) -> Result<KeyEventCommand, BackendError> {
+    let code = u16::try_from(keycode).map_err(|_| {
+        BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            format!("uinput keycode {keycode} is outside the supported range"),
+        )
+    })?;
+    Ok(KeyEventCommand { code, pressed })
 }
 
 fn key_sequence_events(keys: &[String]) -> Result<Vec<String>, BackendError> {
@@ -771,6 +936,13 @@ fn configured_socket_path() -> Option<PathBuf> {
     )
 }
 
+fn configured_helper_socket_path() -> PathBuf {
+    env::var_os(SKY_CUA_INPUT_HELPER_SOCKET)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_HELPER_SOCKET_PATH))
+}
+
 fn preferred_socket_path<I>(explicit: Option<PathBuf>, candidates: I) -> Option<PathBuf>
 where
     I: IntoIterator<Item = PathBuf>,
@@ -809,107 +981,6 @@ fn socket_is_connectable(path: &Path) -> bool {
         .is_ok_and(|metadata| metadata.file_type().is_socket())
 }
 
-fn uinput_is_writable() -> bool {
-    OpenOptions::new().write(true).open(UINPUT_PATH).is_ok()
-}
-
-fn detect_desktop_bounds() -> Option<DesktopBounds> {
-    desktop_bounds_from_env()
-        .or_else(desktop_bounds_from_cosmic_randr)
-        .or_else(desktop_bounds_from_xrandr)
-}
-
-fn desktop_bounds_from_env() -> Option<DesktopBounds> {
-    let width = env::var("SKY_CUA_VIRTUAL_INPUT_WIDTH")
-        .ok()?
-        .trim()
-        .parse::<u32>()
-        .ok()?;
-    let height = env::var("SKY_CUA_VIRTUAL_INPUT_HEIGHT")
-        .ok()?
-        .trim()
-        .parse::<u32>()
-        .ok()?;
-    if width == 0 || height == 0 {
-        return None;
-    }
-    let x = env::var("SKY_CUA_VIRTUAL_INPUT_X")
-        .ok()
-        .and_then(|value| value.trim().parse::<i32>().ok())
-        .unwrap_or(0);
-    let y = env::var("SKY_CUA_VIRTUAL_INPUT_Y")
-        .ok()
-        .and_then(|value| value.trim().parse::<i32>().ok())
-        .unwrap_or(0);
-    Some(DesktopBounds {
-        x,
-        y,
-        width,
-        height,
-        scale_milli: env::var("SKY_CUA_VIRTUAL_INPUT_SCALE")
-            .ok()
-            .and_then(|value| parse_scale_milli(&value))
-            .unwrap_or(1000),
-    })
-}
-
-fn desktop_bounds_from_cosmic_randr() -> Option<DesktopBounds> {
-    if !should_probe_cosmic_randr() {
-        return None;
-    }
-    let output = command_output_with_timeout(
-        Command::new("cosmic-randr")
-            .arg("list")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null()),
-        COMMAND_TIMEOUT,
-    )?;
-    if !output.status.success() {
-        return None;
-    }
-    parse_cosmic_randr_bounds(&String::from_utf8_lossy(&output.stdout))
-}
-
-fn desktop_bounds_from_xrandr() -> Option<DesktopBounds> {
-    let output = command_output_with_timeout(
-        Command::new("xrandr")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null()),
-        COMMAND_TIMEOUT,
-    )?;
-    if !output.status.success() {
-        return None;
-    }
-    parse_xrandr_bounds(&String::from_utf8_lossy(&output.stdout))
-}
-
-fn should_probe_cosmic_randr() -> bool {
-    if truthy_env("SKY_CUA_VIRTUAL_INPUT_PROBE_COSMIC_RANDR") {
-        return true;
-    }
-    desktop_name_allows_cosmic_randr(env::var("XDG_CURRENT_DESKTOP").ok().as_deref())
-        || desktop_name_allows_cosmic_randr(env::var("DESKTOP_SESSION").ok().as_deref())
-}
-
-fn desktop_name_allows_cosmic_randr(value: Option<&str>) -> bool {
-    value
-        .unwrap_or_default()
-        .split([':', ';', ','])
-        .any(|part| part.trim().eq_ignore_ascii_case("cosmic"))
-}
-
-fn truthy_env(name: &str) -> bool {
-    env::var(name)
-        .ok()
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(false)
-}
-
 fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
     let mut child = command.spawn().ok()?;
     let deadline = Instant::now() + timeout;
@@ -923,149 +994,6 @@ fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Opti
                 return None;
             }
         }
-    }
-}
-
-fn parse_cosmic_randr_bounds(output: &str) -> Option<DesktopBounds> {
-    let mut current_position: Option<(i32, i32)> = None;
-    let mut current_scale_milli = 1000;
-    for line in output.lines() {
-        let stripped = strip_ansi(line).trim().to_string();
-        if let Some(value) = stripped.strip_prefix("Position:") {
-            let (x, y) = parse_position(value.trim())?;
-            current_position = Some((x, y));
-            continue;
-        }
-        if let Some(value) = stripped.strip_prefix("Scale:") {
-            current_scale_milli = parse_scale_milli(value.trim()).unwrap_or(1000);
-            continue;
-        }
-        if stripped.contains("(current)")
-            && let Some((width, height)) = parse_first_mode_size(&stripped)
-        {
-            let (x, y) = current_position.unwrap_or((0, 0));
-            return Some(DesktopBounds {
-                x,
-                y,
-                width,
-                height,
-                scale_milli: current_scale_milli,
-            });
-        }
-    }
-    None
-}
-
-fn parse_xrandr_bounds(output: &str) -> Option<DesktopBounds> {
-    for line in output.lines() {
-        if !line.contains(" connected") {
-            continue;
-        }
-        for part in line.split_whitespace() {
-            if let Some(bounds) = parse_xrandr_geometry(part) {
-                return Some(bounds);
-            }
-        }
-    }
-    None
-}
-
-fn parse_xrandr_geometry(value: &str) -> Option<DesktopBounds> {
-    let (size, rest) = value.split_once('+')?;
-    let (width, height) = parse_size(size)?;
-    let (x, y) = rest.split_once('+')?;
-    Some(DesktopBounds {
-        x: x.parse().ok()?,
-        y: y.parse().ok()?,
-        width,
-        height,
-        scale_milli: 1000,
-    })
-}
-
-fn parse_first_mode_size(line: &str) -> Option<(u32, u32)> {
-    line.split_whitespace().find_map(parse_size)
-}
-
-fn parse_size(value: &str) -> Option<(u32, u32)> {
-    let clean = value.trim();
-    let (width, height) = clean.split_once('x')?;
-    let width = width.trim().parse::<u32>().ok()?;
-    let height = height.trim().parse::<u32>().ok()?;
-    (width > 0 && height > 0).then_some((width, height))
-}
-
-fn parse_position(value: &str) -> Option<(i32, i32)> {
-    let (x, y) = value.split_once(',')?;
-    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
-}
-
-fn parse_scale_milli(value: &str) -> Option<u32> {
-    let value = value.trim();
-    let scale = if let Some(percent) = value.strip_suffix('%') {
-        percent.trim().parse::<f64>().ok()? / 100.0
-    } else {
-        value.parse::<f64>().ok()?
-    };
-    if !scale.is_finite() || scale <= 0.0 {
-        return None;
-    }
-    Some((scale * 1000.0).round().clamp(1.0, f64::from(u32::MAX)) as u32)
-}
-
-fn strip_ansi(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
-            let _ = chars.next();
-            for code in chars.by_ref() {
-                if code.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-            continue;
-        }
-        output.push(ch);
-    }
-    output
-}
-
-fn ioctl_set(fd: i32, request: libc::c_ulong, value: i32, label: &str) -> Result<(), BackendError> {
-    let rc = unsafe { libc::ioctl(fd, request, value) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(BackendError::new(
-            BackendErrorCode::ActionUnsupportedForEnvironment,
-            format!("{label} failed: {}", std::io::Error::last_os_error()),
-        ))
-    }
-}
-
-fn ioctl_no_arg(fd: i32, request: libc::c_ulong, label: &str) -> Result<(), BackendError> {
-    let rc = unsafe { libc::ioctl(fd, request) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(BackendError::new(
-            BackendErrorCode::ActionUnsupportedForEnvironment,
-            format!("{label} failed: {}", std::io::Error::last_os_error()),
-        ))
-    }
-}
-
-fn clamp_round_to_i32(value: f64, min: i32, max: i32) -> i32 {
-    if !value.is_finite() {
-        return min;
-    }
-    let rounded = value.round();
-    if rounded < f64::from(min) {
-        min
-    } else if rounded > f64::from(max) {
-        max
-    } else {
-        rounded as i32
     }
 }
 
@@ -1084,13 +1012,11 @@ fn round_coordinate(value: f64) -> String {
 mod tests {
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
-    use std::sync::Arc;
 
     use super::{
-        ClickAction, DesktopBounds, LinuxVirtualInput, VirtualInputAdapterKind,
-        VirtualInputCoordinatePlane, VirtualInputProbe, click_code,
-        desktop_name_allows_cosmic_randr, key_sequence_events, move_absolute_args,
-        parse_cosmic_randr_bounds, parse_scale_milli, parse_xrandr_bounds, preferred_socket_path,
+        ClickAction, LinuxVirtualInput, VirtualInputAdapterKind, VirtualInputCoordinatePlane,
+        VirtualInputProbe, click_code, helper_keyboard_only_probe, key_sequence_events,
+        move_absolute_args, parse_localectl_status, parse_setxkbmap_query, preferred_socket_path,
         scroll_vertical_args, type_text_args,
     };
     use crate::portal::remote_desktop::MouseButton;
@@ -1154,96 +1080,61 @@ mod tests {
     }
 
     #[test]
-    fn direct_uinput_without_ydotool_is_pointer_only() {
+    fn helper_without_ydotool_is_keyboard_only() {
         let input = LinuxVirtualInput {
             probe: VirtualInputProbe {
-                adapter: VirtualInputAdapterKind::DirectUinput,
+                adapter: VirtualInputAdapterKind::PrivilegedHelper,
                 coordinate_plane: VirtualInputCoordinatePlane::DesktopLogical,
                 ydotool_path: None,
                 socket_path: None,
-                desktop_bounds: Some(DesktopBounds {
-                    x: 0,
-                    y: 0,
-                    width: 1280,
-                    height: 720,
-                    scale_milli: 1000,
-                }),
+                helper_socket_path: None,
             },
-            uinput_device: Arc::new(std::sync::Mutex::new(None)),
         };
 
+        assert!(input.type_text("hello").is_err());
+        assert!(input.probe.supports_keyboard());
+    }
+
+    #[test]
+    fn helper_pointer_action_requires_ydotool() {
+        let probe =
+            helper_keyboard_only_probe(PathBuf::from("/run/sky-cua/input-helper.sock"), None, None);
+        assert_eq!(probe.adapter, VirtualInputAdapterKind::PrivilegedHelper);
+        assert!(probe.supports_keyboard());
+
+        let input = LinuxVirtualInput { probe };
         let error = input
-            .type_text("hello")
-            .expect_err("keyboard action should fail");
+            .move_absolute(10.0, 20.0)
+            .expect_err("helper should no longer inject pointer events");
 
-        assert!(error.message.contains("ydotool daemon"));
+        assert!(error.message.contains("ydotool"));
     }
 
     #[test]
-    fn parses_cosmic_randr_current_output_bounds() {
-        let output = "\u{1b}[1mVirtual-1\u{1b}[0m \u{1b}[1;32m(enabled)\u{1b}[0m\n  Position: 0,0\n  Scale: 100%\n  Modes:\n    1920x1080 @ 60.000 Hz\n    1280x800 @ 74.994 Hz (current) (preferred)\n";
+    fn parses_setxkbmap_query_for_layout_probe() {
+        let names = parse_setxkbmap_query(
+            "rules:      evdev\nmodel:      pc105\nlayout:     es\nvariant:    nodeadkeys\noptions:    compose:ralt\n",
+        )
+        .unwrap();
 
-        assert_eq!(
-            parse_cosmic_randr_bounds(output),
-            Some(DesktopBounds {
-                x: 0,
-                y: 0,
-                width: 1280,
-                height: 800,
-                scale_milli: 1000,
-            })
-        );
+        assert_eq!(names.rules, "evdev");
+        assert_eq!(names.model, "pc105");
+        assert_eq!(names.layout, "es");
+        assert_eq!(names.variant, "nodeadkeys");
+        assert_eq!(names.options, "compose:ralt");
     }
 
     #[test]
-    fn parses_cosmic_randr_scale_for_absolute_uinput_bounds() {
-        let output = "\u{1b}[1mVirtual-1\u{1b}[0m \u{1b}[1;32m(enabled)\u{1b}[0m\n  Position: 0,0\n  Scale: 125%\n  Modes:\n    1600x1200 @ 60.000 Hz (current)\n";
+    fn parses_localectl_status_for_layout_probe() {
+        let names = parse_localectl_status(
+            "System Locale: LANG=en_US.UTF-8\n    X11 Layout: de\n     X11 Model: pc105\n   X11 Variant: nodeadkeys\n   X11 Options: terminate:ctrl_alt_bksp\n",
+        )
+        .unwrap();
 
-        let bounds = parse_cosmic_randr_bounds(output).unwrap();
-        assert_eq!(
-            bounds,
-            DesktopBounds {
-                x: 0,
-                y: 0,
-                width: 1600,
-                height: 1200,
-                scale_milli: 1250,
-            }
-        );
-        assert_eq!(bounds.logical_to_absolute(194.0, 314.0), (243, 393));
-    }
-
-    #[test]
-    fn parses_scale_values_as_milli_factors() {
-        assert_eq!(parse_scale_milli("100%"), Some(1000));
-        assert_eq!(parse_scale_milli("125%"), Some(1250));
-        assert_eq!(parse_scale_milli("1.5"), Some(1500));
-        assert_eq!(parse_scale_milli("0"), None);
-    }
-
-    #[test]
-    fn cosmic_randr_probe_is_scoped_to_cosmic_desktops() {
-        assert!(desktop_name_allows_cosmic_randr(Some("COSMIC")));
-        assert!(desktop_name_allows_cosmic_randr(Some("pop:COSMIC")));
-        assert!(desktop_name_allows_cosmic_randr(Some("gnome;cosmic")));
-        assert!(!desktop_name_allows_cosmic_randr(Some("KDE")));
-        assert!(!desktop_name_allows_cosmic_randr(Some("GNOME")));
-        assert!(!desktop_name_allows_cosmic_randr(None));
-    }
-
-    #[test]
-    fn parses_xrandr_connected_geometry() {
-        let output = "Virtual-1 connected primary 1280x800+10+20 normal left inverted right x axis y axis 320mm x 200mm\n";
-
-        assert_eq!(
-            parse_xrandr_bounds(output),
-            Some(DesktopBounds {
-                x: 10,
-                y: 20,
-                width: 1280,
-                height: 800,
-                scale_milli: 1000,
-            })
-        );
+        assert_eq!(names.rules, "");
+        assert_eq!(names.model, "pc105");
+        assert_eq!(names.layout, "de");
+        assert_eq!(names.variant, "nodeadkeys");
+        assert_eq!(names.options, "terminate:ctrl_alt_bksp");
     }
 }
