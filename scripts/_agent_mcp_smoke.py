@@ -17,7 +17,7 @@ from _smoke_config import env_flag
 from deploy_freshness import assert_runtime_fresh, deployed_client_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PI_SMOKE_MODEL = "opencode-go/kimi-k2.7-code"
+DEFAULT_PI_SMOKE_MODEL = "openai-codex/gpt-5.5"
 TOOL_FAILURE_STATUSES = {"canceled", "cancelled", "error", "failed", "failure", "timeout"}
 RESULT_PAYLOAD_KEYS = (
     "result",
@@ -203,6 +203,10 @@ def run_agent(
     neutral_cwd: Path | None = None
     if agent == "opencode" and cwd is None:
         neutral_cwd = Path(tempfile.mkdtemp(prefix="sky-cua-opencode-cwd-"))
+        install_opencode_project_config(neutral_cwd)
+        run_cwd = neutral_cwd
+    elif agent == "pi" and cwd is None:
+        neutral_cwd = prepare_pi_smoke_cwd()
         run_cwd = neutral_cwd
 
     try:
@@ -231,6 +235,23 @@ def run_agent(
         raw_stdout_path.unlink(missing_ok=True)
 
     return proc
+
+
+def install_opencode_project_config(cwd: Path) -> None:
+    """Place the VM-local sky-cua MCP config where OpenCode will load it."""
+    generated = Path.home() / ".local" / "share" / "sky-cua" / "opencode.json"
+    if generated.is_file():
+        shutil.copy2(generated, cwd / "opencode.json")
+
+
+def prepare_pi_smoke_cwd() -> Path:
+    """Create a tiny git worktree for Pi, which expects a valid HEAD."""
+    cwd = Path(tempfile.mkdtemp(prefix="sky-cua-pi-cwd-"))
+    subprocess.run(["git", "init", "-q"], cwd=cwd, check=True)
+    subprocess.run(["git", "config", "user.email", "smoke@example.invalid"], cwd=cwd, check=True)
+    subprocess.run(["git", "config", "user.name", "Smoke Test"], cwd=cwd, check=True)
+    subprocess.run(["git", "commit", "--allow-empty", "-q", "-m", "init"], cwd=cwd, check=True)
+    return cwd
 
 
 def agent_environment() -> dict[str, str]:

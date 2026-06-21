@@ -48,10 +48,10 @@ same dependency intent:
 - terminal apps: COSMIC Terminal, Konsole, GNOME Terminal, GNOME Console,
   foot, xterm, Alacritty, Kitty, WezTerm, and Ghostty, so every installed
   desktop has a native or practical terminal target for launch/list/focus tests
-- smoke tools: `gst-plugins-good`, ImageMagick, `grim`, `jq`, `libinput`,
-  `openbox`, `slurp`, `socat`, `strace`, `wev`, `weston`, `wl-clipboard`,
-  `wmctrl`, `xdotool`, `ydotool`/`ydotoold`, Xorg, xauth, xdpyinfo, xev,
-  xmessage, and xwininfo
+- smoke tools: `gst-plugins-good`, ImageMagick, `grim`, `jq`, `kdialog`,
+  `libinput`, `openbox`, `slurp`, `socat`, `strace`, `wev`, `weston`,
+  `wl-clipboard`, `wmctrl`, `xdotool`, `ydotool`/`ydotoold`, Xorg, xauth,
+  xdpyinfo, xev, xmessage, xwininfo, and `zenity`
 - browser-use smoke browser: Google Chrome installed from Google's stable
   Linux package
 - Codex Desktop: installed from the local CodexDesktop-Rebuild Arch package

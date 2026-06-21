@@ -308,6 +308,49 @@ def test_agent_smoke_redacted_opencode_event_preserves_tool_evidence(tmp_path: P
     assert "sky_cua_click" in redacted_text
 
 
+def test_opencode_neutral_cwd_gets_installed_project_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    generated = home / ".local" / "share" / "sky-cua" / "opencode.json"
+    generated.parent.mkdir(parents=True)
+    generated.write_text('{"mcp":{"sky_cua":{"command":["/vm/client","mcp"]}}}\n', encoding="utf-8")
+    neutral = tmp_path / "neutral"
+    neutral.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    _agent_mcp_smoke.install_opencode_project_config(neutral)
+
+    assert (neutral / "opencode.json").read_text(encoding="utf-8") == generated.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_pi_smoke_default_model_uses_openai_codex_auth() -> None:
+    assert _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL == "openai-codex/gpt-5.5"
+    assert "OPENAI_API_KEY" not in _agent_mcp_smoke.model_auth_environment_keys(
+        "pi", _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
+    )
+
+
+def test_pi_smoke_cwd_has_git_head() -> None:
+    cwd = _agent_mcp_smoke.prepare_pi_smoke_cwd()
+    try:
+        assert (
+            _agent_mcp_smoke.subprocess.run(
+                ["git", "rev-parse", "--verify", "HEAD"],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            != ""
+        )
+    finally:
+        _agent_mcp_smoke.shutil.rmtree(cwd, ignore_errors=True)
+
+
 def test_agent_smoke_accepts_payload_after_non_payload_state() -> None:
     event = {
         "type": "tool_use",

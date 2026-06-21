@@ -8,6 +8,8 @@
 #include <QString>
 #include <QTimer>
 
+#include <chrono>
+
 namespace KWin
 {
 
@@ -20,7 +22,7 @@ public:
     SkyCuaAgentCursorEffect();
     ~SkyCuaAgentCursorEffect() override;
 
-    void prePaintScreen(ScreenPrePaintData &data) override;
+    void prePaintScreen(ScreenPrePaintData &data, std::chrono::milliseconds presentTime) override;
 
 public Q_SLOTS:
     bool SetCursorState(const QString &stateJson);

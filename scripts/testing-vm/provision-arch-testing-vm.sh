@@ -53,6 +53,7 @@ pacman -S --noconfirm --needed \
 	kconfig \
 	kcoreaddons \
 	kitty \
+	kdialog \
 	konsole \
 	kwin \
 	kwindowsystem \

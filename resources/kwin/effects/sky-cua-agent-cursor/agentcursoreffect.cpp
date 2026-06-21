@@ -119,14 +119,14 @@ SkyCuaAgentCursorEffect::~SkyCuaAgentCursorEffect()
     restoreSystemCursor();
 }
 
-void SkyCuaAgentCursorEffect::prePaintScreen(ScreenPrePaintData &data)
+void SkyCuaAgentCursorEffect::prePaintScreen(ScreenPrePaintData &data, std::chrono::milliseconds presentTime)
 {
     if (!m_cursorVisible) {
         restoreSystemCursor();
     } else if (m_systemCursor.supported()) {
         m_systemCursor.setHidden(true);
     }
-    QuickSceneEffect::prePaintScreen(data);
+    QuickSceneEffect::prePaintScreen(data, presentTime);
     updateSceneViews();
 }
 

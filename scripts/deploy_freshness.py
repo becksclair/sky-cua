@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import subprocess
 import sys
 from collections.abc import Callable
@@ -160,6 +161,37 @@ def read_build_stamp(client_path: Path) -> dict[str, Any] | None:
     return loaded if isinstance(loaded, dict) else None
 
 
+def _runtime_platform() -> str | None:
+    match platform.machine().lower():
+        case "x86_64" | "amd64":
+            return "linux-x64"
+        case "aarch64" | "arm64":
+            return "linux-arm64"
+        case _:
+            return None
+
+
+def resolve_client_path_for_freshness(client_path: Path, repo_root: Path = REPO_ROOT) -> Path:
+    """Resolve the repo wrapper to the runtime binary it will actually exec."""
+    try:
+        wrapper_path = (repo_root / "bin" / CLIENT_BINARY_NAME).resolve(strict=False)
+        candidate_path = client_path.resolve(strict=False)
+    except OSError:
+        return client_path
+    if candidate_path != wrapper_path:
+        return client_path
+
+    if runtime_platform := _runtime_platform():
+        bundled_runtime = client_path.parent / "runtimes" / runtime_platform / CLIENT_BINARY_NAME
+        if bundled_runtime.exists():
+            return bundled_runtime
+
+    source_runtime = repo_root / "target" / "release" / CLIENT_BINARY_NAME
+    if source_runtime.exists():
+        return source_runtime
+    return client_path
+
+
 @dataclass(frozen=True)
 class Freshness:
     """Whether a client binary was built from the current runtime source."""
@@ -182,6 +214,7 @@ def check_client_freshness(
     deploy_command: str = "python3 scripts/deploy_plugin.py",
 ) -> Freshness:
     """Compare the stamp next to `client_path` against the current source."""
+    client_path = resolve_client_path_for_freshness(client_path, repo_root)
     if not client_path.exists():
         return Freshness(
             fresh=False,

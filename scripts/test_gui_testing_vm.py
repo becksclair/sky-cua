@@ -48,6 +48,7 @@ def test_testing_vm_provisioner_installs_arch_desktop_packages() -> None:
         "rsync",
         "openssh",
         "greetd",
+        "kdialog",
         "seatd",
         "ydotool",
         "xorg-xrandr",
