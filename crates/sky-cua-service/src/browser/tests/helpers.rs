@@ -327,6 +327,12 @@ const GUARDED_ENV_VARS: &[&str] = &[
     SKY_CUA_SOCKET_DIR_ENV,
     CODEX_SOCKET_DIR_ENV,
     sky_cua_platform::config::MACHINE_CONFIG_PATH_ENV,
+    // Test-only timeout overrides: tests that observe a deadline firing set these
+    // to short values; capturing them here means env_lock auto-restores them so
+    // the override never leaks into another test that relies on the generous
+    // default. Kept in sync with the readers in bridge.rs/transport.rs.
+    "SKY_CUA_TEST_BROWSER_OPEN_TIMEOUT_MS",
+    "SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS",
 ];
 
 /// Serialize env-mutating browser tests. Browser selection and eval opt-in are

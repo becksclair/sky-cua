@@ -8,11 +8,19 @@ use tokio::net::UnixStream;
 
 use crate::browser::protocol::{BRIDGE_INFO_REQUEST_ID, MAX_FRAME_SIZE, read_frame, write_frame};
 use crate::browser::transport::{
-    BRIDGE_REQUEST_TIMEOUT, browser_session_params, send_bridge_request,
+    bridge_request_timeout, browser_session_params, send_bridge_request,
 };
+
+use super::helpers::env_lock;
 
 #[tokio::test]
 async fn bridge_request_times_out_when_peer_only_sends_pings() {
+    // Observes the request timeout firing, so pin it short rather than using the
+    // generous test default. env_lock serializes the override with other browser
+    // tests that read it and restores it when the guard drops.
+    let _env_guard = env_lock().await;
+    unsafe { std::env::set_var("SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS", "100") };
+
     let (mut client, mut server) = UnixStream::pair().unwrap();
     let server = tokio::spawn(async move {
         let request = read_frame(&mut server).await.unwrap().unwrap();
@@ -20,7 +28,7 @@ async fn bridge_request_times_out_when_peer_only_sends_pings() {
             request.get("method").and_then(Value::as_str),
             Some("getInfo")
         );
-        let mut interval = tokio::time::interval(BRIDGE_REQUEST_TIMEOUT / 4);
+        let mut interval = tokio::time::interval(bridge_request_timeout() / 4);
         loop {
             interval.tick().await;
             write_frame(

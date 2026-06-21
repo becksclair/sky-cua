@@ -372,6 +372,7 @@ while True:
         r#"#!/usr/bin/env python3
 import socket
 import sys
+import time
 
 if len(sys.argv) != 4 or sys.argv[1:3] != ["serve", "--tcp"]:
     raise SystemExit(f"unexpected argv: {sys.argv!r}")
@@ -379,7 +380,18 @@ if len(sys.argv) != 4 or sys.argv[1:3] != ["serve", "--tcp"]:
 host, _, port = sys.argv[3].rpartition(":")
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind((host, int(port)))
+# The harness reserves the port and releases it before this child runs, so under
+# load a concurrent test can transiently hold the same OS-reused port. Retry the
+# bind for a bounded window (well inside the host start timeout) rather than
+# exiting, which the service would misread as the host being unavailable.
+for _ in range(300):
+    try:
+        server.bind((host, int(port)))
+        break
+    except OSError:
+        time.sleep(0.05)
+else:
+    server.bind((host, int(port)))
 server.listen(8)
 while True:
     conn, _ = server.accept()

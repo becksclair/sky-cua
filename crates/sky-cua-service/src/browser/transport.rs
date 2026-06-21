@@ -10,9 +10,31 @@ use super::diagnostics::{bridge_timeout_diagnostic, unexpected_bridge_response_d
 use super::protocol::{read_frame, write_frame};
 
 #[cfg(not(test))]
-pub(super) const BRIDGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+pub(super) fn bridge_request_timeout() -> Duration {
+    Duration::from_secs(3)
+}
+
+/// Per-bridge-IO deadline. Generous under test so happy-path operations do not
+/// trip it when `cargo test --workspace` starves the in-process fake servers and
+/// a reply that normally takes microseconds takes seconds. Tests that need to
+/// observe the deadline *firing* set `SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS` to a
+/// small value so they stay fast.
 #[cfg(test)]
-pub(super) const BRIDGE_REQUEST_TIMEOUT: Duration = Duration::from_millis(100);
+pub(super) fn bridge_request_timeout() -> Duration {
+    test_duration_override("SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS")
+        .unwrap_or(Duration::from_secs(10))
+}
+
+/// Read a millisecond duration override from `env`, for tests that must exercise
+/// a timeout path without waiting for the generous default. Returns `None` when
+/// the variable is unset or unparseable.
+#[cfg(test)]
+pub(super) fn test_duration_override(env: &str) -> Option<Duration> {
+    std::env::var(env)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .map(Duration::from_millis)
+}
 
 pub(super) async fn send_bridge_request(
     stream: &mut UnixStream,
@@ -27,7 +49,7 @@ pub(super) async fn send_bridge_request(
         request_id,
         method,
         params,
-        TokioInstant::now() + BRIDGE_REQUEST_TIMEOUT,
+        TokioInstant::now() + bridge_request_timeout(),
     )
     .await
 }
@@ -152,7 +174,7 @@ fn cdp_command_timeout_ms(deadline: TokioInstant, now: TokioInstant) -> u64 {
 }
 
 pub(super) async fn connect_bridge_socket(socket: &Path) -> Result<UnixStream, DiagnosticEntry> {
-    tokio::time::timeout(BRIDGE_REQUEST_TIMEOUT, UnixStream::connect(socket))
+    tokio::time::timeout(bridge_request_timeout(), UnixStream::connect(socket))
         .await
         .map_err(|_| bridge_timeout_diagnostic("connect to", socket))?
         .map_err(|error| DiagnosticEntry {
@@ -211,7 +233,7 @@ pub(super) async fn timeout_bridge_io<T>(
     action: &'static str,
     socket: &Path,
 ) -> Result<T, DiagnosticEntry> {
-    tokio::time::timeout(BRIDGE_REQUEST_TIMEOUT, operation)
+    tokio::time::timeout(bridge_request_timeout(), operation)
         .await
         .map_err(|_| bridge_timeout_diagnostic(action, socket))?
         .map_err(|error| DiagnosticEntry {

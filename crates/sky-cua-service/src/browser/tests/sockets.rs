@@ -8,7 +8,7 @@ use tokio::net::UnixListener;
 use tokio::time::Instant as TokioInstant;
 
 use crate::browser::bridge::{
-    BROWSER_OPEN_TIMEOUT, browser_bridge_diagnostics, list_tabs, open_tab,
+    browser_bridge_diagnostics, browser_open_timeout, list_tabs, open_tab,
 };
 use crate::browser::sockets::{
     BrowserFamily, BrowserSocketSelection, CODEX_SOCKET_DIR_ENV, MAX_BRIDGE_SOCKET_CANDIDATES,
@@ -17,7 +17,7 @@ use crate::browser::sockets::{
     cache_socket_family_for_tests, find_bridge_sockets, record_bridge_socket_result,
     reset_socket_inventory_for_tests, socket_host_pid,
 };
-use crate::browser::transport::BRIDGE_REQUEST_TIMEOUT;
+use crate::browser::transport::bridge_request_timeout;
 
 use super::helpers::*;
 
@@ -100,7 +100,7 @@ async fn open_tab_does_not_wait_for_later_stale_sockets_after_first_live_probe()
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
     let response = tokio::time::timeout(
-        BRIDGE_REQUEST_TIMEOUT,
+        bridge_request_timeout(),
         open_tab(Some(BrowserTargetKind::UserChrome), None),
     )
     .await
@@ -132,7 +132,7 @@ async fn open_tab_does_not_wait_for_preferred_stale_socket_when_later_socket_is_
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
     let response = tokio::time::timeout(
-        BRIDGE_REQUEST_TIMEOUT,
+        bridge_request_timeout(),
         open_tab(Some(BrowserTargetKind::UserChrome), None),
     )
     .await
@@ -152,6 +152,14 @@ async fn open_tab_does_not_wait_for_preferred_stale_socket_when_later_socket_is_
 #[tokio::test]
 async fn open_tab_stops_at_aggregate_deadline_across_responsive_bad_sockets() {
     let _env_guard = env_lock().await;
+    // This test observes the deadline *firing*, so it pins the timeouts to short
+    // values rather than the generous test defaults (which exist so happy-path
+    // tests do not trip under load). env_lock serializes these with every other
+    // browser test that reads them, and restores them when the guard drops.
+    unsafe {
+        std::env::set_var("SKY_CUA_TEST_BROWSER_OPEN_TIMEOUT_MS", "2000");
+        std::env::set_var("SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS", "100");
+    }
     let socket_dir = unique_test_dir("sky-cua-browser-open-deadline");
     std::fs::create_dir_all(&socket_dir).unwrap();
     let listeners = (0..4)
@@ -169,7 +177,7 @@ async fn open_tab_stops_at_aggregate_deadline_across_responsive_bad_sockets() {
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
     let started = TokioInstant::now();
     let response = tokio::time::timeout(
-        BROWSER_OPEN_TIMEOUT + BRIDGE_REQUEST_TIMEOUT + BRIDGE_REQUEST_TIMEOUT,
+        browser_open_timeout() + bridge_request_timeout() + bridge_request_timeout(),
         open_tab(Some(BrowserTargetKind::UserChrome), None),
     )
     .await
@@ -183,7 +191,7 @@ async fn open_tab_stops_at_aggregate_deadline_across_responsive_bad_sockets() {
     assert!(response.tab.is_none());
     assert_eq!(response.diagnostics.len(), 1);
     assert_eq!(response.diagnostics[0].code, "BrowserBridgeRequestTimedOut");
-    assert!(started.elapsed() < BROWSER_OPEN_TIMEOUT + BRIDGE_REQUEST_TIMEOUT);
+    assert!(started.elapsed() < browser_open_timeout() + bridge_request_timeout());
 }
 
 #[tokio::test]
@@ -244,6 +252,11 @@ async fn list_tabs_suppresses_stale_socket_noise_when_a_live_socket_responds() {
 #[tokio::test]
 async fn list_tabs_probes_stale_sockets_concurrently() {
     let _env_guard = env_lock().await;
+    // list_tabs aggregates across sockets, so it waits one request timeout for the
+    // unresponsive stale sockets. Pin it to a bounded value (not the generous test
+    // default, which would make the wait 10s) that still leaves headroom for the
+    // live socket to respond under load. env_lock restores it when the guard drops.
+    unsafe { std::env::set_var("SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS", "1000") };
     let socket_dir = unique_test_dir("sky-cua-browser-bridge-concurrent");
     std::fs::create_dir_all(&socket_dir).unwrap();
     let stale_a = UnixListener::bind(socket_dir.join("extension-100-hung.sock")).unwrap();
@@ -258,7 +271,7 @@ async fn list_tabs_probes_stale_sockets_concurrently() {
     let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
     let response = tokio::time::timeout(
-        BRIDGE_REQUEST_TIMEOUT + BRIDGE_REQUEST_TIMEOUT,
+        bridge_request_timeout() + bridge_request_timeout(),
         list_tabs(Some(BrowserTargetKind::UserChrome)),
     )
     .await
