@@ -327,11 +327,10 @@ const GUARDED_ENV_VARS: &[&str] = &[
     SKY_CUA_SOCKET_DIR_ENV,
     CODEX_SOCKET_DIR_ENV,
     sky_cua_platform::config::MACHINE_CONFIG_PATH_ENV,
-    // Test-only timeout overrides: tests that observe a deadline firing set these
-    // to short values; capturing them here means env_lock auto-restores them so
-    // the override never leaks into another test that relies on the generous
-    // default. Kept in sync with the readers in bridge.rs/transport.rs.
-    "SKY_CUA_TEST_BROWSER_OPEN_TIMEOUT_MS",
+    // Test-only timeout override: the few tests that observe the bridge request
+    // deadline firing pin it short via this var; capturing it here means env_lock
+    // auto-restores it so the override never leaks into another test that relies
+    // on the generous default. Kept in sync with the reader in transport.rs.
     "SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS",
 ];
 

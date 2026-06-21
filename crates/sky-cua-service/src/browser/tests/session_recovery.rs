@@ -122,10 +122,6 @@ async fn cdp_action_recovers_when_tab_is_not_in_browser_session() {
 #[tokio::test]
 async fn cdp_action_recovers_when_cdp_command_times_out() {
     let _env_guard = env_lock().await;
-    // Asserts the per-CDP-command timeoutMs is derived from a short open deadline
-    // (250..=1250 ms); pin the open timeout short rather than using the generous
-    // test default. env_lock restores it when the guard drops.
-    unsafe { std::env::set_var("SKY_CUA_TEST_BROWSER_OPEN_TIMEOUT_MS", "2000") };
     let socket_dir = unique_test_dir("sky-cua-browser-cdp-recover-timeout");
     std::fs::create_dir_all(&socket_dir).unwrap();
     let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
@@ -451,10 +447,6 @@ async fn cdp_action_recovery_reclaims_stale_sky_cua_owner() {
 #[tokio::test]
 async fn cdp_command_timeout_resets_session_without_replaying_input_action() {
     let _env_guard = env_lock().await;
-    // The per-CDP-command budget derives from the browser-open deadline; pin it
-    // short so the timeout fires quickly instead of waiting the generous test
-    // default. env_lock restores it when the guard drops.
-    unsafe { std::env::set_var("SKY_CUA_TEST_BROWSER_OPEN_TIMEOUT_MS", "2000") };
     let socket_dir = unique_test_dir("sky-cua-browser-cdp-timeout-no-replay");
     std::fs::create_dir_all(&socket_dir).unwrap();
     let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
@@ -570,10 +562,6 @@ async fn cdp_command_timeout_resets_session_without_replaying_input_action() {
 #[tokio::test]
 async fn cdp_command_timeout_is_not_replayed_on_another_bridge_socket() {
     let _env_guard = env_lock().await;
-    // The per-CDP-command budget derives from the browser-open deadline; pin it
-    // short so the timeout fires quickly instead of waiting the generous test
-    // default. env_lock restores it when the guard drops.
-    unsafe { std::env::set_var("SKY_CUA_TEST_BROWSER_OPEN_TIMEOUT_MS", "2000") };
     let socket_dir = unique_test_dir("sky-cua-browser-cdp-timeout-two-sockets");
     std::fs::create_dir_all(&socket_dir).unwrap();
     let listener_a = UnixListener::bind(socket_dir.join("extension-1-a.sock")).unwrap();

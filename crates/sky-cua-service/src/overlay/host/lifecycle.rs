@@ -19,15 +19,7 @@ use sky_cua_overlay_host::{
 };
 use sky_cua_platform::model::DiagnosticEntry;
 
-#[cfg(not(test))]
 const HOST_START_TIMEOUT: Duration = Duration::from_secs(2);
-// Generous under test: the fake host binary the tests spawn can take well over a
-// second to start and bind when `cargo test --workspace` saturates the CPU, and a
-// startup that loses that race would otherwise be misread as the host being
-// unavailable rather than reaching its (bad) reply. No test relies on this
-// firing, so a large value only affects the pathological never-ready case.
-#[cfg(test)]
-const HOST_START_TIMEOUT: Duration = Duration::from_secs(30);
 const HOST_CONNECT_INTERVAL: Duration = Duration::from_millis(25);
 #[cfg(any(not(unix), test))]
 const HOST_TCP_CONNECT_TIMEOUT: Duration = Duration::from_millis(100);

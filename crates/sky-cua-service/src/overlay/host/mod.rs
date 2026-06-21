@@ -381,10 +381,11 @@ host, _, port = sys.argv[3].rpartition(":")
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 # The harness reserves the port and releases it before this child runs, so under
-# load a concurrent test can transiently hold the same OS-reused port. Retry the
-# bind for a bounded window (well inside the host start timeout) rather than
-# exiting, which the service would misread as the host being unavailable.
-for _ in range(300):
+# load a concurrent test can transiently hold the same OS-reused port. The hold is
+# momentary, so retry the bind briefly (~1s, well inside the host start timeout)
+# rather than exiting, which the service would misread as the host being
+# unavailable.
+for _ in range(20):
     try:
         server.bind((host, int(port)))
         break

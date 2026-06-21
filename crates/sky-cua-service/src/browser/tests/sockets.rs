@@ -8,7 +8,7 @@ use tokio::net::UnixListener;
 use tokio::time::Instant as TokioInstant;
 
 use crate::browser::bridge::{
-    browser_bridge_diagnostics, browser_open_timeout, list_tabs, open_tab,
+    BROWSER_OPEN_TIMEOUT, browser_bridge_diagnostics, list_tabs, open_tab,
 };
 use crate::browser::sockets::{
     BrowserFamily, BrowserSocketSelection, CODEX_SOCKET_DIR_ENV, MAX_BRIDGE_SOCKET_CANDIDATES,
@@ -152,14 +152,11 @@ async fn open_tab_does_not_wait_for_preferred_stale_socket_when_later_socket_is_
 #[tokio::test]
 async fn open_tab_stops_at_aggregate_deadline_across_responsive_bad_sockets() {
     let _env_guard = env_lock().await;
-    // This test observes the deadline *firing*, so it pins the timeouts to short
-    // values rather than the generous test defaults (which exist so happy-path
-    // tests do not trip under load). env_lock serializes these with every other
-    // browser test that reads them, and restores them when the guard drops.
-    unsafe {
-        std::env::set_var("SKY_CUA_TEST_BROWSER_OPEN_TIMEOUT_MS", "2000");
-        std::env::set_var("SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS", "100");
-    }
+    // This test observes the bridge request deadline *firing*, so it pins it short
+    // rather than using the generous test default (which exists so happy-path tests
+    // do not trip under load). env_lock serializes it with every other browser test
+    // that reads it, and restores it when the guard drops.
+    unsafe { std::env::set_var("SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS", "100") };
     let socket_dir = unique_test_dir("sky-cua-browser-open-deadline");
     std::fs::create_dir_all(&socket_dir).unwrap();
     let listeners = (0..4)
@@ -177,7 +174,7 @@ async fn open_tab_stops_at_aggregate_deadline_across_responsive_bad_sockets() {
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
     let started = TokioInstant::now();
     let response = tokio::time::timeout(
-        browser_open_timeout() + bridge_request_timeout() + bridge_request_timeout(),
+        BROWSER_OPEN_TIMEOUT + bridge_request_timeout() + bridge_request_timeout(),
         open_tab(Some(BrowserTargetKind::UserChrome), None),
     )
     .await
@@ -191,7 +188,7 @@ async fn open_tab_stops_at_aggregate_deadline_across_responsive_bad_sockets() {
     assert!(response.tab.is_none());
     assert_eq!(response.diagnostics.len(), 1);
     assert_eq!(response.diagnostics[0].code, "BrowserBridgeRequestTimedOut");
-    assert!(started.elapsed() < browser_open_timeout() + bridge_request_timeout());
+    assert!(started.elapsed() < BROWSER_OPEN_TIMEOUT + bridge_request_timeout());
 }
 
 #[tokio::test]
