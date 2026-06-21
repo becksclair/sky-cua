@@ -849,6 +849,27 @@ def test_testing_vm_kwin_host_framebuffer_profile_paths_are_stable() -> None:
     assert paths.host_summary_path == paths.local_artifact_dir / "host-summary.json"
 
 
+def test_testing_vm_kwin_host_framebuffer_prefers_native_requested_point() -> None:
+    point = run_gui_testing_vm_smoke.requested_point_from_summary(
+        {
+            "requested_point": {"x": 720.0, "y": 450.0},
+            "requested_native_point": {"x": 640.0, "y": 400.0},
+        }
+    )
+
+    assert point == (640.0, 400.0)
+
+
+def test_testing_vm_kwin_host_framebuffer_requested_point_fallbacks() -> None:
+    assert run_gui_testing_vm_smoke.requested_point_from_summary(
+        {"requested_point": {"x": 720.0, "y": 450.0}}
+    ) == (720.0, 450.0)
+    assert (
+        run_gui_testing_vm_smoke.requested_point_from_summary({})
+        == run_gui_testing_vm_smoke.KWIN_EFFECT_SYSTEM_POINT
+    )
+
+
 def test_testing_vm_cosmic_host_framebuffer_summary_writer_preserves_json_shape(
     tmp_path: Path,
 ) -> None:
@@ -1169,6 +1190,8 @@ def test_testing_vm_runner_builds_runtimes_on_host(
             "sky-cua-service",
             "-p",
             "sky-cua-cosmic-helper",
+            "-p",
+            "sky-cua-input-helper",
             "-p",
             "sky-cua-overlay-host",
         ],

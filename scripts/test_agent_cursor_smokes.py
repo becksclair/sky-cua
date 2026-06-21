@@ -29,7 +29,7 @@ def test_kwin_effect_static_mode_requires_explicit_install_flag(
         live_agent_cursor_kde_smoke.main()
 
     message = str(exc_info.value)
-    assert "kwin-effect-static installs and loads a user-level KWin C++ effect" in message
+    assert "kwin-effect-static installs and loads a user-level KWin cursor-hide shim" in message
     assert "--allow-kwin-effect-install" in message
 
 
@@ -274,15 +274,48 @@ def test_kde_smoke_accepts_expected_visible_overlay_capabilities() -> None:
         {
             "capabilities": {
                 "backend": "wayland_layer_shell",
+                "renderer_backend": "wgpu",
                 "visible_overlay": True,
                 "click_through": True,
+                "pointer_tracking_backend": "kwin_effect_signal",
+                "pointer_tracking_exact": True,
             }
         },
         expected_backend="wayland_layer_shell",
+        expected_renderer="wgpu",
+        expected_pointer_tracking="kwin_effect_signal",
+        expected_pointer_tracking_exact=True,
     )
 
 
-def test_kde_smoke_native_point_for_portal_capture_is_output_local() -> None:
+def test_kde_smoke_accepts_kwin_system_cursor_split_capabilities() -> None:
+    live_agent_cursor_kde_smoke.require_kwin_system_cursor_capabilities(
+        {
+            "capabilities": {
+                "backend": "wayland_layer_shell",
+                "visible_overlay": True,
+                "click_through": True,
+                "system_cursor_backend": "kwin_effect",
+                "system_cursor_hide_supported": True,
+                "system_cursor_hidden": True,
+            }
+        },
+        hidden=True,
+    )
+    with pytest.raises(RuntimeError, match="system_cursor_backend"):
+        live_agent_cursor_kde_smoke.require_kwin_system_cursor_capabilities(
+            {
+                "capabilities": {
+                    "system_cursor_backend": "wayland_client_unsupported",
+                    "system_cursor_hide_supported": False,
+                    "system_cursor_hidden": False,
+                }
+            },
+            hidden=True,
+        )
+
+
+def test_kde_smoke_native_point_for_display_target_capture_is_desktop_logical() -> None:
     point = live_agent_cursor_kde_smoke.native_point_from_capture(
         {
             "backend": "portal_pipe_wire",
@@ -300,11 +333,90 @@ def test_kde_smoke_native_point_for_portal_capture_is_output_local() -> None:
     )
 
     assert point == {
+        "x": 120.0,
+        "y": 75.0,
+        "coordinate_space": "desktop_logical",
+        "mapping_id": "mapping",
+    }
+
+
+def test_kde_smoke_native_point_for_stream_local_portal_capture_stays_stream_logical() -> None:
+    point = live_agent_cursor_kde_smoke.native_point_from_capture(
+        {
+            "backend": "portal_pipe_wire",
+            "pixel_size": {"width": 400, "height": 200},
+            "logical_rect": {
+                "x": 100,
+                "y": 50,
+                "width": 200,
+                "height": 100,
+                "space": "stream_logical",
+            },
+            "mapping_id": "mapping",
+        },
+        (40.0, 50.0),
+    )
+
+    assert point == {
         "x": 20.0,
         "y": 25.0,
         "coordinate_space": "stream_logical",
         "mapping_id": "mapping",
     }
+
+
+def test_kde_smoke_selects_display_for_logical_point() -> None:
+    snapshot = {
+        "environment": {
+            "displays": [
+                {
+                    "display_id": "left",
+                    "name": "Left",
+                    "logical_rect": {
+                        "x": -1280,
+                        "y": 0,
+                        "width": 1280,
+                        "height": 720,
+                        "space": "desktop_logical",
+                    },
+                },
+                {
+                    "display_id": "right",
+                    "name": "Right",
+                    "logical_rect": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 1920,
+                        "height": 1080,
+                        "space": "desktop_logical",
+                    },
+                },
+            ]
+        }
+    }
+
+    display = live_agent_cursor_kde_smoke.display_for_logical_point(
+        snapshot, {"x": -40.0, "y": 80.0}
+    )
+
+    assert display["display_id"] == "left"
+    assert live_agent_cursor_kde_smoke.display_target_for_display(display) == {"display_id": "left"}
+    assert live_agent_cursor_kde_smoke.native_point_in_display(
+        {
+            "x": -40.0,
+            "y": 80.0,
+            "coordinate_space": "desktop_logical",
+        },
+        display,
+    )
+
+
+def test_kde_smoke_display_rects_are_half_open_at_monitor_seams() -> None:
+    left = {"x": -1280, "y": 0, "width": 1280, "height": 720}
+    right = {"x": 0, "y": 0, "width": 1920, "height": 1080}
+
+    assert not live_agent_cursor_kde_smoke.rect_contains_point(left, 0.0, 100.0)
+    assert live_agent_cursor_kde_smoke.rect_contains_point(right, 0.0, 100.0)
 
 
 def test_kde_smoke_maps_logical_fixture_point_to_model_pixels() -> None:
@@ -341,6 +453,70 @@ def test_kde_smoke_rejects_fixture_point_outside_capture() -> None:
             },
             {"x": 900.0, "y": 100.0},
         )
+
+
+def test_kde_smoke_agent_probe_uses_native_point_when_available() -> None:
+    point = live_agent_cursor_kde_smoke.agent_cursor_probe_point(
+        {
+            "agent_cursor": {
+                "native_point": {
+                    "x": 300.0,
+                    "y": 100.0,
+                    "coordinate_space": "desktop_logical",
+                },
+                "model_point": {
+                    "x": 12.0,
+                    "y": 34.0,
+                    "coordinate_space": "stream_pixels",
+                },
+            },
+        },
+        {
+            "pixel_size": {"width": 800, "height": 400},
+            "logical_rect": {
+                "x": 100,
+                "y": 50,
+                "width": 400,
+                "height": 200,
+                "space": "desktop_logical",
+            },
+        },
+        (1.0, 2.0),
+    )
+
+    assert point == (400.0, 100.0)
+
+
+def test_kde_smoke_agent_probe_fails_when_native_point_leaves_capture() -> None:
+    point = live_agent_cursor_kde_smoke.agent_cursor_probe_point(
+        {
+            "agent_cursor": {
+                "native_point": {
+                    "x": 900.0,
+                    "y": 100.0,
+                    "coordinate_space": "desktop_logical",
+                },
+                "model_point": {
+                    "x": 12.0,
+                    "y": 34.0,
+                    "coordinate_space": "stream_pixels",
+                },
+            },
+        },
+        {
+            "pixel_size": {"width": 800, "height": 400},
+            "logical_rect": {
+                "x": 100,
+                "y": 50,
+                "width": 400,
+                "height": 200,
+                "space": "desktop_logical",
+            },
+        },
+        (1.0, 2.0),
+    )
+
+    assert point is None
 
 
 def test_kde_smoke_execute_click_request_uses_snapshot_and_stream_pixels() -> None:

@@ -59,8 +59,7 @@ def with_plugin_mention(prompt: str, codex_home: Path) -> str:
     return (
         f"Use {plugin_mention(codex_home)} and its bundled computer-use skill.\n"
         "Start from a fresh `get_app_state`, inspect `capture.inspection_image_path` with `view_image`"
-        " when present, and fall back to `capture.screenshot_path` only for older plugin responses."
-        " Treat `raw_capture_path` and `original_screenshot_path` as debug-only. When the tree is sparse or fallback-only,"
+        " when present. When the tree is sparse or fallback-only,"
         " prefer compact `get_app_state` snapshots; use `element_query`, `element_limit`,"
         ' or `detail: "full"` only when the omitted fields are needed. '
         " For a known target app or window, use `list_windows` and then `screenshot(window_id=...)`"

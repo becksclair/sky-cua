@@ -368,7 +368,7 @@ fn validate_snapshot_pixel_point(
         return Err(BackendError::new(
             BackendErrorCode::InvalidRequest,
             format!(
-                "snapshot coordinates x={},y={} are outside the captured image bounds {}x{}; use pixel coordinates from this snapshot's screenshot_path image",
+                "snapshot coordinates x={},y={} are outside the captured image bounds {}x{}; use pixel coordinates from this snapshot's inspection_image_path image",
                 point.0, point.1, pixel_size.width, pixel_size.height
             ),
         ));

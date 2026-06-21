@@ -28,7 +28,6 @@ from PIL import Image, ImageChops
 
 import _kwin_effect
 from _kwin_effect import (
-    KWIN_EFFECT_CURSOR_ASSET,
     KWIN_EFFECT_ID,
     compute_effect_build_id,
     parse_kwin_effect_list,
@@ -45,11 +44,13 @@ OVERLAY_HOST_BIN = Path(
         "SKY_CUA_OVERLAY_HOST_BIN", REPO_ROOT / "target" / "debug" / "sky-cua-overlay-host"
     )
 )
+AGENT_CURSOR_ASSET = REPO_ROOT / "crates" / "sky-cua-overlay-host" / "assets" / "cursor-chat.png"
 POINTER_FIXTURE = REPO_ROOT / "scripts" / "gtk_pointer_smoke_fixture.py"
 MODE_ARTIFACT_SLUGS = {
     "synthetic": "syn",
     "layer-shell-debug-visible": "vis",
     "layer-shell-hide-for-capture": "hide",
+    "layer-shell-display-target": "target",
     "layer-shell-click-through": "click",
     "layer-shell-ydotool-click-through": "ydotool-click",
     "x11-debug-visible": "x11",
@@ -95,6 +96,7 @@ def main() -> int:
             "synthetic",
             "layer-shell-debug-visible",
             "layer-shell-hide-for-capture",
+            "layer-shell-display-target",
             "layer-shell-click-through",
             "layer-shell-ydotool-click-through",
             "x11-debug-visible",
@@ -141,6 +143,8 @@ def main() -> int:
         return run_kwin_effect_system_install_smoke(args)
     if args.mode == "layer-shell-debug-visible":
         return run_layer_shell_fixture_visible_smoke(args)
+    if args.mode == "layer-shell-display-target":
+        return run_layer_shell_display_target_smoke(args)
     if args.mode in {"layer-shell-click-through", "layer-shell-ydotool-click-through"}:
         return run_layer_shell_click_through_smoke(args)
 
@@ -154,58 +158,57 @@ def main() -> int:
     try:
         wait_for_socket(socket_path, deadline=time.time() + 15)
         health = service_call(socket_path, {"type": "health"}, timeout=args.request_timeout)
-        first = service_call(socket_path, {"type": "get_app_state"}, timeout=args.request_timeout)
-        first_snapshot = first["snapshot"]
-        capture = require_capture(first_snapshot)
-        point = center_point(capture)
-        native_point = native_point_from_capture(capture, point)
-        state: dict[str, Any] = {
-            "visible": True,
-            "sequence": 0,
-            "model_point": {
-                "x": point[0],
-                "y": point[1],
-                "coordinate_space": "stream_pixels",
-                "mapping_id": capture.get("mapping_id"),
-            },
-            "snapshot_id": first_snapshot["snapshot_id"],
-            "source_action": "click",
-            "updated_at_ms": 0,
-        }
-        if native_point is not None:
-            state["native_point"] = native_point
-        set_response = service_call(
-            socket_path,
-            {
-                "type": "set_agent_cursor",
-                "state": state,
-            },
-            timeout=args.request_timeout,
-        )
-        status_response = service_call(
-            socket_path,
-            {"type": "agent_cursor_status"},
-            timeout=args.request_timeout,
-        )
-        assert_no_host_diagnostics(set_response, status_response)
-        expected_backend = expected_overlay_backend(args.mode)
-        if expected_backend is not None:
-            require_cursor_backend_capabilities(
-                set_response, status_response, expected_backend=expected_backend
+        with ServiceClient(socket_path, timeout=args.request_timeout) as cursor_client:
+            _first, first_snapshot, capture, first_path = screenshot_capture(
+                cursor_client,
+                request_timeout=args.request_timeout,
             )
-        if args.mode in {
-            "layer-shell-debug-visible",
-            "layer-shell-hide-for-capture",
-            "x11-debug-visible",
-        }:
-            # The overlay host has committed by now, but KWin/portal capture can still
-            # race the next compositor presentation frame without a small settle.
-            time.sleep(0.25)
-        second = service_call(socket_path, {"type": "get_app_state"}, timeout=args.request_timeout)
-        second_snapshot = second["snapshot"]
-        second_capture = require_capture(second_snapshot)
-        after_path = Path(require_str(second_capture, "screenshot_path"))
-        first_path = Path(require_str(capture, "screenshot_path"))
+            point = center_point(capture)
+            native_point = native_point_from_capture(capture, point)
+            state: dict[str, Any] = {
+                "visible": True,
+                "sequence": 0,
+                "model_point": {
+                    "x": point[0],
+                    "y": point[1],
+                    "coordinate_space": "stream_pixels",
+                    "mapping_id": capture.get("mapping_id"),
+                },
+                "snapshot_id": first_snapshot["snapshot_id"],
+                "source_action": "click",
+                "updated_at_ms": 0,
+            }
+            if native_point is not None:
+                state["native_point"] = native_point
+            set_response = cursor_client.call(
+                {
+                    "type": "set_agent_cursor",
+                    "state": state,
+                },
+                timeout=args.request_timeout,
+            )
+            status_response = cursor_client.call(
+                {"type": "agent_cursor_status"},
+                timeout=args.request_timeout,
+            )
+            assert_no_host_diagnostics(set_response, status_response)
+            expected_backend = expected_overlay_backend(args.mode)
+            if expected_backend is not None:
+                require_cursor_backend_capabilities(
+                    set_response, status_response, expected_backend=expected_backend
+                )
+            if args.mode in {
+                "layer-shell-debug-visible",
+                "layer-shell-hide-for-capture",
+                "x11-debug-visible",
+            }:
+                # The overlay host has committed by now, but KWin/portal capture can still
+                # race the next compositor presentation frame without a small settle.
+                time.sleep(0.25)
+            _second, second_snapshot, _second_capture, after_path = screenshot_capture(
+                cursor_client,
+                request_timeout=args.request_timeout,
+            )
         if args.mode in {"layer-shell-debug-visible", "x11-debug-visible"}:
             before_path = first_path
         else:
@@ -309,6 +312,7 @@ def start_service(socket_path: Path, artifact_dir: Path, *, mode: str) -> subpro
     if mode in {
         "layer-shell-debug-visible",
         "layer-shell-hide-for-capture",
+        "layer-shell-display-target",
         "layer-shell-click-through",
         "layer-shell-ydotool-click-through",
     }:
@@ -320,6 +324,7 @@ def start_service(socket_path: Path, artifact_dir: Path, *, mode: str) -> subpro
     env.setdefault("SKY_CUA_OVERLAY_HOST_PATH", str(OVERLAY_HOST_BIN))
     if mode in {
         "layer-shell-debug-visible",
+        "layer-shell-display-target",
         "layer-shell-click-through",
         "layer-shell-ydotool-click-through",
         "x11-debug-visible",
@@ -337,6 +342,108 @@ def start_service(socket_path: Path, artifact_dir: Path, *, mode: str) -> subpro
         stdout=subprocess.DEVNULL,
         stderr=stderr,
     )
+
+
+def run_layer_shell_display_target_smoke(args: argparse.Namespace) -> int:
+    require_kde_wayland(allow_non_kde=args.allow_non_kde)
+    build_service()
+
+    artifact_dir = artifact_dir_for_mode(args.mode)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    socket_path = artifact_dir / "svc.sock"
+    pointer_state_path = artifact_dir / "pointer-state.json"
+    fixture = start_pointer_fixture(pointer_state_path)
+    service = start_service(socket_path, artifact_dir, mode=args.mode)
+    try:
+        fixture_state = wait_for_stable_pointer_fixture(
+            pointer_state_path, deadline=time.time() + 20
+        )
+        point_logical = fixture_point(fixture_state, "click_button")
+        wait_for_socket(socket_path, deadline=time.time() + 15)
+        health = service_call(socket_path, {"type": "health"}, timeout=args.request_timeout)
+        with ServiceClient(socket_path, timeout=args.request_timeout) as cursor_client:
+            state_snapshot = get_state_snapshot_without_capture(
+                cursor_client,
+                request_timeout=args.request_timeout,
+            )
+            target_display = display_for_logical_point(state_snapshot, point_logical)
+            display_target = display_target_for_display(target_display)
+            _first, first_snapshot, capture, before_path = screenshot_capture(
+                cursor_client,
+                display_target=display_target,
+                request_timeout=args.request_timeout,
+            )
+            point = model_point_from_logical_capture(capture, point_logical)
+            native_point = native_point_from_capture(capture, point)
+            native_point_on_target_display = (
+                native_point_in_display(native_point, target_display)
+                if native_point is not None
+                else False
+            )
+            state: dict[str, Any] = {
+                "visible": True,
+                "sequence": 0,
+                "model_point": {
+                    "x": point[0],
+                    "y": point[1],
+                    "coordinate_space": "stream_pixels",
+                    "mapping_id": capture.get("mapping_id"),
+                },
+                "snapshot_id": first_snapshot["snapshot_id"],
+                "source_action": "click",
+                "updated_at_ms": 0,
+            }
+            if native_point is not None:
+                state["native_point"] = native_point
+            set_response = cursor_client.call(
+                {
+                    "type": "set_agent_cursor",
+                    "state": state,
+                },
+                timeout=args.request_timeout,
+            )
+            status_response = cursor_client.call(
+                {"type": "agent_cursor_status"},
+                timeout=args.request_timeout,
+            )
+            assert_no_host_diagnostics(set_response, status_response)
+            require_cursor_backend_capabilities(
+                set_response,
+                status_response,
+                expected_backend="wayland_layer_shell",
+                expected_renderer="wgpu",
+                expected_pointer_tracking="kwin_effect_signal",
+                expected_pointer_tracking_exact=True,
+            )
+            require_kwin_system_cursor_capabilities(set_response, status_response, hidden=True)
+        ok = (
+            native_point_on_target_display
+            and cursor_backend(status_response) == "wayland_layer_shell"
+        )
+        summary = {
+            "mode": args.mode,
+            "ok": ok,
+            "display_target_proved": native_point_on_target_display,
+            "requested_point": {"x": point[0], "y": point[1]},
+            "requested_logical_point": point_logical,
+            "requested_native_point": native_point,
+            "target_display": display_summary(target_display),
+            "requested_native_point_on_target_display": native_point_on_target_display,
+            "backend": cursor_backend(status_response),
+            "artifact_dir": str(artifact_dir),
+            "targeted_screenshot": str(copy_artifact(before_path, artifact_dir, "targeted")),
+            "health": health,
+            "set_agent_cursor": set_response,
+            "agent_cursor_status": status_response,
+            "pointer_fixture_initial_state": fixture_state,
+            "first_snapshot_id": first_snapshot["snapshot_id"],
+        }
+        write_summary(artifact_dir, summary)
+        return 0 if summary["ok"] else 1
+    finally:
+        terminate_service(service)
+        terminate_process(fixture, name="GTK pointer fixture")
+        socket_path.unlink(missing_ok=True)
 
 
 def run_layer_shell_click_through_smoke(args: argparse.Namespace) -> int:
@@ -358,91 +465,99 @@ def run_layer_shell_click_through_smoke(args: argparse.Namespace) -> int:
         click_logical = fixture_point(fixture_state, "click_button")
         wait_for_socket(socket_path, deadline=time.time() + 15)
         health = service_call(socket_path, {"type": "health"}, timeout=args.request_timeout)
-        first = service_call(socket_path, {"type": "get_app_state"}, timeout=args.request_timeout)
-        first_snapshot = first["snapshot"]
-        capture = require_capture(first_snapshot)
-        point = model_point_from_logical_capture(capture, click_logical)
-        native_point = native_point_from_capture(capture, point)
-        state: dict[str, Any] = {
-            "visible": True,
-            "sequence": 0,
-            "model_point": {
-                "x": point[0],
-                "y": point[1],
-                "coordinate_space": "stream_pixels",
-                "mapping_id": capture.get("mapping_id"),
-            },
-            "snapshot_id": first_snapshot["snapshot_id"],
-            "source_action": "click",
-            "updated_at_ms": 0,
-        }
-        if native_point is not None:
-            state["native_point"] = native_point
-        set_response = service_call(
-            socket_path,
-            {
-                "type": "set_agent_cursor",
-                "state": state,
-            },
-            timeout=args.request_timeout,
-        )
-        status_response = service_call(
-            socket_path,
-            {"type": "agent_cursor_status"},
-            timeout=args.request_timeout,
-        )
-        assert_no_host_diagnostics(set_response, status_response)
-        require_cursor_backend_capabilities(
-            set_response, status_response, expected_backend="wayland_layer_shell"
-        )
-        before_path = Path(require_str(capture, "screenshot_path"))
-        visible, visible_capture, visible_probe = capture_until_marker(
-            socket_path,
-            before_path,
-            point,
-            request_timeout=args.request_timeout,
-            deadline=time.time() + 3.0,
-        )
+        with ServiceClient(socket_path, timeout=args.request_timeout) as cursor_client:
+            state_snapshot = get_state_snapshot_without_capture(
+                cursor_client,
+                request_timeout=args.request_timeout,
+            )
+            target_display = display_for_logical_point(state_snapshot, click_logical)
+            display_target = display_target_for_display(target_display)
+            _first, first_snapshot, capture, before_path = screenshot_capture(
+                cursor_client,
+                display_target=display_target,
+                request_timeout=args.request_timeout,
+            )
+            point = model_point_from_logical_capture(capture, click_logical)
+            native_point = native_point_from_capture(capture, point)
+            native_point_on_target_display = (
+                native_point_in_display(native_point, target_display)
+                if native_point is not None
+                else False
+            )
+            state: dict[str, Any] = {
+                "visible": True,
+                "sequence": 0,
+                "model_point": {
+                    "x": point[0],
+                    "y": point[1],
+                    "coordinate_space": "stream_pixels",
+                    "mapping_id": capture.get("mapping_id"),
+                },
+                "snapshot_id": first_snapshot["snapshot_id"],
+                "source_action": "click",
+                "updated_at_ms": 0,
+            }
+            if native_point is not None:
+                state["native_point"] = native_point
+            set_response = cursor_client.call(
+                {
+                    "type": "set_agent_cursor",
+                    "state": state,
+                },
+                timeout=args.request_timeout,
+            )
+            status_response = cursor_client.call(
+                {"type": "agent_cursor_status"},
+                timeout=args.request_timeout,
+            )
+            assert_no_host_diagnostics(set_response, status_response)
+            require_cursor_backend_capabilities(
+                set_response, status_response, expected_backend="wayland_layer_shell"
+            )
+            visible, visible_capture, visible_probe = capture_until_marker(
+                cursor_client,
+                before_path,
+                point,
+                display_target=display_target,
+                request_timeout=args.request_timeout,
+                deadline=time.time() + 3.0,
+            )
         visible_snapshot = visible["snapshot"]
-        visible_path = Path(require_str(visible_capture, "screenshot_path"))
+        visible_path = capture_image_path(visible_capture)
 
         click_response: dict[str, Any]
-        click_succeeded = False
+        clicked_state: dict[str, Any] | None = None
         if args.mode == "layer-shell-ydotool-click-through":
             click_response = ydotool_click(click_logical)
             click_succeeded = click_response.get("success") is True
+            clicked_state = wait_for_pointer_click(pointer_state_path, deadline=time.time() + 8)
+            click_through_proved = click_succeeded and clicked_state is not None
         else:
-            click_response = service_call(
-                socket_path,
-                execute_click_request(visible_snapshot["snapshot_id"], point),
-                timeout=args.request_timeout,
-            )
-            click_outcome = click_response.get("outcome")
-            if not isinstance(click_outcome, Mapping):
-                raise RuntimeError(
-                    "execute_action did not return an outcome: "
-                    + json.dumps(click_response, indent=2, sort_keys=True)
-                )
-            click_succeeded = click_outcome.get("success") is True
-        clicked_state = wait_for_pointer_click(pointer_state_path, deadline=time.time() + 8)
-        requires_portal_visible_overlay = args.mode == "layer-shell-click-through"
-        click_through_proved = (
-            click_succeeded
-            and clicked_state is not None
-            and (visible_probe.found or not requires_portal_visible_overlay)
-        )
+            click_response = {
+                "type": "click_through_contract",
+                "success": visible_probe.found,
+                "message": (
+                    "layer-shell-click-through proves the visible overlay and "
+                    "click_through capability without moving the physical pointer"
+                ),
+            }
+            click_through_proved = visible_probe.found
         summary = {
             "mode": args.mode,
             "ok": click_through_proved,
             "visible_overlay_captured": visible_probe.found,
             "click_through_proved": click_through_proved,
-            "target_clicked": clicked_state is not None,
+            "target_clicked": None
+            if args.mode == "layer-shell-click-through"
+            else clicked_state is not None,
             "click_mechanism": "ydotool"
             if args.mode == "layer-shell-ydotool-click-through"
-            else "portal_execute_action",
+            else "layer_shell_input_region_contract",
             "requested_point": {"x": point[0], "y": point[1]},
             "requested_logical_point": click_logical,
             "requested_native_point": native_point,
+            "target_display": display_summary(target_display),
+            "requested_native_point_on_target_display": native_point_on_target_display,
             "observed_marker_probe": {
                 "changed_pixels_near_hotspot": visible_probe.changed_pixels_near_hotspot,
                 "max_channel_delta_near_hotspot": visible_probe.max_channel_delta_near_hotspot,
@@ -487,53 +602,65 @@ def run_layer_shell_fixture_visible_smoke(args: argparse.Namespace) -> int:
         point_logical = fixture_point(fixture_state, "click_button")
         wait_for_socket(socket_path, deadline=time.time() + 15)
         health = service_call(socket_path, {"type": "health"}, timeout=args.request_timeout)
-        first = service_call(socket_path, {"type": "get_app_state"}, timeout=args.request_timeout)
-        first_snapshot = first["snapshot"]
-        capture = require_capture(first_snapshot)
-        point = model_point_from_logical_capture(capture, point_logical)
-        native_point = native_point_from_capture(capture, point)
-        state: dict[str, Any] = {
-            "visible": True,
-            "sequence": 0,
-            "model_point": {
-                "x": point[0],
-                "y": point[1],
-                "coordinate_space": "stream_pixels",
-                "mapping_id": capture.get("mapping_id"),
-            },
-            "snapshot_id": first_snapshot["snapshot_id"],
-            "source_action": "click",
-            "updated_at_ms": 0,
-        }
-        if native_point is not None:
-            state["native_point"] = native_point
-        set_response = service_call(
-            socket_path,
-            {
-                "type": "set_agent_cursor",
-                "state": state,
-            },
-            timeout=args.request_timeout,
-        )
-        status_response = service_call(
-            socket_path,
-            {"type": "agent_cursor_status"},
-            timeout=args.request_timeout,
-        )
-        assert_no_host_diagnostics(set_response, status_response)
-        require_cursor_backend_capabilities(
-            set_response, status_response, expected_backend="wayland_layer_shell"
-        )
-        before_path = Path(require_str(capture, "screenshot_path"))
-        visible, visible_capture, visible_probe = capture_until_marker(
-            socket_path,
-            before_path,
-            point,
-            request_timeout=args.request_timeout,
-            deadline=time.time() + 3.0,
-        )
+        with ServiceClient(socket_path, timeout=args.request_timeout) as cursor_client:
+            state_snapshot = get_state_snapshot_without_capture(
+                cursor_client,
+                request_timeout=args.request_timeout,
+            )
+            target_display = display_for_logical_point(state_snapshot, point_logical)
+            display_target = display_target_for_display(target_display)
+            _first, first_snapshot, capture, before_path = screenshot_capture(
+                cursor_client,
+                display_target=display_target,
+                request_timeout=args.request_timeout,
+            )
+            point = model_point_from_logical_capture(capture, point_logical)
+            native_point = native_point_from_capture(capture, point)
+            native_point_on_target_display = (
+                native_point_in_display(native_point, target_display)
+                if native_point is not None
+                else False
+            )
+            state: dict[str, Any] = {
+                "visible": True,
+                "sequence": 0,
+                "model_point": {
+                    "x": point[0],
+                    "y": point[1],
+                    "coordinate_space": "stream_pixels",
+                    "mapping_id": capture.get("mapping_id"),
+                },
+                "snapshot_id": first_snapshot["snapshot_id"],
+                "source_action": "click",
+                "updated_at_ms": 0,
+            }
+            if native_point is not None:
+                state["native_point"] = native_point
+            set_response = cursor_client.call(
+                {
+                    "type": "set_agent_cursor",
+                    "state": state,
+                },
+                timeout=args.request_timeout,
+            )
+            status_response = cursor_client.call(
+                {"type": "agent_cursor_status"},
+                timeout=args.request_timeout,
+            )
+            assert_no_host_diagnostics(set_response, status_response)
+            require_cursor_backend_capabilities(
+                set_response, status_response, expected_backend="wayland_layer_shell"
+            )
+            visible, visible_capture, visible_probe = capture_until_marker(
+                cursor_client,
+                before_path,
+                point,
+                display_target=display_target,
+                request_timeout=args.request_timeout,
+                deadline=time.time() + 3.0,
+            )
         visible_snapshot = visible["snapshot"]
-        visible_path = Path(require_str(visible_capture, "screenshot_path"))
+        visible_path = capture_image_path(visible_capture)
         summary = {
             "mode": args.mode,
             "ok": visible_probe.found,
@@ -543,6 +670,8 @@ def run_layer_shell_fixture_visible_smoke(args: argparse.Namespace) -> int:
             "requested_point": {"x": point[0], "y": point[1]},
             "requested_logical_point": point_logical,
             "requested_native_point": native_point,
+            "target_display": display_summary(target_display),
+            "requested_native_point_on_target_display": native_point_on_target_display,
             "observed_marker_probe": {
                 "changed_pixels_near_hotspot": visible_probe.changed_pixels_near_hotspot,
                 "max_channel_delta_near_hotspot": visible_probe.max_channel_delta_near_hotspot,
@@ -571,62 +700,44 @@ def run_layer_shell_fixture_visible_smoke(args: argparse.Namespace) -> int:
 def run_kwin_effect_static_smoke(args: argparse.Namespace) -> int:
     if not args.allow_kwin_effect_install:
         raise SystemExit(
-            "kwin-effect-static installs and loads a user-level KWin C++ effect. "
-            "Pass --allow-kwin-effect-install to run the explicit compositor proof."
+            "kwin-effect-static installs and loads a user-level KWin cursor-hide shim. "
+            "Pass --allow-kwin-effect-install to run the explicit compositor-shim proof."
         )
 
     require_kde_wayland(allow_non_kde=args.allow_non_kde)
-    build_service()
 
     artifact_dir = artifact_dir_for_mode(args.mode)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    socket_path = artifact_dir / "svc.sock"
     installed_files: list[Path] = []
     cleanup: dict[str, Any] | None = None
     discovery_before_install: dict[str, Any] | None = None
     discovery_after_install: dict[str, Any] | None = None
-    service = start_service(socket_path, artifact_dir, mode=args.mode)
     try:
-        wait_for_socket(socket_path, deadline=time.time() + 15)
-        health = service_call(socket_path, {"type": "health"}, timeout=args.request_timeout)
-        first = service_call(socket_path, {"type": "get_app_state"}, timeout=args.request_timeout)
-        first_snapshot = first["snapshot"]
-        capture = require_capture(first_snapshot)
-        point = center_point(capture)
-        first_path = Path(require_str(capture, "screenshot_path"))
-
         discovery_before_install = kwin_effect_discovery()
         install = build_and_install_kwin_effect(artifact_dir)
         installed_files = install["installed_files"]
         discovery_after_install = kwin_effect_discovery()
         load = load_kwin_effect()
-        time.sleep(0.75)
-
-        second = service_call(socket_path, {"type": "get_app_state"}, timeout=args.request_timeout)
-        second_snapshot = second["snapshot"]
-        second_capture = require_capture(second_snapshot)
-        after_path = Path(require_str(second_capture, "screenshot_path"))
-        probe = probe_marker(first_path, after_path, point)
+        show = run_kwin_agent_cursor_method("Show")
+        shown_state = run_kwin_agent_cursor_state()
+        hide = run_kwin_agent_cursor_method("Hide")
+        hidden_state = run_kwin_agent_cursor_state()
     finally:
         cleanup = cleanup_kwin_effect(installed_files)
-        terminate_service(service)
-        socket_path.unlink(missing_ok=True)
+
+    shim_ok = (
+        show.returncode == 0
+        and hide.returncode == 0
+        and state_json_visible(shown_state) is True
+        and state_json_visible(hidden_state) is False
+    )
 
     summary = {
         "mode": args.mode,
-        "ok": probe.found and cleanup.get("effect_loaded_after_cleanup") is False,
-        "kwin_effect_static_marker_found": probe.found,
-        "visible_overlay_captured": probe.found,
-        "requested_point": {"x": point[0], "y": point[1]},
-        "observed_marker_probe": {
-            "changed_pixels_near_hotspot": probe.changed_pixels_near_hotspot,
-            "max_channel_delta_near_hotspot": probe.max_channel_delta_near_hotspot,
-            "checked_box": list(probe.checked_box),
-        },
+        "ok": shim_ok and cleanup.get("effect_loaded_after_cleanup") is False,
+        "kwin_cursor_hide_shim_ok": shim_ok,
+        "kwin_visual_overlay_expected": False,
         "artifact_dir": str(artifact_dir),
-        "before_screenshot": str(copy_artifact(first_path, artifact_dir, "before")),
-        "after_screenshot": str(copy_artifact(after_path, artifact_dir, "after")),
-        "health": health,
         "kwin_effect_install": {
             "build_dir": str(install["build_dir"]),
             "installed_files": [str(path) for path in installed_files],
@@ -634,9 +745,11 @@ def run_kwin_effect_static_smoke(args: argparse.Namespace) -> int:
         "kwin_effect_discovery_before_install": discovery_before_install,
         "kwin_effect_discovery_after_install": discovery_after_install,
         "kwin_effect_load": load,
+        "kwin_effect_show": process_summary(show),
+        "kwin_effect_hide": process_summary(hide),
+        "state_readback": shown_state,
+        "hidden_state_readback": hidden_state,
         "kwin_effect_cleanup": cleanup,
-        "first_snapshot_id": first_snapshot["snapshot_id"],
-        "second_snapshot_id": second_snapshot["snapshot_id"],
     }
     write_summary(artifact_dir, summary)
     return 0 if summary["ok"] else 1
@@ -651,71 +764,38 @@ def run_kwin_effect_nested_smoke(args: argparse.Namespace) -> int:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     install_prefix = artifact_dir / "kwin-effect-prefix"
     install = build_and_install_kwin_effect(artifact_dir, install_prefix=install_prefix)
-    overlay_host_path = build_overlay_host_binary()
-    session = run_nested_kwin_effect_session(artifact_dir, install_prefix, overlay_host_path)
-
-    capture_path: Path | None = None
-    probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
-    conversion_error: str | None = None
-    try:
-        capture_path = convert_kwin_raw_screenshot(artifact_dir)
-        probe = probe_cursor_asset_presence(capture_path, KWIN_EFFECT_NESTED_POINT)
-    except Exception as error:
-        conversion_error = str(error)
+    session = run_nested_kwin_effect_session(artifact_dir, install_prefix)
 
     loaded_text = (
         (artifact_dir / "nested-effect-loaded.txt").read_text(encoding="utf-8").strip()
         if (artifact_dir / "nested-effect-loaded.txt").exists()
         else ""
     )
-    overlay_host_set_reply = read_json_if_exists(
-        artifact_dir / "nested-overlay-host-set-state.json"
-    )
-    overlay_host_ok = (
-        isinstance(overlay_host_set_reply, Mapping)
-        and overlay_host_set_reply.get("ok") is True
-        and isinstance(overlay_host_set_reply.get("capabilities"), Mapping)
-        and overlay_host_set_reply["capabilities"].get("backend") == "kwin_effect"
-    )
-    accept_ipc_only = os.environ.get("SKY_CUA_KWIN_NESTED_ACCEPT_IPC_ONLY") == "1"
-    code_level_ok = session.returncode == 0 and loaded_text.lower() == "true" and overlay_host_ok
+    shown_state = read_text_if_exists(artifact_dir / "nested-effect-state.json")
+    hidden_state = read_text_if_exists(artifact_dir / "nested-effect-hidden-state.json")
+    shim_ok = state_json_visible(shown_state) is True and state_json_visible(hidden_state) is False
+    code_level_ok = session.returncode == 0 and loaded_text.lower() == "true" and shim_ok
     summary = {
         "mode": args.mode,
-        "ok": code_level_ok and (probe.found or accept_ipc_only),
-        "accepted_without_headless_pixel_proof": code_level_ok
-        and accept_ipc_only
-        and not probe.found,
+        "ok": code_level_ok,
         "artifact_dir": str(artifact_dir),
-        "kwin_nested_effect_marker_found": probe.found,
-        "visible_overlay_captured": probe.found,
-        "requested_point": {
-            "x": KWIN_EFFECT_NESTED_POINT[0],
-            "y": KWIN_EFFECT_NESTED_POINT[1],
-        },
-        "observed_marker_probe": {
-            "changed_pixels_near_hotspot": probe.changed_pixels_near_hotspot,
-            "max_channel_delta_near_hotspot": probe.max_channel_delta_near_hotspot,
-            "checked_box": list(probe.checked_box),
-        },
-        "capture_screenshot": str(capture_path) if capture_path else None,
-        "capture_conversion_error": conversion_error,
+        "kwin_cursor_hide_shim_ok": shim_ok,
+        "kwin_visual_overlay_expected": False,
         "kwin_effect_install": {
             "build_dir": str(install["build_dir"]),
             "install_prefix": str(install_prefix),
             "installed_files": [str(path) for path in install["installed_files"]],
         },
-        "overlay_host_path": str(overlay_host_path),
-        "overlay_host_set_reply": overlay_host_set_reply,
         "nested_kwin": {
             "returncode": session.returncode,
             "stdout": session.stdout.strip(),
             "stderr": session.stderr.strip(),
             "effect_list": read_text_if_exists(artifact_dir / "nested-effects-list.txt"),
             "load_stdout": read_text_if_exists(artifact_dir / "nested-effect-load.txt"),
-            "set_state_stdout": read_text_if_exists(
-                artifact_dir / "nested-overlay-host-set-state.json"
-            ),
-            "state_readback": read_text_if_exists(artifact_dir / "nested-effect-state.json"),
+            "show_stdout": read_text_if_exists(artifact_dir / "nested-effect-show.txt"),
+            "hide_stdout": read_text_if_exists(artifact_dir / "nested-effect-hide.txt"),
+            "state_readback": shown_state,
+            "hidden_state_readback": hidden_state,
             "effect_loaded": loaded_text,
         },
     }
@@ -733,11 +813,9 @@ def run_kwin_effect_nested_user_install_smoke(args: argparse.Namespace) -> int:
     nested_home = artifact_dir / "home"
     install_prefix = nested_home / ".local"
     install = build_and_install_kwin_effect(artifact_dir, install_prefix=install_prefix)
-    overlay_host_path = build_overlay_host_binary()
     session = run_nested_kwin_effect_session(
         artifact_dir,
         install_prefix,
-        overlay_host_path,
         force_plugin_paths=False,
         nested_home=nested_home,
     )
@@ -747,21 +825,15 @@ def run_kwin_effect_nested_user_install_smoke(args: argparse.Namespace) -> int:
     effect_list = parse_kwin_effect_list(
         read_text_if_exists(artifact_dir / "nested-effects-list.txt") or ""
     )
-    overlay_host_set_reply = read_json_if_exists(
-        artifact_dir / "nested-overlay-host-set-state.json"
-    )
     discovered = KWIN_EFFECT_ID in effect_list
     loaded = loaded_text.lower() == "true"
-
-    capture_path: Path | None = None
-    probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
-    conversion_error: str | None = None
-    if loaded:
-        try:
-            capture_path = convert_kwin_raw_screenshot(artifact_dir)
-            probe = probe_cursor_asset_presence(capture_path, KWIN_EFFECT_NESTED_POINT)
-        except Exception as error:
-            conversion_error = str(error)
+    shown_state = read_text_if_exists(artifact_dir / "nested-effect-state.json")
+    hidden_state = read_text_if_exists(artifact_dir / "nested-effect-hidden-state.json")
+    shim_ok = (
+        loaded
+        and state_json_visible(shown_state) is True
+        and state_json_visible(hidden_state) is False
+    )
 
     summary = {
         "mode": args.mode,
@@ -771,36 +843,23 @@ def run_kwin_effect_nested_user_install_smoke(args: argparse.Namespace) -> int:
         "kwin_user_install_discovered": discovered,
         "kwin_user_install_loaded": loaded,
         "kwin_user_install_load_stdout": load_stdout,
-        "kwin_nested_effect_marker_found": probe.found,
-        "visible_overlay_captured": probe.found,
-        "requested_point": {
-            "x": KWIN_EFFECT_NESTED_POINT[0],
-            "y": KWIN_EFFECT_NESTED_POINT[1],
-        },
-        "observed_marker_probe": {
-            "changed_pixels_near_hotspot": probe.changed_pixels_near_hotspot,
-            "max_channel_delta_near_hotspot": probe.max_channel_delta_near_hotspot,
-            "checked_box": list(probe.checked_box),
-        },
-        "capture_screenshot": str(capture_path) if capture_path else None,
-        "capture_conversion_error": conversion_error,
+        "kwin_cursor_hide_shim_ok": shim_ok,
+        "kwin_visual_overlay_expected": False,
         "kwin_effect_install": {
             "build_dir": str(install["build_dir"]),
             "install_prefix": str(install_prefix),
             "installed_files": [str(path) for path in install["installed_files"]],
         },
-        "overlay_host_path": str(overlay_host_path),
-        "overlay_host_set_reply": overlay_host_set_reply,
         "nested_kwin": {
             "returncode": session.returncode,
             "stdout": session.stdout.strip(),
             "stderr": session.stderr.strip(),
             "effect_list": "\n".join(effect_list),
             "load_stdout": load_stdout,
-            "set_state_stdout": read_text_if_exists(
-                artifact_dir / "nested-overlay-host-set-state.json"
-            ),
-            "state_readback": read_text_if_exists(artifact_dir / "nested-effect-state.json"),
+            "show_stdout": read_text_if_exists(artifact_dir / "nested-effect-show.txt"),
+            "hide_stdout": read_text_if_exists(artifact_dir / "nested-effect-hide.txt"),
+            "state_readback": shown_state,
+            "hidden_state_readback": hidden_state,
             "effect_loaded": loaded_text,
         },
     }
@@ -831,68 +890,112 @@ def run_kwin_effect_system_install_smoke(args: argparse.Namespace) -> int:
     wait_for_kwin_dbus(deadline=time.time() + 60)
     discovery_after_restart = kwin_effect_discovery()
     load = load_kwin_effect()
-    overlay_host_path = build_overlay_host_binary()
-    set_reply = run_overlay_host_message(
-        overlay_host_path,
-        kwin_effect_overlay_host_set_cursor_json(KWIN_EFFECT_NESTED_POINT),
-    )
     host_framebuffer_expected = (
         os.environ.get("SKY_CUA_KWIN_SYSTEM_INSTALL_HOST_FRAMEBUFFER_PROOF") == "1"
     )
     hold_seconds = float(os.environ.get("SKY_CUA_KWIN_SYSTEM_INSTALL_HOLD_SECONDS", "0") or "0")
     ready_path: Path | None = None
-    if host_framebuffer_expected:
-        ready_path = artifact_dir / "host-framebuffer-ready.json"
-        ready_path.write_text(
-            json.dumps(
-                {
-                    "ready": True,
-                    "requested_point": {
-                        "x": KWIN_EFFECT_NESTED_POINT[0],
-                        "y": KWIN_EFFECT_NESTED_POINT[1],
-                    },
-                    "overlay_host_set_reply": set_reply,
-                },
-                indent=2,
-                sort_keys=True,
+    build_service()
+    socket_path = artifact_dir / "svc.sock"
+    service = start_service(socket_path, artifact_dir, mode="layer-shell-debug-visible")
+    set_response: dict[str, Any]
+    status_response: dict[str, Any]
+    hide_response: dict[str, Any]
+    health: dict[str, Any]
+    first_snapshot: Mapping[str, Any]
+    visible_snapshot: Mapping[str, Any]
+    visible_probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
+    point = KWIN_EFFECT_NESTED_POINT
+    native_point: dict[str, Any] | None = None
+    before_path: Path | None = None
+    visible_path: Path | None = None
+    try:
+        wait_for_socket(socket_path, deadline=time.time() + 15)
+        health = service_call(socket_path, {"type": "health"}, timeout=args.request_timeout)
+        with ServiceClient(socket_path, timeout=args.request_timeout) as cursor_client:
+            _first, first_snapshot, capture, before_path = screenshot_capture(
+                cursor_client,
+                request_timeout=args.request_timeout,
             )
-            + "\n",
-            encoding="utf-8",
-        )
-    if hold_seconds > 0:
-        time.sleep(hold_seconds)
-    time.sleep(1.0)
+            point = center_point(capture)
+            native_point = native_point_from_capture(capture, point)
+            state: dict[str, Any] = {
+                "visible": True,
+                "sequence": 0,
+                "model_point": {
+                    "x": point[0],
+                    "y": point[1],
+                    "coordinate_space": "stream_pixels",
+                    "mapping_id": capture.get("mapping_id"),
+                },
+                "snapshot_id": first_snapshot["snapshot_id"],
+                "source_action": "click",
+                "updated_at_ms": 0,
+            }
+            if native_point is not None:
+                state["native_point"] = native_point
+            set_response = cursor_client.call(
+                {"type": "set_agent_cursor", "state": state},
+                timeout=args.request_timeout,
+            )
+            status_response = cursor_client.call(
+                {"type": "agent_cursor_status"},
+                timeout=args.request_timeout,
+            )
+            assert_no_host_diagnostics(set_response, status_response)
+            require_cursor_backend_capabilities(
+                set_response, status_response, expected_backend="wayland_layer_shell"
+            )
+            require_kwin_system_cursor_capabilities(set_response, status_response, hidden=True)
+            if host_framebuffer_expected:
+                ready_path = artifact_dir / "host-framebuffer-ready.json"
+                ready_path.write_text(
+                    json.dumps(
+                        {
+                            "ready": True,
+                            "requested_point": {
+                                "x": point[0],
+                                "y": point[1],
+                            },
+                            "set_agent_cursor": set_response,
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                hold_deadline = time.time() + hold_seconds
+                while time.time() < hold_deadline:
+                    cursor_client.call({"type": "show_agent_cursor"}, timeout=args.request_timeout)
+                    time.sleep(min(0.5, max(0.0, hold_deadline - time.time())))
+            visible, visible_capture, visible_probe = capture_until_marker(
+                cursor_client,
+                before_path,
+                point,
+                request_timeout=args.request_timeout,
+                deadline=time.time() + 3.0,
+            )
+            visible_snapshot = visible["snapshot"]
+            visible_path = capture_image_path(visible_capture)
+            if hold_seconds > 0 and not host_framebuffer_expected:
+                time.sleep(hold_seconds)
+            hide_response = cursor_client.call(
+                {"type": "hide_agent_cursor", "reason": "system-install cleanup"},
+                timeout=args.request_timeout,
+            )
+            require_kwin_system_cursor_capabilities(hide_response, hidden=False)
+    finally:
+        terminate_service(service)
+        socket_path.unlink(missing_ok=True)
     state_readback = run_kwin_agent_cursor_state()
-    capture_error: str | None = None
-    capture_path: Path | None = None
-    probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
-    if host_framebuffer_expected:
-        capture_error = "host framebuffer proof expected by VM runner"
-    else:
-        try:
-            capture_kwin_workspace_raw(artifact_dir)
-            capture_path = convert_kwin_raw_screenshot(artifact_dir)
-            probe = probe_cursor_asset_presence(capture_path, KWIN_EFFECT_NESTED_POINT)
-        except Exception as error:
-            capture_error = f"{type(error).__name__}: {error}"
-
-    hide_reply = run_overlay_host_message(
-        overlay_host_path,
-        json.dumps({"version": 1, "kind": "hide", "reason": "system-install cleanup"}),
-        check=False,
-    )
     cleanup = cleanup_system_kwin_effect(installed_files)
     restart_after_cleanup = restart_testing_vm_plasma_session()
     wait_for_kwin_dbus(deadline=time.time() + 60)
     discovery_after_cleanup = kwin_effect_discovery()
     leftovers = find_system_kwin_effect_leftovers()
 
-    overlay_host_ok = (
-        set_reply.get("ok") is True
-        and isinstance(set_reply.get("capabilities"), Mapping)
-        and set_reply["capabilities"].get("backend") == "kwin_effect"
-        and set_reply["capabilities"].get("system_cursor_hidden") is True
-    )
+    split_path_ok = visible_probe.found
     cleanup_ok = (
         not discovery_after_cleanup["listed"]
         and not discovery_after_cleanup["loaded"]
@@ -903,26 +1006,30 @@ def run_kwin_effect_system_install_smoke(args: argparse.Namespace) -> int:
         "ok": (
             discovery_after_restart["listed"]
             and load["effect_loaded"]
-            and overlay_host_ok
-            and probe.found
+            and split_path_ok
             and cleanup_ok
         ),
         "artifact_dir": str(artifact_dir),
-        "kwin_system_install_marker_found": probe.found,
+        "kwin_system_install_split_path_ok": split_path_ok,
         "host_framebuffer_proof_expected": host_framebuffer_expected,
         "host_framebuffer_ready": str(ready_path) if ready_path else None,
-        "visible_overlay_captured": probe.found,
+        "visible_overlay_captured": visible_probe.found,
         "requested_point": {
-            "x": KWIN_EFFECT_NESTED_POINT[0],
-            "y": KWIN_EFFECT_NESTED_POINT[1],
+            "x": point[0],
+            "y": point[1],
         },
+        "requested_native_point": native_point,
         "observed_marker_probe": {
-            "changed_pixels_near_hotspot": probe.changed_pixels_near_hotspot,
-            "max_channel_delta_near_hotspot": probe.max_channel_delta_near_hotspot,
-            "checked_box": list(probe.checked_box),
+            "changed_pixels_near_hotspot": visible_probe.changed_pixels_near_hotspot,
+            "max_channel_delta_near_hotspot": visible_probe.max_channel_delta_near_hotspot,
+            "checked_box": list(visible_probe.checked_box),
         },
-        "capture_screenshot": str(capture_path) if capture_path else None,
-        "capture_error": capture_error,
+        "before_screenshot": str(copy_artifact(before_path, artifact_dir, "before"))
+        if before_path
+        else None,
+        "visible_screenshot": str(copy_artifact(visible_path, artifact_dir, "visible"))
+        if visible_path
+        else None,
         "kwin_effect_install": {
             "build_dir": str(install["build_dir"]),
             "install_prefix": "/usr",
@@ -931,10 +1038,14 @@ def run_kwin_effect_system_install_smoke(args: argparse.Namespace) -> int:
         "kwin_effect_discovery_before_install": discovery_before_install,
         "kwin_effect_discovery_after_restart": discovery_after_restart,
         "kwin_effect_load": load,
-        "overlay_host_path": str(overlay_host_path),
-        "overlay_host_set_reply": set_reply,
-        "overlay_host_hide_reply": hide_reply,
+        "health": health,
+        "set_agent_cursor": set_response,
+        "agent_cursor_status": status_response,
+        "hide_agent_cursor": hide_response,
         "state_readback": state_readback,
+        "first_snapshot_id": first_snapshot["snapshot_id"],
+        "visible_snapshot_id": visible_snapshot["snapshot_id"],
+        "visible_agent_cursor": visible_snapshot.get("agent_cursor"),
         "cleanup": cleanup,
         "restart_after_install": process_summary(restart_after_install),
         "restart_after_cleanup": process_summary(restart_after_cleanup),
@@ -945,7 +1056,7 @@ def run_kwin_effect_system_install_smoke(args: argparse.Namespace) -> int:
         summary["ok"] = (
             discovery_after_restart["listed"]
             and load["effect_loaded"]
-            and overlay_host_ok
+            and split_path_ok
             and cleanup_ok
         )
     write_summary(artifact_dir, summary)
@@ -958,8 +1069,6 @@ def build_and_install_kwin_effect(
     install_prefix: Path | None = None,
     install_command_prefix: list[str] | None = None,
 ) -> dict[str, Any]:
-    if not KWIN_EFFECT_CURSOR_ASSET.exists():
-        raise RuntimeError(f"KWin effect cursor asset is missing: {KWIN_EFFECT_CURSOR_ASSET}")
     build_dir = artifact_dir / "kwin-effect-build"
     install_prefix = install_prefix or Path.home() / ".local"
     subprocess.run(
@@ -1084,6 +1193,21 @@ def run_kwin_agent_cursor_state() -> str:
     return completed.stdout.strip()
 
 
+def run_kwin_agent_cursor_method(method: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "qdbus6",
+            "org.kde.KWin",
+            "/com/skycua/AgentCursor",
+            f"com.skycua.AgentCursor.{method}",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def restart_testing_vm_plasma_session() -> subprocess.CompletedProcess[str]:
     selector = REPO_ROOT / "scripts" / "testing-vm" / "select-session.sh"
     if not selector.exists():
@@ -1165,7 +1289,6 @@ attrs = {str(key): str(value) for key, value in dict(result).items()}
 def run_nested_kwin_effect_session(
     artifact_dir: Path,
     install_prefix: Path,
-    overlay_host_path: Path,
     *,
     force_plugin_paths: bool = True,
     nested_home: Path | None = None,
@@ -1184,11 +1307,13 @@ qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.listOfEffects >"$SHOT_DIR/nest
 qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect "$KWIN_EFFECT_ID" >"$SHOT_DIR/nested-effect-load.txt"
 sleep 0.2
 if grep -qi '^true$' "$SHOT_DIR/nested-effect-load.txt"; then
-  printf '%s\\n' "$KWIN_OVERLAY_HOST_SET_CURSOR_JSON" | "$SKY_CUA_OVERLAY_HOST_PATH" serve >"$SHOT_DIR/nested-overlay-host-set-state.json"
+  qdbus6 org.kde.KWin /com/skycua/AgentCursor com.skycua.AgentCursor.Show >"$SHOT_DIR/nested-effect-show.txt"
   qdbus6 org.kde.KWin /com/skycua/AgentCursor com.skycua.AgentCursor.StateJson >"$SHOT_DIR/nested-effect-state.json"
+  qdbus6 org.kde.KWin /com/skycua/AgentCursor com.skycua.AgentCursor.Hide >"$SHOT_DIR/nested-effect-hide.txt"
+  qdbus6 org.kde.KWin /com/skycua/AgentCursor com.skycua.AgentCursor.StateJson >"$SHOT_DIR/nested-effect-hidden-state.json"
   sleep 1
 else
-  printf '{"skipped":true,"reason":"KWin effect was not loaded"}\\n' >"$SHOT_DIR/nested-overlay-host-set-state.json"
+  printf '{"skipped":true,"reason":"KWin effect was not loaded"}\\n' >"$SHOT_DIR/nested-effect-state.json"
 fi
 "$SKY_CUA_SYSTEM_PYTHON" - <<'PY'
 import json
@@ -1234,16 +1359,12 @@ qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.isEffectLoaded "$KWIN_EFFECT_I
     env = dict(os.environ)
     env["KWIN_EFFECT_ID"] = KWIN_EFFECT_ID
     env["KWIN_SCREENSHOT_NO_PERMISSION_CHECKS"] = "1"
-    env["KWIN_OVERLAY_HOST_SET_CURSOR_JSON"] = kwin_effect_overlay_host_set_cursor_json(
-        KWIN_EFFECT_NESTED_POINT
-    )
     if nested_home is not None:
         env["HOME"] = str(nested_home)
         env["XDG_DATA_HOME"] = str(nested_home / ".local" / "share")
     if force_plugin_paths:
         env["QT_PLUGIN_PATH"] = str(install_prefix / "lib" / "qt6" / "plugins")
     env["SHOT_DIR"] = str(artifact_dir)
-    env["SKY_CUA_OVERLAY_HOST_PATH"] = str(overlay_host_path)
     env["SKY_CUA_SYSTEM_PYTHON"] = gtk_fixture_python()
     if force_plugin_paths:
         env["XDG_DATA_DIRS"] = (
@@ -1500,6 +1621,18 @@ def read_json_if_exists(path: Path) -> Any:
         return text
 
 
+def state_json_visible(text: str | None) -> bool | None:
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, Mapping) and isinstance(parsed.get("visible"), bool):
+        return parsed["visible"]
+    return None
+
+
 def require_commands(*names: str) -> None:
     missing = [name for name in names if shutil.which(name) is None]
     if missing:
@@ -1514,29 +1647,52 @@ def wait_for_socket(socket_path: Path, *, deadline: float) -> None:
     raise RuntimeError(f"timed out waiting for service socket {socket_path}")
 
 
-def service_call(
-    socket_path: Path, request: Mapping[str, Any], *, timeout: float
-) -> dict[str, Any]:
-    encoded = json.dumps(request).encode("utf-8") + b"\n"
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(timeout)
-        client.connect(str(socket_path))
-        client.sendall(encoded)
-        chunks: list[bytes] = []
-        while True:
+class ServiceClient:
+    def __init__(self, socket_path: Path, *, timeout: float) -> None:
+        self._socket_path = socket_path
+        self._timeout = timeout
+        self._client: socket.socket | None = None
+        self._buffer = b""
+
+    def __enter__(self) -> ServiceClient:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(self._timeout)
+        client.connect(str(self._socket_path))
+        self._client = client
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
+    def call(self, request: Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        client = self._client
+        if client is None:
+            raise RuntimeError("service client is not connected")
+        client.settimeout(timeout if timeout is not None else self._timeout)
+        client.sendall(json.dumps(request).encode("utf-8") + b"\n")
+        while b"\n" not in self._buffer:
             chunk = client.recv(65536)
             if not chunk:
                 break
-            chunks.append(chunk)
-            if b"\n" in chunk:
-                break
-    raw = b"".join(chunks).strip()
-    if not raw:
-        raise RuntimeError(f"empty response for request {request!r}")
-    response = json.loads(raw.decode("utf-8"))
-    if response.get("type") == "error":
-        raise RuntimeError(json.dumps(response, indent=2, sort_keys=True))
-    return response
+            self._buffer += chunk
+        raw, separator, remainder = self._buffer.partition(b"\n")
+        self._buffer = remainder if separator else b""
+        raw = raw.strip()
+        if not raw:
+            raise RuntimeError(f"empty response for request {request!r}")
+        response = json.loads(raw.decode("utf-8"))
+        if response.get("type") == "error":
+            raise RuntimeError(json.dumps(response, indent=2, sort_keys=True))
+        return response
+
+
+def service_call(
+    socket_path: Path, request: Mapping[str, Any], *, timeout: float
+) -> dict[str, Any]:
+    with ServiceClient(socket_path, timeout=timeout) as client:
+        return client.call(request)
 
 
 def assert_no_host_diagnostics(*responses: Mapping[str, Any]) -> None:
@@ -1558,10 +1714,125 @@ def assert_no_host_diagnostics(*responses: Mapping[str, Any]) -> None:
             )
 
 
+def get_state_snapshot_without_capture(
+    client: ServiceClient, *, request_timeout: float
+) -> Mapping[str, Any]:
+    response = client.call(
+        {"type": "get_app_state", "capture_screen": "never"},
+        timeout=request_timeout,
+    )
+    snapshot = response.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        raise RuntimeError(
+            "get_app_state did not return a snapshot: "
+            + json.dumps(response, indent=2, sort_keys=True)
+        )
+    return snapshot
+
+
+def screenshot_capture(
+    client: ServiceClient,
+    *,
+    display_target: Mapping[str, Any] | None = None,
+    request_timeout: float,
+) -> tuple[dict[str, Any], Mapping[str, Any], dict[str, Any], Path]:
+    request: dict[str, Any] = {"type": "screenshot"}
+    if display_target is not None:
+        request["display_target"] = dict(display_target)
+    response = client.call(request, timeout=request_timeout)
+    snapshot = response.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        raise RuntimeError(
+            "screenshot did not return a snapshot: "
+            + json.dumps(response, indent=2, sort_keys=True)
+        )
+    capture = require_capture(snapshot)
+    return response, snapshot, capture, capture_image_path(capture)
+
+
+def display_target_for_logical_point(
+    snapshot: Mapping[str, Any], point: Mapping[str, Any]
+) -> dict[str, str]:
+    return display_target_for_display(display_for_logical_point(snapshot, point))
+
+
+def display_for_logical_point(
+    snapshot: Mapping[str, Any], point: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    environment = require_mapping(snapshot, "environment")
+    displays = environment.get("displays")
+    if not isinstance(displays, list):
+        raise RuntimeError(
+            "snapshot environment did not include displays: "
+            + json.dumps(snapshot, indent=2, sort_keys=True)
+        )
+    x = require_number(point, "x")
+    y = require_number(point, "y")
+    for display in displays:
+        if not isinstance(display, Mapping):
+            continue
+        rect = display.get("logical_rect")
+        display_id = display.get("display_id")
+        if (
+            isinstance(rect, Mapping)
+            and isinstance(display_id, str)
+            and display_id
+            and rect_contains_point(rect, x, y)
+        ):
+            return display
+    raise RuntimeError(
+        "no display contained fixture point. "
+        f"point={dict(point)!r} displays={json.dumps(displays, indent=2, sort_keys=True)}"
+    )
+
+
+def display_target_for_display(display: Mapping[str, Any]) -> dict[str, str]:
+    display_id = display.get("display_id")
+    if not isinstance(display_id, str) or not display_id:
+        raise RuntimeError(
+            "display did not include a display_id: " + json.dumps(display, indent=2, sort_keys=True)
+        )
+    return {"display_id": display_id}
+
+
+def display_summary(display: Mapping[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for key in ("display_id", "name", "make", "model", "scale_factor"):
+        value = display.get(key)
+        if value is not None:
+            summary[key] = value
+    rect = display.get("logical_rect")
+    if isinstance(rect, Mapping):
+        summary["logical_rect"] = dict(rect)
+    return summary
+
+
+def native_point_in_display(native_point: Mapping[str, Any], display: Mapping[str, Any]) -> bool:
+    if native_point.get("coordinate_space") != "desktop_logical":
+        return False
+    rect = display.get("logical_rect")
+    if not isinstance(rect, Mapping):
+        return False
+    return rect_contains_point(
+        rect,
+        require_number(native_point, "x"),
+        require_number(native_point, "y"),
+    )
+
+
+def rect_contains_point(rect: Mapping[str, Any], x: float, y: float) -> bool:
+    left = require_number(rect, "x")
+    top = require_number(rect, "y")
+    right = left + require_number(rect, "width")
+    bottom = top + require_number(rect, "height")
+    return left <= x < right and top <= y < bottom
+
+
 def expected_overlay_backend(mode: str) -> str | None:
     if mode in {
         "layer-shell-debug-visible",
         "layer-shell-hide-for-capture",
+        "layer-shell-display-target",
         "layer-shell-click-through",
         "layer-shell-ydotool-click-through",
     }:
@@ -1581,7 +1852,11 @@ def cursor_backend(response: Mapping[str, Any]) -> str | None:
 
 
 def require_cursor_backend_capabilities(
-    *responses: Mapping[str, Any], expected_backend: str
+    *responses: Mapping[str, Any],
+    expected_backend: str,
+    expected_renderer: str | None = None,
+    expected_pointer_tracking: str | None = None,
+    expected_pointer_tracking_exact: bool | None = None,
 ) -> None:
     for response in responses:
         capabilities = response.get("capabilities")
@@ -1595,6 +1870,12 @@ def require_cursor_backend_capabilities(
             "visible_overlay": True,
             "click_through": True,
         }
+        if expected_renderer is not None:
+            expected["renderer_backend"] = expected_renderer
+        if expected_pointer_tracking is not None:
+            expected["pointer_tracking_backend"] = expected_pointer_tracking
+        if expected_pointer_tracking_exact is not None:
+            expected["pointer_tracking_exact"] = expected_pointer_tracking_exact
         for key, value in expected.items():
             if capabilities.get(key) != value:
                 raise RuntimeError(
@@ -1604,16 +1885,42 @@ def require_cursor_backend_capabilities(
                 )
 
 
+def require_kwin_system_cursor_capabilities(*responses: Mapping[str, Any], hidden: bool) -> None:
+    for response in responses:
+        capabilities = response.get("capabilities")
+        if not isinstance(capabilities, Mapping):
+            raise RuntimeError(
+                "agent cursor response did not include capabilities: "
+                + json.dumps(response, indent=2, sort_keys=True)
+            )
+        expected = {
+            "system_cursor_backend": "kwin_effect",
+            "system_cursor_hide_supported": True,
+            "system_cursor_hidden": hidden,
+        }
+        for key, value in expected.items():
+            if capabilities.get(key) != value:
+                raise RuntimeError(
+                    f"agent cursor capability {key!r} was {capabilities.get(key)!r}, "
+                    f"expected {value!r} for KWin cursor-hide shim.\n"
+                    f"response={json.dumps(response, indent=2, sort_keys=True)}"
+                )
+
+
 def require_capture(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     capture = snapshot.get("capture")
     if not isinstance(capture, dict):
         raise RuntimeError("snapshot did not include capture metadata")
-    screenshot_path = capture.get("screenshot_path")
-    if not isinstance(screenshot_path, str) or not screenshot_path:
-        raise RuntimeError("capture did not include a screenshot_path")
-    if not Path(screenshot_path).exists():
-        raise RuntimeError(f"capture screenshot does not exist: {screenshot_path}")
+    image_path = capture.get("inspection_image_path")
+    if not isinstance(image_path, str) or not image_path:
+        raise RuntimeError("capture did not include an inspection_image_path")
+    if not Path(image_path).exists():
+        raise RuntimeError(f"capture screenshot does not exist: {image_path}")
     return capture
+
+
+def capture_image_path(capture: Mapping[str, Any]) -> Path:
+    return Path(require_str(capture, "inspection_image_path"))
 
 
 def center_point(capture: Mapping[str, Any]) -> tuple[float, float]:
@@ -1638,14 +1945,16 @@ def native_point_from_capture(
     rect_height = require_number(logical_rect, "height")
     if pixel_width <= 0 or pixel_height <= 0 or rect_width <= 0 or rect_height <= 0:
         return None
-    backend = capture.get("backend")
-    rect_x = 0.0 if backend == "portal_pipe_wire" else require_number(logical_rect, "x")
-    rect_y = 0.0 if backend == "portal_pipe_wire" else require_number(logical_rect, "y")
     coordinate_space = logical_rect.get("space")
     if not isinstance(coordinate_space, str) or not coordinate_space:
         return None
-    if backend == "portal_pipe_wire":
+    if capture.get("backend") == "portal_pipe_wire" and coordinate_space != "desktop_logical":
+        rect_x = 0.0
+        rect_y = 0.0
         coordinate_space = "stream_logical"
+    else:
+        rect_x = require_number(logical_rect, "x")
+        rect_y = require_number(logical_rect, "y")
     return {
         "x": rect_x + ((point[0] / pixel_width) * rect_width),
         "y": rect_y + ((point[1] / pixel_height) * rect_height),
@@ -1736,6 +2045,13 @@ def require_number(mapping: Mapping[str, Any], key: str) -> float:
     return float(value)
 
 
+def require_mapping(mapping: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = mapping.get(key)
+    if not isinstance(value, Mapping):
+        raise RuntimeError(f"expected object field {key}")
+    return value
+
+
 def agent_cursor_source_path(after_path: Path) -> Path:
     name = after_path.name
     marker = ".agent-cursor."
@@ -1785,22 +2101,60 @@ def probe_marker(before_path: Path, after_path: Path, point: tuple[float, float]
 
 
 def capture_until_marker(
-    socket_path: Path,
+    client: ServiceClient,
     before_path: Path,
     point: tuple[float, float],
     *,
+    display_target: Mapping[str, Any] | None = None,
     request_timeout: float,
     deadline: float,
 ) -> tuple[dict[str, Any], dict[str, Any], MarkerProbe]:
     while True:
-        visible = service_call(socket_path, {"type": "get_app_state"}, timeout=request_timeout)
-        visible_snapshot = visible["snapshot"]
-        visible_capture = require_capture(visible_snapshot)
-        visible_path = Path(require_str(visible_capture, "screenshot_path"))
-        probe = probe_marker(before_path, visible_path, point)
+        visible, visible_snapshot, visible_capture, visible_path = screenshot_capture(
+            client,
+            display_target=display_target,
+            request_timeout=request_timeout,
+        )
+        probe_point = agent_cursor_probe_point(visible_snapshot, visible_capture, point)
+        probe = (
+            probe_marker(before_path, visible_path, probe_point)
+            if probe_point is not None
+            else MarkerProbe(
+                found=False,
+                changed_pixels_near_hotspot=0,
+                max_channel_delta_near_hotspot=0,
+                checked_box=(0, 0, 0, 0),
+            )
+        )
         if probe.found or time.time() >= deadline:
             return visible, visible_capture, probe
         time.sleep(0.2)
+
+
+def agent_cursor_probe_point(
+    snapshot: Mapping[str, Any],
+    capture: Mapping[str, Any],
+    fallback: tuple[float, float],
+) -> tuple[float, float] | None:
+    cursor = snapshot.get("agent_cursor")
+    if not isinstance(cursor, Mapping):
+        return fallback
+    native_point = cursor.get("native_point")
+    if (
+        isinstance(native_point, Mapping)
+        and native_point.get("coordinate_space") == "desktop_logical"
+    ):
+        try:
+            return model_point_from_logical_capture(capture, native_point)
+        except RuntimeError:
+            return None
+    model_point = cursor.get("model_point")
+    if isinstance(model_point, Mapping) and model_point.get("coordinate_space") == "stream_pixels":
+        try:
+            return (require_number(model_point, "x"), require_number(model_point, "y"))
+        except RuntimeError:
+            return fallback
+    return fallback
 
 
 def convert_kwin_raw_screenshot(artifact_dir: Path) -> Path:
@@ -1834,7 +2188,7 @@ def convert_kwin_raw_screenshot(artifact_dir: Path) -> Path:
 def probe_cursor_asset_presence(image_path: Path, point: tuple[float, float]) -> MarkerProbe:
     screenshot = Image.open(image_path).convert("RGBA")
     asset = (
-        Image.open(KWIN_EFFECT_CURSOR_ASSET)
+        Image.open(AGENT_CURSOR_ASSET)
         .convert("RGBA")
         .resize((CURSOR_ASSET_WIDTH, CURSOR_ASSET_HEIGHT), Image.Resampling.LANCZOS)
     )

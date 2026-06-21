@@ -60,7 +60,7 @@ struct CompactSnapshot<'a> {
     created_at: &'a DateTime<Utc>,
     environment: &'a EnvironmentInfo,
     focused_app: &'a Option<FocusedApp>,
-    capture: Option<ProjectedCaptureInfo<'a>>,
+    capture: Option<Value>,
     agent_cursor: &'a Option<AgentCursorState>,
     diagnostics: &'a Vec<DiagnosticEntry>,
     app_guidance: &'a Option<HeuristicMatch>,
@@ -81,7 +81,7 @@ struct ProjectedFullSnapshot<'a> {
     environment: &'a EnvironmentInfo,
     capabilities: &'a ToolCapabilities,
     focused_app: &'a Option<FocusedApp>,
-    capture: Option<ProjectedCaptureInfo<'a>>,
+    capture: Option<Value>,
     elements: &'a [&'a ElementNode],
     diagnostics: &'a [DiagnosticEntry],
     app_guidance: &'a Option<HeuristicMatch>,
@@ -92,63 +92,42 @@ struct ProjectedFullSnapshot<'a> {
 }
 
 #[derive(Serialize)]
-struct ProjectedCaptureInfo<'a> {
-    #[serde(flatten)]
-    capture: &'a CaptureInfo,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    inspection_image_path: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    raw_capture_path: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    recommended_path: Option<&'static str>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    images: Vec<CaptureImagePath<'a>>,
-}
-
-#[derive(Serialize)]
 struct CaptureImagePath<'a> {
     path: &'a str,
     role: &'static str,
     scope: &'static str,
     recommended_for: &'static str,
-    debug_only: bool,
 }
 
-impl<'a> From<&'a CaptureInfo> for ProjectedCaptureInfo<'a> {
-    fn from(capture: &'a CaptureInfo) -> Self {
-        let inspection_image_path = capture.screenshot_path.as_deref();
-        let raw_capture_path = capture.original_screenshot_path.as_deref();
-        let mut images = Vec::new();
-        if let Some(path) = inspection_image_path {
-            images.push(CaptureImagePath {
+fn projected_capture(capture: Option<&CaptureInfo>) -> Option<Value> {
+    capture.map(projected_capture_info)
+}
+
+fn projected_capture_info(capture: &CaptureInfo) -> Value {
+    let mut value = serde_json::to_value(capture).expect("capture metadata should serialize");
+    let object = value
+        .as_object_mut()
+        .expect("capture metadata should serialize to an object");
+    let inspection_image_path = capture.screenshot_path.as_deref();
+    object.remove("screenshot_path");
+    object.remove("original_screenshot_path");
+    if let Some(path) = inspection_image_path {
+        object.insert(
+            "inspection_image_path".to_string(),
+            Value::String(path.to_string()),
+        );
+        object.insert(
+            "images".to_string(),
+            serde_json::to_value([CaptureImagePath {
                 path,
                 role: inspection_image_role(capture),
                 scope: inspection_image_scope(capture),
                 recommended_for: "visual_inspection",
-                debug_only: false,
-            });
-        }
-        if let Some(path) = raw_capture_path.filter(|path| Some(*path) != inspection_image_path) {
-            images.push(CaptureImagePath {
-                path,
-                role: "raw_capture_source",
-                scope: "capture_source",
-                recommended_for: "debug_only",
-                debug_only: true,
-            });
-        }
-        Self {
-            capture,
-            inspection_image_path,
-            raw_capture_path,
-            recommended_path: inspection_image_path.map(|_| "inspection_image_path"),
-            images,
-        }
+            }])
+            .expect("capture image path should serialize"),
+        );
     }
-}
-
-fn projected_capture(capture: Option<&CaptureInfo>) -> Option<ProjectedCaptureInfo<'_>> {
-    capture.map(ProjectedCaptureInfo::from)
+    value
 }
 
 fn inspection_image_role(capture: &CaptureInfo) -> &'static str {
@@ -393,7 +372,7 @@ fn snapshot_text_header(snapshot: &AppStateSnapshot) -> String {
         }
         append_text_field(
             &mut text,
-            "screenshot_path",
+            "inspection_image_path",
             capture.screenshot_path.as_deref(),
         );
     }
@@ -782,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_snapshot_labels_inspection_and_raw_capture_paths() {
+    fn compact_snapshot_projects_only_inspection_capture_path() {
         let mut snapshot = app_state_snapshot();
         snapshot.capture = Some(capture_with_paths(
             "/tmp/sky-cua/captures/snap-1.jpg",
@@ -793,26 +772,17 @@ mod tests {
         let capture = &compact["capture"];
 
         assert_eq!(
-            capture["screenshot_path"],
-            "/tmp/sky-cua/captures/snap-1.jpg"
-        );
-        assert_eq!(
             capture["inspection_image_path"],
             "/tmp/sky-cua/captures/snap-1.jpg"
         );
-        assert_eq!(
-            capture["raw_capture_path"],
-            "/tmp/sky-cua/captures/snap-1-window.png"
-        );
-        assert_eq!(capture["recommended_path"], "inspection_image_path");
+        assert!(capture.get("screenshot_path").is_none());
+        assert!(capture.get("original_screenshot_path").is_none());
+        assert!(capture.get("raw_capture_path").is_none());
+        assert!(capture.get("recommended_path").is_none());
         assert_eq!(capture["images"][0]["role"], "target_window_crop");
         assert_eq!(capture["images"][0]["scope"], "window");
         assert_eq!(capture["images"][0]["recommended_for"], "visual_inspection");
-        assert_eq!(capture["images"][0]["debug_only"], false);
-        assert_eq!(capture["images"][1]["role"], "raw_capture_source");
-        assert_eq!(capture["images"][1]["scope"], "capture_source");
-        assert_eq!(capture["images"][1]["recommended_for"], "debug_only");
-        assert_eq!(capture["images"][1]["debug_only"], true);
+        assert_eq!(capture["images"].as_array().expect("images").len(), 1);
     }
 
     #[test]
@@ -831,7 +801,7 @@ mod tests {
             "/tmp/sky-cua/captures/snap-2.jpg"
         );
         assert!(capture.get("raw_capture_path").is_none());
-        assert_eq!(capture["recommended_path"], "inspection_image_path");
+        assert!(capture.get("recommended_path").is_none());
         assert_eq!(capture["images"].as_array().expect("images").len(), 1);
     }
 

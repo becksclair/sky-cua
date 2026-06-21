@@ -50,6 +50,8 @@ class PointerSmokeWindow(Gtk.Window):
             "button_release_seen": False,
             "last_pointer_event": {},
             "points": {},
+            "grid_canvas": {},
+            "monitor": {},
             "window_size": {},
             "last_event": "starting",
         }
@@ -58,6 +60,10 @@ class PointerSmokeWindow(Gtk.Window):
         self.add(self.fixed)
         self.fixed.set_hexpand(True)
         self.fixed.set_vexpand(True)
+
+        self.grid_canvas = Gtk.DrawingArea()
+        self.grid_canvas.connect("draw", self.on_grid_draw)
+        self.fixed.put(self.grid_canvas, 0, 0)
 
         self.header = Gtk.Label()
         self.header.set_xalign(0.0)
@@ -253,6 +259,8 @@ class PointerSmokeWindow(Gtk.Window):
 
         self.fixed.move(self.header, margin_x, top)
         self.header.set_size_request(layout_width - (margin_x * 2), -1)
+        self.fixed.move(self.grid_canvas, 0, 0)
+        self.grid_canvas.set_size_request(layout_width, layout_height)
 
         instructions_y = top + (42 if compact else 56)
         self.fixed.move(self.instructions, margin_x, instructions_y)
@@ -291,6 +299,14 @@ class PointerSmokeWindow(Gtk.Window):
         origin_x, origin_y = self.window_origin(width, height)
         self.state["window_origin"] = {"x": origin_x, "y": origin_y}
         self.state["window_size"] = {"width": width, "height": height}
+        self.state["grid_canvas"] = {
+            "x": origin_x,
+            "y": origin_y,
+            "width": layout_width,
+            "height": layout_height,
+            "cell_size": self.grid_cell_size(layout_width, layout_height),
+        }
+        self.state["monitor"] = self.monitor_state(width, height)
         self.state["points"] = self.points_from_requested_layout(
             origin_x=origin_x,
             origin_y=origin_y,
@@ -306,6 +322,56 @@ class PointerSmokeWindow(Gtk.Window):
         # Keep the requested layout points; GTK allocation translation can report local widget
         # coordinates after activation, which makes the harness click the wrong targets.
         self.write_state()
+        return False
+
+    def grid_cell_size(self, width: int, height: int) -> int:
+        short_side = min(width, height)
+        if short_side < 800:
+            return 50
+        if short_side < 1400:
+            return 80
+        return 100
+
+    def on_grid_draw(self, widget: Gtk.Widget, context: Any) -> bool:
+        width = widget.get_allocated_width()
+        height = widget.get_allocated_height()
+        if width <= 0 or height <= 0:
+            return False
+
+        cell = self.grid_cell_size(width, height)
+        # Cairo is dynamically typed through PyGObject here.
+        cairo = context
+        cairo.set_source_rgb(0.965, 0.97, 0.965)
+        cairo.paint()
+        cairo.set_source_rgba(0.18, 0.24, 0.30, 0.16)
+        cairo.set_line_width(1.0)
+        for x in range(0, width + 1, cell):
+            cairo.move_to(x + 0.5, 0)
+            cairo.line_to(x + 0.5, height)
+        for y in range(0, height + 1, cell):
+            cairo.move_to(0, y + 0.5)
+            cairo.line_to(width, y + 0.5)
+        cairo.stroke()
+
+        cairo.set_source_rgba(0.02, 0.09, 0.16, 0.55)
+        cairo.set_line_width(2.0)
+        center_x = width / 2.0
+        center_y = height / 2.0
+        cairo.move_to(center_x, 0)
+        cairo.line_to(center_x, height)
+        cairo.move_to(0, center_y)
+        cairo.line_to(width, center_y)
+        cairo.stroke()
+
+        cairo.select_font_face("Sans", 0, 0)
+        cairo.set_font_size(13)
+        cairo.set_source_rgba(0.02, 0.09, 0.16, 0.62)
+        for x in range(0, width + 1, cell * 2):
+            cairo.move_to(x + 6, 20)
+            cairo.show_text(str(x))
+        for y in range(cell * 2, height + 1, cell * 2):
+            cairo.move_to(8, y - 6)
+            cairo.show_text(str(y))
         return False
 
     def center(self, x: int, y: int, width: int, height: int) -> dict[str, float]:
@@ -423,6 +489,38 @@ class PointerSmokeWindow(Gtk.Window):
         geometry = monitor.get_geometry()
         return (geometry.width, geometry.height)
 
+    def monitor_state(self, allocation_width: int, allocation_height: int) -> dict[str, Any]:
+        gdk_window = self.get_window()
+        display = Gdk.Display.get_default()
+        if gdk_window is None or display is None:
+            return {}
+        monitor = display.get_monitor_at_window(gdk_window)
+        if monitor is None:
+            return {}
+        geometry = monitor.get_geometry()
+        origin_x, origin_y = self.window_origin(allocation_width, allocation_height)
+        state: dict[str, Any] = {
+            "geometry": {
+                "x": int(geometry.x),
+                "y": int(geometry.y),
+                "width": int(geometry.width),
+                "height": int(geometry.height),
+            },
+            "window_origin": {"x": origin_x, "y": origin_y},
+            "scale_factor": int(monitor.get_scale_factor()),
+        }
+        for key, getter in (
+            ("manufacturer", monitor.get_manufacturer),
+            ("model", monitor.get_model),
+        ):
+            try:
+                value = getter()
+            except TypeError:
+                value = None
+            if value:
+                state[key] = value
+        return state
+
     def window_origin(self, allocation_width: int, allocation_height: int) -> tuple[int, int]:
         gdk_window = self.get_window()
         if gdk_window is None:
@@ -453,10 +551,19 @@ class PointerSmokeWindow(Gtk.Window):
         if monitor is None:
             return (origin_x, origin_y)
 
+        geometry = monitor.get_geometry()
+        if (
+            os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+            and "gnome" not in os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+            and origin_x == 0
+            and origin_y == 0
+            and (geometry.x != 0 or geometry.y != 0)
+        ):
+            return (int(geometry.x), int(geometry.y))
+
         if "gnome" not in os.environ.get("XDG_CURRENT_DESKTOP", "").lower():
             return (origin_x, origin_y)
 
-        geometry = monitor.get_geometry()
         return adjusted_origin_for_visible_monitor(
             origin_x,
             origin_y,

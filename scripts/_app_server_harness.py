@@ -26,8 +26,7 @@ def with_plugin_mention(prompt: str, codex_home: Path) -> str:
     return (
         f"Use {plugin_mention(codex_home)} and its bundled computer-use skill.\n"
         "When `get_app_state` returns `capture.inspection_image_path`, inspect that image with `view_image` and"
-        " treat it as the visual source of truth. Fall back to `capture.screenshot_path` only for"
-        " older plugin responses; treat `raw_capture_path` and `original_screenshot_path` as debug-only."
+        " treat it as the visual source of truth."
         " If the control tree is sparse or fallback-only,"
         " you may still act by confirmed on-screen coordinates through the computer-use tools."
         " Prefer compact `get_app_state` snapshots; use `element_query`, `element_limit`,"

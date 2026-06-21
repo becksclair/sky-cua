@@ -114,11 +114,11 @@ def require_capture(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
     capture = snapshot.get("capture")
     if not isinstance(capture, Mapping):
         raise RuntimeError("screenshot did not include capture metadata")
-    screenshot_path = capture.get("screenshot_path")
-    if not isinstance(screenshot_path, str) or not screenshot_path:
-        raise RuntimeError("screenshot capture did not include screenshot_path")
-    if not Path(screenshot_path).exists():
-        raise RuntimeError(f"screenshot path does not exist: {screenshot_path}")
+    image_path = capture.get("inspection_image_path")
+    if not isinstance(image_path, str) or not image_path:
+        raise RuntimeError("screenshot capture did not include inspection_image_path")
+    if not Path(image_path).exists():
+        raise RuntimeError(f"screenshot path does not exist: {image_path}")
     return capture
 
 
@@ -146,12 +146,12 @@ def require_crop_metadata(
 
 
 def require_screenshot_file_matches_capture(capture: Mapping[str, Any]) -> None:
-    screenshot_path = capture["screenshot_path"]
-    if not isinstance(screenshot_path, str):
-        raise RuntimeError("screenshot_path is not a string")
+    image_path = capture["inspection_image_path"]
+    if not isinstance(image_path, str):
+        raise RuntimeError("inspection_image_path is not a string")
     pixel_size = require_mapping(capture, "pixel_size")
     expected = (int(require_number(pixel_size, "width")), int(require_number(pixel_size, "height")))
-    with Image.open(screenshot_path) as image:
+    with Image.open(image_path) as image:
         actual = image.size
     if actual != expected:
         raise RuntimeError(

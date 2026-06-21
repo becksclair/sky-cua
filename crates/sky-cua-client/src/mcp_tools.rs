@@ -794,7 +794,7 @@ fn parse_optional_string_argument(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ScreenshotDelivery {
-    /// Reference the capture by `screenshot_path` only (token-lean default).
+    /// Reference the capture by `inspection_image_path` only (token-lean default).
     #[default]
     Path,
     /// Also attach the capture as an MCP image content block, for hosts or
@@ -1283,8 +1283,8 @@ mod tests {
                 .is_some_and(
                     |description| description.contains("Defaults to compact detail")
                         && description.contains("capture.inspection_image_path")
-                        && description.contains("screenshot_path is compatibility metadata")
-                        && description.contains("raw/original paths are debug-only")
+                        && !description.contains("screenshot_path")
+                        && !description.contains("raw/original")
                 )
         );
         let get_app_state_schema = &get_app_state["inputSchema"];
@@ -2841,8 +2841,8 @@ mod tests {
                 .as_str()
                 .is_some_and(
                     |description| description.contains("capture.inspection_image_path")
-                        && description.contains("screenshot_path is compatibility metadata")
-                        && description.contains("raw/original paths are debug-only")
+                        && !description.contains("screenshot_path")
+                        && !description.contains("raw/original")
                 )
         );
     }

@@ -27,6 +27,7 @@ RUNTIME_PACKAGES = (
     "sky-cua-client",
     "sky-cua-service",
     "sky-cua-cosmic-helper",
+    "sky-cua-input-helper",
     "sky-cua-overlay-host",
 )
 RSYNC_EXCLUDES = (
@@ -101,9 +102,8 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
             dispatch="cosmic-transparent-xcursor-host-proof",
             remote_profile="agent-cursor-cosmic-transparent-xcursor-host-proof",
         ),
-        # In-guest layer-shell capture is grim-based (wlr-screencopy), so this
-        # lane is compositor-specific (Hyprland-class) and stays outside the
-        # session-agnostic curated set.
+        # This lane is a service-backed overlay/screenshot proof that still needs
+        # a real Wayland session socket, so keep it outside the headless curated set.
         VmProfileDescriptor("wayland-layer-shell-overlay"),
         VmProfileDescriptor(
             "wayland-pointer",
@@ -201,7 +201,30 @@ class RemoteRunner:
             f'export WAYLAND_DISPLAY="${{WAYLAND_DISPLAY:-{shlex.quote(self.wayland_display)}}}" && '
             "export XDG_SESSION_TYPE=wayland && "
             f"{desktop_exports}"
+            f"{self.input_helper_start_script()}"
             f"{shlex.join(command)}"
+        )
+
+    def input_helper_start_script(self) -> str:
+        helper = shlex.quote(str(self.remote_root / "target" / "release" / "sky-cua-input-helper"))
+        return (
+            f"if [ -x {helper} ]; then "
+            "sudo systemctl stop sky-cua-input-helper.service >/dev/null 2>&1 || true; "
+            "sudo systemctl reset-failed sky-cua-input-helper.service >/dev/null 2>&1 || true; "
+            "sudo systemd-run --unit=sky-cua-input-helper --collect "
+            "--setenv=SKY_CUA_INPUT_HELPER_SOCKET=/run/sky-cua/input-helper.sock "
+            "--setenv=SKY_CUA_INPUT_HELPER_SOCKET_MODE=0660 "
+            "--setenv=SKY_CUA_INPUT_HELPER_SOCKET_GROUP=input "
+            f"{helper} serve >/dev/null; "
+            "helper_ready=0; "
+            "for _ in $(seq 1 40); do "
+            "[ -S /run/sky-cua/input-helper.sock ] && helper_ready=1 && break; "
+            "sleep 0.05; "
+            "done; "
+            'if [ "$helper_ready" -ne 1 ]; then '
+            "printf 'sky-cua input helper socket did not appear\\n' >&2; exit 1; "
+            "fi; "
+            "fi && "
         )
 
 
@@ -927,7 +950,9 @@ def reset_guest_sky_cua_processes(
 ) -> None:
     remote_script = (
         'runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; '
+        "sudo systemctl stop sky-cua-input-helper.service 2>/dev/null || true; "
         "pkill -x sky-cua-service 2>/dev/null || true; "
+        "pkill -x sky-cua-input-helper 2>/dev/null || true; "
         "pkill -f '(^|/)sky-cua-overlay-host( |$)' 2>/dev/null || true; "
         "pkill -x sky-cua-overlay 2>/dev/null || true; "
         "pkill -f '(^|/)gtk_pointer_smoke_fixture.py( |$)' 2>/dev/null || true; "
@@ -1138,6 +1163,7 @@ def run_remote_profile(
         "env",
         "SKY_CUA_USE_PREBUILT_RUNTIMES=1",
         f"SKY_CUA_COPY_CODEX_SETTINGS={int(sync_codex_settings)}",
+        "SKY_CUA_INPUT_HELPER_SOCKET=/run/sky-cua/input-helper.sock",
         f"SKY_CUA_OVERLAY_HOST_PATH={remote_root}/target/release/sky-cua-overlay-host",
         f"SKY_CUA_DEBUG_OVERLAY_HOST_PATH={remote_root}/target/debug/sky-cua-overlay-host",
         f"SKY_CUA_COSMIC_HELPER={remote_root}/target/release/sky-cua-cosmic-helper",
@@ -1730,10 +1756,10 @@ def run_remote_kwin_effect_system_install_profile(
         remote_summary = {}
     probe = MarkerProbe(False, 0, 0, (0, 0, 0, 0))
     probe_error: str | None = None
+    host_probe_point = requested_point_from_summary(remote_summary)
     if ready:
         try:
-            point = requested_point_from_summary(remote_summary)
-            probe = probe_marker(paths.before_path, paths.after_path, point)
+            probe = probe_marker(paths.before_path, paths.after_path, host_probe_point)
         except Exception as error:
             probe_error = f"{type(error).__name__}: {error}"
     else:
@@ -1756,7 +1782,7 @@ def run_remote_kwin_effect_system_install_profile(
         "before_screenshot": str(paths.before_path),
         "after_screenshot": str(paths.after_path) if paths.after_path.exists() else None,
         "host_framebuffer_ready": ready,
-        "requested_point": {"x": KWIN_EFFECT_SYSTEM_POINT[0], "y": KWIN_EFFECT_SYSTEM_POINT[1]},
+        "requested_point": {"x": host_probe_point[0], "y": host_probe_point[1]},
         "host_marker_probe": marker_probe_to_json(probe),
         "host_probe_error": probe_error,
         "remote_summary": remote_summary,
@@ -1910,6 +1936,12 @@ def json_object_field(parent: dict[str, object] | None, key: str) -> dict[str, o
 
 
 def requested_point_from_summary(summary: dict[str, object]) -> tuple[float, float]:
+    native_point = summary.get("requested_native_point")
+    if isinstance(native_point, dict):
+        x = native_point.get("x")
+        y = native_point.get("y")
+        if isinstance(x, int | float) and isinstance(y, int | float):
+            return (float(x), float(y))
     point = summary.get("requested_point")
     if isinstance(point, dict):
         x = point.get("x")

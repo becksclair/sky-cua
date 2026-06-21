@@ -112,10 +112,10 @@ def main() -> int:
                     f"capture={json.dumps(capture, indent=2, sort_keys=True)}"
                 )
 
-            screenshot_path = capture.get("screenshot_path")
-            if not screenshot_path or not Path(screenshot_path).exists():
+            image_path = capture.get("inspection_image_path")
+            if not image_path or not Path(image_path).exists():
                 raise RuntimeError(
-                    "Forced downgrade snapshot did not produce a real fallback screenshot path.\n"
+                    "Forced downgrade snapshot did not produce a real fallback inspection image path.\n"
                     f"capture={json.dumps(capture, indent=2, sort_keys=True)}"
                 )
 
