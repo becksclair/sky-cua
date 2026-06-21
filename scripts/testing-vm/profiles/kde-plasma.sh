@@ -32,8 +32,7 @@ cmake \
   -S /workspace/resources/kwin/effects/sky-cua-agent-cursor \
   -B "$artifact_dir/kwin-effect-build" \
   -G Ninja \
-  -DCMAKE_INSTALL_PREFIX="$install_prefix" \
-  -DSKY_CUA_CURSOR_ASSET=/workspace/crates/sky-cua-overlay-host/assets/cursor-chat.png
+  -DCMAKE_INSTALL_PREFIX="$install_prefix"
 cmake --build "$artifact_dir/kwin-effect-build"
 cmake --install "$artifact_dir/kwin-effect-build"
 
@@ -133,7 +132,7 @@ PY
 done
 
 qdbus6 org.kde.KWin /com/skycua/AgentCursor com.skycua.AgentCursor.StateJson >"$SHOT_DIR/plasma-effect-state.json"
-printf 'headed KDE Plasma Wayland cursor overlay is active; sleeping for inspection\n' >"$SHOT_DIR/plasma-ready.txt"
+printf 'headed KDE Plasma layer-shell cursor overlay with KWin cursor-hide shim is active; sleeping for inspection\n' >"$SHOT_DIR/plasma-ready.txt"
 cat "$SHOT_DIR/plasma-ready.txt"
 sleep "${SKY_CUA_HEADED_SLEEP_SECONDS:-300}"
 EOF

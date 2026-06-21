@@ -8,12 +8,12 @@
             }
         ],
         "Category": "Accessibility",
-        "Description": "Static proof effect for the sky-cua agent cursor overlay.",
+        "Description": "Cursor visibility and pointer-position shim for the sky-cua layer-shell agent cursor overlay.",
         "EnabledByDefault": false,
         "Icon": "input-mouse",
-        "Id": "sky-cua-agent-cursor",
+        "Id": "@SKY_CUA_EFFECT_ID@",
         "License": "MIT",
-        "Name": "sky-cua Agent Cursor",
+        "Name": "sky-cua Cursor Shim",
         "Version": "0.1.0"
     }
 }

@@ -1044,3 +1044,46 @@ def test_install_mcp_server_kwin_effect_flag_invokes_helper(
 
     assert install_mcp_server.main() == 0
     assert calls["build_dir"] == (tmp_path / "install").resolve() / "kwin-effect-build"
+
+
+def test_install_mcp_server_kwin_effect_failure_returns_nonzero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_deploy(**_kwargs: object) -> kwin_effect.ReloadOutcome:
+        return kwin_effect.ReloadOutcome(
+            converged=False,
+            loaded=False,
+            expected_build_id="new",
+            running_build_id="old",
+            effect_id="sky-cua-agent-cursor-000004",
+            rollback_effect_id="sky-cua-agent-cursor-000003",
+            live_load_attempted=True,
+        )
+
+    monkeypatch.setattr(install_mcp_server, "deploy_kwin_effect", fake_deploy)
+    monkeypatch.setattr(
+        install_mcp_server, "print_kwin_effect_deploy_outcome", lambda _outcome: None
+    )
+    monkeypatch.setattr(
+        install_mcp_server, "install_binaries", lambda target: target / "bin" / "sky-cua-client"
+    )
+    monkeypatch.setattr(
+        install_mcp_server,
+        "write_mcp_json",
+        lambda target, config: target / ".mcp.json",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "install_mcp_server.py",
+            "--target-dir",
+            str(tmp_path / "install"),
+            "--kwin-effect",
+        ],
+    )
+
+    assert install_mcp_server.main() == 1
+    assert "did not converge" in capsys.readouterr().err

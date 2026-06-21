@@ -24,7 +24,11 @@ from _companion import (
     print_companion_setup_status,
 )
 from _install_shared import DEFAULT_LOCAL_INSTALL_DIR, MCP_HOST_CHOICES
-from _kwin_effect import deploy_kwin_effect, print_kwin_effect_deploy_outcome
+from _kwin_effect import (
+    deploy_kwin_effect,
+    kwin_effect_deploy_failed,
+    print_kwin_effect_deploy_outcome,
+)
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DIST_PLUGIN_ROOT,
@@ -136,6 +140,13 @@ def fast_deploy(args: argparse.Namespace) -> int:
     if args.kwin_effect:
         outcome = deploy_kwin_effect(build_dir=destination.parent / "kwin-effect-build")
         print_kwin_effect_deploy_outcome(outcome)
+        if kwin_effect_deploy_failed(outcome):
+            print(
+                f"KWin effect {outcome.effect_id} did not converge; "
+                f"restored {outcome.rollback_effect_id or 'no previous effect'}",
+                file=sys.stderr,
+            )
+            return 1
 
     print(f"installed_path={destination}")
     print(f"config_path={config_path}")

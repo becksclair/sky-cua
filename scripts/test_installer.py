@@ -537,6 +537,31 @@ def test_kwin_phase_skipped_by_default(tmp_path: Path) -> None:
     assert result.status == "skipped"
 
 
+def test_kwin_phase_fails_when_rotating_live_reload_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import _kwin_effect as kwin_effect
+
+    def fake_deploy(**_kwargs: object) -> kwin_effect.ReloadOutcome:
+        return kwin_effect.ReloadOutcome(
+            converged=False,
+            loaded=False,
+            expected_build_id="new",
+            running_build_id="old",
+            effect_id="sky-cua-agent-cursor-000004",
+            rollback_effect_id="sky-cua-agent-cursor-000003",
+            live_load_attempted=True,
+        )
+
+    monkeypatch.setattr(kwin_effect, "deploy_kwin_effect", fake_deploy)
+
+    result = installer.run_kwin_phase(enabled=True, target_dir=tmp_path)
+
+    assert result.status == "failed"
+    assert "did not converge" in result.detail
+
+
 def test_main_dry_run_lists_phases(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

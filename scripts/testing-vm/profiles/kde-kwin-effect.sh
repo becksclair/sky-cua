@@ -25,6 +25,8 @@ if [[ "${1:-}" == "--headed" ]]; then
   ln -sf "/tmp/host-wayland/$HOST_WAYLAND_DISPLAY" "$XDG_RUNTIME_DIR/wayland-0"
   export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
   export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland}"
+  export XDG_SESSION_TYPE=wayland
+  export XDG_CURRENT_DESKTOP=KDE
 
   artifact_dir="/workspace/artifacts/codex-e2e/agent-cursor-kde/$(date -u +%m%d%H%M%S%N)-kwin-headed"
   mkdir -p "$artifact_dir"
@@ -38,8 +40,7 @@ if [[ "${1:-}" == "--headed" ]]; then
     -S /workspace/resources/kwin/effects/sky-cua-agent-cursor \
     -B "$artifact_dir/kwin-effect-build" \
     -G Ninja \
-    -DCMAKE_INSTALL_PREFIX="$install_prefix" \
-    -DSKY_CUA_CURSOR_ASSET=/workspace/crates/sky-cua-overlay-host/assets/cursor-chat.png
+    -DCMAKE_INSTALL_PREFIX="$install_prefix"
   cmake --build "$artifact_dir/kwin-effect-build"
   cmake --install "$artifact_dir/kwin-effect-build"
   export SKY_CUA_OVERLAY_HOST_PATH="${SKY_CUA_OVERLAY_HOST_PATH:-/workspace/target/release/sky-cua-overlay-host}"
@@ -96,7 +97,7 @@ done
 
 qdbus6 org.kde.KWin /com/skycua/AgentCursor com.skycua.AgentCursor.StateJson >"$SHOT_DIR/headed-effect-state.json"
 qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.isEffectLoaded "$KWIN_EFFECT_ID" >"$SHOT_DIR/headed-effect-loaded.txt" || true
-printf 'headed KWin cursor overlay is active; sleeping for inspection\n' >"$SHOT_DIR/headed-ready.txt"
+printf 'headed layer-shell cursor overlay with KWin cursor-hide shim is active; sleeping for inspection\n' >"$SHOT_DIR/headed-ready.txt"
 cat "$SHOT_DIR/headed-ready.txt"
 sleep "${SKY_CUA_HEADED_SLEEP_SECONDS:-300}"
 EOF

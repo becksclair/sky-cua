@@ -2,17 +2,14 @@
 """Build, install, and reload the sky-cua KWin agent-cursor effect locally.
 
 Default action: configure and compile the effect from the current sources,
-install it system-wide (sudo cmake --install), enable it persistently in
-kwinrc, then drive the running KWin to the new build. Fresh installs hot-load;
-a replaced plugin cannot hot-reload into a running KWin, so updates show a
-desktop notification asking the user to restart the Plasma session when
-convenient. This tool never restarts KWin itself: a compositor restart can
-take the whole session down.
+install it system-wide (sudo cmake --install) under the next generated effect
+id, enable it persistently in kwinrc, unload the previous generated/stable id,
+then drive the running KWin to the new build. This tool never restarts KWin.
 
 Usage:
   python3 scripts/install_kwin_effect.py
   python3 scripts/install_kwin_effect.py --status
-  python3 scripts/install_kwin_effect.py --no-notify   # skip the desktop notification
+  python3 scripts/install_kwin_effect.py --no-notify   # accepted legacy no-op
 """
 
 from __future__ import annotations
@@ -27,6 +24,7 @@ from _kwin_effect import (
     REPO_ROOT,
     deploy_kwin_effect,
     effect_status,
+    kwin_effect_deploy_failed,
 )
 
 DEFAULT_BUILD_DIR = REPO_ROOT / "artifacts" / "kwin-effect-deploy" / "build"
@@ -87,7 +85,10 @@ def main() -> int:
         return 1
 
     if outcome.converged:
-        print(f"KWin effect is loaded and current (build id {outcome.expected_build_id})")
+        print(
+            f"KWin effect {outcome.effect_id} is loaded and current "
+            f"(build id {outcome.expected_build_id})"
+        )
         return 0
 
     if outcome.session_restart_required:
@@ -98,8 +99,17 @@ def main() -> int:
         return 0
 
     if not outcome.loaded:
-        # KWin not running: installed and enabled for the next session start.
-        print("KWin effect installed; it will load on the next Plasma session start.")
+        if kwin_effect_deploy_failed(outcome):
+            print(
+                f"KWin effect {outcome.effect_id} did not converge; "
+                f"restored {outcome.rollback_effect_id or 'no previous effect'}.",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"KWin effect {outcome.effect_id} installed and enabled for the next "
+            "Plasma session start."
+        )
         return 0
 
     print(

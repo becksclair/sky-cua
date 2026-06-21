@@ -316,6 +316,8 @@ def test_copy_tracked_bundle_sources_allows_retired_skill_paths(
             Path("skills/computer-use-workflows/SKILL.md"),
             Path("skills/sky-cua-isolated-daemon/SKILL.md"),
             Path("skills/sky-cua-plugin-release/SKILL.md"),
+            Path("resources/kwin/effects/sky-cua-agent-cursor/metadata.json"),
+            Path("resources/kwin/effects/sky-cua-agent-cursor/qml/main.qml"),
         ],
     )
 
@@ -329,11 +331,11 @@ def test_copy_worktree_bundle_dirs_includes_kwin_effect_resources(
     repo_root = tmp_path / "repo"
     effect_dir = repo_root / "resources" / "kwin" / "effects" / "sky-cua-agent-cursor"
     effect_dir.mkdir(parents=True)
-    (effect_dir / "metadata.json").write_text(
+    (effect_dir / "metadata.json.in").write_text(
         json.dumps(
             {
                 "KPackageStructure": "KWin/Effect",
-                "KPlugin": {"Id": "sky-cua-agent-cursor"},
+                "KPlugin": {"Id": "@SKY_CUA_EFFECT_ID@"},
             }
         ),
         encoding="utf-8",
@@ -345,10 +347,10 @@ def test_copy_worktree_bundle_dirs_includes_kwin_effect_resources(
     build_plugin.copy_worktree_bundle_dirs(bundle_root)
 
     copied = (
-        bundle_root / "resources" / "kwin" / "effects" / "sky-cua-agent-cursor" / "metadata.json"
+        bundle_root / "resources" / "kwin" / "effects" / "sky-cua-agent-cursor" / "metadata.json.in"
     )
     assert json.loads(copied.read_text(encoding="utf-8"))["KPlugin"]["Id"] == (
-        "sky-cua-agent-cursor"
+        "@SKY_CUA_EFFECT_ID@"
     )
 
 

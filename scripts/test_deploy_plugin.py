@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import _kwin_effect as kwin_effect
 import deploy_plugin
 from _plugin_bundle import (
     COMPUTER_USE_COMPAT_PLUGIN_ID,
@@ -189,3 +190,60 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     assert calls["restart_runtime"] is True
     assert calls["refresh_accessibility"] is False
     assert calls["host"] == "claude-code"
+
+
+def test_fast_deploy_returns_failure_when_kwin_live_reload_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setattr(deploy_plugin, "build_bundle", lambda: None)
+    monkeypatch.setattr(deploy_plugin, "ensure_bundle_structure", lambda _root: None)
+    monkeypatch.setattr(
+        deploy_plugin,
+        "drop_retired_channel_caches",
+        lambda _home, **_kwargs: None,
+    )
+    monkeypatch.setattr(deploy_plugin, "install_bundle", lambda *_args: None)
+    monkeypatch.setattr(deploy_plugin, "run_browser_preflight", lambda _dest, _home: None)
+    monkeypatch.setattr(deploy_plugin, "stop_unix_runtime_processes", lambda _roots: None)
+    monkeypatch.setattr(deploy_plugin, "stop_windows_cache_processes", lambda _root: None)
+    monkeypatch.setattr(deploy_plugin, "compat_plugin_targets_payload", lambda _home, _dest: True)
+    monkeypatch.setattr(deploy_plugin, "refresh_accessibility_bus", lambda: None)
+    monkeypatch.setattr(
+        deploy_plugin,
+        "install_local_mcp_server",
+        lambda target, _host, **_kwargs: (
+            target / "bin" / "sky-cua-client",
+            target / "claude_code_mcp.json",
+        ),
+    )
+
+    def fake_deploy(**_kwargs: object) -> kwin_effect.ReloadOutcome:
+        return kwin_effect.ReloadOutcome(
+            converged=False,
+            loaded=False,
+            expected_build_id="new",
+            running_build_id="old",
+            effect_id="sky-cua-agent-cursor-000004",
+            rollback_effect_id="sky-cua-agent-cursor-000003",
+            live_load_attempted=True,
+        )
+
+    monkeypatch.setattr(deploy_plugin, "deploy_kwin_effect", fake_deploy)
+    monkeypatch.setattr(deploy_plugin, "print_kwin_effect_deploy_outcome", lambda _outcome: None)
+
+    args = argparse.Namespace(
+        codex_home=codex_home,
+        no_build=True,
+        symlink=False,
+        kwin_effect=True,
+        no_companion=True,
+        force_companion=False,
+        local_install_dir=tmp_path / "local-install",
+        local_install_host="claude-code",
+    )
+
+    assert deploy_plugin.fast_deploy(args) == 1
+    assert "did not converge" in capsys.readouterr().err

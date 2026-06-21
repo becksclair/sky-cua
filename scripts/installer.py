@@ -309,12 +309,19 @@ def run_kwin_phase(*, enabled: bool, target_dir: Path) -> PhaseResult:
     name = "kwin-effect"
     if not enabled:
         return PhaseResult(name, "skipped", "pass --kwin-effect to install")
-    from _kwin_effect import deploy_kwin_effect
+    from _kwin_effect import deploy_kwin_effect, kwin_effect_deploy_failed
 
     try:
         outcome = deploy_kwin_effect(build_dir=target_dir / "kwin-effect-build")
     except Exception as error:
         return PhaseResult(name, "failed", str(error))
+    if kwin_effect_deploy_failed(outcome):
+        return PhaseResult(
+            name,
+            "failed",
+            f"{outcome.effect_id} did not converge; "
+            f"restored {outcome.rollback_effect_id or 'no previous effect'}",
+        )
     detail = "installed"
     if outcome.session_restart_required:
         detail = "installed; activates after the next Plasma session restart"
