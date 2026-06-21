@@ -69,6 +69,7 @@ Open boxes link to the active ExecPlan that owns the work.
 - [x] Agent-agnostic screenshot delivery (browser MCP image blocks + persisted capture paths, `get_app_state screenshot_delivery: inline`, one CSS-pixel browser coordinate space) — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [ ] Re-run the VM smoke matrix for the CSS-pixel browser contract (only the live KDE host is verified so far)
 - [x] Display-targeted desktop screenshots (primary-display default, explicit display/window/all-displays capture, and snapshot coordinate remapping) — [`docs/features/display-targeted-screenshots.md`](docs/features/display-targeted-screenshots.md)
+  - [x] `get_app_state` visual attachment now prefers focused/selected window crops, falls back only to target/primary display scopes, and labels `inspection_image_path` versus raw/debug captures
 - [x] First-class browser MCP tools for `user_chrome` — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [x] Explicit host opt-in gate for OpenCode/Pi, with Codex Desktop kept on the companion Browser Use path
   - [x] Real user-tab listing, session-owned tab creation, existing-tab claiming, and Brave/Chrome/Chromium socket selection

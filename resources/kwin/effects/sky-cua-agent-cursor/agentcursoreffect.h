@@ -1,21 +1,17 @@
 #pragma once
 
 #include "core/region.h"
-#include "effect/effect.h"
+#include "effect/quickeffect.h"
 #include "systemcursoradapter.h"
 
 #include <QPointF>
 #include <QString>
 #include <QTimer>
 
-#include <memory>
-
 namespace KWin
 {
 
-class OffscreenQuickScene;
-
-class SkyCuaAgentCursorEffect : public Effect
+class SkyCuaAgentCursorEffect : public QuickSceneEffect
 {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "com.skycua.AgentCursor")
@@ -24,12 +20,7 @@ public:
     SkyCuaAgentCursorEffect();
     ~SkyCuaAgentCursorEffect() override;
 
-    void prePaintScreen(ScreenPrePaintData &data, std::chrono::milliseconds presentTime) override;
-    void paintScreen(const RenderTarget &renderTarget,
-                     const RenderViewport &viewport,
-                     int mask,
-                     const Region &deviceRegion,
-                     LogicalOutput *screen) override;
+    void prePaintScreen(ScreenPrePaintData &data) override;
 
 public Q_SLOTS:
     bool SetCursorState(const QString &stateJson);
@@ -38,16 +29,19 @@ public Q_SLOTS:
     QString StateJson() const;
     QString BuildId() const;
 
+protected:
+    QVariantMap initialProperties(LogicalOutput *screen) override;
+
 private:
-    void ensureScene();
+    void updateSceneViews();
     void restoreSystemCursor();
 
     void armIdleHideTimer();
     void syncStateJsonVisibility();
 
-    std::unique_ptr<OffscreenQuickScene> m_scene;
     KWinSystemCursorAdapter m_systemCursor;
     QString m_stateJson;
+    QString m_cursorSource;
     QPointF m_cursorPoint;
     // Failsafe: when the overlay host dies without hiding the cursor, this
     // timer restores the user's cursor on its own.

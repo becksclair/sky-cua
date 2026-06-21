@@ -111,7 +111,7 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
             "description": if can_receive_images {
                 "Capture a fresh visual frame. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop. Use the returned snapshot_id for pixel actions; if capture source geometry is missing, retry the targeted screenshot once before broad fallbacks."
             } else {
-                "Capture a fresh visual frame and return screenshot_path plus snapshot_id. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop. Use the returned snapshot_id for pixel actions; if capture source geometry is missing, retry the targeted screenshot once before broad fallbacks."
+                "Capture a fresh visual frame and return capture.inspection_image_path, compatibility screenshot_path, and snapshot_id. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop. Use the returned snapshot_id for pixel actions; if capture source geometry is missing, retry the targeted screenshot once before broad fallbacks."
             },
             "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
             "inputSchema": {
@@ -123,9 +123,9 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
         {
             "name": "get_app_state",
             "description": if can_receive_images {
-                format!("Return token-bounded desktop state: app identity, displays, diagnostics, accessibility elements, text/value readback, optional screenshot. Defaults to compact detail and {APP_STATE_DEFAULT_ELEMENT_LIMIT} elements; use element_query/offset/limit or detail=full. Use screenshot for cropped window/display visuals.")
+                format!("Return token-bounded desktop state: app identity, displays, diagnostics, accessibility elements, text/value readback, and optional capture metadata. Defaults to compact detail and {APP_STATE_DEFAULT_ELEMENT_LIMIT} elements; use element_query/offset/limit or detail=full. Inspect capture.inspection_image_path when present; screenshot_path is compatibility metadata and raw/original paths are debug-only.")
             } else {
-                format!("Return token-bounded desktop state: app identity, displays, diagnostics, accessibility elements, and text/value readback. Defaults to compact detail and {APP_STATE_DEFAULT_ELEMENT_LIMIT} elements; use element_query/offset/limit or detail=full. Use screenshot for screenshot_path visuals.")
+                format!("Return token-bounded desktop state: app identity, displays, diagnostics, accessibility elements, text/value readback, and optional capture metadata. Defaults to compact detail and {APP_STATE_DEFAULT_ELEMENT_LIMIT} elements; use element_query/offset/limit or detail=full. Inspect capture.inspection_image_path when present; screenshot_path is compatibility metadata and raw/original paths are debug-only.")
             },
             "annotations": READ_ONLY_TOOL.to_value(),
             "inputSchema": {
@@ -394,7 +394,7 @@ fn get_app_state_properties(can_receive_images: bool) -> Value {
             json!({
                 "type": "string",
                 "enum": ["path", "inline"],
-                "description": "path returns screenshot_path only; inline also attaches an image block."
+                "description": "path returns capture.inspection_image_path and compatibility screenshot_path metadata; inline also attaches the inspection image block."
             }),
         );
     }
@@ -443,7 +443,7 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
             json!({
                 "type": "string",
                 "enum": ["path", "inline"],
-                "description": "path returns screenshot_path only; inline also attaches an image block."
+                "description": "path returns capture.inspection_image_path and compatibility screenshot_path metadata; inline also attaches the inspection image block."
             }),
         );
     }

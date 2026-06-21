@@ -60,7 +60,7 @@ struct CompactSnapshot<'a> {
     created_at: &'a DateTime<Utc>,
     environment: &'a EnvironmentInfo,
     focused_app: &'a Option<FocusedApp>,
-    capture: &'a Option<CaptureInfo>,
+    capture: Option<ProjectedCaptureInfo<'a>>,
     agent_cursor: &'a Option<AgentCursorState>,
     diagnostics: &'a Vec<DiagnosticEntry>,
     app_guidance: &'a Option<HeuristicMatch>,
@@ -81,7 +81,7 @@ struct ProjectedFullSnapshot<'a> {
     environment: &'a EnvironmentInfo,
     capabilities: &'a ToolCapabilities,
     focused_app: &'a Option<FocusedApp>,
-    capture: &'a Option<CaptureInfo>,
+    capture: Option<ProjectedCaptureInfo<'a>>,
     elements: &'a [&'a ElementNode],
     diagnostics: &'a [DiagnosticEntry],
     app_guidance: &'a Option<HeuristicMatch>,
@@ -89,6 +89,88 @@ struct ProjectedFullSnapshot<'a> {
     doctor_report: Option<&'a DoctorReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_cursor: Option<&'a AgentCursorState>,
+}
+
+#[derive(Serialize)]
+struct ProjectedCaptureInfo<'a> {
+    #[serde(flatten)]
+    capture: &'a CaptureInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inspection_image_path: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    raw_capture_path: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recommended_path: Option<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<CaptureImagePath<'a>>,
+}
+
+#[derive(Serialize)]
+struct CaptureImagePath<'a> {
+    path: &'a str,
+    role: &'static str,
+    scope: &'static str,
+    recommended_for: &'static str,
+    debug_only: bool,
+}
+
+impl<'a> From<&'a CaptureInfo> for ProjectedCaptureInfo<'a> {
+    fn from(capture: &'a CaptureInfo) -> Self {
+        let inspection_image_path = capture.screenshot_path.as_deref();
+        let raw_capture_path = capture.original_screenshot_path.as_deref();
+        let mut images = Vec::new();
+        if let Some(path) = inspection_image_path {
+            images.push(CaptureImagePath {
+                path,
+                role: inspection_image_role(capture),
+                scope: inspection_image_scope(capture),
+                recommended_for: "visual_inspection",
+                debug_only: false,
+            });
+        }
+        if let Some(path) = raw_capture_path.filter(|path| Some(*path) != inspection_image_path) {
+            images.push(CaptureImagePath {
+                path,
+                role: "raw_capture_source",
+                scope: "capture_source",
+                recommended_for: "debug_only",
+                debug_only: true,
+            });
+        }
+        Self {
+            capture,
+            inspection_image_path,
+            raw_capture_path,
+            recommended_path: inspection_image_path.map(|_| "inspection_image_path"),
+            images,
+        }
+    }
+}
+
+fn projected_capture(capture: Option<&CaptureInfo>) -> Option<ProjectedCaptureInfo<'_>> {
+    capture.map(ProjectedCaptureInfo::from)
+}
+
+fn inspection_image_role(capture: &CaptureInfo) -> &'static str {
+    use sky_cua_platform::model::CaptureScope;
+    match capture.capture_scope {
+        CaptureScope::Window => "target_window_crop",
+        CaptureScope::Display => "display_capture",
+        CaptureScope::PrimaryDisplay => "primary_display_capture",
+        CaptureScope::AllDisplays => "virtual_desktop_capture",
+        CaptureScope::Unknown => "inspection_image",
+    }
+}
+
+fn inspection_image_scope(capture: &CaptureInfo) -> &'static str {
+    use sky_cua_platform::model::CaptureScope;
+    match capture.capture_scope {
+        CaptureScope::Window => "window",
+        CaptureScope::Display => "display",
+        CaptureScope::PrimaryDisplay => "primary_display",
+        CaptureScope::AllDisplays => "virtual_desktop",
+        CaptureScope::Unknown => "unknown",
+    }
 }
 
 pub(crate) fn compact_snapshot(snapshot: &AppStateSnapshot) -> Value {
@@ -113,7 +195,7 @@ pub(crate) fn compact_snapshot_with_element_selection(
         created_at: &snapshot.created_at,
         environment: &snapshot.environment,
         focused_app: &snapshot.focused_app,
-        capture: &snapshot.capture,
+        capture: projected_capture(snapshot.capture.as_ref()),
         agent_cursor: &snapshot.agent_cursor,
         diagnostics: &snapshot.diagnostics,
         app_guidance: &snapshot.app_guidance,
@@ -139,7 +221,7 @@ pub(crate) fn full_snapshot_with_element_selection(
         environment: &snapshot.environment,
         capabilities: &snapshot.capabilities,
         focused_app: &snapshot.focused_app,
-        capture: &snapshot.capture,
+        capture: projected_capture(snapshot.capture.as_ref()),
         elements: &selection.elements,
         diagnostics: &snapshot.diagnostics,
         app_guidance: &snapshot.app_guidance,
@@ -667,7 +749,17 @@ pub(crate) fn list_apps_error_diagnostic(
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_text_field, string_matches_query};
+    use super::{
+        compact_snapshot, compact_text_field, full_snapshot_with_element_selection,
+        select_app_state_elements, string_matches_query,
+    };
+    use crate::app_state::AppStateElementOptions;
+    use chrono::Utc;
+    use sky_cua_platform::model::{
+        AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
+        EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
+        ScrollDirection, SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
+    };
 
     #[test]
     fn compact_text_field_preserves_normalized_truncation_shape() {
@@ -687,5 +779,160 @@ mod tests {
     fn string_matches_query_preserves_unicode_case_folding_fallback() {
         assert!(string_matches_query("İstanbul", "i"));
         assert!(string_matches_query("Straße", "straße"));
+    }
+
+    #[test]
+    fn compact_snapshot_labels_inspection_and_raw_capture_paths() {
+        let mut snapshot = app_state_snapshot();
+        snapshot.capture = Some(capture_with_paths(
+            "/tmp/sky-cua/captures/snap-1.jpg",
+            Some("/tmp/sky-cua/captures/snap-1-window.png"),
+        ));
+
+        let compact = compact_snapshot(&snapshot);
+        let capture = &compact["capture"];
+
+        assert_eq!(
+            capture["screenshot_path"],
+            "/tmp/sky-cua/captures/snap-1.jpg"
+        );
+        assert_eq!(
+            capture["inspection_image_path"],
+            "/tmp/sky-cua/captures/snap-1.jpg"
+        );
+        assert_eq!(
+            capture["raw_capture_path"],
+            "/tmp/sky-cua/captures/snap-1-window.png"
+        );
+        assert_eq!(capture["recommended_path"], "inspection_image_path");
+        assert_eq!(capture["images"][0]["role"], "target_window_crop");
+        assert_eq!(capture["images"][0]["scope"], "window");
+        assert_eq!(capture["images"][0]["recommended_for"], "visual_inspection");
+        assert_eq!(capture["images"][0]["debug_only"], false);
+        assert_eq!(capture["images"][1]["role"], "raw_capture_source");
+        assert_eq!(capture["images"][1]["scope"], "capture_source");
+        assert_eq!(capture["images"][1]["recommended_for"], "debug_only");
+        assert_eq!(capture["images"][1]["debug_only"], true);
+    }
+
+    #[test]
+    fn full_snapshot_uses_projected_capture_metadata() {
+        let mut snapshot = app_state_snapshot();
+        snapshot.capture = Some(capture_with_paths("/tmp/sky-cua/captures/snap-2.jpg", None));
+        let options = AppStateElementOptions::default();
+        let selection = select_app_state_elements(&snapshot, &options, None);
+
+        let full = full_snapshot_with_element_selection(&snapshot, &selection)
+            .expect("full snapshot should serialize");
+        let capture = &full["capture"];
+
+        assert_eq!(
+            capture["inspection_image_path"],
+            "/tmp/sky-cua/captures/snap-2.jpg"
+        );
+        assert!(capture.get("raw_capture_path").is_none());
+        assert_eq!(capture["recommended_path"], "inspection_image_path");
+        assert_eq!(capture["images"].as_array().expect("images").len(), 1);
+    }
+
+    fn capture_with_paths(path: &str, raw_path: Option<&str>) -> CaptureInfo {
+        CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Window,
+            display: None,
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("stream-1".to_string()),
+            source_type: None,
+            mapping_id: None,
+            logical_rect: Some(RectF {
+                x: 10.0,
+                y: 20.0,
+                width: 400.0,
+                height: 300.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            source_logical_rect: None,
+            pixel_size: Some(PixelSize {
+                width: 800,
+                height: 600,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 800,
+                height: 600,
+            }),
+            logical_to_pixel_scale: Some(2.0),
+            screenshot_path: Some(path.to_string()),
+            original_screenshot_path: raw_path.map(str::to_string),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1024),
+            model_image_encode_ms: Some(5),
+        }
+    }
+
+    fn app_state_snapshot() -> AppStateSnapshot {
+        AppStateSnapshot {
+            snapshot_id: "snap-1".to_string(),
+            created_at: Utc::now(),
+            environment: environment_info(),
+            capabilities: available_capabilities(),
+            focused_app: None,
+            capture: None,
+            elements: Vec::new(),
+            diagnostics: Vec::new(),
+            app_guidance: None,
+            doctor_report: None,
+            agent_cursor: None,
+        }
+    }
+
+    fn environment_info() -> EnvironmentInfo {
+        EnvironmentInfo {
+            session_kind: SessionKind::Wayland,
+            compositor: Some("KWin".to_string()),
+            desktop_environment: Some("KDE".to_string()),
+            capture_backend: CaptureBackendKind::PortalPipeWire,
+            input_backend: InputBackendKind::PortalRemoteDesktop,
+            semantic_backend: SemanticBackendKind::Atspi,
+            portal_capabilities: PortalCapabilities {
+                screencast_version: Some(5),
+                remote_desktop_version: Some(2),
+                screenshot_version: Some(1),
+                available_source_types: None,
+                available_cursor_modes: None,
+                available_device_types: None,
+            },
+            xdg_session_type: Some("wayland".to_string()),
+            display: None,
+            wayland_display: Some("wayland-0".to_string()),
+            displays: Vec::new(),
+        }
+    }
+
+    fn available_capabilities() -> ToolCapabilities {
+        let available = || ToolAvailability {
+            available: true,
+            reason: None,
+        };
+        ToolCapabilities {
+            list_apps: available(),
+            get_app_state: available(),
+            focus_element: available(),
+            activate_element: available(),
+            select_element: available(),
+            expand_element: available(),
+            collapse_element: available(),
+            toggle_element: available(),
+            click: available(),
+            perform_action: available(),
+            perform_secondary_action: available(),
+            scroll: available(),
+            supported_scroll_directions: vec![ScrollDirection::Up, ScrollDirection::Down],
+            drag: available(),
+            type_text: available(),
+            press_key: available(),
+            set_value: available(),
+        }
     }
 }

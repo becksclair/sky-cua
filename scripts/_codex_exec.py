@@ -58,12 +58,14 @@ def plugin_mention(codex_home: Path) -> str:
 def with_plugin_mention(prompt: str, codex_home: Path) -> str:
     return (
         f"Use {plugin_mention(codex_home)} and its bundled computer-use skill.\n"
-        "Start from a fresh `get_app_state`, inspect any returned `screenshot_path` with `view_image`,"
-        " and treat the screenshot as the visual source of truth. When the tree is sparse or fallback-only,"
+        "Start from a fresh `get_app_state`, inspect `capture.inspection_image_path` with `view_image`"
+        " when present, and fall back to `capture.screenshot_path` only for older plugin responses."
+        " Treat `raw_capture_path` and `original_screenshot_path` as debug-only. When the tree is sparse or fallback-only,"
         " prefer compact `get_app_state` snapshots; use `element_query`, `element_limit`,"
         ' or `detail: "full"` only when the omitted fields are needed. '
-        " visually focus on the target app/window inside the full screenshot while keeping click and drag"
-        " coordinates in the current screenshot's pixel coordinate space. Before typing, inspect the current screenshot to confirm"
+        " For a known target app or window, use `list_windows` and then `screenshot(window_id=...)`"
+        " when you need a dedicated visual. Keep click and drag coordinates in the current"
+        " screenshot's pixel coordinate space. Before typing, inspect the current screenshot to confirm"
         " the target field and whether it already contains text; prefer element `value` or `text.content`"
         " readback when present, and clear or select stale contents before"
         " `type_text` when replacement is intended. Look for visible text-entry controls, action clusters,"

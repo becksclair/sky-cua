@@ -2,8 +2,8 @@ use atspi::AccessibilityConnection;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
-    ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind, CaptureScope,
-    CaptureScreenMode, DiagnosticEntry, DisplayInfo, DisplayRef, DisplayTarget,
+    ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind, CaptureInfo,
+    CaptureScope, CaptureScreenMode, DiagnosticEntry, DisplayInfo, DisplayRef, DisplayTarget,
     DoctorDisplayTopologyReport, DoctorReport, ElementNode, EnvironmentInfo, FocusedApp,
     InputBackendKind, RectF, ScrollDirection, SemanticBackendKind, ToolAvailability,
     ToolCapabilities, WindowTarget,
@@ -379,6 +379,268 @@ impl LinuxDesktopBackend {
             ..Self::focused_from_app(&app)
         }
     }
+
+    async fn get_app_state_capture(
+        &self,
+        snapshot_id: &str,
+        capture_screen: CaptureScreenMode,
+        environment: &EnvironmentInfo,
+        target_window: Option<&linux_windowing::LinuxWindowInfo>,
+        diagnostics: &mut DiagnosticBuilder,
+    ) -> Result<Option<CaptureInfo>, BackendError> {
+        if capture_screen == CaptureScreenMode::Never {
+            return Ok(None);
+        }
+        let candidates = get_app_state_capture_candidates(environment, target_window, diagnostics);
+        if candidates.is_empty() {
+            diagnostics.push_code(
+                "GetAppStateCaptureUnavailable",
+                "get_app_state did not attach a screenshot because no target window, target display, or primary display geometry was available.",
+                Some("Use screenshot(capture_all_displays=true) only when a full virtual desktop image is explicitly required.".to_string()),
+            );
+            return Ok(None);
+        }
+
+        for (index, candidate) in candidates.iter().enumerate() {
+            if index > 0 {
+                diagnostics.push_code(
+                    "GetAppStateCaptureScopeFallback",
+                    format!(
+                        "get_app_state could not use a narrower capture target; trying {} capture.",
+                        candidate.label
+                    ),
+                    None,
+                );
+            }
+
+            let mut capture_plan = match crate::capture_plan::plan_capture(
+                &self.portal,
+                snapshot_id,
+                capture_screen,
+                environment,
+                Some(&candidate.target),
+                candidate.target.capture_scope.clone(),
+                candidate.target.display.clone(),
+                true,
+                diagnostics,
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(error) if crate::capture_plan::is_capture_source_geometry_missing(&error) => {
+                    diagnostics.push_code(
+                        "CaptureSourceGeometryRetry",
+                        "RemoteDesktop capture source geometry was missing; resetting the capture session and retrying the scoped get_app_state screenshot once",
+                        Some(error.message.clone()),
+                    );
+                    self.portal.reset_session().await;
+                    match crate::capture_plan::plan_capture(
+                        &self.portal,
+                        snapshot_id,
+                        capture_screen,
+                        environment,
+                        Some(&candidate.target),
+                        candidate.target.capture_scope.clone(),
+                        candidate.target.display.clone(),
+                        false,
+                        diagnostics,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            diagnostics.push_code(
+                                error.code,
+                                "Scoped get_app_state screenshot capture failed",
+                                Some(error.message),
+                            );
+                            let mut events = self.portal.take_lifecycle_events().await;
+                            push_portal_lifecycle_diagnostics(&mut events, diagnostics);
+                            continue;
+                        }
+                    }
+                }
+                Err(error) => {
+                    diagnostics.push_code(
+                        error.code,
+                        "Scoped get_app_state screenshot capture failed",
+                        Some(error.message),
+                    );
+                    let mut events = self.portal.take_lifecycle_events().await;
+                    push_portal_lifecycle_diagnostics(&mut events, diagnostics);
+                    continue;
+                }
+            };
+
+            if crate::capture_plan::outcome_missing_capture_source_geometry(&capture_plan)
+                && environment.input_backend == InputBackendKind::PortalRemoteDesktop
+            {
+                diagnostics.push_code(
+                    "CaptureSourceGeometryRetry",
+                    "RemoteDesktop capture source geometry was missing; resetting the capture session and retrying the scoped get_app_state screenshot once",
+                    capture_plan
+                        .capture_error
+                        .as_ref()
+                        .map(|error| error.message.clone()),
+                );
+                self.portal.reset_session().await;
+                capture_plan = match crate::capture_plan::plan_capture(
+                    &self.portal,
+                    snapshot_id,
+                    capture_screen,
+                    environment,
+                    Some(&candidate.target),
+                    candidate.target.capture_scope.clone(),
+                    candidate.target.display.clone(),
+                    false,
+                    diagnostics,
+                )
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        diagnostics.push_code(
+                            error.code,
+                            "Scoped get_app_state screenshot capture failed",
+                            Some(error.message),
+                        );
+                        let mut events = self.portal.take_lifecycle_events().await;
+                        push_portal_lifecycle_diagnostics(&mut events, diagnostics);
+                        continue;
+                    }
+                };
+            }
+
+            let mut events = self.portal.take_lifecycle_events().await;
+            crate::capture_plan::push_diagnostics(
+                environment,
+                capture_plan.capture.as_ref(),
+                capture_plan.portal_session_error.as_ref(),
+                capture_plan.capture_error.as_ref(),
+                diagnostics,
+            );
+            push_portal_lifecycle_diagnostics(&mut events, diagnostics);
+
+            if let Err(error) = reject_unactionable_targeted_capture(
+                Some(&candidate.target),
+                &capture_plan,
+                environment,
+            ) {
+                diagnostics.push_code(
+                    error.code,
+                    "Scoped get_app_state screenshot was not actionable",
+                    Some(error.message),
+                );
+                continue;
+            }
+
+            if capture_plan
+                .capture
+                .as_ref()
+                .and_then(|capture| capture.screenshot_path.as_deref())
+                .is_some_and(|path| !path.trim().is_empty())
+            {
+                return Ok(capture_plan.capture);
+            }
+        }
+
+        diagnostics.push_code(
+            "GetAppStateCaptureUnavailable",
+            "get_app_state did not attach a screenshot because no scoped window/display capture could be produced.",
+            Some("Use screenshot(window_id=...) or screenshot(display_id=...) for explicit visual capture; use screenshot(capture_all_displays=true) only when a full virtual desktop image is required.".to_string()),
+        );
+        Ok(None)
+    }
+}
+
+struct GetAppStateCaptureCandidate {
+    target: crate::capture_plan::CaptureRegionTarget,
+    label: &'static str,
+}
+
+fn get_app_state_capture_candidates(
+    environment: &EnvironmentInfo,
+    target_window: Option<&linux_windowing::LinuxWindowInfo>,
+    diagnostics: &mut DiagnosticBuilder,
+) -> Vec<GetAppStateCaptureCandidate> {
+    let mut candidates = Vec::new();
+    let mut display_candidate_id: Option<String> = None;
+
+    if let Some(window) = target_window {
+        if let Some(bounds) = window.bounds.clone() {
+            candidates.push(GetAppStateCaptureCandidate {
+                target: crate::capture_plan::CaptureRegionTarget {
+                    desktop_logical_rect: bounds,
+                    capture_scope: CaptureScope::Window,
+                    display: window.display.clone(),
+                },
+                label: "window",
+            });
+        } else {
+            diagnostics.push_code(
+                "GetAppStateCaptureScopeFallback",
+                format!(
+                    "Selected {} window {} did not report bounds; trying display-scoped get_app_state capture.",
+                    window.backend, window.window_id
+                ),
+                None,
+            );
+        }
+
+        if let Some(display_ref) = &window.display {
+            if let Some(display) = display_for_ref(environment, display_ref) {
+                display_candidate_id = Some(display.display_id.clone());
+                candidates.push(display_candidate(display, CaptureScope::Display, "display"));
+            } else {
+                diagnostics.push_code(
+                    "GetAppStateCaptureScopeFallback",
+                    format!(
+                        "Selected window display {} was not present in environment.displays; trying primary-display capture.",
+                        display_ref.display_id
+                    ),
+                    None,
+                );
+            }
+        }
+    }
+
+    if let Some(primary) = crate::displays::primary_display(&environment.displays)
+        && display_candidate_id.as_deref() != Some(primary.display_id.as_str())
+    {
+        candidates.push(display_candidate(
+            &primary,
+            CaptureScope::PrimaryDisplay,
+            "primary display",
+        ));
+    }
+
+    candidates
+}
+
+fn display_for_ref<'a>(
+    environment: &'a EnvironmentInfo,
+    display_ref: &DisplayRef,
+) -> Option<&'a DisplayInfo> {
+    environment
+        .displays
+        .iter()
+        .find(|display| display.display_id == display_ref.display_id)
+}
+
+fn display_candidate(
+    display: &DisplayInfo,
+    capture_scope: CaptureScope,
+    label: &'static str,
+) -> GetAppStateCaptureCandidate {
+    let display_ref = DisplayRef::from(display);
+    GetAppStateCaptureCandidate {
+        target: crate::capture_plan::CaptureRegionTarget {
+            desktop_logical_rect: display.logical_rect.clone(),
+            capture_scope,
+            display: Some(display_ref),
+        },
+        label,
+    }
 }
 
 fn merge_session_env_reports(current: &mut DoctorSessionEnvReport, latest: DoctorSessionEnvReport) {
@@ -635,23 +897,6 @@ impl DesktopBackend for LinuxDesktopBackend {
             .await
             .unwrap_or_default();
 
-        let capture_plan = crate::capture_plan::plan_capture(
-            &self.portal,
-            &snapshot_id,
-            capture_screen,
-            &environment,
-            None,
-            CaptureScope::Unknown,
-            None,
-            false,
-            &mut diagnostics,
-        )
-        .await?;
-        let capture = capture_plan.capture;
-        let portal_session_error = capture_plan.portal_session_error;
-        let capture_error = capture_plan.capture_error;
-        let mut portal_lifecycle_events = self.portal.take_lifecycle_events().await;
-
         let (connection, mut apps) = match self.discover_accessible_apps().await {
             Ok(result) => result,
             Err(error) => {
@@ -664,14 +909,6 @@ impl DesktopBackend for LinuxDesktopBackend {
                     .as_ref()
                     .and_then(|selector| select_linux_window(&registry_windows, selector))
                     .or_else(|| preferred_linux_window(&registry_windows));
-                crate::capture_plan::push_diagnostics(
-                    &environment,
-                    capture.as_ref(),
-                    portal_session_error.as_ref(),
-                    capture_error.as_ref(),
-                    &mut diagnostics,
-                );
-                push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
                 if let Some(window) = fallback_window {
                     let app = app_from_linux_window(&window);
                     diagnostics.push(
@@ -682,6 +919,15 @@ impl DesktopBackend for LinuxDesktopBackend {
                         ),
                         Some(selector_or_window_summary(selector.as_ref(), &app)),
                     );
+                    let capture = self
+                        .get_app_state_capture(
+                            &snapshot_id,
+                            capture_screen,
+                            &environment,
+                            Some(&window),
+                            &mut diagnostics,
+                        )
+                        .await?;
                     return Ok(linux_fallback_snapshot(
                         snapshot_id,
                         environment,
@@ -692,6 +938,15 @@ impl DesktopBackend for LinuxDesktopBackend {
                         window,
                     ));
                 }
+                let capture = self
+                    .get_app_state_capture(
+                        &snapshot_id,
+                        capture_screen,
+                        &environment,
+                        None,
+                        &mut diagnostics,
+                    )
+                    .await?;
                 return Ok(AppStateSnapshot {
                     snapshot_id,
                     created_at: chrono::Utc::now(),
@@ -715,14 +970,6 @@ impl DesktopBackend for LinuxDesktopBackend {
                 "AT-SPI returned no accessible applications",
                 None,
             );
-            crate::capture_plan::push_diagnostics(
-                &environment,
-                capture.as_ref(),
-                portal_session_error.as_ref(),
-                capture_error.as_ref(),
-                &mut diagnostics,
-            );
-            push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
             if let Some(window) = selector
                 .as_ref()
                 .and_then(|selector| select_linux_window(&registry_windows, selector))
@@ -737,6 +984,15 @@ impl DesktopBackend for LinuxDesktopBackend {
                     ),
                     Some(selector_or_window_summary(selector.as_ref(), &app)),
                 );
+                let capture = self
+                    .get_app_state_capture(
+                        &snapshot_id,
+                        capture_screen,
+                        &environment,
+                        Some(&window),
+                        &mut diagnostics,
+                    )
+                    .await?;
                 return Ok(linux_fallback_snapshot(
                     snapshot_id,
                     environment,
@@ -747,6 +1003,15 @@ impl DesktopBackend for LinuxDesktopBackend {
                     window,
                 ));
             }
+            let capture = self
+                .get_app_state_capture(
+                    &snapshot_id,
+                    capture_screen,
+                    &environment,
+                    None,
+                    &mut diagnostics,
+                )
+                .await?;
             return Ok(AppStateSnapshot {
                 snapshot_id,
                 created_at: chrono::Utc::now(),
@@ -766,14 +1031,6 @@ impl DesktopBackend for LinuxDesktopBackend {
             if let Some(app) = select_app(&apps, selector) {
                 app
             } else if let Some(window) = select_linux_window(&registry_windows, selector) {
-                crate::capture_plan::push_diagnostics(
-                    &environment,
-                    capture.as_ref(),
-                    portal_session_error.as_ref(),
-                    capture_error.as_ref(),
-                    &mut diagnostics,
-                );
-                push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
                 let app = app_from_linux_window(&window);
                 diagnostics.push(
                     BackendErrorCode::AccessibilityCoverageLimited,
@@ -783,6 +1040,15 @@ impl DesktopBackend for LinuxDesktopBackend {
                     ),
                     Some(selector_or_window_summary(Some(selector), &app)),
                 );
+                let capture = self
+                    .get_app_state_capture(
+                        &snapshot_id,
+                        capture_screen,
+                        &environment,
+                        Some(&window),
+                        &mut diagnostics,
+                    )
+                    .await?;
                 return Ok(linux_fallback_snapshot(
                     snapshot_id,
                     environment,
@@ -816,14 +1082,15 @@ impl DesktopBackend for LinuxDesktopBackend {
                     ),
                     Some(window_summary(&app)),
                 );
-                crate::capture_plan::push_diagnostics(
-                    &environment,
-                    capture.as_ref(),
-                    portal_session_error.as_ref(),
-                    capture_error.as_ref(),
-                    &mut diagnostics,
-                );
-                push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
+                let capture = self
+                    .get_app_state_capture(
+                        &snapshot_id,
+                        capture_screen,
+                        &environment,
+                        Some(&window),
+                        &mut diagnostics,
+                    )
+                    .await?;
                 return Ok(linux_fallback_snapshot(
                     snapshot_id,
                     environment,
@@ -839,10 +1106,10 @@ impl DesktopBackend for LinuxDesktopBackend {
                 .await
         };
         let mut focused_app = Self::focused_from_app(&chosen_app.info);
-        focused_app.display = registry_windows
+        let focused_window = registry_windows
             .iter()
-            .find(|window| linux_window_matches_app(window, &chosen_app.info))
-            .and_then(|window| window.display.clone());
+            .find(|window| linux_window_matches_app(window, &chosen_app.info));
+        focused_app.display = focused_window.and_then(|window| window.display.clone());
         let focused_app = Some(focused_app);
 
         let (elements, snapshot_diags) = snapshot_for_app(&connection, &chosen_app).await?;
@@ -854,14 +1121,15 @@ impl DesktopBackend for LinuxDesktopBackend {
             );
         }
 
-        crate::capture_plan::push_diagnostics(
-            &environment,
-            capture.as_ref(),
-            portal_session_error.as_ref(),
-            capture_error.as_ref(),
-            &mut diagnostics,
-        );
-        push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
+        let capture = self
+            .get_app_state_capture(
+                &snapshot_id,
+                capture_screen,
+                &environment,
+                focused_window,
+                &mut diagnostics,
+            )
+            .await?;
 
         Ok(AppStateSnapshot {
             snapshot_id,
@@ -2199,9 +2467,9 @@ mod tests {
     use sky_cua_platform::model::test_support::wayland_pipewire_environment;
     use sky_cua_platform::model::{
         CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace,
-        DisplayInfo, DoctorDisplayTopologyReport, DoctorSessionEnvRepair, DoctorSessionEnvReport,
-        ElementNode, ElementNumericValueReadback, EnvironmentInfo, InputBackendKind, PixelSize,
-        PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
+        DisplayInfo, DisplayRef, DoctorDisplayTopologyReport, DoctorSessionEnvRepair,
+        DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback, EnvironmentInfo,
+        InputBackendKind, PixelSize, PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
     };
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::{Duration, Instant};
@@ -2263,6 +2531,77 @@ mod tests {
             scale_factor: Some(1.0),
             backend: "test".to_string(),
         }
+    }
+
+    fn test_window(bounds: Option<RectF>, display: Option<DisplayRef>) -> LinuxWindowInfo {
+        LinuxWindowInfo {
+            window_id: "window-1".to_string(),
+            title: Some("Test window".to_string()),
+            app_id: Some("test.desktop".to_string()),
+            wm_class: None,
+            pid: Some(42),
+            bounds,
+            display,
+            display_intersections: Vec::new(),
+            workspace: None,
+            focused: true,
+            hidden: false,
+            client_type: None,
+            backend: "kwin".to_string(),
+            terminal: None,
+        }
+    }
+
+    #[test]
+    fn get_app_state_capture_candidates_prefer_window_then_display() {
+        let mut environment = wayland_pipewire_environment();
+        environment.displays = vec![test_display("kwin:eDP-1")];
+        let display_ref = DisplayRef::from(&environment.displays[0]);
+        let window = test_window(Some(rect(100.0, 80.0, 640.0, 480.0)), Some(display_ref));
+        let mut diagnostics = DiagnosticBuilder::new();
+
+        let candidates =
+            super::get_app_state_capture_candidates(&environment, Some(&window), &mut diagnostics);
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].target.capture_scope, CaptureScope::Window);
+        assert_eq!(candidates[0].label, "window");
+        assert_eq!(candidates[1].target.capture_scope, CaptureScope::Display);
+        assert_eq!(candidates[1].label, "display");
+        assert!(diagnostics.finish().is_empty());
+    }
+
+    #[test]
+    fn get_app_state_capture_candidates_fall_back_to_display_without_window_bounds() {
+        let mut environment = wayland_pipewire_environment();
+        environment.displays = vec![test_display("kwin:eDP-1")];
+        let display_ref = DisplayRef::from(&environment.displays[0]);
+        let window = test_window(None, Some(display_ref));
+        let mut diagnostics = DiagnosticBuilder::new();
+
+        let candidates =
+            super::get_app_state_capture_candidates(&environment, Some(&window), &mut diagnostics);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].target.capture_scope, CaptureScope::Display);
+        let entries = diagnostics.finish();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.code == "GetAppStateCaptureScopeFallback")
+        );
+    }
+
+    #[test]
+    fn get_app_state_capture_candidates_do_not_add_virtual_desktop_fallback() {
+        let environment = wayland_pipewire_environment();
+        let mut diagnostics = DiagnosticBuilder::new();
+
+        let candidates =
+            super::get_app_state_capture_candidates(&environment, None, &mut diagnostics);
+
+        assert!(candidates.is_empty());
+        assert!(diagnostics.finish().is_empty());
     }
 
     fn test_display_topology_report(display_count: usize) -> DoctorDisplayTopologyReport {

@@ -3,6 +3,7 @@
 /.idea
 /.vscode
 /.opencode
+.ultra-review-state.json
 *.log
 __pycache__/
 *.py[cod]

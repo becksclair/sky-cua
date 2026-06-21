@@ -222,7 +222,7 @@ pub(crate) fn handle_tool_call(
                             Some(Ok(image_block)) => content.push(image_block),
                             Some(Err(message)) => {
                                 text_content.push_str(
-                                    "\nInline screenshot delivery failed; read screenshot_path instead: ",
+                                    "\nInline screenshot delivery failed; read capture.inspection_image_path instead: ",
                                 );
                                 text_content.push_str(&message);
                             }
@@ -809,7 +809,7 @@ fn parse_screenshot_delivery(arguments: &Value) -> ScreenshotDelivery {
     }
 }
 
-/// Build an MCP image content block from the snapshot's persisted screenshot.
+/// Build an MCP image content block from the snapshot's persisted inspection image.
 /// Returns None when the snapshot has no capture, and Err text when the file
 /// cannot be read back.
 fn inline_screenshot_block(snapshot: &AppStateSnapshot) -> Option<Result<Value, String>> {
@@ -1280,7 +1280,12 @@ mod tests {
         assert!(
             get_app_state["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("Defaults to compact detail"))
+                .is_some_and(
+                    |description| description.contains("Defaults to compact detail")
+                        && description.contains("capture.inspection_image_path")
+                        && description.contains("screenshot_path is compatibility metadata")
+                        && description.contains("raw/original paths are debug-only")
+                )
         );
         let get_app_state_schema = &get_app_state["inputSchema"];
         assert_eq!(
@@ -2266,6 +2271,8 @@ mod tests {
         assert_eq!(content.len(), 1);
         let text = content[0]["text"].as_str().expect("text content");
         assert!(text.contains("Inline screenshot delivery failed"));
+        assert!(text.contains("capture.inspection_image_path"));
+        assert!(!text.contains("read screenshot_path instead"));
     }
 
     #[test]
@@ -2808,6 +2815,14 @@ mod tests {
                 .get("capture_screen")
                 .is_some()
         );
+        assert!(
+            get_app_state["inputSchema"]["properties"]["screenshot_delivery"]["description"]
+                .as_str()
+                .is_some_and(
+                    |description| description.contains("capture.inspection_image_path")
+                        && description.contains("inspection image block")
+                )
+        );
 
         let text_only_tools = build_tool_definitions(false);
         let text_only_get_app_state = text_only_tools
@@ -2820,6 +2835,15 @@ mod tests {
             text_only_get_app_state["inputSchema"]["properties"]
                 .get("capture_screen")
                 .is_none()
+        );
+        assert!(
+            text_only_get_app_state["description"]
+                .as_str()
+                .is_some_and(
+                    |description| description.contains("capture.inspection_image_path")
+                        && description.contains("screenshot_path is compatibility metadata")
+                        && description.contains("raw/original paths are debug-only")
+                )
         );
     }
 

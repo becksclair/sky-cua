@@ -91,7 +91,7 @@ pub(super) fn handle_get_app_state(
                     Some(Ok(image_block)) => content.push(image_block),
                     Some(Err(message)) => {
                         text_content.push_str(
-                            "\nInline screenshot delivery failed; read screenshot_path instead: ",
+                            "\nInline screenshot delivery failed; read capture.inspection_image_path instead: ",
                         );
                         text_content.push_str(&message);
                     }

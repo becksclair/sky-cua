@@ -25,13 +25,16 @@ _READ_POLL_SECONDS = 0.25
 def with_plugin_mention(prompt: str, codex_home: Path) -> str:
     return (
         f"Use {plugin_mention(codex_home)} and its bundled computer-use skill.\n"
-        "When `get_app_state` returns a `screenshot_path`, inspect that image with `view_image` and"
-        " treat it as the visual source of truth. If the control tree is sparse or fallback-only,"
+        "When `get_app_state` returns `capture.inspection_image_path`, inspect that image with `view_image` and"
+        " treat it as the visual source of truth. Fall back to `capture.screenshot_path` only for"
+        " older plugin responses; treat `raw_capture_path` and `original_screenshot_path` as debug-only."
+        " If the control tree is sparse or fallback-only,"
         " you may still act by confirmed on-screen coordinates through the computer-use tools."
         " Prefer compact `get_app_state` snapshots; use `element_query`, `element_limit`,"
         ' or `detail: "full"` only when the omitted fields are needed.'
-        " If you know the target app or window, visually focus on that region of the full screenshot"
-        " while keeping all click and drag coordinates in the current screenshot's pixel coordinate space."
+        " If you know the target app or window, use `list_windows` and then `screenshot(window_id=...)`"
+        " when you need a dedicated visual, while keeping all click and drag coordinates in the"
+        " current screenshot's pixel coordinate space."
         " When the next move is unclear, look for visible text-entry controls, action clusters,"
         " and right-click/context-menu paths rather than waiting for perfect semantics. Before typing,"
         " inspect the current screenshot and any element `value` or `text.content` readback to confirm"

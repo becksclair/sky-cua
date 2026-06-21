@@ -8,10 +8,16 @@ On a `2560x1440` desktop this produces an aspect-preserved `1440x810` JPEG for m
 
 The raw capture contract is unchanged:
 
-- `capture.screenshot_path` points to the bounded model image.
+- `capture.inspection_image_path` points to the bounded model image agents
+  should inspect. For compatibility, `capture.screenshot_path` points to the
+  same image.
 - `capture.pixel_size` describes that bounded model image.
-- `capture.original_screenshot_path` points to the raw capture.
+- `capture.raw_capture_path` points to the raw capture when preserved. For
+  compatibility, `capture.original_screenshot_path` points to the same raw
+  capture.
 - `capture.original_pixel_size` describes the raw capture.
+- `capture.images[]` labels inspection and raw paths with role, scope, and
+  recommended use.
 - `capture.model_image_format`, `capture.model_image_quality`,
   `capture.model_image_bytes`, and `capture.model_image_encode_ms` describe the
   model-image encoding used for the snapshot.

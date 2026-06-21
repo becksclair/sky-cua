@@ -1,9 +1,7 @@
 #include "agentcursoreffect.h"
 
 #include "core/output.h"
-#include "core/renderviewport.h"
 #include "effect/effecthandler.h"
-#include "effect/offscreenquickview.h"
 
 #include <QDBusConnection>
 #include <QDebug>
@@ -12,6 +10,7 @@
 #include <QJsonParseError>
 #include <QJsonValue>
 #include <QPointF>
+#include <QQuickItem>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QVariant>
@@ -82,6 +81,18 @@ std::optional<QPointF> pointFromState(const QJsonObject &state)
 
 SkyCuaAgentCursorEffect::SkyCuaAgentCursorEffect()
 {
+    const QString qmlPath = QStandardPaths::locate(QStandardPaths::GenericDataLocation, QString::fromLatin1(QmlPath));
+    const QString cursorPath = QStandardPaths::locate(QStandardPaths::GenericDataLocation, QString::fromLatin1(CursorPath));
+    if (qmlPath.isEmpty() || cursorPath.isEmpty()) {
+        qWarning() << "sky-cua agent cursor KWin effect resources are missing"
+                   << "qml" << qmlPath
+                   << "cursor" << cursorPath;
+    } else {
+        m_cursorSource = QUrl::fromLocalFile(cursorPath).toString();
+        setSource(QUrl::fromLocalFile(qmlPath));
+    }
+    setRunning(false);
+
     m_idleHideTimer.setSingleShot(true);
     m_idleHideTimer.setInterval(IdleHideTimeoutMs);
     QObject::connect(&m_idleHideTimer, &QTimer::timeout, this, [this] {
@@ -90,6 +101,7 @@ SkyCuaAgentCursorEffect::SkyCuaAgentCursorEffect()
         }
         m_cursorVisible = false;
         syncStateJsonVisibility();
+        setRunning(false);
         restoreSystemCursor();
         effects->addRepaintFull();
     });
@@ -107,58 +119,15 @@ SkyCuaAgentCursorEffect::~SkyCuaAgentCursorEffect()
     restoreSystemCursor();
 }
 
-void SkyCuaAgentCursorEffect::prePaintScreen(ScreenPrePaintData &data, std::chrono::milliseconds presentTime)
+void SkyCuaAgentCursorEffect::prePaintScreen(ScreenPrePaintData &data)
 {
-    effects->prePaintScreen(data, presentTime);
-    ensureScene();
-}
-
-void SkyCuaAgentCursorEffect::paintScreen(const RenderTarget &renderTarget,
-                                          const RenderViewport &viewport,
-                                          int mask,
-                                          const Region &deviceRegion,
-                                          LogicalOutput *screen)
-{
-    effects->paintScreen(renderTarget, viewport, mask, deviceRegion, screen);
-
-    if (!m_scene) {
-        restoreSystemCursor();
-        return;
-    }
     if (!m_cursorVisible) {
         restoreSystemCursor();
-        return;
-    }
-
-    if (m_systemCursor.supported()) {
+    } else if (m_systemCursor.supported()) {
         m_systemCursor.setHidden(true);
     }
-    const auto rect = viewport.renderRect();
-    const QPointF cursorPoint = m_hasCursorPoint
-        ? m_cursorPoint
-        : QPointF(rect.x() + (rect.width() / 2.0), rect.y() + (rect.height() / 2.0));
-    // The agent cursor exists at exactly one desktop-logical location, so draw it
-    // only on the output that contains it. paintScreen() runs once per output;
-    // renderRect() is this output's global-logical geometry (origin included), so
-    // a point outside it belongs to another output and is skipped here. The
-    // centered fallback (no cursor point) keeps drawing per output unchanged.
-    if (m_hasCursorPoint
-        && (cursorPoint.x() < rect.x() || cursorPoint.x() >= rect.x() + rect.width()
-            || cursorPoint.y() < rect.y() || cursorPoint.y() >= rect.y() + rect.height())) {
-        return;
-    }
-    // Pin the offscreen scene's devicePixelRatio to this output's compositor scale
-    // rather than the QScreen DPR, which KWin quantizes for fractional scales. The
-    // viewport already maps global-logical geometry to device pixels through its
-    // projection matrix; the DPR only governs the cursor texture's own resolution,
-    // so a mismatch on a mixed-scale secondary output skews the rendered position.
-    if (screen) {
-        m_scene->setDevicePixelRatio(screen->scale());
-    }
-    const int left = static_cast<int>(std::round(cursorPoint.x())) - CursorHotspotX;
-    const int top = static_cast<int>(std::round(cursorPoint.y())) - CursorHotspotY;
-    m_scene->setGeometry(QRect(left, top, CursorWidth, CursorHeight));
-    effects->renderOffscreenQuickView(renderTarget, viewport, m_scene.get());
+    QuickSceneEffect::prePaintScreen(data);
+    updateSceneViews();
 }
 
 bool SkyCuaAgentCursorEffect::SetCursorState(const QString &stateJson)
@@ -179,6 +148,7 @@ bool SkyCuaAgentCursorEffect::SetCursorState(const QString &stateJson)
         m_hasCursorPoint = false;
     }
     m_cursorVisible = state.value(QStringLiteral("visible")).toBool(true);
+    setRunning(m_cursorVisible && !m_cursorSource.isEmpty());
     m_stateJson = QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact));
     if (!m_cursorVisible) {
         restoreSystemCursor();
@@ -191,6 +161,7 @@ bool SkyCuaAgentCursorEffect::SetCursorState(const QString &stateJson)
 void SkyCuaAgentCursorEffect::Hide()
 {
     m_cursorVisible = false;
+    setRunning(false);
     m_idleHideTimer.stop();
     syncStateJsonVisibility();
     restoreSystemCursor();
@@ -200,6 +171,7 @@ void SkyCuaAgentCursorEffect::Hide()
 void SkyCuaAgentCursorEffect::Show()
 {
     m_cursorVisible = true;
+    setRunning(!m_cursorSource.isEmpty());
     syncStateJsonVisibility();
     armIdleHideTimer();
     effects->addRepaintFull();
@@ -215,31 +187,47 @@ QString SkyCuaAgentCursorEffect::BuildId() const
     return QStringLiteral(SKY_CUA_EFFECT_BUILD_ID);
 }
 
-void SkyCuaAgentCursorEffect::ensureScene()
+QVariantMap SkyCuaAgentCursorEffect::initialProperties(LogicalOutput *screen)
 {
-    if (m_scene) {
-        return;
-    }
+    Q_UNUSED(screen)
+    return {
+        {QStringLiteral("cursorSource"), m_cursorSource},
+    };
+}
 
-    const QString qmlPath = QStandardPaths::locate(QStandardPaths::GenericDataLocation, QString::fromLatin1(QmlPath));
-    const QString cursorPath = QStandardPaths::locate(QStandardPaths::GenericDataLocation, QString::fromLatin1(CursorPath));
-    if (qmlPath.isEmpty() || cursorPath.isEmpty()) {
-        qWarning() << "sky-cua agent cursor KWin effect resources are missing"
-                   << "qml" << qmlPath
-                   << "cursor" << cursorPath;
-        return;
-    }
+void SkyCuaAgentCursorEffect::updateSceneViews()
+{
+    const QList<LogicalOutput *> screens = effects->screens();
+    for (LogicalOutput *screen : screens) {
+        QuickSceneView *view = viewForScreen(screen);
+        if (!view || !view->rootItem()) {
+            continue;
+        }
+        QQuickItem *root = view->rootItem();
+        if (!m_cursorVisible) {
+            root->setVisible(false);
+            continue;
+        }
 
-    m_scene = std::make_unique<OffscreenQuickScene>(OffscreenQuickView::ExportMode::Texture, true);
-    QObject::connect(m_scene.get(), &OffscreenQuickView::repaintNeeded, [] {
-        effects->addRepaintFull();
-    });
-    m_scene->setSource(
-        QUrl::fromLocalFile(qmlPath),
-        {
-            {QStringLiteral("cursorSource"), QUrl::fromLocalFile(cursorPath).toString()},
-        });
-    m_scene->show();
+        const Rect rect = screen->geometry();
+        const QPointF cursorPoint = m_hasCursorPoint
+            ? m_cursorPoint
+            : QPointF(rect.x() + (rect.width() / 2.0), rect.y() + (rect.height() / 2.0));
+        if (m_hasCursorPoint
+            && (cursorPoint.x() < rect.x() || cursorPoint.x() >= rect.x() + rect.width()
+                || cursorPoint.y() < rect.y() || cursorPoint.y() >= rect.y() + rect.height())) {
+            root->setVisible(false);
+            continue;
+        }
+
+        root->setVisible(true);
+        root->setWidth(CursorWidth);
+        root->setHeight(CursorHeight);
+        root->setX(std::round(cursorPoint.x() - rect.x()) - CursorHotspotX);
+        root->setY(std::round(cursorPoint.y() - rect.y()) - CursorHotspotY);
+        view->setDevicePixelRatio(screen->scale());
+        view->scheduleRepaint();
+    }
 }
 
 // Keep the StateJson introspection honest: Hide/Show and the idle failsafe

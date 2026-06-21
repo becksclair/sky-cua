@@ -14,6 +14,9 @@ Desktop screenshots are display-aware. A no-selector `screenshot` captures the
 primary display, explicit display selectors capture one monitor, window
 selectors activate and focus-verify the window before returning an unoccluded
 crop, and full virtual-desktop capture requires `capture_all_displays=true`.
+`get_app_state(capture_screen="always")` attaches the narrowest proven visual:
+focused/selected window first, then that window's display, then the primary
+display. It does not silently attach an all-displays virtual desktop image.
 
 ## Contract surface
 
@@ -32,6 +35,10 @@ crop, and full virtual-desktop capture requires `capture_all_displays=true`.
   backend. If a Screenshot-portal fallback is outside the active RemoteDesktop
   stream, `source_logical_rect` is omitted and portal actions against that
   snapshot fail closed.
+- MCP `get_app_state` projects `capture.inspection_image_path` as the path an
+  agent should visually inspect, plus `capture.images[]` entries with role,
+  scope, and `recommended_for`. `capture.raw_capture_path` and legacy
+  `capture.original_screenshot_path` identify source/debug artifacts.
 - `ServiceRequest::Screenshot` carries `target`, `display_target`, and
   `capture_all_displays`.
 - MCP `screenshot` accepts flat display selector fields:
@@ -61,6 +68,14 @@ the backend does not silently return another monitor. When no selector is
 provided, the primary display is captured. If topology is unavailable only for
 that omitted-selector path, Linux preserves the legacy raw capture with a
 diagnostic instead of breaking old callers.
+
+`get_app_state` follows a stricter visual-attachment ladder than the standalone
+`screenshot` default: target window crop when focused/selected window geometry
+is known, target display when window bounds are missing or unusable, primary
+display when there is no target display, and no image when none of those scopes
+can be proven. Diagnostics describe each scope fallback. Agents that require a
+virtual-desktop image must call `screenshot(capture_all_displays=true)`
+explicitly.
 
 Linux diagnostics distinguish two display-topology caveats:
 `DisplayTopologyUnavailable` means no provider supplied display geometry, and
@@ -99,10 +114,12 @@ monitor layouts remain valid.
 ## Verification
 
 - Rust contract/client tests cover display contract serialization,
-  screenshot request fields, MCP schema fields, and selector parsing.
+  screenshot request fields, MCP schema fields, selector parsing, and projected
+  `get_app_state` capture metadata.
 - Linux unit tests cover KWin/KScreen, GNOME DisplayConfig, Hyprland, COSMIC,
   and xrandr parsers; window-to-display assignment; capture-region planning;
-  and portal, XTest, and Linux virtual-input coordinate mapping.
+  `get_app_state` scoped-capture candidate selection; and portal, XTest, and
+  Linux virtual-input coordinate mapping.
 - Windows target checks cover monitor selection, window intersection, display
   capture source origins, and screenshot-pixel to desktop-coordinate mapping.
 - VM smoke profiles:

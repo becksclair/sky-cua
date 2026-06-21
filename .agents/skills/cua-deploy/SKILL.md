@@ -52,8 +52,13 @@ best-effort refresh of the user AT-SPI accessibility bus before sky-cua
 reconnects so wedged semantic trees do not survive deploys. Does not touch the
 marketplace.
 
+A build-bearing deploy also rebuilds and stages the Android phone-companion APK
+automatically (toolchain-gated, change-detected — see "Android phone companion"
+below), so the bundled companion stays current without a manual Gradle step.
+
 ```bash
-# Build + deploy locally (also refreshes the installed MCP runtime)
+# Build + deploy locally (also refreshes the installed MCP runtime, and rebuilds
+# the phone-companion APK when its sources changed and the Android toolchain is present)
 python3 scripts/deploy_plugin.py
 python3 scripts/sync_openclaw_workspace_skills.py
 
@@ -61,10 +66,47 @@ python3 scripts/sync_openclaw_workspace_skills.py
 python3 scripts/deploy_plugin.py --kwin-effect
 python3 scripts/sync_openclaw_workspace_skills.py
 
-# Install existing bundle without rebuilding
+# Force a companion rebuild, or skip it entirely
+python3 scripts/deploy_plugin.py --force-companion
+python3 scripts/deploy_plugin.py --no-companion
+
+# Install existing bundle without rebuilding (skips the companion lane too)
 python3 scripts/deploy_plugin.py --no-build
 python3 scripts/sync_openclaw_workspace_skills.py
 ```
+
+### Android phone companion
+
+A build-bearing `deploy_plugin.py` runs the companion build/stage lane before
+bundling. It rebuilds the APK with Gradle only when the companion sources
+changed since the last staged APK (so a pure-Rust deploy is not slowed), stages
+it to `resources/android/phone-companion.{apk,json}`, and lets `build_plugin.py`
+bundle it. The lane is graceful: on a host without JDK 21 + the Android SDK it
+logs a note and skips, reusing any previously staged APK (ADB-baseline phone-use
+is unaffected). `--force-companion` forces a rebuild; `--no-companion` skips the
+lane. Override the toolchain with `SKY_CUA_COMPANION_JAVA_HOME` /
+`SKY_CUA_COMPANION_ANDROID_SDK_ROOT` when it is not auto-detected.
+
+Installing the companion onto a device and enabling its required services is a
+*runtime* concern, not a deploy-script one: `phone_install_companion` (and
+`phone_connect` under auto-install) install the staged APK over ADB and enable
+the accessibility + notification-listener services automatically. See
+`docs/features/phone-use.md`.
+
+To keep that handoff explicit rather than silent, a build-bearing deploy prints
+a `[companion]` device-setup status: the staged version and the currently
+connected adb devices. When you (the agent) see it after a deploy and a
+companion is bundled, finish setup through the runtime tools — do not push the
+APK from the shell (a raw `adb install` bypasses the service-enable logic, which
+lives in the Rust tool path):
+
+1. If devices are listed, ask the user which one(s) to set up (do not assume; do
+   not auto-install on every connected device).
+2. For each chosen device: `phone_connect(serial=…)` then
+   `phone_install_companion`. That installs the staged APK and auto-enables the
+   accessibility + notification-listener services; confirm with
+   `phone_companion_status` (it reports installed-vs-expected version and the
+   permission grants).
 
 ### Build + install a release package
 
@@ -133,11 +175,33 @@ uv run ruff format --check scripts && uv run ruff check scripts && uv run basedp
 
 State any live-smoke gates not run (desktop/portal/KDE/COSMIC/Hyprland/GNOME).
 
+## Deploy before live tests
+
+Live tests must run against current binaries, not a stale build. Always deploy
+before a live smoke or an agent-driven device test. The harnesses enforce this
+at the shared launch choke points: `deploy_freshness.py` fingerprints the Rust
+runtime source, every build/deploy stamps the client binary it produced, and
+every sky-cua MCP spawn (`_mcp_stdio.McpClient`) and agent launch
+(`_agent_mcp_smoke.run_agent`) aborts with a redeploy hint when the binary it —
+or the agent it drives — would use was not built from the current source. This
+covers all `live_*_smoke.py` harnesses automatically.
+
+```bash
+# Standalone preflight (exits nonzero when the deployed runtime is stale):
+python3 scripts/deploy_freshness.py            # checks the locally-deployed client
+python3 scripts/deploy_freshness.py --client bin/sky-cua-client  # a specific binary
+
+# Refresh, then test:
+python3 scripts/deploy_plugin.py
+```
+
+Set `SKY_CUA_ALLOW_STALE_DEPLOY=1` only to intentionally bypass the gate.
+
 ## Common flags summary
 
 | Script | Key flags |
 |---|---|
-| `deploy_plugin.py` | `--no-build`, `--symlink`, `--kwin-effect`, `--local-install-host` |
+| `deploy_plugin.py` | `--no-build`, `--symlink`, `--kwin-effect`, `--no-companion`, `--force-companion`, `--local-install-host` |
 | `package.py` | `--no-build`, `--platform`, `--version-from-tag [TAG]`, `--release-dir` |
 | `install.py` | `--agents`, `--mode {auto,repo,bundle}`, `--bundle-root`, `--target-dir`, `--kwin-effect`, `--skip-system-deps`, `--dry-run` |
 | `install_mcp_server.py` | `--host`, `--restart-runtime`, `--kwin-effect` |

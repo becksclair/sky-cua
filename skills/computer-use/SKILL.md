@@ -46,6 +46,10 @@ coordinates across them.
   Use `element_query`/`element_offset`/`element_limit` on dense trees. Use
   `capture_screen: "never"` for structure-only passes and `"always"` for a
   fresh focused-app image.
+- When `get_app_state` includes capture metadata, inspect
+  `capture.inspection_image_path` first. `capture.raw_capture_path` and
+  `capture.original_screenshot_path` are source/debug artifacts, not the
+  recommended visual inspection image.
 - `screenshot` is visual state. Use it instead of `get_app_state` for a
   specific window/display image or pixel target. Use
   `screenshot_delivery: "inline"` only when local file paths are unreadable.
