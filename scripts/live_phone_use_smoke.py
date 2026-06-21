@@ -830,7 +830,7 @@ def _notification_observe_step(
     return step, events
 
 
-def _overlay_step(smoke: PhoneSmoke, session_id: str, companion_caps: dict[str, Any]) -> StepResult:
+def overlay_step(smoke: PhoneSmoke, session_id: str, companion_caps: dict[str, Any]) -> StepResult:
     """Exercise the phone-native agent overlay over an established companion session.
 
     The persistent "agent in control" edge glow is toggled on by the host when the
@@ -895,6 +895,12 @@ def _overlay_step(smoke: PhoneSmoke, session_id: str, companion_caps: dict[str, 
     )
 
 
+# The canonical overlay assertion is shared with the workflow smoke
+# (`live_phone_workflow_smoke.overlay_probe`), so it is public. The historical
+# private name is retained as an alias because tests reference it.
+_overlay_step = overlay_step
+
+
 def profile_companion(smoke: PhoneSmoke, options: PhoneSmokeOptions) -> list[StepResult]:
     """Companion backend: status, agent overlay, then notification flows."""
     steps: list[StepResult] = []
@@ -926,7 +932,7 @@ def profile_companion(smoke: PhoneSmoke, options: PhoneSmokeOptions) -> list[Ste
     # control" glow (overlay_active(true) fired on connect); exercise the
     # per-action overlay_gesture animations and assert the native overlay plane.
     steps.append(
-        _step_or_skip("phone_overlay", lambda: _overlay_step(smoke, session_id, companion_caps))
+        _step_or_skip("phone_overlay", lambda: overlay_step(smoke, session_id, companion_caps))
     )
 
     # Notification surface: observe first, then exercise open/dismiss/action/reply
