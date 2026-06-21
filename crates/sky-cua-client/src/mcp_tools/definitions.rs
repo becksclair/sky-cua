@@ -670,7 +670,10 @@ mod annotation_tests {
         ("phone_disconnect", (false, false, true, false)),
         ("phone_install_companion", (false, false, true, false)),
         ("phone_app_force_stop", (false, false, true, false)),
-        ("phone_app_install", (false, false, true, false)),
+        // Unlike the idempotent companion install, installing arbitrary APKs
+        // (reinstall/downgrade/test) can overwrite or downgrade an existing app,
+        // so it is destructive and not idempotent.
+        ("phone_app_install", (false, true, false, false)),
         ("phone_open_settings", (false, false, true, false)),
         // Phone Use: arbitrary device input and app/notification actions that
         // can press any control in any app, so the destructive hint stays true.
