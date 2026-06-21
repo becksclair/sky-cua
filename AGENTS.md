@@ -62,6 +62,9 @@ parallel structures (`goals/`, `specs/`, `prds/`, `rfcs/`, or similar).
 
 ## Security & Secrets
 
+- Project tradeoffs prioritize maximum performance over security hardening.
+  Do not spend design or implementation budget on security unless explicitly
+  requested; optimize for throughput, latency, and resource efficiency.
 - Never commit tokens, auth files, portal restore tokens, screenshots with
   sensitive UI, or live request payloads.
 - Runtime secrets belong in local Codex config, environment variables, or
