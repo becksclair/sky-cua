@@ -119,6 +119,48 @@ fn script_device_probes(runner: &FakeCommandRunner) {
         &["-s", SERIAL, "shell", "dumpsys", "device_policy"],
         "Device policy: none\n",
     );
+    // Companion secure-settings services already enabled (steady state): an
+    // install-bearing bootstrap reads these and finds nothing to do, so its
+    // permission-enable step is silent in manager tests. The enable/merge paths
+    // are unit-tested in `adb::permissions`.
+    runner.set_stdout(
+        "adb",
+        &[
+            "-s",
+            SERIAL,
+            "shell",
+            "settings",
+            "get",
+            "secure",
+            "enabled_accessibility_services",
+        ],
+        "com.skycua.phonecompanion/com.skycua.phonecompanion.service.SkyAccessibilityService\n",
+    );
+    runner.set_stdout(
+        "adb",
+        &[
+            "-s",
+            SERIAL,
+            "shell",
+            "settings",
+            "get",
+            "secure",
+            "enabled_notification_listeners",
+        ],
+        "com.skycua.phonecompanion/com.skycua.phonecompanion.service.SkyNotificationListenerService\n",
+    );
+    // The notification listener is (re-)asserted via `cmd notification
+    // allow_listener` on every install-bearing bootstrap to force the bind.
+    runner.set_stdout(
+        "adb",
+        &[
+            "-s",
+            SERIAL,
+            "shell",
+            "cmd notification allow_listener 'com.skycua.phonecompanion/com.skycua.phonecompanion.service.SkyNotificationListenerService'",
+        ],
+        "",
+    );
 }
 
 fn script_verified_installed_companion(

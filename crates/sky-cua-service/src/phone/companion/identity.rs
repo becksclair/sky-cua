@@ -14,6 +14,7 @@
 //! once `phone_connect` calls these helpers.
 #![cfg_attr(not(test), expect(dead_code))]
 
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Identity/version metadata for the installed companion package, as read from
@@ -68,18 +69,13 @@ pub(crate) enum CompanionInstallDecision {
     Update { reason: String },
     /// Installed and current; nothing to do.
     UpToDate,
-    /// Installed cert does not match expected cert -> refuse to silently replace.
-    /// Recovery requires an explicit uninstall/reinstall by the operator.
+    /// Installed cert is readable and does not match expected cert -> refuse to
+    /// silently replace. Recovery requires an explicit uninstall/reinstall by the
+    /// operator. (An *unreadable* installed cert is not a mismatch: it proceeds
+    /// and is reported as `signature_matches_expected=false`.)
     RefuseSignatureMismatch {
         installed_cert: String,
         expected_cert: String,
-    },
-    /// Installed package exists but the host cannot prove its signing cert matches
-    /// the packaged companion. Do not provision an RPC token to a same-name APK
-    /// whose identity is unknown.
-    RefuseSignatureUnverified {
-        installed_cert: Option<String>,
-        expected_cert: Option<String>,
     },
     /// Installed version is NEWER than expected and downgrade is not allowed.
     RefuseDowngrade {
@@ -105,9 +101,6 @@ impl CompanionInstallDecision {
             CompanionInstallDecision::UpToDate => "CompanionUpToDate",
             CompanionInstallDecision::RefuseSignatureMismatch { .. } => {
                 "CompanionSignatureMismatch"
-            }
-            CompanionInstallDecision::RefuseSignatureUnverified { .. } => {
-                "CompanionSignatureUnverified"
             }
             CompanionInstallDecision::RefuseDowngrade { .. } => "CompanionDowngradeBlocked",
         }
@@ -144,19 +137,24 @@ pub(crate) fn decide_install(
         installed.cert_sha256.as_ref(),
         expected.cert_sha256.as_ref(),
     ) {
-        (Some(installed_cert), Some(expected_cert)) if cert_eq(installed_cert, expected_cert) => {}
-        (Some(installed_cert), Some(expected_cert)) => {
+        // Confirmed mismatch: a same-name package whose readable signing cert
+        // differs from the packaged companion is an impostor; never silently
+        // replace or trust it.
+        (Some(installed_cert), Some(expected_cert)) if !cert_eq(installed_cert, expected_cert) => {
             return CompanionInstallDecision::RefuseSignatureMismatch {
                 installed_cert: installed_cert.clone(),
                 expected_cert: expected_cert.clone(),
             };
         }
-        (installed_cert, expected_cert) => {
-            return CompanionInstallDecision::RefuseSignatureUnverified {
-                installed_cert: installed_cert.cloned(),
-                expected_cert: expected_cert.cloned(),
-            };
-        }
+        // Otherwise proceed: a verified match, or an unverifiable cert. Modern
+        // Android (API 28+) does not expose the installed package's certificate
+        // SHA-256 through `dumpsys package` (only a short signature hash), so the
+        // installed cert is commonly unreadable. Refusing that case made the
+        // companion unusable on every current device while detecting no real
+        // impostor (a mismatch is only knowable when the cert IS readable, handled
+        // above). An unverifiable cert is reported honestly as
+        // `signature_matches_expected=false` rather than refused.
+        _ => {}
     }
 
     if let (Some(installed_code), Some(expected_code)) =
@@ -190,6 +188,74 @@ fn cert_eq(left: &str, right: &str) -> bool {
             .collect::<String>()
     };
     normalize(left) == normalize(right)
+}
+
+/// Public case/separator-insensitive equality of two hex cert digests, so the
+/// capability builder can report `signature_matches_expected` from the actual
+/// installed-vs-expected certs rather than inferring it from the install decision.
+pub(crate) fn certs_match(left: &str, right: &str) -> bool {
+    cert_eq(left, right)
+}
+
+// ===========================================================================
+// Bundled build-metadata sidecar
+// ===========================================================================
+
+/// Expected companion identity loaded from the build-metadata sidecar that ships
+/// next to the packaged APK (`<name>.apk` -> `<name>.json`). The build emits it
+/// (package id, versionCode/Name, APK SHA-256, signing-cert SHA-256) precisely so
+/// the host has a source of truth for the signature/version checks. Env and
+/// machine-config values override it; a missing or unparseable sidecar yields
+/// all-`None` so the bootstrap falls back to configured values without failing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CompanionMetadata {
+    pub(crate) version_name: Option<String>,
+    pub(crate) version_code: Option<u64>,
+    pub(crate) cert_sha256: Option<String>,
+    pub(crate) apk_sha256: Option<String>,
+}
+
+/// The sidecar path for a packaged APK path: the same path with a `.json`
+/// extension (`resources/android/phone-companion.apk` ->
+/// `resources/android/phone-companion.json`).
+pub(crate) fn metadata_path_for_apk(apk_path: &str) -> PathBuf {
+    Path::new(apk_path).with_extension("json")
+}
+
+/// Load the bundled companion metadata sidecar for `apk_path`. Best-effort: any
+/// read or parse failure yields the default (all-`None`).
+pub(crate) fn load_companion_metadata(apk_path: &str) -> CompanionMetadata {
+    match std::fs::read_to_string(metadata_path_for_apk(apk_path)) {
+        Ok(text) => parse_companion_metadata(&text),
+        Err(_) => CompanionMetadata::default(),
+    }
+}
+
+/// Parse the sidecar JSON (`version_code`, `version_name`, `apk_sha256`,
+/// `signing_cert_sha256`). Hex digests are normalized to lowercase so they
+/// compare cleanly against the host-parsed installed cert.
+fn parse_companion_metadata(text: &str) -> CompanionMetadata {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return CompanionMetadata::default();
+    };
+    let lower_hex = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(|raw| raw.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+    };
+    CompanionMetadata {
+        version_name: value
+            .get("version_name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        version_code: value
+            .get("version_code")
+            .and_then(serde_json::Value::as_u64),
+        cert_sha256: lower_hex("signing_cert_sha256"),
+        apk_sha256: lower_hex("apk_sha256"),
+    }
 }
 
 // ===========================================================================
@@ -277,44 +343,33 @@ fn fallback_token_bytes(now_ms: u64, ttl_ms: u64) -> [u8; 32] {
 /// constants so the companion app and host agree on a single spelling.
 pub(crate) const SETUP_TOKEN_EXPIRES_EXTRA: &str = "sky_cua_rpc_token_expires_at_ms";
 
-/// Argument key for a device-local token file path. The host pushes the token to
-/// the companion app's external cache, then launches setup with this non-secret
-/// path instead of placing the bearer token in process argv.
-pub(crate) const SETUP_TOKEN_FILE_EXTRA: &str = "sky_cua_rpc_token_file";
+/// String-extra key carrying the ephemeral RPC bearer token directly to the
+/// companion `SetupActivity`.
+///
+/// The token is delivered as an intent extra rather than a pushed file: on
+/// Android 11+ each app gets an isolated storage mount namespace, so a file the
+/// host (`adb`/shell) writes into `/sdcard/Android/data/<pkg>/` is NOT readable
+/// by the app process, which made the file handoff silently fail (the RPC server
+/// never started). The token is ephemeral (short TTL), localhost-only, and
+/// ADB-gated; `hidepid` hides `/proc/<pid>/cmdline` from other uids on modern
+/// Android, so the argv exposure is bounded. The documented future hardening is
+/// the logcat-readback handshake (companion mints its own token).
+pub(crate) const SETUP_TOKEN_EXTRA: &str = "sky_cua_rpc_token";
 
-/// Device path where the host stages the setup token for the companion to read.
-pub(crate) fn setup_token_device_path(package_name: &str) -> String {
-    format!("/sdcard/Android/data/{package_name}/cache/sky_cua_rpc_token")
-}
-
-/// Build the ADB argv that pushes the token file onto the device. The returned
-/// argv carries only paths, never the token itself.
-pub(crate) fn setup_token_push_argv(
-    serial: &str,
-    local_token_path: &str,
-    package_name: &str,
-) -> Vec<String> {
-    vec![
-        "-s".to_string(),
-        serial.to_string(),
-        "push".to_string(),
-        local_token_path.to_string(),
-        setup_token_device_path(package_name),
-    ]
-}
-
-/// Build the ADB argv that launches the companion `SetupActivity` to consume the
-/// already-pushed token file. Does NOT run adb; returns the argv for the
-/// integrator/`CommandRunner`:
+/// Build the ADB argv that launches the companion `SetupActivity` with the
+/// ephemeral session token delivered directly as an intent extra. Does NOT run
+/// adb; returns the argv for the integrator/`CommandRunner`:
 ///
 /// ```text
 /// adb -s <serial> shell am start -n <pkg>/.SetupActivity \
-///   --es sky_cua_rpc_token_file /sdcard/Android/data/<pkg>/cache/sky_cua_rpc_token \
+///   --es sky_cua_rpc_token <token> \
 ///   --el sky_cua_rpc_token_expires_at_ms <epoch_ms>
 /// ```
 ///
 /// The returned vector starts at `-s` (the program `adb` is supplied by the
-/// runner). `--es` is an Android string extra; `--el` is a long extra.
+/// runner). `--es` is an Android string extra; `--el` is a long extra. The token
+/// is 64 hex characters (no shell metacharacters), so it is safe as a single argv
+/// element through the device shell.
 pub(crate) fn setup_intent_argv(
     serial: &str,
     package_name: &str,
@@ -331,8 +386,8 @@ pub(crate) fn setup_intent_argv(
         "-n".to_string(),
         component,
         "--es".to_string(),
-        SETUP_TOKEN_FILE_EXTRA.to_string(),
-        setup_token_device_path(package_name),
+        SETUP_TOKEN_EXTRA.to_string(),
+        token.token.clone(),
         "--el".to_string(),
         SETUP_TOKEN_EXPIRES_EXTRA.to_string(),
         expires,

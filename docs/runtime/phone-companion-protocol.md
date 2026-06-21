@@ -83,22 +83,26 @@ dispatch. A missing, wrong, or expired token returns error code `unauthorized`.
 
 The host generates an ephemeral token plus a TTL once per session
 (`companion_rpc_token_ttl_ms`, default 900000 ms = 15 minutes) and delivers it to
-the companion out of band of `/rpc`, through a host-pushed token file followed by
-an ADB-launched setup intent:
+the companion out of band of `/rpc`, through an ADB-launched setup intent that
+carries the token directly as a string extra:
 
 ```
-adb -s <serial> push <local-token-file> \
-  /sdcard/Android/data/<package>/cache/sky_cua_rpc_token
 adb -s <serial> shell am start -n <package>/.SetupActivity \
-  --es sky_cua_rpc_token_file /sdcard/Android/data/<package>/cache/sky_cua_rpc_token \
+  --es sky_cua_rpc_token <token> \
   --el sky_cua_rpc_token_expires_at_ms <epoch_ms>
 ```
 
-- `adb push .../sky_cua_rpc_token` — writes the token into the companion app's
-  external cache path. The token itself does not appear in the host `adb` argv.
-- `--es sky_cua_rpc_token_file` — the device-local token file path.
+- `--es sky_cua_rpc_token` — the bearer token as a string extra.
 - `--el sky_cua_rpc_token_expires_at_ms` — the absolute expiry in epoch
   milliseconds, as a long extra.
+
+The companion also still accepts a `sky_cua_rpc_token_file` path extra as a
+legacy fallback, but the host no longer uses it: Android 11+ gives each app an
+isolated storage mount namespace, so a file the host (`adb`/shell) writes into
+`/sdcard/Android/data/<package>/` is not readable by the app process. The earlier
+file handoff therefore failed silently — `SetupActivity` could not read the
+token, so it never started the RPC server. Direct-extra delivery works across API
+30–36.
 
 The companion stores the token and expiry and validates them on each request. The
 token is a localhost-only, ADB-gated bearer credential scoped to one session; it
@@ -114,14 +118,16 @@ delivery path is the critical surface.
 `SetupActivity` is exported so the host can target it by explicit component
 through `adb shell am start`, but it requires `android.permission.DUMP`. The
 shell UID has that platform permission; ordinary co-resident apps do not, so
-they cannot `startActivity()` it to install their own RPC token. The setup intent
-accepts only the device-local token-file path plus expiry; it does not accept a
-direct token string extra.
+they cannot `startActivity()` it to install their own RPC token.
 
-The host-push token-file handshake avoids exposing the bearer token in local
-host process argv and avoids an exported token replacement endpoint. It remains
-a trusted-local, ADB-gated bootstrap rather than a remote authentication
-protocol.
+The token is delivered as an intent string extra. This does place the token in
+the `am start` argv, but `hidepid` hides `/proc/<pid>/cmdline` from other uids on
+modern Android and the token is ephemeral (15-minute TTL), localhost-only, and
+ADB-gated, so the exposure window is bounded. The pushed-file alternative is not
+viable: per-app storage mount-namespace isolation (Android 11+) makes a
+host-written file under `/sdcard/Android/data/<package>/` unreadable by the app,
+which silently broke the bootstrap. This remains a trusted-local, ADB-gated
+bootstrap rather than a remote authentication protocol.
 
 The documented robust future fix (not scheduled) is a handshake redesign: the
 companion mints its own token and emits it to its own logcat; the host reads it

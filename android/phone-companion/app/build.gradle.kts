@@ -15,14 +15,17 @@ android {
         applicationId = "com.skycua.phonecompanion"
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Expose version metadata to runtime code explicitly. Newer AGP no
-        // longer guarantees VERSION_CODE/VERSION_NAME in BuildConfig.
-        buildConfigField("int", "VERSION_CODE", "1")
-        buildConfigField("String", "VERSION_NAME", "\"0.1.0\"")
+        // longer guarantees VERSION_CODE/VERSION_NAME in BuildConfig. Derive
+        // these from the versionCode/versionName above so the runtime-reported
+        // version can never drift from the manifest (the companion RPC surfaces
+        // BuildConfig.VERSION_NAME as its installed version).
+        buildConfigField("int", "VERSION_CODE", "$versionCode")
+        buildConfigField("String", "VERSION_NAME", "\"$versionName\"")
         buildConfigField("int", "RPC_PORT", "47683")
     }
 

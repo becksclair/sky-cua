@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 use super::client::{CompanionClient, CompanionRpcError};
 use super::identity::{
     self, CompanionInstallDecision, ExpectedCompanion, InstalledCompanion,
-    SETUP_TOKEN_EXPIRES_EXTRA, SETUP_TOKEN_FILE_EXTRA,
+    SETUP_TOKEN_EXPIRES_EXTRA, SETUP_TOKEN_EXTRA,
 };
 use super::protocol::{
     GestureKind, GesturePoint, NotificationOp, NotificationOpParams, PROTOCOL_VERSION, error_codes,
@@ -244,7 +244,6 @@ async fn capabilities_success_and_builder_derives_flags() {
     let token = identity::generate_token(1_000, 60_000);
     let report = super::capabilities_from_response(
         &caps,
-        &CompanionInstallDecision::UpToDate,
         Some(&token),
         Some("feedface"),
         Some("deadbeef"),
@@ -252,6 +251,9 @@ async fn capabilities_success_and_builder_derives_flags() {
         false,
         false,
     );
+    // Honest signature report: the installed and expected certs differ here, so
+    // it is false (the builder compares the actual certs, not the install decision).
+    assert!(!report.signature_matches_expected);
     assert!(report.installed);
     assert!(report.rpc_reachable);
     assert!(report.gesture_dispatch, "gestures derived available");
@@ -261,7 +263,6 @@ async fn capabilities_success_and_builder_derives_flags() {
     );
     assert!(!report.notifications, "listener disabled");
     assert_eq!(report.rpc_token_expires_at_ms, Some(token.expires_at_ms));
-    assert!(report.signature_matches_expected);
     // The reachable report carries the installed cert the host parsed (not None),
     // the expected cert, and the expected packaged-APK hash.
     assert_eq!(report.installed_cert_sha256.as_deref(), Some("feedface"));
@@ -771,7 +772,11 @@ fn decide_up_to_date_when_equal() {
 }
 
 #[test]
-fn refuse_same_package_when_expected_cert_missing() {
+fn proceeds_when_expected_cert_missing() {
+    // No expected cert to compare against (no bundled metadata, no config): the
+    // signature is unverifiable, not a confirmed mismatch, so the decision falls
+    // through to the version check rather than refusing. The report records
+    // `signature_matches_expected=false` separately.
     let installed = InstalledCompanion {
         version_name: Some("1.0".to_string()),
         version_code: Some(10),
@@ -781,28 +786,25 @@ fn refuse_same_package_when_expected_cert_missing() {
     expected.cert_sha256 = None;
 
     let decision = identity::decide_install(Some(&installed), &expected);
-    assert!(matches!(
-        decision,
-        CompanionInstallDecision::RefuseSignatureUnverified { .. }
-    ));
-    assert_eq!(decision.code(), "CompanionSignatureUnverified");
+    assert_eq!(decision, CompanionInstallDecision::UpToDate);
     assert!(!decision.requires_install());
 }
 
 #[test]
-fn refuse_same_package_when_installed_cert_missing() {
+fn proceeds_when_installed_cert_unreadable() {
+    // Modern Android does not expose the installed cert SHA-256 via `dumpsys`, so
+    // the host parses `None`. That is unverifiable, not a mismatch, so the
+    // companion is still usable (reported as `signature_matches_expected=false`).
     let installed = InstalledCompanion {
-        version_name: Some("1.0".to_string()),
-        version_code: Some(10),
+        version_name: Some("0.9".to_string()),
+        version_code: Some(9),
         cert_sha256: None,
     };
     let decision = identity::decide_install(Some(&installed), &expected(10, "aabb", false));
 
-    assert!(matches!(
-        decision,
-        CompanionInstallDecision::RefuseSignatureUnverified { .. }
-    ));
-    assert!(!decision.requires_install());
+    // Installed is older than expected, so an unverifiable cert still updates.
+    assert!(matches!(decision, CompanionInstallDecision::Update { .. }));
+    assert!(decision.requires_install());
 }
 
 #[test]
@@ -849,6 +851,45 @@ fn allow_downgrade_when_permitted() {
     assert_eq!(decision, CompanionInstallDecision::UpToDate);
 }
 
+#[test]
+fn metadata_path_swaps_apk_extension_for_json() {
+    assert_eq!(
+        identity::metadata_path_for_apk("resources/android/phone-companion.apk"),
+        std::path::PathBuf::from("resources/android/phone-companion.json")
+    );
+}
+
+#[test]
+fn parses_bundled_metadata_sidecar() {
+    let dir = std::env::temp_dir().join(format!(
+        "sky-cua-meta-parse-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let json = dir.join("phone-companion.json");
+    std::fs::write(
+        &json,
+        r#"{"package":"com.skycua.phonecompanion","version_code":7,"version_name":"1.2.3","apk_sha256":"ABCD","signing_cert_sha256":"2DC7"}"#,
+    )
+    .expect("write sidecar");
+    let apk = dir.join("phone-companion.apk");
+    let metadata = identity::load_companion_metadata(apk.to_str().expect("utf8 path"));
+    assert_eq!(metadata.version_code, Some(7));
+    assert_eq!(metadata.version_name.as_deref(), Some("1.2.3"));
+    // Hex digests are normalized to lowercase so they compare against the parsed
+    // installed cert cleanly.
+    assert_eq!(metadata.cert_sha256.as_deref(), Some("2dc7"));
+    assert_eq!(metadata.apk_sha256.as_deref(), Some("abcd"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn missing_metadata_sidecar_yields_default() {
+    let metadata = identity::load_companion_metadata("/nonexistent/sky-cua/phone-companion.apk");
+    assert_eq!(metadata, identity::CompanionMetadata::default());
+}
+
 // ===========================================================================
 // Token + argv helpers
 // ===========================================================================
@@ -880,26 +921,7 @@ fn back_to_back_tokens_differ() {
 }
 
 #[test]
-fn setup_token_push_argv_has_no_token_value() {
-    let token = identity::generate_token(2_000, 60_000);
-    let argv = identity::setup_token_push_argv(
-        "emulator-5554",
-        "/tmp/sky-cua-phone-token",
-        "com.skycua.phonecompanion",
-    );
-    assert_eq!(argv[0], "-s");
-    assert_eq!(argv[1], "emulator-5554");
-    assert_eq!(argv[2], "push");
-    assert_eq!(argv[3], "/tmp/sky-cua-phone-token");
-    assert_eq!(
-        argv[4],
-        "/sdcard/Android/data/com.skycua.phonecompanion/cache/sky_cua_rpc_token"
-    );
-    assert!(!argv.contains(&token.token));
-}
-
-#[test]
-fn setup_intent_argv_has_token_file_and_expiry_extras() {
+fn setup_intent_argv_delivers_token_and_expiry_as_extras() {
     let token = identity::generate_token(2_000, 60_000);
     let argv = identity::setup_intent_argv("emulator-5554", "com.skycua.phonecompanion", &token);
     assert_eq!(argv[0], "-s");
@@ -907,17 +929,14 @@ fn setup_intent_argv_has_token_file_and_expiry_extras() {
     assert!(argv.contains(&"am".to_string()));
     assert!(argv.contains(&"start".to_string()));
     assert!(argv.contains(&"com.skycua.phonecompanion/.SetupActivity".to_string()));
-    // string extra
+    // The bearer token is delivered directly as a string extra (a pushed file is
+    // unreadable by the app on Android 11+ per-app storage namespaces).
     let token_idx = argv
         .iter()
-        .position(|a| a == SETUP_TOKEN_FILE_EXTRA)
-        .expect("token file extra");
+        .position(|a| a == SETUP_TOKEN_EXTRA)
+        .expect("token extra key");
     assert_eq!(argv[token_idx - 1], "--es");
-    assert_eq!(
-        argv[token_idx + 1],
-        "/sdcard/Android/data/com.skycua.phonecompanion/cache/sky_cua_rpc_token"
-    );
-    assert!(!argv.contains(&token.token));
+    assert_eq!(argv[token_idx + 1], token.token);
     // long extra
     let exp_idx = argv
         .iter()

@@ -50,7 +50,16 @@ class TokenStore {
     }
 
     companion object {
-        /** Setup-intent extra key for the device-local token file path. */
+        /**
+         * Setup-intent string-extra key carrying the bearer token directly. This
+         * is the primary delivery: Android 11+ per-app storage mount namespaces
+         * make a host-pushed file under `/sdcard/Android/data/<pkg>/` unreadable by
+         * the app, so the file path below is a no-op on modern devices.
+         */
+        const val EXTRA_TOKEN = "sky_cua_rpc_token"
+
+        /** Setup-intent extra key for the device-local token file path (legacy
+         * fallback; unreadable on Android 11+ scoped storage). */
         const val EXTRA_TOKEN_FILE = "sky_cua_rpc_token_file"
 
         /** Setup-intent extra key for the absolute expiry in epoch milliseconds. */

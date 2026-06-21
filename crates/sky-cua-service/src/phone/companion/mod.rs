@@ -30,7 +30,7 @@ mod tests;
 
 use sky_cua_platform::model::{DiagnosticEntry, PhoneCompanionCapabilities};
 
-use identity::{CompanionInstallDecision, CompanionToken, InstalledCompanion};
+use identity::{CompanionToken, InstalledCompanion};
 use protocol::{CapabilitiesResult, HealthResult};
 
 /// Stable diagnostic for companion operations that are not implemented yet.
@@ -79,7 +79,6 @@ pub(super) fn absent_companion(package_name: &str) -> PhoneCompanionCapabilities
 /// produced `caps`.
 pub(super) fn capabilities_from_response(
     caps: &CapabilitiesResult,
-    decision: &CompanionInstallDecision,
     token: Option<&CompanionToken>,
     installed_cert_sha256: Option<&str>,
     expected_cert_sha256: Option<&str>,
@@ -88,11 +87,15 @@ pub(super) fn capabilities_from_response(
     allow_downgrade: bool,
 ) -> PhoneCompanionCapabilities {
     let health = &caps.health;
-    let signature_matches_expected = !matches!(
-        decision,
-        CompanionInstallDecision::RefuseSignatureMismatch { .. }
-            | CompanionInstallDecision::RefuseSignatureUnverified { .. }
-    );
+    // Honest signature report: a match requires BOTH the installed and expected
+    // certs to be present and equal. An unreadable installed cert (modern Android
+    // does not expose the SHA-256 via `dumpsys`) reports as a non-match, never as
+    // a verified match. A readable mismatch never reaches here — it is refused at
+    // the install decision.
+    let signature_matches_expected = match (installed_cert_sha256, expected_cert_sha256) {
+        (Some(installed), Some(expected)) => identity::certs_match(installed, expected),
+        _ => false,
+    };
 
     PhoneCompanionCapabilities {
         installed: true,

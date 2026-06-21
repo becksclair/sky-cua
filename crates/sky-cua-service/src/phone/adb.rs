@@ -27,6 +27,7 @@ use super::command::{CommandError, CommandOutput, CommandRunner, resolve_adb_pat
 
 mod install;
 mod parse;
+mod permissions;
 
 #[cfg(test)]
 mod tests;
@@ -38,6 +39,12 @@ mod tests;
 pub(super) use install::{
     InstallOutcome, forward_tcp, install_multi_package, install_multiple, install_replace,
     install_single,
+};
+// Re-export the companion secure-settings enablement surface the companion lane
+// consumes as `adb::*` to make a freshly deployed companion immediately usable.
+pub(super) use permissions::{
+    ACCESSIBILITY_SERVICE_CLASS_SUFFIX, NOTIFICATION_LISTENER_CLASS_SUFFIX, SecureServiceOutcome,
+    SecureServiceState, ensure_notification_listener, ensure_secure_list_service,
 };
 // Re-export the parser surface the sibling `device` lane and the integrator
 // consume as `adb::*`. The remaining parsers (`parse_server_status`,

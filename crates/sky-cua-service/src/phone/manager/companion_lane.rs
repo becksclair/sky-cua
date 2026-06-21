@@ -9,17 +9,18 @@
 //! and probe `capabilities`. Any failure degrades to ADB baseline without
 //! aborting the session.
 
-use std::fs;
-use std::path::PathBuf;
-
 use sky_cua_platform::model::{
     DiagnosticEntry, PhoneActionResponse, PhoneBackendKind, PhoneCapabilityProfile,
-    PhoneCapabilityRefreshState, PhoneCompanionStatusResponse, PhoneInstallCompanionRequest,
-    PhoneSessionSelector,
+    PhoneCapabilityRefreshState, PhoneCompanionCapabilities, PhoneCompanionStatusResponse,
+    PhoneInstallCompanionRequest, PhoneSessionSelector, PhoneSettingsScreen,
 };
 
 use super::{CompanionRuntime, PhoneManager, no_session_diagnostic, selector_ids};
-use crate::phone::adb::{InstallOutcome, forward_tcp, install_replace};
+use crate::phone::adb::{
+    ACCESSIBILITY_SERVICE_CLASS_SUFFIX, InstallOutcome, NOTIFICATION_LISTENER_CLASS_SUFFIX,
+    SecureServiceOutcome, SecureServiceState, ensure_notification_listener,
+    ensure_secure_list_service, forward_tcp, install_replace,
+};
 use crate::phone::companion;
 use crate::phone::companion::client::CompanionClient;
 use crate::phone::companion::identity::{
@@ -101,18 +102,27 @@ impl PhoneManager {
         let allow_downgrade = options
             .allow_downgrade
             .unwrap_or(self.selection.companion_allow_downgrade);
+        // Expected identity comes from the build-metadata sidecar bundled next to
+        // the packaged APK (version, signing-cert SHA-256, APK SHA-256); env and
+        // machine-config values override it. Without this, the expected cert is
+        // always absent and the signature check has nothing to compare against.
+        // The expected APK SHA-256 is report-only (the installed APK's hash is not
+        // obtainable from `dumpsys`); the cert is the real check.
+        let metadata = identity::load_companion_metadata(&self.selection.companion_apk_path);
         let expected = ExpectedCompanion {
             package_name: package.clone(),
-            version_name: None,
-            version_code: None,
-            cert_sha256: self.selection.companion_expected_cert_sha256.clone(),
-            // Expected packaged-APK SHA-256 from build metadata. This is
-            // report-only metadata: it surfaces on the capability report so the
-            // operator can confirm which packaged APK the host expects, but it is
-            // NOT a live install gate (the installed APK's hash is generally not
-            // obtainable from `dumpsys`; only the signing cert is). The cert gate
-            // in `decide_install` remains the real security check.
-            apk_sha256: self.selection.companion_apk_sha256.clone(),
+            version_name: metadata.version_name.clone(),
+            version_code: metadata.version_code,
+            cert_sha256: self
+                .selection
+                .companion_expected_cert_sha256
+                .clone()
+                .or_else(|| metadata.cert_sha256.clone()),
+            apk_sha256: self
+                .selection
+                .companion_apk_sha256
+                .clone()
+                .or_else(|| metadata.apk_sha256.clone()),
             apk_path: self.selection.companion_apk_path.clone(),
             allow_downgrade,
         };
@@ -154,24 +164,39 @@ impl PhoneManager {
         if matches!(
             decision,
             CompanionInstallDecision::RefuseSignatureMismatch { .. }
-                | CompanionInstallDecision::RefuseSignatureUnverified { .. }
         ) {
-            // Never trust a same-name package without a verified matching signature.
+            // A same-name package whose readable signing cert differs from the
+            // packaged companion is an impostor; never trust or replace it. (An
+            // unreadable cert is not a mismatch and does not reach here.)
             diagnostics.push(DiagnosticEntry {
                 code: decision.code().to_string(),
-                message: "refusing to trust a same-name companion package without a verified \
-                          matching signing certificate; explicit operator reinstall required"
+                message: "refusing to trust a same-name companion package whose signing \
+                          certificate does not match the packaged companion; explicit operator \
+                          reinstall required"
                     .to_string(),
                 details: None,
             });
             profile.companion = companion::capabilities_unreachable(
                 &package,
                 installed.as_ref().unwrap_or(&InstalledCompanion::default()),
-                self.selection.companion_expected_cert_sha256.as_deref(),
+                expected.cert_sha256.as_deref(),
                 expected.apk_sha256.as_deref(),
                 false,
             );
             return (None, diagnostics);
+        }
+
+        // Enable the companion's required secure-settings services (accessibility
+        // + notification listener) as part of an install-bearing bootstrap, so a
+        // freshly deployed companion is immediately usable instead of requiring a
+        // manual trip through Android settings. Gated on `allow_install` — the
+        // same operator/explicit signal that authorizes the APK install — and run
+        // only after the signature gate above, never for an untrusted package. The
+        // grant is verified against the companion's health probe below; a
+        // read-merge-write never clobbers the user's existing services.
+        if options.allow_install {
+            self.ensure_companion_permissions(serial, &package, &mut diagnostics)
+                .await;
         }
 
         // Set up the forward through the shared ADB-lane primitive and deliver the
@@ -209,77 +234,42 @@ impl PhoneManager {
             }
         }
 
+        // Deliver the ephemeral session token to the companion `SetupActivity`
+        // directly as an intent extra. (A pushed file does not work: Android 11+
+        // per-app storage mount namespaces make a shell-written file under
+        // `/sdcard/Android/data/<pkg>/` unreadable by the app, so the RPC server
+        // never started.) A failed `am start` means the token was not delivered,
+        // so surface a distinct diagnostic rather than a confusing later
+        // `unauthorized`. The token is never logged or echoed into any diagnostic.
         let token = identity::generate_token(now, self.selection.companion_rpc_token_ttl_ms);
-        let local_token_path = write_setup_token_file(serial, now, &token.token);
-        let mut setup_intent_ok = false;
-        if let Some(local_token_path) = local_token_path.as_ref() {
-            let push_argv = identity::setup_token_push_argv(
-                serial,
-                local_token_path.to_string_lossy().as_ref(),
-                &package,
-            );
-            let push_ref: Vec<&str> = push_argv.iter().map(String::as_str).collect();
-            match self.runner.run(&self.adb_program(), &push_ref).await {
-                Ok(output) if output.success() => {
-                    let setup_argv = identity::setup_intent_argv(serial, &package, &token);
-                    let setup_ref: Vec<&str> = setup_argv.iter().map(String::as_str).collect();
-                    setup_intent_ok = match self.runner.run(&self.adb_program(), &setup_ref).await {
-                        Ok(output) if output.success() => true,
-                        Ok(output) => {
-                            diagnostics.push(DiagnosticEntry {
-                                code: "PhoneCompanionSetupIntentFailed".to_string(),
-                                message: format!(
-                                    "companion setup intent (am start .SetupActivity) exited with status {}; \
-                                     the session token may not have been delivered",
-                                    output.status.map_or(-1, |c| c)
-                                ),
-                                details: None,
-                            });
-                            false
-                        }
-                        Err(error) => {
-                            diagnostics.push(DiagnosticEntry {
-                                code: "PhoneCompanionSetupIntentFailed".to_string(),
-                                message: format!(
-                                    "companion setup intent (am start .SetupActivity) could not run: {error}; \
-                                     the session token may not have been delivered"
-                                ),
-                                details: None,
-                            });
-                            false
-                        }
-                    };
-                }
-                Ok(output) => diagnostics.push(DiagnosticEntry {
+        let setup_argv = identity::setup_intent_argv(serial, &package, &token);
+        let setup_ref: Vec<&str> = setup_argv.iter().map(String::as_str).collect();
+        let setup_intent_ok = match self.runner.run(&self.adb_program(), &setup_ref).await {
+            Ok(output) if output.success() => true,
+            Ok(output) => {
+                diagnostics.push(DiagnosticEntry {
                     code: "PhoneCompanionSetupIntentFailed".to_string(),
                     message: format!(
-                        "companion setup token push exited with status {}; the session token may not have been delivered",
+                        "companion setup intent (am start .SetupActivity) exited with status {}; \
+                         the session token may not have been delivered",
                         output.status.map_or(-1, |c| c)
                     ),
                     details: None,
-                }),
-                Err(error) => diagnostics.push(DiagnosticEntry {
+                });
+                false
+            }
+            Err(error) => {
+                diagnostics.push(DiagnosticEntry {
                     code: "PhoneCompanionSetupIntentFailed".to_string(),
                     message: format!(
-                        "companion setup token push could not run: {error}; the session token may not have been delivered"
+                        "companion setup intent (am start .SetupActivity) could not run: {error}; \
+                         the session token may not have been delivered"
                     ),
                     details: None,
-                }),
+                });
+                false
             }
-            let _ = fs::remove_file(local_token_path);
-        } else {
-            diagnostics.push(DiagnosticEntry {
-                code: "PhoneCompanionSetupIntentFailed".to_string(),
-                message:
-                    "could not create a local setup token file; the session token was not delivered"
-                        .to_string(),
-                details: None,
-            });
-        }
-        // Capture the setup-intent result. A failed `am start` means the token was
-        // never delivered to the companion, so surface a distinct diagnostic now
-        // rather than letting it resurface as a confusing later `unauthorized`. The
-        // token itself is never logged or echoed into any diagnostic.
+        };
 
         // Probe capabilities over the forwarded RPC endpoint. When the setup
         // intent ran, the companion starts its RPC server and installs the token
@@ -303,22 +293,21 @@ impl PhoneManager {
                 caps_result = client.capabilities().await;
             }
         }
-        match caps_result {
+        let runtime = match caps_result {
             Ok(caps) => {
                 profile.companion = companion::capabilities_from_response(
                     &caps,
-                    &decision,
                     Some(&token),
                     // The installed cert the host parsed during
                     // `read_installed_companion`, so the reachable report carries
                     // `installed_cert_sha256` like the unreachable path.
                     installed.as_ref().and_then(|c| c.cert_sha256.as_deref()),
-                    self.selection.companion_expected_cert_sha256.as_deref(),
+                    expected.cert_sha256.as_deref(),
                     expected.apk_sha256.as_deref(),
                     auto_install_attempted,
                     allow_downgrade,
                 );
-                (Some(CompanionRuntime { client }), diagnostics)
+                Some(CompanionRuntime { client })
             }
             Err(caps_error) if !caps_error.is_fallback() => {
                 // The companion is reachable and answered, but could not serve the
@@ -339,7 +328,7 @@ impl PhoneManager {
                             &health,
                             installed.as_ref().and_then(|c| c.version_name.clone()),
                         );
-                        (Some(CompanionRuntime { client }), diagnostics)
+                        Some(CompanionRuntime { client })
                     }
                     Err(health_error) => {
                         diagnostics.push(DiagnosticEntry {
@@ -350,11 +339,11 @@ impl PhoneManager {
                         profile.companion = companion::capabilities_unreachable(
                             &package,
                             installed.as_ref().unwrap_or(&InstalledCompanion::default()),
-                            self.selection.companion_expected_cert_sha256.as_deref(),
+                            expected.cert_sha256.as_deref(),
                             expected.apk_sha256.as_deref(),
                             true,
                         );
-                        (None, diagnostics)
+                        None
                     }
                 }
             }
@@ -373,8 +362,144 @@ impl PhoneManager {
                     expected.apk_sha256.as_deref(),
                     true,
                 );
-                (None, diagnostics)
+                None
             }
+        };
+
+        // Verify the services we enabled actually took. The companion's health
+        // booleans are the ground truth, so this only runs when the companion is
+        // reachable (a degraded/unreachable bootstrap already surfaced its own
+        // diagnostic) and only after an install-bearing bootstrap that attempted
+        // the grant. Some OEM builds gate a sideloaded app's accessibility behind
+        // a manual confirmation the adb write cannot satisfy; a still-disabled
+        // service yields an actionable diagnostic and (for accessibility) opens
+        // the on-device settings screen so setup can be finished by hand.
+        if runtime.is_some() && options.allow_install {
+            self.flag_companion_permission_gaps(serial, &profile.companion, &mut diagnostics)
+                .await;
+        }
+
+        (runtime, diagnostics)
+    }
+
+    /// Enable the companion's required secure-settings services on a connecting
+    /// device as part of an install-bearing bootstrap. The companion needs its
+    /// accessibility service (gestures, tree, screenshots, and the cursor
+    /// overlay) and its notification listener present in the corresponding
+    /// secure-settings lists; both are writable by the adb `shell` user. Each
+    /// enable is a read-merge-write that preserves the user's existing services.
+    /// Newly enabled services and hard write rejections are surfaced as
+    /// structured diagnostics; the already-enabled steady state stays silent so
+    /// repeat deploys are quiet. The post-probe [`flag_companion_permission_gaps`]
+    /// proves the grants actually bound.
+    async fn ensure_companion_permissions(
+        &self,
+        serial: &str,
+        package: &str,
+        diagnostics: &mut Vec<DiagnosticEntry>,
+    ) {
+        let accessibility = format!("{package}/{package}{ACCESSIBILITY_SERVICE_CLASS_SUFFIX}");
+        let notification = format!("{package}/{package}{NOTIFICATION_LISTENER_CLASS_SUFFIX}");
+
+        // Accessibility binds immediately from a secure-settings read-merge-write
+        // plus the global `accessibility_enabled` flag; there is no stable `cmd`
+        // equivalent across Android versions.
+        match ensure_secure_list_service(
+            self.runner.as_ref(),
+            self.configured_adb_path(),
+            serial,
+            "enabled_accessibility_services",
+            &accessibility,
+            true,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                if let Some(diagnostic) =
+                    permission_outcome_diagnostic("accessibility service", &outcome)
+                {
+                    diagnostics.push(diagnostic);
+                }
+            }
+            Err(error) => diagnostics.push(crate::phone::adb::command_error_diagnostic(
+                "adb shell settings get/put secure enabled_accessibility_services",
+                &error,
+            )),
+        }
+
+        // The notification listener is bound through `cmd notification
+        // allow_listener`: a bare settings write can leave the entry present but
+        // unbound until the next reconcile, which would make the health probe
+        // spuriously report it off.
+        match ensure_notification_listener(
+            self.runner.as_ref(),
+            self.configured_adb_path(),
+            serial,
+            &notification,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                if let Some(diagnostic) =
+                    permission_outcome_diagnostic("notification listener", &outcome)
+                {
+                    diagnostics.push(diagnostic);
+                }
+            }
+            Err(error) => diagnostics.push(crate::phone::adb::command_error_diagnostic(
+                "adb shell cmd notification allow_listener",
+                &error,
+            )),
+        }
+    }
+
+    /// After an install-bearing bootstrap enabled the companion's secure-settings
+    /// services, flag any the reachable companion still reports disabled.
+    ///
+    /// `settings put` succeeds, but some OEM builds (notably Samsung One UI)
+    /// ignore an adb-written accessibility grant until the operator clears a
+    /// "Restricted settings" confirmation by hand. The companion health booleans
+    /// are the ground truth, so a still-disabled service yields an actionable
+    /// diagnostic; accessibility — which gates gestures, the tree, screenshots,
+    /// and the cursor overlay — also best-effort opens the on-device Accessibility
+    /// screen so the operator sees exactly where to finish setup.
+    async fn flag_companion_permission_gaps(
+        &self,
+        serial: &str,
+        companion: &PhoneCompanionCapabilities,
+        diagnostics: &mut Vec<DiagnosticEntry>,
+    ) {
+        if !companion.accessibility_enabled {
+            diagnostics.push(DiagnosticEntry {
+                code: "PhoneCompanionAccessibilityManualSetup".to_string(),
+                message: "the companion accessibility service was enabled over adb but the device \
+                          still reports it off; some builds (e.g. Samsung One UI) gate a \
+                          sideloaded app's accessibility behind a manual 'Restricted settings' \
+                          confirmation. Enable 'Sky Phone Companion' under Settings > \
+                          Accessibility to finish setup."
+                    .to_string(),
+                details: None,
+            });
+            // Best-effort: surface the exact on-device screen so the operator can
+            // act. A failure here only forgoes the convenience, so it is swallowed.
+            let _ = crate::phone::adb::open_settings(
+                self.runner.as_ref(),
+                self.configured_adb_path(),
+                serial,
+                PhoneSettingsScreen::Accessibility,
+                None,
+            )
+            .await;
+        }
+        if !companion.notification_listener_enabled {
+            diagnostics.push(DiagnosticEntry {
+                code: "PhoneCompanionNotificationManualSetup".to_string(),
+                message: "the companion notification listener was enabled over adb but the device \
+                          still reports it off; grant 'Sky Phone Companion notifications' under \
+                          Settings > Notification access to enable the notification tools."
+                    .to_string(),
+                details: None,
+            });
         }
     }
 
@@ -615,20 +740,29 @@ fn install_outcome_diagnostic(
     }
 }
 
-fn write_setup_token_file(serial: &str, now: u64, token: &str) -> Option<PathBuf> {
-    let safe_serial = serial
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>();
-    let path = std::env::temp_dir().join(format!("sky-cua-phone-token-{safe_serial}-{now}"));
-    fs::write(&path, token).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+/// Map a companion secure-settings enable [`SecureServiceOutcome`] to a structured
+/// diagnostic. A freshly enabled service and a hard write rejection are surfaced;
+/// the already-enabled steady state returns `None` so repeat deploys stay quiet.
+fn permission_outcome_diagnostic(
+    label: &str,
+    outcome: &SecureServiceOutcome,
+) -> Option<DiagnosticEntry> {
+    match outcome.state {
+        SecureServiceState::AlreadyEnabled => None,
+        SecureServiceState::Enabled => Some(DiagnosticEntry {
+            code: "PhoneCompanionPermissionEnabled".to_string(),
+            message: format!("enabled the companion {label} via secure settings"),
+            details: None,
+        }),
+        SecureServiceState::WriteRejected => Some(DiagnosticEntry {
+            code: "PhoneCompanionPermissionWriteRejected".to_string(),
+            message: format!(
+                "could not enable the companion {label} over adb; a manual grant in Android \
+                 settings is required"
+            ),
+            details: (!outcome.message.is_empty()).then(|| outcome.message.clone()),
+        }),
     }
-    Some(path)
 }
 
 /// Best-effort parse of `dumpsys package <pkg>` output into an
