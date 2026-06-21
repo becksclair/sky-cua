@@ -11,7 +11,8 @@ pytest.
   `_smoke_config.py` (live-smoke model/reasoning settings), `_codex_exec.py`
   (codex exec harness), `_codex_app_server.py` (shared codex app-server
   stdio JSON-RPC client), `_app_server_harness.py` (rich app-server turn
-  policy), `_kwin_effect.py` (KWin effect deploy).
+  policy), `_kwin_effect.py` (KWin effect deploy), `_companion.py` (Android
+  phone-companion build/stage lane for `deploy_plugin.py`).
 - Build/deploy/distribution entrypoints: `build_plugin.py`,
   `install_plugin.py`, `install_mcp_server.py`, `deploy_plugin.py` (fast local
   dev deploy as `sky-cua@local`), `package.py` (self-contained release
@@ -20,6 +21,16 @@ pytest.
 - Live operator smokes are `live_*_smoke.py` and must fail honestly when app
   state is blocked. JSON schemas for final agent messages:
   `scripts/schemas/*.json`.
+- Live smokes gate on deploy freshness. `deploy_freshness.py` fingerprints the
+  Rust runtime source (`crates/**` + `Cargo.{toml,lock}`) and every build/deploy
+  stamps the client binary it produced. The gate is enforced at the shared
+  launch choke points — every sky-cua MCP spawn (`_mcp_stdio.McpClient`) and
+  agent launch (`_agent_mcp_smoke.run_agent`) — so *any* live smoke that
+  exercises the runtime aborts (nonzero, with a redeploy hint) rather than
+  testing a binary not built from the current source. Run
+  `python3 scripts/deploy_plugin.py` (cua-deploy) first;
+  `python3 scripts/deploy_freshness.py` is a standalone preflight; set
+  `SKY_CUA_ALLOW_STALE_DEPLOY=1` only to intentionally override.
 - Pure helper tests stay free of desktop app requirements. Each subsystem
   gets a focused `test_<subsystem>.py` module (for example
   `test_plugin_bundle.py`, `test_gui_testing_vm.py`,
@@ -40,6 +51,14 @@ pytest.
   the test is about computer-use tools.
 - New live smokes must name the target app, artifact directory, and proof
   condition.
+- Phone-use live smokes are device-dependent (adb + an Android device), not VM
+  desktop smokes: `live_phone_use_smoke.py` (non-destructive `phone_*` tool
+  driver), `live_phone_companion_setup_smoke.py` (cold-device companion setup,
+  agent- or direct-driven, proven by adb ground truth plus a pure MCP probe with
+  companion auto-install off), and `live_phone_workflow_smoke.py` (agentic
+  Settings/Chrome workflows on a ready device, proven by the adb resumed-activity
+  ground truth plus a pointer-overlay MCP probe). They SKIP honestly without a
+  device/companion APK.
 - Never read a child process stderr pipe before terminating a child that may
   still be running.
 

@@ -204,3 +204,34 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
   `XDG_STATE_HOME/sky-cua` (or `~/.local/state/sky-cua`); the RemoteDesktop
   lane rotates the restore token on session start. Reset via
   `sky-cua-client clear-portal-tokens` or `scripts/reset_portal_tokens.py`.
+
+## Phone companion (Android)
+
+- Companion has no runtime permissions; setup = two service enablements the
+  install-bearing bootstrap does over ADB. Accessibility: read-merge-write
+  `settings put secure enabled_accessibility_services <merged>` + `settings put
+  secure accessibility_enabled 1` — binds immediately. Verify with `dumpsys
+  accessibility` ("Bound services" line; `capabilities=161` = retrieve + perform
+  gestures + screenshot).
+- Notification listener: a bare `settings put secure
+  enabled_notification_listeners` sets the list but may NOT bind until the next
+  reconcile (health then spuriously reads it off). Use `cmd notification
+  allow_listener <pkg>/<cls>` — additive, binds immediately. Verify a live
+  `INotificationListener$Stub$Proxy` in `dumpsys notification`.
+- Always read-merge these `:`-lists; never blind-`put` (the emulator ships
+  Google notification listeners). Samsung One UI may gate sideloaded
+  accessibility behind a manual "Restricted settings" confirmation the ADB
+  write cannot satisfy — the host then emits `PhoneCompanion*ManualSetup` and
+  opens the on-device Accessibility screen.
+- RPC token delivery: a host file pushed to `/sdcard/Android/data/<pkg>/cache/`
+  is UNREADABLE by the app on Android 11+ (per-app storage mount namespaces;
+  `run-as <pkg> cat` of the shell-pushed file gives "Permission denied"), so the
+  companion's `SetupActivity` never started the RPC server. Deliver the token as
+  an `am start --es sky_cua_rpc_token <tok>` intent extra instead.
+- Installed signing-cert SHA-256 is NOT in `dumpsys package` on API 28+ (only a
+  short `signatures:[<hash>]`), so the host can't verify the installed cert. The
+  signature gate refuses only a *readable* mismatch; an unreadable cert proceeds
+  with `signature_matches_expected=false`. Expected cert/sha/version come from
+  the bundled `resources/android/phone-companion.json` sidecar (env overrides).
+- Verify companion RPC up: `cat /proc/net/tcp /proc/net/tcp6 | grep -i BA43`
+  (47683=0xBA43) on the device. Host forward: `adb forward --list | grep 47683`.

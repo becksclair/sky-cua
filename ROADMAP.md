@@ -148,15 +148,27 @@ notifications) and optional scrcpy acceleration.
       proof pending)
 - [x] Phase 3 snapshots, coordinate mapping, cursor planes (source landed)
 - [x] Phase 4 Android companion backend host + RPC contract (Rust host and
-      `docs/runtime/phone-companion-protocol.md` landed; companion APK build
-      and live proof pending)
+      `docs/runtime/phone-companion-protocol.md` landed). Live proof achieved on
+      the API-36 emulator 2026-06-20: `phone_connect` auto-installs the companion,
+      enables its accessibility + notification-listener services, brings up the
+      RPC server, and serves `phone_observe`/accessibility-tree/screenshot through
+      `backend=companion`. Three live-only bugs were fixed to get there: the
+      expected signing cert is now loaded from the bundled metadata sidecar (it
+      was never read, so the signature gate refused every companion); an
+      unreadable installed cert proceeds (reported `signature_matches_expected=
+      false`) instead of refusing (modern Android hides the cert SHA-256); and the
+      RPC token is delivered as an `am start` intent extra instead of a pushed
+      file (per-app storage namespaces made the file unreadable by the app, so the
+      RPC server never started). Companion bumped to versionCode 2 so installs
+      auto-update
 - [x] Phase 4b phone-native agent overlay (source landed): the companion draws
       the agent cursor and a persistent "agent in control" edge glow on the
       device via a single full-screen pass-through `TYPE_ACCESSIBILITY_OVERLAY`,
       animated per action (`overlay_active`/`overlay_gesture` RPCs) and hidden
       around model-facing captures. The host-desktop phone-cursor draw
-      (`host_cursor_state`/`HostCursorDraw`) was removed; live device proof
-      pending
+      (`host_cursor_state`/`HostCursorDraw`) was removed. Live proof on the
+      API-36 emulator 2026-06-20: the cursor + edge glow render on-device in a
+      companion-backed `phone_observe` capture
 - [x] Phase 5 scrcpy acceleration + host-visible overlay (source landed; live
       proof pending). Mid-session crash detection (2s watchdog downgrades the
       capability and hides the host overlay), remap-on-window-resize, and
@@ -164,10 +176,29 @@ notifications) and optional scrcpy acceleration.
       proof of these scrcpy paths remains pending.
 - [ ] Phase 6 packaging, `skills/phone-use`, docs, installed MCP proof
       (skill, docs, and bundling landed — [`docs/features/phone-use.md`](docs/features/phone-use.md);
-      installed-MCP `tools/list` proof pending)
+      installed-MCP `tools/list` proof pending). Install-bearing bootstrap now
+      auto-enables the companion's accessibility + notification-listener services
+      over ADB (read-merge-write of `enabled_accessibility_services` + global
+      flag; `cmd notification allow_listener` for the listener), verifies via the
+      health probe, and surfaces an actionable `PhoneCompanion*ManualSetup`
+      diagnostic (and opens the on-device Accessibility screen) when an OEM gates
+      the grant. Proven end-to-end on the API-36 emulator (both services bind,
+      existing services preserved)
 - [ ] Phase 7 adversarial testing
 - [ ] Phase 8 full live-smoke and release proof (Redmi/API-36 tablet lane
-      blocked until that device is connected)
+      blocked until that device is connected). Agent-driven companion-setup
+      live-smoke landed — `scripts/live_phone_companion_setup_smoke.py` validates
+      the cold-device → reachable-companion workflow (agent or direct driver) by
+      adb ground truth plus a pure MCP probe with auto-install off; green on the
+      API-36 emulator 2026-06-20. Agent-driven workflow live-smoke landed —
+      `scripts/live_phone_workflow_smoke.py` crystallizes the Settings →
+      Accessibility navigation and Chrome web-search workflows, each proven by the
+      adb resumed-activity ground truth plus a pointer-overlay MCP probe; green on
+      the API-36 emulator 2026-06-20 (`--workflow full --agent claude`:
+      both workflows reached their target screen, the browser agent surfaced the
+      expected answer, and the overlay routed `backend=companion`). The `phone_*`
+      tool-driver smoke (`live_phone_use_smoke.py`) full installed run remains
+      pending.
 
 ## Phase: Performance and runtime tuning
 

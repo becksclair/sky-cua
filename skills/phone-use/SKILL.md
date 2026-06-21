@@ -94,6 +94,23 @@ those surfaces are not reachable through a phone session.
   snapshot before tapping** — `phone_screenshot`/`phone_observe` themselves fail
   closed with `PhoneCapabilityProfileDrifted` when a fresh frame no longer
   matches the cached display size.
+- **Prefer accessibility-tree bounds over visual estimation for tap targets on
+  native UI.** `phone_accessibility_tree` reports each element's exact
+  device-pixel `bounds`; tap the bounds center with `use_device_coordinates=true`
+  (no snapshot, no TTL to race). The screenshot is a faithful 1:1 capture of the
+  device, but estimating a target's pixel position by eye is unreliable on tall
+  displays — a vertical misjudgement of 10-15% is easy and lands the tap on a
+  neighboring element, with the error growing toward the bottom of the screen.
+  The image is not the problem; the visual estimate is. Use the tree's bounds
+  whenever the target is a native view.
+- **Web content (Chrome and other WebViews) is not in the accessibility tree.**
+  `phone_accessibility_tree` exposes only the app's native chrome (toolbar, URL
+  bar, tabs) plus an opaque `WebView`/`FrameLayout` container — never the page's
+  own links, buttons, or text. In-page targets must be located visually from the
+  screenshot, where the tall-display estimation risk above applies. To place an
+  in-page tap accurately, tap once, read the synthetic cursor's rendered position
+  in the next screenshot (it marks exactly where the last action landed), and
+  correct relative to it rather than re-estimating from scratch.
 
 ## Actions
 
@@ -119,6 +136,15 @@ those surfaces are not reachable through a phone session.
   its `success` boolean. Read `backend`/`isError`, not the summary text. Tool
   success only means input was dispatched; verify consequential changes with a
   fresh `phone_observe`.
+- **Expect first-run interstitials, especially in browsers.** A freshly
+  installed or first-launched app commonly interposes consent sheets, permission
+  prompts, or feature promos that steal focus before the screen you want — e.g.
+  Chrome's notifications dialog, the Gboard handwriting promo (which can swallow
+  typed text and the Enter key), and a locale-specific cookie-consent wall.
+  Re-observe and confirm the foreground is the screen you expect before typing or
+  submitting, and dismiss the interstitial first. When a search submit is
+  swallowed, navigating directly to a result URL with `phone_app_open_intent` is
+  a reliable fallback.
 
 ## Companion lifecycle
 
@@ -140,10 +166,21 @@ those surfaces are not reachable through a phone session.
   re-bootstrap; reach for it when the companion is enabled but missing/unreachable
   (e.g. operator auto-install is off) or to force a reinstall (`force_reinstall`,
   or `allow_downgrade` to accept an older build).
+- An install-bearing bootstrap (`phone_install_companion`, or `phone_connect`
+  under operator auto-install / an explicit `install_companion`) also enables the
+  companion's accessibility service and notification listener over ADB, so a
+  freshly deployed companion is usable without a manual setup trip. It never
+  clobbers the device's existing services. Watch the bootstrap diagnostics:
+  `PhoneCompanionPermissionEnabled` confirms a grant; a
+  `PhoneCompanion*ManualSetup` entry means the device gated the grant (e.g.
+  Samsung "Restricted settings") and the operator must finish it by hand — the
+  host best-effort opens the Accessibility screen in that case.
 - `phone_open_settings` drives the user to a specific Android screen
   (accessibility, notification_access, overlay_permission, app_details,
   wireless_debugging, battery_optimization) to grant a companion permission when
-  the action menu reports it disabled. `app_details` requires a `package_name`.
+  the action menu reports it disabled or a `PhoneCompanion*ManualSetup`
+  diagnostic asks for manual intervention. `app_details` requires a
+  `package_name`.
 
 ## Cursor planes
 

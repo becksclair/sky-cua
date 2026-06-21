@@ -65,11 +65,35 @@ inputs that may be absent.
 `phone_connect` resolves `adb` (config, then environment, then `PATH`), probes
 device identity and display metrics, detects and caches a per-session
 `PhoneCapabilityProfile`, and — when companion support is enabled — verifies,
-installs, or updates the companion APK and establishes the RPC forward before
-finalizing the profile. The cache is per session and is invalidated on
-reconnect, companion install/update, permission change, orientation or
-display-size change, RPC failure, wireless disconnect, and explicit
-`phone_refresh_capabilities`.
+installs, or updates the companion APK, enables its required services, and
+establishes the RPC forward before finalizing the profile. The cache is per
+session and is invalidated on reconnect, companion install/update, permission
+change, orientation or display-size change, RPC failure, wireless disconnect,
+and explicit `phone_refresh_capabilities`.
+
+Companion permission setup (as built): an install-bearing bootstrap — the same
+`allow_install` gate that authorizes the APK install (`phone_install_companion`,
+or `phone_connect` under operator auto-install or an explicit `install_companion`
+request) — also enables the two services the companion needs to function, so a
+freshly deployed companion is usable without a manual trip through Android
+settings. The companion declares no runtime permissions (its overlay rides a
+`TYPE_ACCESSIBILITY_OVERLAY` window), so setup reduces to two service
+enablements, both performed by the adb `shell` user after the signature gate
+passes, never for an untrusted package. The accessibility service is enabled by
+a read-merge-write of `enabled_accessibility_services` plus the global
+`accessibility_enabled` flag; the existing list is always preserved, never
+clobbered. The notification listener is bound through `cmd notification
+allow_listener` (additive and immediate; a bare `settings put` can leave the
+entry present but unbound until the next reconcile). Each enable is reported as a
+structured diagnostic (`PhoneCompanionPermissionEnabled`, or
+`PhoneCompanionPermissionWriteRejected` on a hard failure); the already-enabled
+steady state is silent. After the capability probe, the companion health
+booleans are the ground truth: a service the device still reports off (some OEM
+builds, notably Samsung One UI, gate a sideloaded app's accessibility behind a
+manual "Restricted settings" confirmation the adb write cannot satisfy) yields an
+actionable `PhoneCompanion*ManualSetup` diagnostic, and for accessibility the
+host best-effort opens the on-device Accessibility screen so the operator can
+finish setup by hand.
 
 Freshness contract (as built): the tools that act on or perceive through the
 profile — the action tools (`phone_tap`, `phone_swipe`, `phone_type_text`,
@@ -214,6 +238,12 @@ These `[phone]` keys are resolved into `ResolvedPhoneSelection`
 and consumed by the service. Each is a no-op at its default value, so default
 behavior is unchanged.
 
+- `enabled` (default `true`; env `SKY_CUA_PHONE`): the master switch for the
+  phone-use subsystem. Phone-use is **on by default** — the `phone_*` tools are
+  always advertised and device-control dispatch is allowed without any opt-in.
+  Set `[phone] enabled = false` to turn it off; the tools then return the
+  `PhoneUseDisabled` diagnostic instead of dispatching. The config file is the
+  intended control; the `SKY_CUA_PHONE` env var is only a per-process override.
 - `visible_overlay` (default `true`; env `SKY_CUA_PHONE_VISIBLE_OVERLAY`):
   whether the on-phone agent overlay (edge glow, cursor, per-action gesture
   animation) is shown. When `false`, the host suppresses every companion
@@ -286,16 +316,77 @@ payload, version mismatch, token mismatch, fallback), and the client MCP
 surface (tool list, schemas, response shaping). `build_plugin.py` stages
 `skills/phone-use` into the bundle and conditionally stages the companion APK.
 
-Live and installed proof (pending hardware/packaging run):
+Live and installed proof:
 
 ```bash
+# Tool-driver smoke: exercises the whole phone_* family (non-destructive; assumes
+# the companion is already installed for its companion profile).
 uv run python scripts/live_phone_use_smoke.py --profile adb-usb --serial <serial>
 uv run python scripts/live_phone_use_smoke.py --profile full --serial <serial>
+
+# Companion-setup smoke: validates the cold-device -> reachable-companion setup
+# workflow. From a cold reset (companion uninstalled, accessibility + notification
+# services disabled — only the sky-cua companion's own entries are touched) it
+# drives install + service-enable, then proves the result by GROUND TRUTH (adb:
+# package installed, both services bound, RPC port listening) plus a pure MCP
+# probe with companion auto-install OFF, so reachability can only pass when the
+# driver actually completed setup.
+uv run python scripts/live_phone_companion_setup_smoke.py --driver agent --serial <serial>
+uv run python scripts/live_phone_companion_setup_smoke.py --driver direct --serial <serial>
+
+# Workflow smoke: crystallizes the live agentic workflows (an external agent
+# driving a ready device through the phone_* tools) into a repeatable check —
+# Settings -> Accessibility navigation, and a Chrome web search. Each workflow is
+# proven by GROUND TRUTH read from adb (the device's resumed activity must be the
+# target screen), independent of the agent's own claims; web-page text is not in
+# the a11y tree, so the prose answer is a soft signal. Every run also probes the
+# phone-native pointer overlay (companion advertises the plane, a screenshot
+# reports it live, and a benign device-space tap + swipe route backend=companion).
+uv run python scripts/live_phone_workflow_smoke.py --workflow full --serial <serial>
+uv run python scripts/live_phone_workflow_smoke.py --workflow settings --agent claude --serial <serial>
 ```
 
-The full live smoke must run from the installed MCP surface after packaging and
-record adb version, Android version, companion version when installed, scrcpy
-version when used, connection kind, cursor planes proven, and skipped profiles.
+`--driver agent` (default) has an agent CLI run `phone_connect` +
+`phone_install_companion`; the ground-truth checks gate the pass. The default
+agent is `claude` (Claude Code reliably surfaces the phone MCP tools);
+`opencode` does NOT currently expose them to the agent (it sees the phone-use
+skill and falls back to bash/exploration), so it is unreliable here — the
+ground-truth gate catches that honestly. Tool-call evidence is parsed when the
+agent emits structured tool events; `--require-tool-evidence` makes it a hard
+gate. `--driver direct` drives the MCP tools deterministically (no agent CLI).
+Proven live on the API-36 emulator 2026-06-20 (`--driver direct` 8/8, and
+`--driver agent --agent claude`). The pure helpers are unit-tested in
+`test_phone_companion_setup_smoke.py`.
+
+The workflow smoke's adb resumed-activity parser, per-workflow ground-truth
+evaluation, prompt builders, and CLI options are unit-tested in
+`test_live_phone_workflow_smoke.py`; the live workflows themselves require a
+ready device and an agent CLI, and SKIP honestly otherwise. Because the agent
+reaches sky-cua through its locally deployed MCP runtime, the workflow smoke (via
+`run_agent`) is subject to the deploy-freshness gate — run `cua-deploy` first so
+the agent drives the current runtime. Proven green on the API-36 emulator
+2026-06-20 (`--workflow full --agent claude`, 7 passed / 2 skipped / 0 failed):
+the settings agent landed on `com.android.settings/.Settings$AccessibilitySettingsActivity`,
+the browser agent landed on `com.android.chrome` and produced the expected answer
+(a soft signal — the browser ground truth proves the agent reached Chrome, not
+that a specific search ran), and the overlay probe reported `native_overlay=true`
+with the tap and swipe routing `backend=companion`. The `tool_evidence` steps SKIP
+under `claude` (plain-text mode emits no structured tool events); pass
+`--require-tool-evidence` with a JSON-mode agent to make them a hard gate. Evidence
+is any-of: each workflow accepts any of several phone action tools, so an efficient
+agent that reaches Settings via `phone_open_settings` (instead of tapping) still
+passes. Proven live 2026-06-21 with `--agent opencode --model kimi-for-coding/k2p7`:
+kimi drove the Settings → Accessibility workflow in three tool calls
+(`phone_connect` → `phone_open_settings` → `phone_accessibility_tree`), reaching
+`com.android.settings/.Settings$AccessibilitySettingsActivity` with no redundant
+captures or taps. opencode must run from a neutral working directory (the harness
+handles this) so it loads the global MCP config — a worktree `opencode.json` can
+otherwise point `sky_cua` at a sibling checkout that lacks the phone tools.
+
+The full live smoke should also run from the installed MCP surface
+(`--installed`) after packaging and record adb version, Android version,
+companion version when installed, scrcpy version when used, connection kind,
+cursor planes proven, and skipped profiles.
 
 ## Known limitations
 
@@ -306,15 +397,32 @@ version when used, connection kind, cursor planes proven, and skipped profiles.
   Redmi-family target is complete only when a real device reports HyperOS 3.1
   (or equivalent), Android release 16, and SDK 36 through ADB/capability
   evidence; API 35 is only a documented launch-baseline fallback.
-- The companion APK and its identity sidecar may not be built yet. Packaging
-  stages them conditionally and never hard-requires them; without them only the
-  ADB baseline and (if present) scrcpy paths are exercised. Building the
-  companion requires JDK 21 (the host default `java` is unsupported by AGP)
-  plus SDK build-tools/platforms 35–37; that toolchain note lives with the
-  Android build survey research.
-- Companion signature-mismatch recovery is intentionally manual: a same-named
-  package whose certificate differs from packaged metadata is refused, not
-  silently replaced.
+- The companion APK and its identity sidecar may not be built on a host without
+  the Android toolchain. A build-bearing `deploy_plugin.py` runs an automatic,
+  toolchain-gated, change-detected companion build/stage lane (`_companion.py`)
+  before bundling; when JDK 21 + the Android SDK are absent it skips gracefully
+  and packaging bundles whatever APK is already staged (conditionally, never
+  hard-required), so only the ADB baseline and (if present) scrcpy paths are
+  exercised. Building the companion requires JDK 21 (the host default `java` is
+  unsupported by AGP) plus SDK build-tools/platforms 35–37; that toolchain note
+  lives with the Android build survey research.
+- Companion signature checks read the expected signing cert + version + APK
+  SHA-256 from the bundled `phone-companion.json` metadata sidecar (env/machine
+  config override). A confirmed mismatch — a same-named package whose *readable*
+  certificate differs from the packaged companion — is refused, not silently
+  replaced. An *unreadable* installed certificate is not a mismatch: modern
+  Android (API 28+) does not expose the installed cert SHA-256 through
+  `dumpsys package` (only a short signature hash), so refusing it would make the
+  companion unusable on every current device while detecting no real impostor.
+  The host proceeds in that case and reports `signature_matches_expected=false`
+  honestly. Validated live on the API-36 emulator 2026-06-20.
+- The companion session token is delivered as an `am start` intent string extra
+  (`--es sky_cua_rpc_token`), not a pushed file: Android 11+ per-app storage
+  mount-namespace isolation makes a host-written file under
+  `/sdcard/Android/data/<pkg>/` unreadable by the app, which silently broke the
+  RPC bootstrap. The argv exposure is bounded (`hidepid`, ephemeral 15-min token,
+  localhost-only, ADB-gated); the logcat-readback handshake remains the future
+  hardening. See `docs/runtime/phone-companion-protocol.md`.
 - ADB `input tap`/`swipe` dispatch coordinates in the device's displayed
   (rotated) frame — the same frame the agent's screenshot uses — so no rotation
   transform is applied on the ADB input path. Validated 2026-06-17 on a Samsung
