@@ -18,22 +18,14 @@ pub(super) fn bridge_request_timeout() -> Duration {
 /// trip it when `cargo test --workspace` starves the in-process fake servers and
 /// a reply that normally takes microseconds takes seconds. Tests that need to
 /// observe the deadline *firing* set `SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS` to a
-/// small value so they stay fast.
+/// small millisecond value so they stay fast.
 #[cfg(test)]
 pub(super) fn bridge_request_timeout() -> Duration {
-    test_duration_override("SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS")
-        .unwrap_or(Duration::from_secs(10))
-}
-
-/// Read a millisecond duration override from `env`, for tests that must exercise
-/// a timeout path without waiting for the generous default. Returns `None` when
-/// the variable is unset or unparseable.
-#[cfg(test)]
-pub(super) fn test_duration_override(env: &str) -> Option<Duration> {
-    std::env::var(env)
+    std::env::var("SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS")
         .ok()
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .map(Duration::from_millis)
+        .unwrap_or(Duration::from_secs(10))
 }
 
 pub(super) async fn send_bridge_request(
