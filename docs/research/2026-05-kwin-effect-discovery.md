@@ -96,13 +96,21 @@ not a production-equivalent proof on a running desktop session.
 
 Local deploy tooling now automates the system install and update path:
 `scripts/install_kwin_effect.py` stamps builds with a content hash exposed
-through the effect's `BuildId` DBus slot and attempts a hot
-`unloadEffect`/`reconfigure`/`loadEffect` cycle. Verified live on KWin 6.6.5
+through the effect's `BuildId` DBus slot. Verified live on KWin 6.6.5
 (2026-06-10): a freshly installed effect hot-loads through `loadEffect`
 without any restart, but a replaced `.so` does not — `unloadEffect` followed
-by `loadEffect` reloads the old binary from memory, so effect updates only
-activate after a Plasma session restart. The deploy notifies the user and
-never restarts KWin itself.
+by `loadEffect` reloads the old binary from memory.
+
+## Follow-up (2026-06-21)
+
+Deploy tooling now avoids the in-memory replacement blocker by rotating effect
+ids. Each deploy builds the same source-content `BuildId` under the next id
+(`sky-cua-agent-cursor-000001`, `...-000002`, ...), unloads the previously
+active sky-cua id to release the stable `/com/skycua/AgentCursor` DBus path,
+loads the new id, verifies `BuildId()`, and removes older exact sky-cua ids
+after the new id is active. Restarting the Plasma session is now a fallback
+caveat for legacy same-id installs or unexpected loader/DBus failure, not the
+default update path. The deploy still never restarts KWin itself.
 
 ## Restart caveat (2026-06-10)
 
@@ -111,5 +119,5 @@ live: one restart survived (reconnecting Wayland clients), a later one took
 the entire session down, and restarts can bring KWin back as a compositor
 without re-registering the `org.kde.KWin` DBus name (only
 `org.kde.KWinWrapper` remains), leaving the effects/scripting DBus surface
-unreachable until another restart reclaims it. Effect updates therefore
-notify the user to restart the Plasma session at their convenience.
+unreachable until another restart reclaims it. Tooling must not restart KWin;
+rotating generated ids are the normal no-logout update path.

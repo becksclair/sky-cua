@@ -244,7 +244,7 @@ The host-facing tools are the portable product contract. Current tools:
   `filtered_element_count` metadata; use `element_query`, `element_offset`,
   and `element_limit` to page or narrow dense accessibility trees. Use
   `screenshot_delivery: "inline"` to attach the captured screenshot as an MCP
-  image content block for hosts that cannot read `screenshot_path` files
+  image content block for hosts that cannot read `inspection_image_path` files
 - visual capture: `screenshot`, which defaults to the primary display, accepts
   the same window target fields as `activate_window`, accepts
   `display_id`/`display_name`/`display_index` from `environment.displays`, and

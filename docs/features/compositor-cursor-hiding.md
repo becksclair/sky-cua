@@ -26,6 +26,8 @@ Public model in `crates/sky-cua-platform/src/model.rs`:
 - `AgentCursorCapabilities.system_cursor_hide_supported: bool`
 - `AgentCursorCapabilities.system_cursor_hidden: bool`
 - `AgentCursorCapabilities.system_cursor_backend: AgentCursorSystemCursorBackend`
+- `AgentCursorCapabilities.pointer_tracking_backend: AgentCursorPointerTrackingBackend`
+- `AgentCursorCapabilities.pointer_tracking_exact: bool`
 - `AgentCursorCapabilities.reason: Option<String>` — explanation when
   `system_cursor_hide_supported=false`.
 
@@ -47,7 +49,7 @@ Per-backend hide path:
 | Compositor          | Backend                       | Hide mechanism                                                                  | Restore on overlay hide |
 | ------------------- | ----------------------------- | ------------------------------------------------------------------------------- | ----------------------- |
 | X11 (Xorg, i3)      | `x11_xfixes`                  | `XFixesHideCursor` / `XFixesShowCursor` from the overlay host                   | Yes                     |
-| KDE Plasma / KWin   | `kwin_effect`                 | C++ effect calls compositor `hideCursor()` / `showCursor()` from inside KWin    | Yes                     |
+| KDE Plasma / KWin   | `kwin_effect`                 | C++ shim calls compositor `hideCursor()` / `showCursor()` and emits `PointerMoved(x, y, sequence)` while visible; layer-shell draws the agent cursor | Yes |
 | GNOME Shell         | `gnome_shell_extension`       | Extension uses `inhibit_cursor_visibility()` (Shell 49+) or `set_pointer_visible(false)` (older) with a guarded fallback | Yes |
 | Hyprland            | `hyprland_config`             | Snapshots the previous `cursor:invisible` value, sets it through `hyprctl`, restores afterward | Yes (previous value) |
 | COSMIC (patched)    | `cosmic_comp_bridge`          | Patched `cosmic-comp` exposes a Unix socket sentinel; bridge daemon toggles `CursorImageStatus::Hidden` in compositor seat state | Yes |
@@ -62,9 +64,13 @@ Adapter selection ordering inside the overlay host's
 4. `WaylandClientUnsupported` for generic Wayland (with a Wayland-focus
    reason).
 
-KWin's effect is separate because the compositor effect owns both planes;
-when the effect is loaded, `system_cursor_backend=kwin_effect` and
-`system_cursor_hide_supported=true`.
+KWin's effect is separate because a generic click-through layer-shell client
+cannot hide the compositor cursor or observe global pointer motion. The effect
+does not draw the agent cursor; when it is loaded beside the layer-shell backend,
+`backend=wayland_layer_shell`, `system_cursor_backend=kwin_effect`, and
+`system_cursor_hide_supported=true`. On updated shims, KDE also reports
+`pointer_tracking_backend=kwin_effect_signal` and
+`pointer_tracking_exact=true`.
 
 X11 is selected when the overlay host's X11 backend is active.
 
@@ -85,13 +91,12 @@ Capability honesty rules:
   selection plus the Hyprland-config, COSMIC bridge, and transparent-
   Xcursor adapter implementations
 - `crates/sky-cua-overlay-host/src/x11.rs` — XFixes adapter wiring
-- `crates/sky-cua-overlay-host/src/layer_shell.rs` — Wayland adapter
-  selection (delegates to compositor-specific adapters or reports
-  `wayland_client_unsupported`)
+- `crates/sky-cua-overlay-host/src/layer_shell.rs` — Wayland visual overlay
+  and system-cursor adapter selection
 - `crates/sky-cua-overlay-host/src/gnome_shell.rs` — GNOME extension
   adapter client
-- `resources/kwin/effects/sky-cua-agent-cursor/systemcursoradapter.cpp` —
-  KWin effect adapter
+- `resources/kwin/effects/sky-cua-agent-cursor/` — KWin cursor-hide and
+  pointer-position shim
 - `resources/gnome-shell-extension/codex-window-control@openai.com/extension.js`
   — GNOME extension cursor service (extends existing window-control
   service; same UUID and DBus path)
@@ -137,33 +142,35 @@ clean cleanup.
 
 ## Local install and update on a real Plasma host
 
-`scripts/install_kwin_effect.py` builds the effect from the current sources,
+`scripts/install_kwin_effect.py` builds the cursor shim from the current sources,
 installs it system-wide (`sudo cmake --install`, the only step that escalates;
-the exact command is printed first), enables it persistently in `kwinrc`
-(`Plugins/sky-cua-agent-cursorEnabled=true`), and drives the running KWin to
-the new build:
+the exact command is printed first), enables the next generated effect id
+persistently in `kwinrc`, and drives the running KWin to that new build:
 
 ```bash
 python3 scripts/install_kwin_effect.py --status   # session + effect state as JSON
 python3 scripts/install_kwin_effect.py            # build, install, reload
 ```
 
-Update detection uses a build stamp: the deploy hashes the effect sources and
-cursor asset into `SKY_CUA_EFFECT_BUILD_ID`, the compiled effect reports it
+Update detection uses a build stamp: the deploy hashes the shim sources into
+`SKY_CUA_EFFECT_BUILD_ID`, the compiled effect reports it
 through the `com.skycua.AgentCursor.BuildId` DBus slot, and the script
 considers the deploy converged only when the running build id matches the
-installed one. Fresh installs hot-load through `loadEffect`; a replaced `.so`
-cannot hot-reload into the running KWin (no dlclose; verified live on KWin
-6.6), so updates report a pending Plasma session restart and show a desktop
-notification (`notify-send`, kdialog passive popup fallback) telling the user
-to log out and back in at their convenience. The deploy never restarts KWin
-itself: restarting `plasma-kwin_wayland.service` took a whole session down
-during live verification (it can also bring KWin back without re-claiming the
-`org.kde.KWin` DBus name). `--no-notify` suppresses the notification for
-automation. The effect itself starts hidden — autoloading with the session
-must not hide the user's cursor until an overlay host activates it — and
-carries an 8s idle auto-hide failsafe that restores the system cursor when
-the overlay host stops refreshing the cursor state (see the watchdog chain in
+installed one. KWin does not dlclose replaced effect libraries, so the deploy
+does not replace the active `.so` in place. It installs the next generated id
+(`sky-cua-agent-cursor-000001`, `...-000002`, ...), unloads the previously
+loaded sky-cua id to release `/com/skycua/AgentCursor`, reconfigures KWin,
+loads the new id, and then removes every older exact sky-cua id from KWin
+plugin paths and `kwinrc`. Cleanup keeps only the active generated id after a
+successful deploy. If KWin DBus is unreachable, the new id is installed and
+enabled for the next Plasma session start without attempting live load. The
+deploy never restarts KWin itself: restarting `plasma-kwin_wayland.service`
+took a whole session down during live verification (it can also bring KWin
+back without re-claiming the `org.kde.KWin` DBus name). `--no-notify` is kept
+as a legacy no-op for automation compatibility. The shim itself starts hidden — autoloading with the session
+must not hide the user's cursor until the layer-shell overlay host activates
+it — and carries an 8s idle auto-hide failsafe that restores the system cursor
+when the overlay host stops refreshing the cursor state (see the watchdog chain in
 [`agent-cursor-overlay.md`](agent-cursor-overlay.md)).
 
 The same deploy runs from the plugin lanes:

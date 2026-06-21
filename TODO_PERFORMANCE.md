@@ -3,7 +3,7 @@
 Generated from a deep performance review of the current working tree.
 Status: **13 of 13 critical/high findings implemented**. **23 of 26 medium/low fixed**; 1 skipped (MED-005); 1 no-change (LOW-005); **0 remain**.
 
-Last updated: 2026-06-11
+Last updated: 2026-06-21
 
 ---
 
@@ -47,17 +47,18 @@ Last updated: 2026-06-11
 - **File/line:** `crates/sky-cua-linux/src/portal/remote_desktop.rs:1048-1102`
 - **Problem:** When EIS keyboard fails and falls back to legacy portal keysym injection, the code iterates `text.chars()` and calls `send_keysym_raw(keysym)` for each character. That method calls `send_keysym_state` twice (press + release), each an async D-Bus call.
 - **Impact:** A 100-character string generates **200 sequential D-Bus round-trips**. At ~5–10ms each, this is 1–2 seconds of wall-clock time for a single `type_text` call.
-- **Fix applied:** In the EIS fallback path, try `input_xtest::send_text()` / `press_key_sequence()` first (single xdotool call, batch-capable). If XTest is unavailable, try `LinuxVirtualInput::type_text()` / `press_key_sequence()` next (single ydotool/uinput call). Only fall back to per-character D-Bus if all faster options are unavailable. Same fallback chain added to both `send_text` and `press_key_sequence`. Impact: a 100-char string drops from ~200 D-Bus round-trips to a single subprocess call (~10–50 ms).
+- **Fix applied:** In the EIS fallback path, try `input_xtest::send_text()` / `press_key_sequence()` first (single xdotool call, batch-capable). If XTest is unavailable, try `LinuxVirtualInput::type_text()` / `press_key_sequence()` next (single ydotool call, or helper-backed uinput keyboard events when the privileged helper is selected). Only fall back to per-character D-Bus if all faster options are unavailable. Same fallback chain added to both `send_text` and `press_key_sequence`. Impact: a 100-char string drops from ~200 D-Bus round-trips to one batched virtual-keyboard path (~10–50 ms in ydotool mode, helper-dependent in privileged-helper mode).
 
 ---
 
 ## High
 
-### HIGH-001 — `cached_virtual_input` holds `StdMutex` during slow initialization — ✅ FIXED
+### HIGH-001 — `cached_virtual_input` held `StdMutex` during slow initialization — ✅ FIXED
 - **File/line:** `crates/sky-cua-linux/src/backend.rs:71-78`
-- **Problem:** `cached_virtual_input` locks `self.virtual_input` (a `std::sync::Mutex`) and then calls `LinuxVirtualInput::new()` — which opens `/dev/uinput`, performs `ioctl` setup, and sleeps `UINPUT_SETTLE_DELAY` (650ms) — **all while holding the lock**.
-- **Impact:** If called from an async executor thread, this blocks the thread for ~650ms. Any other task needing virtual input stalls.
-- **Fix applied:** Restructured `cached_virtual_input` to (1) lock and check cache, (2) release lock, (3) construct `LinuxVirtualInput`, (4) re-lock and store. The 650ms uinput init now runs outside the mutex.
+- **Problem:** `cached_virtual_input` locked `self.virtual_input` (a `std::sync::Mutex`) and then called `LinuxVirtualInput::new()` while holding the lock. At the time, the direct uinput pointer path opened `/dev/uinput`, performed `ioctl` setup, and slept `UINPUT_SETTLE_DELAY` (650ms) during initialization.
+- **Impact:** If called from an async executor thread, this could block the thread for ~650ms. Any other task needing virtual input stalled.
+- **Fix applied:** Restructured `cached_virtual_input` to (1) lock and check cache, (2) release lock, (3) construct `LinuxVirtualInput`, (4) re-lock and store.
+- **Current status:** Direct uinput pointer injection is now retired entirely. `LinuxVirtualInput::new()` no longer creates a uinput pointer device or performs pointer-device settle sleeps; privileged helper mode is keyboard injection plus pointer observation only, and Linux virtual pointer actions require ydotool.
 
 ### HIGH-002 — `EisAction` clones large payloads on every retry attempt — ✅ FIXED
 - **File/line:** `crates/sky-cua-linux/src/portal/remote_desktop.rs:1151`

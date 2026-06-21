@@ -141,10 +141,8 @@ direct MCP text readback in one command.
 
 The curated set is deliberately session-agnostic: every member must be able
 to pass headless on whichever real desktop session the VM is booted into.
-That criterion excludes two lanes the provisional set once aimed at:
-`wayland-layer-shell-overlay` captures with `grim` (wlr-screencopy), which
-makes it a Hyprland-class lane, and `desktop-smoke` strictly requires live
-PipeWire snapshot frames, which COSMIC does not deliver headless. Those, the
+That criterion excludes the stricter `desktop-smoke` lane, which requires live
+PipeWire snapshot frames that COSMIC does not deliver headless. That lane, the
 cursor pixel host proofs (`kde-kwin-effect-system-install`, the COSMIC
 cursor host proofs), `wayland-pointer-scaled`, and `i3` remain per-session
 feature and release gates run through the full matrix.
@@ -291,11 +289,9 @@ Do not force GNOME or KDE `RemoteDesktop` as the COSMIC answer. Those backends
 are session/compositor-specific and make a misleading production proof. COSMIC
 Wayland physical input should use the Linux virtual input backend when
 virtual input is available. That backend exposes one runtime selection,
-`LinuxVirtualInput`; pointer actions prefer the direct absolute `/dev/uinput`
-adapter when `/dev/uinput` is writable and desktop bounds are detected, while
-`ydotool` remains the keyboard/text adapter and lower-priority fallback. KDE and
-GNOME continue to prefer their `RemoteDesktop` portals in their own real
-sessions.
+`LinuxVirtualInput`; pointer actions use ydotool, while the privileged helper
+is reserved for keyboard/text injection and pointer observation. KDE and GNOME
+continue to prefer their `RemoteDesktop` portals in their own real sessions.
 
 ## Session Switching
 
@@ -352,10 +348,9 @@ Profiles live under `scripts/testing-vm/profiles/`.
 - `curated`: host-side run mode, not a remote profile. Runs the trimmed
   pre-merge curated set in sequence; see "Curated pre-merge profile set".
 - `wayland-layer-shell-overlay`: real Wayland session proof for the native
-  layer-shell cursor overlay. It uses the active session socket, draws the
-  copied Chrome cursor asset through `sky-cua-overlay-host`, captures with the
-  compositor screenshot tool (`grim -o <output>` on Hyprland), and proves visible
-  then hidden cursor pixels.
+  layer-shell cursor overlay. It runs the service-backed KDE cursor smoke in
+  non-KDE mode, captures through sky-cua's screenshot request, and proves
+  visible cursor pixels on the display containing the fixture point.
 - `opencode-mcp`: real-session OpenCode MCP smoke. Installs sky-cua as an MCP
   server for OpenCode, deploys skills, and exercises dialog dismissal through
   OpenCode's tool-calling loop against visible desktop fixtures. It is part of
@@ -387,9 +382,9 @@ Profiles live under `scripts/testing-vm/profiles/`.
   Run this from a VM booted into Plasma Wayland when testing production KWin
   behavior.
 - `kde-kwin-effect-system-install`: VM-only production package-path proof. It
-  installs the compiled effect under `/usr` with `sudo`, restarts Plasma, proves
-  KWin discovery/load and overlay-host `kwin_effect` IPC, then uninstalls the
-  system files and restarts Plasma again. The host runner owns pixel proof:
+  installs the compiled effect under `/usr` with `sudo`, proves KWin
+  discovery/load and overlay-host KWin-shim IPC, then uninstalls the exact
+  system files. The host runner owns pixel proof:
   it captures before/after VM framebuffers with `virsh screenshot`, probes the
   cursor diff locally, and writes `host-summary.json`.
 - `kde-plasma`, `gnome`, `cosmic`, and `hyprland`: legacy nested visual-debug
@@ -472,13 +467,15 @@ The pointer smoke now fails honestly with
 `ActionUnsupportedForEnvironment: no physical input backend is available for click fallback`
 instead of falsely routing through the X11/XWayland input fallback.
 
-After the Linux virtual input pass, COSMIC pointer input is accepted through the
-direct absolute `/dev/uinput` adapter. Artifact
+The old direct absolute `/dev/uinput` pointer adapter was tried and then
+retired because it was not a reliable compositor-delivered pointer path. Older
+artifact
 `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260515T091758Z`
-proves the fullscreen GTK fixture received click, drag, and scroll
-(`clicked=true`, `drag_completed=true`, `scroll_events=1`). The ydotool pointer
-calibration artifacts immediately before that were useful negative proof:
-ydotool's VM pointer device is relative-only and `mousemove --absolute` landed
+proved the fullscreen GTK fixture received click, drag, and scroll in that VM
+run (`clicked=true`, `drag_completed=true`, `scroll_events=1`), but later live
+KDE validation made it non-production. The ydotool pointer calibration
+artifacts immediately before that were useful negative proof: ydotool's VM
+pointer device is relative-only and `mousemove --absolute` landed
 at accelerated coordinates, so ydotool is not the COSMIC pointer adapter.
 `ydotool` remains useful for keyboard/text fallback.
 The extended COSMIC artifact

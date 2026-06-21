@@ -45,7 +45,7 @@ dumps. Per-feature artifact paths live in
   from `hyprctl monitors -j`.
 - KWin user-level compiled-effect discovery is blocked on Plasma 6 even with
   explicit `loadEffect` + reconfigure; production proof is a system install
-  under `/usr` plus Plasma restart. See
+  under `/usr`. See
   `docs/research/2026-05-kwin-effect-discovery.md`.
 - Fullscreen GTK windows can report a logical width larger than the portal
   stream width — keep explicit-coordinate smoke targets well inside the
@@ -64,40 +64,37 @@ dumps. Per-feature artifact paths live in
 - KDE Screenshot portal returns a local `file://` URI; copy it into
   `/run/user/<uid>/sky-cua/captures/`.
 
-## KWin agent-cursor effect
+## KWin cursor shim
 
-Behavior, install flow, ghost-cursor background, and the idle auto-hide
-watchdog chain are documented in `docs/features/agent-cursor-overlay.md`
-and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
+Behavior, install flow, pointer-position telemetry, ghost-cursor background,
+and the idle auto-hide watchdog chain are documented in
+`docs/features/agent-cursor-overlay.md` and
+`docs/features/compositor-cursor-hiding.md`. Tactical reminders:
 
 - `SKY_CUA_PORTAL_EIS=never` isolates the legacy portal lane when debugging
   pointer mapping.
-- A replaced effect `.so` never hot-reloads (no dlclose; verified 2026-06-10
-  via BuildId) — after the user's session restart, confirm with
-  `install_kwin_effect.py --status`; rerun the deploy after KWin updates.
+- A replaced effect `.so` never hot-reloads under the same id (no dlclose;
+  verified 2026-06-10 via BuildId). The installer avoids this with rotating
+  ids and keeps only the active generated id after a successful deploy; confirm
+  with `install_kwin_effect.py --status`; rerun the deploy after KWin updates.
 - NEVER restart `plasma-kwin_wayland.service` from tooling: it can kill the
   whole session, or come back without re-claiming the `org.kde.KWin` DBus
   name (only `org.kde.KWinWrapper`), leaving effects DBus dead.
-- Stale build hijacking the cursor:
+- Stale shim hiding the cursor:
   `qdbus6 org.kde.KWin /com/skycua/AgentCursor com.skycua.AgentCursor.Hide`.
 - For live overlay visibility, query the overlay host `capabilities` reply —
   pre-fix effect builds report stale `StateJson`.
 
 ## Input adapters
 
-- `ydotool` cannot be the precise pointer adapter on COSMIC (relative-only
-  device; `--absolute` lands at accelerated coordinates). Use direct
-  absolute `/dev/uinput` for pointer, ydotool for keyboard/text. See
-  `docs/research/2026-05-ydotool-vs-direct-uinput.md`. Direct uinput scroll
-  on COSMIC needs both `REL_WHEEL_HI_RES` and `REL_WHEEL`, sign inverted
-  from the portal helper.
+- Direct `/dev/uinput` pointer injection was retired after live compositor
+  testing showed it was not reliable enough to keep as a production or
+  fallback pointer path. The privileged helper still owns `/dev/uinput` for
+  keyboard injection and raw pointer observation; Linux virtual pointer
+  actions use ydotool when selected.
 - `ydotool` argv must insert `--` before coordinate, wheel, and text payload
   arguments, or negative values and `-`-prefixed text parse as flags
   (unit-tested).
-- `cosmic-randr list` is the preferred COSMIC bounds source; `xrandr` is the
-  X11 fallback; `SKY_CUA_VIRTUAL_INPUT_X/Y/WIDTH/HEIGHT` are test overrides.
-- At fractional scale, direct uinput must multiply desktop logical points by
-  output scale, or clicks report success while the target never sees them.
 - The i3/X11 VM can start Xorg on `:1` while the user systemd env still says
   `DISPLAY=:0`/`wayland-0`. The i3 profile reconstructs `DISPLAY` and
   `XAUTHORITY` from the active Xorg command and unsets Wayland.
@@ -193,8 +190,10 @@ and `docs/features/compositor-cursor-hiding.md`. Tactical reminders:
 - Desktop cursor preview/testing: `sky-cua-overlay-host playground [--backdrop
   transparent|grid|dark|light]` opens an interactive Wayland layer-shell surface
   that hides the system cursor and draws the real agent cursor at the pointer
-  (Ctrl-C to quit). Wayland-only; previews the layer-shell render path, not the
-  KWin effect. Bounded capture: wrap in `timeout -k 2 4 ...`, shoot with
+  (Ctrl-C to quit). Wayland-only; previews the production layer-shell visual
+  path; KWin supplies the optional cursor-hide and pointer-position shim.
+  Bounded capture:
+  wrap in `timeout -k 2 4 ...`, shoot with
   `spectacle -b -n -f -o` (grim has no wlr-screencopy on KWin). Full notes:
   `docs/features/agent-cursor-overlay.md` → Pointer playground.
 

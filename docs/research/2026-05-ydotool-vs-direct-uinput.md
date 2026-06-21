@@ -1,4 +1,4 @@
-# ydotool vs direct /dev/uinput as the COSMIC pointer adapter
+# ydotool vs retired direct /dev/uinput pointer injection
 
 ## Context
 
@@ -9,9 +9,12 @@ candidate because it is widely packaged, has a per-user socket
 (`/run/user/$UID/.ydotool_socket`), and the existing `sky-cua` doctor /
 setup already probed for it.
 
-This research records the live calibration that rejected `ydotool` as the
-pointer adapter on COSMIC, kept it as the keyboard / text adapter, and
-moved the pointer path to a direct absolute `/dev/uinput` adapter.
+This research records the May 2026 live calibration that rejected `ydotool`
+as a precise pointer adapter on COSMIC, kept it as the keyboard / text
+adapter, and moved the pointer path to a direct absolute `/dev/uinput`
+adapter. A later live KDE pass retired direct uinput pointer injection
+entirely because compositor delivery was not reliable enough to keep it as a
+production or fallback pointer path.
 
 ## Investigation
 
@@ -62,26 +65,22 @@ shell-escaped strings.
 
 ## Conclusion
 
-The COSMIC pointer path is **direct absolute `/dev/uinput`**, not
-`ydotool`. Bounds come from `cosmic-randr` first, `xrandr` second, env
-vars as test overrides; logical-to-physical conversion happens at the
-uinput boundary using output scale; scrolling emits both
-`REL_WHEEL_HI_RES` and `REL_WHEEL` with the sign inverted from portal
-discrete scroll.
+The direct absolute `/dev/uinput` pointer path was useful experimental proof
+but is now **retired**. It should not be selected, documented as a current
+fallback, or revived without a new compositor-specific acceptance pass.
 
-`ydotool` is **kept as the keyboard / text adapter** and as a sub-adapter
-for Wayland sessions that have a usable ydotool socket. Its argv must
-always insert `--` before payload arguments to avoid flag-parsing.
+`ydotool` is the remaining Linux virtual pointer adapter when that backend
+is selected. The privileged helper is kept for keyboard / text injection and
+non-exact pointer observation. ydotool argv must always insert `--` before
+payload arguments to avoid flag-parsing.
 
 ## Implications
 
 - The shipped feature
   ([`docs/features/linux-virtual-input.md`](../features/linux-virtual-input.md))
-  documents direct uinput as the primary pointer adapter and ydotool as
-  the keyboard / text path.
-- Tests cover argv construction (including the `--` separator), the
-  COSMIC and XRandR bounds parsers, and the screenshot-to-desktop-logical
-  conversion at 1x and at fractional scale.
+  documents ydotool as the Linux virtual pointer adapter and the privileged
+  helper as keyboard / observation only.
+- Tests cover argv construction, including the `--` separator.
 - Future work on additional Wayland compositors should not adopt
   `ydotool` for pointer work without re-running this calibration on that
   compositor.

@@ -64,7 +64,9 @@ duplicating it:
    `scripts/install_mcp_server.py --host <host> --restart-runtime`, which
    installs binaries to the target dir, writes/registers host configs, and
    deploys skills where the host supports them.
-5. **kwin-effect** (opt-in via `--kwin-effect`): `_kwin_effect.deploy_kwin_effect`.
+5. **kwin-effect** (opt-in via `--kwin-effect`): `_kwin_effect.deploy_kwin_effect`
+   builds the next generated KWin effect id, hot-loads it, verifies `BuildId()`,
+   and cleans older exact sky-cua ids after success.
 6. **health**: `sky-cua-client doctor` against the installed binaries, plus
    `codex mcp list` (expects `computer-use`) and `claude mcp list` (expects
    `sky-cua`) for the selected agents. `--skip-health` is reserved for

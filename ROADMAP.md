@@ -23,9 +23,11 @@ Open boxes link to the active ExecPlan that owns the work.
   - [ ] Capture a dedicated `list_windows` workspace artifact on real KWin and X11
 - [x] KWin window targeting (focused_window + verified activation via KWin scripting) — [`docs/features/kwin-window-targeting.md`](docs/features/kwin-window-targeting.md)
 - [x] Linux virtual input (`LinuxVirtualInput` backend) — [`docs/features/linux-virtual-input.md`](docs/features/linux-virtual-input.md)
+  - [ ] Privileged helper fast path for Wayland input — [`plans/privileged_linux_uinput_helper.md`](plans/privileged_linux_uinput_helper.md)
 - [x] Native agent cursor overlay — [`docs/features/agent-cursor-overlay.md`](docs/features/agent-cursor-overlay.md)
+  - [x] GPU-backed Wayland layer-shell renderer (`wgpu`) with shm fallback and evented pointer tracking
 - [x] Compositor cursor hiding (KWin / X11 / GNOME / Hyprland / patched COSMIC) — [`docs/features/compositor-cursor-hiding.md`](docs/features/compositor-cursor-hiding.md)
-  - [x] Local KWin effect deploy/update tooling (`install_kwin_effect.py`, `--kwin-effect` deploy flags, BuildId convergence, session-restart notification — tooling never restarts KWin)
+  - [x] Local KWin cursor shim deploy/update tooling (`install_kwin_effect.py`, `--kwin-effect` deploy flags, rotating generated ids, BuildId convergence — tooling never restarts KWin)
   - [x] Unpatched COSMIC transparent-Xcursor mode (VM-only fallback)
   - [ ] Long-term unpatched COSMIC path or accepted upstream integration
 - [ ] Wayland fallback vision anchors — [`plans/wayland_fallback_vision_anchors.md`](plans/wayland_fallback_vision_anchors.md)
@@ -69,7 +71,7 @@ Open boxes link to the active ExecPlan that owns the work.
 - [x] Agent-agnostic screenshot delivery (browser MCP image blocks + persisted capture paths, `get_app_state screenshot_delivery: inline`, one CSS-pixel browser coordinate space) — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [ ] Re-run the VM smoke matrix for the CSS-pixel browser contract (only the live KDE host is verified so far)
 - [x] Display-targeted desktop screenshots (primary-display default, explicit display/window/all-displays capture, and snapshot coordinate remapping) — [`docs/features/display-targeted-screenshots.md`](docs/features/display-targeted-screenshots.md)
-  - [x] `get_app_state` visual attachment now prefers focused/selected window crops, falls back only to target/primary display scopes, and labels `inspection_image_path` versus raw/debug captures
+  - [x] `get_app_state` visual attachment now prefers focused/selected window crops, falls back only to target/primary display scopes, and exposes `inspection_image_path` for visual inspection
 - [x] First-class browser MCP tools for `user_chrome` — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [x] Explicit host opt-in gate for OpenCode/Pi, with Codex Desktop kept on the companion Browser Use path
   - [x] Real user-tab listing, session-owned tab creation, existing-tab claiming, and Brave/Chrome/Chromium socket selection

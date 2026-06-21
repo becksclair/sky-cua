@@ -56,9 +56,10 @@ packaged adapter around that runtime, not the runtime boundary itself.
   top-level window fallback snapshots, GDI screenshots, and SendInput actions
 - Linux window targeting through a registry of KWin, X11, GNOME, COSMIC,
   Hyprland, and i3 backends, with terminal metadata selectors where available
-- Linux compositor cursor overlay and hide/show support through X11/XFixes, the
-  KWin effect, the bundled GNOME Shell extension, Hyprland
-  `cursor:invisible`, the COSMIC bridge prototype, and the dedicated no-patch
+- Linux compositor cursor overlay and hide/show support through X11/XFixes,
+  GPU-backed layer-shell visuals plus the KWin cursor-hide/pointer-signal
+  shim, the bundled GNOME Shell extension, Hyprland `cursor:invisible`, the
+  COSMIC bridge prototype, and the dedicated no-patch
   `cosmic_transparent_xcursor` VM session mode
 - `doctor`, `setup_accessibility`, and `setup_window_targeting` MCP tools with
   structured readiness reports
@@ -84,6 +85,9 @@ python3 install.py
 Use `--dry-run` to preview the phases, `--agents` to pick hosts explicitly,
 and `--kwin-effect` to also install the KDE agent-cursor effect. Details in
 [`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md).
+For fastest Linux Wayland input, install the privileged uinput helper from a
+runtime install with `scripts/install_mcp_server.py --input-helper`; it runs as
+root and exposes `/run/sky-cua/input-helper.sock`.
 
 To install on a machine without a checkout or toolchain, build a
 self-contained release tarball with `python3 scripts/package.py`, copy it
@@ -174,6 +178,10 @@ python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw
 ```
+
+On Linux, add `--input-helper` to install and start the root
+`sky-cua-input-helper.service` for helper-backed `uinput` keyboard injection
+and raw pointer observation.
 
 During local sky-cua development, add `--restart-runtime` after rebuilding and
 installing so OpenCode, Pi, or another MCP host respawns from the new binaries

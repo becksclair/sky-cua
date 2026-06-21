@@ -37,8 +37,7 @@ display. It does not silently attach an all-displays virtual desktop image.
   snapshot fail closed.
 - MCP `get_app_state` projects `capture.inspection_image_path` as the path an
   agent should visually inspect, plus `capture.images[]` entries with role,
-  scope, and `recommended_for`. `capture.raw_capture_path` and legacy
-  `capture.original_screenshot_path` identify source/debug artifacts.
+  scope, and `recommended_for`.
 - `ServiceRequest::Screenshot` carries `target`, `display_target`, and
   `capture_all_displays`.
 - MCP `screenshot` accepts flat display selector fields:
@@ -66,8 +65,8 @@ Display-targeted screenshots resolve the requested display from
 `environment.displays`. Explicit display target failures are hard failures:
 the backend does not silently return another monitor. When no selector is
 provided, the primary display is captured. If topology is unavailable only for
-that omitted-selector path, Linux preserves the legacy raw capture with a
-diagnostic instead of breaking old callers.
+that omitted-selector path, Linux returns an unscoped desktop capture with a
+diagnostic instead of pretending a display target was proven.
 
 `get_app_state` follows a stricter visual-attachment ladder than the standalone
 `screenshot` default: target window crop when focused/selected window geometry

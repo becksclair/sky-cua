@@ -102,8 +102,7 @@ Use `--skip-host-build` only when host release/dev artifacts were already rebuil
 ## False Trails
 
 - `scripts/live_wayland_pointer_smoke.py --help` is not an inert help path; it can launch the GTK fixture. On hosts without Python `gi`, it fails before proving anything useful.
-- Local layer-shell overlay proof may fail if the current compositor does not expose the screen capture protocol to `grim`. Treat `grim: compositor doesn't support the screen capture protocol` as a local capture limitation; use the VM profile for layer-shell proof.
-- A Hyprland profile run while the guest is still in Plasma can fail with `grim: failed to create display` against a stale `wayland-1`; switch the guest session first.
+- The layer-shell overlay profile uses sky-cua's service-backed screenshot request. A stale `WAYLAND_DISPLAY` can still prevent the overlay host from connecting; switch the guest session first when targeting a specific desktop.
 - The KWin system-install profile must run from Plasma. If the guest is still COSMIC, it can exit before `host-framebuffer-ready.json` appears and report remote exit 67.
 - The ydotool control socket can be a Unix datagram socket. Do not use `UnixStream::connect` as the readiness test; check that the path is a socket or prove it with a real `ydotool key ...` command.
 

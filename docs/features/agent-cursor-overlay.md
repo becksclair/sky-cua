@@ -20,8 +20,14 @@ Public model in `crates/sky-cua-platform/src/model.rs`:
 
 - `AgentCursorState { visible, sequence, model_point, native_point, snapshot_id, source_action, updated_at_ms }`
 - `AgentCursorPoint { x, y, coordinate_space, mapping_id }`
-- `AgentCursorCapabilities { backend, visible_overlay, screenshot_synthetic_cursor, click_through, capture_exclusion, system_cursor_hide_supported, system_cursor_backend, system_cursor_hidden, needs_user_install, reason }`
-- `AgentCursorBackendKind`: `wayland_layer_shell`, `kwin_effect`, `x11_shaped_window`, `gnome_shell_extension`, `cosmic_comp_bridge`, `cosmic_transparent_xcursor`, `none`
+- `AgentCursorCapabilities { backend, renderer_backend, visible_overlay, screenshot_synthetic_cursor, click_through, capture_exclusion, pointer_tracking_backend, pointer_tracking_exact, system_cursor_hide_supported, system_cursor_backend, system_cursor_hidden, needs_user_install, reason }`
+- `AgentCursorBackendKind`: `wayland_layer_shell`, `x11_shaped_window`,
+  `gnome_shell_extension`, `cosmic_comp_bridge`, `cosmic_transparent_xcursor`,
+  `none`. Historical status may still deserialize `kwin_effect`, but it is no
+  longer a selectable visible-overlay backend.
+- `AgentCursorRendererBackendKind`: `wgpu`, `wayland_shm`, `none`.
+- `AgentCursorPointerTrackingBackendKind`: `kwin_effect_signal`,
+  `privileged_input_helper`, `x11_query`, `none`.
 - `AgentCursorPlane`: `UserVisible`, `ScreenshotSynthetic`
 - `AgentCursorSystemCursorBackend`: see `docs/features/compositor-cursor-hiding.md`
 - `AppStateSnapshot.agent_cursor`, `ActionOutcome.agent_cursor` (preserved in compact snapshots)
@@ -37,7 +43,7 @@ Overlay-host JSON-lines protocol on
 Environment variables (allowlisted in `resources/chrome_preflight.py`):
 
 - `SKY_CUA_AGENT_CURSOR` — `auto` (default), `on`, `off`
-- `SKY_CUA_OVERLAY_BACKEND` — `auto`, `wayland_layer_shell`, `kwin_effect`,
+- `SKY_CUA_OVERLAY_BACKEND` — `auto`, `wayland_layer_shell`,
   `x11`, `gnome_shell_extension`, `cosmic_comp_bridge`, `none`
 - `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE` — `auto`, `on`, `off`
 - `SKY_CUA_OVERLAY_HOST_PATH` — explicit path; defaults to bundled binary
@@ -45,32 +51,28 @@ Environment variables (allowlisted in `resources/chrome_preflight.py`):
 
 ## Behavior
 
-### Idle auto-hide watchdog chain
+### Idle cleanup policy
 
-The agent cursor must never outlive the agent driving it. Three independent
-watchdog layers guarantee the overlay hides and the system cursor is restored
-after a short timeout, no matter which part of the stack was interrupted,
-crashed, or abandoned mid-turn:
+The service owns the visual overlay lifecycle. Agents should end their
+computer-use session explicitly, and sky-cua hides the overlay as part of that
+cleanup path. If an agent turn is interrupted or abandoned, the service idle
+watchdog hides the whole agent-cursor overlay after 15 seconds. The same
+service cleanup runs lazily before snapshot synthesis, so stale visible cursor
+state is not composited into a later capture.
 
-1. **Service (1.5s)** — the daemon runs an active idle watchdog task that
-   hides the overlay once the cursor state is older than the idle timeout,
-   in addition to the lazy check on the next snapshot. Covers abandoned or
-   interrupted agent turns while the runtime is healthy.
-2. **Overlay host (4s, `SKY_CUA_OVERLAY_IDLE_HIDE_MS`)** — the host's serve
-   loop polls for connections and synthesizes a Hide
-   (`overlay host idle timeout`) when no visibility refresh arrives in time.
-   Covers a crashed or killed service. The env value is clamped to a 2s
-   floor so this layer cannot be configured below the service's 1.5s
-   timeout, which would hide the cursor mid-action between refreshes.
-3. **KWin effect (8s)** — the effect arms a single-shot timer on every
-   Show/SetCursorState and hides itself (restoring the system cursor) when no
-   refresh arrives. Covers a killed overlay host; this layer lives inside the
-   compositor and survives everything else dying. Hide/Show and the failsafe
-   keep the `StateJson` introspection's `visible` field in sync.
+The overlay host does not run an independent idle-hide policy. Its socket loop
+uses `calloop` timers only to advance frame-paced work such as pointer tracking;
+it keeps the overlay visible until the service sends `hide`, `show`, or
+`shutdown`.
 
-Verified live on KDE Plasma (2026-06-10): the service layer hid at exactly
-1.5s with no further requests, and the host layer hid the real kwin_effect
-backend at the 4s boundary with the service SIGKILLed.
+On KDE, the KWin shim keeps a separate 8 second fail-safe solely to restore the
+system compositor cursor if the service or overlay host dies after hiding it.
+The shim does not draw the agent cursor; layer-shell owns all visuals. It emits
+`PointerMoved(double x, double y, qulonglong sequence)` while the agent cursor
+is visible so the click-through layer-shell overlay can follow the compositor
+pointer without shell polling. `PointerStateJson` remains a status/fallback
+method. Hide/Show and the failsafe keep the `StateJson` introspection's
+`visible` field in sync.
 
 
 The overlay has two planes that operate independently:
@@ -84,9 +86,17 @@ The overlay has two planes that operate independently:
 
 Backend selection at `auto`:
 
-- KDE/KWin: prefers the compiled `kwin_effect` when it is discoverable
-  (requires system install under `/usr`; user-level install is not picked up
-  by a running KWin), falls back to `wayland_layer_shell`.
+- KDE/KWin: `wayland_layer_shell` draws the visible agent cursor. The default
+  renderer is `wgpu` (`SKY_CUA_LAYER_SHELL_RENDERER=shm` keeps the explicit
+  shared-memory fallback). The compiled KWin effect, when installed and loaded,
+  is used as `system_cursor_backend=kwin_effect` to hide/restore the compositor
+  cursor and as `pointer_tracking_backend=kwin_effect_signal` for exact,
+  compositor-native follow-mouse rendering.
+- Other Wayland compositors: `wayland_layer_shell` draws with `wgpu` by
+  default and falls back to `wayland_shm`. When no exact compositor tracker is
+  available, the privileged input helper can stream relative evdev motion as
+  `pointer_tracking_backend=privileged_input_helper` with
+  `pointer_tracking_exact=false`.
 - Hyprland: `wayland_layer_shell`. Layer-shell surfaces must wait for
   configure events before drawing.
 - GNOME Shell: extends the bundled `codex-window-control@openai.com`
@@ -128,14 +138,13 @@ other.
 - `crates/sky-cua-overlay-host/` — overlay host crate
   - `src/layer_shell.rs` — generic Wayland layer-shell backend (KWin, Hyprland)
   - `src/x11.rs` — X11 shaped-window backend
-  - `src/kwin_effect.rs` — KWin effect host bridge
   - `src/gnome_shell.rs` — GNOME Shell extension client
   - `src/cosmic_bridge.rs` — COSMIC compositor bridge client
   - `src/system_cursor.rs` — system cursor adapter trait
   - `src/playground.rs` — interactive desktop pointer playground (preview tool)
   - `assets/cursor-chat.png` — cursor asset, byte-identical to the Chrome
     extension's
-- `resources/kwin/effects/sky-cua-agent-cursor/` — C++ KWin effect plugin
+- `resources/kwin/effects/sky-cua-agent-cursor/` — C++ KWin cursor shim
 - `resources/gnome-shell-extension/codex-window-control@openai.com/` —
   GNOME Shell extension (extended for cursor)
 - `resources/cosmic/cosmic-comp-sky-cua-cursor-bridge.patch` — COSMIC
@@ -168,7 +177,8 @@ python3 scripts/run_gui_testing_vm_smoke.py --profile cosmic-transparent-xcursor
 
 Latest accepted artifacts (2026-05-15 session):
 
-- KDE/KWin compiled effect: `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T132649888064Z/host-summary.json`
+- KDE/KWin layer-shell visuals plus compiled cursor shim:
+  `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T132649888064Z/host-summary.json`
 - KDE/KWin layer-shell sequence: `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100302670580-syn`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100303845615-vis`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100305142807-hide`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0515100306568235-click`
 - Hyprland layer-shell: `/workspace/artifacts/codex-e2e/agent-cursor-wayland-layer-shell/20260515T142710878162Z/`
 - X11/i3 shaped window: `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T142731049499Z/`
@@ -216,9 +226,9 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
   matching the agent cursor, and the offset ghost cursor is KWin's visual
   artifact. Verified live on Plasma (scale 1.5, left panel) on 2026-06-10
   with synthetic-cursor captures and a small-button click probe.
-  Installing the sky-cua KWin effect hides the system cursor while the
-  agent cursor is shown, which removes the visual confusion; install or
-  update it with `python3 scripts/install_kwin_effect.py` (see
+  Installing the sky-cua KWin cursor shim hides the system cursor while
+  the layer-shell agent cursor is shown, which removes the visual confusion;
+  install or update it with `python3 scripts/install_kwin_effect.py` (see
   [`compositor-cursor-hiding.md`](compositor-cursor-hiding.md)).
   `SKY_CUA_PORTAL_EIS=never` forces the legacy pointer lane for input-lane
   debugging.
@@ -226,7 +236,7 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
 - **Windows overlay is deferred.** The shared model and IPC contract were
   designed not to make Windows harder, but no Windows live proof exists yet.
   The Windows backend reports `visible_overlay=false` with a clear reason.
-- **KWin compiled effect needs system install for production.** User-level
+- **KWin cursor shim needs system install for production.** User-level
   install under `~/.local/lib/qt6/plugins/kwin/effects/plugins` does not get
   discovered by a running KWin process even with explicit `loadEffect` and
   reconfigure. The accepted production lane installs under `/usr` via

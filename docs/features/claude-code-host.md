@@ -56,8 +56,8 @@ host.
   KWin agent-cursor effect on Plasma hosts, so one command refreshes binaries,
   the Claude registration, and the compositor effect:
   `python3 scripts/install_mcp_server.py --host claude-code --restart-runtime --kwin-effect`.
-  Effect updates that cannot hot-reload notify the user to restart the Plasma
-  session when convenient; KWin is never restarted by the tooling.
+  KWin updates use rotating generated effect ids, verify the stable DBus
+  `BuildId()`, clean older ids after success, and never restart KWin.
 - Screenshot delivery is host-portable rather than Claude-specific:
   `browser_screenshot` attaches an MCP image content block and persists the
   capture to `screenshot_path`; `get_app_state` accepts

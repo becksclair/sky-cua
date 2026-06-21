@@ -145,8 +145,8 @@ provided. Explicit `display_id`/`display_name`/`display_index` captures crop to
 that monitor, window-targeted captures activate and focus-verify the window
 before cropping to its bounds, and `capture_all_displays=true` is the only
 virtual-desktop capture path. If display topology is unavailable only for an
-omitted selector, the Linux backend preserves the legacy raw capture and emits
-a downgrade diagnostic.
+omitted selector, the Linux backend returns an unscoped desktop capture and
+emits a downgrade diagnostic.
 
 X11 and XWayland have a fallback snapshot path with synthetic root
 bounds from `xwininfo` plus child-region recovery. The fallback

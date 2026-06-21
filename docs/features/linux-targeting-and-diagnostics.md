@@ -25,7 +25,8 @@ setup messages that say exactly which state the extension install reached.
   `command_name` keeps the short name.
 - `DoctorInputReport` exposes per-check `DoctorCheck` fields: `backend`,
   `ydotool` (binary), `ydotoold` (process), `ydotool_socket` (connectable
-  socket), `xdotool` (binary), and `uinput` (`/dev/uinput` presence). The
+  socket), `xdotool` (binary), and `uinput` (`/dev/uinput` presence for
+  helper keyboard injection). The
   MCP `doctor` text summary appends failing input checks as
   `Input details: ...`; the structured report always carries all checks.
 - `WindowTargetingSetupReport` (`setup_window_targeting`) distinguishes four
