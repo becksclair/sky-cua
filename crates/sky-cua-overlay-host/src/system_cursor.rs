@@ -1,7 +1,9 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
 use std::{
-    env, fs,
+    env,
+    ffi::OsStr,
+    fs,
     io::{Read, Write},
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -19,9 +21,17 @@ use x11rb::connection::Connection as X11Connection;
 
 use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SystemPointerPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Debug)]
 pub enum SystemCursorAdapter {
     Unsupported(UnsupportedSystemCursorAdapter),
+    #[cfg(target_os = "linux")]
+    KwinEffect(KwinEffectSystemCursorAdapter),
     #[cfg(target_os = "linux")]
     CosmicTransparentXcursor(CosmicTransparentXcursorAdapter),
     #[cfg(target_os = "linux")]
@@ -44,6 +54,11 @@ impl SystemCursorAdapter {
     #[cfg(target_os = "linux")]
     #[must_use]
     pub fn for_wayland_session() -> Self {
+        if is_kde_session()
+            && let Some(adapter) = KwinEffectSystemCursorAdapter::probe()
+        {
+            return Self::KwinEffect(adapter);
+        }
         if let Some(adapter) = HyprlandSystemCursorAdapter::probe() {
             return Self::Hyprland(adapter);
         }
@@ -86,6 +101,8 @@ impl SystemCursorAdapter {
         match self {
             Self::Unsupported(adapter) => adapter.backend(),
             #[cfg(target_os = "linux")]
+            Self::KwinEffect(adapter) => adapter.backend(),
+            #[cfg(target_os = "linux")]
             Self::CosmicTransparentXcursor(adapter) => adapter.backend(),
             #[cfg(target_os = "linux")]
             Self::Cosmic(adapter) => adapter.backend(),
@@ -100,6 +117,8 @@ impl SystemCursorAdapter {
     pub fn supported(&self) -> bool {
         match self {
             Self::Unsupported(adapter) => adapter.supported(),
+            #[cfg(target_os = "linux")]
+            Self::KwinEffect(adapter) => adapter.supported(),
             #[cfg(target_os = "linux")]
             Self::CosmicTransparentXcursor(adapter) => adapter.supported(),
             #[cfg(target_os = "linux")]
@@ -116,6 +135,8 @@ impl SystemCursorAdapter {
         match self {
             Self::Unsupported(adapter) => adapter.hidden(),
             #[cfg(target_os = "linux")]
+            Self::KwinEffect(adapter) => adapter.hidden(),
+            #[cfg(target_os = "linux")]
             Self::CosmicTransparentXcursor(adapter) => adapter.hidden(),
             #[cfg(target_os = "linux")]
             Self::Cosmic(adapter) => adapter.hidden(),
@@ -131,6 +152,8 @@ impl SystemCursorAdapter {
         match self {
             Self::Unsupported(adapter) => adapter.reason(),
             #[cfg(target_os = "linux")]
+            Self::KwinEffect(adapter) => adapter.reason(),
+            #[cfg(target_os = "linux")]
             Self::CosmicTransparentXcursor(adapter) => adapter.reason(),
             #[cfg(target_os = "linux")]
             Self::Cosmic(adapter) => adapter.reason(),
@@ -145,6 +168,8 @@ impl SystemCursorAdapter {
         match self {
             Self::Unsupported(adapter) => adapter.set_hidden(hidden),
             #[cfg(target_os = "linux")]
+            Self::KwinEffect(adapter) => adapter.set_hidden(hidden),
+            #[cfg(target_os = "linux")]
             Self::CosmicTransparentXcursor(adapter) => adapter.set_hidden(hidden),
             #[cfg(target_os = "linux")]
             Self::Cosmic(adapter) => adapter.set_hidden(hidden),
@@ -155,8 +180,36 @@ impl SystemCursorAdapter {
         }
     }
 
+    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
+        match self {
+            Self::Unsupported(adapter) => adapter.pointer_position(),
+            #[cfg(target_os = "linux")]
+            Self::KwinEffect(adapter) => adapter.pointer_position(),
+            #[cfg(target_os = "linux")]
+            Self::CosmicTransparentXcursor(adapter) => adapter.pointer_position(),
+            #[cfg(target_os = "linux")]
+            Self::Cosmic(adapter) => adapter.pointer_position(),
+            #[cfg(target_os = "linux")]
+            Self::Hyprland(adapter) => adapter.pointer_position(),
+            #[cfg(target_os = "linux")]
+            Self::X11(adapter) => adapter.pointer_position(),
+        }
+    }
+
     pub fn restore(&mut self) -> Result<()> {
         self.set_hidden(false)
+    }
+}
+
+#[cfg(test)]
+impl SystemCursorAdapter {
+    #[must_use]
+    pub(crate) fn test_kwin_effect(hidden: bool) -> Self {
+        Self::KwinEffect(KwinEffectSystemCursorAdapter {
+            qdbus: "qdbus6".to_string(),
+            hidden,
+            reason: "KWin effect cursor shim is loaded for tests".to_string(),
+        })
     }
 }
 
@@ -176,6 +229,179 @@ fn is_cosmic_session() -> bool {
             .collect::<Vec<_>>()
     })
     .any(|part| part == "cosmic")
+}
+
+#[cfg(target_os = "linux")]
+fn is_kde_session() -> bool {
+    [
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "DESKTOP_SESSION",
+    ]
+    .into_iter()
+    .filter_map(|name| env::var(name).ok())
+    .flat_map(|value| {
+        value
+            .split([':', ';'])
+            .map(|part| part.trim().to_ascii_lowercase())
+            .collect::<Vec<_>>()
+    })
+    .any(|part| matches!(part.as_str(), "kde" | "plasma"))
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone)]
+pub struct KwinEffectSystemCursorAdapter {
+    qdbus: String,
+    hidden: bool,
+    reason: String,
+}
+
+#[cfg(target_os = "linux")]
+impl KwinEffectSystemCursorAdapter {
+    const KWIN_SERVICE: &str = "org.kde.KWin";
+    const KWIN_AGENT_CURSOR_PATH: &str = "/com/skycua/AgentCursor";
+    const KWIN_AGENT_CURSOR_INTERFACE: &str = "com.skycua.AgentCursor";
+
+    #[must_use]
+    pub fn probe() -> Option<Self> {
+        let qdbus = find_qdbus()?;
+        let adapter = Self {
+            qdbus,
+            hidden: false,
+            reason: "KWin effect cursor shim is loaded through com.skycua.AgentCursor".to_string(),
+        };
+        adapter
+            .call_agent_cursor_method("BuildId", std::iter::empty::<&str>())
+            .ok()?;
+        Some(adapter)
+    }
+
+    #[must_use]
+    pub fn backend(&self) -> AgentCursorSystemCursorBackendKind {
+        AgentCursorSystemCursorBackendKind::KwinEffect
+    }
+
+    #[must_use]
+    pub fn supported(&self) -> bool {
+        true
+    }
+
+    #[must_use]
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        Some(self.reason.as_str())
+    }
+
+    pub fn set_hidden(&mut self, hidden: bool) -> Result<()> {
+        if self.hidden == hidden {
+            return Ok(());
+        }
+        let method = if hidden { "Show" } else { "Hide" };
+        self.call_agent_cursor_method(method, std::iter::empty::<&str>())?;
+        self.hidden = hidden;
+        Ok(())
+    }
+
+    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
+        let output =
+            self.call_agent_cursor_method("PointerStateJson", std::iter::empty::<&str>())?;
+        parse_kwin_pointer_state_json(&output)
+    }
+
+    fn call_agent_cursor_method<I, S>(&self, method: &str, args: I) -> Result<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.call_qdbus(
+            Self::KWIN_SERVICE,
+            Self::KWIN_AGENT_CURSOR_PATH,
+            format!("{}.{method}", Self::KWIN_AGENT_CURSOR_INTERFACE),
+            args,
+        )
+    }
+
+    fn call_qdbus<I, S>(
+        &self,
+        service: &str,
+        object_path: &str,
+        method: String,
+        args: I,
+    ) -> Result<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let output = Command::new(&self.qdbus)
+            .arg(service)
+            .arg(object_path)
+            .arg(method)
+            .args(args)
+            .output()
+            .with_context(|| format!("failed to run {}", self.qdbus))?;
+        if !output.status.success() {
+            bail!(
+                "{} exited with status {}: {}",
+                self.qdbus,
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Deserialize)]
+struct KwinPointerStateJson {
+    #[serde(default)]
+    ok: bool,
+    #[serde(default)]
+    pointer: Option<KwinPointerJson>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Deserialize)]
+struct KwinPointerJson {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "linux")]
+fn parse_kwin_pointer_state_json(output: &str) -> Result<Option<SystemPointerPosition>> {
+    let state: KwinPointerStateJson = serde_json::from_str(output.trim())
+        .context("KWin PointerStateJson returned invalid JSON")?;
+    let Some(pointer) = state.ok.then_some(state.pointer).flatten() else {
+        return Ok(None);
+    };
+    if !pointer.x.is_finite() || !pointer.y.is_finite() {
+        return Ok(None);
+    }
+    Ok(Some(SystemPointerPosition {
+        x: pointer.x,
+        y: pointer.y,
+    }))
+}
+
+fn find_qdbus() -> Option<String> {
+    ["qdbus6", "qdbus"]
+        .into_iter()
+        .find(|candidate| command_exists(candidate))
+        .map(str::to_string)
+}
+
+fn command_exists(command: &str) -> bool {
+    env::var_os("PATH").is_some_and(|paths| {
+        env::split_paths(&paths).any(|dir| {
+            let path = dir.join(command);
+            path.is_file()
+        })
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -232,6 +458,10 @@ impl CosmicTransparentXcursorAdapter {
     pub fn set_hidden(&mut self, hidden: bool) -> Result<()> {
         self.hidden = hidden;
         Ok(())
+    }
+
+    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
+        Ok(None)
     }
 }
 
@@ -345,6 +575,10 @@ impl CosmicCompBridgeAdapter {
         self.hidden = response.hidden;
         self.reason = Some(response.detail);
         Ok(())
+    }
+
+    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
+        Ok(None)
     }
 }
 
@@ -561,6 +795,10 @@ impl HyprlandSystemCursorAdapter {
         ));
         Ok(())
     }
+
+    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
+        Ok(None)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -737,13 +975,31 @@ impl X11SystemCursorAdapter {
         self.hidden = hidden;
         Ok(())
     }
+
+    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
+        let reply = x11rb::protocol::xproto::query_pointer(self.conn.as_ref(), self.root)?
+            .reply()
+            .context("failed to query X11 pointer position")?;
+        Ok(Some(SystemPointerPosition {
+            x: f64::from(reply.root_x),
+            y: f64::from(reply.root_y),
+        }))
+    }
+}
+
+impl UnsupportedSystemCursorAdapter {
+    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::SystemCursorAdapter;
     #[cfg(target_os = "linux")]
-    use super::{environ_has_xcursor_theme, parse_hyprland_cursor_invisible};
+    use super::{
+        environ_has_xcursor_theme, parse_hyprland_cursor_invisible, parse_kwin_pointer_state_json,
+    };
     use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
 
     #[test]
@@ -817,5 +1073,30 @@ mod tests {
             b"USER=skycua\0XCURSOR_THEME=sky-cua-blankish\0",
             "sky-cua-blank"
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_kwin_pointer_state_json() {
+        assert_eq!(
+            parse_kwin_pointer_state_json(
+                r#"{"ok":true,"visible":true,"pointer":{"x":123.5,"y":456.25,"coordinate_space":"desktop_logical"}}"#
+            )
+            .expect("parse pointer state"),
+            Some(super::SystemPointerPosition {
+                x: 123.5,
+                y: 456.25
+            })
+        );
+        assert_eq!(
+            parse_kwin_pointer_state_json(r#"{"ok":false}"#).expect("parse disabled state"),
+            None
+        );
+        assert!(
+            parse_kwin_pointer_state_json(r#"not json"#)
+                .expect_err("invalid json should fail")
+                .to_string()
+                .contains("invalid JSON")
+        );
     }
 }

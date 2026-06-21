@@ -2,10 +2,11 @@ use chrono::Utc;
 
 use super::{
     ActionName, ActionOutcome, AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPoint,
-    AgentCursorState, AgentCursorSystemCursorBackendKind, AppStateSnapshot, CaptureBackendKind,
-    CoordinateSpace, DoctorReadiness, DoctorReport, EnvironmentInfo, InputBackendKind,
-    PortalCapabilities, ScrollDirection, SemanticBackendKind, SessionKind, SetupCommandReport,
-    ToolAvailability, ToolCapabilities, WindowInfo,
+    AgentCursorPointerTrackingBackendKind, AgentCursorRendererBackendKind, AgentCursorState,
+    AgentCursorSystemCursorBackendKind, AppStateSnapshot, CaptureBackendKind, CoordinateSpace,
+    DoctorReadiness, DoctorReport, EnvironmentInfo, InputBackendKind, PortalCapabilities,
+    ScrollDirection, SemanticBackendKind, SessionKind, SetupCommandReport, ToolAvailability,
+    ToolCapabilities, WindowInfo,
 };
 
 pub fn available_capabilities() -> ToolCapabilities {
@@ -164,10 +165,13 @@ pub fn cursor_state() -> AgentCursorState {
 pub fn cursor_capabilities() -> AgentCursorCapabilities {
     AgentCursorCapabilities {
         backend: AgentCursorBackendKind::WaylandLayerShell,
+        renderer_backend: AgentCursorRendererBackendKind::WaylandShm,
         visible_overlay: true,
         screenshot_synthetic_cursor: true,
         click_through: true,
         capture_exclusion: false,
+        pointer_tracking_backend: AgentCursorPointerTrackingBackendKind::None,
+        pointer_tracking_exact: false,
         system_cursor_hide_supported: false,
         system_cursor_hidden: false,
         system_cursor_backend: AgentCursorSystemCursorBackendKind::WaylandClientUnsupported,

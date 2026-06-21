@@ -1,9 +1,15 @@
-use std::{collections::BTreeMap, fmt, rc::Rc};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    rc::Rc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context, Result, bail};
 use image::imageops::FilterType;
 use sky_cua_platform::model::{
-    AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPoint, AgentCursorState,
+    AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPoint,
+    AgentCursorPointerTrackingBackendKind, AgentCursorRendererBackendKind, AgentCursorState,
     CoordinateSpace, DiagnosticEntry,
 };
 use x11rb::{
@@ -22,7 +28,8 @@ use x11rb::{
 
 use crate::{
     OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
-    cursor_asset, diagnostic, system_cursor::SystemCursorAdapter,
+    cursor_asset, diagnostic,
+    system_cursor::{SystemCursorAdapter, SystemPointerPosition},
 };
 
 const ALPHA_VISIBLE_THRESHOLD: u8 = 8;
@@ -169,6 +176,10 @@ impl X11OverlayBackend {
         }
     }
 
+    pub fn tick(&mut self) {
+        let _ = self.follow_system_pointer();
+    }
+
     fn render_reply(&mut self) -> OverlayHostReply {
         match self.render_current() {
             Ok(()) => self.reply(true, Vec::new()),
@@ -234,6 +245,23 @@ impl X11OverlayBackend {
         self.render_current()
     }
 
+    fn follow_system_pointer(&mut self) -> Result<()> {
+        if !self.state.as_ref().is_some_and(|state| state.visible) {
+            return Ok(());
+        }
+        let Some(position) = self.system_cursor.pointer_position()? else {
+            return Ok(());
+        };
+        let Some(state) = self.state.as_mut() else {
+            return Ok(());
+        };
+        if !state_needs_system_pointer_update(state, position) {
+            return Ok(());
+        }
+        apply_system_pointer_position(state, position);
+        self.render_current()
+    }
+
     fn draw_cursor(&self) -> Result<()> {
         for (pixel, rectangles) in &self.cursor.pixel_rectangles {
             self.conn
@@ -264,10 +292,13 @@ impl X11OverlayBackend {
         }
         AgentCursorCapabilities {
             backend: AgentCursorBackendKind::X11ShapedWindow,
+            renderer_backend: AgentCursorRendererBackendKind::None,
             visible_overlay: true,
             screenshot_synthetic_cursor: false,
             click_through: true,
             capture_exclusion: false,
+            pointer_tracking_backend: AgentCursorPointerTrackingBackendKind::X11Query,
+            pointer_tracking_exact: true,
             system_cursor_hide_supported: self.system_cursor.supported(),
             system_cursor_hidden: self.system_cursor.hidden(),
             system_cursor_backend: self.system_cursor.backend(),
@@ -333,6 +364,37 @@ fn point_to_overlay_coordinates(point: &AgentCursorPoint) -> Option<(f64, f64)> 
         | CoordinateSpace::StreamLogical
         | CoordinateSpace::StreamPixels => Some((point.x, point.y)),
     }
+}
+
+fn state_needs_system_pointer_update(
+    state: &AgentCursorState,
+    position: SystemPointerPosition,
+) -> bool {
+    let Some(point) = state.native_point.as_ref() else {
+        return true;
+    };
+    if point.coordinate_space != CoordinateSpace::DesktopLogical {
+        return true;
+    }
+    (point.x - position.x).abs() >= 0.5 || (point.y - position.y).abs() >= 0.5
+}
+
+fn apply_system_pointer_position(state: &mut AgentCursorState, position: SystemPointerPosition) {
+    state.native_point = Some(AgentCursorPoint {
+        x: position.x,
+        y: position.y,
+        coordinate_space: CoordinateSpace::DesktopLogical,
+        mapping_id: None,
+    });
+    state.sequence = state.sequence.saturating_add(1);
+    state.updated_at_ms = current_epoch_ms();
+}
+
+fn current_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
 }
 
 fn rounded_i16(value: f64, hotspot: i32) -> Result<i16> {
@@ -513,7 +575,11 @@ fn x11_backend_reason(session_type: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{VisualFormat, cursor_geometry, cursor_point, x11_backend_reason};
+    use super::{
+        VisualFormat, apply_system_pointer_position, cursor_geometry, cursor_point,
+        state_needs_system_pointer_update, x11_backend_reason,
+    };
+    use crate::system_cursor::SystemPointerPosition;
     use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpace};
 
     #[test]
@@ -539,6 +605,42 @@ mod tests {
         };
 
         assert_eq!(cursor_point(&state), Some((100.0, 200.0)));
+    }
+
+    #[test]
+    fn system_pointer_update_moves_x11_state_to_desktop_coordinates() {
+        let mut state = AgentCursorState {
+            visible: true,
+            sequence: 3,
+            model_point: Some(AgentCursorPoint {
+                x: 10.0,
+                y: 20.0,
+                coordinate_space: CoordinateSpace::StreamPixels,
+                mapping_id: Some("stream".to_string()),
+            }),
+            native_point: None,
+            snapshot_id: None,
+            source_action: None,
+            updated_at_ms: 0,
+        };
+        let position = SystemPointerPosition { x: 640.0, y: 360.0 };
+
+        assert!(state_needs_system_pointer_update(&state, position));
+        apply_system_pointer_position(&mut state, position);
+
+        assert_eq!(state.sequence, 4);
+        assert_eq!(cursor_point(&state), Some((640.0, 360.0)));
+        assert!(!state_needs_system_pointer_update(
+            &state,
+            SystemPointerPosition {
+                x: 640.25,
+                y: 360.25
+            }
+        ));
+        assert!(state_needs_system_pointer_update(
+            &state,
+            SystemPointerPosition { x: 641.0, y: 360.0 }
+        ));
     }
 
     #[test]

@@ -1,7 +1,13 @@
+use std::{
+    ptr::NonNull,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use anyhow::{Context, Result, bail};
 use image::imageops::FilterType;
 use sky_cua_platform::model::{
-    AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPoint, AgentCursorState,
+    AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPoint,
+    AgentCursorPointerTrackingBackendKind, AgentCursorRendererBackendKind, AgentCursorState,
     CoordinateSpace, DiagnosticEntry,
 };
 use smithay_client_toolkit::{
@@ -21,19 +27,22 @@ use smithay_client_toolkit::{
     },
 };
 use wayland_client::{
-    Connection, Dispatch, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle,
     globals::{GlobalListContents, registry_queue_init},
     protocol::{wl_output, wl_region, wl_registry, wl_shm, wl_surface},
 };
 
 use crate::{
     OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
-    cursor_asset, diagnostic, system_cursor::SystemCursorAdapter,
+    cursor_asset, diagnostic,
+    pointer_tracking::{PointerTracker, PointerTrackingBounds},
+    system_cursor::{SystemCursorAdapter, SystemPointerPosition},
 };
 
 const INITIAL_ROUNDTRIPS: usize = 4;
 const DEBUG_FILL_ENV: &str = "SKY_CUA_LAYER_SHELL_DEBUG_FILL";
 const LAYER_ENV: &str = "SKY_CUA_LAYER_SHELL_LAYER";
+const RENDERER_ENV: &str = "SKY_CUA_LAYER_SHELL_RENDERER";
 const BUFFER_SLOTS_PER_LAYER: usize = 2;
 
 #[derive(Debug)]
@@ -41,6 +50,8 @@ pub struct LayerShellOverlayBackend {
     event_queue: wayland_client::EventQueue<LayerShellApp>,
     app: LayerShellApp,
     system_cursor: SystemCursorAdapter,
+    pointer_tracker: PointerTracker,
+    conn: Connection,
 }
 
 impl LayerShellOverlayBackend {
@@ -85,6 +96,9 @@ impl LayerShellOverlayBackend {
         let pool = SlotPool::new(pool_size, &shm)
             .context("failed to create Wayland shared-memory pool")?;
         let app = LayerShellApp {
+            renderer: LayerShellRenderer::Shm {
+                reason: Some("layer-shell renderer has not been selected yet".to_string()),
+            },
             shm,
             output_state,
             pool,
@@ -96,8 +110,13 @@ impl LayerShellOverlayBackend {
             event_queue,
             app,
             system_cursor: SystemCursorAdapter::for_wayland_session(),
+            pointer_tracker: PointerTracker::none("pointer tracker has not been selected yet"),
+            conn,
         };
         backend.prime()?;
+        backend.app.select_renderer(&backend.conn)?;
+        backend.pointer_tracker =
+            PointerTracker::for_wayland_session(backend.app.pointer_tracking_bounds());
         backend.render_current()?;
         Ok(backend)
     }
@@ -120,7 +139,10 @@ impl LayerShellOverlayBackend {
         match message.kind {
             OverlayHostMessageKind::Hello
             | OverlayHostMessageKind::Ping
-            | OverlayHostMessageKind::Capabilities => self.reply(true, Vec::new()),
+            | OverlayHostMessageKind::Capabilities => {
+                let _ = self.follow_tracked_pointer();
+                self.reply(true, Vec::new())
+            }
             OverlayHostMessageKind::Shutdown => {
                 let _ = self.hide_visible_cursor();
                 self.reply(true, Vec::new())
@@ -151,6 +173,10 @@ impl LayerShellOverlayBackend {
                 self.render_reply()
             }
         }
+    }
+
+    pub fn tick(&mut self) {
+        let _ = self.follow_tracked_pointer();
     }
 
     fn prime(&mut self) -> Result<()> {
@@ -207,6 +233,23 @@ impl LayerShellOverlayBackend {
         self.render_current()
     }
 
+    fn follow_tracked_pointer(&mut self) -> Result<()> {
+        if !self.app.state.as_ref().is_some_and(|state| state.visible) {
+            return Ok(());
+        }
+        let Some(position) = self.pointer_tracker.latest_position() else {
+            return Ok(());
+        };
+        let Some(state) = self.app.state.as_mut() else {
+            return Ok(());
+        };
+        if !state_needs_system_pointer_update(state, position) {
+            return Ok(());
+        }
+        apply_system_pointer_position(state, position);
+        self.render_current()
+    }
+
     fn reply(&self, ok: bool, diagnostics: Vec<DiagnosticEntry>) -> OverlayHostReply {
         OverlayHostReply {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
@@ -218,35 +261,69 @@ impl LayerShellOverlayBackend {
     }
 
     fn capabilities(&self) -> AgentCursorCapabilities {
-        let mut reason = format!(
-            "zwlr_layer_shell_v1 visible overlay active on {} output surface(s)",
-            self.app.open_layer_count()
-        );
-        if let Some(system_cursor_reason) = self.system_cursor.reason() {
-            if self.system_cursor.supported() {
-                reason.push_str("; system cursor: ");
-            } else {
-                reason.push_str("; system cursor hide unsupported: ");
-            }
-            reason.push_str(system_cursor_reason);
+        layer_shell_capabilities(
+            self.app.open_layer_count(),
+            self.app.has_open_layer(),
+            self.app.renderer_kind(),
+            self.app.renderer_reason(),
+            self.pointer_tracker.backend(),
+            self.pointer_tracker.exact(),
+            self.pointer_tracker.reason(),
+            &self.system_cursor,
+        )
+    }
+}
+
+fn layer_shell_capabilities(
+    open_layer_count: usize,
+    has_open_layer: bool,
+    renderer_backend: AgentCursorRendererBackendKind,
+    renderer_reason: Option<&str>,
+    pointer_tracking_backend: AgentCursorPointerTrackingBackendKind,
+    pointer_tracking_exact: bool,
+    pointer_tracking_reason: Option<&str>,
+    system_cursor: &SystemCursorAdapter,
+) -> AgentCursorCapabilities {
+    let mut reason = format!(
+        "zwlr_layer_shell_v1 visible overlay active on {} output surface(s)",
+        open_layer_count
+    );
+    if let Some(system_cursor_reason) = system_cursor.reason() {
+        if system_cursor.supported() {
+            reason.push_str("; system cursor: ");
+        } else {
+            reason.push_str("; system cursor hide unsupported: ");
         }
-        AgentCursorCapabilities {
-            backend: AgentCursorBackendKind::WaylandLayerShell,
-            visible_overlay: self.app.has_open_layer(),
-            screenshot_synthetic_cursor: false,
-            click_through: true,
-            capture_exclusion: false,
-            system_cursor_hide_supported: self.system_cursor.supported(),
-            system_cursor_hidden: self.system_cursor.hidden(),
-            system_cursor_backend: self.system_cursor.backend(),
-            needs_user_install: false,
-            reason: Some(reason),
-        }
+        reason.push_str(system_cursor_reason);
+    }
+    if let Some(renderer_reason) = renderer_reason {
+        reason.push_str("; renderer: ");
+        reason.push_str(renderer_reason);
+    }
+    if let Some(pointer_tracking_reason) = pointer_tracking_reason {
+        reason.push_str("; pointer tracking: ");
+        reason.push_str(pointer_tracking_reason);
+    }
+    AgentCursorCapabilities {
+        backend: AgentCursorBackendKind::WaylandLayerShell,
+        renderer_backend,
+        visible_overlay: has_open_layer,
+        screenshot_synthetic_cursor: false,
+        click_through: true,
+        capture_exclusion: false,
+        pointer_tracking_backend,
+        pointer_tracking_exact,
+        system_cursor_hide_supported: system_cursor.supported(),
+        system_cursor_hidden: system_cursor.hidden(),
+        system_cursor_backend: system_cursor.backend(),
+        needs_user_install: false,
+        reason: Some(reason),
     }
 }
 
 #[derive(Debug)]
 struct LayerShellApp {
+    renderer: LayerShellRenderer,
     shm: Shm,
     output_state: OutputState,
     pool: SlotPool,
@@ -266,13 +343,671 @@ struct LayerSurfaceEntry {
     buffer: Option<Buffer>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestedLayerShellRenderer {
+    Auto,
+    Wgpu,
+    Shm,
+}
+
+fn requested_renderer() -> RequestedLayerShellRenderer {
+    match std::env::var(RENDERER_ENV)
+        .unwrap_or_else(|_| "auto".to_string())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "shm" | "wayland_shm" | "wayland-shm" => RequestedLayerShellRenderer::Shm,
+        "wgpu" | "gpu" => RequestedLayerShellRenderer::Wgpu,
+        "auto" | "" => RequestedLayerShellRenderer::Auto,
+        _ => RequestedLayerShellRenderer::Auto,
+    }
+}
+
+#[derive(Debug)]
+enum LayerShellRenderer {
+    Shm { reason: Option<String> },
+    Wgpu(WgpuLayerRenderer),
+}
+
+impl LayerShellRenderer {
+    fn kind(&self) -> AgentCursorRendererBackendKind {
+        match self {
+            Self::Shm { .. } => AgentCursorRendererBackendKind::WaylandShm,
+            Self::Wgpu(_) => AgentCursorRendererBackendKind::Wgpu,
+        }
+    }
+
+    fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Shm { reason } => reason.as_deref(),
+            Self::Wgpu(renderer) => Some(renderer.reason()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WgpuLayerRenderer {
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: Option<wgpu::RenderPipeline>,
+    pipeline_format: Option<wgpu::TextureFormat>,
+    bind_group_layout: wgpu::BindGroupLayout,
+    bind_group: wgpu::BindGroup,
+    vertex_buffer: wgpu::Buffer,
+    surfaces: Vec<Option<WgpuSurfaceEntry>>,
+    reason: String,
+}
+
+#[derive(Debug)]
+struct WgpuSurfaceEntry {
+    surface: wgpu::Surface<'static>,
+    config: Option<wgpu::SurfaceConfiguration>,
+}
+
+const CURSOR_SHADER: &str = r#"
+struct VertexOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(
+    @location(0) position: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+) -> VertexOut {
+    var out: VertexOut;
+    out.position = vec4<f32>(position, 0.0, 1.0);
+    out.uv = uv;
+    return out;
+}
+
+@group(0) @binding(0) var cursor_texture: texture_2d<f32>;
+@group(0) @binding(1) var cursor_sampler: sampler;
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    let color = textureSample(cursor_texture, cursor_sampler, in.uv);
+    return vec4<f32>(color.rgb * color.a, color.a);
+}
+"#;
+
+impl WgpuLayerRenderer {
+    fn new(conn: &Connection, layers: &[LayerSurfaceEntry], cursor: &CursorImage) -> Result<Self> {
+        let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance_descriptor.backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
+        let instance = wgpu::Instance::new(instance_descriptor);
+        let mut surfaces = create_wgpu_surfaces(&instance, conn, layers)?;
+        let first_surface = surfaces
+            .iter()
+            .filter_map(|entry| entry.as_ref())
+            .map(|entry| &entry.surface)
+            .next()
+            .context("no layer-shell Wayland surfaces available for wgpu")?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: Some(first_surface),
+        }))
+        .context("failed to find a GPU adapter compatible with layer-shell surfaces")?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("sky-cua layer-shell overlay"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        }))
+        .context("failed to request wgpu device for layer-shell overlay")?;
+
+        let (bind_group, bind_group_layout) = create_cursor_texture(&device, &queue, cursor);
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sky-cua cursor quad vertices"),
+            size: (6 * 4 * std::mem::size_of::<f32>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let adapter_info = adapter.get_info();
+        let backend = format!("{:?}", adapter_info.backend).to_ascii_lowercase();
+        let reason = format!(
+            "wgpu renderer active on {} via {}",
+            adapter_info.name, backend
+        );
+
+        // Keep empty slots aligned with layer indices even when a surface failed
+        // construction. This should not happen for normal Wayland surfaces, but
+        // preserving indices lets rendering continue for other outputs.
+        surfaces.resize_with(layers.len(), || None);
+
+        Ok(Self {
+            adapter,
+            device,
+            queue,
+            pipeline: None,
+            pipeline_format: None,
+            bind_group_layout,
+            bind_group,
+            vertex_buffer,
+            surfaces,
+            reason,
+        })
+    }
+
+    fn reason(&self) -> &str {
+        self.reason.as_str()
+    }
+
+    fn draw(
+        &mut self,
+        qh: &QueueHandle<LayerShellApp>,
+        layers: &mut [LayerSurfaceEntry],
+        visible_target: &Option<LayerCursorTarget>,
+    ) -> Result<()> {
+        for (index, entry) in layers.iter_mut().enumerate() {
+            if entry.closed || !entry.configured {
+                continue;
+            }
+            let visible_point = visible_target
+                .as_ref()
+                .filter(|target| target.layer_index == index)
+                .map(|target| (target.x, target.y));
+            let width = entry.width.max(1);
+            let height = entry.height.max(1);
+            entry.layer.set_size(width, height);
+            entry.layer.set_margin(0, 0, 0, 0);
+            entry
+                .layer
+                .wl_surface()
+                .damage_buffer(0, 0, width as i32, height as i32);
+            entry
+                .layer
+                .wl_surface()
+                .frame(qh, entry.layer.wl_surface().clone());
+
+            if index >= self.surfaces.len() {
+                continue;
+            };
+            let Some(mut surface_entry) = self.surfaces[index].take() else {
+                continue;
+            };
+            self.configure_surface(&mut surface_entry, width, height);
+            let draw_result = self.draw_surface(&mut surface_entry, width, height, visible_point);
+            self.surfaces[index] = Some(surface_entry);
+            draw_result?;
+            entry.layer.commit();
+        }
+        Ok(())
+    }
+
+    fn configure_surface(&self, surface_entry: &mut WgpuSurfaceEntry, width: u32, height: u32) {
+        if surface_entry
+            .config
+            .as_ref()
+            .is_some_and(|config| config.width == width && config.height == height)
+        {
+            return;
+        }
+        let capabilities = surface_entry.surface.get_capabilities(&self.adapter);
+        let format = choose_surface_format(&capabilities.formats);
+        let present_mode = choose_present_mode(&capabilities.present_modes);
+        let alpha_mode = choose_alpha_mode(&capabilities.alpha_modes);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width,
+            height,
+            present_mode,
+            desired_maximum_frame_latency: 1,
+            alpha_mode,
+            view_formats: vec![format],
+        };
+        surface_entry.surface.configure(&self.device, &config);
+        surface_entry.config = Some(config);
+    }
+
+    fn draw_surface(
+        &mut self,
+        surface_entry: &mut WgpuSurfaceEntry,
+        width: u32,
+        height: u32,
+        visible_point: Option<(f64, f64)>,
+    ) -> Result<()> {
+        let frame = match surface_entry.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                if let Some(config) = surface_entry.config.as_ref() {
+                    surface_entry.surface.configure(&self.device, config);
+                }
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err(anyhow::anyhow!(
+                    "wgpu validation error while acquiring layer-shell frame"
+                ));
+            }
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("sky-cua layer-shell cursor encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sky-cua layer-shell cursor pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 0.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let Some((x, y)) = visible_point {
+                let Some(config) = surface_entry.config.as_ref() else {
+                    return Ok(());
+                };
+                self.ensure_pipeline(config.format);
+                let vertices = cursor_quad_vertices(x, y, width, height);
+                self.queue
+                    .write_buffer(&self.vertex_buffer, 0, f32_slice_as_bytes(&vertices));
+                pass.set_pipeline(self.pipeline.as_ref().expect("pipeline initialized"));
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                pass.draw(0..6, 0..1);
+            }
+        }
+        self.queue.submit(Some(encoder.finish()));
+        frame.present();
+        Ok(())
+    }
+
+    fn ensure_pipeline(&mut self, format: wgpu::TextureFormat) {
+        if self.pipeline_format == Some(format) {
+            return;
+        }
+        self.pipeline = Some(create_cursor_pipeline(
+            &self.device,
+            &self.bind_group_layout,
+            format,
+        ));
+        self.pipeline_format = Some(format);
+    }
+}
+
+fn create_wgpu_surfaces(
+    instance: &wgpu::Instance,
+    conn: &Connection,
+    layers: &[LayerSurfaceEntry],
+) -> Result<Vec<Option<WgpuSurfaceEntry>>> {
+    let display = NonNull::new(conn.backend().display_ptr() as *mut _)
+        .context("Wayland display pointer was null")?;
+    let raw_display_handle =
+        wgpu::rwh::RawDisplayHandle::Wayland(wgpu::rwh::WaylandDisplayHandle::new(display));
+    layers
+        .iter()
+        .map(|entry| {
+            let surface_ptr = NonNull::new(entry.layer.wl_surface().id().as_ptr() as *mut _)
+                .context("Wayland surface pointer was null")?;
+            let raw_window_handle = wgpu::rwh::RawWindowHandle::Wayland(
+                wgpu::rwh::WaylandWindowHandle::new(surface_ptr),
+            );
+            let surface = unsafe {
+                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: Some(raw_display_handle),
+                    raw_window_handle,
+                })
+            }
+            .context("failed to create wgpu surface for layer-shell wl_surface")?;
+            Ok(Some(WgpuSurfaceEntry {
+                surface,
+                config: None,
+            }))
+        })
+        .collect()
+}
+
+fn create_cursor_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    cursor: &CursorImage,
+) -> (wgpu::BindGroup, wgpu::BindGroupLayout) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("sky-cua agent cursor texture"),
+        size: wgpu::Extent3d {
+            width: cursor.width,
+            height: cursor.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        cursor.rgba.as_slice(),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(cursor.width * 4),
+            rows_per_image: Some(cursor.height),
+        },
+        wgpu::Extent3d {
+            width: cursor.width,
+            height: cursor.height,
+            depth_or_array_layers: 1,
+        },
+    );
+    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("sky-cua cursor sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    });
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("sky-cua cursor bind group layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("sky-cua cursor bind group"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+    (bind_group, bind_group_layout)
+}
+
+fn create_cursor_pipeline(
+    device: &wgpu::Device,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("sky-cua cursor shader"),
+        source: wgpu::ShaderSource::Wgsl(CURSOR_SHADER.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("sky-cua cursor pipeline layout"),
+        bind_group_layouts: &[Some(bind_group_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sky-cua cursor render pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: (4 * std::mem::size_of::<f32>()) as wgpu::BufferAddress,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: (2 * std::mem::size_of::<f32>()) as wgpu::BufferAddress,
+                        shader_location: 1,
+                    },
+                ],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn choose_surface_format(formats: &[wgpu::TextureFormat]) -> wgpu::TextureFormat {
+    formats
+        .iter()
+        .copied()
+        .find(|format| *format == wgpu::TextureFormat::Bgra8UnormSrgb)
+        .or_else(|| {
+            formats
+                .iter()
+                .copied()
+                .find(|format| *format == wgpu::TextureFormat::Rgba8UnormSrgb)
+        })
+        .or_else(|| formats.iter().copied().find(wgpu::TextureFormat::is_srgb))
+        .or_else(|| formats.first().copied())
+        .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb)
+}
+
+fn choose_present_mode(present_modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+    if present_modes.contains(&wgpu::PresentMode::Mailbox) {
+        wgpu::PresentMode::Mailbox
+    } else {
+        wgpu::PresentMode::Fifo
+    }
+}
+
+fn choose_alpha_mode(alpha_modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
+    if alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        wgpu::CompositeAlphaMode::PreMultiplied
+    } else if alpha_modes.contains(&wgpu::CompositeAlphaMode::Auto) {
+        wgpu::CompositeAlphaMode::Auto
+    } else {
+        alpha_modes
+            .first()
+            .copied()
+            .unwrap_or(wgpu::CompositeAlphaMode::Auto)
+    }
+}
+
+fn cursor_quad_vertices(x: f64, y: f64, surface_width: u32, surface_height: u32) -> [f32; 24] {
+    let left = x - f64::from(cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X);
+    let top = y - f64::from(cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y);
+    let right = left + f64::from(cursor_asset::AGENT_CURSOR_DESKTOP_WIDTH);
+    let bottom = top + f64::from(cursor_asset::AGENT_CURSOR_DESKTOP_HEIGHT);
+    let left = ndc_x(left, surface_width);
+    let right = ndc_x(right, surface_width);
+    let top = ndc_y(top, surface_height);
+    let bottom = ndc_y(bottom, surface_height);
+    [
+        left, top, 0.0, 0.0, right, top, 1.0, 0.0, right, bottom, 1.0, 1.0, left, top, 0.0, 0.0,
+        right, bottom, 1.0, 1.0, left, bottom, 0.0, 1.0,
+    ]
+}
+
+fn ndc_x(x: f64, width: u32) -> f32 {
+    ((x / f64::from(width.max(1))) * 2.0 - 1.0) as f32
+}
+
+fn ndc_y(y: f64, height: u32) -> f32 {
+    (1.0 - (y / f64::from(height.max(1))) * 2.0) as f32
+}
+
+fn f32_slice_as_bytes(values: &[f32]) -> &[u8] {
+    let byte_len = std::mem::size_of_val(values);
+    unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), byte_len) }
+}
+
 impl LayerShellApp {
+    fn select_renderer(&mut self, conn: &Connection) -> Result<()> {
+        match requested_renderer() {
+            RequestedLayerShellRenderer::Shm => {
+                self.renderer = LayerShellRenderer::Shm {
+                    reason: Some(format!("{RENDERER_ENV}=shm")),
+                };
+                Ok(())
+            }
+            RequestedLayerShellRenderer::Wgpu => {
+                self.renderer = LayerShellRenderer::Wgpu(
+                    WgpuLayerRenderer::new(conn, &self.layers, &self.cursor)
+                        .context("explicit wgpu layer-shell renderer failed to initialize")?,
+                );
+                Ok(())
+            }
+            RequestedLayerShellRenderer::Auto => {
+                if debug_fill_enabled() {
+                    self.renderer = LayerShellRenderer::Shm {
+                        reason: Some(format!(
+                            "{DEBUG_FILL_ENV} is set, using shm renderer for debug fill support"
+                        )),
+                    };
+                    return Ok(());
+                }
+                match WgpuLayerRenderer::new(conn, &self.layers, &self.cursor) {
+                    Ok(renderer) => {
+                        self.renderer = LayerShellRenderer::Wgpu(renderer);
+                    }
+                    Err(error) => {
+                        self.renderer = LayerShellRenderer::Shm {
+                            reason: Some(format!("wgpu unavailable, using shm fallback: {error}")),
+                        };
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn renderer_kind(&self) -> AgentCursorRendererBackendKind {
+        self.renderer.kind()
+    }
+
+    fn renderer_reason(&self) -> Option<&str> {
+        self.renderer.reason()
+    }
+
+    fn pointer_tracking_bounds(&self) -> Option<PointerTrackingBounds> {
+        let mut left = i32::MAX;
+        let mut top = i32::MAX;
+        let mut right = i32::MIN;
+        let mut bottom = i32::MIN;
+        for entry in self
+            .layers
+            .iter()
+            .filter(|entry| !entry.closed && entry.configured)
+        {
+            let Some(output) = entry.output.as_ref() else {
+                left = left.min(0);
+                top = top.min(0);
+                right = right.max(i32::try_from(entry.width).unwrap_or(i32::MAX));
+                bottom = bottom.max(i32::try_from(entry.height).unwrap_or(i32::MAX));
+                continue;
+            };
+            let Some(info) = self.output_state.info(output) else {
+                continue;
+            };
+            let position = info.logical_position.unwrap_or(info.location);
+            let Some(size) = info.logical_size else {
+                continue;
+            };
+            left = left.min(position.0);
+            top = top.min(position.1);
+            right = right.max(position.0.saturating_add(size.0));
+            bottom = bottom.max(position.1.saturating_add(size.1));
+        }
+        if right <= left || bottom <= top {
+            return None;
+        }
+        Some(PointerTrackingBounds {
+            x: left,
+            y: top,
+            width: u32::try_from(right - left).ok()?,
+            height: u32::try_from(bottom - top).ok()?,
+            scale_milli: 1000,
+        })
+    }
+
     fn draw(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
         let visible_target = self
             .state
             .as_ref()
             .filter(|state| state.visible)
             .and_then(|state| self.cursor_target(state));
+        if let LayerShellRenderer::Wgpu(renderer) = &mut self.renderer {
+            return renderer.draw(qh, &mut self.layers, &visible_target);
+        }
+        self.draw_shm(qh, visible_target)
+    }
+
+    fn draw_shm(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        visible_target: Option<LayerCursorTarget>,
+    ) -> Result<()> {
         let layer_count = self.layers.len();
 
         for (index, entry) in self.layers.iter_mut().enumerate() {
@@ -404,7 +1139,10 @@ fn create_cursor_layer(
     );
     layer.set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT | Anchor::BOTTOM);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    layer.set_exclusive_zone(0);
+    // The production cursor overlay must cover compositor-global logical
+    // coordinates, not the panel-constrained work area. KWin otherwise offsets
+    // click-through layer surfaces away from exclusive panel edges.
+    layer.set_exclusive_zone(-1);
     layer.set_size(0, 0);
     set_empty_input_region(compositor, &layer, qh);
     layer.commit();
@@ -454,6 +1192,37 @@ fn point_to_overlay_coordinates(point: &AgentCursorPoint) -> Option<(f64, f64)> 
         | CoordinateSpace::StreamLogical
         | CoordinateSpace::StreamPixels => Some((point.x, point.y)),
     }
+}
+
+fn state_needs_system_pointer_update(
+    state: &AgentCursorState,
+    position: SystemPointerPosition,
+) -> bool {
+    let Some(point) = state.native_point.as_ref() else {
+        return true;
+    };
+    if point.coordinate_space != CoordinateSpace::DesktopLogical {
+        return true;
+    }
+    (point.x - position.x).abs() >= 0.5 || (point.y - position.y).abs() >= 0.5
+}
+
+fn apply_system_pointer_position(state: &mut AgentCursorState, position: SystemPointerPosition) {
+    state.native_point = Some(AgentCursorPoint {
+        x: position.x,
+        y: position.y,
+        coordinate_space: CoordinateSpace::DesktopLogical,
+        mapping_id: None,
+    });
+    state.sequence = state.sequence.saturating_add(1);
+    state.updated_at_ms = current_epoch_ms();
+}
+
+fn current_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
 }
 
 fn output_local_point(
@@ -757,11 +1526,20 @@ delegate_shm!(LayerShellApp);
 #[cfg(test)]
 mod tests {
     use super::{
-        BUFFER_SLOTS_PER_LAYER, CursorImage, cursor_point, draw_cursor_asset,
-        layer_buffer_pool_size, output_local_point,
+        BUFFER_SLOTS_PER_LAYER, CursorImage, RequestedLayerShellRenderer,
+        apply_system_pointer_position, cursor_point, draw_cursor_asset, layer_buffer_pool_size,
+        layer_shell_capabilities, output_local_point, requested_renderer,
+        state_needs_system_pointer_update,
     };
-    use crate::cursor_asset;
-    use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpace};
+    use crate::{
+        cursor_asset,
+        system_cursor::{SystemCursorAdapter, SystemPointerPosition},
+    };
+    use sky_cua_platform::model::{
+        AgentCursorBackendKind, AgentCursorPoint, AgentCursorPointerTrackingBackendKind,
+        AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
+        CoordinateSpace,
+    };
 
     #[test]
     fn cursor_point_prefers_native_coordinates_for_visible_overlay() {
@@ -786,6 +1564,51 @@ mod tests {
         };
 
         assert_eq!(cursor_point(&state), Some((100.0, 200.0)));
+    }
+
+    #[test]
+    fn system_pointer_update_moves_visible_state_to_desktop_coordinates() {
+        let mut state = AgentCursorState {
+            visible: true,
+            sequence: 7,
+            model_point: Some(AgentCursorPoint {
+                x: 10.0,
+                y: 20.0,
+                coordinate_space: CoordinateSpace::StreamPixels,
+                mapping_id: Some("stream".to_string()),
+            }),
+            native_point: None,
+            snapshot_id: None,
+            source_action: None,
+            updated_at_ms: 0,
+        };
+        let position = SystemPointerPosition { x: 300.0, y: 400.0 };
+
+        assert!(state_needs_system_pointer_update(&state, position));
+        apply_system_pointer_position(&mut state, position);
+
+        assert_eq!(state.sequence, 8);
+        assert_eq!(
+            state.native_point,
+            Some(AgentCursorPoint {
+                x: 300.0,
+                y: 400.0,
+                coordinate_space: CoordinateSpace::DesktopLogical,
+                mapping_id: None,
+            })
+        );
+        assert_eq!(cursor_point(&state), Some((300.0, 400.0)));
+        assert!(!state_needs_system_pointer_update(
+            &state,
+            SystemPointerPosition {
+                x: 300.25,
+                y: 400.25
+            }
+        ));
+        assert!(state_needs_system_pointer_update(
+            &state,
+            SystemPointerPosition { x: 301.0, y: 400.0 }
+        ));
     }
 
     #[test]
@@ -826,5 +1649,52 @@ mod tests {
             * 4) as usize;
         assert_eq!(corner_alpha, 0);
         assert_eq!(canvas[hotspot_offset + 3], 255);
+    }
+
+    #[test]
+    fn layer_shell_capabilities_report_kwin_system_cursor_split_path() {
+        let capabilities = layer_shell_capabilities(
+            1,
+            true,
+            AgentCursorRendererBackendKind::Wgpu,
+            Some("wgpu renderer active"),
+            AgentCursorPointerTrackingBackendKind::KwinEffectSignal,
+            true,
+            Some("KWin signal tracker active"),
+            &SystemCursorAdapter::test_kwin_effect(true),
+        );
+
+        assert_eq!(
+            capabilities.backend,
+            AgentCursorBackendKind::WaylandLayerShell
+        );
+        assert_eq!(
+            capabilities.renderer_backend,
+            AgentCursorRendererBackendKind::Wgpu
+        );
+        assert!(capabilities.visible_overlay);
+        assert!(capabilities.click_through);
+        assert_eq!(
+            capabilities.pointer_tracking_backend,
+            AgentCursorPointerTrackingBackendKind::KwinEffectSignal
+        );
+        assert!(capabilities.pointer_tracking_exact);
+        assert!(capabilities.system_cursor_hide_supported);
+        assert!(capabilities.system_cursor_hidden);
+        assert_eq!(
+            capabilities.system_cursor_backend,
+            AgentCursorSystemCursorBackendKind::KwinEffect
+        );
+    }
+
+    #[test]
+    fn layer_shell_renderer_env_selects_wgpu_and_shm() {
+        unsafe { std::env::set_var(super::RENDERER_ENV, "wgpu") };
+        assert_eq!(requested_renderer(), RequestedLayerShellRenderer::Wgpu);
+        unsafe { std::env::set_var(super::RENDERER_ENV, "shm") };
+        assert_eq!(requested_renderer(), RequestedLayerShellRenderer::Shm);
+        unsafe { std::env::set_var(super::RENDERER_ENV, "auto") };
+        assert_eq!(requested_renderer(), RequestedLayerShellRenderer::Auto);
+        unsafe { std::env::remove_var(super::RENDERER_ENV) };
     }
 }

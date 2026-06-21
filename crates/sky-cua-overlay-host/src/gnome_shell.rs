@@ -3,8 +3,9 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use sky_cua_platform::model::{
-    AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorState,
-    AgentCursorSystemCursorBackendKind, DiagnosticEntry,
+    AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPointerTrackingBackendKind,
+    AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
+    DiagnosticEntry,
 };
 
 use crate::{
@@ -188,10 +189,13 @@ impl GnomeShellOverlayBackend {
     fn capabilities(&self) -> AgentCursorCapabilities {
         AgentCursorCapabilities {
             backend: AgentCursorBackendKind::GnomeShellExtension,
+            renderer_backend: AgentCursorRendererBackendKind::None,
             visible_overlay: self.visible,
             screenshot_synthetic_cursor: false,
             click_through: true,
             capture_exclusion: false,
+            pointer_tracking_backend: AgentCursorPointerTrackingBackendKind::None,
+            pointer_tracking_exact: false,
             system_cursor_hide_supported: self
                 .last_status
                 .as_ref()

@@ -1,17 +1,18 @@
 use serde::{Deserialize, Serialize};
 use sky_cua_platform::model::{
-    AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorState,
-    AgentCursorSystemCursorBackendKind, DiagnosticEntry,
+    AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPointerTrackingBackendKind,
+    AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
+    DiagnosticEntry,
 };
 
 #[cfg(target_os = "linux")]
 mod gnome_shell;
 #[cfg(target_os = "linux")]
-mod kwin_effect;
-#[cfg(target_os = "linux")]
 mod layer_shell;
 #[cfg(target_os = "linux")]
 mod playground;
+#[cfg(target_os = "linux")]
+mod pointer_tracking;
 mod system_cursor;
 #[cfg(target_os = "linux")]
 mod x11;
@@ -105,10 +106,13 @@ impl NoopOverlayBackend {
     pub fn default_capabilities() -> AgentCursorCapabilities {
         AgentCursorCapabilities {
             backend: AgentCursorBackendKind::None,
+            renderer_backend: AgentCursorRendererBackendKind::None,
             visible_overlay: false,
             screenshot_synthetic_cursor: false,
             click_through: false,
             capture_exclusion: false,
+            pointer_tracking_backend: AgentCursorPointerTrackingBackendKind::None,
+            pointer_tracking_exact: false,
             system_cursor_hide_supported: false,
             system_cursor_hidden: false,
             system_cursor_backend: AgentCursorSystemCursorBackendKind::None,
@@ -189,8 +193,6 @@ pub enum OverlayHostBackend {
     #[cfg(target_os = "linux")]
     GnomeShell(gnome_shell::GnomeShellOverlayBackend),
     #[cfg(target_os = "linux")]
-    KwinEffect(kwin_effect::KwinEffectOverlayBackend),
-    #[cfg(target_os = "linux")]
     LayerShell(Box<layer_shell::LayerShellOverlayBackend>),
     #[cfg(target_os = "linux")]
     X11(Box<x11::X11OverlayBackend>),
@@ -203,22 +205,34 @@ impl OverlayHostBackend {
             .unwrap_or_else(|_| "auto".to_string())
             .trim()
             .to_ascii_lowercase();
+        Self::from_mode(&mode)
+    }
 
-        if matches!(mode.as_str(), "none" | "never" | "off" | "false" | "0") {
+    #[must_use]
+    fn from_mode(mode: &str) -> Self {
+        if matches!(mode, "none" | "never" | "off" | "false" | "0") {
             return Self::Noop(NoopOverlayBackend::with_reason(format!(
                 "{OVERLAY_BACKEND_ENV}={mode}"
             )));
         }
-        if matches!(mode.as_str(), "noop" | "no-op") {
+        if matches!(mode, "noop" | "no-op") {
             return Self::Noop(NoopOverlayBackend::with_reason(format!(
                 "{OVERLAY_BACKEND_ENV}={mode}"
+            )));
+        }
+        if matches!(
+            mode,
+            "kwin" | "kwin-effect" | "kwin_effect" | "kde-kwin-effect" | "kde_kwin_effect"
+        ) {
+            return Self::Noop(NoopOverlayBackend::with_reason(format!(
+                "{OVERLAY_BACKEND_ENV}={mode} is no longer a selectable visible overlay backend; use auto or wayland_layer_shell for KDE visuals"
             )));
         }
 
         #[cfg(target_os = "linux")]
         {
             if matches!(
-                mode.as_str(),
+                mode,
                 "gnome"
                     | "gnome-shell"
                     | "gnome_shell"
@@ -233,18 +247,7 @@ impl OverlayHostBackend {
                 };
             }
             if matches!(
-                mode.as_str(),
-                "kwin" | "kwin-effect" | "kwin_effect" | "kde-kwin-effect" | "kde_kwin_effect"
-            ) {
-                return match kwin_effect::KwinEffectOverlayBackend::connect() {
-                    Ok(backend) => Self::KwinEffect(backend),
-                    Err(error) => Self::Noop(NoopOverlayBackend::with_reason(format!(
-                        "KWin effect overlay unavailable: {error}"
-                    ))),
-                };
-            }
-            if matches!(
-                mode.as_str(),
+                mode,
                 "layer-shell" | "layer_shell" | "wayland-layer-shell" | "wayland_layer_shell"
             ) {
                 return match layer_shell::LayerShellOverlayBackend::connect() {
@@ -255,7 +258,7 @@ impl OverlayHostBackend {
                 };
             }
             if matches!(
-                mode.as_str(),
+                mode,
                 "x11" | "x11-shaped" | "x11_shaped" | "x11-shaped-window" | "x11_shaped_window"
             ) {
                 return match x11::X11OverlayBackend::connect() {
@@ -265,12 +268,14 @@ impl OverlayHostBackend {
                     ))),
                 };
             }
-            if matches!(mode.as_str(), "auto" | "") {
+            if matches!(mode, "auto" | "") {
                 let mut reasons = Vec::new();
-                match kwin_effect::KwinEffectOverlayBackend::connect() {
-                    Ok(backend) => return Self::KwinEffect(backend),
-                    Err(error) => {
-                        reasons.push(format!("KWin effect overlay unavailable: {error}"));
+                if linux_env_value("WAYLAND_DISPLAY").is_some() {
+                    match layer_shell::LayerShellOverlayBackend::connect() {
+                        Ok(backend) => return Self::LayerShell(Box::new(backend)),
+                        Err(error) => {
+                            reasons.push(format!("wayland layer-shell unavailable: {error}"));
+                        }
                     }
                 }
                 if is_gnome_session() {
@@ -280,14 +285,6 @@ impl OverlayHostBackend {
                             reasons.push(format!(
                                 "GNOME Shell extension overlay unavailable: {error}"
                             ));
-                        }
-                    }
-                }
-                if linux_env_value("WAYLAND_DISPLAY").is_some() {
-                    match layer_shell::LayerShellOverlayBackend::connect() {
-                        Ok(backend) => return Self::LayerShell(Box::new(backend)),
-                        Err(error) => {
-                            reasons.push(format!("wayland layer-shell unavailable: {error}"));
                         }
                     }
                 }
@@ -323,11 +320,21 @@ impl OverlayHostBackend {
             #[cfg(target_os = "linux")]
             Self::GnomeShell(backend) => backend.handle_message(message),
             #[cfg(target_os = "linux")]
-            Self::KwinEffect(backend) => backend.handle_message(message),
-            #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.handle_message(message),
             #[cfg(target_os = "linux")]
             Self::X11(backend) => backend.handle_message(message),
+        }
+    }
+
+    pub fn tick(&mut self) {
+        match self {
+            Self::Noop(_backend) => {}
+            #[cfg(target_os = "linux")]
+            Self::GnomeShell(_backend) => {}
+            #[cfg(target_os = "linux")]
+            Self::LayerShell(backend) => backend.tick(),
+            #[cfg(target_os = "linux")]
+            Self::X11(backend) => backend.tick(),
         }
     }
 }
@@ -427,7 +434,7 @@ mod tests {
     };
     use image::GenericImageView;
     use sky_cua_platform::model::{
-        ActionName, AgentCursorPoint, AgentCursorState, CoordinateSpace,
+        ActionName, AgentCursorBackendKind, AgentCursorPoint, AgentCursorState, CoordinateSpace,
     };
 
     #[test]
@@ -540,6 +547,31 @@ mod tests {
         assert_eq!(cursor_asset::AGENT_CURSOR_HEIGHT, 24);
         assert_eq!(cursor_asset::AGENT_CURSOR_HOTSPOT_X, 10);
         assert_eq!(cursor_asset::AGENT_CURSOR_HOTSPOT_Y, 11);
+    }
+
+    #[test]
+    fn kwin_effect_is_not_a_selectable_visible_backend() {
+        let reply = match super::OverlayHostBackend::from_mode("kwin_effect") {
+            super::OverlayHostBackend::Noop(mut backend) => {
+                backend.handle_message(OverlayHostMessage {
+                    version: OVERLAY_HOST_PROTOCOL_VERSION,
+                    kind: OverlayHostMessageKind::Capabilities,
+                    state: None,
+                    reason: None,
+                })
+            }
+            #[cfg(target_os = "linux")]
+            other => panic!("expected noop backend, got {other:?}"),
+        };
+
+        let capabilities = reply.capabilities.expect("capabilities");
+        assert_eq!(capabilities.backend, AgentCursorBackendKind::None);
+        assert!(
+            capabilities
+                .reason
+                .expect("reason")
+                .contains("no longer a selectable visible overlay backend")
+        );
     }
 
     #[cfg(target_os = "linux")]

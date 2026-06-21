@@ -5,15 +5,15 @@ use sky_cua_overlay_host::{
 };
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
-    AgentCursorPoint, AgentCursorState, AgentCursorSystemCursorBackendKind, AppStateSnapshot,
-    CaptureBackendKind, CaptureInfo, CoordinateSpace, DiagnosticEntry, ElementNode, PixelSize,
-    RectF,
+    AgentCursorPoint, AgentCursorPointerTrackingBackendKind, AgentCursorRendererBackendKind,
+    AgentCursorState, AgentCursorSystemCursorBackendKind, AppStateSnapshot, CaptureBackendKind,
+    CaptureInfo, CoordinateSpace, DiagnosticEntry, ElementNode, PixelSize, RectF,
 };
 
 const AGENT_CURSOR_ENV: &str = "SKY_CUA_AGENT_CURSOR";
 const OVERLAY_HIDE_FOR_CAPTURE_ENV: &str = "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE";
 const SCREENSHOT_CURSOR_ENV: &str = "SKY_CUA_SCREENSHOT_CURSOR";
-const AGENT_CURSOR_IDLE_HIDE_MS: u64 = 1_500;
+const OVERLAY_IDLE_CLEANUP_MS: u64 = 15_000;
 
 mod host;
 mod synthetic_cursor;
@@ -107,10 +107,13 @@ impl OverlayController {
         if self.agent_cursor_mode == CursorMode::Never {
             return AgentCursorCapabilities {
                 backend: AgentCursorBackendKind::None,
+                renderer_backend: AgentCursorRendererBackendKind::None,
                 visible_overlay: false,
                 screenshot_synthetic_cursor: false,
                 click_through: false,
                 capture_exclusion: false,
+                pointer_tracking_backend: AgentCursorPointerTrackingBackendKind::None,
+                pointer_tracking_exact: false,
                 system_cursor_hide_supported: false,
                 system_cursor_hidden: false,
                 system_cursor_backend: AgentCursorSystemCursorBackendKind::None,
@@ -226,7 +229,7 @@ impl OverlayController {
     }
 
     pub fn apply_to_snapshot(&mut self, snapshot: &mut AppStateSnapshot) {
-        snapshot.diagnostics.extend(self.hide_idle_cursor());
+        snapshot.diagnostics.extend(self.hide_idle_overlay());
         snapshot.agent_cursor = self.state();
         if !self.should_synthesize_cursor() {
             remove_synthetic_cursor_from_snapshot(snapshot);
@@ -260,20 +263,21 @@ impl OverlayController {
             )
     }
 
-    /// Hide the agent cursor when it has been idle past the timeout.
+    /// Hide the whole agent-cursor overlay when it has been idle past the timeout.
     ///
     /// Called lazily from snapshot handling and actively from the daemon's
-    /// idle watchdog, so an interrupted or abandoned agent turn still
-    /// restores the user's cursor without any further requests.
-    pub(crate) fn hide_idle_cursor(&mut self) -> Vec<DiagnosticEntry> {
+    /// idle watchdog. The overlay host does not own this lifecycle: normal
+    /// cleanup comes from the service when an agent session ends or goes idle,
+    /// while the compositor shim only keeps a last-ditch cursor-unhide failsafe.
+    pub(crate) fn hide_idle_overlay(&mut self) -> Vec<DiagnosticEntry> {
         let Some(state) = self.state.as_ref().filter(|state| state.visible) else {
             return Vec::new();
         };
-        if now_ms().saturating_sub(state.updated_at_ms) < AGENT_CURSOR_IDLE_HIDE_MS {
+        if now_ms().saturating_sub(state.updated_at_ms) < OVERLAY_IDLE_CLEANUP_MS {
             return Vec::new();
         }
 
-        self.hide(Some("agent cursor idle timeout".to_string()))
+        self.hide(Some("agent cursor overlay idle cleanup".to_string()))
             .diagnostics
     }
 
@@ -343,6 +347,9 @@ impl OverlayController {
         if let Some(capabilities) = reply.capabilities {
             self.host_capabilities = Some(capabilities);
         }
+        if let Some(state) = reply.state {
+            self.state = Some(state);
+        }
         if !reply.ok && diagnostics.is_empty() {
             diagnostics.push(diagnostic(
                 "AgentCursorHostRejected",
@@ -362,10 +369,13 @@ impl OverlayController {
                 } else {
                     AgentCursorBackendKind::None
                 },
+                renderer_backend: AgentCursorRendererBackendKind::None,
                 visible_overlay: false,
                 screenshot_synthetic_cursor,
                 click_through: false,
                 capture_exclusion: false,
+                pointer_tracking_backend: AgentCursorPointerTrackingBackendKind::None,
+                pointer_tracking_exact: false,
                 system_cursor_hide_supported: false,
                 system_cursor_hidden: false,
                 system_cursor_backend: AgentCursorSystemCursorBackendKind::None,
@@ -711,7 +721,7 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{AGENT_CURSOR_IDLE_HIDE_MS, OverlayController, now_ms, state_from_action_request};
+    use super::{OVERLAY_IDLE_CLEANUP_MS, OverlayController, now_ms, state_from_action_request};
     use image::{ImageBuffer, Rgba};
     use sky_cua_overlay_host::{OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostReply};
     use sky_cua_platform::model::{
@@ -798,11 +808,18 @@ mod tests {
         assert!(
             controller
                 .state()
-                .expect("service state stays visible")
+                .expect("service state follows host-hidden capture state")
                 .visible
+                == false
         );
         let restore_diagnostics = controller.restore_after_capture(guard);
         assert!(restore_diagnostics.is_empty());
+        assert!(
+            controller
+                .state()
+                .expect("service state follows restored host state")
+                .visible
+        );
 
         drop(controller);
         assert!(!socket_path.exists());
@@ -945,10 +962,14 @@ mod tests {
             ok: true,
             capabilities: Some(sky_cua_platform::model::AgentCursorCapabilities {
                 backend: sky_cua_platform::model::AgentCursorBackendKind::WaylandLayerShell,
+                renderer_backend: sky_cua_platform::model::AgentCursorRendererBackendKind::Wgpu,
                 visible_overlay: true,
                 screenshot_synthetic_cursor: false,
                 click_through: true,
                 capture_exclusion: true,
+                pointer_tracking_backend:
+                    sky_cua_platform::model::AgentCursorPointerTrackingBackendKind::KwinEffectSignal,
+                pointer_tracking_exact: true,
                 system_cursor_hide_supported: true,
                 system_cursor_hidden: true,
                 system_cursor_backend:
@@ -1234,8 +1255,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_to_snapshot_hides_idle_cursor_before_synthesizing() {
-        let dir = unique_temp_dir("snapshot-idle-cursor");
+    fn apply_to_snapshot_hides_idle_overlay_before_synthesizing() {
+        let dir = unique_temp_dir("snapshot-idle-overlay");
         let path = dir.join("capture.png");
         ImageBuffer::from_pixel(32, 32, Rgba([240u8, 240, 240, 255]))
             .save(&path)
@@ -1243,7 +1264,7 @@ mod tests {
         let mut controller = OverlayController::new_for_tests();
         controller.set_state(synthetic_state(16, 16));
         if let Some(state) = controller.state.as_mut() {
-            state.updated_at_ms = now_ms().saturating_sub(AGENT_CURSOR_IDLE_HIDE_MS + 1);
+            state.updated_at_ms = now_ms().saturating_sub(OVERLAY_IDLE_CLEANUP_MS + 1);
         }
         let mut snapshot = snapshot_with_capture(capture_with_path(&path, None));
 
@@ -1475,10 +1496,14 @@ mod tests {
     ) -> sky_cua_platform::model::AgentCursorCapabilities {
         sky_cua_platform::model::AgentCursorCapabilities {
             backend: sky_cua_platform::model::AgentCursorBackendKind::WaylandLayerShell,
+            renderer_backend: sky_cua_platform::model::AgentCursorRendererBackendKind::Wgpu,
             visible_overlay: true,
             screenshot_synthetic_cursor: false,
             click_through: true,
             capture_exclusion: true,
+            pointer_tracking_backend:
+                sky_cua_platform::model::AgentCursorPointerTrackingBackendKind::KwinEffectSignal,
+            pointer_tracking_exact: true,
             system_cursor_hide_supported: true,
             system_cursor_hidden: true,
             system_cursor_backend:

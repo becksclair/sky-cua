@@ -12,6 +12,11 @@ serde_json.workspace = true
 sky-cua-platform = { path = "../sky-cua-platform" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+calloop.workspace = true
+calloop-wayland-source.workspace = true
+pollster.workspace = true
 smithay-client-toolkit.workspace = true
 wayland-client.workspace = true
+wgpu.workspace = true
 x11rb.workspace = true
+zbus.workspace = true

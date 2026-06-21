@@ -1,7 +1,8 @@
 use super::test_support::available_capabilities;
 use super::{
     ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
-    AgentCursorPlane, AgentCursorPoint, AgentCursorState, AgentCursorSystemCursorBackendKind,
+    AgentCursorPlane, AgentCursorPoint, AgentCursorPointerTrackingBackendKind,
+    AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
     AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace, DisplayInfo,
     DisplayIntersection, DisplayRef, DoctorCheck, DoctorReadiness, DoctorReport,
     DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback,
@@ -332,8 +333,13 @@ fn boxed_get_app_state_preserves_wire_shape() {
     assert_eq!(rendered["type"], "get_app_state");
     assert_eq!(rendered["snapshot"]["snapshot_id"], "snap-1");
     assert_eq!(
-        rendered["snapshot"]["capture"]["screenshot_path"],
+        rendered["snapshot"]["capture"]["inspection_image_path"],
         "/tmp/snap.jpg"
+    );
+    assert!(
+        rendered["snapshot"]["capture"]
+            .get("original_screenshot_path")
+            .is_none()
     );
     assert!(rendered.get("snapshot").is_some());
     assert!(rendered["snapshot"].get("doctor_report").is_none());
@@ -563,10 +569,13 @@ fn agent_cursor_contract_serializes_snake_case_and_skips_absent_optional_fields(
 fn agent_cursor_capabilities_report_backend_as_snake_case() {
     let rendered = serde_json::to_value(AgentCursorCapabilities {
         backend: AgentCursorBackendKind::WaylandLayerShell,
+        renderer_backend: AgentCursorRendererBackendKind::Wgpu,
         visible_overlay: true,
         screenshot_synthetic_cursor: true,
         click_through: true,
         capture_exclusion: false,
+        pointer_tracking_backend: AgentCursorPointerTrackingBackendKind::KwinEffectSignal,
+        pointer_tracking_exact: true,
         system_cursor_hide_supported: false,
         system_cursor_hidden: false,
         system_cursor_backend: AgentCursorSystemCursorBackendKind::WaylandClientUnsupported,
@@ -576,6 +585,9 @@ fn agent_cursor_capabilities_report_backend_as_snake_case() {
     .expect("capabilities should serialize");
 
     assert_eq!(rendered["backend"], "wayland_layer_shell");
+    assert_eq!(rendered["renderer_backend"], "wgpu");
+    assert_eq!(rendered["pointer_tracking_backend"], "kwin_effect_signal");
+    assert_eq!(rendered["pointer_tracking_exact"], true);
     assert_eq!(rendered["system_cursor_hide_supported"], false);
     assert_eq!(rendered["system_cursor_hidden"], false);
     assert_eq!(
@@ -608,6 +620,16 @@ fn agent_cursor_capabilities_report_backend_as_snake_case() {
             .expect("serialize system cursor backend"),
         json!("cosmic_transparent_xcursor")
     );
+    assert_eq!(
+        serde_json::to_value(AgentCursorRendererBackendKind::WaylandShm)
+            .expect("serialize renderer backend"),
+        json!("wayland_shm")
+    );
+    assert_eq!(
+        serde_json::to_value(AgentCursorPointerTrackingBackendKind::PrivilegedInputHelper)
+            .expect("serialize pointer tracking backend"),
+        json!("privileged_input_helper")
+    );
 
     let old: AgentCursorCapabilities = serde_json::from_value(json!({
         "backend": "wayland_layer_shell",
@@ -624,6 +646,12 @@ fn agent_cursor_capabilities_report_backend_as_snake_case() {
         old.system_cursor_backend,
         AgentCursorSystemCursorBackendKind::None
     );
+    assert_eq!(old.renderer_backend, AgentCursorRendererBackendKind::None);
+    assert_eq!(
+        old.pointer_tracking_backend,
+        AgentCursorPointerTrackingBackendKind::None
+    );
+    assert!(!old.pointer_tracking_exact);
 }
 
 #[test]

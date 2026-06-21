@@ -99,6 +99,25 @@ pub enum AgentCursorBackendKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum AgentCursorRendererBackendKind {
+    #[default]
+    None,
+    WaylandShm,
+    Wgpu,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCursorPointerTrackingBackendKind {
+    #[default]
+    None,
+    KwinEffectSignal,
+    PrivilegedInputHelper,
+    X11Query,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentCursorSystemCursorBackendKind {
     #[default]
     None,
@@ -148,10 +167,16 @@ pub struct AgentCursorState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentCursorCapabilities {
     pub backend: AgentCursorBackendKind,
+    #[serde(default)]
+    pub renderer_backend: AgentCursorRendererBackendKind,
     pub visible_overlay: bool,
     pub screenshot_synthetic_cursor: bool,
     pub click_through: bool,
     pub capture_exclusion: bool,
+    #[serde(default)]
+    pub pointer_tracking_backend: AgentCursorPointerTrackingBackendKind,
+    #[serde(default)]
+    pub pointer_tracking_exact: bool,
     #[serde(default)]
     pub system_cursor_hide_supported: bool,
     #[serde(default)]
@@ -466,9 +491,12 @@ pub struct CaptureInfo {
     pub original_pixel_size: Option<PixelSize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logical_to_pixel_scale: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "inspection_image_path",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub screenshot_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing, skip_deserializing)]
     pub original_screenshot_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_image_format: Option<ModelImageFormat>,
@@ -766,11 +794,21 @@ pub struct DoctorWindowingReport {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DoctorInputReport {
     pub backend: InputBackendKind,
+    #[serde(default = "default_linux_virtual_input_check")]
+    pub linux_virtual_input: DoctorCheck,
     pub ydotool: DoctorCheck,
     pub ydotoold: DoctorCheck,
     pub ydotool_socket: DoctorCheck,
     pub xdotool: DoctorCheck,
     pub uinput: DoctorCheck,
+}
+
+fn default_linux_virtual_input_check() -> DoctorCheck {
+    DoctorCheck {
+        name: "linux_virtual_input".to_string(),
+        ok: false,
+        detail: "not reported".to_string(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
