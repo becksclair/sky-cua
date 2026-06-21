@@ -164,12 +164,18 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
         return target / "bin" / "sky-cua-client", target / "claude_code_mcp.json"
 
     monkeypatch.setattr(deploy_plugin, "install_local_mcp_server", fake_install_local)
+    # The companion device-setup handoff shells out to `adb`; stub it so the unit
+    # test stays device-free (the lane is covered by `test_companion.py`).
+    monkeypatch.setattr(deploy_plugin, "companion_setup_status", lambda: None)
+    monkeypatch.setattr(deploy_plugin, "print_companion_setup_status", lambda _status: None)
 
     args = argparse.Namespace(
         codex_home=codex_home,
         no_build=True,
         symlink=False,
         kwin_effect=False,
+        no_companion=False,
+        force_companion=False,
         local_install_dir=tmp_path / "local-install",
         local_install_host="claude-code",
     )

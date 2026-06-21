@@ -14,8 +14,15 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
+from _companion import (
+    build_and_stage_companion,
+    companion_setup_status,
+    print_companion_build_outcome,
+    print_companion_setup_status,
+)
 from _install_shared import DEFAULT_LOCAL_INSTALL_DIR, MCP_HOST_CHOICES
 from _kwin_effect import deploy_kwin_effect, print_kwin_effect_deploy_outcome
 from _plugin_bundle import (
@@ -31,6 +38,7 @@ from _plugin_bundle import (
     stop_windows_cache_processes,
     update_codex_config,
 )
+from deploy_freshness import write_build_stamp
 from install_mcp_server import install_local_mcp_server, refresh_accessibility_bus
 from install_plugin import install_bundle, run_browser_preflight
 
@@ -75,6 +83,14 @@ def retired_channel_cache_roots(codex_home: Path) -> list[Path]:
 
 def fast_deploy(args: argparse.Namespace) -> int:
     if not args.no_build:
+        # Build + stage the Android companion APK before bundling so build_bundle
+        # picks up a fresh artifact. Automatic and toolchain-gated: it rebuilds
+        # only when the companion sources changed (or --force-companion) and skips
+        # gracefully on a host without JDK 21 + the Android SDK. --no-companion
+        # opts out entirely. --no-build skips this too (the bundle is reused).
+        if not args.no_companion:
+            outcome = build_and_stage_companion(force=args.force_companion)
+            print_companion_build_outcome(outcome)
         build_bundle()
 
     bundle_root = DIST_PLUGIN_ROOT.resolve()
@@ -111,6 +127,12 @@ def fast_deploy(args: argparse.Namespace) -> int:
         refresh_accessibility=False,
     )
 
+    # Stamp the deployed client with the runtime-source fingerprint it was built
+    # from, so live tests can detect when the deployed runtime has gone stale
+    # relative to the working tree and refuse to run against old binaries.
+    stamp_path = write_build_stamp(client_path, deployed_at_ms=int(time.time() * 1000))
+    print(f"deploy_stamp={stamp_path}")
+
     if args.kwin_effect:
         outcome = deploy_kwin_effect(build_dir=destination.parent / "kwin-effect-build")
         print_kwin_effect_deploy_outcome(outcome)
@@ -119,6 +141,13 @@ def fast_deploy(args: argparse.Namespace) -> int:
     print(f"config_path={config_path}")
     print(f"local_install_path={client_path}")
     print(f"local_install_config={mcp_config_path}")
+
+    # Device-setup handoff: the deploy staged + bundled the companion but does
+    # not install it onto a phone or enable its services (a runtime step). Emit a
+    # status the calling agent acts on — which devices are connected, and to ask
+    # the user which to set up via phone_connect + phone_install_companion.
+    if not args.no_companion:
+        print_companion_setup_status(companion_setup_status())
     return 0
 
 
@@ -152,6 +181,23 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Also build, install (sudo cmake --install), and reload the sky-cua "
             "KWin agent-cursor effect (Linux/KDE only)."
+        ),
+    )
+    parser.add_argument(
+        "--no-companion",
+        action="store_true",
+        help=(
+            "Skip the Android phone-companion build/stage lane. By default the "
+            "deploy rebuilds the companion APK when its sources changed and the "
+            "Android toolchain (JDK 21 + SDK) is present, and bundles it."
+        ),
+    )
+    parser.add_argument(
+        "--force-companion",
+        action="store_true",
+        help=(
+            "Rebuild and stage the Android phone-companion APK even when its "
+            "sources appear unchanged (requires the Android toolchain)."
         ),
     )
     parser.add_argument(

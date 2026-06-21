@@ -849,7 +849,7 @@ def test_opencode_agent_runner_preserves_status_and_redacts_stdout(
     monkeypatch.setattr(_agent_mcp_smoke.subprocess, "run", fake_run)
 
     proc = _agent_mcp_smoke.run_agent(
-        "opencode", "use sky cua", tmp_path, model="opencode-go/test-model"
+        "opencode", "use sky cua", tmp_path, model="opencode-go/test-model", gate_deploy=False
     )
 
     assert proc.returncode == 7
@@ -881,7 +881,7 @@ def test_openclaw_agent_runner_preserves_state_and_auth_env(
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
     monkeypatch.setattr(_agent_mcp_smoke.subprocess, "run", fake_run)
 
-    proc = _agent_mcp_smoke.run_agent("openclaw", "use sky cua", tmp_path)
+    proc = _agent_mcp_smoke.run_agent("openclaw", "use sky cua", tmp_path, gate_deploy=False)
 
     assert proc.returncode == 0
     assert captured["argv"][:2] == ["openclaw", "agent"]

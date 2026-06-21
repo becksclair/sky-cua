@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from _smoke_config import env_flag
+from deploy_freshness import assert_runtime_fresh, deployed_client_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PI_SMOKE_MODEL = "opencode-go/kimi-k2.7-code"
@@ -74,6 +75,13 @@ SKY_CUA_RUNTIME_ENV_ALLOWLIST = {
     "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE",
     "SKY_CUA_OVERLAY_HOST_PATH",
     "SKY_CUA_OVERLAY_HOST_TCP_ADDR",
+    "SKY_CUA_ADB",
+    "SKY_CUA_PHONE",
+    "SKY_CUA_PHONE_BACKEND",
+    "SKY_CUA_PHONE_COMPANION",
+    "SKY_CUA_PHONE_COMPANION_APK",
+    "SKY_CUA_PHONE_COMPANION_AUTO_INSTALL",
+    "SKY_CUA_PHONE_COMPANION_OPERATOR_MODE",
     "SKY_CUA_PORTAL_EIS",
     "SKY_CUA_PRESENCE_ENABLED",
     "SKY_CUA_PRESENCE_IDLE_RELEASE_SECS",
@@ -103,8 +111,15 @@ def run_agent(
     cwd: Path | None = None,
     timeout: float = 300,
     model: str | None = None,
+    gate_deploy: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Invoke an agent CLI with a prompt and capture output."""
+    # Deploy-freshness gate: the agent reaches sky-cua through its own MCP config,
+    # which points at the locally deployed runtime — refuse to run against a stale
+    # deploy (the live-test cua-deploy gate). gate_deploy=False for unit tests that
+    # fake the agent subprocess.
+    if gate_deploy:
+        assert_runtime_fresh(deployed_client_path())
     stdout_path = artifact_dir / f"{agent}.stdout.log"
     stderr_path = artifact_dir / f"{agent}.stderr.log"
     selected_model: str | None = None
@@ -177,22 +192,39 @@ def run_agent(
             raw_stdout_path = Path(raw_file.name)
         stdout_capture_path = raw_stdout_path
 
-    with (
-        stdout_capture_path.open("w", encoding="utf-8") as stdout,
-        stderr_path.open("w", encoding="utf-8") as stderr,
-    ):
-        try:
-            proc = subprocess.run(
-                argv,
-                cwd=cwd or REPO_ROOT,
-                stdout=stdout,
-                stderr=stderr,
-                text=True,
-                timeout=timeout,
-                env=env,
-            )
-        except subprocess.TimeoutExpired:
-            proc = subprocess.CompletedProcess(argv, returncode=-9, stdout="", stderr="")
+    # opencode loads a project-level opencode.json/opencode.jsonc from its working
+    # directory, which in a repo worktree can override the sky_cua MCP server to a
+    # different binary (e.g. a sibling main checkout) that lacks the tools under
+    # test. Run opencode from a neutral directory when the caller did not pin a
+    # cwd, so it uses the user's global config — whose sky_cua points at the
+    # deployed runtime the deploy-freshness gate validates. Other agents keep the
+    # repo cwd.
+    run_cwd = cwd or REPO_ROOT
+    neutral_cwd: Path | None = None
+    if agent == "opencode" and cwd is None:
+        neutral_cwd = Path(tempfile.mkdtemp(prefix="sky-cua-opencode-cwd-"))
+        run_cwd = neutral_cwd
+
+    try:
+        with (
+            stdout_capture_path.open("w", encoding="utf-8") as stdout,
+            stderr_path.open("w", encoding="utf-8") as stderr,
+        ):
+            try:
+                proc = subprocess.run(
+                    argv,
+                    cwd=run_cwd,
+                    stdout=stdout,
+                    stderr=stderr,
+                    text=True,
+                    timeout=timeout,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired:
+                proc = subprocess.CompletedProcess(argv, returncode=-9, stdout="", stderr="")
+    finally:
+        if neutral_cwd is not None:
+            shutil.rmtree(neutral_cwd, ignore_errors=True)
 
     if raw_stdout_path is not None:
         redact_pi_json_stdout(raw_stdout_path, stdout_path)
@@ -342,12 +374,32 @@ def promote_tool_identity(value: object, redacted: dict[str, Any]) -> None:
 def safe_tool_identity_field(key: str, value: str) -> bool:
     normalized_key = key.lower().replace("-", "_")
     if normalized_key in {"toolname", "tool_name", "tool", "name"}:
-        return value == "mcp" or value.startswith(
+        if value == "mcp" or value.startswith(
             ("sky_cua_", "mcp__computer_use__", "mcp__sky-cua__", "mcp__sky_cua__")
-        )
+        ):
+            return True
+        # Keep phone tool names regardless of the agent's namespace spelling
+        # (opencode names them `sky-cua_phone_connect`, others bare/`mcp__`-
+        # prefixed). Tool names are non-sensitive; results stay redacted.
+        return tool_base_name(value).startswith("phone_")
     if normalized_key in {"server", "server_name", "mcp_server", "servername"}:
         return value in {"sky_cua", "sky-cua", "computer-use", "mcp__computer_use"}
     return False
+
+
+def tool_base_name(value: str) -> str:
+    """Strip an MCP/server namespace prefix to the bare tool name.
+
+    Tolerant of the spellings agents use: ``mcp__<server>__<tool>``,
+    ``sky-cua_<tool>`` / ``sky_cua_<tool>``, ``computer-use_<tool>``.
+    """
+    token = value.strip()
+    if token.startswith("mcp__") and "__" in token[len("mcp__") :]:
+        token = token.split("__", 2)[-1]
+    for prefix in ("sky-cua_", "sky_cua_", "computer-use_", "computer_use_"):
+        if token.startswith(prefix):
+            return token[len(prefix) :]
+    return token
 
 
 def payload_declares_failure(value: object) -> bool:

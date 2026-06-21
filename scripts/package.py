@@ -44,6 +44,7 @@ PACKAGE_SCRIPTS = (
     "_kwin_effect.py",
     "_plugin_bundle.py",
     "_mcp_stdio.py",
+    "deploy_freshness.py",
 )
 
 DEFAULT_RELEASE_DIR = REPO_ROOT / "dist" / "release"

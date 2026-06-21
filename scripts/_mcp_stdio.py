@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
+from deploy_freshness import gate_spawn_argv
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MCP_READ_TIMEOUT_SECONDS = 15.0
 
@@ -98,7 +100,13 @@ class McpClient:
         read_timeout: float = DEFAULT_MCP_READ_TIMEOUT_SECONDS,
         client_name: str = "live-desktop-smoke",
         client_version: str = "0.2.0",
+        gate_deploy: bool = True,
     ) -> None:
+        # Deploy-freshness gate: when this spawns the sky-cua runtime, refuse to
+        # launch a stale build (the live-test cua-deploy gate). Only sky-cua-client
+        # spawns are gated; pass gate_deploy=False for non-test utilities.
+        if gate_deploy:
+            gate_spawn_argv(argv)
         env = dict(os.environ if base_env is None else base_env)
         env.setdefault("SKY_CUA_REPO_ROOT", str(REPO_ROOT))
         if extra_env:
