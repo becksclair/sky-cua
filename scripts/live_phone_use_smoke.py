@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live phone-use smoke harness for sky-cua (plan Phase 8).
 
-Drives the sky-cua MCP surface over stdio and exercises the real ``phone_*`` tool
+Drives the sky-cua MCP surface over stdio and exercises the real phone-use tool
 family against an attached Android device. The harness is hardware-dependent:
 when a prerequisite is missing (no adb, no device, no companion, no scrcpy, no
 wireless target) the affected profile SKIPS with an explicit reason rather than
@@ -120,6 +120,31 @@ EXPECTED_PHONE_TOOLS: frozenset[str] = frozenset(
         "phone_open_settings",
     }
 )
+
+COMPACT_EXPECTED_PHONE_TOOLS: frozenset[str] = frozenset(
+    {
+        "status",
+        "list_resources",
+        "observe",
+        "capture_screen",
+        "phone_accessibility_tree",
+        "phone_notifications",
+        "phone_connection",
+        "phone_pair_wireless",
+        "phone_setup",
+        "phone_app_force_stop",
+        "phone_pointer",
+        "phone_keyboard",
+        "phone_notification_action",
+        "phone_notification_reply",
+        "phone_app_action",
+        "phone_app_install",
+    }
+)
+
+TOOL_PROFILE_ENV_VAR = "SKY_CUA_MCP_TOOL_PROFILE"
+TOOL_PROFILE_LEGACY = "legacy"
+TOOL_PROFILE_COMPACT = "compact"
 
 
 # ---------------------------------------------------------------------------
@@ -304,17 +329,47 @@ def tool_names_from_list(result: Any) -> set[str]:
     return names
 
 
-def require_expected_phone_tools(client: McpClient) -> StepResult:
+def active_tool_profile() -> str:
+    """Return the MCP tool profile the smoke should expect."""
+    value = os.environ.get(TOOL_PROFILE_ENV_VAR, TOOL_PROFILE_LEGACY).strip().lower()
+    if value == TOOL_PROFILE_COMPACT:
+        return TOOL_PROFILE_COMPACT
+    return TOOL_PROFILE_LEGACY
+
+
+def compact_unwrapped_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Return a legacy-shaped result map from a compact profile envelope."""
+    payload = structured(result)
+    if payload.get("profile") != TOOL_PROFILE_COMPACT:
+        return result
+    inner = payload.get("result")
+    if not isinstance(inner, dict):
+        return result
+    unwrapped = dict(result)
+    unwrapped["structuredContent"] = inner
+    return unwrapped
+
+
+def require_expected_phone_tools(
+    client: McpClient,
+    *,
+    tool_profile: str = TOOL_PROFILE_LEGACY,
+) -> StepResult:
     """Prove the installed MCP surface exposes the complete phone-use family."""
     result = client.tools_list()
     names = tool_names_from_list(result)
-    missing = sorted(EXPECTED_PHONE_TOOLS - names)
+    expected = (
+        COMPACT_EXPECTED_PHONE_TOOLS
+        if tool_profile == TOOL_PROFILE_COMPACT
+        else EXPECTED_PHONE_TOOLS
+    )
+    missing = sorted(expected - names)
     if missing:
         raise SmokeFailure(
             "installed MCP tools/list is missing phone tools: "
             + bounded_metadata(", ".join(missing), max_len=180)
         )
-    return step_pass("tools_list", f"phone_tools={len(EXPECTED_PHONE_TOOLS)}")
+    return step_pass("tools_list", f"{tool_profile}_phone_tools={len(expected)}")
 
 
 def cursor_capabilities(result: dict[str, Any]) -> dict[str, Any]:
@@ -435,6 +490,7 @@ class PhoneSmokeOptions:
     # real device itself; without them those steps SKIP with a named reason.
     rotate_device: bool = False
     resize_device: bool = False
+    tool_profile: str = TOOL_PROFILE_LEGACY
 
 
 class PhoneSmoke:
@@ -444,6 +500,7 @@ class PhoneSmoke:
         self._client = client
         self._options = options
         self._request_id = 100
+        self._compact = options.tool_profile == TOOL_PROFILE_COMPACT
 
     def _next_id(self) -> int:
         self._request_id += 1
@@ -451,7 +508,89 @@ class PhoneSmoke:
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Invoke a phone tool and return its raw MCP result map."""
-        return self._client.tools_call(self._next_id(), name, arguments)
+        if not self._compact:
+            return self._client.tools_call(self._next_id(), name, arguments)
+        compact_name, compact_arguments = self._compact_call(name, arguments)
+        result = self._client.tools_call(self._next_id(), compact_name, compact_arguments)
+        return compact_unwrapped_result(result)
+
+    def _compact_call(self, name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map the smoke's legacy phone operation names onto compact branches."""
+        mapped = dict(arguments)
+        match name:
+            case "phone_status":
+                mapped["component"] = "phone"
+                return "status", mapped
+            case "phone_companion_status":
+                mapped["component"] = "phone_companion"
+                return "status", mapped
+            case "phone_list_devices":
+                mapped.update({"surface": "phone", "resource": "devices"})
+                return "list_resources", mapped
+            case "phone_app_list":
+                mapped.update({"surface": "phone", "resource": "apps"})
+                return "list_resources", mapped
+            case "phone_app_current":
+                mapped.update({"surface": "phone", "resource": "current_app"})
+                return "list_resources", mapped
+            case "phone_observe":
+                mapped["surface"] = "phone"
+                return "observe", mapped
+            case "phone_screenshot":
+                mapped["surface"] = "phone"
+                return "capture_screen", mapped
+            case "phone_connect":
+                mapped["operation"] = "connect"
+                return "phone_connection", mapped
+            case "phone_disconnect":
+                mapped["operation"] = "disconnect"
+                return "phone_connection", mapped
+            case "phone_refresh_capabilities":
+                mapped["operation"] = "refresh"
+                return "phone_connection", mapped
+            case "phone_tap":
+                mapped["operation"] = "tap"
+                return "phone_pointer", mapped
+            case "phone_swipe":
+                mapped["operation"] = "swipe"
+                return "phone_pointer", mapped
+            case "phone_type_text":
+                mapped["operation"] = "type_text"
+                return "phone_keyboard", mapped
+            case "phone_press_key":
+                mapped["operation"] = "press_key"
+                return "phone_keyboard", mapped
+            case "phone_install_companion":
+                mapped["operation"] = "install_companion"
+                return "phone_setup", mapped
+            case "phone_open_settings":
+                mapped["operation"] = "open_settings"
+                return "phone_setup", mapped
+            case "phone_notification_open":
+                mapped["operation"] = "open"
+                return "phone_notification_action", mapped
+            case "phone_notification_dismiss":
+                mapped["operation"] = "dismiss"
+                return "phone_notification_action", mapped
+            case "phone_notification_action":
+                mapped["operation"] = "action"
+                return "phone_notification_action", mapped
+            case (
+                "phone_pair_wireless"
+                | "phone_notifications"
+                | "phone_notification_reply"
+                | "phone_app_force_stop"
+                | "phone_app_install"
+                | "phone_accessibility_tree"
+            ):
+                return name, mapped
+            case "phone_app_launch":
+                mapped["operation"] = "launch"
+                return "phone_app_action", mapped
+            case "phone_app_open_intent":
+                mapped["operation"] = "open_intent"
+                return "phone_app_action", mapped
+        return name, mapped
 
     # The following thin wrappers exist so profiles read declaratively and so
     # tests can monkeypatch ``call`` on a fake driver.
@@ -589,7 +728,7 @@ class PhoneSmoke:
         arguments: dict[str, Any] = {
             "event_id": event_id,
             "action_id": action_id,
-            "reply_text": reply_text,
+            "text": reply_text,
         }
         if session_id:
             arguments["session_id"] = session_id
@@ -1227,7 +1366,7 @@ def run_smoke(
     try:
         client.initialize()
         if options.installed:
-            proof = require_expected_phone_tools(client)
+            proof = require_expected_phone_tools(client, tool_profile=options.tool_profile)
             report.add(proof)
             emit(format_step_line("installed", proof))
         smoke = PhoneSmoke(client, options)
@@ -1325,6 +1464,7 @@ def _env_truthy(name: str) -> bool:
 
 def options_from_args(args: argparse.Namespace) -> PhoneSmokeOptions:
     installed = bool(args.installed) or _env_truthy(INSTALLED_ENV_VAR)
+    tool_profile = active_tool_profile()
     return PhoneSmokeOptions(
         profile=args.profile,
         serial=args.serial,
@@ -1334,6 +1474,7 @@ def options_from_args(args: argparse.Namespace) -> PhoneSmokeOptions:
         installed=installed,
         rotate_device=bool(args.device_can_rotate),
         resize_device=bool(args.device_can_resize),
+        tool_profile=tool_profile,
     )
 
 

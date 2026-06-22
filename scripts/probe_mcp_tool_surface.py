@@ -127,7 +127,11 @@ def forbid_tools(names: set[str], forbidden: frozenset[str], *, profile: str) ->
 
 
 def require_compact_action_shape(tools: Iterable[dict[str, Any]]) -> None:
-    by_name = {tool.get("name"): tool for tool in tools if isinstance(tool.get("name"), str)}
+    by_name: dict[str, dict[str, Any]] = {}
+    for tool in tools:
+        name = tool.get("name")
+        if isinstance(name, str):
+            by_name[name] = tool
     doctor = by_name.get("doctor")
     if not isinstance(doctor, dict):
         raise ProbeFailure("compact tools/list omitted doctor")
@@ -161,7 +165,7 @@ def require_compact_action_shape(tools: Iterable[dict[str, Any]]) -> None:
         raise ProbeFailure("desktop_keyboard type_text branch must require text")
 
 
-def _tool_schema(by_name: dict[object, dict[str, Any]], name: str) -> dict[str, Any]:
+def _tool_schema(by_name: dict[str, dict[str, Any]], name: str) -> dict[str, Any]:
     tool = by_name.get(name)
     if not isinstance(tool, dict):
         raise ProbeFailure(f"compact tools/list omitted {name}")

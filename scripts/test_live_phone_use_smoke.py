@@ -57,6 +57,21 @@ def err(structured: dict[str, Any]) -> dict[str, Any]:
     return {"structuredContent": structured, "isError": True}
 
 
+def compact_ok(
+    tool: str, branch: str, legacy_tool: str, structured: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "structuredContent": {
+            "profile": "compact",
+            "tool": tool,
+            "branch": branch,
+            "legacy_tool": legacy_tool,
+            "result": structured,
+        },
+        "isError": False,
+    }
+
+
 def make_smoke(
     responses: dict[str, dict[str, Any]] | None = None,
     *,
@@ -65,6 +80,7 @@ def make_smoke(
     wireless_host: str | None = None,
     pair_host: str | None = None,
     pairing_code: str | None = None,
+    tool_profile: str = smoke.TOOL_PROFILE_LEGACY,
 ) -> tuple[smoke.PhoneSmoke, FakeClient]:
     client = FakeClient(responses)
     options = smoke.PhoneSmokeOptions(
@@ -73,6 +89,7 @@ def make_smoke(
         wireless_host=wireless_host,
         pair_host=pair_host,
         pairing_code=pairing_code,
+        tool_profile=tool_profile,
     )
     return smoke.PhoneSmoke(client, options), client  # pyright: ignore[reportArgumentType]
 
@@ -208,10 +225,74 @@ def test_require_expected_phone_tools_passes_with_complete_surface() -> None:
     assert "phone_tools=" in result.detail
 
 
+def test_require_expected_phone_tools_passes_with_compact_surface() -> None:
+    client = FakeClient(tools=[{"name": name} for name in smoke.COMPACT_EXPECTED_PHONE_TOOLS])
+    result = smoke.require_expected_phone_tools(
+        client,  # pyright: ignore[reportArgumentType]
+        tool_profile=smoke.TOOL_PROFILE_COMPACT,
+    )
+    assert result.passed
+    assert "compact_phone_tools=" in result.detail
+
+
 def test_require_expected_phone_tools_fails_when_missing() -> None:
     client = FakeClient(tools=[{"name": "phone_observe"}])
     with pytest.raises(smoke.SmokeFailure, match="missing phone tools"):
         smoke.require_expected_phone_tools(client)  # pyright: ignore[reportArgumentType]
+
+
+def test_compact_smoke_maps_phone_calls_and_unwraps_results() -> None:
+    driver, client = make_smoke(
+        {
+            "status": compact_ok(
+                "status",
+                "phone",
+                "phone_status",
+                {"adb_available": True, "devices": [{"serial": "emulator-5554"}]},
+            )
+        },
+        tool_profile=smoke.TOOL_PROFILE_COMPACT,
+    )
+
+    result = driver.status(refresh_devices=True)
+
+    assert smoke.structured(result)["adb_available"] is True
+    assert client.calls == [
+        ("status", {"refresh_devices": True, "component": "phone"}),
+    ]
+
+
+def test_compact_smoke_maps_phone_actions() -> None:
+    driver, client = make_smoke(tool_profile=smoke.TOOL_PROFILE_COMPACT)
+
+    driver.connect("emulator-5554")
+    driver.screenshot("session")
+    driver.tap("session", "snap", 1.0, 2.0)
+    driver.notification_reply("session", "event", "action", "reply")
+
+    assert client.calls == [
+        ("phone_connection", {"serial": "emulator-5554", "operation": "connect"}),
+        ("capture_screen", {"session_id": "session", "surface": "phone"}),
+        (
+            "phone_pointer",
+            {
+                "x": 1.0,
+                "y": 2.0,
+                "session_id": "session",
+                "phone_snapshot_id": "snap",
+                "operation": "tap",
+            },
+        ),
+        (
+            "phone_notification_reply",
+            {
+                "event_id": "event",
+                "action_id": "action",
+                "text": "reply",
+                "session_id": "session",
+            },
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------
