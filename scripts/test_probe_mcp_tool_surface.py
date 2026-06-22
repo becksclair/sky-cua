@@ -20,15 +20,17 @@ def test_tool_names_extracts_only_string_names() -> None:
     assert names == {"status", "phone_connection"}
 
 
-def test_require_and_forbid_tools_report_contract_violations() -> None:
-    probe.require_tools({"status", "phone_connection"}, frozenset({"status"}))
-    probe.forbid_tools({"status"}, frozenset({"phone_status"}))
+def test_require_exact_canonical_tools_report_contract_violations() -> None:
+    probe.require_exact_canonical_tools(set(probe.CANONICAL_TOOLS))
+    probe.require_exact_canonical_tools(set(probe.CANONICAL_TOOLS) | {probe.BROWSER_EVAL_TOOL})
 
-    with pytest.raises(probe.ProbeFailure, match="missing required tools"):
-        probe.require_tools({"status"}, frozenset({"status", "phone_connection"}))
+    missing_phone = set(probe.CANONICAL_TOOLS)
+    missing_phone.remove("phone_connection")
+    with pytest.raises(probe.ProbeFailure, match=r"missing=.*phone_connection"):
+        probe.require_exact_canonical_tools(missing_phone)
 
-    with pytest.raises(probe.ProbeFailure, match="advertised old surface tools"):
-        probe.forbid_tools({"status", "phone_status"}, frozenset({"phone_status"}))
+    with pytest.raises(probe.ProbeFailure, match=r"extra=.*unexpected_tool"):
+        probe.require_exact_canonical_tools(set(probe.CANONICAL_TOOLS) | {"unexpected_tool"})
 
 
 def test_canonical_payload_requires_identity_and_result() -> None:
@@ -60,7 +62,7 @@ def test_canonical_payload_requires_identity_and_result() -> None:
         )
 
 
-def test_canonical_error_payload_requires_tool_error_code() -> None:
+def test_canonical_error_payload_requires_structured_error_code() -> None:
     payload = probe.canonical_error_payload(
         {
             "isError": True,
@@ -88,14 +90,6 @@ def test_canonical_error_payload_requires_tool_error_code() -> None:
             tool="status",
             code="InvalidRequest",
         )
-
-
-def test_tool_error_code_reads_json_rpc_data_code() -> None:
-    assert (
-        probe.tool_error_code({"error": {"code": -32602, "data": {"code": "UnknownTool"}}})
-        == "UnknownTool"
-    )
-    assert probe.tool_error_code({"result": {}}) is None
 
 
 def test_require_canonical_action_shape_rejects_vague_action_tools() -> None:

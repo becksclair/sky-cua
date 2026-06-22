@@ -228,7 +228,7 @@ successful action.
   - `phone_notification_reply` takes `event_id` + `action_id` + `text`, and is valid **only** for an
     action whose `supports_inline_reply` is true; a non-reply target yields
     `reply_unavailable`. All non-inline-reply buttons go through
-    notification-action.
+    `phone_notification_action(operation="action")`.
   - Check `can_open` / `can_dismiss` before an op. Successful ops refetch and
     return the fresh notification list.
 - App control: app/current-app listing uses
@@ -242,9 +242,9 @@ successful action.
 
 ## Disconnecting
 
-`phone_disconnect` ends the session — the `session_id` dies — and drops the
-cached profile, snapshot/cursor, and companion runtime. It tears down only a
-sky-cua-managed scrcpy mirror (adopted or operator-launched windows are never
-killed) and never touches operator-launched adb/scrcpy processes. For wireless
-serials it runs `adb disconnect` unless `keep_wireless=true`, which retains the
-wireless adb link for a later reconnect.
+`phone_connection(operation="disconnect")` ends the session — the `session_id`
+dies — and drops the cached profile, snapshot/cursor, and companion runtime. It
+tears down only a sky-cua-managed scrcpy mirror (adopted or operator-launched
+windows are never killed) and never touches operator-launched adb/scrcpy
+processes. For wireless serials it runs `adb disconnect` unless
+`keep_wireless=true`, which retains the wireless adb link for a later reconnect.

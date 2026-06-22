@@ -23,8 +23,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEV_CLIENT = REPO_ROOT / "bin" / "sky-cua-client"
 INSTALLED_CLIENT = REPO_ROOT / "dist" / "plugin" / "sky-cua" / "bin" / "sky-cua-client"
 
-CANONICAL_REQUIRED_TOOLS: frozenset[str] = frozenset(
+CANONICAL_TOOLS: frozenset[str] = frozenset(
     {
+        "activate_window",
+        "browser_claim_tab",
+        "browser_input",
+        "browser_move_mouse",
+        "browser_navigate",
+        "browser_open",
+        "browser_scroll",
         "doctor",
         "status",
         "list_resources",
@@ -36,28 +43,26 @@ CANONICAL_REQUIRED_TOOLS: frozenset[str] = frozenset(
         "desktop_pointer",
         "desktop_keyboard",
         "desktop_action",
-        "browser_input",
+        "desktop_scroll",
+        "desktop_semantic",
+        "desktop_set_value",
+        "desktop_toggle",
         "phone_connection",
+        "phone_pair_wireless",
+        "phone_setup",
+        "phone_app_force_stop",
         "phone_pointer",
         "phone_keyboard",
         "phone_app_action",
+        "phone_app_install",
+        "phone_notification_action",
+        "phone_notification_reply",
         "phone_notifications",
         "phone_accessibility_tree",
     }
 )
 
-OLD_SURFACE_SENTINELS: frozenset[str] = frozenset(
-    {
-        "list_apps",
-        "get_app_state",
-        "click",
-        "type_text",
-        "browser_list_tabs",
-        "browser_click",
-        "phone_connect",
-        "phone_status",
-    }
-)
+BROWSER_EVAL_TOOL = "browser_eval"
 
 
 class ProbeFailure(Exception):
@@ -90,16 +95,19 @@ def tool_names(tools: Iterable[dict[str, Any]]) -> set[str]:
     return names
 
 
-def require_tools(names: set[str], required: frozenset[str]) -> None:
-    missing = sorted(required - names)
-    if missing:
-        raise ProbeFailure(f"tools/list is missing required tools: {missing!r}")
-
-
-def forbid_tools(names: set[str], forbidden: frozenset[str]) -> None:
-    present = sorted(forbidden & names)
-    if present:
-        raise ProbeFailure(f"tools/list advertised old surface tools: {present!r}")
+def require_exact_canonical_tools(names: set[str]) -> None:
+    expected = set(CANONICAL_TOOLS)
+    if BROWSER_EVAL_TOOL in names:
+        expected.add(BROWSER_EVAL_TOOL)
+    missing = sorted(expected - names)
+    extra = sorted(names - expected)
+    if missing or extra:
+        details = []
+        if missing:
+            details.append(f"missing={missing!r}")
+        if extra:
+            details.append(f"extra={extra!r}")
+        raise ProbeFailure("tools/list does not match canonical surface: " + " ".join(details))
 
 
 def require_canonical_action_shape(tools: Iterable[dict[str, Any]]) -> None:
@@ -245,24 +253,6 @@ def canonical_error_payload(result: dict[str, Any], *, tool: str, code: str) -> 
     return payload
 
 
-def tool_error_code(response: dict[str, Any]) -> str | None:
-    error = response.get("error")
-    if isinstance(error, dict):
-        data = error.get("data")
-        if isinstance(data, dict) and isinstance(data.get("code"), str):
-            return data["code"]
-        if isinstance(data, dict) and isinstance(data.get("error"), dict):
-            nested = data["error"]
-            if isinstance(nested.get("code"), str):
-                return nested["code"]
-    result = response.get("result")
-    if isinstance(result, dict):
-        structured = result.get("structuredContent")
-        if isinstance(structured, dict) and isinstance(structured.get("code"), str):
-            return structured["code"]
-    return None
-
-
 def resolve_client(installed: bool) -> Path:
     client = INSTALLED_CLIENT if installed else DEV_CLIENT
     if not client.exists():
@@ -290,8 +280,7 @@ def probe_canonical(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
         client.initialize()
         tools = client.tools_list()
         names = tool_names(tools)
-        require_tools(names, CANONICAL_REQUIRED_TOOLS)
-        forbid_tools(names, OLD_SURFACE_SENTINELS)
+        require_exact_canonical_tools(names)
         require_canonical_action_shape(tools)
         steps.append(step_pass("canonical.tools_list", f"tools={len(names)}"))
 
@@ -316,12 +305,6 @@ def probe_canonical(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
                 )
             )
 
-        old_call = client.call_raw(30, "tools/call", {"name": "phone_status", "arguments": {}})
-        if tool_error_code(old_call.raw) != "UnknownTool":
-            raise ProbeFailure(
-                f"canonical surface did not reject old phone_status: {old_call.raw!r}"
-            )
-        steps.append(step_pass("canonical.old_surface_rejected", "code=UnknownTool"))
     finally:
         client.close()
     return steps

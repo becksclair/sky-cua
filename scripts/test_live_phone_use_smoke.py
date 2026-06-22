@@ -262,9 +262,9 @@ def test_first_diagnostic_message_empty_when_absent() -> None:
 
 
 def test_tool_names_from_raw_tools_list() -> None:
-    assert smoke.tool_names_from_list([{"name": "phone_observe"}, {"name": "get_app_state"}]) == {
-        "phone_observe",
-        "get_app_state",
+    assert smoke.tool_names_from_list([{"name": "observe"}, {"name": "phone_connection"}]) == {
+        "observe",
+        "phone_connection",
     }
 
 

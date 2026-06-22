@@ -68,7 +68,7 @@ Open boxes link to the active ExecPlan that owns the work.
 - [x] Codex Desktop compatibility (one active `computer-use` server, Browser Use companion, native-host preflight) — [`docs/features/codex-desktop-compat.md`](docs/features/codex-desktop-compat.md)
 - [x] OpenCode/Pi MCP host smoke parity
 - [x] Claude Code host support (plugin manifest + marketplace, `--host claude-code` installer, `~/.claude/skills` sync, `~/.claude/settings.json` deny-built-in-computer-use + auto-approve sky-cua) — [`docs/features/claude-code-host.md`](docs/features/claude-code-host.md)
-- [ ] Canonical MCP tool surface — [`plans/mcp_tool_surface.md`](plans/mcp_tool_surface.md), [`docs/features/mcp-tool-surface.md`](docs/features/mcp-tool-surface.md)
+- [x] Canonical MCP tool surface — [`docs/features/mcp-tool-surface.md`](docs/features/mcp-tool-surface.md)
   - [x] Installed MCP probe, Android emulator phone smoke, and OpenCode VM
         host smoke passed on the canonical surface
   - [ ] Broader cross-desktop VM matrix remains a release gate for

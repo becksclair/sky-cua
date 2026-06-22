@@ -89,4 +89,4 @@ OpenCode VM smoke.
 
 ## Related
 
-Originating ExecPlan: `plans/mcp_tool_surface.md`.
+- `ROADMAP.md`

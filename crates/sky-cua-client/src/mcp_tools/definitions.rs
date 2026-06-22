@@ -2090,6 +2090,27 @@ mod annotation_tests {
         );
     }
 
+    #[test]
+    fn call_cases_match_canonical_dispatcher() {
+        for case in generated_call_cases()["cases"]
+            .as_array()
+            .expect("call cases")
+        {
+            let tool_name = case["tool"].as_str().expect("case tool");
+            let expected_branch = case["branch"].as_str().expect("case branch");
+            let expected_handler = case["handler_id"].as_str().expect("case handler");
+            let call = crate::mcp_tools::canonical_handler_call(tool_name, case["valid"].clone())
+                .unwrap_or_else(|error| {
+                    panic!("call case {tool_name}/{expected_branch} did not dispatch: {error}")
+                });
+            assert_eq!(call.branch, expected_branch, "{tool_name} branch");
+            assert_eq!(
+                call.handler_name, expected_handler,
+                "{tool_name}/{expected_branch} handler"
+            );
+        }
+    }
+
     fn schema_accepts(schema: &Value, instance: &Value) -> bool {
         let Some(schema) = schema.as_object() else {
             return true;

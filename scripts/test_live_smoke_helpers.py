@@ -202,7 +202,7 @@ def test_agent_smoke_accepts_opencode_tool_use_event_shape() -> None:
         "type": "tool_use",
         "part": {
             "type": "tool",
-            "tool": "sky_cua_click",
+            "tool": "sky_cua_desktop_pointer",
             "state": {
                 "status": "completed",
                 "output": "Invoked the element semantically through AT-SPI.",
@@ -213,27 +213,7 @@ def test_agent_smoke_accepts_opencode_tool_use_event_shape() -> None:
     assert live_agent_mcp_smoke._tool_evidence_from_stdout_line(json.dumps(event)) is True
 
 
-def test_agent_smoke_accepts_action_tool_evidence(tmp_path: Path) -> None:
-    stdout = tmp_path / "agent.stdout.log"
-    stdout.write_text(
-        json.dumps(
-            {
-                "type": "tool_use",
-                "part": {
-                    "type": "tool",
-                    "tool": "sky_cua_click",
-                    "state": {"status": "completed", "output": "clicked"},
-                },
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(stdout) is True
-
-
-def test_agent_smoke_accepts_compact_action_tool_evidence(tmp_path: Path) -> None:
+def test_agent_smoke_accepts_canonical_action_tool_evidence(tmp_path: Path) -> None:
     stdout = tmp_path / "agent.stdout.log"
     stdout.write_text(
         json.dumps(
@@ -261,7 +241,7 @@ def test_agent_smoke_rejects_read_only_tool_as_action_evidence(tmp_path: Path) -
                 json.dumps(
                     {
                         "type": "tool_execution_start",
-                        "tool": "sky_cua_get_app_state",
+                        "tool": "sky_cua_observe",
                         "toolCallId": "tool-1",
                     }
                 ),
@@ -308,7 +288,7 @@ def test_agent_smoke_redacted_opencode_event_preserves_tool_evidence(tmp_path: P
                 "type": "tool_use",
                 "part": {
                     "type": "tool",
-                    "tool": "sky_cua_click",
+                    "tool": "sky_cua_desktop_pointer",
                     "state": {
                         "status": "completed",
                         "output": "secret desktop text",
@@ -325,7 +305,7 @@ def test_agent_smoke_redacted_opencode_event_preserves_tool_evidence(tmp_path: P
     redacted_text = redacted.read_text(encoding="utf-8")
     assert live_agent_mcp_smoke._stdout_has_sky_cua_tool_evidence(redacted) is True
     assert "secret desktop text" not in redacted_text
-    assert "sky_cua_click" in redacted_text
+    assert "sky_cua_desktop_pointer" in redacted_text
 
 
 def test_opencode_neutral_cwd_gets_installed_project_config(
@@ -376,7 +356,7 @@ def test_agent_smoke_accepts_payload_after_non_payload_state() -> None:
         "type": "tool_use",
         "part": {
             "type": "tool",
-            "tool": "sky_cua_click",
+            "tool": "sky_cua_desktop_pointer",
             "state": {"status": "completed"},
             "toolResult": {"content": [{"type": "text", "text": "clicked"}]},
         },
@@ -388,7 +368,7 @@ def test_agent_smoke_accepts_payload_after_non_payload_state() -> None:
 def test_agent_smoke_rejects_status_only_completed_state() -> None:
     event = {
         "type": "tool_use",
-        "tool": "sky_cua_click",
+        "tool": "sky_cua_desktop_pointer",
         "state": "completed",
     }
 
@@ -400,7 +380,7 @@ def test_agent_smoke_rejects_opencode_failed_tool_use_event_shape() -> None:
         "type": "tool_use",
         "part": {
             "type": "tool",
-            "tool": "sky_cua_click",
+            "tool": "sky_cua_desktop_pointer",
             "state": {
                 "status": "failed",
                 "error": "boom",
@@ -418,7 +398,7 @@ def test_agent_smoke_redacted_top_level_error_rejects_tool_evidence(tmp_path: Pa
         json.dumps(
             {
                 "type": "tool_use",
-                "tool": "sky_cua_click",
+                "tool": "sky_cua_desktop_pointer",
                 "error": "boom",
                 "result": {"content": [{"type": "text", "text": "clicked"}]},
             }
@@ -451,7 +431,7 @@ def test_agent_smoke_rejects_opencode_failed_state_with_payload(
         "type": "tool_use",
         "part": {
             "type": "tool",
-            "tool": "sky_cua_click",
+            "tool": "sky_cua_desktop_pointer",
             "state": state,
         },
     }
@@ -467,7 +447,7 @@ def test_agent_smoke_accepts_pi_split_tool_start_and_end_events(tmp_path: Path) 
                 json.dumps(
                     {
                         "server": "sky_cua",
-                        "tool": "sky_cua_get_app_state",
+                        "tool": "sky_cua_observe",
                         "toolCallId": "tool-1",
                         "toolName": "mcp",
                         "type": "tool_execution_start",
@@ -498,7 +478,7 @@ def test_agent_smoke_rejects_mismatched_split_tool_completion(tmp_path: Path) ->
             [
                 json.dumps(
                     {
-                        "tool": "sky_cua_click",
+                        "tool": "sky_cua_desktop_pointer",
                         "toolCallId": "sky",
                         "type": "tool_execution_start",
                     }
@@ -529,7 +509,7 @@ def test_agent_smoke_rejects_pi_failed_split_tool_before_unrelated_success(
                 json.dumps(
                     {
                         "server": "sky_cua",
-                        "tool": "sky_cua_get_app_state",
+                        "tool": "sky_cua_observe",
                         "toolCallId": "tool-1",
                         "toolName": "mcp",
                         "type": "tool_execution_start",
@@ -583,7 +563,7 @@ def test_agent_smoke_fails_without_action_tool_evidence(
             json.dumps(
                 {
                     "type": "tool_use",
-                    "tool": "sky_cua_get_app_state",
+                    "tool": "sky_cua_observe",
                     "result": {"redacted": True},
                 }
             )
@@ -896,7 +876,7 @@ def test_opencode_agent_runner_preserves_status_and_redacts_stdout(
             json.dumps(
                 {
                     "type": "tool_use",
-                    "tool": "sky_cua_click",
+                    "tool": "sky_cua_desktop_pointer",
                     "output": "secret desktop text",
                 }
             )

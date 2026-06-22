@@ -1355,26 +1355,11 @@ mod tests {
     }
 
     #[test]
-    fn old_surface_tools_fail_before_service_dispatch() {
+    fn disabled_browser_eval_fails_before_service_dispatch() {
         let service = FakeService::default();
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
         let model = ModelSessionInfo::default();
         let registry = build_tool_registry(&process_config(false), &model);
-
-        let old_surface_result = handle_session_tool_call(
-            &service,
-            &heuristics,
-            &model,
-            &registry,
-            "get_app_state",
-            json!({"detail": "full"}),
-        )
-        .expect("old surface tool returns tool error");
-        assert_eq!(old_surface_result["isError"], true);
-        assert_eq!(
-            old_surface_result["structuredContent"]["code"],
-            "UnknownTool"
-        );
 
         let eval_result = handle_session_tool_call(
             &service,
