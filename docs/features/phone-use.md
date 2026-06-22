@@ -2,45 +2,49 @@
 
 ## Status
 
-Partial. Source-complete and green across the Rust workspace; live device proof
-and installed-MCP/packaging proof are pending. Last verified: 2026-06-17
-(`cargo test` green for the phone platform model, service backends, and client
-MCP surface; `python3 scripts/build_plugin.py` stages `skills/phone-use`).
+Partial. Source-complete and green across the Rust workspace. The installed
+canonical MCP path and ADB-baseline emulator smoke are proven; broader
+companion, scrcpy, and real-device release proof remain open. Last verified:
+2026-06-22.
 
 ## Summary
 
 Lets a sky-cua agent control a real Android phone from the existing
 `sky-cua-client mcp` process over USB or wireless ADB: discover, pair, connect,
 observe, screenshot, tap/swipe/type, press keys, read and act on notifications,
-manage apps, and render an agent cursor. `phone_observe` is the default
-per-turn perception tool; ADB is the required baseline, with an optional
-companion app and optional scrcpy acceleration layered on top.
+manage apps, and render an agent cursor. `observe(surface="phone")` is the
+default per-turn perception call; ADB is the required baseline, with an
+optional companion app and optional scrcpy acceleration layered on top.
 
 ## Contract surface
 
-A static `phone_*` MCP tool family inside the single `computer-use` MCP server
-(no new server). Tools:
+A static phone-capable tool family inside the single `computer-use` MCP server
+(no new server). Phone work uses the canonical grouped MCP surface:
 
-- Session and discovery: `phone_status`, `phone_list_devices`,
-  `phone_pair_wireless`, `phone_connect`, `phone_disconnect`,
-  `phone_refresh_capabilities`.
-- Perception: `phone_observe` (default), `phone_screenshot`,
-  `phone_accessibility_tree`, `phone_notifications`.
-- Input: `phone_tap`, `phone_swipe`, `phone_type_text`, `phone_press_key`.
-- Companion: `phone_install_companion`, `phone_companion_status`.
-- Notifications (explicit ids required): `phone_notification_open`,
-  `phone_notification_dismiss`, `phone_notification_action`,
+- Session and discovery: `status(component="phone")`,
+  `list_resources(surface="phone", resource="devices")`,
+  `phone_pair_wireless`, and
+  `phone_connection(operation="connect"|"disconnect"|"refresh")`.
+- Perception: `observe(surface="phone")` (default),
+  `capture_screen(surface="phone")`, `phone_accessibility_tree`, and
+  `phone_notifications`.
+- Input: `phone_pointer(operation="tap"|"swipe")` and
+  `phone_keyboard(operation="type_text"|"press_key")`.
+- Companion/setup: `phone_setup(operation="install_companion"|"open_settings")`
+  and `status(component="phone_companion")`.
+- Notifications (explicit ids required):
+  `phone_notification_action(operation="open"|"dismiss"|"action")` and
   `phone_notification_reply`.
-- Apps: `phone_app_current`, `phone_app_list`, `phone_app_launch`,
-  `phone_app_open_intent`, `phone_app_force_stop`, `phone_app_install`,
-  `phone_open_settings`.
+- Apps: `list_resources(surface="phone", resource="apps"|"current_app")`,
+  `phone_app_action(operation="launch"|"open_intent")`,
+  `phone_app_force_stop`, and `phone_app_install`.
 
 Callers can rely on: structured responses carrying the truth (backend used,
 capability profile id/version, snapshot ids, cursor capabilities, permission
 state, diagnostics) — prose summaries are secondary. Coordinate actions require
 a fresh `phone_snapshot_id`. `available_actions` / `unavailable_actions` come
 from the cached capability profile, not a static schema. The tool list is
-static (compatibility), action affordances are dynamic.
+static; action affordances are dynamic.
 
 Config lives in the `[phone]` table of the machine config and is mirrored by
 environment overrides, all allowlisted in `.mcp.json`:
@@ -62,21 +66,24 @@ inputs that may be absent.
 
 ## Behavior
 
-`phone_connect` resolves `adb` (config, then environment, then `PATH`), probes
-device identity and display metrics, detects and caches a per-session
+`phone_connection(operation="connect")` resolves `adb` (config, then
+environment, then `PATH`), probes device identity and display metrics, detects
+and caches a per-session
 `PhoneCapabilityProfile`, and — when companion support is enabled — verifies,
 installs, or updates the companion APK, enables its required services, and
 establishes the RPC forward before finalizing the profile. The cache is per
 session and is invalidated on reconnect, companion install/update, permission
 change, orientation or display-size change, RPC failure, wireless disconnect,
-and explicit `phone_refresh_capabilities`.
+and explicit `phone_connection(operation="refresh")`.
 
 Companion permission setup (as built): an install-bearing bootstrap — the same
-`allow_install` gate that authorizes the APK install (`phone_install_companion`,
-or `phone_connect` under operator auto-install or an explicit `install_companion`
-request) — also enables the two services the companion needs to function, so a
-freshly deployed companion is usable without a manual trip through Android
-settings. The companion declares no runtime permissions (its overlay rides a
+`allow_install` gate that authorizes the APK install
+(`phone_setup(operation="install_companion")`, or
+`phone_connection(operation="connect")` under operator auto-install or an
+explicit install-companion request) — also enables the two services the
+companion needs to function, so a freshly deployed companion is usable without a
+manual trip through Android settings. The companion declares no runtime permissions
+(its overlay rides a
 `TYPE_ACCESSIBILITY_OVERLAY` window), so setup reduces to two service
 enablements, both performed by the adb `shell` user after the signature gate
 passes, never for an untrusted package. The accessibility service is enabled by
@@ -96,15 +103,17 @@ host best-effort opens the on-device Accessibility screen so the operator can
 finish setup by hand.
 
 Freshness contract (as built): the tools that act on or perceive through the
-profile — the action tools (`phone_tap`, `phone_swipe`, `phone_type_text`,
-`phone_press_key`, the notification and app operations), `phone_observe`, and
-`phone_screenshot` — carry the profile id/version used and a
+profile — the action tools (`phone_pointer(operation="tap")`,
+`phone_pointer(operation="swipe")`, `phone_keyboard(operation="type_text")`,
+`phone_keyboard(operation="press_key")`, the notification and app operations),
+`observe(surface="phone")`, and `capture_screen(surface="phone")` — carry the
+profile id/version used and a
 `profile_refresh_state` of `refreshed`, `reused`, or `stale`. `reused` is
 emitted on a within-TTL cache hit, and the `profile_refresh_state` is kept in
 lockstep with the `stale` boolean. The pure-status tools
-(`phone_companion_status`, `phone_accessibility_tree`, `phone_notifications`, and
-the `phone_app_*` reads) do not act on the profile and intentionally omit the
-freshness field.
+(`status(component="phone_companion")`, `phone_accessibility_tree`,
+`phone_notifications`, and the app resource reads) do not act on the profile
+and intentionally omit the freshness field.
 
 Three backends, deterministically routed from the cached profile:
 
@@ -257,7 +266,7 @@ behavior is unchanged.
   `visible_overlay=false` regardless, preserving the Phase 3 contract.
 - `wireless_auto_connect` (default `false`; env
   `SKY_CUA_PHONE_WIRELESS_AUTO_CONNECT`): when `true` and the configured
-  `default_serial` is a wireless `host:port` target, `phone_connect` runs `adb
+  `default_serial` is a wireless `host:port` target, `phone_connection(operation="connect")` runs `adb
   connect <host:port>` for that default before serial resolution, so a
   pre-configured wireless link is brought up and the device becomes present for
   targeting. Best-effort and idempotent; a failed link resurfaces as the normal
@@ -267,8 +276,8 @@ behavior is unchanged.
   `SKY_CUA_PHONE_COMPANION_OPERATOR_MODE`): gates the host-side privileged
   operator conveniences. As wired, it gates the *silent* companion auto-install
   convenience (`adb install -r`): the automatic install/update on connect or
-  `phone_refresh_capabilities` runs only when operator mode AND
-  `companion_auto_install` are both on. An explicit `phone_install_companion`
+  `phone_connection(operation="refresh")` runs only when operator mode AND
+  `companion_auto_install` are both on. An explicit `phone_setup(operation="install_companion")`
   (or `install_companion: true` on connect) is the operator acting deliberately
   and still installs regardless of operator mode. With operator mode off, an
   already-installed companion still connects (forward + token + probe); only the
@@ -276,7 +285,7 @@ behavior is unchanged.
   no settings-screen automation or deeper privileged setup exists yet to gate.
 - `primary_target_models` (default empty; env `SKY_CUA_PHONE_TARGET_MODELS`,
   comma-separated): the operator's known device models. In the
-  `phone_list_devices` path, each device whose reported `model` matches a
+  `list_resources(surface="phone", resource="devices")` path, each device whose reported `model` matches a
   configured target (case-insensitive, trimmed) is marked `primary=true` and
   stably sorted ahead of the rest, preserving adb's order within each group. The
   `PhoneDevice.primary` field is omitted from the wire when `false`. An empty
@@ -335,7 +344,7 @@ uv run python scripts/live_phone_companion_setup_smoke.py --driver agent --seria
 uv run python scripts/live_phone_companion_setup_smoke.py --driver direct --serial <serial>
 
 # Workflow smoke: crystallizes the live agentic workflows (an external agent
-# driving a ready device through the phone_* tools) into a repeatable check —
+# driving a ready device through the phone tools) into a repeatable check —
 # Settings -> Accessibility navigation, and a Chrome web search. Each workflow is
 # proven by GROUND TRUTH read from adb (the device's resumed activity must be the
 # target screen), independent of the agent's own claims; web-page text is not in
@@ -346,9 +355,10 @@ uv run python scripts/live_phone_workflow_smoke.py --workflow full --serial <ser
 uv run python scripts/live_phone_workflow_smoke.py --workflow settings --agent claude --serial <serial>
 ```
 
-`--driver agent` (default) has an agent CLI run `phone_connect` +
-`phone_install_companion`; the ground-truth checks gate the pass. The default
-agent is `claude` (Claude Code reliably surfaces the phone MCP tools);
+`--driver agent` (default) has an agent CLI run
+`phone_connection(operation="connect")` +
+`phone_setup(operation="install_companion")`; the ground-truth checks gate the
+pass. The default agent is `claude` (Claude Code reliably surfaces the phone MCP tools);
 `opencode` does NOT currently expose them to the agent (it sees the phone-use
 skill and falls back to bash/exploration), so it is unreliable here — the
 ground-truth gate catches that honestly. Tool-call evidence is parsed when the
@@ -374,10 +384,12 @@ with the tap and swipe routing `backend=companion`. The `tool_evidence` steps SK
 under `claude` (plain-text mode emits no structured tool events); pass
 `--require-tool-evidence` with a JSON-mode agent to make them a hard gate. Evidence
 is any-of: each workflow accepts any of several phone action tools, so an efficient
-agent that reaches Settings via `phone_open_settings` (instead of tapping) still
-passes. Proven live 2026-06-21 with `--agent opencode --model kimi-for-coding/k2p7`:
-kimi drove the Settings → Accessibility workflow in three tool calls
-(`phone_connect` → `phone_open_settings` → `phone_accessibility_tree`), reaching
+agent that reaches Settings via `phone_setup(operation="open_settings")`
+(instead of tapping) still passes. Proven live 2026-06-21 with `--agent
+opencode --model kimi-for-coding/k2p7`: kimi drove the Settings →
+Accessibility workflow in three tool calls
+(`phone_connection(operation="connect")` →
+`phone_setup(operation="open_settings")` → `phone_accessibility_tree`), reaching
 `com.android.settings/.Settings$AccessibilitySettingsActivity` with no redundant
 captures or taps. opencode must run from a neutral working directory (the harness
 handles this) so it loads the global MCP config — a worktree `opencode.json` can
@@ -390,9 +402,9 @@ cursor planes proven, and skipped profiles.
 
 ## Known limitations
 
-- Live device proof is pending: no installed-MCP `tools/list` proof and no
-  full live-smoke run is recorded yet. Treat all backends as source-complete,
-  not field-proven.
+- The installed canonical MCP path and ADB-baseline emulator smoke are proven,
+  but the full phone-use smoke matrix across wireless pairing, companion,
+  scrcpy, adversarial geometry changes, and real devices is still pending.
 - Redmi/API-36 tablet lane is blocked until that device is connected. The
   Redmi-family target is complete only when a real device reports HyperOS 3.1
   (or equivalent), Android release 16, and SDK 36 through ADB/capability

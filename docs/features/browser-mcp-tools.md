@@ -18,39 +18,39 @@ key, scrolled, and navigated back to `about:blank`.
 
 `sky-cua` exposes browser readiness, real user-tab listing, session-owned tab
 creation, existing-tab claiming, browser snapshots/screenshots, and basic
-browser actions as first-class MCP tools for hosts such as OpenCode and Pi. The
-default browser MCP surface is a core sky-cua capability and is always
-advertised by the MCP server; `browser_eval` is an opt-in diagnostic exception.
+browser actions through the canonical grouped MCP surface for hosts such as
+OpenCode and Pi. The default browser capability is always advertised by the MCP
+server; `browser_eval` is an opt-in diagnostic exception.
 
 ## Contract surface
 
-MCP browser tools:
+Current MCP browser entrypoints:
 
-- `browser_status` returns structured browser readiness, available targets,
-  diagnostics, and optional known-tab count.
-- `browser_list_tabs` accepts optional `target`, currently `user_chrome`, plus
-  optional `url_contains` and `title_contains` filters for the human-readable MCP
-  summary and structured response. When filters are present, only matching tabs
-  are returned to avoid leaking unrelated tab titles/URLs through
-  `structuredContent`; call without filters only when a broad tab inventory is
-  actually needed. It returns tabs plus diagnostics. `user_chrome` is the only
-  target value.
+- `status(component="browser")` returns structured browser readiness,
+  available targets, diagnostics, and optional known-tab count.
+- `list_resources(surface="browser", resource="tabs")` accepts optional
+  `target`, currently `user_chrome`, plus optional `url_contains` and
+  `title_contains` filters for the human-readable MCP summary and structured
+  response. When filters are present, only matching tabs are returned to avoid
+  leaking unrelated tab titles/URLs through `structuredContent`; call without
+  filters only when a broad tab inventory is actually needed. It returns tabs
+  plus diagnostics. `user_chrome` is the only target value.
 - `browser_open` accepts optional `target=user_chrome` and optional `url`. It
   creates a new session-owned tab through the Chrome-family bridge, attaches it
   to the sky-cua browser session, enables CDP Page events, and navigates when a
   URL is provided. Allowed URL forms are `http://`, `https://`, and
   `about:blank`.
-- `browser_claim_tab` accepts `target=user_chrome` and `tab_id` from
-  `browser_list_tabs`. It asks the extension to adopt that existing user tab into
-  the sky-cua browser session for subsequent browser actions.
+- `browser_claim_tab` accepts `target=user_chrome` and `tab_id` from the
+  browser tab resource list. It asks the extension to adopt that existing user
+  tab into the sky-cua browser session for subsequent browser actions.
 - `browser_move_mouse` accepts `target=user_chrome`, `tab_id`, `x`, `y`, and
   optional `wait_for_arrival`. Coordinates are CSS pixels, the same space as
-  `browser_screenshot` image pixels and `browser_snapshot` element bounds.
+  browser capture image pixels and browser observation element bounds.
   When omitted, `wait_for_arrival` defaults to true in both the MCP argument
   parser and the service request contract.
 - `browser_navigate` accepts `target=user_chrome`, `tab_id`, and `url`. Allowed
   URL forms are `http://`, `https://`, and `about:blank`.
-- `browser_snapshot` accepts `target=user_chrome`, `tab_id`, and optional
+- `observe(surface="browser")` accepts `target=user_chrome`, `tab_id`, and optional
   `element_query`, `element_offset`, `element_limit`, and `text_limit`, then
   returns the current page title, URL, and a structured DOM snapshot payload
   when CDP access succeeds. `text_limit` defaults to 4000 visible-text
@@ -64,7 +64,7 @@ MCP browser tools:
   default slice, so the structured `elements` array defaults to at most 200;
   `snapshot.elementCount` always reports the full total, and `element_limit`
   raises or lowers the cap up to the service maximum of 5000.
-- `browser_screenshot` accepts `target=user_chrome` and `tab_id`, then captures
+- `capture_screen(surface="browser")` accepts `target=user_chrome` and `tab_id`, then captures
   the visible viewport, normalizes the image to CSS-pixel dimensions, and
   re-encodes it with the shared model-screenshot knobs (JPEG by default, WebP
   via `SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp`). The MCP result attaches the
@@ -73,15 +73,17 @@ MCP browser tools:
   omits response image data and returns `screenshot_path`, `mime_type`, and
   `width`/`height` only. The base64 payload is never repeated inside
   `structuredContent`.
-- `browser_click` accepts `target=user_chrome`, `tab_id`, `x`, and `y` in CSS
-  pixels, matching `browser_screenshot` image pixels and `browser_snapshot`
-  element bounds. Before dispatching the CDP click, the service moves the
-  browser agent cursor to the same point and waits for arrival.
-- `browser_type_text` accepts `target=user_chrome`, `tab_id`, and non-empty
-  `text`, then inserts text into the focused page control.
-- `browser_press_key` accepts `target=user_chrome`, `tab_id`, and non-empty
-  `key`, then dispatches the key to the page. Single CDP key names and modifier
-  chords such as `Ctrl+K`, `Ctrl+L`, `Shift+Tab`, and `Meta+K` are accepted.
+- `browser_input(operation="click")` accepts `target=user_chrome`, `tab_id`,
+  `x`, and `y` in CSS pixels, matching browser capture pixels and browser
+  observation element bounds. Before dispatching the CDP click, the service
+  moves the browser agent cursor to the same point and waits for arrival.
+- `browser_input(operation="type_text")` accepts `target=user_chrome`,
+  `tab_id`, and non-empty `text`, then inserts text into the focused page
+  control.
+- `browser_input(operation="press_key")` accepts `target=user_chrome`,
+  `tab_id`, and non-empty `key`, then dispatches the key to the page. Single
+  CDP key names and modifier chords such as `Ctrl+K`, `Ctrl+L`, `Shift+Tab`,
+  and `Meta+K` are accepted.
 - `browser_scroll` accepts `target=user_chrome`, `tab_id`, `delta_x`, `delta_y`,
   and optional CSS-pixel `x`/`y` context fields. At least one delta must be
   non-zero, and `x` and `y` must be provided together. When they are provided,
@@ -116,40 +118,42 @@ Browser targets:
   with an explicit error.
 
 `browser_claim_tab` is the explicit adoption seam for existing `user_chrome`
-tabs from `browser_list_tabs`. Browser actions should target tabs returned by
-`browser_open` or successfully adopted by `browser_claim_tab`; callers should
-not assume every listed tab is already controllable.
+tabs from `list_resources(surface="browser", resource="tabs")`. Browser
+actions should target tabs returned by `browser_open` or successfully adopted by
+`browser_claim_tab`; callers should not assume every listed tab is already
+controllable.
 
 All browser tool coordinates are CSS pixels and share one space:
-`browser_screenshot` image pixels, `browser_snapshot` element bounds, and
-`browser_click`/`browser_move_mouse`/`browser_scroll` coordinates line up
-one-to-one. They are not desktop screen coordinates and they are not
-coordinates from `get_app_state` screenshots. The service normalizes high-DPI
-captures to CSS-pixel dimensions at capture time, so agents never divide by
-`window.devicePixelRatio` and the center of a returned snapshot element can be
-passed directly to `browser_click`. Screenshots cover the currently visible
-viewport only; scroll and re-capture when the target is off-screen.
+`capture_screen(surface="browser")` image pixels, `observe(surface="browser")`
+element bounds, and `browser_input`/`browser_move_mouse`/`browser_scroll`
+coordinates line up one-to-one. They are not desktop screen coordinates and
+they are not coordinates from desktop observations. The service normalizes
+high-DPI captures to CSS-pixel dimensions at capture time, so agents never
+divide by `window.devicePixelRatio` and the center of a returned snapshot
+element can be passed directly to `browser_input(operation="click")`.
+Screenshots cover the currently visible viewport only; scroll and re-capture
+when the target is off-screen.
 
 Recommended agent flow:
 
-- Use `browser_status` first when diagnosing bridge readiness.
-- Use `browser_open` for a new controllable tab, or `browser_list_tabs` followed
-  by `browser_claim_tab` for an existing user tab. When many tabs are open, pass
+- Use `status(component="browser")` first when diagnosing bridge readiness.
+- Use `browser_open` for a new controllable tab, or
+  `list_resources(surface="browser", resource="tabs")` followed by
+  `browser_claim_tab` for an existing user tab. When many tabs are open, pass
   `url_contains` or `title_contains` to make the text response list relevant tab
   ids instead of only a count.
-- Use `browser_snapshot` to inspect page title, URL, viewport, visible text,
+- Use `observe(surface="browser")` to inspect page title, URL, viewport, visible text,
   and common actionable element summaries with click-ready CSS-pixel bounds. Pass `element_query: "update"` or an `element_offset`/`element_limit`
   window when a page contains many controls. Its MCP text summary also includes
   these details for text-only hosts.
-- Use `browser_click`, `browser_type_text`, `browser_press_key`,
-  `browser_scroll`, and `browser_move_mouse` against the tab returned by
-  `browser_open` or `browser_claim_tab`. The service self-recovers once when the
-  native-host bridge reports that the tab fell out of `sky-cua-mcp` session
-  ownership or that the debugger is no longer attached.
-- Use `browser_screenshot` when visual proof is needed; the image arrives as an
+- Use `browser_input`, `browser_scroll`, and `browser_move_mouse` against the
+  tab returned by `browser_open` or `browser_claim_tab`. The service
+  self-recovers once when the native-host bridge reports that the tab fell out
+  of `sky-cua-mcp` session ownership or that the debugger is no longer attached.
+- Use `capture_screen(surface="browser")` when visual proof is needed; the image arrives as an
   MCP image content block for image-capable sessions and is also persisted to
   the file named in `structuredContent.screenshot_path`. Text-only agents should
-  prefer `browser_snapshot`.
+  prefer `observe(surface="browser")`.
 
 Environment variables:
 
@@ -234,17 +238,17 @@ Install outputs:
 
 ## Behavior
 
-`browser_status` combines the existing runtime doctor browser report with
-browser-bridge diagnostics. When a matching native-host socket is connected,
-status does not emit a disconnected diagnostic. If the browser selection env is
-invalid, the report returns an explicit diagnostic instead of guessing. If the
-desktop request lane is already busy, status still returns bridge diagnostics
-and marks browser integration checks as deferred instead of waiting behind the
-desktop action.
+The browser status branch combines the existing runtime doctor browser report
+with browser-bridge diagnostics. When a matching native-host socket is
+connected, status does not emit a disconnected diagnostic. If the browser
+selection env is invalid, the report returns an explicit diagnostic instead of
+guessing. If the desktop request lane is already busy, status still returns
+bridge diagnostics and marks browser integration checks as deferred instead of
+waiting behind the desktop action.
 
 
-`browser_list_tabs(user_chrome)` discovers Unix sockets from the Chrome-family
-native messaging host, filters them by `SKY_CUA_BROWSER`, and calls the Codex
+The browser tabs resource discovers Unix sockets from the Chrome-family native
+messaging host, filters them by `SKY_CUA_BROWSER`, and calls the Codex
 extension's `getUserTabs` method. This is intentionally different from
 `getTabs`, which lists session-owned Codex tabs rather than the user's real
 browser tabs. Tab titles and URLs are structured runtime data. MCP text output
@@ -293,8 +297,7 @@ reports stale session ownership, an unattached debugger, or a CDP command
 timeout, sky-cua reclaims, detaches, re-attaches, enables Page, and retries
 once (the move is an absolute position, so a replay is safe).
 
-`browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_click`,
-`browser_type_text`, `browser_press_key`, and enabled `browser_eval` use
+Browser navigation, observation, capture, input, and enabled `browser_eval` use
 extension `executeCdp` requests against tabs that are part of the sky-cua
 browser session.
 Navigation uses `Page.navigate`. Snapshot uses `Runtime.evaluate` to return the

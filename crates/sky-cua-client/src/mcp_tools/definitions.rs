@@ -520,7 +520,36 @@ fn compact_tool_with_constraints(
         .as_object()
         .unwrap_or_else(|| panic!("tool constraints must be object: {constraints:?}"));
     input_schema.extend(constraints.clone());
+    normalize_root_composition_schema(input_schema);
     tool
+}
+
+fn normalize_root_composition_schema(input_schema: &mut serde_json::Map<String, Value>) {
+    if input_schema.get("type") != Some(&Value::String("object".into())) {
+        return;
+    }
+    for key in ["anyOf", "oneOf"] {
+        let Some(mut branches) = input_schema.remove(key).and_then(|value| match value {
+            Value::Array(branches) => Some(branches),
+            _ => None,
+        }) else {
+            continue;
+        };
+        for branch in &mut branches {
+            if let Some(branch) = branch.as_object_mut() {
+                branch
+                    .entry("type".to_string())
+                    .or_insert_with(|| Value::String("object".to_string()));
+            }
+        }
+        let constraint = json!({key: branches});
+        match input_schema.get_mut("allOf").and_then(Value::as_array_mut) {
+            Some(all_of) => all_of.push(constraint),
+            None => {
+                input_schema.insert("allOf".to_string(), json!([constraint]));
+            }
+        }
+    }
 }
 
 fn merge_properties(left: Value, right: Value) -> Value {
@@ -1605,20 +1634,38 @@ mod annotation_tests {
         );
 
         let list_resources_schema = &tool("list_resources")["inputSchema"];
+        let list_resource_pairs = list_resources_schema["allOf"]
+            .as_array()
+            .and_then(|all_of| {
+                all_of
+                    .iter()
+                    .find_map(|constraint| constraint["oneOf"].as_array())
+            })
+            .expect("list_resources oneOf constraint");
         assert!(
-            list_resources_schema["oneOf"]
-                .as_array()
-                .is_some_and(|pairs| {
-                    pairs.iter().any(|pair| {
-                        pair["properties"]["surface"]["const"] == "browser"
-                            && pair["properties"]["resource"]["const"] == "tabs"
-                    }) && pairs.iter().any(|pair| {
-                        pair["properties"]["surface"]["const"] == "phone"
-                            && pair["properties"]["resource"]["const"] == "current_app"
-                    })
-                }),
+            list_resource_pairs.iter().any(|pair| {
+                pair["properties"]["surface"]["const"] == "browser"
+                    && pair["properties"]["resource"]["const"] == "tabs"
+            }) && list_resource_pairs.iter().any(|pair| {
+                pair["properties"]["surface"]["const"] == "phone"
+                    && pair["properties"]["resource"]["const"] == "current_app"
+            }),
             "list_resources must constrain surface/resource pairs to dispatchable branches"
         );
+
+        for schema in tools.iter().map(|tool| &tool["inputSchema"]) {
+            assert_eq!(
+                schema["type"],
+                Value::String("object".to_string()),
+                "MCP adapters expect root inputSchema.type=object"
+            );
+            for key in ["anyOf", "oneOf"] {
+                assert!(
+                    schema.get(key).is_none(),
+                    "root {key} schemas must move composition under allOf for opencode-go/moonshot compatibility"
+                );
+            }
+        }
 
         let observe_schema = &tool("observe")["inputSchema"];
         assert!(
@@ -1805,17 +1852,21 @@ mod annotation_tests {
             tool("desktop_scroll")["inputSchema"]["properties"]["pages"].is_object(),
             "desktop_scroll should expose the canonical pages field"
         );
+        let desktop_scroll_any_of = tool("desktop_scroll")["inputSchema"]["allOf"]
+            .as_array()
+            .and_then(|all_of| {
+                all_of
+                    .iter()
+                    .find_map(|constraint| constraint["anyOf"].as_array())
+            })
+            .expect("desktop_scroll anyOf constraint");
         assert!(
-            tool("desktop_scroll")["inputSchema"]["anyOf"]
-                .as_array()
-                .is_some_and(|any_of| {
-                    any_of
-                        .iter()
-                        .any(|item| item["required"] == json!(["snapshot_id", "element_index"]))
-                        && !any_of
-                            .iter()
-                            .any(|item| item["required"] == json!(["element_identifier"]))
-                }),
+            desktop_scroll_any_of
+                .iter()
+                .any(|item| item["required"] == json!(["snapshot_id", "element_index"]))
+                && !desktop_scroll_any_of
+                    .iter()
+                    .any(|item| item["required"] == json!(["element_identifier"])),
             "desktop_scroll must only advertise snapshot-resolved semantic targets"
         );
         assert_eq!(

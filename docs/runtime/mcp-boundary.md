@@ -74,7 +74,7 @@ normalizes `PATH`, probes `/run/user/<uid>`, X11 sockets, logind, and the
 systemd user manager before spawning `sky-cua-service`; the Linux service then
 hydrates the same session state again before probing portals, AT-SPI, KWin, and
 other desktop backends. The repair is observable through `doctor.session_env`,
-the `SessionEnvRepaired` diagnostic, and `list_apps` diagnostics. This is a
+the `SessionEnvRepaired` diagnostic, and desktop resource diagnostics. This is a
 recovery path, not a reason for host adapters to omit the environment allowlist.
 
 For Codex Desktop compatibility, the shipped plugin presents one active
@@ -196,11 +196,11 @@ python3 scripts/live_openclaw_mcp_smoke.py --agent-turn  # plus one live turn
 ```
 
 Stage 1 checks the registered config (binary path, `enabled`, approval mode);
-stage 2 has OpenClaw spawn the server and asserts the required browser-use and
-computer-use tools are listed; the optional agent turn asks the model to call
-`browser_status` and return structured evidence that the tools were visible
-and executable. `scripts/live_agent_mcp_smoke.py --agent openclaw` drives the
-desktop-fixture flow through OpenClaw as well.
+stage 2 has OpenClaw spawn the server and asserts the required grouped
+desktop/browser tools are listed; the optional agent turn asks the model to
+call `status` with `component="browser"` and return structured evidence that
+the tools were visible and executable. `scripts/live_agent_mcp_smoke.py
+--agent openclaw` drives the desktop-fixture flow through OpenClaw as well.
 
 ## Machine configuration
 
@@ -231,35 +231,44 @@ unparseable file surfaces as a
 
 ## MCP tool surface
 
-The host-facing tools are the portable product contract. Current tools:
+The host-facing tools are the portable product contract. Current tools are
+canonical and grouped by target/intent:
 
-- readiness/setup: `doctor`, `setup_accessibility`, `setup_window_targeting`
-- session presence: `hold_session`, `unlock_session`, `release_session`, and
-  `session_presence_status`
-- app/window discovery: `list_apps`, `list_windows`, `focused_window`,
-  `activate_window`
-- state capture: `get_app_state`, with `detail: "compact"` by default and
-  `detail: "full"` as the exhaustive inspection mode. Compact MCP responses
+- readiness/setup: `doctor`, `status(component=...)`, and
+  `setup_desktop(operation="accessibility"|"window_targeting")`
+- session presence: `session_presence(operation="hold"|"unlock"|"release")`
+  plus `status(component="session_presence")`
+- app/window discovery: `list_resources(surface="desktop",
+  resource="apps"|"windows"|"focused_window")` and `activate_window`
+- desktop state: `observe(surface="desktop")`, with `detail: "compact"` by
+  default and `detail: "full"` as the exhaustive inspection mode. Responses
   default to 200 returned elements while preserving `element_count`/
   `filtered_element_count` metadata; use `element_query`, `element_offset`,
   and `element_limit` to page or narrow dense accessibility trees. Use
   `screenshot_delivery: "inline"` to attach the captured screenshot as an MCP
   image content block for hosts that cannot read `inspection_image_path` files
-- visual capture: `screenshot`, which defaults to the primary display, accepts
-  the same window target fields as `activate_window`, accepts
+- desktop visual capture: `capture_desktop`, which defaults to the primary
+  display, accepts the same window target fields as `activate_window`, accepts
   `display_id`/`display_name`/`display_index` from `environment.displays`, and
   uses `capture_all_displays=true` as the explicit full-virtual-desktop opt-in
-- semantic element actions: `focus_element`, `activate_element`,
-  `select_element`, `expand_element`, `collapse_element`, `toggle_element`,
-  and `perform_action`
-- physical or hybrid actions: `click`, `perform_secondary_action`, `scroll`,
-  `drag`, `type_text`, `press_key`, and `set_value`
+- desktop semantic actions: `desktop_semantic`, `desktop_toggle`,
+  `desktop_action`, and `desktop_set_value`
+- desktop physical or hybrid actions: `desktop_pointer`, `desktop_scroll`, and
+  `desktop_keyboard`
 - browser readiness, tab lifecycle, page state, screenshots, and tab-scoped
-  actions through the always-advertised browser tools: `browser_status`,
-  `browser_list_tabs`, `browser_open`, `browser_claim_tab`,
-  `browser_move_mouse`, `browser_navigate`, `browser_snapshot`,
-  `browser_screenshot`, `browser_click`, `browser_type_text`,
-  `browser_press_key`, and `browser_scroll`
+  actions: `status(component="browser")`,
+  `list_resources(surface="browser", resource="tabs")`, `browser_open`,
+  `browser_claim_tab`, `browser_move_mouse`, `browser_navigate`,
+  `observe(surface="browser")`, `capture_screen(surface="browser")`,
+  `browser_input`, and `browser_scroll`
+- phone discovery, connection, perception, input, notifications, and app
+  control: `status(component="phone"|"phone_companion")`,
+  `list_resources(surface="phone", resource=...)`, `phone_connection`,
+  `phone_pair_wireless`, `phone_setup`, `observe(surface="phone")`,
+  `capture_screen(surface="phone")`, `phone_pointer`, `phone_keyboard`,
+  `phone_notification_action`, `phone_notification_reply`, `phone_app_action`,
+  `phone_app_force_stop`, `phone_app_install`, `phone_accessibility_tree`, and
+  `phone_notifications`
 
 Browser tools do not require a host-specific enable flag. `browser_eval` is the
 security-gated exception and is advertised only when `SKY_CUA_BROWSER_EVAL` is
@@ -275,15 +284,15 @@ Every tool definition carries MCP `ToolAnnotations` (`readOnlyHint`,
 graduated approval: Codex's `auto` approval mode silently approves read-only
 tools and prompts for destructive or open-world ones, and treats unannotated
 tools as both. The hints are honest by policy, not flattering: observation
-tools (`doctor`, `list_apps`, `list_windows`, `focused_window`,
-`get_app_state`, `browser_status`, `browser_list_tabs`, `browser_snapshot`,
-`browser_screenshot`, `session_presence_status`) are read-only;
-focus/selection/expansion moves, session hold/release/unlock requests, and tab
-claims are non-destructive and idempotent; arbitrary input (`click`,
-`type_text`, `press_key`, `drag`, `perform_action`, `activate_element`,
-`browser_click`, `browser_type_text`, `browser_press_key`, and enabled
-`browser_eval`) stays destructive because it can trigger any in-app action.
-Live-web actions are additionally open-world; `browser_scroll` is
+tools (`doctor`, `status`, `list_resources`, `observe`, `capture_screen`,
+`phone_accessibility_tree`, and `phone_notifications`) are read-only;
+focus/selection/expansion moves, session hold/release/unlock requests, tab
+claims, and desktop captures are non-destructive and idempotent; arbitrary
+input (`desktop_pointer`, `desktop_keyboard`, `desktop_action`,
+`desktop_set_value`, `browser_input`, `phone_pointer`, `phone_keyboard`,
+notification/app actions, and enabled `browser_eval`) stays destructive because
+it can trigger any in-app action. Live-web actions are additionally open-world;
+`browser_scroll` is
 non-destructive but still open-world because it mutates a real web page's
 viewport or scrollable DOM state. The full table is pinned by
 `mcp_tools::annotation_tests`; changing a row changes what hosts auto-approve
@@ -300,19 +309,19 @@ from which source, `path_changed` reports whether `PATH` was normalized, and
 snapshot/list diagnostics may include `SessionEnvRepaired`; treat that as
 useful context that the runtime recovered, not as an error by itself.
 
-Action tools accept `snapshot_id` from the latest `get_app_state` or
-`screenshot` result. With a captured snapshot that includes capture metadata,
+Action tools accept `snapshot_id` from the latest `observe(surface="desktop")`
+or `capture_desktop` result. With a captured snapshot that includes capture metadata,
 explicit coordinates are screenshot pixels from that image. A structure-only
-`get_app_state` snapshot_id still scopes `element_index` lookups, but cannot
-translate screenshot pixels. Without capture metadata, supported coordinate
-actions use the current screen coordinate space exposed by the active input
-backend.
+desktop observation snapshot id still scopes `element_index` lookups, but
+cannot translate screenshot pixels. Without capture metadata, supported
+coordinate actions use the current screen coordinate space exposed by the active
+input backend.
 Desktop snapshots may be cropped to a window or one display; callers should
 always pass the matching `snapshot_id` so the backend can translate screenshot
 pixels through `capture.logical_rect` and the backend-specific source rect.
 
-`get_app_state` elements may include readback fields when the backend can prove
-them. On Linux, focused or editable AT-SPI Text controls can populate
+`observe(surface="desktop")` elements may include readback fields when the
+backend can prove them. On Linux, focused or editable AT-SPI Text controls can populate
 `ElementNode.value` and `text.content` with the current text, including a known
 empty string. AT-SPI Value controls can populate `numeric_value` and use a
 short value summary. Password/protected controls suppress content and leave
@@ -320,12 +329,12 @@ short value summary. Password/protected controls suppress content and leave
 preserve `value`, `text`, `numeric_value`, and `supports_editable_text` so
 agents can verify text entry without switching back to full detail.
 
-`list_windows`, `focused_window`, and `activate_window` use native window
-metadata when available. Linux currently probes GNOME Shell extension, GNOME
+Desktop window resources and `activate_window` use native window metadata when
+available. Linux currently probes GNOME Shell extension, GNOME
 Shell Introspect, COSMIC helper, KWin/Plasma, Hyprland, i3, and X11 metadata
 backends. Window payloads may include bounds, workspace, PID, client type,
 display assignment, spanning-display intersections, and terminal metadata
-depending on what the backend can prove. `get_app_state` and `screenshot`
+depending on what the backend can prove. Desktop observations and captures
 surface `environment.displays`; agents should use those display IDs instead of
 guessing monitor names.
 
@@ -348,7 +357,7 @@ Use these lanes when validating changes:
 - Text-readback lane: `scripts/live_desktop_smoke.py` covers direct `zenity`
   readback before and after `set_value` / `type_text`; `scripts/live_codex_exec_text_readback_smoke.py`
   and `scripts/live_app_server_text_readback_smoke.py` prove agents consume
-  stale and replacement values from `get_app_state` transcripts before
+  stale and replacement values from desktop observation transcripts before
   submitting.
 
 Runtime changes should pass the narrowest relevant runtime lane first. Codex
@@ -387,7 +396,7 @@ OpenCode:
 ```bash
 opencode mcp list
 opencode run --dir /home/bex/projects/sky-cua \
-  "Use the sky_cua MCP tool list_apps directly."
+  "Use the sky_cua MCP tool list_resources with surface=desktop and resource=apps."
 ```
 
 For VM-based non-Codex harness work, use the Arch testing VM documented in
@@ -406,7 +415,7 @@ For the LAN server at `https://opencode.heliasar.com`, restart the
 systemctl --user restart opencode-lan.service
 opencode run --attach https://opencode.heliasar.com \
   --dir /home/bex/projects/sky-cua \
-  "Use the sky_cua MCP tool list_apps directly."
+  "Use the sky_cua MCP tool list_resources with surface=desktop and resource=apps."
 ```
 
 OpenCode validates `tools/list.nextCursor` strictly: omit `nextCursor` when

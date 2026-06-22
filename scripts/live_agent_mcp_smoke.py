@@ -162,6 +162,7 @@ def _stdout_has_sky_cua_tool_evidence_matching(
         return None
     saw_json_event = False
     pending_matching_tool_ids: set[str] = set()
+    pending_anonymous_matching_tool = False
     with stdout_path.open(encoding="utf-8") as stdout_file:
         for line in stdout_file:
             event = _json_object_from_stdout_line(line)
@@ -171,6 +172,8 @@ def _stdout_has_sky_cua_tool_evidence_matching(
                     call_id = _tool_call_id_from_event(event)
                     if call_id is not None:
                         pending_matching_tool_ids.add(call_id)
+                    else:
+                        pending_anonymous_matching_tool = True
                 elif _is_tool_completion_event(event):
                     call_id = _tool_call_id_from_event(event)
                     if (
@@ -181,6 +184,10 @@ def _stdout_has_sky_cua_tool_evidence_matching(
                         return True
                     if call_id is not None:
                         pending_matching_tool_ids.discard(call_id)
+                    elif pending_anonymous_matching_tool:
+                        pending_anonymous_matching_tool = False
+                        if _is_successful_tool_completion_event(event):
+                            return True
             found = _tool_evidence_from_stdout_line_matching(line, record_predicate)
             if found is True:
                 return True

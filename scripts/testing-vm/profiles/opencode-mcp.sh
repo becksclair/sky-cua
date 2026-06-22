@@ -7,6 +7,16 @@ if ! command -v opencode >/dev/null; then
 	printf 'opencode is not installed in the testing VM\n' >&2
 	exit 66
 fi
+missing_fixtures=()
+for fixture in zenity kdialog; do
+	if ! command -v "${fixture}" >/dev/null 2>&1; then
+		missing_fixtures+=("${fixture}")
+	fi
+done
+if (( ${#missing_fixtures[@]} > 0 )); then
+	printf 'Required dialog fixture(s) missing in testing VM: %s\n' "${missing_fixtures[*]}" >&2
+	exit 67
+fi
 
 remote_root="/workspace"
 target_dir="${HOME}/.local/share/sky-cua"
@@ -26,6 +36,7 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 python3 "${remote_root}/scripts/install_mcp_server.py" \
 	--host opencode \
 	--target-dir "${target_dir}" \
+	--restart-runtime \
 	"${install_policy_args[@]}"
 
 # Place the generated opencode.json in the workspace so OpenCode discovers it
@@ -46,9 +57,5 @@ fi
 
 # Run smoke tests across available fixtures
 for fixture in zenity kdialog; do
-	if command -v "${fixture}" >/dev/null 2>&1; then
-		python3 "${remote_root}/scripts/live_agent_mcp_smoke.py" --agent opencode --fixture "${fixture}" || exit 1
-	else
-		printf 'Skipping %s fixture: not installed in this VM\n' "${fixture}"
-	fi
+	python3 "${remote_root}/scripts/live_agent_mcp_smoke.py" --agent opencode --fixture "${fixture}" || exit 1
 done

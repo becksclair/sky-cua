@@ -140,6 +140,10 @@ def test_testing_vm_opencode_sync_has_user_writable_latest_fallback() -> None:
     for profile in (opencode_profile, pi_profile):
         assert "install_policy_args+=(--browser-eval" in profile
         assert "install_policy_args+=(--model-supports-images" in profile
+        assert "missing_fixtures=()" in profile
+        assert "Required dialog fixture(s) missing in testing VM" in profile
+        assert "Skipping %s fixture" not in profile
+        assert "for fixture in zenity kdialog; do" in profile
 
 
 def test_testing_vm_pi_sync_has_user_writable_latest_fallback() -> None:

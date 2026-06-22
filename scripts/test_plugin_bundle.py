@@ -370,6 +370,14 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
         if Path("bin") / name not in current_runtime_paths
     ]
     write_minimal_bundle(bundle_root, binaries=other_binaries)
+    for binary_name in other_binaries:
+        if Path(binary_name).name in {"sky-cua-client", "sky-cua-client.exe"}:
+            (bundle_root / "bin" / binary_name).with_name(
+                Path(binary_name).name + plugin_bundle.BUILD_STAMP_SUFFIX
+            ).write_text(
+                '{"source_fingerprint":"preserved"}\n',
+                encoding="utf-8",
+            )
     write_minimal_bundle_sources(tmp_path)
     target_release = tmp_path / "target" / "release"
     target_release.mkdir(parents=True)
@@ -399,6 +407,40 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
             ).read_text(encoding="utf-8") == '{"source_fingerprint":"fresh"}\n'
     for binary_name in other_binaries:
         assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == binary_name
+        if Path(binary_name).name in {"sky-cua-client", "sky-cua-client.exe"}:
+            assert (bundle_root / "bin" / binary_name).with_name(
+                Path(binary_name).name + plugin_bundle.BUILD_STAMP_SUFFIX
+            ).read_text(encoding="utf-8") == '{"source_fingerprint":"preserved"}\n'
+
+
+def test_copytree_replace_preserving_platform_binaries_keeps_build_stamp_sidecars(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    destination_root = tmp_path / "installed"
+    source_root.mkdir()
+    destination_root.mkdir()
+    (source_root / "manifest.json").write_text('{"fresh":true}\n', encoding="utf-8")
+
+    preserved_path = destination_root / plugin_bundle.all_runtime_binary_paths()[0]
+    preserved_path.parent.mkdir(parents=True)
+    preserved_path.write_text("preserved binary", encoding="utf-8")
+    preserved_stamp = preserved_path.with_name(
+        preserved_path.name + plugin_bundle.BUILD_STAMP_SUFFIX
+    )
+    preserved_stamp.write_text('{"source_fingerprint":"preserved"}\n', encoding="utf-8")
+
+    plugin_bundle.copytree_replace_preserving_platform_binaries(source_root, destination_root)
+
+    restored_path = destination_root / plugin_bundle.all_runtime_binary_paths()[0]
+    assert (destination_root / "manifest.json").read_text(encoding="utf-8") == '{"fresh":true}\n'
+    assert restored_path.read_text(encoding="utf-8") == "preserved binary"
+    assert (
+        restored_path.with_name(restored_path.name + plugin_bundle.BUILD_STAMP_SUFFIX).read_text(
+            encoding="utf-8"
+        )
+        == '{"source_fingerprint":"preserved"}\n'
+    )
 
 
 def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(

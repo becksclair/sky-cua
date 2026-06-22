@@ -260,7 +260,7 @@ def copytree_replace(src: Path, dst: Path) -> None:
 def copytree_replace_preserving_platform_binaries(src: Path, dst: Path) -> None:
     preserved_root = dst.parent / f".{dst.name}.preserved-bin"
     remove_path(preserved_root)
-    preserved: list[tuple[str, Path]] = []
+    preserved: list[tuple[Path, Path, Path | None]] = []
     for relative_binary_path in all_runtime_binary_paths():
         source_binary = src / relative_binary_path
         destination_binary = dst / relative_binary_path
@@ -269,17 +269,30 @@ def copytree_replace_preserving_platform_binaries(src: Path, dst: Path) -> None:
         preserved_binary = preserved_root / relative_binary_path
         preserved_binary.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(destination_binary, preserved_binary)
-        preserved.append((relative_binary_path.as_posix(), preserved_binary))
+        destination_stamp = destination_binary.with_name(
+            destination_binary.name + BUILD_STAMP_SUFFIX
+        )
+        preserved_stamp = preserved_binary.with_name(preserved_binary.name + BUILD_STAMP_SUFFIX)
+        if destination_stamp.exists():
+            shutil.copy2(destination_stamp, preserved_stamp)
+        else:
+            preserved_stamp = None
+        preserved.append((relative_binary_path, preserved_binary, preserved_stamp))
 
     try:
         copytree_replace(src, dst)
-        for relative_binary_path, preserved_binary in preserved:
+        for relative_binary_path, preserved_binary, preserved_stamp in preserved:
             restored_binary = dst / relative_binary_path
             if restored_binary.exists():
                 continue
             restored_binary.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(preserved_binary, restored_binary)
-            if not relative_binary_path.endswith(".exe"):
+            restored_stamp = restored_binary.with_name(restored_binary.name + BUILD_STAMP_SUFFIX)
+            if preserved_stamp is not None:
+                shutil.copy2(preserved_stamp, restored_stamp)
+            else:
+                remove_path(restored_stamp)
+            if not relative_binary_path.name.endswith(".exe"):
                 ensure_executable(restored_binary)
     finally:
         remove_path(preserved_root)

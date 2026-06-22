@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress. Last verified: 2026-06-22.
+Shipped. Last verified: 2026-06-22.
 
 ## Summary
 
@@ -44,10 +44,10 @@ Canonical tools:
 ## Behavior
 
 The MCP registry is frozen during `initialize`; `tools/list` and `tools/call`
-share that registry, and old direct tool names are rejected as `UnknownTool`
-before service dispatch. Browser eval availability is also frozen in the MCP
-process and service daemon startup snapshot, so request-time environment
-changes cannot alter the advertised/callable contract.
+share that registry. Only advertised names are callable; any other name returns
+`UnknownTool` before service dispatch. Browser eval availability is also frozen
+in the MCP process and service daemon startup snapshot, so request-time
+environment changes cannot alter the advertised/callable contract.
 
 Installers persist only live launch policy fields through
 `mcp-launch-policy.json`: `SKY_CUA_BROWSER_EVAL` and
@@ -76,8 +76,8 @@ emitted into new host configs.
 - `uv run pytest`
 - `python3 scripts/build_plugin.py`
 - `python3 scripts/deploy_plugin.py --local-install-host opencode`
-- `python3 scripts/probe_mcp_tool_surface.py --installed` — 34 tools, old direct name rejected as `UnknownTool`
-- `SKY_CUA_BROWSER_EVAL=on python3 scripts/probe_mcp_tool_surface.py --installed` — 35 tools, old direct name rejected as `UnknownTool`
+- `python3 scripts/probe_mcp_tool_surface.py --installed` — exact 34-tool canonical surface
+- `SKY_CUA_BROWSER_EVAL=on python3 scripts/probe_mcp_tool_surface.py --installed` — exact 35-tool canonical surface
 - `python3 scripts/live_phone_use_smoke.py --profile adb-usb --serial emulator-5554 --installed` — 9 passed / 0 failed on `Pixel_9a`
 - `uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua ... --profile opencode-mcp --desktop-env KDE --wayland-display wayland-0 --sync-opencode-settings` — OpenCode Zenity and kdialog passed with action-tool evidence
 - `cargo test -p sky-cua-client`

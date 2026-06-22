@@ -8,10 +8,10 @@ Stages:
   2. codex-home - every agent codex-home config.toml parses and pins
               mcp_servers.sky_cua with an existing client binary.
   3. probe  - `openclaw mcp probe sky_cua --json`: OpenClaw spawns the server
-              and the required computer-use and browser-use tools are listed.
+              and the required grouped desktop/browser tools are listed.
   4. agent  - optional (--agent-turn): one live agent turn via
-              `openclaw agent --json` that must call sky_cua browser_status
-              and report structured evidence.
+              `openclaw agent --json` that must call sky_cua status for the
+              browser component and report structured evidence.
 
 Usage:
   python3 scripts/live_openclaw_mcp_smoke.py
@@ -38,7 +38,7 @@ from _openclaw_install import CODEX_TOOLS_APPROVAL_MODE
 
 SERVER_NAME = "sky_cua"
 SMOKE_REPORT_KEY = "sky_cua_smoke"
-AGENT_TURN_TOOL_NAME = f"{SERVER_NAME}__browser_status"
+AGENT_TURN_TOOL_NAME = f"{SERVER_NAME}__status"
 COMMAND_TIMEOUT_SECONDS = 60
 AGENT_TURN_TIMEOUT_SECONDS = 300
 TIMEOUT_RETURNCODE = 124
@@ -60,23 +60,22 @@ PROBE_RETRY_DELAY_SECONDS = 5
 # A deployment is only usable when both the desktop and browser surfaces are
 # advertised; this is the minimum contract an OpenClaw agent turn relies on.
 REQUIRED_TOOLS = (
-    f"{SERVER_NAME}__browser_status",
-    f"{SERVER_NAME}__browser_list_tabs",
-    f"{SERVER_NAME}__browser_open",
-    f"{SERVER_NAME}__browser_snapshot",
-    f"{SERVER_NAME}__browser_click",
     f"{SERVER_NAME}__doctor",
-    f"{SERVER_NAME}__list_apps",
-    f"{SERVER_NAME}__list_windows",
+    f"{SERVER_NAME}__status",
+    f"{SERVER_NAME}__list_resources",
+    f"{SERVER_NAME}__observe",
+    f"{SERVER_NAME}__capture_screen",
+    f"{SERVER_NAME}__browser_open",
+    f"{SERVER_NAME}__browser_input",
 )
 
 AGENT_TURN_PROMPT = (
     f"This is an automated sky-cua deployment smoke test. Call the MCP tool "
-    f"{SERVER_NAME}__browser_status (server {SERVER_NAME}, tool browser_status) "
-    f"with no arguments. Then reply with exactly one JSON object of the shape "
+    f"{SERVER_NAME}__status (server {SERVER_NAME}, tool status) with "
+    f'{{"component":"browser"}}. Then reply with exactly one JSON object of the shape '
     f'{{"{SMOKE_REPORT_KEY}": {{"tool_called": <bool>, '
     f'"tools_visible": <bool>, "error": <string or null>}}}} and no other '
-    f"text. Set tool_called to true only if the browser_status call actually "
+    f"text. Set tool_called to true only if the status(component=browser) call actually "
     f"executed and returned a result. Set tools_visible to true only if "
     f"{SERVER_NAME} tools are available to you this turn."
 )
@@ -307,21 +306,21 @@ def _dig_smoke_report(value: object) -> dict[str, Any] | None:
     return None
 
 
-def agent_turn_has_browser_status_tool_event(text: str) -> bool:
-    """Return True only when stdout contains browser_status result evidence."""
+def agent_turn_has_status_tool_event(text: str) -> bool:
+    """Return True only when stdout contains status(component=browser) result evidence."""
     _report, tool_result_seen = scan_agent_turn_stdout(text)
     return tool_result_seen
 
 
 def scan_agent_turn_stdout(text: str) -> tuple[dict[str, Any] | None, bool]:
     report: dict[str, Any] | None = None
-    browser_status_call_ids: set[str] = set()
+    status_call_ids: set[str] = set()
     tool_result_seen = False
     for line in text.splitlines():
         stripped = line.strip()
         if (
             (stripped.startswith("[tool result]") or stripped.startswith("[tool_result]"))
-            and _text_names_browser_status_tool(stripped)
+            and _text_names_status_tool(stripped)
             and _text_has_success_status(stripped)
         ):
             tool_result_seen = True
@@ -329,12 +328,12 @@ def scan_agent_turn_stdout(text: str) -> tuple[dict[str, Any] | None, bool]:
         found = _dig_smoke_report(candidate)
         if found is not None:
             report = found
-        if _has_browser_status_tool_result(candidate, browser_status_call_ids):
+        if _has_status_tool_result(candidate, status_call_ids):
             tool_result_seen = True
     return report, tool_result_seen
 
 
-def _has_browser_status_tool_result(value: object, call_ids: set[str]) -> bool:
+def _has_status_tool_result(value: object, call_ids: set[str]) -> bool:
     if isinstance(value, dict):
         if _record_has_successful_tool_summary(value):
             return True
@@ -355,26 +354,26 @@ def _has_browser_status_tool_result(value: object, call_ids: set[str]) -> bool:
                 if key in value:
                     child.setdefault(key, value[key])
             child.setdefault("sessionUpdate", "tool_result")
-            if _has_browser_status_tool_result(child, call_ids):
+            if _has_status_tool_result(child, call_ids):
                 return True
         is_tool_record = _is_tool_event_record(value)
-        names_browser_status = _record_directly_names_browser_status_tool(value)
+        names_status = _record_directly_names_status_tool(value)
         call_id = _record_tool_call_id(value)
-        if is_tool_record and names_browser_status and call_id is not None:
+        if is_tool_record and names_status and call_id is not None:
             call_ids.add(call_id)
-        matched_browser_status = is_tool_record and (
-            names_browser_status or (call_id is not None and call_id in call_ids)
+        matched_status = is_tool_record and (
+            names_status or (call_id is not None and call_id in call_ids)
         )
-        if matched_browser_status and _record_is_failed_tool_result(value):
+        if matched_status and _record_is_failed_tool_result(value):
             return False
-        if matched_browser_status:
+        if matched_status:
             if _record_is_implicit_tool_result(value) and _record_has_result_payload(value):
                 return True
             if _record_has_successful_tool_result(value) and _record_has_result_payload(value):
                 return True
-        return any(_has_browser_status_tool_result(child, call_ids) for child in value.values())
+        return any(_has_status_tool_result(child, call_ids) for child in value.values())
     if isinstance(value, list):
-        return any(_has_browser_status_tool_result(child, call_ids) for child in value)
+        return any(_has_status_tool_result(child, call_ids) for child in value)
     return False
 
 
@@ -439,10 +438,10 @@ def _normalized_tool_event_kind(value: str) -> str:
     return re.sub(r"[^a-z]", "", value.lower())
 
 
-def _record_directly_names_browser_status_tool(record: dict[str, Any]) -> bool:
+def _record_directly_names_status_tool(record: dict[str, Any]) -> bool:
     for key in ("name", "toolName", "tool_name", "tool", "title"):
         value = record.get(key)
-        if isinstance(value, str) and _text_names_browser_status_tool(value):
+        if isinstance(value, str) and _text_names_status_tool(value):
             return True
     return False
 
@@ -458,12 +457,15 @@ def _record_has_successful_tool_summary(record: dict[str, Any]) -> bool:
         return False
     tools = summary.get("tools")
     return isinstance(tools, list) and any(
-        isinstance(tool, str) and _text_names_browser_status_tool(tool) for tool in tools
+        isinstance(tool, str) and _text_names_status_tool(tool) for tool in tools
     )
 
 
-def _text_names_browser_status_tool(text: str) -> bool:
-    return AGENT_TURN_TOOL_NAME in text or (SERVER_NAME in text and "browser_status" in text)
+def _text_names_status_tool(text: str) -> bool:
+    if AGENT_TURN_TOOL_NAME in text:
+        return True
+    normalized = text.replace(".", "__")
+    return f"{SERVER_NAME}__status" in normalized
 
 
 def _text_has_success_status(text: str) -> bool:
@@ -487,7 +489,7 @@ def check_agent_report(report: dict[str, Any] | None) -> list[str]:
     if report.get("tool_called") is not True:
         error = report.get("error")
         detail = f" (agent error: {error})" if error else ""
-        failures.append(f"agent could not execute {SERVER_NAME}__browser_status{detail}")
+        failures.append(f"agent could not execute {AGENT_TURN_TOOL_NAME}{detail}")
     return failures
 
 

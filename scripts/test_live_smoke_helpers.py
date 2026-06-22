@@ -213,7 +213,7 @@ def test_agent_smoke_accepts_opencode_tool_use_event_shape() -> None:
     assert live_agent_mcp_smoke._tool_evidence_from_stdout_line(json.dumps(event)) is True
 
 
-def test_agent_smoke_accepts_canonical_action_tool_evidence(tmp_path: Path) -> None:
+def test_agent_smoke_accepts_grouped_action_tool_evidence(tmp_path: Path) -> None:
     stdout = tmp_path / "agent.stdout.log"
     stdout.write_text(
         json.dumps(
@@ -327,9 +327,12 @@ def test_opencode_neutral_cwd_gets_installed_project_config(
     )
 
 
-def test_pi_smoke_default_model_uses_openai_codex_auth() -> None:
-    assert _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL == "openai-codex/gpt-5.5"
+def test_pi_smoke_default_model_uses_opencode_go_auth() -> None:
+    assert _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL == "opencode-go/kimi-k2.7-code"
     assert "OPENAI_API_KEY" not in _agent_mcp_smoke.model_auth_environment_keys(
+        "pi", _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
+    )
+    assert "OPENCODE_API_KEY" in _agent_mcp_smoke.model_auth_environment_keys(
         "pi", _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
     )
 
@@ -471,6 +474,36 @@ def test_agent_smoke_accepts_pi_split_tool_start_and_end_events(tmp_path: Path) 
     assert live_agent_mcp_smoke._stdout_has_sky_cua_tool_evidence(stdout) is True
 
 
+def test_agent_smoke_accepts_pi_anonymous_split_action_events(tmp_path: Path) -> None:
+    stdout = tmp_path / "pi.stdout.log"
+    stdout.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "args": {"tool": "sky_cua_desktop_action"},
+                        "tool": "sky_cua_desktop_action",
+                        "toolName": "mcp",
+                        "type": "tool_execution_start",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "isError": False,
+                        "result": {"redacted": True},
+                        "toolName": "mcp",
+                        "type": "tool_execution_end",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(stdout) is True
+
+
 def test_agent_smoke_rejects_mismatched_split_tool_completion(tmp_path: Path) -> None:
     stdout = tmp_path / "pi.stdout.log"
     stdout.write_text(
@@ -487,6 +520,46 @@ def test_agent_smoke_rejects_mismatched_split_tool_completion(tmp_path: Path) ->
                     {
                         "result": {"redacted": True},
                         "toolCallId": "other",
+                        "type": "tool_execution_end",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(stdout) is False
+
+
+def test_agent_smoke_rejects_pi_failed_anonymous_action_before_success(
+    tmp_path: Path,
+) -> None:
+    stdout = tmp_path / "pi.stdout.log"
+    stdout.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "tool": "sky_cua_desktop_action",
+                        "toolName": "mcp",
+                        "type": "tool_execution_start",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "isError": False,
+                        "result": {"redacted": True},
+                        "result_declares_failure": True,
+                        "toolName": "mcp",
+                        "type": "tool_execution_end",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "isError": False,
+                        "result": {"redacted": True},
+                        "toolName": "mcp",
                         "type": "tool_execution_end",
                     }
                 ),
@@ -640,7 +713,7 @@ def test_openclaw_smoke_probe_requires_browser_and_desktop_tools() -> None:
         "diagnostics": [],
     }
     failures = live_openclaw_mcp_smoke.check_probe_result(missing_browser)
-    assert any("sky_cua__browser_status" in failure for failure in failures)
+    assert any("sky_cua__status" in failure for failure in failures)
 
     disconnected = {"servers": {}, "tools": [], "diagnostics": []}
     failures = live_openclaw_mcp_smoke.check_probe_result(disconnected)
@@ -660,14 +733,14 @@ def test_openclaw_smoke_extracts_agent_report_from_json_output() -> None:
     assert live_openclaw_mcp_smoke.extract_smoke_report("no structured output") is None
 
 
-def test_openclaw_smoke_detects_browser_status_tool_event() -> None:
+def test_openclaw_smoke_detects_status_tool_event() -> None:
     pending_event = json.dumps(
         {
             "type": "session_update",
             "update": {
                 "sessionUpdate": "tool_call",
                 "toolCallId": "tool-1",
-                "title": "sky_cua__browser_status",
+                "title": "sky_cua__status",
                 "status": "pending",
             },
         }
@@ -700,25 +773,25 @@ def test_openclaw_smoke_detects_browser_status_tool_event() -> None:
                 {
                     "sessionUpdate": "tool_call",
                     "toolCallId": "tool-2",
-                    "title": "sky_cua__browser_status",
+                    "title": "sky_cua__status",
                     "status": "pending",
                 }
             ],
         }
     )
 
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         "\n".join([pending_event, completed_event])
     )
-    assert live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         "\n".join([pending_event, result_event])
     )
-    assert live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         json.dumps(
             {
                 "message": {
                     "role": "toolResult",
-                    "toolName": "sky_cua__browser_status",
+                    "toolName": "sky_cua__status",
                     "toolCallId": "call-1",
                     "isError": False,
                     "content": [{"type": "toolResult", "text": "ok"}],
@@ -726,23 +799,23 @@ def test_openclaw_smoke_detects_browser_status_tool_event() -> None:
             }
         )
     )
-    assert live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         json.dumps(
             {
                 "type": "toolResult",
-                "toolName": "sky_cua__browser_status",
+                "toolName": "sky_cua__status",
                 "toolCallId": "call-1",
                 "isError": False,
                 "content": "ok",
             }
         )
     )
-    assert live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         json.dumps(
             {
                 "type": "tool.result",
                 "data": {
-                    "name": "sky_cua__browser_status",
+                    "name": "sky_cua__status",
                     "toolCallId": "call-1",
                     "status": "completed",
                     "output": "ok",
@@ -750,32 +823,32 @@ def test_openclaw_smoke_detects_browser_status_tool_event() -> None:
             }
         )
     )
-    assert live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         json.dumps(
             {
                 "type": "tool.result",
-                "toolName": "sky_cua__browser_status",
+                "toolName": "sky_cua__status",
                 "toolCallId": "call-1",
                 "data": {"output": "ok"},
             }
         )
     )
-    assert live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
-        "[tool result] sky_cua__browser_status (completed)\n"
+    assert live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
+        "[tool result] sky_cua__status (completed)\n"
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
-        "[tool result] sky_cua__browser_status failed before completed output\n"
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
+        "[tool result] sky_cua__status failed before completed output\n"
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
-        "[tool result] sky_cua__browser_status error: unsuccessful\n"
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
+        "[tool result] sky_cua__status error: unsuccessful\n"
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
-        "[tool result] sky_cua__browser_status not completed\n"
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
+        "[tool result] sky_cua__status not completed\n"
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
-        "[tool result] sky_cua__browser_status not ok\n"
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
+        "[tool result] sky_cua__status not ok\n"
     )
-    assert live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         json.dumps(
             {
                 "finalAssistantVisibleText": json.dumps(
@@ -785,23 +858,23 @@ def test_openclaw_smoke_detects_browser_status_tool_event() -> None:
                 "toolSummary": {
                     "calls": 1,
                     "failures": 0,
-                    "tools": ["sky_cua.browser_status"],
+                    "tools": ["sky_cua.status"],
                 },
             }
         )
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         json.dumps(
             {
                 "toolSummary": {
                     "calls": 0,
                     "failures": 0,
-                    "tools": ["sky_cua.browser_status"],
+                    "tools": ["sky_cua.status"],
                 }
             }
         )
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         json.dumps(
             {
                 "reply": {
@@ -809,28 +882,28 @@ def test_openclaw_smoke_detects_browser_status_tool_event() -> None:
                     "toolSummary": {
                         "calls": 1,
                         "failures": 0,
-                        "tools": ["sky_cua.browser_status"],
+                        "tools": ["sky_cua.status"],
                     },
                 }
             }
         )
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         json.dumps(
             {
                 "toolSummary": {
                     "calls": 1,
                     "failures": 1,
-                    "tools": ["sky_cua.browser_status"],
+                    "tools": ["sky_cua.status"],
                 }
             }
         )
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(pending_event)
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(pending_event)
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         pending_event.replace('"pending"', '"failed"')
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         completed_batch_with_pending_call
     )
 
@@ -842,7 +915,7 @@ def test_openclaw_smoke_detects_browser_status_tool_event() -> None:
                 {
                     "sessionUpdate": "tool_call",
                     "toolCallId": "tool-3",
-                    "title": "sky_cua__browser_status",
+                    "title": "sky_cua__status",
                     "status": "pending",
                 },
                 {
@@ -853,14 +926,14 @@ def test_openclaw_smoke_detects_browser_status_tool_event() -> None:
             ],
         }
     )
-    assert live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(
+    assert live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(
         failed_wrapper_with_successful_child
     )
 
     report_only = json.dumps(
         {"reply": {"sky_cua_smoke": {"tool_called": True, "tools_visible": True, "error": None}}}
     )
-    assert not live_openclaw_mcp_smoke.agent_turn_has_browser_status_tool_event(report_only)
+    assert not live_openclaw_mcp_smoke.agent_turn_has_status_tool_event(report_only)
 
 
 def test_opencode_agent_runner_preserves_status_and_redacts_stdout(
@@ -1032,9 +1105,7 @@ def test_openclaw_smoke_agent_turn_requires_tool_event(
 
     assert stage["ok"] is False
     assert stage["tool_result_seen"] is False
-    assert any(
-        "did not show a completed sky_cua__browser_status result" in failure for failure in failures
-    )
+    assert any("did not show a completed sky_cua__status result" in failure for failure in failures)
 
 
 def test_openclaw_smoke_agent_turn_accepts_tool_event_and_report(
@@ -1047,7 +1118,7 @@ def test_openclaw_smoke_agent_turn_accepts_tool_event_and_report(
         "update": {
             "sessionUpdate": "tool_call",
             "toolCallId": "tool-1",
-            "title": "sky_cua__browser_status",
+            "title": "sky_cua__status",
             "status": "pending",
         },
     }

@@ -236,14 +236,16 @@ fn phone_action_schemas_pin_required_fields() {
 
     let install = find_tool(&definitions, "phone_app_install");
     assert_eq!(install["inputSchema"]["required"], json!([]));
-    assert_eq!(
-        install["inputSchema"]["anyOf"][0]["required"],
-        json!(["apk_paths"])
-    );
-    assert_eq!(
-        install["inputSchema"]["anyOf"][1]["required"],
-        json!(["apk_path"])
-    );
+    let install_any_of = install["inputSchema"]["allOf"]
+        .as_array()
+        .and_then(|all_of| {
+            all_of
+                .iter()
+                .find_map(|constraint| constraint["anyOf"].as_array())
+        })
+        .expect("phone_app_install anyOf constraint");
+    assert_eq!(install_any_of[0]["required"], json!(["apk_paths"]));
+    assert_eq!(install_any_of[1]["required"], json!(["apk_path"]));
     assert_eq!(
         install["inputSchema"]["properties"]["mode"]["enum"],
         json!(["single", "multiple", "multi_package"])

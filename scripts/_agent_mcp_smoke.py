@@ -17,7 +17,7 @@ from _smoke_config import env_flag
 from deploy_freshness import assert_runtime_fresh, deployed_client_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PI_SMOKE_MODEL = "openai-codex/gpt-5.5"
+DEFAULT_PI_SMOKE_MODEL = "opencode-go/kimi-k2.7-code"
 TOOL_FAILURE_STATUSES = {"canceled", "cancelled", "error", "failed", "failure", "timeout"}
 RESULT_PAYLOAD_KEYS = (
     "result",

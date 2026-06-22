@@ -214,103 +214,114 @@
       "content_policy": "canonical_rewrite",
       "input_schema": {
         "additionalProperties": false,
-        "oneOf": [
+        "allOf": [
           {
-            "properties": {
-              "resource": {
-                "const": "apps"
+            "oneOf": [
+              {
+                "properties": {
+                  "resource": {
+                    "const": "apps"
+                  },
+                  "surface": {
+                    "const": "desktop"
+                  }
+                },
+                "required": [
+                  "surface",
+                  "resource"
+                ],
+                "type": "object"
               },
-              "surface": {
-                "const": "desktop"
-              }
-            },
-            "required": [
-              "surface",
-              "resource"
-            ]
-          },
-          {
-            "properties": {
-              "resource": {
-                "const": "windows"
+              {
+                "properties": {
+                  "resource": {
+                    "const": "windows"
+                  },
+                  "surface": {
+                    "const": "desktop"
+                  }
+                },
+                "required": [
+                  "surface",
+                  "resource"
+                ],
+                "type": "object"
               },
-              "surface": {
-                "const": "desktop"
-              }
-            },
-            "required": [
-              "surface",
-              "resource"
-            ]
-          },
-          {
-            "properties": {
-              "resource": {
-                "const": "focused_window"
+              {
+                "properties": {
+                  "resource": {
+                    "const": "focused_window"
+                  },
+                  "surface": {
+                    "const": "desktop"
+                  }
+                },
+                "required": [
+                  "surface",
+                  "resource"
+                ],
+                "type": "object"
               },
-              "surface": {
-                "const": "desktop"
-              }
-            },
-            "required": [
-              "surface",
-              "resource"
-            ]
-          },
-          {
-            "properties": {
-              "resource": {
-                "const": "tabs"
+              {
+                "properties": {
+                  "resource": {
+                    "const": "tabs"
+                  },
+                  "surface": {
+                    "const": "browser"
+                  }
+                },
+                "required": [
+                  "surface",
+                  "resource"
+                ],
+                "type": "object"
               },
-              "surface": {
-                "const": "browser"
-              }
-            },
-            "required": [
-              "surface",
-              "resource"
-            ]
-          },
-          {
-            "properties": {
-              "resource": {
-                "const": "devices"
+              {
+                "properties": {
+                  "resource": {
+                    "const": "devices"
+                  },
+                  "surface": {
+                    "const": "phone"
+                  }
+                },
+                "required": [
+                  "surface",
+                  "resource"
+                ],
+                "type": "object"
               },
-              "surface": {
-                "const": "phone"
-              }
-            },
-            "required": [
-              "surface",
-              "resource"
-            ]
-          },
-          {
-            "properties": {
-              "resource": {
-                "const": "apps"
+              {
+                "properties": {
+                  "resource": {
+                    "const": "apps"
+                  },
+                  "surface": {
+                    "const": "phone"
+                  }
+                },
+                "required": [
+                  "surface",
+                  "resource"
+                ],
+                "type": "object"
               },
-              "surface": {
-                "const": "phone"
+              {
+                "properties": {
+                  "resource": {
+                    "const": "current_app"
+                  },
+                  "surface": {
+                    "const": "phone"
+                  }
+                },
+                "required": [
+                  "surface",
+                  "resource"
+                ],
+                "type": "object"
               }
-            },
-            "required": [
-              "surface",
-              "resource"
-            ]
-          },
-          {
-            "properties": {
-              "resource": {
-                "const": "current_app"
-              },
-              "surface": {
-                "const": "phone"
-              }
-            },
-            "required": [
-              "surface",
-              "resource"
             ]
           }
         ],
@@ -1130,28 +1141,36 @@
       "content_policy": "canonical_rewrite",
       "input_schema": {
         "additionalProperties": false,
-        "anyOf": [
+        "allOf": [
           {
-            "required": [
-              "snapshot_id",
-              "element_index"
-            ]
-          },
-          {
-            "required": [
-              "element_identifier"
-            ]
-          },
-          {
-            "required": [
-              "snapshot_id",
-              "name"
-            ]
-          },
-          {
-            "required": [
-              "snapshot_id",
-              "text"
+            "anyOf": [
+              {
+                "required": [
+                  "snapshot_id",
+                  "element_index"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "element_identifier"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "snapshot_id",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "snapshot_id",
+                  "text"
+                ],
+                "type": "object"
+              }
             ]
           }
         ],
@@ -1636,28 +1655,36 @@
       "content_policy": "canonical_rewrite",
       "input_schema": {
         "additionalProperties": false,
-        "anyOf": [
+        "allOf": [
           {
-            "required": [
-              "snapshot_id",
-              "element_index"
-            ]
-          },
-          {
-            "required": [
-              "element_identifier"
-            ]
-          },
-          {
-            "required": [
-              "snapshot_id",
-              "name"
-            ]
-          },
-          {
-            "required": [
-              "snapshot_id",
-              "text"
+            "anyOf": [
+              {
+                "required": [
+                  "snapshot_id",
+                  "element_index"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "element_identifier"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "snapshot_id",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "snapshot_id",
+                  "text"
+                ],
+                "type": "object"
+              }
             ]
           }
         ],
@@ -1729,23 +1756,30 @@
       "content_policy": "canonical_rewrite",
       "input_schema": {
         "additionalProperties": false,
-        "anyOf": [
+        "allOf": [
           {
-            "required": [
-              "snapshot_id",
-              "element_index"
-            ]
-          },
-          {
-            "required": [
-              "snapshot_id",
-              "name"
-            ]
-          },
-          {
-            "required": [
-              "snapshot_id",
-              "text"
+            "anyOf": [
+              {
+                "required": [
+                  "snapshot_id",
+                  "element_index"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "snapshot_id",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "snapshot_id",
+                  "text"
+                ],
+                "type": "object"
+              }
             ]
           }
         ],
@@ -2520,28 +2554,36 @@
       "content_policy": "canonical_rewrite",
       "input_schema": {
         "additionalProperties": false,
-        "anyOf": [
+        "allOf": [
           {
-            "required": [
-              "snapshot_id",
-              "element_index"
-            ]
-          },
-          {
-            "required": [
-              "element_identifier"
-            ]
-          },
-          {
-            "required": [
-              "snapshot_id",
-              "name"
-            ]
-          },
-          {
-            "required": [
-              "snapshot_id",
-              "text"
+            "anyOf": [
+              {
+                "required": [
+                  "snapshot_id",
+                  "element_index"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "element_identifier"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "snapshot_id",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "snapshot_id",
+                  "text"
+                ],
+                "type": "object"
+              }
             ]
           }
         ],
@@ -3447,15 +3489,21 @@
       "content_policy": "canonical_rewrite",
       "input_schema": {
         "additionalProperties": false,
-        "anyOf": [
+        "allOf": [
           {
-            "required": [
-              "apk_paths"
-            ]
-          },
-          {
-            "required": [
-              "apk_path"
+            "anyOf": [
+              {
+                "required": [
+                  "apk_paths"
+                ],
+                "type": "object"
+              },
+              {
+                "required": [
+                  "apk_path"
+                ],
+                "type": "object"
+              }
             ]
           }
         ],

@@ -128,8 +128,13 @@ enabled = false
 After cleanup, rerun `python3 scripts/deploy_plugin.py`. The cheap
 control-plane proof is `codex mcp list --json` or `mcpServerStatus/list`
 through `codex app-server`; it should show one `computer-use` server with tools
-such as `list_apps`, `get_app_state`, `click`, `scroll`, `type_text`, and
-`doctor`.
+such as `doctor`, `status`, `list_resources`, `observe`, `capture_desktop`,
+`desktop_pointer`, `desktop_keyboard`, `browser_input`, and `phone_connection`.
+For an exact contract check, run:
+
+```bash
+python3 scripts/probe_mcp_tool_surface.py --installed
+```
 
 ## Verification
 

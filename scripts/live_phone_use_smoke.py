@@ -359,7 +359,7 @@ def first_reply_action(event: dict[str, Any]) -> str | None:
     actions = event.get("actions")
     if isinstance(actions, list):
         for action in actions:
-            if isinstance(action, dict) and action.get("is_reply") is True:
+            if isinstance(action, dict) and action.get("supports_inline_reply") is True:
                 action_id = action.get("action_id")
                 if isinstance(action_id, str) and action_id:
                     return action_id

@@ -7,6 +7,16 @@ if ! command -v pi >/dev/null; then
 	printf 'pi is not installed in the testing VM\n' >&2
 	exit 66
 fi
+missing_fixtures=()
+for fixture in zenity kdialog; do
+	if ! command -v "${fixture}" >/dev/null 2>&1; then
+		missing_fixtures+=("${fixture}")
+	fi
+done
+if (( ${#missing_fixtures[@]} > 0 )); then
+	printf 'Required dialog fixture(s) missing in testing VM: %s\n' "${missing_fixtures[*]}" >&2
+	exit 67
+fi
 
 remote_root="/workspace"
 target_dir="${HOME}/.local/share/sky-cua"
@@ -23,6 +33,7 @@ fi
 python3 "${remote_root}/scripts/install_mcp_server.py" \
 	--host pi \
 	--target-dir "${target_dir}" \
+	--restart-runtime \
 	"${install_policy_args[@]}"
 
 # Merge the generated pi_mcp.json into Pi's mcp.json
@@ -47,6 +58,7 @@ with open('${pi_mcp}', 'w') as f:
 else
 	cp "${target_dir}/pi_mcp.json" "${pi_mcp}"
 fi
+rm -f "${HOME}/.pi/agent/mcp-cache.json"
 
 # Deploy sky-cua skills for Pi
 mkdir -p "${HOME}/.pi/agent/skills"
@@ -57,9 +69,5 @@ done
 
 # Run smoke tests across available fixtures
 for fixture in zenity kdialog; do
-	if command -v "${fixture}" >/dev/null 2>&1; then
-		python3 "${remote_root}/scripts/live_agent_mcp_smoke.py" --agent pi --fixture "${fixture}" || exit 1
-	else
-		printf 'Skipping %s fixture: not installed in this VM\n' "${fixture}"
-	fi
+	python3 "${remote_root}/scripts/live_agent_mcp_smoke.py" --agent pi --fixture "${fixture}" || exit 1
 done

@@ -918,15 +918,15 @@ def test_first_reply_action_finds_reply() -> None:
     event = {
         "event_id": "e1",
         "actions": [
-            {"action_id": "open", "is_reply": False},
-            {"action_id": "reply", "is_reply": True},
+            {"action_id": "open", "supports_inline_reply": False},
+            {"action_id": "reply", "supports_inline_reply": True},
         ],
     }
     assert smoke.first_reply_action(event) == "reply"
 
 
 def test_first_reply_action_none_without_reply() -> None:
-    event = {"event_id": "e1", "actions": [{"action_id": "open", "is_reply": False}]}
+    event = {"event_id": "e1", "actions": [{"action_id": "open", "supports_inline_reply": False}]}
     assert smoke.first_reply_action(event) is None
 
 
@@ -979,8 +979,8 @@ def test_profile_companion_runs_notification_steps(
         "can_open": True,
         "can_dismiss": True,
         "actions": [
-            {"action_id": "act-1", "is_reply": False},
-            {"action_id": "reply-1", "is_reply": True},
+            {"action_id": "act-1", "supports_inline_reply": False},
+            {"action_id": "reply-1", "supports_inline_reply": True},
         ],
     }
     driver, _ = make_smoke(

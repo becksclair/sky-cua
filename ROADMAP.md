@@ -20,7 +20,7 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Windows power-request inhibition backend (verified live on the
         devbox VM; display inhibition untestable over SSH)
 - [x] KWin and X11 workspace metadata — [`docs/features/kwin-x11-workspace-metadata.md`](docs/features/kwin-x11-workspace-metadata.md)
-  - [ ] Capture a dedicated `list_windows` workspace artifact on real KWin and X11
+  - [ ] Capture a dedicated `list_resources(surface="desktop", resource="windows")` workspace artifact on real KWin and X11
 - [x] KWin window targeting (focused_window + verified activation via KWin scripting) — [`docs/features/kwin-window-targeting.md`](docs/features/kwin-window-targeting.md)
 - [x] Linux virtual input (`LinuxVirtualInput` backend) — [`docs/features/linux-virtual-input.md`](docs/features/linux-virtual-input.md)
   - [ ] Privileged helper fast path for Wayland input — [`plans/privileged_linux_uinput_helper.md`](plans/privileged_linux_uinput_helper.md)
@@ -73,10 +73,10 @@ Open boxes link to the active ExecPlan that owns the work.
         host smoke passed on the canonical surface
   - [ ] Broader cross-desktop VM matrix remains a release gate for
         display-specific runtime changes
-- [x] Agent-agnostic screenshot delivery (browser MCP image blocks + persisted capture paths, `get_app_state screenshot_delivery: inline`, one CSS-pixel browser coordinate space) — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
+- [x] Agent-agnostic screenshot delivery (browser MCP image blocks + persisted capture paths, `observe(surface="desktop", screenshot_delivery="inline")`, one CSS-pixel browser coordinate space) — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [ ] Re-run the VM smoke matrix for the CSS-pixel browser contract (only the live KDE host is verified so far)
 - [x] Display-targeted desktop screenshots (primary-display default, explicit display/window/all-displays capture, and snapshot coordinate remapping) — [`docs/features/display-targeted-screenshots.md`](docs/features/display-targeted-screenshots.md)
-  - [x] `get_app_state` visual attachment now prefers focused/selected window crops, falls back only to target/primary display scopes, and exposes `inspection_image_path` for visual inspection
+  - [x] Desktop observation visual attachment now prefers focused/selected window crops, falls back only to target/primary display scopes, and exposes `inspection_image_path` for visual inspection
 - [x] First-class browser MCP tools for `user_chrome` — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [x] Explicit host opt-in gate for OpenCode/Pi, with Codex Desktop kept on the companion Browser Use path
   - [x] Real user-tab listing, session-owned tab creation, existing-tab claiming, and Brave/Chrome/Chromium socket selection
@@ -157,9 +157,10 @@ notifications) and optional scrcpy acceleration.
 - [x] Phase 3 snapshots, coordinate mapping, cursor planes (source landed)
 - [x] Phase 4 Android companion backend host + RPC contract (Rust host and
       `docs/runtime/phone-companion-protocol.md` landed). Live proof achieved on
-      the API-36 emulator 2026-06-20: `phone_connect` auto-installs the companion,
+      the API-36 emulator 2026-06-20: `phone_connection(operation="connect")`
+      auto-installs the companion,
       enables its accessibility + notification-listener services, brings up the
-      RPC server, and serves `phone_observe`/accessibility-tree/screenshot through
+      RPC server, and serves `observe(surface="phone")`/accessibility-tree/screenshot through
       `backend=companion`. Three live-only bugs were fixed to get there: the
       expected signing cert is now loaded from the bundled metadata sidecar (it
       was never read, so the signature gate refused every companion); an
@@ -176,15 +177,16 @@ notifications) and optional scrcpy acceleration.
       around model-facing captures. The host-desktop phone-cursor draw
       (`host_cursor_state`/`HostCursorDraw`) was removed. Live proof on the
       API-36 emulator 2026-06-20: the cursor + edge glow render on-device in a
-      companion-backed `phone_observe` capture
+      companion-backed `observe(surface="phone")` capture
 - [x] Phase 5 scrcpy acceleration + host-visible overlay (source landed; live
       proof pending). Mid-session crash detection (2s watchdog downgrades the
       capability and hides the host overlay), remap-on-window-resize, and
       explicit-serial window adoption are implemented in source; live-smoke
       proof of these scrcpy paths remains pending.
-- [ ] Phase 6 packaging, `skills/phone-use`, docs, installed MCP proof
-      (skill, docs, and bundling landed — [`docs/features/phone-use.md`](docs/features/phone-use.md);
-      installed-MCP `tools/list` proof pending). Install-bearing bootstrap now
+- [x] Phase 6 packaging, `skills/phone-use`, docs, installed MCP proof
+      (skill, docs, bundling, canonical installed `tools/list` proof, and the
+      installed ADB-baseline phone smoke landed — [`docs/features/phone-use.md`](docs/features/phone-use.md)).
+      Install-bearing bootstrap now
       auto-enables the companion's accessibility + notification-listener services
       over ADB (read-merge-write of `enabled_accessibility_services` + global
       flag; `cmd notification allow_listener` for the listener), verifies via the
@@ -250,7 +252,7 @@ pick them off between feature work.
     candidate app (N+1)
   - `matched_x11_window_for_request` re-runs X11 window discovery on every
     action request
-  - `linux_fallback_snapshot` re-discovers X11 windows after `get_app_state`
+  - `linux_fallback_snapshot` re-discovers X11 windows after desktop observation
     already fetched them
 - [ ] Replace the 10 ms busy-poll in `command_output_with_timeout` with
       exponential backoff or `tokio::process::Command` + `tokio::time::timeout`
