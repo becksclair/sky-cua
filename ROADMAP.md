@@ -68,6 +68,9 @@ Open boxes link to the active ExecPlan that owns the work.
 - [x] Codex Desktop compatibility (one active `computer-use` server, Browser Use companion, native-host preflight) — [`docs/features/codex-desktop-compat.md`](docs/features/codex-desktop-compat.md)
 - [x] OpenCode/Pi MCP host smoke parity
 - [x] Claude Code host support (plugin manifest + marketplace, `--host claude-code` installer, `~/.claude/skills` sync, `~/.claude/settings.json` deny-built-in-computer-use + auto-approve sky-cua) — [`docs/features/claude-code-host.md`](docs/features/claude-code-host.md)
+- [ ] Compact MCP tool surface profiles — [`plans/compact_mcp_tool_surface.md`](plans/compact_mcp_tool_surface.md)
+  - [ ] Future compact-by-default installer rollout, after opt-in compact has
+        installed-host proof and persisted upgrade semantics
 - [x] Agent-agnostic screenshot delivery (browser MCP image blocks + persisted capture paths, `get_app_state screenshot_delivery: inline`, one CSS-pixel browser coordinate space) — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [ ] Re-run the VM smoke matrix for the CSS-pixel browser contract (only the live KDE host is verified so far)
 - [x] Display-targeted desktop screenshots (primary-display default, explicit display/window/all-displays capture, and snapshot coordinate remapping) — [`docs/features/display-targeted-screenshots.md`](docs/features/display-targeted-screenshots.md)
