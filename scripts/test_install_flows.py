@@ -522,6 +522,63 @@ def test_bundle_mode_generic_mcp_config_pins_bundle_resource_root(
     assert (resource_root / "resources" / "app-instructions" / "index.json").exists()
 
 
+def test_mcp_launch_policy_uses_cli_persisted_env_default_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    (target_dir / install_mcp_server.MCP_LAUNCH_POLICY_STATE).write_text(
+        json.dumps(
+            {
+                "tool_profile": "compact",
+                "browser_eval": "on",
+                "model_supports_images": "false",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(install_mcp_server.MCP_TOOL_PROFILE_ENV, "legacy")
+    monkeypatch.setenv(install_mcp_server.MCP_BROWSER_EVAL_ENV, "off")
+    monkeypatch.setenv(install_mcp_server.MCP_MODEL_SUPPORTS_IMAGES_ENV, "true")
+
+    policy = install_mcp_server.resolve_mcp_launch_policy(
+        target_dir,
+        browser_eval="off",
+    )
+
+    assert policy.tool_profile == "compact"
+    assert policy.browser_eval == "off"
+    assert policy.model_supports_images == "false"
+
+
+def test_mcp_launch_policy_rejects_invalid_recognized_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(install_mcp_server.MCP_TOOL_PROFILE_ENV, "tiny")
+
+    with pytest.raises(ValueError, match="SKY_CUA_MCP_TOOL_PROFILE"):
+        install_mcp_server.resolve_mcp_launch_policy(tmp_path / "installed")
+
+
+def test_generic_mcp_config_pins_compact_launch_policy(tmp_path: Path) -> None:
+    target_dir = tmp_path / "installed"
+    client_path = target_dir / "bin" / "sky-cua-client"
+    policy = install_mcp_server.McpLaunchPolicy(
+        tool_profile="compact",
+        browser_eval="on",
+        model_supports_images="false",
+    )
+
+    config = install_mcp_server.generate_mcp_config(client_path, target_dir, launch_policy=policy)
+    server = config["mcpServers"]["computer-use"]  # type: ignore[index]
+
+    assert server["env"][install_mcp_server.MCP_TOOL_PROFILE_ENV] == "compact"  # type: ignore[index]
+    assert server["env"][install_mcp_server.MCP_BROWSER_EVAL_ENV] == "on"  # type: ignore[index]
+    assert server["env"][install_mcp_server.MCP_MODEL_SUPPORTS_IMAGES_ENV] == "false"  # type: ignore[index]
+    for name in install_mcp_server.RECOGNIZED_MCP_LAUNCH_ENV:
+        assert name in server["env_vars"]  # type: ignore[operator]
+
+
 def test_codex_exec_plugin_mention_rejects_stale_compat_root(tmp_path: Path) -> None:
     codex_home = tmp_path / "codex-home"
     latest = codex_home / "plugins" / "cache" / "openai-bundled" / "computer-use" / "latest"
@@ -731,9 +788,11 @@ def test_install_local_mcp_server_threads_claude_config_dir(
         client: Path,
         claude_config_dir: Path | None = None,
         resource_root: Path | None = None,
+        launch_policy: install_mcp_server.McpLaunchPolicy | None = None,
     ) -> Path:
         received["claude_config_dir"] = claude_config_dir
         received["resource_root"] = resource_root
+        received["launch_policy"] = launch_policy
         return target_dir / "claude_code_mcp.json"
 
     monkeypatch.setattr(install_mcp_server, "install_claude_code", spy)
@@ -745,6 +804,7 @@ def test_install_local_mcp_server_threads_claude_config_dir(
 
     assert received["claude_config_dir"] == config_dir
     assert received["resource_root"] == _install_shared.REPO_ROOT.resolve()
+    assert isinstance(received["launch_policy"], install_mcp_server.McpLaunchPolicy)
 
 
 def test_machine_config_seeding_writes_and_updates_browser(
@@ -894,13 +954,20 @@ def test_generic_mcp_main_can_install_openclaw_host(
         ],
     )
     monkeypatch.setattr(install_mcp_server, "install_binaries", lambda _target_dir: client_path)
-    monkeypatch.setattr(
-        install_mcp_server,
-        "install_openclaw",
-        lambda target, client, openclaw_dir, openclaw_bin="openclaw", resource_root=None: (
-            installed.append((target, client, openclaw_dir)) or target / "openclaw_mcp.json"
-        ),
-    )
+
+    def fake_install_openclaw(
+        target: Path,
+        client: Path,
+        openclaw_dir: Path,
+        openclaw_bin: str = "openclaw",
+        resource_root: Path | None = None,
+        launch_env: dict[str, str] | None = None,
+    ) -> Path:
+        _ = openclaw_bin, resource_root, launch_env
+        installed.append((target, client, openclaw_dir))
+        return target / "openclaw_mcp.json"
+
+    monkeypatch.setattr(install_mcp_server, "install_openclaw", fake_install_openclaw)
     monkeypatch.setattr(install_mcp_server, "print_next_steps", lambda *_args: None)
 
     assert install_mcp_server.main() == 0

@@ -27,6 +27,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import _install_shared
@@ -68,10 +69,158 @@ CLAUDE_MCP_ADD_TIMEOUT_SECONDS = 30
 CLAUDE_CODE_DENY_RULES = ("mcp__computer-use", "mcp__computer-use__*")
 CLAUDE_CODE_ALLOW_RULES = ("mcp__sky-cua", "mcp__sky-cua__*")
 AT_SPI_RESTART_TIMEOUT_SECONDS = 5
+MCP_TOOL_PROFILE_ENV = "SKY_CUA_MCP_TOOL_PROFILE"
+MCP_BROWSER_EVAL_ENV = "SKY_CUA_BROWSER_EVAL"
+MCP_MODEL_SUPPORTS_IMAGES_ENV = "SKY_CUA_MODEL_SUPPORTS_IMAGES"
+MCP_LAUNCH_POLICY_STATE = "mcp-launch-policy.json"
+RECOGNIZED_MCP_LAUNCH_ENV = (
+    MCP_TOOL_PROFILE_ENV,
+    MCP_BROWSER_EVAL_ENV,
+    MCP_MODEL_SUPPORTS_IMAGES_ENV,
+)
+
+
+@dataclass(frozen=True)
+class McpLaunchPolicy:
+    tool_profile: str = "legacy"
+    browser_eval: str | None = None
+    model_supports_images: str | None = None
+
+    def env(self) -> dict[str, str]:
+        env = {MCP_TOOL_PROFILE_ENV: self.tool_profile}
+        if self.browser_eval is not None:
+            env[MCP_BROWSER_EVAL_ENV] = self.browser_eval
+        if self.model_supports_images is not None:
+            env[MCP_MODEL_SUPPORTS_IMAGES_ENV] = self.model_supports_images
+        return env
 
 
 def current_platform() -> str:
     return current_runtime_platform()
+
+
+def normalize_tool_profile(value: str, *, source: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"legacy", "compact"}:
+        return normalized
+    raise ValueError(f"{source} must be 'legacy' or 'compact', got {value!r}")
+
+
+def normalize_on_off(value: str, *, source: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return "on"
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return "off"
+    raise ValueError(f"{source} must be an on/off boolean, got {value!r}")
+
+
+def normalize_true_false(value: str, *, source: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on", "supported", "enabled"}:
+        return "true"
+    if normalized in {"0", "false", "no", "off", "unsupported", "disabled"}:
+        return "false"
+    raise ValueError(f"{source} must be a true/false boolean, got {value!r}")
+
+
+def load_persisted_mcp_launch_policy(target_dir: Path) -> McpLaunchPolicy | None:
+    path = target_dir / MCP_LAUNCH_POLICY_STATE
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid persisted MCP launch policy {path}: {error}") from error
+    if not isinstance(raw, dict):
+        raise ValueError(f"persisted MCP launch policy must be a JSON object: {path}")
+    return McpLaunchPolicy(
+        tool_profile=normalize_tool_profile(
+            str(raw.get("tool_profile", "legacy")), source=f"{path}:tool_profile"
+        ),
+        browser_eval=(
+            normalize_on_off(str(raw["browser_eval"]), source=f"{path}:browser_eval")
+            if raw.get("browser_eval") is not None
+            else None
+        ),
+        model_supports_images=(
+            normalize_true_false(
+                str(raw["model_supports_images"]), source=f"{path}:model_supports_images"
+            )
+            if raw.get("model_supports_images") is not None
+            else None
+        ),
+    )
+
+
+def resolve_mcp_launch_policy(
+    target_dir: Path,
+    *,
+    tool_profile: str | None = None,
+    browser_eval: str | None = None,
+    model_supports_images: str | None = None,
+    environ: dict[str, str] | None = None,
+) -> McpLaunchPolicy:
+    """Resolve launch policy per field: CLI, persisted state, env, defaults."""
+    env = os.environ if environ is None else environ
+    persisted = load_persisted_mcp_launch_policy(target_dir)
+
+    env_tool_profile = (
+        normalize_tool_profile(env[MCP_TOOL_PROFILE_ENV], source=MCP_TOOL_PROFILE_ENV)
+        if MCP_TOOL_PROFILE_ENV in env
+        else None
+    )
+    env_browser_eval = (
+        normalize_on_off(env[MCP_BROWSER_EVAL_ENV], source=MCP_BROWSER_EVAL_ENV)
+        if MCP_BROWSER_EVAL_ENV in env
+        else None
+    )
+    env_model_supports_images = (
+        normalize_true_false(
+            env[MCP_MODEL_SUPPORTS_IMAGES_ENV], source=MCP_MODEL_SUPPORTS_IMAGES_ENV
+        )
+        if MCP_MODEL_SUPPORTS_IMAGES_ENV in env
+        else None
+    )
+
+    return McpLaunchPolicy(
+        tool_profile=(
+            normalize_tool_profile(tool_profile, source="--mcp-tool-profile")
+            if tool_profile is not None
+            else (
+                persisted.tool_profile if persisted is not None else (env_tool_profile or "legacy")
+            )
+        ),
+        browser_eval=(
+            normalize_on_off(browser_eval, source="--browser-eval")
+            if browser_eval is not None
+            else (
+                persisted.browser_eval
+                if persisted is not None and persisted.browser_eval is not None
+                else env_browser_eval
+            )
+        ),
+        model_supports_images=(
+            normalize_true_false(model_supports_images, source="--model-supports-images")
+            if model_supports_images is not None
+            else (
+                persisted.model_supports_images
+                if persisted is not None and persisted.model_supports_images is not None
+                else env_model_supports_images
+            )
+        ),
+    )
+
+
+def write_mcp_launch_policy_state(target_dir: Path, policy: McpLaunchPolicy) -> Path:
+    path = target_dir / MCP_LAUNCH_POLICY_STATE
+    payload = {
+        "tool_profile": policy.tool_profile,
+        "browser_eval": policy.browser_eval,
+        "model_supports_images": policy.model_supports_images,
+    }
+    write_text_atomically(path, json.dumps(payload, indent=2) + "\n")
+    return path
 
 
 def entrypoint_path(platform_id: str, name: str) -> Path:
@@ -184,9 +333,11 @@ def generate_mcp_config(
     client_path: Path,
     target_dir: Path,
     resource_root: Path | None = None,
+    launch_policy: McpLaunchPolicy | None = None,
 ) -> dict[str, object]:
     """Build an MCP server config dict with absolute paths."""
     root = runtime_resource_root(resource_root)
+    policy = launch_policy or McpLaunchPolicy()
     return {
         "mcpServers": {
             "computer-use": {
@@ -194,6 +345,7 @@ def generate_mcp_config(
                 "args": ["mcp"],
                 "env": {
                     "SKY_CUA_REPO_ROOT": str(root),
+                    **policy.env(),
                 },
                 "env_vars": [
                     "CODEX_COMPUTER_USE_COSMIC_HELPER",
@@ -202,14 +354,17 @@ def generate_mcp_config(
                     "DISPLAY",
                     "SKY_CUA_AGENT_CURSOR",
                     BROWSER_SELECTION_ENV,
+                    MCP_BROWSER_EVAL_ENV,
                     "SKY_CUA_COSMIC_HELPER",
                     "SKY_CUA_INPUT_BACKEND",
                     "SKY_CUA_INPUT_HELPER_SOCKET",
+                    MCP_MODEL_SUPPORTS_IMAGES_ENV,
                     "SKY_CUA_MODEL_SCREENSHOT_FORMAT",
                     "SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY",
                     "SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT",
                     "SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH",
                     "SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY",
+                    MCP_TOOL_PROFILE_ENV,
                     "SKY_CUA_OVERLAY_BACKEND",
                     "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE",
                     "SKY_CUA_OVERLAY_HOST_PATH",
@@ -258,9 +413,11 @@ def install_opencode(
     target_dir: Path,
     client_path: Path,
     resource_root: Path | None = None,
+    launch_policy: McpLaunchPolicy | None = None,
 ) -> Path:
     """Update or create opencode.json in the target directory."""
     root = runtime_resource_root(resource_root)
+    policy = launch_policy or McpLaunchPolicy()
     opencode_config: dict[str, object] = {
         "$schema": "https://opencode.ai/config.json",
         "mcp": {
@@ -269,6 +426,7 @@ def install_opencode(
                 "command": [str(client_path), "mcp"],
                 "environment": {
                     "SKY_CUA_REPO_ROOT": str(root),
+                    **policy.env(),
                 },
                 "enabled": True,
                 "timeout": 30000,
@@ -285,9 +443,11 @@ def install_claude_desktop(
     target_dir: Path,
     client_path: Path,
     resource_root: Path | None = None,
+    launch_policy: McpLaunchPolicy | None = None,
 ) -> Path:
     """Emit a Claude Desktop config snippet and print instructions."""
     root = runtime_resource_root(resource_root)
+    policy = launch_policy or McpLaunchPolicy()
     snippet: dict[str, object] = {
         "mcpServers": {
             "computer-use": {
@@ -295,6 +455,7 @@ def install_claude_desktop(
                 "args": ["mcp"],
                 "env": {
                     "SKY_CUA_REPO_ROOT": str(root),
+                    **policy.env(),
                 },
             }
         }
@@ -310,6 +471,7 @@ def install_claude_code(
     client_path: Path,
     claude_config_dir: Path | None = None,
     resource_root: Path | None = None,
+    launch_policy: McpLaunchPolicy | None = None,
 ) -> Path:
     """Register sky-cua with Claude Code and copy skills into ~/.claude/skills.
 
@@ -317,12 +479,14 @@ def install_claude_code(
     config only pins SKY_CUA_REPO_ROOT plus any explicit browser selection.
     """
     root = runtime_resource_root(resource_root)
+    policy = launch_policy or McpLaunchPolicy()
     server: dict[str, object] = {
         "type": "stdio",
         "command": str(client_path),
         "args": ["mcp"],
         "env": {
             "SKY_CUA_REPO_ROOT": str(root),
+            **policy.env(),
         },
     }
     # Claude Code reserves the MCP server name "computer-use" for its native
@@ -490,6 +654,7 @@ def install_pi(
     client_path: Path,
     pi_agent_dir: Path | None = None,
     resource_root: Path | None = None,
+    launch_policy: McpLaunchPolicy | None = None,
 ) -> Path:
     """Emit a Pi mcp.json config snippet for merging into ~/.pi/agent/mcp.json.
 
@@ -499,10 +664,15 @@ def install_pi(
     """
     wrapper_path = target_dir / "pi_mcp_wrapper.sh"
     root = runtime_resource_root(resource_root)
+    policy = launch_policy or McpLaunchPolicy()
+    policy_exports = [
+        f"export {name}={shlex.quote(value)}\n" for name, value in policy.env().items()
+    ]
     wrapper_content = "".join(
         [
             "#!/usr/bin/env bash\n",
             f"export SKY_CUA_REPO_ROOT={shlex.quote(str(root))}\n",
+            *policy_exports,
             f'exec {shlex.quote(str(client_path))} mcp "$@"\n',
         ]
     )
@@ -724,6 +894,9 @@ def install_local_mcp_server(
     refresh_accessibility: bool = True,
     install_input_helper: bool = False,
     input_helper_group: str | None = None,
+    mcp_tool_profile: str | None = None,
+    browser_eval: str | None = None,
+    model_supports_images: str | None = None,
 ) -> tuple[Path, Path]:
     """Install runtime binaries and host config; optionally restart installed runtimes.
 
@@ -732,6 +905,12 @@ def install_local_mcp_server(
     With ``bundle_root``, binaries come from that built bundle instead of
     target/release so all channels ship identical bits.
     """
+    launch_policy = resolve_mcp_launch_policy(
+        target_dir,
+        tool_profile=mcp_tool_profile,
+        browser_eval=browser_eval,
+        model_supports_images=model_supports_images,
+    )
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if restart_runtime and sys.platform == "win32":
@@ -749,20 +928,29 @@ def install_local_mcp_server(
         print(f"Seeded machine config browser selection: {seeded}")
 
     if host == "opencode":
-        config_path = install_opencode(target_dir, client_path, resource_root)
+        config_path = install_opencode(target_dir, client_path, resource_root, launch_policy)
     elif host == "claude-code":
-        config_path = install_claude_code(target_dir, client_path, claude_config_dir, resource_root)
+        config_path = install_claude_code(
+            target_dir, client_path, claude_config_dir, resource_root, launch_policy
+        )
     elif host == "claude-desktop":
-        config_path = install_claude_desktop(target_dir, client_path, resource_root)
+        config_path = install_claude_desktop(target_dir, client_path, resource_root, launch_policy)
     elif host == "pi":
-        config_path = install_pi(target_dir, client_path, resource_root=resource_root)
+        config_path = install_pi(
+            target_dir, client_path, resource_root=resource_root, launch_policy=launch_policy
+        )
     elif host == "openclaw":
         config_path = install_openclaw(
-            target_dir, client_path, openclaw_dir=openclaw_dir, resource_root=resource_root
+            target_dir,
+            client_path,
+            openclaw_dir=openclaw_dir,
+            resource_root=resource_root,
+            launch_env=launch_policy.env(),
         )
     else:
-        config = generate_mcp_config(client_path, target_dir, resource_root)
+        config = generate_mcp_config(client_path, target_dir, resource_root, launch_policy)
         config_path = write_mcp_json(target_dir, config)
+    write_mcp_launch_policy_state(target_dir, launch_policy)
 
     if restart_runtime:
         restart_runtime_processes(target_dir, refresh_accessibility=refresh_accessibility)
@@ -858,6 +1046,24 @@ def main() -> int:
         help="Claude Code config directory for --host claude-code (default: ~/.claude).",
     )
     parser.add_argument(
+        "--mcp-tool-profile",
+        choices=("legacy", "compact"),
+        default=None,
+        help="Persist the MCP tool surface profile for launched servers.",
+    )
+    parser.add_argument(
+        "--browser-eval",
+        choices=("on", "off"),
+        default=None,
+        help="Persist browser_eval availability for launched servers.",
+    )
+    parser.add_argument(
+        "--model-supports-images",
+        choices=("true", "false"),
+        default=None,
+        help="Persist an explicit model image-capability override for launched servers.",
+    )
+    parser.add_argument(
         "--bin-dir",
         type=Path,
         default=None,
@@ -911,6 +1117,9 @@ def main() -> int:
         ),
         install_input_helper=args.input_helper,
         input_helper_group=args.input_helper_group,
+        mcp_tool_profile=args.mcp_tool_profile,
+        browser_eval=args.browser_eval,
+        model_supports_images=args.model_supports_images,
     )
 
     if args.bin_dir:

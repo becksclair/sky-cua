@@ -129,6 +129,9 @@ def fast_deploy(args: argparse.Namespace) -> int:
         restart_runtime=True,
         bundle_root=bundle_root,
         refresh_accessibility=False,
+        mcp_tool_profile=args.mcp_tool_profile,
+        browser_eval=args.browser_eval,
+        model_supports_images=args.model_supports_images,
     )
 
     # Stamp the deployed client with the runtime-source fingerprint it was built
@@ -222,6 +225,24 @@ def main(argv: list[str] | None = None) -> int:
         default="claude-code",
         choices=MCP_HOST_CHOICES,
         help="Host config format for the installed MCP-server runtime (default: claude-code).",
+    )
+    parser.add_argument(
+        "--mcp-tool-profile",
+        choices=("legacy", "compact"),
+        default=None,
+        help="Persist the MCP tool surface profile for the refreshed local MCP install.",
+    )
+    parser.add_argument(
+        "--browser-eval",
+        choices=("on", "off"),
+        default=None,
+        help="Persist browser_eval availability for the refreshed local MCP install.",
+    )
+    parser.add_argument(
+        "--model-supports-images",
+        choices=("true", "false"),
+        default=None,
+        help="Persist an explicit model image-capability override for the refreshed local MCP install.",
     )
     args = parser.parse_args(argv)
     return fast_deploy(args)

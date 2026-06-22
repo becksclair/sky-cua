@@ -39,13 +39,15 @@ def install_openclaw(
     openclaw_dir: Path | None = None,
     openclaw_bin: str = "openclaw",
     resource_root: Path | None = None,
+    launch_env: dict[str, str] | None = None,
 ) -> Path:
     """Register sky-cua with OpenClaw and copy sky-cua skills into its workspace."""
     openclaw_state_dir = (openclaw_dir or DEFAULT_OPENCLAW_DIR).expanduser().resolve()
     openclaw_state_dir.mkdir(parents=True, exist_ok=True)
     root = (resource_root or _install_shared.REPO_ROOT).resolve()
+    policy_env = dict(launch_env or {})
     codex_home_updates = plan_openclaw_agent_codex_mcp_servers(
-        openclaw_state_dir, client_path, resource_root=root
+        openclaw_state_dir, client_path, resource_root=root, launch_env=policy_env
     )
     server: dict[str, object] = {
         "enabled": True,
@@ -54,6 +56,7 @@ def install_openclaw(
         "cwd": str(target_dir),
         "env": {
             "SKY_CUA_REPO_ROOT": str(root),
+            **policy_env,
         },
         # OpenClaw's native codex runtime projects this as Codex
         # default_tools_approval_mode; see CODEX_TOOLS_APPROVAL_MODE.
@@ -128,6 +131,7 @@ def install_openclaw_agent_codex_mcp_servers(
     openclaw_state_dir: Path,
     client_path: Path,
     resource_root: Path | None = None,
+    launch_env: dict[str, str] | None = None,
 ) -> None:
     """Pin sky_cua into each agent's codex-home config.toml mcp_servers table.
 
@@ -139,7 +143,7 @@ def install_openclaw_agent_codex_mcp_servers(
     """
     apply_openclaw_agent_codex_mcp_server_updates(
         plan_openclaw_agent_codex_mcp_servers(
-            openclaw_state_dir, client_path, resource_root=resource_root
+            openclaw_state_dir, client_path, resource_root=resource_root, launch_env=launch_env
         )
     )
 
@@ -148,6 +152,7 @@ def plan_openclaw_agent_codex_mcp_servers(
     openclaw_state_dir: Path,
     client_path: Path,
     resource_root: Path | None = None,
+    launch_env: dict[str, str] | None = None,
 ) -> list[tuple[Path, str]]:
     """Validate every OpenClaw agent codex-home config before any writes."""
     planned_updates: list[tuple[Path, str]] = []
@@ -161,7 +166,9 @@ def plan_openclaw_agent_codex_mcp_servers(
             )
             refused_paths.append(config_path)
             continue
-        planned = plan_codex_mcp_server_toml(config_path, client_path, resource_root=resource_root)
+        planned = plan_codex_mcp_server_toml(
+            config_path, client_path, resource_root=resource_root, launch_env=launch_env
+        )
         if planned is None:
             refused_paths.append(config_path)
         else:
@@ -228,9 +235,13 @@ def restore_openclaw_agent_codex_mcp_server_snapshots(
 def codex_mcp_server_toml_block(
     client_path: Path,
     resource_root: Path | None = None,
+    launch_env: dict[str, str] | None = None,
 ) -> str:
     root = (resource_root or _install_shared.REPO_ROOT).resolve()
-    rendered_env = f"SKY_CUA_REPO_ROOT = {toml_basic_string(str(root))}"
+    env_values = {"SKY_CUA_REPO_ROOT": str(root), **dict(launch_env or {})}
+    rendered_env = "\n".join(
+        f"{key} = {toml_basic_string(value)}" for key, value in sorted(env_values.items())
+    )
     return (
         f"{CODEX_MCP_SERVER_TOML_BEGIN}\n"
         "[mcp_servers.sky_cua]\n"
@@ -271,6 +282,7 @@ def plan_codex_mcp_server_toml(
     config_path: Path,
     client_path: Path,
     resource_root: Path | None = None,
+    launch_env: dict[str, str] | None = None,
 ) -> str | None:
     """Return updated config text for a marker-delimited sky_cua mcp_servers block.
 
@@ -280,7 +292,9 @@ def plan_codex_mcp_server_toml(
     (a duplicate table would make the whole agent config unparseable), or a
     result that fails TOML validation.
     """
-    block = codex_mcp_server_toml_block(client_path, resource_root=resource_root)
+    block = codex_mcp_server_toml_block(
+        client_path, resource_root=resource_root, launch_env=launch_env
+    )
     text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
     begin = text.find(CODEX_MCP_SERVER_TOML_BEGIN)
     end = text.find(CODEX_MCP_SERVER_TOML_END)
