@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
+from deploy_freshness import write_build_stamp
 from live_agent_cursor_kde_smoke import MarkerProbe, probe_marker  # type: ignore[import-not-found]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -810,6 +811,7 @@ def build_host_runtime_artifacts() -> None:
         cwd=REPO_ROOT,
         check=True,
     )
+    write_build_stamp(REPO_ROOT / "target" / "release" / "sky-cua-client")
     subprocess.run(
         ["cargo", "build", "-p", "sky-cua-overlay-host"],
         cwd=REPO_ROOT,

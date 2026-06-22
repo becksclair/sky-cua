@@ -84,6 +84,7 @@ pacman -S --noconfirm --needed \
 	pkgconf \
 	plasma-desktop \
 	python \
+	python-cairo \
 	python-dbus \
 	python-gobject \
 	python-pillow \

@@ -764,8 +764,9 @@ fn move_absolute_args(x: f64, y: f64) -> Vec<String> {
     vec![
         "mousemove".to_string(),
         "--absolute".to_string(),
-        "--".to_string(),
+        "-x".to_string(),
         round_coordinate(x),
+        "-y".to_string(),
         round_coordinate(y),
     ]
 }
@@ -1039,7 +1040,7 @@ mod tests {
     fn builds_ydotool_pointer_and_text_argv_without_shell_escaping() {
         assert_eq!(
             move_absolute_args(10.4, 20.6),
-            vec!["mousemove", "--absolute", "--", "10", "21"]
+            vec!["mousemove", "--absolute", "-x", "10", "-y", "21"]
         );
         assert_eq!(
             scroll_vertical_args(-2),

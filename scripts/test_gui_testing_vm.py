@@ -1168,6 +1168,7 @@ def test_testing_vm_runner_builds_runtimes_on_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[list[str]] = []
+    stamps: list[Path] = []
 
     def fake_run(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
         assert cwd == run_gui_testing_vm_smoke.REPO_ROOT
@@ -1176,9 +1177,15 @@ def test_testing_vm_runner_builds_runtimes_on_host(
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_gui_testing_vm_smoke,
+        "write_build_stamp",
+        lambda path: stamps.append(path) or path.with_name(path.name + ".buildstamp.json"),
+    )
 
     run_gui_testing_vm_smoke.build_host_runtime_artifacts()
 
+    assert stamps == [run_gui_testing_vm_smoke.REPO_ROOT / "target" / "release" / "sky-cua-client"]
     assert commands == [
         [
             "cargo",
