@@ -26,6 +26,7 @@ from _plugin_bundle import (
     runtime_binary_path,
     runtime_binary_source_name,
 )
+from deploy_freshness import STAMP_SUFFIX, write_build_stamp
 
 BUNDLE_SOURCE_PATHS = [
     Path(".claude-plugin"),
@@ -130,10 +131,20 @@ def cargo_env_without_rustc_wrappers() -> dict[str, str]:
     return env
 
 
+def release_client_binary_path() -> Path:
+    return (
+        REPO_ROOT
+        / "target"
+        / "release"
+        / runtime_binary_source_name(current_runtime_platform(), "sky-cua-client")
+    )
+
+
 def build_release_binaries() -> None:
     result = run_cargo_build()
     if result.returncode == 0:
         emit_cargo_output(result)
+        write_build_stamp(release_client_binary_path())
         return
 
     if is_windows_sccache_shim_failure(result):
@@ -144,6 +155,7 @@ def build_release_binaries() -> None:
         retry = run_cargo_build(env=cargo_env_without_rustc_wrappers())
         if retry.returncode == 0:
             emit_cargo_output(retry)
+            write_build_stamp(release_client_binary_path())
             return
         emit_cargo_output(result)
         emit_cargo_output(retry)
@@ -151,6 +163,16 @@ def build_release_binaries() -> None:
 
     emit_cargo_output(result)
     result.check_returncode()
+
+
+def copy_build_stamp_sidecar(source: Path, destination: Path) -> None:
+    source_stamp = source.with_name(source.name + STAMP_SUFFIX)
+    destination_stamp = destination.with_name(destination.name + STAMP_SUFFIX)
+    if not source_stamp.exists():
+        remove_path(destination_stamp)
+        return
+    destination_stamp.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_stamp, destination_stamp)
 
 
 def tracked_bundle_files(source_paths: list[Path] | None = None) -> list[Path]:
@@ -593,6 +615,7 @@ def stage_bundle(bundle_root: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         ensure_executable(destination)
+        copy_build_stamp_sidecar(source, destination)
     for relative_path in all_runtime_binary_paths():
         destination = temp_root / relative_path
         if destination.exists():
@@ -614,6 +637,7 @@ def stage_bundle(bundle_root: Path) -> None:
         shutil.copy2(source, destination)
         if not relative_path.name.endswith(".exe"):
             ensure_executable(destination)
+        copy_build_stamp_sidecar(source, destination)
 
     ensure_bundle_structure(temp_root)
     remove_path(bundle_root)

@@ -35,6 +35,7 @@ LINUX_ARM64 = "linux-arm64"
 WINDOWS_X64 = "windows-x64"
 REQUIRED_RUNTIME_PLATFORMS = (LINUX_X64, LINUX_ARM64, WINDOWS_X64)
 RUNTIME_BINARY_BASE_NAMES = ("sky-cua-client", "sky-cua-service", "sky-cua-overlay-host")
+BUILD_STAMP_SUFFIX = ".buildstamp.json"
 LINUX_RUNTIME_BINARY_BASE_NAMES = (
     *RUNTIME_BINARY_BASE_NAMES,
     "sky-cua-cosmic-helper",
@@ -196,6 +197,12 @@ def merge_runtime_artifacts(bundle_root: Path, artifacts_root: Path) -> None:
                 continue
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
+            source_stamp = source.with_name(source.name + BUILD_STAMP_SUFFIX)
+            destination_stamp = destination.with_name(destination.name + BUILD_STAMP_SUFFIX)
+            if source_stamp.exists():
+                shutil.copy2(source_stamp, destination_stamp)
+            else:
+                remove_path(destination_stamp)
             if not destination.name.endswith(".exe"):
                 ensure_executable(destination)
             if binary_name == "sky-cua-chrome-host" and (

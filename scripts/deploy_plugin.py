@@ -129,9 +129,9 @@ def fast_deploy(args: argparse.Namespace) -> int:
         restart_runtime=True,
         bundle_root=bundle_root,
         refresh_accessibility=False,
-        mcp_tool_profile=args.mcp_tool_profile,
-        browser_eval=args.browser_eval,
-        model_supports_images=args.model_supports_images,
+        mcp_tool_profile=getattr(args, "mcp_tool_profile", None),
+        browser_eval=getattr(args, "browser_eval", None),
+        model_supports_images=getattr(args, "model_supports_images", None),
     )
 
     # Stamp the deployed client with the runtime-source fingerprint it was built

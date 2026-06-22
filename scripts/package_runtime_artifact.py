@@ -16,12 +16,14 @@ import shutil
 from pathlib import Path
 
 from _plugin_bundle import (
+    BUILD_STAMP_SUFFIX,
     REPO_ROOT,
     current_runtime_platform,
     ensure_executable,
     platform_runtime_binary_base_names,
     runtime_binary_source_name,
 )
+from deploy_freshness import write_build_stamp
 
 
 def package_runtime_artifact(platform_id: str, output_root: Path) -> Path:
@@ -35,8 +37,13 @@ def package_runtime_artifact(platform_id: str, output_root: Path) -> Path:
         source = REPO_ROOT / "target" / "release" / source_name
         if not source.exists():
             raise FileNotFoundError(f"runtime binary not found: {source}")
+        if binary_name == "sky-cua-client":
+            write_build_stamp(source)
         destination = artifact_root / source_name
         shutil.copy2(source, destination)
+        source_stamp = source.with_name(source.name + BUILD_STAMP_SUFFIX)
+        if source_stamp.exists():
+            shutil.copy2(source_stamp, destination.with_name(destination.name + BUILD_STAMP_SUFFIX))
         if not destination.name.endswith(".exe"):
             ensure_executable(destination)
     return artifact_root

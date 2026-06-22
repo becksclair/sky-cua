@@ -374,7 +374,13 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
     target_release = tmp_path / "target" / "release"
     target_release.mkdir(parents=True)
     for binary_name in current_binaries:
-        (target_release / binary_name).write_text(f"fresh {binary_name}", encoding="utf-8")
+        binary_path = target_release / binary_name
+        binary_path.write_text(f"fresh {binary_name}", encoding="utf-8")
+        if binary_name == "sky-cua-client":
+            binary_path.with_name(binary_path.name + ".buildstamp.json").write_text(
+                '{"source_fingerprint":"fresh"}\n',
+                encoding="utf-8",
+            )
 
     monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
@@ -387,6 +393,10 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
 
     for binary_name, runtime_path in zip(current_binaries, current_runtime_paths, strict=True):
         assert (bundle_root / runtime_path).read_text(encoding="utf-8") == (f"fresh {binary_name}")
+        if binary_name == "sky-cua-client":
+            assert (
+                bundle_root / runtime_path.with_name(runtime_path.name + ".buildstamp.json")
+            ).read_text(encoding="utf-8") == '{"source_fingerprint":"fresh"}\n'
     for binary_name in other_binaries:
         assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == binary_name
 
@@ -419,6 +429,11 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
         binary_path = tmp_path / "bin" / binary_name
         binary_path.parent.mkdir(parents=True, exist_ok=True)
         binary_path.write_text(f"repo {binary_name}", encoding="utf-8")
+        if binary_name == "sky-cua-client":
+            binary_path.with_name(binary_path.name + ".buildstamp.json").write_text(
+                '{"source_fingerprint":"repo"}\n',
+                encoding="utf-8",
+            )
 
     monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
@@ -434,6 +449,41 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
     for binary_name in other_binaries:
         assert (bundle_root / "bin" / binary_name).read_text(encoding="utf-8") == (
             f"repo {binary_name}"
+        )
+        if binary_name == "sky-cua-client":
+            assert (bundle_root / "bin" / f"{binary_name}.buildstamp.json").read_text(
+                encoding="utf-8"
+            ) == '{"source_fingerprint":"repo"}\n'
+
+
+def test_merge_runtime_artifacts_copies_build_stamp_sidecars(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    artifacts_root = tmp_path / "artifacts"
+
+    for platform_id in plugin_bundle.REQUIRED_RUNTIME_PLATFORMS:
+        platform_root = artifacts_root / platform_id
+        platform_root.mkdir(parents=True)
+        for binary_name in plugin_bundle.platform_runtime_binary_base_names(platform_id):
+            source_name = plugin_bundle.runtime_binary_source_name(platform_id, binary_name)
+            source = platform_root / source_name
+            source.write_text(f"{platform_id} {binary_name}", encoding="utf-8")
+            if binary_name == "sky-cua-client":
+                source.with_name(source.name + plugin_bundle.BUILD_STAMP_SUFFIX).write_text(
+                    f'{{"source_fingerprint":"{platform_id}"}}\n',
+                    encoding="utf-8",
+                )
+
+    plugin_bundle.merge_runtime_artifacts(bundle_root, artifacts_root)
+
+    for platform_id in plugin_bundle.REQUIRED_RUNTIME_PLATFORMS:
+        client_name = plugin_bundle.runtime_binary_source_name(platform_id, "sky-cua-client")
+        client_path = bundle_root / plugin_bundle.runtime_binary_path(platform_id, "sky-cua-client")
+        assert client_path.read_text(encoding="utf-8") == f"{platform_id} sky-cua-client"
+        assert (
+            client_path.with_name(client_name + plugin_bundle.BUILD_STAMP_SUFFIX).read_text(
+                encoding="utf-8"
+            )
+            == f'{{"source_fingerprint":"{platform_id}"}}\n'
         )
 
 
@@ -800,6 +850,7 @@ def test_build_release_binaries_retries_windows_sccache_shim_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, str] | None] = []
+    stamps: list[Path] = []
 
     def fake_run(
         _command: list[str],
@@ -828,6 +879,7 @@ def test_build_release_binaries_retries_windows_sccache_shim_failure(
     monkeypatch.setattr(build_plugin.sys, "platform", "win32")
     monkeypatch.setenv("RUSTC_WRAPPER", "sccache")
     monkeypatch.setattr(build_plugin.subprocess, "run", fake_run)
+    monkeypatch.setattr(build_plugin, "write_build_stamp", lambda path: stamps.append(path))
 
     build_plugin.build_release_binaries()
 
@@ -836,6 +888,7 @@ def test_build_release_binaries_retries_windows_sccache_shim_failure(
     assert calls[1] is not None
     assert calls[1]["RUSTC_WRAPPER"] == ""
     assert calls[1]["RUSTC_WORKSPACE_WRAPPER"] == ""
+    assert stamps == [build_plugin.REPO_ROOT / "target" / "release" / "sky-cua-client.exe"]
 
 
 def test_build_release_binaries_does_not_retry_unrelated_failure(

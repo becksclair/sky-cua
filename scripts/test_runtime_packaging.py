@@ -160,17 +160,29 @@ def test_package_runtime_artifact_uses_platform_binary_contract(
     )
 
     monkeypatch.setattr(package_runtime_artifact, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(
+        package_runtime_artifact,
+        "write_build_stamp",
+        lambda path: path.with_name(path.name + plugin_bundle.BUILD_STAMP_SUFFIX).write_text(
+            f"stamp {path.name}\n",
+            encoding="utf-8",
+        ),
+    )
 
     linux_root = package_runtime_artifact.package_runtime_artifact("linux-x64", output_root)
 
     assert sorted(path.name for path in linux_root.iterdir()) == [
         "sky-cua-chrome-host",
         "sky-cua-client",
+        "sky-cua-client.buildstamp.json",
         "sky-cua-cosmic-helper",
         "sky-cua-input-helper",
         "sky-cua-overlay-host",
         "sky-cua-service",
     ]
+    assert (linux_root / "sky-cua-client.buildstamp.json").read_text(encoding="utf-8") == (
+        "stamp sky-cua-client\n"
+    )
     assert not (linux_root / "stale-binary").exists()
 
     for binary_name in plugin_bundle.platform_runtime_binary_base_names("windows-x64"):
@@ -183,9 +195,13 @@ def test_package_runtime_artifact_uses_platform_binary_contract(
 
     assert sorted(path.name for path in windows_root.iterdir()) == [
         "sky-cua-client.exe",
+        "sky-cua-client.exe.buildstamp.json",
         "sky-cua-overlay-host.exe",
         "sky-cua-service.exe",
     ]
+    assert (windows_root / "sky-cua-client.exe.buildstamp.json").read_text(
+        encoding="utf-8"
+    ) == "stamp sky-cua-client.exe\n"
 
 
 def test_package_runtime_artifact_rejects_invalid_platform_before_cleanup(

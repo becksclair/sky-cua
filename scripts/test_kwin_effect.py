@@ -432,6 +432,7 @@ def test_kwin_effect_deploy_picks_next_id_and_installs_generated_target(
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     monkeypatch.setattr(kwin_effect, "kwin_effect_preconditions", lambda: [])
     monkeypatch.setattr(kwin_effect, "compute_effect_build_id", lambda: "new-build")
+    monkeypatch.setattr(kwin_effect, "KWINRC_PATH", tmp_path / "kwinrc")
     runner = FakeKwinRunner()
     old_id = "sky-cua-agent-cursor-000003"
     new_id = "sky-cua-agent-cursor-000004"
