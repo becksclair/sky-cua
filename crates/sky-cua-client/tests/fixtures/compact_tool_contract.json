@@ -1,0 +1,2732 @@
+{
+  "default_tool_count": 34,
+  "eval_tool_count": 35,
+  "profile": "compact",
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "doctor",
+          "legacy_tool": "doctor",
+          "minimal_valid_arguments": {},
+          "name": "diagnostics"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "doctor",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_status",
+          "legacy_tool": "browser_status",
+          "minimal_valid_arguments": {
+            "component": "browser"
+          },
+          "name": "browser"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_status",
+          "legacy_tool": "phone_status",
+          "minimal_valid_arguments": {
+            "component": "phone"
+          },
+          "name": "phone"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_companion_status",
+          "legacy_tool": "phone_companion_status",
+          "minimal_valid_arguments": {
+            "component": "phone_companion"
+          },
+          "name": "phone_companion"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "session_presence_status",
+          "legacy_tool": "session_presence_status",
+          "minimal_valid_arguments": {
+            "component": "session_presence"
+          },
+          "name": "session_presence"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "component": {
+            "enum": [
+              "browser",
+              "phone",
+              "phone_companion",
+              "session_presence"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "component"
+        ],
+        "type": "object"
+      },
+      "name": "status",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "list_apps",
+          "legacy_tool": "list_apps",
+          "minimal_valid_arguments": {
+            "resource": "apps",
+            "surface": "desktop"
+          },
+          "name": "desktop/apps"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "list_windows",
+          "legacy_tool": "list_windows",
+          "minimal_valid_arguments": {
+            "resource": "windows",
+            "surface": "desktop"
+          },
+          "name": "desktop/windows"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "focused_window",
+          "legacy_tool": "focused_window",
+          "minimal_valid_arguments": {
+            "resource": "focused_window",
+            "surface": "desktop"
+          },
+          "name": "desktop/focused_window"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_list_tabs",
+          "legacy_tool": "browser_list_tabs",
+          "minimal_valid_arguments": {
+            "resource": "tabs",
+            "surface": "browser"
+          },
+          "name": "browser/tabs"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_list_devices",
+          "legacy_tool": "phone_list_devices",
+          "minimal_valid_arguments": {
+            "resource": "devices",
+            "surface": "phone"
+          },
+          "name": "phone/devices"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_app_list",
+          "legacy_tool": "phone_app_list",
+          "minimal_valid_arguments": {
+            "resource": "apps",
+            "surface": "phone"
+          },
+          "name": "phone/apps"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_app_current",
+          "legacy_tool": "phone_app_current",
+          "minimal_valid_arguments": {
+            "resource": "current_app",
+            "surface": "phone"
+          },
+          "name": "phone/current_app"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "include_mdns": {
+            "description": "For phone devices only, include mDNS wireless-debugging records.",
+            "type": "boolean"
+          },
+          "include_system": {
+            "description": "For phone apps only, include system packages.",
+            "type": "boolean"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource": {
+            "enum": [
+              "apps",
+              "windows",
+              "focused_window",
+              "tabs",
+              "devices",
+              "current_app"
+            ],
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          },
+          "surface": {
+            "enum": [
+              "desktop",
+              "browser",
+              "phone"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          },
+          "title_contains": {
+            "description": "For browser tabs only, case-insensitive title filter.",
+            "type": "string"
+          },
+          "url_contains": {
+            "description": "For browser tabs only, case-insensitive URL filter.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface",
+          "resource"
+        ],
+        "type": "object"
+      },
+      "name": "list_resources",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "get_app_state",
+          "legacy_tool": "get_app_state",
+          "minimal_valid_arguments": {
+            "surface": "desktop"
+          },
+          "name": "desktop"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_snapshot",
+          "legacy_tool": "browser_snapshot",
+          "minimal_valid_arguments": {
+            "surface": "browser",
+            "tab_id": "tab-1"
+          },
+          "name": "browser"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_observe",
+          "legacy_tool": "phone_observe",
+          "minimal_valid_arguments": {
+            "surface": "phone"
+          },
+          "name": "phone"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "backend": {
+            "description": "Only honored by phone observe, phone screenshot, and phone connect branches.",
+            "enum": [
+              "auto",
+              "adb",
+              "companion",
+              "scrcpy",
+              "none"
+            ],
+            "type": "string"
+          },
+          "capture_screen": {
+            "description": "Screen-capture policy. Defaults to if_changed. Use always for a fresh frame, never for structure-only loops.",
+            "enum": [
+              "auto",
+              "if_changed",
+              "always",
+              "never"
+            ],
+            "type": "string"
+          },
+          "desktop_file_id": {
+            "type": "string"
+          },
+          "detail": {
+            "description": "Defaults to compact. Use full for verbose element details and full capability data.",
+            "enum": [
+              "full",
+              "compact"
+            ],
+            "type": "string"
+          },
+          "element_limit": {
+            "maximum": 5000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "element_offset": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "element_query": {
+            "type": "string"
+          },
+          "include_accessibility": {
+            "description": "For phone only, include the accessibility tree in the observation.",
+            "type": "boolean"
+          },
+          "include_notifications": {
+            "description": "For phone only, include recent notifications in the observation.",
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "screenshot_delivery": {
+            "description": "path returns capture.inspection_image_path metadata; inline also attaches the inspection image block.",
+            "enum": [
+              "path",
+              "inline"
+            ],
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          },
+          "surface": {
+            "enum": [
+              "desktop",
+              "browser",
+              "phone"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "type": "string"
+          },
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          },
+          "text_limit": {
+            "description": "For browser only, maximum page text characters.",
+            "maximum": 20000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window_title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface"
+        ],
+        "type": "object"
+      },
+      "name": "observe",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_screenshot",
+          "legacy_tool": "browser_screenshot",
+          "minimal_valid_arguments": {
+            "surface": "browser",
+            "tab_id": "tab-1"
+          },
+          "name": "browser"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_screenshot",
+          "legacy_tool": "phone_screenshot",
+          "minimal_valid_arguments": {
+            "surface": "phone"
+          },
+          "name": "phone"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "description": "Only honored by phone observe, phone screenshot, and phone connect branches.",
+            "enum": [
+              "auto",
+              "adb",
+              "companion",
+              "scrcpy",
+              "none"
+            ],
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          },
+          "surface": {
+            "enum": [
+              "browser",
+              "phone"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "type": "string"
+          },
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface"
+        ],
+        "type": "object"
+      },
+      "name": "capture_screen",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_accessibility_tree",
+          "legacy_tool": "phone_accessibility_tree",
+          "minimal_valid_arguments": {},
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "node_limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "phone_accessibility_tree",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_notifications",
+          "legacy_tool": "phone_notifications",
+          "minimal_valid_arguments": {},
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "phone_notifications",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "screenshot",
+          "legacy_tool": "screenshot",
+          "minimal_valid_arguments": {},
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "capture_all_displays": {
+            "description": "Capture the full virtual desktop. Defaults to false.",
+            "type": "boolean"
+          },
+          "display_id": {
+            "description": "Exact display_id from environment.displays.",
+            "type": "string"
+          },
+          "display_index": {
+            "description": "Zero-based display index from environment.displays. Prefer display_id.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "display_name": {
+            "description": "Display name/connector from environment.displays. Prefer display_id.",
+            "type": "string"
+          },
+          "pid": {
+            "description": "Process ID from list_windows. 0 is ignored.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "screenshot_delivery": {
+            "description": "path returns capture.inspection_image_path metadata; inline also attaches the inspection image block.",
+            "enum": [
+              "path",
+              "inline"
+            ],
+            "type": "string"
+          },
+          "terminal_command": {
+            "type": "string"
+          },
+          "terminal_cwd": {
+            "type": "string"
+          },
+          "terminal_pid": {
+            "description": "Terminal process ID from list_windows terminal metadata. 0 is ignored.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tty": {
+            "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+            "type": "string"
+          },
+          "window_id": {
+            "description": "Exact window_id from list_windows.",
+            "type": "string"
+          },
+          "wm_class": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "capture_desktop",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "setup_accessibility",
+          "legacy_tool": "setup_accessibility",
+          "minimal_valid_arguments": {
+            "operation": "accessibility"
+          },
+          "name": "accessibility"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "setup_window_targeting",
+          "legacy_tool": "setup_window_targeting",
+          "minimal_valid_arguments": {
+            "operation": "window_targeting"
+          },
+          "name": "window_targeting"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "enum": [
+              "accessibility",
+              "window_targeting"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "setup_desktop",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "hold_session",
+          "legacy_tool": "hold_session",
+          "minimal_valid_arguments": {
+            "operation": "hold"
+          },
+          "name": "hold"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "unlock_session",
+          "legacy_tool": "unlock_session",
+          "minimal_valid_arguments": {
+            "operation": "unlock"
+          },
+          "name": "unlock"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "release_session",
+          "legacy_tool": "release_session",
+          "minimal_valid_arguments": {
+            "operation": "release"
+          },
+          "name": "release"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "inhibit_lock": {
+            "description": "Defaults to true for hold/unlock.",
+            "type": "boolean"
+          },
+          "inhibit_suspend": {
+            "description": "Defaults to true for hold/unlock.",
+            "type": "boolean"
+          },
+          "operation": {
+            "enum": [
+              "hold",
+              "unlock",
+              "release"
+            ],
+            "type": "string"
+          },
+          "relock": {
+            "description": "For release only, relock after releasing when supported.",
+            "type": "boolean"
+          },
+          "unlock": {
+            "description": "For hold only, unlock before holding inhibitors when supported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "session_presence",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "activate_window",
+          "legacy_tool": "activate_window",
+          "minimal_valid_arguments": {
+            "window_id": "window-1"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "pid": {
+            "description": "Process ID from list_windows. 0 is ignored.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "terminal_command": {
+            "type": "string"
+          },
+          "terminal_cwd": {
+            "type": "string"
+          },
+          "terminal_pid": {
+            "description": "Terminal process ID from list_windows terminal metadata. 0 is ignored.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tty": {
+            "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+            "type": "string"
+          },
+          "window_id": {
+            "description": "Exact window_id from list_windows.",
+            "type": "string"
+          },
+          "wm_class": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "activate_window",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "focus_element",
+          "legacy_tool": "focus_element",
+          "minimal_valid_arguments": {
+            "element_index": 1,
+            "operation": "focus"
+          },
+          "name": "focus"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "select_element",
+          "legacy_tool": "select_element",
+          "minimal_valid_arguments": {
+            "element_index": 1,
+            "operation": "select"
+          },
+          "name": "select"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "expand_element",
+          "legacy_tool": "expand_element",
+          "minimal_valid_arguments": {
+            "element_index": 1,
+            "operation": "expand"
+          },
+          "name": "expand"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "collapse_element",
+          "legacy_tool": "collapse_element",
+          "minimal_valid_arguments": {
+            "element_index": 1,
+            "operation": "collapse"
+          },
+          "name": "collapse"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "element_identifier": {
+            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the latest desktop observation.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "focus",
+              "select",
+              "expand",
+              "collapse"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_semantic",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_claim_tab",
+          "legacy_tool": "browser_claim_tab",
+          "minimal_valid_arguments": {
+            "tab_id": "tab-1"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "type": "string"
+          },
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_claim_tab",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_move_mouse",
+          "legacy_tool": "browser_move_mouse",
+          "minimal_valid_arguments": {
+            "tab_id": "tab-1",
+            "x": 1,
+            "y": 1
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "type": "string"
+          },
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          },
+          "wait_for_arrival": {
+            "description": "Wait for the visible cursor overlay to arrive. Defaults to true.",
+            "type": "boolean"
+          },
+          "x": {
+            "description": "CSS pixel x coordinate.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "y": {
+            "description": "CSS pixel y coordinate.",
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "tab_id",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      },
+      "name": "browser_move_mouse",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_connect",
+          "legacy_tool": "phone_connect",
+          "minimal_valid_arguments": {
+            "operation": "connect"
+          },
+          "name": "connect"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_disconnect",
+          "legacy_tool": "phone_disconnect",
+          "minimal_valid_arguments": {
+            "operation": "disconnect"
+          },
+          "name": "disconnect"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_refresh_capabilities",
+          "legacy_tool": "phone_refresh_capabilities",
+          "minimal_valid_arguments": {
+            "operation": "refresh"
+          },
+          "name": "refresh"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "description": "Only honored by phone observe, phone screenshot, and phone connect branches.",
+            "enum": [
+              "auto",
+              "adb",
+              "companion",
+              "scrcpy",
+              "none"
+            ],
+            "type": "string"
+          },
+          "install_companion": {
+            "type": "boolean"
+          },
+          "keep_wireless": {
+            "type": "boolean"
+          },
+          "operation": {
+            "enum": [
+              "connect",
+              "disconnect",
+              "refresh"
+            ],
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          },
+          "start_scrcpy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_connection",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_pair_wireless",
+          "legacy_tool": "phone_pair_wireless",
+          "minimal_valid_arguments": {
+            "host_port": "127.0.0.1:37099",
+            "pairing_code": "123456"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "host_port": {
+            "type": "string"
+          },
+          "pairing_code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_port",
+          "pairing_code"
+        ],
+        "type": "object"
+      },
+      "name": "phone_pair_wireless",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_install_companion",
+          "legacy_tool": "phone_install_companion",
+          "minimal_valid_arguments": {
+            "operation": "install_companion"
+          },
+          "name": "install_companion"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_open_settings",
+          "legacy_tool": "phone_open_settings",
+          "minimal_valid_arguments": {
+            "operation": "open_settings"
+          },
+          "name": "open_settings"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_downgrade": {
+            "type": "boolean"
+          },
+          "force_reinstall": {
+            "type": "boolean"
+          },
+          "operation": {
+            "enum": [
+              "install_companion",
+              "open_settings"
+            ],
+            "type": "string"
+          },
+          "screen": {
+            "enum": [
+              "accessibility",
+              "notification_listener",
+              "developer_options",
+              "wireless_debugging",
+              "app_info"
+            ],
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_setup",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_app_force_stop",
+          "legacy_tool": "phone_app_force_stop",
+          "minimal_valid_arguments": {
+            "package_name": "com.example.app"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "package_name": {
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "package_name"
+        ],
+        "type": "object"
+      },
+      "name": "phone_app_force_stop",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "toggle_element",
+          "legacy_tool": "toggle_element",
+          "minimal_valid_arguments": {
+            "element_index": 1
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "element_identifier": {
+            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the latest desktop observation.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "desktop_toggle",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "scroll",
+          "legacy_tool": "scroll",
+          "minimal_valid_arguments": {
+            "direction": "down"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "description": "Optional scroll amount passed through to the desktop backend.",
+            "type": "number"
+          },
+          "direction": {
+            "enum": [
+              "up",
+              "down",
+              "left",
+              "right"
+            ],
+            "type": "string"
+          },
+          "element_identifier": {
+            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the latest desktop observation.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "direction"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_scroll",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_scroll",
+          "legacy_tool": "browser_scroll",
+          "minimal_valid_arguments": {
+            "delta_y": 300,
+            "tab_id": "tab-1"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "delta_x": {
+            "description": "Horizontal wheel delta in CSS pixels.",
+            "type": "number"
+          },
+          "delta_y": {
+            "description": "Vertical wheel delta in CSS pixels.",
+            "type": "number"
+          },
+          "tab_id": {
+            "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "type": "string"
+          },
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          },
+          "wait_for_arrival": {
+            "description": "Wait for the visible cursor overlay to arrive. Defaults to true.",
+            "type": "boolean"
+          },
+          "x": {
+            "description": "CSS pixel x coordinate.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "y": {
+            "description": "CSS pixel y coordinate.",
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_scroll",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "click",
+          "legacy_tool": "click",
+          "minimal_valid_arguments": {
+            "operation": "click",
+            "x": 1,
+            "y": 1
+          },
+          "name": "click"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "perform_secondary_action",
+          "legacy_tool": "perform_secondary_action",
+          "minimal_valid_arguments": {
+            "operation": "secondary_click",
+            "x": 1,
+            "y": 1
+          },
+          "name": "secondary_click"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "drag",
+          "legacy_tool": "drag",
+          "minimal_valid_arguments": {
+            "from_x": 1,
+            "from_y": 1,
+            "operation": "drag",
+            "to_x": 2,
+            "to_y": 2
+          },
+          "name": "drag"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "element_identifier": {
+            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the latest desktop observation.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from_x": {
+            "description": "Drag start x coordinate.",
+            "type": "number"
+          },
+          "from_y": {
+            "description": "Drag start y coordinate.",
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "click",
+              "secondary_click",
+              "drag"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          },
+          "to_element_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to_x": {
+            "description": "Drag end x coordinate.",
+            "type": "number"
+          },
+          "to_y": {
+            "description": "Drag end y coordinate.",
+            "type": "number"
+          },
+          "x": {
+            "description": "Click x coordinate or drag start x.",
+            "type": "number"
+          },
+          "y": {
+            "description": "Click y coordinate or drag start y.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_pointer",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "type_text",
+          "legacy_tool": "type_text",
+          "minimal_valid_arguments": {
+            "operation": "type_text",
+            "text": "hello"
+          },
+          "name": "type_text"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "press_key",
+          "legacy_tool": "press_key",
+          "minimal_valid_arguments": {
+            "key": "Enter",
+            "operation": "press_key"
+          },
+          "name": "press_key"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "type_text",
+              "press_key"
+            ],
+            "type": "string"
+          },
+          "pid": {
+            "description": "Process ID from list_windows. 0 is ignored.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "snapshot_id": {
+            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "type": "string"
+          },
+          "terminal_command": {
+            "type": "string"
+          },
+          "terminal_cwd": {
+            "type": "string"
+          },
+          "terminal_pid": {
+            "description": "Terminal process ID from list_windows terminal metadata. 0 is ignored.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tty": {
+            "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+            "type": "string"
+          },
+          "window_id": {
+            "description": "Exact window_id from list_windows.",
+            "type": "string"
+          },
+          "wm_class": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_keyboard",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "activate_element",
+          "legacy_tool": "activate_element",
+          "minimal_valid_arguments": {
+            "element_index": 1,
+            "operation": "activate"
+          },
+          "name": "activate"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "perform_action",
+          "legacy_tool": "perform_action",
+          "minimal_valid_arguments": {
+            "action_index": 0,
+            "operation": "perform_action"
+          },
+          "name": "perform_action"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "Named backend action when operation=perform_action.",
+            "type": "string"
+          },
+          "action_index": {
+            "description": "Indexed backend action when operation=perform_action.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "element_identifier": {
+            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the latest desktop observation.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "activate",
+              "perform_action"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_action",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "set_value",
+          "legacy_tool": "set_value",
+          "minimal_valid_arguments": {
+            "element_index": 1,
+            "value": "hello"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "element_identifier": {
+            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the latest desktop observation.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_set_value",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_open",
+          "legacy_tool": "browser_open",
+          "minimal_valid_arguments": {},
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          },
+          "url": {
+            "description": "HTTP(S), file, about, data, or chrome URL accepted by the browser bridge.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "browser_open",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_navigate",
+          "legacy_tool": "browser_navigate",
+          "minimal_valid_arguments": {
+            "tab_id": "tab-1",
+            "url": "https://example.test/"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "type": "string"
+          },
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          },
+          "url": {
+            "description": "HTTP(S), file, about, data, or chrome URL accepted by the browser bridge.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "url"
+        ],
+        "type": "object"
+      },
+      "name": "browser_navigate",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_click",
+          "legacy_tool": "browser_click",
+          "minimal_valid_arguments": {
+            "operation": "click",
+            "tab_id": "tab-1",
+            "x": 1,
+            "y": 1
+          },
+          "name": "click"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_type_text",
+          "legacy_tool": "browser_type_text",
+          "minimal_valid_arguments": {
+            "operation": "type_text",
+            "tab_id": "tab-1",
+            "text": "hello"
+          },
+          "name": "type_text"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_press_key",
+          "legacy_tool": "browser_press_key",
+          "minimal_valid_arguments": {
+            "key": "Enter",
+            "operation": "press_key",
+            "tab_id": "tab-1"
+          },
+          "name": "press_key"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "click",
+              "type_text",
+              "press_key"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "type": "string"
+          },
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "wait_for_arrival": {
+            "description": "Wait for the visible cursor overlay to arrive. Defaults to true.",
+            "type": "boolean"
+          },
+          "x": {
+            "description": "CSS pixel x coordinate.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "y": {
+            "description": "CSS pixel y coordinate.",
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "operation",
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_input",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_tap",
+          "legacy_tool": "phone_tap",
+          "minimal_valid_arguments": {
+            "operation": "tap",
+            "x": 1,
+            "y": 1
+          },
+          "name": "tap"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_swipe",
+          "legacy_tool": "phone_swipe",
+          "minimal_valid_arguments": {
+            "end_x": 2,
+            "end_y": 2,
+            "operation": "swipe",
+            "start_x": 1,
+            "start_y": 1
+          },
+          "name": "swipe"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "end_x": {
+            "type": "number"
+          },
+          "end_y": {
+            "type": "number"
+          },
+          "operation": {
+            "enum": [
+              "tap",
+              "swipe"
+            ],
+            "type": "string"
+          },
+          "phone_snapshot_id": {
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          },
+          "start_x": {
+            "type": "number"
+          },
+          "start_y": {
+            "type": "number"
+          },
+          "use_device_coordinates": {
+            "type": "boolean"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_pointer",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_type_text",
+          "legacy_tool": "phone_type_text",
+          "minimal_valid_arguments": {
+            "operation": "type_text",
+            "text": "hello"
+          },
+          "name": "type_text"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_press_key",
+          "legacy_tool": "phone_press_key",
+          "minimal_valid_arguments": {
+            "key": "BACK",
+            "operation": "press_key"
+          },
+          "name": "press_key"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "type_text",
+              "press_key"
+            ],
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_keyboard",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_notification_open",
+          "legacy_tool": "phone_notification_open",
+          "minimal_valid_arguments": {
+            "event_id": "event-1",
+            "operation": "open"
+          },
+          "name": "open"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_notification_dismiss",
+          "legacy_tool": "phone_notification_dismiss",
+          "minimal_valid_arguments": {
+            "event_id": "event-1",
+            "operation": "dismiss"
+          },
+          "name": "dismiss"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_notification_action",
+          "legacy_tool": "phone_notification_action",
+          "minimal_valid_arguments": {
+            "action_id": "action-1",
+            "event_id": "event-1",
+            "operation": "action"
+          },
+          "name": "action"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "open",
+              "dismiss",
+              "action"
+            ],
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_notification_action",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_notification_reply",
+          "legacy_tool": "phone_notification_reply",
+          "minimal_valid_arguments": {
+            "event_id": "event-1",
+            "text": "reply"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "phone_notification_reply",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_app_launch",
+          "legacy_tool": "phone_app_launch",
+          "minimal_valid_arguments": {
+            "operation": "launch",
+            "package_name": "com.example.app"
+          },
+          "name": "launch"
+        },
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_app_open_intent",
+          "legacy_tool": "phone_app_open_intent",
+          "minimal_valid_arguments": {
+            "action": "android.intent.action.VIEW",
+            "operation": "open_intent"
+          },
+          "name": "open_intent"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "activity": {
+            "type": "string"
+          },
+          "data_uri": {
+            "type": "string"
+          },
+          "extras": {
+            "type": "object"
+          },
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "launch",
+              "open_intent"
+            ],
+            "type": "string"
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_app_action",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_app_install",
+          "legacy_tool": "phone_app_install",
+          "minimal_valid_arguments": {
+            "apk_path": "/tmp/example.apk"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_downgrade": {
+            "type": "boolean"
+          },
+          "allow_test_apk": {
+            "type": "boolean"
+          },
+          "apk_path": {
+            "type": "string"
+          },
+          "apk_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "enum": [
+              "install",
+              "streaming",
+              "fastdeploy"
+            ],
+            "type": "string"
+          },
+          "reinstall": {
+            "type": "boolean"
+          },
+          "serial": {
+            "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices).",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "phone_app_install",
+      "structured_policy": "compact_envelope"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "ToolNotInActiveProfile",
+            "UnknownTool"
+          ],
+          "handler_id": "browser_eval",
+          "legacy_tool": "browser_eval",
+          "minimal_valid_arguments": {
+            "expression": "document.title",
+            "tab_id": "tab-1"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "profile_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "type": "string"
+          },
+          "target": {
+            "description": "Browser bridge target. Defaults to user_chrome.",
+            "enum": [
+              "user_chrome"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "name": "browser_eval",
+      "structured_policy": "compact_envelope"
+    }
+  ],
+  "version": 1
+}

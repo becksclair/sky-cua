@@ -549,35 +549,35 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "list_resources",
             "List bounded resources such as desktop windows/apps, browser tabs, phone devices/apps, or current focused resources.",
             READ_ONLY_TOOL,
-            json!({"surface": {"type": "string", "enum": ["desktop", "browser", "phone"]}, "resource": {"type": "string"}}),
+            compact_list_resources_properties(),
             json!(["surface", "resource"])
         ),
         compact_tool(
             "observe",
             "Observe desktop, browser, or phone state using the compact profile branch selected by surface.",
             READ_ONLY_TOOL,
-            json!({"surface": {"type": "string", "enum": ["desktop", "browser", "phone"]}}),
+            compact_observe_properties(can_receive_images),
             json!(["surface"])
         ),
         compact_tool(
             "capture_screen",
             "Capture browser or phone screen state. Use capture_desktop for desktop screenshots.",
             READ_ONLY_TOOL,
-            json!({"surface": {"type": "string", "enum": ["browser", "phone"]}}),
+            compact_capture_screen_properties(),
             json!(["surface"])
         ),
         compact_tool(
             "phone_accessibility_tree",
             "Read the full connected-phone accessibility tree.",
             READ_ONLY_TOOL,
-            json!({}),
+            with_phone_selector(json!({"node_limit": limit_schema()})),
             json!([])
         ),
         compact_tool(
             "phone_notifications",
             "Read recent connected-phone notifications.",
             READ_ONLY_TOOL,
-            json!({}),
+            with_phone_selector(json!({"limit": limit_schema()})),
             json!([])
         ),
         compact_tool(
@@ -598,7 +598,13 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "session_presence",
             "Hold, unlock, or release session-presence inhibitors.",
             LOCAL_NAVIGATION_ACTION,
-            json!({"operation": {"type": "string", "enum": ["hold", "unlock", "release"]}}),
+            json!({
+                "operation": {"type": "string", "enum": ["hold", "unlock", "release"]},
+                "unlock": {"type": "boolean", "description": "For hold only, unlock before holding inhibitors when supported."},
+                "inhibit_lock": {"type": "boolean", "description": "Defaults to true for hold/unlock."},
+                "inhibit_suspend": {"type": "boolean", "description": "Defaults to true for hold/unlock."},
+                "relock": {"type": "boolean", "description": "For release only, relock after releasing when supported."}
+            }),
             json!(["operation"])
         ),
         compact_tool(
@@ -612,28 +618,30 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "desktop_semantic",
             "Focus, select, expand, or collapse a desktop semantic element.",
             LOCAL_NAVIGATION_ACTION,
-            json!({"operation": {"type": "string", "enum": ["focus", "select", "expand", "collapse"]}}),
+            compact_desktop_semantic_properties(
+                json!({"operation": {"type": "string", "enum": ["focus", "select", "expand", "collapse"]}})
+            ),
             json!(["operation"])
         ),
         compact_tool(
             "browser_claim_tab",
             "Claim an existing browser tab for control.",
             LOCAL_NAVIGATION_ACTION,
-            json!({"tab_id": {"type": "string"}}),
+            browser_tab_properties(),
             json!(["tab_id"])
         ),
         compact_tool(
             "browser_move_mouse",
             "Move the visible browser agent cursor in CSS-pixel coordinates.",
             LOCAL_NAVIGATION_ACTION,
-            json!({"tab_id": {"type": "string"}, "x": {"type": "number", "minimum": 0}, "y": {"type": "number", "minimum": 0}}),
+            compact_browser_point_properties(),
             json!(["tab_id", "x", "y"])
         ),
         compact_tool(
             "phone_connection",
             "Connect, disconnect, or refresh a phone session.",
             LOCAL_NAVIGATION_ACTION,
-            json!({"operation": {"type": "string", "enum": ["connect", "disconnect", "refresh"]}}),
+            compact_phone_connection_properties(),
             json!(["operation"])
         ),
         compact_tool(
@@ -647,28 +655,31 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "phone_setup",
             "Install the phone companion app or open a required Android settings screen.",
             LOCAL_NAVIGATION_ACTION,
-            json!({"operation": {"type": "string", "enum": ["install_companion", "open_settings"]}}),
+            compact_phone_setup_properties(),
             json!(["operation"])
         ),
         compact_tool(
             "phone_app_force_stop",
             "Force-stop a connected phone app.",
             LOCAL_NAVIGATION_ACTION,
-            json!({"package_name": {"type": "string"}}),
+            with_phone_selector(json!({"package_name": {"type": "string"}})),
             json!(["package_name"])
         ),
         compact_tool(
             "desktop_toggle",
             "Toggle a desktop semantic element.",
             LOCAL_STATEFUL_ACTION,
-            json!({}),
+            compact_desktop_semantic_properties(json!({})),
             json!([])
         ),
         compact_tool(
             "desktop_scroll",
             "Scroll a desktop semantic element or focused area.",
             LOCAL_STATEFUL_ACTION,
-            json!({"direction": {"type": "string", "enum": ["up", "down", "left", "right"]}}),
+            compact_desktop_semantic_properties(json!({
+                "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
+                "amount": {"type": "number", "description": "Optional scroll amount passed through to the desktop backend."}
+            })),
             json!(["direction"])
         ),
         compact_tool(
@@ -680,28 +691,28 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 idempotent: false,
                 open_world: true
             },
-            json!({"tab_id": {"type": "string"}}),
+            compact_browser_scroll_properties(),
             json!(["tab_id"])
         ),
         compact_tool(
             "desktop_pointer",
             "Click, secondary-click, or drag on the desktop.",
             LOCAL_DESTRUCTIVE_ACTION,
-            json!({"operation": {"type": "string", "enum": ["click", "secondary_click", "drag"]}}),
+            compact_desktop_pointer_properties(),
             json!(["operation"])
         ),
         compact_tool(
             "desktop_keyboard",
             "Type text or press a key on the desktop.",
             LOCAL_DESTRUCTIVE_ACTION,
-            json!({"operation": {"type": "string", "enum": ["type_text", "press_key"]}}),
+            compact_desktop_keyboard_properties(),
             json!(["operation"])
         ),
         compact_tool(
             "desktop_action",
             "Activate a desktop semantic element or perform a named/indexed action.",
             LOCAL_DESTRUCTIVE_ACTION,
-            json!({"operation": {"type": "string", "enum": ["activate", "perform_action"]}}),
+            compact_desktop_action_properties(),
             json!(["operation"])
         ),
         compact_tool(
@@ -713,7 +724,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 idempotent: true,
                 open_world: false
             },
-            json!({"value": {"type": "string"}}),
+            compact_desktop_semantic_properties(json!({"value": {"type": "string"}})),
             json!(["value"])
         ),
         compact_tool(
@@ -725,7 +736,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 idempotent: false,
                 open_world: true
             },
-            json!({}),
+            browser_target_url_properties(false),
             json!([])
         ),
         compact_tool(
@@ -737,56 +748,58 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 idempotent: true,
                 open_world: true
             },
-            json!({"tab_id": {"type": "string"}, "url": {"type": "string"}}),
+            browser_target_url_properties(true),
             json!(["tab_id", "url"])
         ),
         compact_tool(
             "browser_input",
             "Click, type text, or press a key in an open-world browser tab.",
             super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
-            json!({"operation": {"type": "string", "enum": ["click", "type_text", "press_key"]}, "tab_id": {"type": "string"}}),
+            compact_browser_input_properties(),
             json!(["operation", "tab_id"])
         ),
         compact_tool(
             "phone_pointer",
             "Tap or swipe on a connected phone.",
             LOCAL_DESTRUCTIVE_ACTION,
-            json!({"operation": {"type": "string", "enum": ["tap", "swipe"]}}),
+            compact_phone_pointer_properties(),
             json!(["operation"])
         ),
         compact_tool(
             "phone_keyboard",
             "Type text or press a key on a connected phone.",
             LOCAL_DESTRUCTIVE_ACTION,
-            json!({"operation": {"type": "string", "enum": ["type_text", "press_key"]}}),
+            compact_phone_keyboard_properties(),
             json!(["operation"])
         ),
         compact_tool(
             "phone_notification_action",
             "Open, dismiss, or run an action on a connected-phone notification.",
             LOCAL_DESTRUCTIVE_ACTION,
-            json!({"operation": {"type": "string", "enum": ["open", "dismiss", "action"]}}),
+            compact_phone_notification_action_properties(),
             json!(["operation"])
         ),
         compact_tool(
             "phone_notification_reply",
             "Reply inline to a connected-phone notification.",
             LOCAL_DESTRUCTIVE_ACTION,
-            json!({"event_id": {"type": "string"}, "text": {"type": "string"}}),
+            with_phone_selector(
+                json!({"event_id": {"type": "string"}, "text": {"type": "string"}})
+            ),
             json!(["event_id", "text"])
         ),
         compact_tool(
             "phone_app_action",
             "Launch a phone app or open an Android intent.",
             LOCAL_DESTRUCTIVE_ACTION,
-            json!({"operation": {"type": "string", "enum": ["launch", "open_intent"]}}),
+            compact_phone_app_action_properties(),
             json!(["operation"])
         ),
         compact_tool(
             "phone_app_install",
             "Install an APK on a connected phone.",
             LOCAL_DESTRUCTIVE_ACTION,
-            json!({}),
+            compact_phone_app_install_properties(),
             json!([])
         )
     ]);
@@ -795,7 +808,10 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "browser_eval",
             "Evaluate JavaScript in a claimed browser tab. This is hidden unless browser eval is explicitly enabled.",
             super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
-            json!({"tab_id": {"type": "string"}, "expression": {"type": "string"}}),
+            merge_properties(
+                browser_tab_properties(),
+                json!({"expression": {"type": "string"}})
+            ),
             json!(["tab_id", "expression"]),
         ));
     }
@@ -820,6 +836,370 @@ fn compact_tool(
             "additionalProperties": false
         }
     })
+}
+
+fn merge_properties(left: Value, right: Value) -> Value {
+    let mut merged = left
+        .as_object()
+        .unwrap_or_else(|| panic!("merge_properties left must be object: {left:?}"))
+        .clone();
+    let right = right
+        .as_object()
+        .unwrap_or_else(|| panic!("merge_properties right must be object: {right:?}"));
+    merged.extend(right.clone());
+    Value::Object(merged)
+}
+
+fn compact_list_resources_properties() -> Value {
+    json!({
+        "surface": {"type": "string", "enum": ["desktop", "browser", "phone"]},
+        "resource": {"type": "string", "enum": ["apps", "windows", "focused_window", "tabs", "devices", "current_app"]},
+        "target": browser_target_schema(),
+        "url_contains": {
+            "type": "string",
+            "description": "For browser tabs only, case-insensitive URL filter."
+        },
+        "title_contains": {
+            "type": "string",
+            "description": "For browser tabs only, case-insensitive title filter."
+        },
+        "include_mdns": {
+            "type": "boolean",
+            "description": "For phone devices only, include mDNS wireless-debugging records."
+        },
+        "session_id": phone_session_id_schema(),
+        "serial": phone_serial_schema(),
+        "include_system": {
+            "type": "boolean",
+            "description": "For phone apps only, include system packages."
+        },
+        "limit": limit_schema()
+    })
+}
+
+fn compact_observe_properties(can_receive_images: bool) -> Value {
+    merge_properties(
+        json!({
+            "surface": {"type": "string", "enum": ["desktop", "browser", "phone"]},
+            "target": browser_target_schema(),
+            "tab_id": browser_tab_id_schema(),
+            "text_limit": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": sky_cua_platform::model::BROWSER_SNAPSHOT_MAX_TEXT_LIMIT,
+                "description": "For browser only, maximum page text characters."
+            },
+            "include_accessibility": {
+                "type": "boolean",
+                "description": "For phone only, include the accessibility tree in the observation."
+            },
+            "include_notifications": {
+                "type": "boolean",
+                "description": "For phone only, include recent notifications in the observation."
+            },
+            "backend": phone_backend_schema()
+        }),
+        merge_properties(
+            get_app_state_properties(can_receive_images),
+            merge_properties(
+                browser_snapshot_window_properties(),
+                phone_selector_properties(),
+            ),
+        ),
+    )
+}
+
+fn compact_capture_screen_properties() -> Value {
+    merge_properties(
+        json!({
+            "surface": {"type": "string", "enum": ["browser", "phone"]},
+            "target": browser_target_schema(),
+            "tab_id": browser_tab_id_schema(),
+            "backend": phone_backend_schema()
+        }),
+        phone_selector_properties(),
+    )
+}
+
+fn compact_desktop_semantic_properties(properties: Value) -> Value {
+    action_tool_properties(merge_properties(properties, semantic_selector_properties()))
+}
+
+fn compact_desktop_pointer_properties() -> Value {
+    action_tool_properties(merge_properties(
+        json!({
+            "operation": {"type": "string", "enum": ["click", "secondary_click", "drag"]},
+            "x": coordinate_schema("Click x coordinate or drag start x."),
+            "y": coordinate_schema("Click y coordinate or drag start y."),
+            "from_x": coordinate_schema("Drag start x coordinate."),
+            "from_y": coordinate_schema("Drag start y coordinate."),
+            "to_x": coordinate_schema("Drag end x coordinate."),
+            "to_y": coordinate_schema("Drag end y coordinate."),
+            "to_element_index": {"type": "integer", "minimum": 0}
+        }),
+        semantic_selector_properties(),
+    ))
+}
+
+fn compact_desktop_keyboard_properties() -> Value {
+    action_tool_properties(keyboard_target_properties(json!({
+        "operation": {"type": "string", "enum": ["type_text", "press_key"]},
+        "text": {"type": "string"},
+        "key": {"type": "string"}
+    })))
+}
+
+fn compact_desktop_action_properties() -> Value {
+    action_tool_properties(merge_properties(
+        json!({
+            "operation": {"type": "string", "enum": ["activate", "perform_action"]},
+            "action": {
+                "type": "string",
+                "description": "Named backend action when operation=perform_action."
+            },
+            "action_index": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Indexed backend action when operation=perform_action."
+            }
+        }),
+        semantic_selector_properties(),
+    ))
+}
+
+fn action_tool_properties(mut properties: Value) -> Value {
+    let property_map = properties
+        .as_object_mut()
+        .expect("action tool properties must be object");
+    property_map.insert(
+        "snapshot_id".to_string(),
+        json!({
+            "type": "string",
+            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata."
+        }),
+    );
+    properties
+}
+
+fn semantic_selector_properties() -> Value {
+    json!({
+        "element_index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Element index from the latest desktop observation."
+        },
+        "element_identifier": {
+            "type": "string",
+            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup."
+        },
+        "role": {"type": "string"},
+        "name": {"type": "string"},
+        "text": {"type": "string"},
+        "states": {
+            "type": "array",
+            "items": {"type": "string"}
+        }
+    })
+}
+
+fn browser_target_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["user_chrome"],
+        "description": "Browser bridge target. Defaults to user_chrome."
+    })
+}
+
+fn browser_tab_id_schema() -> Value {
+    json!({
+        "type": "string",
+        "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs)."
+    })
+}
+
+fn browser_tab_properties() -> Value {
+    json!({
+        "target": browser_target_schema(),
+        "tab_id": browser_tab_id_schema()
+    })
+}
+
+fn browser_target_url_properties(require_tab: bool) -> Value {
+    let mut properties = json!({
+        "target": browser_target_schema(),
+        "url": {
+            "type": "string",
+            "description": "HTTP(S), file, about, data, or chrome URL accepted by the browser bridge."
+        }
+    });
+    if require_tab && let Some(map) = properties.as_object_mut() {
+        map.insert("tab_id".to_string(), browser_tab_id_schema());
+    }
+    properties
+}
+
+fn compact_browser_point_properties() -> Value {
+    merge_properties(
+        browser_tab_properties(),
+        json!({
+            "x": {"type": "number", "minimum": 0, "description": "CSS pixel x coordinate."},
+            "y": {"type": "number", "minimum": 0, "description": "CSS pixel y coordinate."},
+            "wait_for_arrival": {
+                "type": "boolean",
+                "description": "Wait for the visible cursor overlay to arrive. Defaults to true."
+            }
+        }),
+    )
+}
+
+fn compact_browser_input_properties() -> Value {
+    merge_properties(
+        compact_browser_point_properties(),
+        json!({
+            "operation": {"type": "string", "enum": ["click", "type_text", "press_key"]},
+            "text": {"type": "string"},
+            "key": {"type": "string"}
+        }),
+    )
+}
+
+fn compact_browser_scroll_properties() -> Value {
+    merge_properties(
+        compact_browser_point_properties(),
+        json!({
+            "delta_x": {"type": "number", "description": "Horizontal wheel delta in CSS pixels."},
+            "delta_y": {"type": "number", "description": "Vertical wheel delta in CSS pixels."}
+        }),
+    )
+}
+
+fn browser_snapshot_window_properties() -> Value {
+    json!({
+        "element_query": {"type": "string"},
+        "element_offset": {"type": "integer", "minimum": 0},
+        "element_limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": sky_cua_platform::model::BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT
+        }
+    })
+}
+
+fn phone_session_id_schema() -> Value {
+    json!({
+        "type": "string",
+        "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices)."
+    })
+}
+
+fn phone_serial_schema() -> Value {
+    json!({
+        "type": "string",
+        "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present."
+    })
+}
+
+fn phone_backend_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["auto", "adb", "companion", "scrcpy", "none"],
+        "description": "Only honored by phone observe, phone screenshot, and phone connect branches."
+    })
+}
+
+fn phone_selector_properties() -> Value {
+    json!({
+        "session_id": phone_session_id_schema(),
+        "serial": phone_serial_schema()
+    })
+}
+
+fn with_phone_selector(properties: Value) -> Value {
+    merge_properties(properties, phone_selector_properties())
+}
+
+fn limit_schema() -> Value {
+    json!({"type": "integer", "minimum": 0})
+}
+
+fn compact_phone_connection_properties() -> Value {
+    merge_properties(
+        with_phone_selector(json!({
+            "operation": {"type": "string", "enum": ["connect", "disconnect", "refresh"]},
+            "backend": phone_backend_schema(),
+            "install_companion": {"type": "boolean"},
+            "start_scrcpy": {"type": "boolean"},
+            "keep_wireless": {"type": "boolean"}
+        })),
+        json!({}),
+    )
+}
+
+fn compact_phone_setup_properties() -> Value {
+    with_phone_selector(json!({
+        "operation": {"type": "string", "enum": ["install_companion", "open_settings"]},
+        "force_reinstall": {"type": "boolean"},
+        "allow_downgrade": {"type": "boolean"},
+        "screen": {
+            "type": "string",
+            "enum": ["accessibility", "notification_listener", "developer_options", "wireless_debugging", "app_info"]
+        }
+    }))
+}
+
+fn compact_phone_pointer_properties() -> Value {
+    with_phone_selector(json!({
+        "operation": {"type": "string", "enum": ["tap", "swipe"]},
+        "phone_snapshot_id": {"type": "string"},
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "start_x": {"type": "number"},
+        "start_y": {"type": "number"},
+        "end_x": {"type": "number"},
+        "end_y": {"type": "number"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "use_device_coordinates": {"type": "boolean"}
+    }))
+}
+
+fn compact_phone_keyboard_properties() -> Value {
+    with_phone_selector(json!({
+        "operation": {"type": "string", "enum": ["type_text", "press_key"]},
+        "text": {"type": "string"},
+        "key": {"type": "string"}
+    }))
+}
+
+fn compact_phone_notification_action_properties() -> Value {
+    with_phone_selector(json!({
+        "operation": {"type": "string", "enum": ["open", "dismiss", "action"]},
+        "event_id": {"type": "string"},
+        "action_id": {"type": "string"}
+    }))
+}
+
+fn compact_phone_app_action_properties() -> Value {
+    with_phone_selector(json!({
+        "operation": {"type": "string", "enum": ["launch", "open_intent"]},
+        "package_name": {"type": "string"},
+        "activity": {"type": "string"},
+        "action": {"type": "string"},
+        "data_uri": {"type": "string"},
+        "mime_type": {"type": "string"},
+        "extras": {"type": "object"},
+        "flags": {"type": "array", "items": {"type": "string"}}
+    }))
+}
+
+fn compact_phone_app_install_properties() -> Value {
+    with_phone_selector(json!({
+        "apk_paths": {"type": "array", "items": {"type": "string"}},
+        "apk_path": {"type": "string"},
+        "mode": {"type": "string", "enum": ["install", "streaming", "fastdeploy"]},
+        "reinstall": {"type": "boolean"},
+        "allow_downgrade": {"type": "boolean"},
+        "allow_test_apk": {"type": "boolean"}
+    }))
 }
 
 fn get_app_state_properties(can_receive_images: bool) -> Value {
@@ -1067,7 +1447,8 @@ mod annotation_tests {
         build_tool_definitions, build_tool_registry, mcp_process_config_from_env,
     };
     use crate::mcp_server::ModelSessionInfo;
-    use std::sync::Mutex;
+    use serde_json::{Value, json};
+    use std::{fs, path::PathBuf, sync::Mutex};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1323,5 +1704,698 @@ mod annotation_tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn mcp_tool_surface_matrix_fixture_matches_generated_registry() {
+        assert_fixture_matches(
+            "mcp_tool_surface_matrix.json",
+            include_str!("../../tests/fixtures/mcp_tool_surface_matrix.json"),
+            generated_surface_matrix(),
+        );
+    }
+
+    #[test]
+    fn compact_tool_contract_fixture_matches_generated_registry() {
+        let generated = generated_compact_contract();
+        let tools = generated["tools"].as_array().expect("contract tools");
+        let contract_names: Vec<&str> = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("contract tool name"))
+            .collect();
+        let registry = build_tool_registry(
+            &process_config(McpToolProfile::Compact, true),
+            &ModelSessionInfo::default(),
+        );
+        let advertised_names: Vec<&str> = registry
+            .tools
+            .as_array()
+            .expect("compact tools")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect();
+        assert_eq!(contract_names, advertised_names);
+
+        assert_fixture_matches(
+            "compact_tool_contract.json",
+            include_str!("../../tests/fixtures/compact_tool_contract.json"),
+            generated,
+        );
+    }
+
+    #[test]
+    fn compact_call_cases_fixture_matches_contract() {
+        let generated = generated_compact_call_cases();
+        let cases = generated["cases"].as_array().expect("call cases");
+        assert!(
+            cases.iter().all(|case| case["valid"].is_object()),
+            "every valid compact call case must be an object"
+        );
+        assert!(
+            cases.iter().all(|case| case["invalid"].is_object()),
+            "every invalid compact call case must be an object"
+        );
+        let contract_branch_count: usize = generated_compact_contract()["tools"]
+            .as_array()
+            .expect("contract tools")
+            .iter()
+            .map(|tool| tool["branches"].as_array().expect("branches").len())
+            .sum();
+        assert_eq!(cases.len(), contract_branch_count);
+
+        assert_fixture_matches(
+            "compact_call_cases.json",
+            include_str!("../../tests/fixtures/compact_call_cases.json"),
+            generated,
+        );
+    }
+
+    fn assert_fixture_matches(name: &str, expected: &str, generated: Value) {
+        let generated_text =
+            serde_json::to_string_pretty(&generated).expect("generated fixture json");
+        if std::env::var_os("SKY_CUA_UPDATE_MCP_FIXTURES").is_some() {
+            let path = fixture_path(name);
+            fs::write(&path, format!("{generated_text}\n"))
+                .unwrap_or_else(|error| panic!("failed to update {}: {error}", path.display()));
+            return;
+        }
+        let expected: Value = serde_json::from_str(expected)
+            .unwrap_or_else(|error| panic!("{name} fixture is invalid json: {error}"));
+        let generated: Value =
+            serde_json::from_str(&generated_text).expect("generated fixture should parse");
+        assert_eq!(
+            expected, generated,
+            "{name} is stale; rerun with SKY_CUA_UPDATE_MCP_FIXTURES=1"
+        );
+    }
+
+    fn fixture_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name)
+    }
+
+    fn generated_surface_matrix() -> Value {
+        let mut rows = Vec::new();
+        for profile in [McpToolProfile::Legacy, McpToolProfile::Compact] {
+            for can_receive_images in [false, true] {
+                for browser_eval_enabled in [false, true] {
+                    let model = model_with_image_capability(can_receive_images);
+                    let registry =
+                        build_tool_registry(&process_config(profile, browser_eval_enabled), &model);
+                    let tools_list = registry.tools_list_result();
+                    let serialized = serde_json::to_string(&tools_list).expect("tools list json");
+                    rows.push(json!({
+                        "profile": profile.as_str(),
+                        "can_receive_images": can_receive_images,
+                        "browser_eval_enabled": browser_eval_enabled,
+                        "tool_count": registry.active_names.len(),
+                        "serialized_bytes": serialized.len(),
+                        "description_bytes": description_bytes(&registry.tools),
+                        "largest_schema_bytes": largest_schema_bytes(&registry.tools),
+                        "tools_list": tools_list
+                    }));
+                }
+            }
+        }
+
+        for can_receive_images in [false, true] {
+            for browser_eval_enabled in [false, true] {
+                let legacy = rows
+                    .iter()
+                    .find(|row| {
+                        row["profile"] == "legacy"
+                            && row["can_receive_images"] == can_receive_images
+                            && row["browser_eval_enabled"] == browser_eval_enabled
+                    })
+                    .expect("legacy row");
+                let compact = rows
+                    .iter()
+                    .find(|row| {
+                        row["profile"] == "compact"
+                            && row["can_receive_images"] == can_receive_images
+                            && row["browser_eval_enabled"] == browser_eval_enabled
+                    })
+                    .expect("compact row");
+                let legacy_bytes = legacy["serialized_bytes"].as_u64().expect("legacy bytes");
+                let compact_bytes = compact["serialized_bytes"].as_u64().expect("compact bytes");
+                assert!(
+                    compact_bytes * 100 <= legacy_bytes * 65,
+                    "compact profile exceeds 65% serialized budget for images={can_receive_images} eval={browser_eval_enabled}: compact={compact_bytes} legacy={legacy_bytes}"
+                );
+            }
+        }
+
+        json!({
+            "version": 1,
+            "generated_by": "crates/sky-cua-client/src/mcp_tools/definitions.rs",
+            "rows": rows
+        })
+    }
+
+    fn model_with_image_capability(can_receive_images: bool) -> ModelSessionInfo {
+        ModelSessionInfo {
+            supports_images: Some(can_receive_images),
+        }
+    }
+
+    fn description_bytes(tools: &Value) -> usize {
+        tools
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["description"].as_str())
+            .map(str::len)
+            .sum()
+    }
+
+    fn largest_schema_bytes(tools: &Value) -> usize {
+        tools
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|tool| {
+                serde_json::to_string(&tool["inputSchema"])
+                    .expect("schema json")
+                    .len()
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn generated_compact_contract() -> Value {
+        let registry = build_tool_registry(
+            &process_config(McpToolProfile::Compact, true),
+            &ModelSessionInfo::default(),
+        );
+        let advertised = registry.tools.as_array().expect("compact tools");
+        let tools: Vec<Value> = compact_contract_tools()
+            .into_iter()
+            .map(|mut contract| {
+                let name = contract["name"].as_str().expect("contract name");
+                let public = advertised
+                    .iter()
+                    .find(|tool| tool["name"] == name)
+                    .unwrap_or_else(|| panic!("contract references unadvertised tool {name}"));
+                let object = contract.as_object_mut().expect("contract object");
+                object.insert("annotations".to_string(), public["annotations"].clone());
+                object.insert("input_schema".to_string(), public["inputSchema"].clone());
+                object.insert("content_policy".to_string(), json!("profile_rewrite"));
+                object.insert("structured_policy".to_string(), json!("compact_envelope"));
+                contract
+            })
+            .collect();
+        assert!(tools.iter().all(|tool| {
+            serde_json::to_string(&tool["input_schema"])
+                .expect("schema json")
+                .len()
+                <= 8192
+        }));
+        json!({
+            "version": 1,
+            "profile": "compact",
+            "default_tool_count": 34,
+            "eval_tool_count": 35,
+            "tools": tools
+        })
+    }
+
+    fn compact_contract_tools() -> Vec<Value> {
+        vec![
+            contract_tool("doctor", vec![branch("diagnostics", "doctor", json!({}))]),
+            contract_tool(
+                "status",
+                vec![
+                    branch("browser", "browser_status", json!({"component": "browser"})),
+                    branch("phone", "phone_status", json!({"component": "phone"})),
+                    branch(
+                        "phone_companion",
+                        "phone_companion_status",
+                        json!({"component": "phone_companion"}),
+                    ),
+                    branch(
+                        "session_presence",
+                        "session_presence_status",
+                        json!({"component": "session_presence"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "list_resources",
+                vec![
+                    branch(
+                        "desktop/apps",
+                        "list_apps",
+                        json!({"surface": "desktop", "resource": "apps"}),
+                    ),
+                    branch(
+                        "desktop/windows",
+                        "list_windows",
+                        json!({"surface": "desktop", "resource": "windows"}),
+                    ),
+                    branch(
+                        "desktop/focused_window",
+                        "focused_window",
+                        json!({"surface": "desktop", "resource": "focused_window"}),
+                    ),
+                    branch(
+                        "browser/tabs",
+                        "browser_list_tabs",
+                        json!({"surface": "browser", "resource": "tabs"}),
+                    ),
+                    branch(
+                        "phone/devices",
+                        "phone_list_devices",
+                        json!({"surface": "phone", "resource": "devices"}),
+                    ),
+                    branch(
+                        "phone/apps",
+                        "phone_app_list",
+                        json!({"surface": "phone", "resource": "apps"}),
+                    ),
+                    branch(
+                        "phone/current_app",
+                        "phone_app_current",
+                        json!({"surface": "phone", "resource": "current_app"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "observe",
+                vec![
+                    branch("desktop", "get_app_state", json!({"surface": "desktop"})),
+                    branch(
+                        "browser",
+                        "browser_snapshot",
+                        json!({"surface": "browser", "tab_id": "tab-1"}),
+                    ),
+                    branch("phone", "phone_observe", json!({"surface": "phone"})),
+                ],
+            ),
+            contract_tool(
+                "capture_screen",
+                vec![
+                    branch(
+                        "browser",
+                        "browser_screenshot",
+                        json!({"surface": "browser", "tab_id": "tab-1"}),
+                    ),
+                    branch("phone", "phone_screenshot", json!({"surface": "phone"})),
+                ],
+            ),
+            contract_tool(
+                "phone_accessibility_tree",
+                vec![branch("default", "phone_accessibility_tree", json!({}))],
+            ),
+            contract_tool(
+                "phone_notifications",
+                vec![branch("default", "phone_notifications", json!({}))],
+            ),
+            contract_tool(
+                "capture_desktop",
+                vec![branch("default", "screenshot", json!({}))],
+            ),
+            contract_tool(
+                "setup_desktop",
+                vec![
+                    branch(
+                        "accessibility",
+                        "setup_accessibility",
+                        json!({"operation": "accessibility"}),
+                    ),
+                    branch(
+                        "window_targeting",
+                        "setup_window_targeting",
+                        json!({"operation": "window_targeting"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "session_presence",
+                vec![
+                    branch("hold", "hold_session", json!({"operation": "hold"})),
+                    branch("unlock", "unlock_session", json!({"operation": "unlock"})),
+                    branch(
+                        "release",
+                        "release_session",
+                        json!({"operation": "release"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "activate_window",
+                vec![branch(
+                    "default",
+                    "activate_window",
+                    json!({"window_id": "window-1"}),
+                )],
+            ),
+            contract_tool(
+                "desktop_semantic",
+                vec![
+                    branch(
+                        "focus",
+                        "focus_element",
+                        json!({"operation": "focus", "element_index": 1}),
+                    ),
+                    branch(
+                        "select",
+                        "select_element",
+                        json!({"operation": "select", "element_index": 1}),
+                    ),
+                    branch(
+                        "expand",
+                        "expand_element",
+                        json!({"operation": "expand", "element_index": 1}),
+                    ),
+                    branch(
+                        "collapse",
+                        "collapse_element",
+                        json!({"operation": "collapse", "element_index": 1}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "browser_claim_tab",
+                vec![branch(
+                    "default",
+                    "browser_claim_tab",
+                    json!({"tab_id": "tab-1"}),
+                )],
+            ),
+            contract_tool(
+                "browser_move_mouse",
+                vec![branch(
+                    "default",
+                    "browser_move_mouse",
+                    json!({"tab_id": "tab-1", "x": 1, "y": 1}),
+                )],
+            ),
+            contract_tool(
+                "phone_connection",
+                vec![
+                    branch("connect", "phone_connect", json!({"operation": "connect"})),
+                    branch(
+                        "disconnect",
+                        "phone_disconnect",
+                        json!({"operation": "disconnect"}),
+                    ),
+                    branch(
+                        "refresh",
+                        "phone_refresh_capabilities",
+                        json!({"operation": "refresh"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "phone_pair_wireless",
+                vec![branch(
+                    "default",
+                    "phone_pair_wireless",
+                    json!({"host_port": "127.0.0.1:37099", "pairing_code": "123456"}),
+                )],
+            ),
+            contract_tool(
+                "phone_setup",
+                vec![
+                    branch(
+                        "install_companion",
+                        "phone_install_companion",
+                        json!({"operation": "install_companion"}),
+                    ),
+                    branch(
+                        "open_settings",
+                        "phone_open_settings",
+                        json!({"operation": "open_settings"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "phone_app_force_stop",
+                vec![branch(
+                    "default",
+                    "phone_app_force_stop",
+                    json!({"package_name": "com.example.app"}),
+                )],
+            ),
+            contract_tool(
+                "desktop_toggle",
+                vec![branch(
+                    "default",
+                    "toggle_element",
+                    json!({"element_index": 1}),
+                )],
+            ),
+            contract_tool(
+                "desktop_scroll",
+                vec![branch("default", "scroll", json!({"direction": "down"}))],
+            ),
+            contract_tool(
+                "browser_scroll",
+                vec![branch(
+                    "default",
+                    "browser_scroll",
+                    json!({"tab_id": "tab-1", "delta_y": 300}),
+                )],
+            ),
+            contract_tool(
+                "desktop_pointer",
+                vec![
+                    branch(
+                        "click",
+                        "click",
+                        json!({"operation": "click", "x": 1, "y": 1}),
+                    ),
+                    branch(
+                        "secondary_click",
+                        "perform_secondary_action",
+                        json!({"operation": "secondary_click", "x": 1, "y": 1}),
+                    ),
+                    branch(
+                        "drag",
+                        "drag",
+                        json!({"operation": "drag", "from_x": 1, "from_y": 1, "to_x": 2, "to_y": 2}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "desktop_keyboard",
+                vec![
+                    branch(
+                        "type_text",
+                        "type_text",
+                        json!({"operation": "type_text", "text": "hello"}),
+                    ),
+                    branch(
+                        "press_key",
+                        "press_key",
+                        json!({"operation": "press_key", "key": "Enter"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "desktop_action",
+                vec![
+                    branch(
+                        "activate",
+                        "activate_element",
+                        json!({"operation": "activate", "element_index": 1}),
+                    ),
+                    branch(
+                        "perform_action",
+                        "perform_action",
+                        json!({"operation": "perform_action", "action_index": 0}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "desktop_set_value",
+                vec![branch(
+                    "default",
+                    "set_value",
+                    json!({"element_index": 1, "value": "hello"}),
+                )],
+            ),
+            contract_tool(
+                "browser_open",
+                vec![branch("default", "browser_open", json!({}))],
+            ),
+            contract_tool(
+                "browser_navigate",
+                vec![branch(
+                    "default",
+                    "browser_navigate",
+                    json!({"tab_id": "tab-1", "url": "https://example.test/"}),
+                )],
+            ),
+            contract_tool(
+                "browser_input",
+                vec![
+                    branch(
+                        "click",
+                        "browser_click",
+                        json!({"operation": "click", "tab_id": "tab-1", "x": 1, "y": 1}),
+                    ),
+                    branch(
+                        "type_text",
+                        "browser_type_text",
+                        json!({"operation": "type_text", "tab_id": "tab-1", "text": "hello"}),
+                    ),
+                    branch(
+                        "press_key",
+                        "browser_press_key",
+                        json!({"operation": "press_key", "tab_id": "tab-1", "key": "Enter"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "phone_pointer",
+                vec![
+                    branch(
+                        "tap",
+                        "phone_tap",
+                        json!({"operation": "tap", "x": 1, "y": 1}),
+                    ),
+                    branch(
+                        "swipe",
+                        "phone_swipe",
+                        json!({"operation": "swipe", "start_x": 1, "start_y": 1, "end_x": 2, "end_y": 2}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "phone_keyboard",
+                vec![
+                    branch(
+                        "type_text",
+                        "phone_type_text",
+                        json!({"operation": "type_text", "text": "hello"}),
+                    ),
+                    branch(
+                        "press_key",
+                        "phone_press_key",
+                        json!({"operation": "press_key", "key": "BACK"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "phone_notification_action",
+                vec![
+                    branch(
+                        "open",
+                        "phone_notification_open",
+                        json!({"operation": "open", "event_id": "event-1"}),
+                    ),
+                    branch(
+                        "dismiss",
+                        "phone_notification_dismiss",
+                        json!({"operation": "dismiss", "event_id": "event-1"}),
+                    ),
+                    branch(
+                        "action",
+                        "phone_notification_action",
+                        json!({"operation": "action", "event_id": "event-1", "action_id": "action-1"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "phone_notification_reply",
+                vec![branch(
+                    "default",
+                    "phone_notification_reply",
+                    json!({"event_id": "event-1", "text": "reply"}),
+                )],
+            ),
+            contract_tool(
+                "phone_app_action",
+                vec![
+                    branch(
+                        "launch",
+                        "phone_app_launch",
+                        json!({"operation": "launch", "package_name": "com.example.app"}),
+                    ),
+                    branch(
+                        "open_intent",
+                        "phone_app_open_intent",
+                        json!({"operation": "open_intent", "action": "android.intent.action.VIEW"}),
+                    ),
+                ],
+            ),
+            contract_tool(
+                "phone_app_install",
+                vec![branch(
+                    "default",
+                    "phone_app_install",
+                    json!({"apk_path": "/tmp/example.apk"}),
+                )],
+            ),
+            contract_tool(
+                "browser_eval",
+                vec![branch(
+                    "default",
+                    "browser_eval",
+                    json!({"tab_id": "tab-1", "expression": "document.title"}),
+                )],
+            ),
+        ]
+    }
+
+    fn contract_tool(name: &'static str, branches: Vec<Value>) -> Value {
+        json!({
+            "name": name,
+            "branches": branches
+        })
+    }
+
+    fn branch(
+        name: &'static str,
+        legacy_tool: &'static str,
+        minimal_valid_arguments: Value,
+    ) -> Value {
+        json!({
+            "name": name,
+            "legacy_tool": legacy_tool,
+            "handler_id": legacy_tool,
+            "minimal_valid_arguments": minimal_valid_arguments,
+            "expected_errors": ["InvalidRequest", "ToolNotInActiveProfile", "UnknownTool"]
+        })
+    }
+
+    fn generated_compact_call_cases() -> Value {
+        let mut cases = Vec::new();
+        for tool in compact_contract_tools() {
+            let tool_name = tool["name"].as_str().expect("tool name");
+            for branch in tool["branches"].as_array().expect("branches") {
+                let branch_name = branch["name"].as_str().expect("branch name");
+                cases.push(json!({
+                    "tool": tool_name,
+                    "branch": branch_name,
+                    "legacy_tool": branch["legacy_tool"],
+                    "valid": branch["minimal_valid_arguments"],
+                    "invalid": invalid_call_case(&branch["minimal_valid_arguments"])
+                }));
+            }
+        }
+        json!({
+            "version": 1,
+            "cases": cases
+        })
+    }
+
+    fn invalid_call_case(valid: &Value) -> Value {
+        let mut invalid = valid.as_object().expect("valid case object").clone();
+        if invalid.contains_key("operation") {
+            invalid.insert("operation".to_string(), json!("__invalid__"));
+        } else if invalid.contains_key("surface") {
+            invalid.insert("surface".to_string(), json!("__invalid__"));
+        } else if invalid.contains_key("component") {
+            invalid.insert("component".to_string(), json!("__invalid__"));
+        } else if let Some(first_key) = invalid.keys().next().cloned() {
+            invalid.insert(first_key, json!(false));
+        } else {
+            invalid.insert("__unexpected".to_string(), json!(true));
+        }
+        Value::Object(invalid)
     }
 }

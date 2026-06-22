@@ -1,0 +1,840 @@
+{
+  "cases": [
+    {
+      "branch": "diagnostics",
+      "invalid": {
+        "__unexpected": true
+      },
+      "legacy_tool": "doctor",
+      "tool": "doctor",
+      "valid": {}
+    },
+    {
+      "branch": "browser",
+      "invalid": {
+        "component": "__invalid__"
+      },
+      "legacy_tool": "browser_status",
+      "tool": "status",
+      "valid": {
+        "component": "browser"
+      }
+    },
+    {
+      "branch": "phone",
+      "invalid": {
+        "component": "__invalid__"
+      },
+      "legacy_tool": "phone_status",
+      "tool": "status",
+      "valid": {
+        "component": "phone"
+      }
+    },
+    {
+      "branch": "phone_companion",
+      "invalid": {
+        "component": "__invalid__"
+      },
+      "legacy_tool": "phone_companion_status",
+      "tool": "status",
+      "valid": {
+        "component": "phone_companion"
+      }
+    },
+    {
+      "branch": "session_presence",
+      "invalid": {
+        "component": "__invalid__"
+      },
+      "legacy_tool": "session_presence_status",
+      "tool": "status",
+      "valid": {
+        "component": "session_presence"
+      }
+    },
+    {
+      "branch": "desktop/apps",
+      "invalid": {
+        "resource": "apps",
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "list_apps",
+      "tool": "list_resources",
+      "valid": {
+        "resource": "apps",
+        "surface": "desktop"
+      }
+    },
+    {
+      "branch": "desktop/windows",
+      "invalid": {
+        "resource": "windows",
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "list_windows",
+      "tool": "list_resources",
+      "valid": {
+        "resource": "windows",
+        "surface": "desktop"
+      }
+    },
+    {
+      "branch": "desktop/focused_window",
+      "invalid": {
+        "resource": "focused_window",
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "focused_window",
+      "tool": "list_resources",
+      "valid": {
+        "resource": "focused_window",
+        "surface": "desktop"
+      }
+    },
+    {
+      "branch": "browser/tabs",
+      "invalid": {
+        "resource": "tabs",
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "browser_list_tabs",
+      "tool": "list_resources",
+      "valid": {
+        "resource": "tabs",
+        "surface": "browser"
+      }
+    },
+    {
+      "branch": "phone/devices",
+      "invalid": {
+        "resource": "devices",
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "phone_list_devices",
+      "tool": "list_resources",
+      "valid": {
+        "resource": "devices",
+        "surface": "phone"
+      }
+    },
+    {
+      "branch": "phone/apps",
+      "invalid": {
+        "resource": "apps",
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "phone_app_list",
+      "tool": "list_resources",
+      "valid": {
+        "resource": "apps",
+        "surface": "phone"
+      }
+    },
+    {
+      "branch": "phone/current_app",
+      "invalid": {
+        "resource": "current_app",
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "phone_app_current",
+      "tool": "list_resources",
+      "valid": {
+        "resource": "current_app",
+        "surface": "phone"
+      }
+    },
+    {
+      "branch": "desktop",
+      "invalid": {
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "get_app_state",
+      "tool": "observe",
+      "valid": {
+        "surface": "desktop"
+      }
+    },
+    {
+      "branch": "browser",
+      "invalid": {
+        "surface": "__invalid__",
+        "tab_id": "tab-1"
+      },
+      "legacy_tool": "browser_snapshot",
+      "tool": "observe",
+      "valid": {
+        "surface": "browser",
+        "tab_id": "tab-1"
+      }
+    },
+    {
+      "branch": "phone",
+      "invalid": {
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "phone_observe",
+      "tool": "observe",
+      "valid": {
+        "surface": "phone"
+      }
+    },
+    {
+      "branch": "browser",
+      "invalid": {
+        "surface": "__invalid__",
+        "tab_id": "tab-1"
+      },
+      "legacy_tool": "browser_screenshot",
+      "tool": "capture_screen",
+      "valid": {
+        "surface": "browser",
+        "tab_id": "tab-1"
+      }
+    },
+    {
+      "branch": "phone",
+      "invalid": {
+        "surface": "__invalid__"
+      },
+      "legacy_tool": "phone_screenshot",
+      "tool": "capture_screen",
+      "valid": {
+        "surface": "phone"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "__unexpected": true
+      },
+      "legacy_tool": "phone_accessibility_tree",
+      "tool": "phone_accessibility_tree",
+      "valid": {}
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "__unexpected": true
+      },
+      "legacy_tool": "phone_notifications",
+      "tool": "phone_notifications",
+      "valid": {}
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "__unexpected": true
+      },
+      "legacy_tool": "screenshot",
+      "tool": "capture_desktop",
+      "valid": {}
+    },
+    {
+      "branch": "accessibility",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "setup_accessibility",
+      "tool": "setup_desktop",
+      "valid": {
+        "operation": "accessibility"
+      }
+    },
+    {
+      "branch": "window_targeting",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "setup_window_targeting",
+      "tool": "setup_desktop",
+      "valid": {
+        "operation": "window_targeting"
+      }
+    },
+    {
+      "branch": "hold",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "hold_session",
+      "tool": "session_presence",
+      "valid": {
+        "operation": "hold"
+      }
+    },
+    {
+      "branch": "unlock",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "unlock_session",
+      "tool": "session_presence",
+      "valid": {
+        "operation": "unlock"
+      }
+    },
+    {
+      "branch": "release",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "release_session",
+      "tool": "session_presence",
+      "valid": {
+        "operation": "release"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "window_id": false
+      },
+      "legacy_tool": "activate_window",
+      "tool": "activate_window",
+      "valid": {
+        "window_id": "window-1"
+      }
+    },
+    {
+      "branch": "focus",
+      "invalid": {
+        "element_index": 1,
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "focus_element",
+      "tool": "desktop_semantic",
+      "valid": {
+        "element_index": 1,
+        "operation": "focus"
+      }
+    },
+    {
+      "branch": "select",
+      "invalid": {
+        "element_index": 1,
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "select_element",
+      "tool": "desktop_semantic",
+      "valid": {
+        "element_index": 1,
+        "operation": "select"
+      }
+    },
+    {
+      "branch": "expand",
+      "invalid": {
+        "element_index": 1,
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "expand_element",
+      "tool": "desktop_semantic",
+      "valid": {
+        "element_index": 1,
+        "operation": "expand"
+      }
+    },
+    {
+      "branch": "collapse",
+      "invalid": {
+        "element_index": 1,
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "collapse_element",
+      "tool": "desktop_semantic",
+      "valid": {
+        "element_index": 1,
+        "operation": "collapse"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "tab_id": false
+      },
+      "legacy_tool": "browser_claim_tab",
+      "tool": "browser_claim_tab",
+      "valid": {
+        "tab_id": "tab-1"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "tab_id": false,
+        "x": 1,
+        "y": 1
+      },
+      "legacy_tool": "browser_move_mouse",
+      "tool": "browser_move_mouse",
+      "valid": {
+        "tab_id": "tab-1",
+        "x": 1,
+        "y": 1
+      }
+    },
+    {
+      "branch": "connect",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_connect",
+      "tool": "phone_connection",
+      "valid": {
+        "operation": "connect"
+      }
+    },
+    {
+      "branch": "disconnect",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_disconnect",
+      "tool": "phone_connection",
+      "valid": {
+        "operation": "disconnect"
+      }
+    },
+    {
+      "branch": "refresh",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_refresh_capabilities",
+      "tool": "phone_connection",
+      "valid": {
+        "operation": "refresh"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "host_port": false,
+        "pairing_code": "123456"
+      },
+      "legacy_tool": "phone_pair_wireless",
+      "tool": "phone_pair_wireless",
+      "valid": {
+        "host_port": "127.0.0.1:37099",
+        "pairing_code": "123456"
+      }
+    },
+    {
+      "branch": "install_companion",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_install_companion",
+      "tool": "phone_setup",
+      "valid": {
+        "operation": "install_companion"
+      }
+    },
+    {
+      "branch": "open_settings",
+      "invalid": {
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_open_settings",
+      "tool": "phone_setup",
+      "valid": {
+        "operation": "open_settings"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "package_name": false
+      },
+      "legacy_tool": "phone_app_force_stop",
+      "tool": "phone_app_force_stop",
+      "valid": {
+        "package_name": "com.example.app"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "element_index": false
+      },
+      "legacy_tool": "toggle_element",
+      "tool": "desktop_toggle",
+      "valid": {
+        "element_index": 1
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "direction": false
+      },
+      "legacy_tool": "scroll",
+      "tool": "desktop_scroll",
+      "valid": {
+        "direction": "down"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "delta_y": false,
+        "tab_id": "tab-1"
+      },
+      "legacy_tool": "browser_scroll",
+      "tool": "browser_scroll",
+      "valid": {
+        "delta_y": 300,
+        "tab_id": "tab-1"
+      }
+    },
+    {
+      "branch": "click",
+      "invalid": {
+        "operation": "__invalid__",
+        "x": 1,
+        "y": 1
+      },
+      "legacy_tool": "click",
+      "tool": "desktop_pointer",
+      "valid": {
+        "operation": "click",
+        "x": 1,
+        "y": 1
+      }
+    },
+    {
+      "branch": "secondary_click",
+      "invalid": {
+        "operation": "__invalid__",
+        "x": 1,
+        "y": 1
+      },
+      "legacy_tool": "perform_secondary_action",
+      "tool": "desktop_pointer",
+      "valid": {
+        "operation": "secondary_click",
+        "x": 1,
+        "y": 1
+      }
+    },
+    {
+      "branch": "drag",
+      "invalid": {
+        "from_x": 1,
+        "from_y": 1,
+        "operation": "__invalid__",
+        "to_x": 2,
+        "to_y": 2
+      },
+      "legacy_tool": "drag",
+      "tool": "desktop_pointer",
+      "valid": {
+        "from_x": 1,
+        "from_y": 1,
+        "operation": "drag",
+        "to_x": 2,
+        "to_y": 2
+      }
+    },
+    {
+      "branch": "type_text",
+      "invalid": {
+        "operation": "__invalid__",
+        "text": "hello"
+      },
+      "legacy_tool": "type_text",
+      "tool": "desktop_keyboard",
+      "valid": {
+        "operation": "type_text",
+        "text": "hello"
+      }
+    },
+    {
+      "branch": "press_key",
+      "invalid": {
+        "key": "Enter",
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "press_key",
+      "tool": "desktop_keyboard",
+      "valid": {
+        "key": "Enter",
+        "operation": "press_key"
+      }
+    },
+    {
+      "branch": "activate",
+      "invalid": {
+        "element_index": 1,
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "activate_element",
+      "tool": "desktop_action",
+      "valid": {
+        "element_index": 1,
+        "operation": "activate"
+      }
+    },
+    {
+      "branch": "perform_action",
+      "invalid": {
+        "action_index": 0,
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "perform_action",
+      "tool": "desktop_action",
+      "valid": {
+        "action_index": 0,
+        "operation": "perform_action"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "element_index": false,
+        "value": "hello"
+      },
+      "legacy_tool": "set_value",
+      "tool": "desktop_set_value",
+      "valid": {
+        "element_index": 1,
+        "value": "hello"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "__unexpected": true
+      },
+      "legacy_tool": "browser_open",
+      "tool": "browser_open",
+      "valid": {}
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "tab_id": false,
+        "url": "https://example.test/"
+      },
+      "legacy_tool": "browser_navigate",
+      "tool": "browser_navigate",
+      "valid": {
+        "tab_id": "tab-1",
+        "url": "https://example.test/"
+      }
+    },
+    {
+      "branch": "click",
+      "invalid": {
+        "operation": "__invalid__",
+        "tab_id": "tab-1",
+        "x": 1,
+        "y": 1
+      },
+      "legacy_tool": "browser_click",
+      "tool": "browser_input",
+      "valid": {
+        "operation": "click",
+        "tab_id": "tab-1",
+        "x": 1,
+        "y": 1
+      }
+    },
+    {
+      "branch": "type_text",
+      "invalid": {
+        "operation": "__invalid__",
+        "tab_id": "tab-1",
+        "text": "hello"
+      },
+      "legacy_tool": "browser_type_text",
+      "tool": "browser_input",
+      "valid": {
+        "operation": "type_text",
+        "tab_id": "tab-1",
+        "text": "hello"
+      }
+    },
+    {
+      "branch": "press_key",
+      "invalid": {
+        "key": "Enter",
+        "operation": "__invalid__",
+        "tab_id": "tab-1"
+      },
+      "legacy_tool": "browser_press_key",
+      "tool": "browser_input",
+      "valid": {
+        "key": "Enter",
+        "operation": "press_key",
+        "tab_id": "tab-1"
+      }
+    },
+    {
+      "branch": "tap",
+      "invalid": {
+        "operation": "__invalid__",
+        "x": 1,
+        "y": 1
+      },
+      "legacy_tool": "phone_tap",
+      "tool": "phone_pointer",
+      "valid": {
+        "operation": "tap",
+        "x": 1,
+        "y": 1
+      }
+    },
+    {
+      "branch": "swipe",
+      "invalid": {
+        "end_x": 2,
+        "end_y": 2,
+        "operation": "__invalid__",
+        "start_x": 1,
+        "start_y": 1
+      },
+      "legacy_tool": "phone_swipe",
+      "tool": "phone_pointer",
+      "valid": {
+        "end_x": 2,
+        "end_y": 2,
+        "operation": "swipe",
+        "start_x": 1,
+        "start_y": 1
+      }
+    },
+    {
+      "branch": "type_text",
+      "invalid": {
+        "operation": "__invalid__",
+        "text": "hello"
+      },
+      "legacy_tool": "phone_type_text",
+      "tool": "phone_keyboard",
+      "valid": {
+        "operation": "type_text",
+        "text": "hello"
+      }
+    },
+    {
+      "branch": "press_key",
+      "invalid": {
+        "key": "BACK",
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_press_key",
+      "tool": "phone_keyboard",
+      "valid": {
+        "key": "BACK",
+        "operation": "press_key"
+      }
+    },
+    {
+      "branch": "open",
+      "invalid": {
+        "event_id": "event-1",
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_notification_open",
+      "tool": "phone_notification_action",
+      "valid": {
+        "event_id": "event-1",
+        "operation": "open"
+      }
+    },
+    {
+      "branch": "dismiss",
+      "invalid": {
+        "event_id": "event-1",
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_notification_dismiss",
+      "tool": "phone_notification_action",
+      "valid": {
+        "event_id": "event-1",
+        "operation": "dismiss"
+      }
+    },
+    {
+      "branch": "action",
+      "invalid": {
+        "action_id": "action-1",
+        "event_id": "event-1",
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_notification_action",
+      "tool": "phone_notification_action",
+      "valid": {
+        "action_id": "action-1",
+        "event_id": "event-1",
+        "operation": "action"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "event_id": false,
+        "text": "reply"
+      },
+      "legacy_tool": "phone_notification_reply",
+      "tool": "phone_notification_reply",
+      "valid": {
+        "event_id": "event-1",
+        "text": "reply"
+      }
+    },
+    {
+      "branch": "launch",
+      "invalid": {
+        "operation": "__invalid__",
+        "package_name": "com.example.app"
+      },
+      "legacy_tool": "phone_app_launch",
+      "tool": "phone_app_action",
+      "valid": {
+        "operation": "launch",
+        "package_name": "com.example.app"
+      }
+    },
+    {
+      "branch": "open_intent",
+      "invalid": {
+        "action": "android.intent.action.VIEW",
+        "operation": "__invalid__"
+      },
+      "legacy_tool": "phone_app_open_intent",
+      "tool": "phone_app_action",
+      "valid": {
+        "action": "android.intent.action.VIEW",
+        "operation": "open_intent"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "apk_path": false
+      },
+      "legacy_tool": "phone_app_install",
+      "tool": "phone_app_install",
+      "valid": {
+        "apk_path": "/tmp/example.apk"
+      }
+    },
+    {
+      "branch": "default",
+      "invalid": {
+        "expression": false,
+        "tab_id": "tab-1"
+      },
+      "legacy_tool": "browser_eval",
+      "tool": "browser_eval",
+      "valid": {
+        "expression": "document.title",
+        "tab_id": "tab-1"
+      }
+    }
+  ],
+  "version": 1
+}
