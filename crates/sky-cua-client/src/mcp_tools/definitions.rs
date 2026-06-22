@@ -618,12 +618,12 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_semantic",
-            "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "Focus, select, expand, or collapse a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             LOCAL_NAVIGATION_ACTION,
             compact_desktop_semantic_properties(
                 json!({"operation": {"type": "string", "enum": ["focus", "select", "expand", "collapse"]}})
             ),
-            json!(["operation"]),
+            json!(["operation", "element_index"]),
             compact_desktop_selector_constraint()
         ),
         compact_tool(
@@ -670,21 +670,21 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_toggle",
-            "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "Toggle a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             LOCAL_STATEFUL_ACTION,
             compact_desktop_semantic_properties(json!({})),
-            json!([]),
+            json!(["element_index"]),
             compact_desktop_selector_constraint()
         ),
         compact_tool_with_constraints(
             "desktop_scroll",
-            "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
+            "Scroll a desktop semantic element. Use element_index from observe(surface=\"desktop\") instead of relying on ambient focus.",
             LOCAL_STATEFUL_ACTION,
             compact_desktop_semantic_properties(json!({
                 "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
                 "amount": {"type": "number", "description": "Optional scroll amount passed through to the desktop backend."}
             })),
-            json!(["direction"]),
+            json!(["direction", "element_index"]),
             compact_desktop_selector_constraint()
         ),
         compact_tool(
@@ -701,10 +701,10 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_pointer",
-            "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
+            "Click, secondary-click, or drag on the desktop. Provide explicit x/y coordinates; do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_desktop_pointer_properties(),
-            json!(["operation"]),
+            json!(["operation", "x", "y"]),
             compact_desktop_pointer_constraints()
         ),
         compact_tool_with_constraints(
@@ -717,15 +717,15 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_action",
-            "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
+            "Activate a desktop semantic element or perform a named/indexed action. Use element_index from observe(surface=\"desktop\"); do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_desktop_action_properties(),
-            json!(["operation"]),
+            json!(["operation", "element_index"]),
             compact_desktop_action_constraints()
         ),
         compact_tool_with_constraints(
             "desktop_set_value",
-            "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
+            "Set a desktop semantic element value. Include value plus element_index from observe(surface=\"desktop\").",
             ToolAnnotations {
                 read_only: false,
                 destructive: true,
@@ -733,7 +733,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 open_world: false
             },
             compact_desktop_semantic_properties(json!({"value": {"type": "string"}})),
-            json!(["value"]),
+            json!(["value", "element_index"]),
             compact_desktop_selector_constraint()
         ),
         compact_tool(

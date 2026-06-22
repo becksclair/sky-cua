@@ -1052,7 +1052,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "element_index"
         ],
         "type": "object"
       },
@@ -1511,7 +1512,9 @@
             "type": "string"
           }
         },
-        "required": [],
+        "required": [
+          "element_index"
+        ],
         "type": "object"
       },
       "name": "desktop_toggle",
@@ -1608,7 +1611,8 @@
           }
         },
         "required": [
-          "direction"
+          "direction",
+          "element_index"
         ],
         "type": "object"
       },
@@ -1940,7 +1944,9 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "x",
+          "y"
         ],
         "type": "object"
       },
@@ -2277,7 +2283,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "element_index"
         ],
         "type": "object"
       },
@@ -2366,7 +2373,8 @@
           }
         },
         "required": [
-          "value"
+          "value",
+          "element_index"
         ],
         "type": "object"
       },

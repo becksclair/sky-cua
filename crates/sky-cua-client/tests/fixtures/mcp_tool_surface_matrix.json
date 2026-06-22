@@ -9694,10 +9694,10 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": false,
-      "description_bytes": 2700,
-      "largest_schema_bytes": 1922,
+      "description_bytes": 2489,
+      "largest_schema_bytes": 1930,
       "profile": "compact",
-      "serialized_bytes": 32143,
+      "serialized_bytes": 32017,
       "tool_count": 34,
       "tools_list": {
         "tools": [
@@ -10229,7 +10229,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "description": "Focus, select, expand, or collapse a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -10294,7 +10294,8 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "element_index"
               ],
               "type": "object"
             },
@@ -10544,7 +10545,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "description": "Toggle a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -10599,7 +10600,9 @@
                   "type": "string"
                 }
               },
-              "required": [],
+              "required": [
+                "element_index"
+              ],
               "type": "object"
             },
             "name": "desktop_toggle"
@@ -10611,7 +10614,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
+            "description": "Scroll a desktop semantic element. Use element_index from observe(surface=\"desktop\") instead of relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -10680,7 +10683,8 @@
                 }
               },
               "required": [
-                "direction"
+                "direction",
+                "element_index"
               ],
               "type": "object"
             },
@@ -10745,7 +10749,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
+            "description": "Click, secondary-click, or drag on the desktop. Provide explicit x/y coordinates; do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -10945,7 +10949,9 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "x",
+                "y"
               ],
               "type": "object"
             },
@@ -11118,7 +11124,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
+            "description": "Activate a desktop semantic element or perform a named/indexed action. Use element_index from observe(surface=\"desktop\"); do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -11220,7 +11226,8 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "element_index"
               ],
               "type": "object"
             },
@@ -11233,7 +11240,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
+            "description": "Set a desktop semantic element value. Include value plus element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -11292,7 +11299,8 @@
                 }
               },
               "required": [
-                "value"
+                "value",
+                "element_index"
               ],
               "type": "object"
             },
@@ -11766,10 +11774,10 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": false,
-      "description_bytes": 2803,
-      "largest_schema_bytes": 1922,
+      "description_bytes": 2592,
+      "largest_schema_bytes": 1930,
       "profile": "compact",
-      "serialized_bytes": 32786,
+      "serialized_bytes": 32660,
       "tool_count": 35,
       "tools_list": {
         "tools": [
@@ -12301,7 +12309,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "description": "Focus, select, expand, or collapse a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -12366,7 +12374,8 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "element_index"
               ],
               "type": "object"
             },
@@ -12616,7 +12625,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "description": "Toggle a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -12671,7 +12680,9 @@
                   "type": "string"
                 }
               },
-              "required": [],
+              "required": [
+                "element_index"
+              ],
               "type": "object"
             },
             "name": "desktop_toggle"
@@ -12683,7 +12694,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
+            "description": "Scroll a desktop semantic element. Use element_index from observe(surface=\"desktop\") instead of relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -12752,7 +12763,8 @@
                 }
               },
               "required": [
-                "direction"
+                "direction",
+                "element_index"
               ],
               "type": "object"
             },
@@ -12817,7 +12829,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
+            "description": "Click, secondary-click, or drag on the desktop. Provide explicit x/y coordinates; do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -13017,7 +13029,9 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "x",
+                "y"
               ],
               "type": "object"
             },
@@ -13190,7 +13204,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
+            "description": "Activate a desktop semantic element or perform a named/indexed action. Use element_index from observe(surface=\"desktop\"); do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -13292,7 +13306,8 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "element_index"
               ],
               "type": "object"
             },
@@ -13305,7 +13320,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
+            "description": "Set a desktop semantic element value. Include value plus element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -13364,7 +13379,8 @@
                 }
               },
               "required": [
-                "value"
+                "value",
+                "element_index"
               ],
               "type": "object"
             },
@@ -13872,10 +13888,10 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": true,
-      "description_bytes": 2700,
+      "description_bytes": 2489,
       "largest_schema_bytes": 2050,
       "profile": "compact",
-      "serialized_bytes": 32715,
+      "serialized_bytes": 32589,
       "tool_count": 34,
       "tools_list": {
         "tools": [
@@ -14433,7 +14449,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "description": "Focus, select, expand, or collapse a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -14498,7 +14514,8 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "element_index"
               ],
               "type": "object"
             },
@@ -14748,7 +14765,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "description": "Toggle a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -14803,7 +14820,9 @@
                   "type": "string"
                 }
               },
-              "required": [],
+              "required": [
+                "element_index"
+              ],
               "type": "object"
             },
             "name": "desktop_toggle"
@@ -14815,7 +14834,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
+            "description": "Scroll a desktop semantic element. Use element_index from observe(surface=\"desktop\") instead of relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -14884,7 +14903,8 @@
                 }
               },
               "required": [
-                "direction"
+                "direction",
+                "element_index"
               ],
               "type": "object"
             },
@@ -14949,7 +14969,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
+            "description": "Click, secondary-click, or drag on the desktop. Provide explicit x/y coordinates; do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -15149,7 +15169,9 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "x",
+                "y"
               ],
               "type": "object"
             },
@@ -15322,7 +15344,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
+            "description": "Activate a desktop semantic element or perform a named/indexed action. Use element_index from observe(surface=\"desktop\"); do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -15424,7 +15446,8 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "element_index"
               ],
               "type": "object"
             },
@@ -15437,7 +15460,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
+            "description": "Set a desktop semantic element value. Include value plus element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -15496,7 +15519,8 @@
                 }
               },
               "required": [
-                "value"
+                "value",
+                "element_index"
               ],
               "type": "object"
             },
@@ -15970,10 +15994,10 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": true,
-      "description_bytes": 2803,
+      "description_bytes": 2592,
       "largest_schema_bytes": 2050,
       "profile": "compact",
-      "serialized_bytes": 33358,
+      "serialized_bytes": 33232,
       "tool_count": 35,
       "tools_list": {
         "tools": [
@@ -16531,7 +16555,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "description": "Focus, select, expand, or collapse a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -16596,7 +16620,8 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "element_index"
               ],
               "type": "object"
             },
@@ -16846,7 +16871,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
+            "description": "Toggle a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -16901,7 +16926,9 @@
                   "type": "string"
                 }
               },
-              "required": [],
+              "required": [
+                "element_index"
+              ],
               "type": "object"
             },
             "name": "desktop_toggle"
@@ -16913,7 +16940,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
+            "description": "Scroll a desktop semantic element. Use element_index from observe(surface=\"desktop\") instead of relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -16982,7 +17009,8 @@
                 }
               },
               "required": [
-                "direction"
+                "direction",
+                "element_index"
               ],
               "type": "object"
             },
@@ -17047,7 +17075,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
+            "description": "Click, secondary-click, or drag on the desktop. Provide explicit x/y coordinates; do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -17247,7 +17275,9 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "x",
+                "y"
               ],
               "type": "object"
             },
@@ -17420,7 +17450,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
+            "description": "Activate a desktop semantic element or perform a named/indexed action. Use element_index from observe(surface=\"desktop\"); do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -17522,7 +17552,8 @@
                 }
               },
               "required": [
-                "operation"
+                "operation",
+                "element_index"
               ],
               "type": "object"
             },
@@ -17535,7 +17566,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
+            "description": "Set a desktop semantic element value. Include value plus element_index from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
               "anyOf": [
@@ -17594,7 +17625,8 @@
                 }
               },
               "required": [
-                "value"
+                "value",
+                "element_index"
               ],
               "type": "object"
             },
