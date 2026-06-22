@@ -89,39 +89,7 @@ BOGUS_SERIAL = "phone-smoke-nonexistent-serial"
 SNAPSHOT_ORIENTATION_MISMATCH_CODE = "PhoneSnapshotOrientationMismatch"
 SNAPSHOT_RESOLUTION_MISMATCH_CODE = "PhoneSnapshotResolutionMismatch"
 
-EXPECTED_PHONE_TOOLS: frozenset[str] = frozenset(
-    {
-        "phone_observe",
-        "phone_status",
-        "phone_list_devices",
-        "phone_refresh_capabilities",
-        "phone_pair_wireless",
-        "phone_connect",
-        "phone_disconnect",
-        "phone_screenshot",
-        "phone_tap",
-        "phone_swipe",
-        "phone_type_text",
-        "phone_press_key",
-        "phone_install_companion",
-        "phone_companion_status",
-        "phone_accessibility_tree",
-        "phone_notifications",
-        "phone_notification_open",
-        "phone_notification_dismiss",
-        "phone_notification_action",
-        "phone_notification_reply",
-        "phone_app_current",
-        "phone_app_list",
-        "phone_app_launch",
-        "phone_app_open_intent",
-        "phone_app_force_stop",
-        "phone_app_install",
-        "phone_open_settings",
-    }
-)
-
-COMPACT_EXPECTED_PHONE_TOOLS: frozenset[str] = frozenset(
+CANONICAL_EXPECTED_PHONE_TOOLS: frozenset[str] = frozenset(
     {
         "status",
         "list_resources",
@@ -141,11 +109,6 @@ COMPACT_EXPECTED_PHONE_TOOLS: frozenset[str] = frozenset(
         "phone_app_install",
     }
 )
-
-TOOL_PROFILE_ENV_VAR = "SKY_CUA_MCP_TOOL_PROFILE"
-TOOL_PROFILE_LEGACY = "legacy"
-TOOL_PROFILE_COMPACT = "compact"
-
 
 # ---------------------------------------------------------------------------
 # Outcome model
@@ -329,19 +292,9 @@ def tool_names_from_list(result: Any) -> set[str]:
     return names
 
 
-def active_tool_profile() -> str:
-    """Return the MCP tool profile the smoke should expect."""
-    value = os.environ.get(TOOL_PROFILE_ENV_VAR, TOOL_PROFILE_LEGACY).strip().lower()
-    if value == TOOL_PROFILE_COMPACT:
-        return TOOL_PROFILE_COMPACT
-    return TOOL_PROFILE_LEGACY
-
-
-def compact_unwrapped_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Return a legacy-shaped result map from a compact profile envelope."""
+def canonical_unwrapped_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Return the branch result map from a canonical envelope."""
     payload = structured(result)
-    if payload.get("profile") != TOOL_PROFILE_COMPACT:
-        return result
     inner = payload.get("result")
     if not isinstance(inner, dict):
         return result
@@ -352,24 +305,18 @@ def compact_unwrapped_result(result: dict[str, Any]) -> dict[str, Any]:
 
 def require_expected_phone_tools(
     client: McpClient,
-    *,
-    tool_profile: str = TOOL_PROFILE_LEGACY,
 ) -> StepResult:
     """Prove the installed MCP surface exposes the complete phone-use family."""
     result = client.tools_list()
     names = tool_names_from_list(result)
-    expected = (
-        COMPACT_EXPECTED_PHONE_TOOLS
-        if tool_profile == TOOL_PROFILE_COMPACT
-        else EXPECTED_PHONE_TOOLS
-    )
+    expected = CANONICAL_EXPECTED_PHONE_TOOLS
     missing = sorted(expected - names)
     if missing:
         raise SmokeFailure(
             "installed MCP tools/list is missing phone tools: "
             + bounded_metadata(", ".join(missing), max_len=180)
         )
-    return step_pass("tools_list", f"{tool_profile}_phone_tools={len(expected)}")
+    return step_pass("tools_list", f"canonical_phone_tools={len(expected)}")
 
 
 def cursor_capabilities(result: dict[str, Any]) -> dict[str, Any]:
@@ -490,7 +437,6 @@ class PhoneSmokeOptions:
     # real device itself; without them those steps SKIP with a named reason.
     rotate_device: bool = False
     resize_device: bool = False
-    tool_profile: str = TOOL_PROFILE_LEGACY
 
 
 class PhoneSmoke:
@@ -500,7 +446,6 @@ class PhoneSmoke:
         self._client = client
         self._options = options
         self._request_id = 100
-        self._compact = options.tool_profile == TOOL_PROFILE_COMPACT
 
     def _next_id(self) -> int:
         self._request_id += 1
@@ -508,14 +453,12 @@ class PhoneSmoke:
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Invoke a phone tool and return its raw MCP result map."""
-        if not self._compact:
-            return self._client.tools_call(self._next_id(), name, arguments)
-        compact_name, compact_arguments = self._compact_call(name, arguments)
-        result = self._client.tools_call(self._next_id(), compact_name, compact_arguments)
-        return compact_unwrapped_result(result)
+        canonical_name, canonical_arguments = self._canonical_call(name, arguments)
+        result = self._client.tools_call(self._next_id(), canonical_name, canonical_arguments)
+        return canonical_unwrapped_result(result)
 
-    def _compact_call(self, name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-        """Map the smoke's legacy phone operation names onto compact branches."""
+    def _canonical_call(self, name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map the smoke's internal phone operation names onto canonical branches."""
         mapped = dict(arguments)
         match name:
             case "phone_status":
@@ -1366,7 +1309,7 @@ def run_smoke(
     try:
         client.initialize()
         if options.installed:
-            proof = require_expected_phone_tools(client, tool_profile=options.tool_profile)
+            proof = require_expected_phone_tools(client)
             report.add(proof)
             emit(format_step_line("installed", proof))
         smoke = PhoneSmoke(client, options)
@@ -1464,7 +1407,6 @@ def _env_truthy(name: str) -> bool:
 
 def options_from_args(args: argparse.Namespace) -> PhoneSmokeOptions:
     installed = bool(args.installed) or _env_truthy(INSTALLED_ENV_VAR)
-    tool_profile = active_tool_profile()
     return PhoneSmokeOptions(
         profile=args.profile,
         serial=args.serial,
@@ -1474,7 +1416,6 @@ def options_from_args(args: argparse.Namespace) -> PhoneSmokeOptions:
         installed=installed,
         rotate_device=bool(args.device_can_rotate),
         resize_device=bool(args.device_can_resize),
-        tool_profile=tool_profile,
     )
 
 

@@ -1,4 +1,4 @@
-"""Unit tests for the compact MCP tool-surface probe helpers."""
+"""Unit tests for the canonical MCP tool-surface probe helpers."""
 
 from __future__ import annotations
 
@@ -21,24 +21,22 @@ def test_tool_names_extracts_only_string_names() -> None:
 
 
 def test_require_and_forbid_tools_report_contract_violations() -> None:
-    probe.require_tools({"status", "phone_connection"}, frozenset({"status"}), profile="x")
-    probe.forbid_tools({"status"}, frozenset({"phone_status"}), profile="x")
+    probe.require_tools({"status", "phone_connection"}, frozenset({"status"}))
+    probe.forbid_tools({"status"}, frozenset({"phone_status"}))
 
     with pytest.raises(probe.ProbeFailure, match="missing required tools"):
-        probe.require_tools({"status"}, frozenset({"status", "phone_connection"}), profile="x")
+        probe.require_tools({"status"}, frozenset({"status", "phone_connection"}))
 
-    with pytest.raises(probe.ProbeFailure, match="advertised inactive tools"):
-        probe.forbid_tools({"status", "phone_status"}, frozenset({"phone_status"}), profile="x")
+    with pytest.raises(probe.ProbeFailure, match="advertised old surface tools"):
+        probe.forbid_tools({"status", "phone_status"}, frozenset({"phone_status"}))
 
 
-def test_compact_payload_requires_identity_and_result() -> None:
-    payload = probe.compact_payload(
+def test_canonical_payload_requires_identity_and_result() -> None:
+    payload = probe.canonical_payload(
         {
             "structuredContent": {
-                "profile": "compact",
                 "tool": "status",
                 "branch": "phone",
-                "legacy_tool": "phone_status",
                 "result": {"structuredContent": {"adb_available": False}},
             }
         },
@@ -46,16 +44,14 @@ def test_compact_payload_requires_identity_and_result() -> None:
         branch="phone",
     )
 
-    assert payload["legacy_tool"] == "phone_status"
+    assert payload["tool"] == "status"
 
     with pytest.raises(probe.ProbeFailure, match="wrong branch"):
-        probe.compact_payload(
+        probe.canonical_payload(
             {
                 "structuredContent": {
-                    "profile": "compact",
                     "tool": "status",
                     "branch": "browser",
-                    "legacy_tool": "browser_status",
                     "result": {},
                 }
             },
@@ -64,15 +60,13 @@ def test_compact_payload_requires_identity_and_result() -> None:
         )
 
 
-def test_compact_error_payload_requires_tool_error_code() -> None:
-    payload = probe.compact_error_payload(
+def test_canonical_error_payload_requires_tool_error_code() -> None:
+    payload = probe.canonical_error_payload(
         {
             "isError": True,
             "structuredContent": {
-                "profile": "compact",
                 "tool": "status",
                 "branch": None,
-                "legacy_tool": None,
                 "error": {"code": "InvalidRequest", "message": "bad branch"},
             },
         },
@@ -83,11 +77,10 @@ def test_compact_error_payload_requires_tool_error_code() -> None:
     assert payload["error"]["code"] == "InvalidRequest"
 
     with pytest.raises(probe.ProbeFailure, match="wrong error code"):
-        probe.compact_error_payload(
+        probe.canonical_error_payload(
             {
                 "isError": True,
                 "structuredContent": {
-                    "profile": "compact",
                     "tool": "status",
                     "error": {"code": "Other"},
                 },
@@ -99,15 +92,13 @@ def test_compact_error_payload_requires_tool_error_code() -> None:
 
 def test_tool_error_code_reads_json_rpc_data_code() -> None:
     assert (
-        probe.tool_error_code(
-            {"error": {"code": -32602, "data": {"code": "ToolNotInActiveProfile"}}}
-        )
-        == "ToolNotInActiveProfile"
+        probe.tool_error_code({"error": {"code": -32602, "data": {"code": "UnknownTool"}}})
+        == "UnknownTool"
     )
     assert probe.tool_error_code({"result": {}}) is None
 
 
-def test_require_compact_action_shape_rejects_vague_action_tools() -> None:
+def test_require_canonical_action_shape_rejects_vague_action_tools() -> None:
     base_tools = [
         {
             "name": "doctor",
@@ -152,7 +143,7 @@ def test_require_compact_action_shape_rejects_vague_action_tools() -> None:
         },
     ]
 
-    probe.require_compact_action_shape(base_tools)
+    probe.require_canonical_action_shape(base_tools)
 
     vague_pointer = [dict(tool) for tool in base_tools]
     vague_pointer[1] = {
@@ -161,4 +152,4 @@ def test_require_compact_action_shape_rejects_vague_action_tools() -> None:
         "inputSchema": {"type": "object"},
     }
     with pytest.raises(probe.ProbeFailure, match="desktop_pointer"):
-        probe.require_compact_action_shape(vague_pointer)
+        probe.require_canonical_action_shape(vague_pointer)

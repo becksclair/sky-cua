@@ -2,9 +2,9 @@
 """Probe the sky-cua MCP tool surface through real stdio transport.
 
 The probe is intentionally small and host-safe: it verifies advertised tools,
-profile isolation, compact response envelopes, and degraded-but-structured
-status branches without needing a particular desktop app, browser tab, or
-attached Android device.
+canonical response envelopes, and degraded-but-structured status branches
+without needing a particular desktop app, browser tab, or attached Android
+device.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEV_CLIENT = REPO_ROOT / "bin" / "sky-cua-client"
 INSTALLED_CLIENT = REPO_ROOT / "dist" / "plugin" / "sky-cua" / "bin" / "sky-cua-client"
 
-COMPACT_REQUIRED_TOOLS: frozenset[str] = frozenset(
+CANONICAL_REQUIRED_TOOLS: frozenset[str] = frozenset(
     {
         "doctor",
         "status",
@@ -46,7 +46,7 @@ COMPACT_REQUIRED_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-LEGACY_SENTINELS: frozenset[str] = frozenset(
+OLD_SURFACE_SENTINELS: frozenset[str] = frozenset(
     {
         "list_apps",
         "get_app_state",
@@ -56,30 +56,6 @@ LEGACY_SENTINELS: frozenset[str] = frozenset(
         "browser_click",
         "phone_connect",
         "phone_status",
-    }
-)
-
-LEGACY_REQUIRED_TOOLS: frozenset[str] = frozenset(
-    {
-        "list_apps",
-        "get_app_state",
-        "click",
-        "type_text",
-        "browser_status",
-        "browser_list_tabs",
-        "phone_status",
-        "phone_list_devices",
-        "phone_connect",
-    }
-)
-
-COMPACT_SENTINELS: frozenset[str] = frozenset(
-    {
-        "status",
-        "list_resources",
-        "desktop_pointer",
-        "browser_input",
-        "phone_connection",
     }
 )
 
@@ -114,19 +90,19 @@ def tool_names(tools: Iterable[dict[str, Any]]) -> set[str]:
     return names
 
 
-def require_tools(names: set[str], required: frozenset[str], *, profile: str) -> None:
+def require_tools(names: set[str], required: frozenset[str]) -> None:
     missing = sorted(required - names)
     if missing:
-        raise ProbeFailure(f"{profile} tools/list is missing required tools: {missing!r}")
+        raise ProbeFailure(f"tools/list is missing required tools: {missing!r}")
 
 
-def forbid_tools(names: set[str], forbidden: frozenset[str], *, profile: str) -> None:
+def forbid_tools(names: set[str], forbidden: frozenset[str]) -> None:
     present = sorted(forbidden & names)
     if present:
-        raise ProbeFailure(f"{profile} tools/list advertised inactive tools: {present!r}")
+        raise ProbeFailure(f"tools/list advertised old surface tools: {present!r}")
 
 
-def require_compact_action_shape(tools: Iterable[dict[str, Any]]) -> None:
+def require_canonical_action_shape(tools: Iterable[dict[str, Any]]) -> None:
     by_name: dict[str, dict[str, Any]] = {}
     for tool in tools:
         name = tool.get("name")
@@ -134,13 +110,13 @@ def require_compact_action_shape(tools: Iterable[dict[str, Any]]) -> None:
             by_name[name] = tool
     doctor = by_name.get("doctor")
     if not isinstance(doctor, dict):
-        raise ProbeFailure("compact tools/list omitted doctor")
+        raise ProbeFailure("tools/list omitted doctor")
     doctor_annotations = doctor.get("annotations")
     if (
         not isinstance(doctor_annotations, dict)
         or doctor_annotations.get("readOnlyHint") is not True
     ):
-        raise ProbeFailure(f"compact doctor must be read-only diagnostics: {doctor!r}")
+        raise ProbeFailure(f"doctor must be read-only diagnostics: {doctor!r}")
 
     pointer = _tool_schema(by_name, "desktop_pointer")
     pointer_description = str(by_name["desktop_pointer"].get("description", ""))
@@ -168,7 +144,7 @@ def require_compact_action_shape(tools: Iterable[dict[str, Any]]) -> None:
 def _tool_schema(by_name: dict[str, dict[str, Any]], name: str) -> dict[str, Any]:
     tool = by_name.get(name)
     if not isinstance(tool, dict):
-        raise ProbeFailure(f"compact tools/list omitted {name}")
+        raise ProbeFailure(f"tools/list omitted {name}")
     schema = tool.get("inputSchema")
     if not isinstance(schema, dict):
         raise ProbeFailure(f"{name} omitted object inputSchema")
@@ -236,36 +212,33 @@ def _schema_has_any_required(schema: object, required: list[str]) -> bool:
     )
 
 
-def compact_payload(result: dict[str, Any], *, tool: str, branch: str) -> dict[str, Any]:
+def canonical_payload(result: dict[str, Any], *, tool: str, branch: str) -> dict[str, Any]:
     payload = result.get("structuredContent")
     if not isinstance(payload, dict):
-        raise ProbeFailure(f"{tool} returned no compact structuredContent: {result!r}")
+        raise ProbeFailure(f"{tool} returned no canonical structuredContent: {result!r}")
     expected = {
-        "profile": "compact",
         "tool": tool,
         "branch": branch,
     }
     for key, value in expected.items():
         if payload.get(key) != value:
             raise ProbeFailure(
-                f"{tool} compact envelope has wrong {key}: "
+                f"{tool} canonical envelope has wrong {key}: "
                 f"expected {value!r}, got {payload.get(key)!r}"
             )
-    if "legacy_tool" not in payload:
-        raise ProbeFailure(f"{tool} compact envelope omitted legacy_tool: {payload!r}")
     if not isinstance(payload.get("result"), dict):
-        raise ProbeFailure(f"{tool} compact envelope omitted result map: {payload!r}")
+        raise ProbeFailure(f"{tool} canonical envelope omitted result map: {payload!r}")
     return payload
 
 
-def compact_error_payload(result: dict[str, Any], *, tool: str, code: str) -> dict[str, Any]:
+def canonical_error_payload(result: dict[str, Any], *, tool: str, code: str) -> dict[str, Any]:
     if result.get("isError") is not True:
         raise ProbeFailure(f"{tool} invalid branch did not set isError: {result!r}")
     payload = result.get("structuredContent")
     if not isinstance(payload, dict):
         raise ProbeFailure(f"{tool} invalid branch returned no structuredContent: {result!r}")
-    if payload.get("profile") != "compact" or payload.get("tool") != tool:
-        raise ProbeFailure(f"{tool} invalid branch returned wrong compact identity: {payload!r}")
+    if payload.get("tool") != tool:
+        raise ProbeFailure(f"{tool} invalid branch returned wrong canonical identity: {payload!r}")
     error = payload.get("error")
     if not isinstance(error, dict) or error.get("code") != code:
         raise ProbeFailure(f"{tool} invalid branch returned wrong error code: {payload!r}")
@@ -278,6 +251,10 @@ def tool_error_code(response: dict[str, Any]) -> str | None:
         data = error.get("data")
         if isinstance(data, dict) and isinstance(data.get("code"), str):
             return data["code"]
+        if isinstance(data, dict) and isinstance(data.get("error"), dict):
+            nested = data["error"]
+            if isinstance(nested.get("code"), str):
+                return nested["code"]
     result = response.get("result")
     if isinstance(result, dict):
         structured = result.get("structuredContent")
@@ -293,34 +270,34 @@ def resolve_client(installed: bool) -> Path:
     return client
 
 
-def make_client(profile: str, *, installed: bool, phone_enabled: bool) -> McpClient:
+def make_client(*, installed: bool, phone_enabled: bool) -> McpClient:
     env = dict(os.environ)
-    env["SKY_CUA_MCP_TOOL_PROFILE"] = profile
+    env.pop("SKY_CUA_MCP_TOOL_PROFILE", None)
     env.setdefault("SKY_CUA_MODEL_SUPPORTS_IMAGES", "false")
     if phone_enabled:
         env.setdefault("SKY_CUA_PHONE", "1")
     return McpClient(
         [str(resolve_client(installed)), "mcp"],
         base_env=env,
-        client_name=f"mcp-tool-surface-{profile}-probe",
+        client_name="mcp-tool-surface-probe",
     )
 
 
-def probe_compact(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
+def probe_canonical(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
     steps: list[ProbeStep] = []
-    client = make_client("compact", installed=installed, phone_enabled=phone_enabled)
+    client = make_client(installed=installed, phone_enabled=phone_enabled)
     try:
         client.initialize()
         tools = client.tools_list()
         names = tool_names(tools)
-        require_tools(names, COMPACT_REQUIRED_TOOLS, profile="compact")
-        forbid_tools(names, LEGACY_SENTINELS, profile="compact")
-        require_compact_action_shape(tools)
-        steps.append(step_pass("compact.tools_list", f"tools={len(names)}"))
+        require_tools(names, CANONICAL_REQUIRED_TOOLS)
+        forbid_tools(names, OLD_SURFACE_SENTINELS)
+        require_canonical_action_shape(tools)
+        steps.append(step_pass("canonical.tools_list", f"tools={len(names)}"))
 
         invalid = client.tools_call(10, "status", {"component": "__invalid__"})
-        compact_error_payload(invalid, tool="status", code="InvalidRequest")
-        steps.append(step_pass("compact.invalid_branch", "code=InvalidRequest"))
+        canonical_error_payload(invalid, tool="status", code="InvalidRequest")
+        steps.append(step_pass("canonical.invalid_branch", "code=InvalidRequest"))
 
         for request_id, tool, arguments, branch in (
             (11, "status", {"component": "browser"}, "browser"),
@@ -330,47 +307,21 @@ def probe_compact(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
             (15, "list_resources", {"surface": "phone", "resource": "devices"}, "phone/devices"),
         ):
             result = client.tools_call(request_id, tool, arguments)
-            payload = compact_payload(result, tool=tool, branch=branch)
-            legacy_tool = payload.get("legacy_tool")
+            payload = canonical_payload(result, tool=tool, branch=branch)
             result_error = bool(payload["result"].get("isError"))
             steps.append(
                 step_pass(
-                    f"compact.{tool}.{branch.replace('/', '_')}",
-                    f"legacy={legacy_tool} result_error={str(result_error).lower()}",
+                    f"canonical.{tool}.{branch.replace('/', '_')}",
+                    f"result_error={str(result_error).lower()}",
                 )
             )
 
-        legacy_call = client.call_raw(30, "tools/call", {"name": "phone_status", "arguments": {}})
-        if tool_error_code(legacy_call.raw) != "ToolNotInActiveProfile":
+        old_call = client.call_raw(30, "tools/call", {"name": "phone_status", "arguments": {}})
+        if tool_error_code(old_call.raw) != "UnknownTool":
             raise ProbeFailure(
-                f"compact profile did not reject inactive legacy phone_status: {legacy_call.raw!r}"
+                f"canonical surface did not reject old phone_status: {old_call.raw!r}"
             )
-        steps.append(step_pass("compact.inactive_legacy_rejected", "code=ToolNotInActiveProfile"))
-    finally:
-        client.close()
-    return steps
-
-
-def probe_legacy(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
-    steps: list[ProbeStep] = []
-    client = make_client("legacy", installed=installed, phone_enabled=phone_enabled)
-    try:
-        client.initialize()
-        names = tool_names(client.tools_list())
-        require_tools(names, LEGACY_REQUIRED_TOOLS, profile="legacy")
-        forbid_tools(names, COMPACT_SENTINELS, profile="legacy")
-        steps.append(step_pass("legacy.tools_list", f"tools={len(names)}"))
-
-        compact_call = client.call_raw(
-            40,
-            "tools/call",
-            {"name": "status", "arguments": {"component": "phone"}},
-        )
-        if tool_error_code(compact_call.raw) != "ToolNotInActiveProfile":
-            raise ProbeFailure(
-                f"legacy profile did not reject inactive compact status: {compact_call.raw!r}"
-            )
-        steps.append(step_pass("legacy.inactive_compact_rejected", "code=ToolNotInActiveProfile"))
+        steps.append(step_pass("canonical.old_surface_rejected", "code=UnknownTool"))
     finally:
         client.close()
     return steps
@@ -378,7 +329,6 @@ def probe_legacy(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("compact", "legacy", "both"), default="both")
     parser.add_argument(
         "--installed",
         action="store_true",
@@ -397,18 +347,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run(profile: str, *, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
-    steps: list[ProbeStep] = []
-    if profile in {"compact", "both"}:
-        steps.extend(probe_compact(installed=installed, phone_enabled=phone_enabled))
-    if profile in {"legacy", "both"}:
-        steps.extend(probe_legacy(installed=installed, phone_enabled=phone_enabled))
-    return steps
+def run(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
+    return probe_canonical(installed=installed, phone_enabled=phone_enabled)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    steps = run(args.profile, installed=bool(args.installed), phone_enabled=not args.no_phone)
+    steps = run(installed=bool(args.installed), phone_enabled=not args.no_phone)
     if args.json:
         print(json.dumps({"ok": True, "steps": [step.__dict__ for step in steps]}, indent=2))
     else:

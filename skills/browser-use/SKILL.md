@@ -11,49 +11,53 @@ not reachable through the page.
 
 ## Ownership
 
-- In compact MCP profile, browser tab listing is
-  `list_resources(surface="browser", resource="tabs")`, page state is
-  `observe(surface="browser")`, screenshots are `capture_screen(surface="browser")`,
-  and clicks/typing/keys are grouped under `browser_input`. Legacy profiles
-  expose these as the direct `browser_*` names.
+- Browser tab listing is `list_resources(surface="browser", resource="tabs")`,
+  page state is `observe(surface="browser")`, screenshots are
+  `capture_screen(surface="browser")`, and clicks/typing/keys are grouped
+  under `browser_input`.
 - `user_chrome` is the user's running Chrome-family browser and the only
   target.
-- New tab: `browser_open`. Existing tab: `browser_list_tabs` ->
-  `browser_claim_tab`. Page actions require an opened or claimed tab.
+- New tab: `browser_open` returns the `tab_id` for later observe/capture/action
+  calls. Existing tab: `list_resources(surface="browser", resource="tabs")`,
+  then `browser_claim_tab(tab_id)` with the listed `tab_id`. Page actions
+  require an opened or claimed tab.
 - The runtime retries stale session/debugger attachment once per action; later
   failures are real.
 - Pin a browser with `SKY_CUA_BROWSER=brave` (or chrome/chromium).
 
 ## Coordinates
 
-- One shared space: CSS pixels. `browser_screenshot` pixels,
-  `browser_snapshot` bounds, and action coordinates line up one-to-one. Never
-  divide by `devicePixelRatio`; captures are already normalized.
+- One shared space: CSS pixels. `capture_screen(surface="browser")` pixels,
+  `observe(surface="browser")` bounds, and action coordinates line up
+  one-to-one. Never divide by `devicePixelRatio`; captures are already
+  normalized.
 - Screenshots show only the visible viewport; scroll, then re-capture, for
   off-screen targets.
-- Desktop `get_app_state` coordinates are a different space; never reuse
+- Desktop `observe(surface="desktop")` coordinates are a different space; never reuse
   them here.
 
 ## State
 
-- Prefer `browser_snapshot` for title, URL, viewport, visible text, and
-  actionable element bounds. Defaults: 4000 text chars, 200 elements.
+- Prefer `observe(surface="browser")` for title, URL, viewport, visible text,
+  and actionable element bounds. Defaults: 4000 text chars, 200 elements.
 - Dense pages: use `element_query`, then `element_offset`/`element_limit`.
   Use `text_limit: 0` for controls-only snapshots. Raise `text_limit` only
   when page text is the task.
-- Use `browser_screenshot` for visual layout or pixel targeting.
+- Use `capture_screen(surface="browser")` for visual layout or pixel targeting.
 - Tool success means input was dispatched; verify consequential changes with a
   fresh snapshot or screenshot.
 
 ## Actions
 
-- `browser_click` moves the visible browser agent cursor before clicking; call
-  `browser_move_mouse` first only for hover or cursor placement without click.
+- `browser_input(operation="click")` moves the visible browser agent cursor
+  before clicking; call `browser_move_mouse` first only for hover or cursor
+  placement without click.
 - `browser_scroll`: provide non-zero `delta_x` or `delta_y`. Omit x/y for
   viewport scroll; provide x/y to move the cursor there and scroll the nearest
   scrollable container, falling back to the viewport. This is scripted DOM
   scrolling, not a real wheel event.
-- `browser_type_text` inserts literal text into the focused control; focus it
-  first.
-- `browser_press_key` handles focused controls and page shortcuts such as
-  Enter, Escape, Tab, Ctrl+K, and Ctrl+L.
+- `browser_input(operation="type_text")` inserts literal text into the focused
+  control; focus it first.
+- `browser_input(operation="press_key")` handles focused controls and page
+  shortcuts. Use literal key strings such as `Enter`, `Escape`, `Tab`,
+  `Ctrl+K`, and `Ctrl+L`.

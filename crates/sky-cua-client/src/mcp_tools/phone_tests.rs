@@ -23,33 +23,22 @@ use crate::mcp_server::ModelSessionInfo;
 use super::{build_tool_definitions, handle_tool_call};
 
 const PHONE_TOOL_NAMES: &[&str] = &[
-    "phone_observe",
-    "phone_status",
-    "phone_list_devices",
-    "phone_refresh_capabilities",
-    "phone_pair_wireless",
-    "phone_connect",
-    "phone_disconnect",
-    "phone_screenshot",
-    "phone_tap",
-    "phone_swipe",
-    "phone_type_text",
-    "phone_press_key",
-    "phone_install_companion",
-    "phone_companion_status",
+    "status",
+    "list_resources",
+    "observe",
+    "capture_screen",
     "phone_accessibility_tree",
     "phone_notifications",
-    "phone_notification_open",
-    "phone_notification_dismiss",
+    "phone_connection",
+    "phone_pair_wireless",
+    "phone_setup",
+    "phone_pointer",
+    "phone_keyboard",
     "phone_notification_action",
     "phone_notification_reply",
-    "phone_app_current",
-    "phone_app_list",
-    "phone_app_launch",
-    "phone_app_open_intent",
+    "phone_app_action",
     "phone_app_force_stop",
     "phone_app_install",
-    "phone_open_settings",
 ];
 
 #[derive(Default)]
@@ -162,7 +151,7 @@ fn status_report() -> PhoneStatusReport {
 
 #[test]
 fn all_phone_tools_are_advertised() {
-    let definitions = build_tool_definitions(false);
+    let definitions = build_tool_definitions(false, false);
     let names = tool_names(&definitions);
     for expected in PHONE_TOOL_NAMES {
         assert!(
@@ -172,23 +161,23 @@ fn all_phone_tools_are_advertised() {
     }
     assert_eq!(
         PHONE_TOOL_NAMES.len(),
-        27,
-        "exactly 27 canonical phone tools"
+        16,
+        "exactly 16 canonical phone-capable tools"
     );
 }
 
 #[test]
 fn phone_tools_carry_session_selector_and_strict_schema() {
-    let definitions = build_tool_definitions(true);
+    let definitions = build_tool_definitions(true, false);
     // Every device-bound tool exposes the shared session selector and forbids
     // unknown properties.
     for name in [
-        "phone_observe",
-        "phone_screenshot",
-        "phone_tap",
-        "phone_companion_status",
-        "phone_app_list",
-        "phone_open_settings",
+        "phone_accessibility_tree",
+        "phone_notifications",
+        "phone_pointer",
+        "phone_keyboard",
+        "phone_setup",
+        "phone_app_action",
     ] {
         let tool = find_tool(&definitions, name);
         let schema = &tool["inputSchema"];
@@ -209,24 +198,28 @@ fn phone_tools_carry_session_selector_and_strict_schema() {
 
 #[test]
 fn phone_action_schemas_pin_required_fields() {
-    let definitions = build_tool_definitions(false);
+    let definitions = build_tool_definitions(false, false);
 
-    let tap = find_tool(&definitions, "phone_tap");
-    assert_eq!(tap["inputSchema"]["required"], json!(["x", "y"]));
+    let pointer = find_tool(&definitions, "phone_pointer");
+    assert_eq!(pointer["inputSchema"]["required"], json!(["operation"]));
     assert!(
-        tap["inputSchema"]["properties"]
+        pointer["inputSchema"]["properties"]
             .get("phone_snapshot_id")
             .is_some()
     );
 
-    let swipe = find_tool(&definitions, "phone_swipe");
+    let pointer_constraints = &pointer["inputSchema"]["allOf"];
     assert_eq!(
-        swipe["inputSchema"]["required"],
-        json!(["start_x", "start_y", "end_x", "end_y"])
+        pointer_constraints[0]["then"]["required"],
+        json!(["x", "y"])
     );
 
-    let type_text = find_tool(&definitions, "phone_type_text");
-    assert_eq!(type_text["inputSchema"]["required"], json!(["text"]));
+    let keyboard = find_tool(&definitions, "phone_keyboard");
+    assert_eq!(keyboard["inputSchema"]["required"], json!(["operation"]));
+    assert_eq!(
+        keyboard["inputSchema"]["allOf"][0]["then"]["required"],
+        json!(["text"])
+    );
 
     let pair = find_tool(&definitions, "phone_pair_wireless");
     assert_eq!(
@@ -242,7 +235,15 @@ fn phone_action_schemas_pin_required_fields() {
     );
 
     let install = find_tool(&definitions, "phone_app_install");
-    assert_eq!(install["inputSchema"]["required"], json!(["apk_paths"]));
+    assert_eq!(install["inputSchema"]["required"], json!([]));
+    assert_eq!(
+        install["inputSchema"]["anyOf"][0]["required"],
+        json!(["apk_paths"])
+    );
+    assert_eq!(
+        install["inputSchema"]["anyOf"][1]["required"],
+        json!(["apk_path"])
+    );
     assert_eq!(
         install["inputSchema"]["properties"]["mode"]["enum"],
         json!(["single", "multiple", "multi_package"])
@@ -250,8 +251,8 @@ fn phone_action_schemas_pin_required_fields() {
     assert_eq!(install["annotations"]["destructiveHint"], true);
     assert_eq!(install["annotations"]["idempotentHint"], false);
 
-    let settings = find_tool(&definitions, "phone_open_settings");
-    assert_eq!(settings["inputSchema"]["required"], json!(["screen"]));
+    let setup = find_tool(&definitions, "phone_setup");
+    assert_eq!(setup["inputSchema"]["required"], json!(["operation"]));
 }
 
 // ---------------------------------------------------------------------------

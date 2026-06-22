@@ -25,7 +25,6 @@ mod phone;
 
 #[cfg(test)]
 use app_state::parse_app_state_detail;
-pub(crate) use definitions::McpToolProfile;
 #[cfg(test)]
 pub(crate) use definitions::tools_list_result;
 pub(crate) use definitions::{
@@ -63,32 +62,13 @@ pub(crate) fn handle_session_tool_call(
                 "FeatureDisabled",
                 "browser_eval is disabled for this MCP process",
             ),
-            Some(InactiveToolReason::OtherProfile) => tool_error(
-                "ToolNotInActiveProfile",
-                format!(
-                    "tool {tool_name} is not active in the {} MCP tool profile",
-                    registry.profile.as_str()
-                ),
-            ),
             None => tool_error("UnknownTool", format!("unknown tool: {tool_name}")),
         };
     }
-    match registry.profile {
-        McpToolProfile::Legacy => handle_tool_call_with_browser_eval_policy(
-            service,
-            heuristics,
-            model,
-            tool_name,
-            arguments,
-            Some(registry.browser_eval_enabled),
-        ),
-        McpToolProfile::Compact => {
-            handle_compact_tool_call(service, heuristics, model, registry, tool_name, arguments)
-        }
-    }
+    handle_canonical_tool_call(service, heuristics, model, registry, tool_name, arguments)
 }
 
-fn handle_compact_tool_call(
+fn handle_canonical_tool_call(
     service: &impl McpService,
     heuristics: &HeuristicsRegistry,
     model: &ModelSessionInfo,
@@ -96,31 +76,36 @@ fn handle_compact_tool_call(
     tool_name: &str,
     arguments: Value,
 ) -> Result<Value> {
-    let call = match compact_legacy_call(tool_name, arguments) {
+    let call = match canonical_handler_call(tool_name, arguments) {
         Ok(call) => call,
-        Err(error) => return Ok(compact_invalid_request_result(tool_name, error.to_string())),
+        Err(error) => {
+            return Ok(canonical_invalid_request_result(
+                tool_name,
+                error.to_string(),
+            ));
+        }
     };
-    let legacy_result = handle_tool_call_with_browser_eval_policy(
+    let handler_result = handle_tool_call_with_browser_eval_policy(
         service,
         heuristics,
         model,
-        call.legacy_name,
+        call.handler_name,
         call.arguments.clone(),
         Some(registry.browser_eval_enabled),
     )?;
-    Ok(compact_profile_result(tool_name, &call, legacy_result))
+    Ok(canonical_tool_result(tool_name, &call, handler_result))
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct CompactLegacyCall {
-    legacy_name: &'static str,
+struct CanonicalHandlerCall {
+    handler_name: &'static str,
     branch: String,
     arguments: Value,
 }
 
-fn compact_legacy_call(tool_name: &str, arguments: Value) -> Result<CompactLegacyCall> {
+fn canonical_handler_call(tool_name: &str, arguments: Value) -> Result<CanonicalHandlerCall> {
     let mut arguments = compact_arguments_object(arguments)?;
-    let (legacy_name, branch) = match tool_name {
+    let (handler_name, branch) = match tool_name {
         "doctor" => ("doctor", "diagnostics".to_string()),
         "status" => match take_required_branch(&mut arguments, "component")?.as_str() {
             "browser" => ("browser_status", "browser".to_string()),
@@ -281,63 +266,58 @@ fn compact_legacy_call(tool_name: &str, arguments: Value) -> Result<CompactLegac
         }
         "phone_accessibility_tree" => ("phone_accessibility_tree", "default".to_string()),
         "phone_notifications" => ("phone_notifications", "default".to_string()),
-        name => return Err(anyhow!("unknown compact tool: {name}")),
+        name => return Err(anyhow!("unknown tool: {name}")),
     };
-    Ok(CompactLegacyCall {
-        legacy_name,
+    Ok(CanonicalHandlerCall {
+        handler_name,
         branch,
         arguments: Value::Object(arguments),
     })
 }
 
-fn compact_profile_result(
+fn canonical_tool_result(
     tool_name: &str,
-    call: &CompactLegacyCall,
-    legacy_result: Value,
+    call: &CanonicalHandlerCall,
+    handler_result: Value,
 ) -> Value {
-    let content = legacy_result
+    let content = handler_result
         .get("content")
         .and_then(Value::as_array)
-        .map(|content| compact_profile_content(tool_name, call, content))
+        .map(|content| canonical_tool_content(tool_name, call, content))
         .unwrap_or_else(|| {
             vec![json!({
                 "type": "text",
                 "text": format!(
-                    "Compact {tool_name}/{} completed via {}.",
-                    call.branch, call.legacy_name
+                    "Canonical {tool_name}/{} completed.",
+                    call.branch
                 )
             })]
         });
     json!({
         "content": content,
         "structuredContent": {
-            "profile": "compact",
             "tool": tool_name,
             "branch": call.branch,
-            "legacy_tool": call.legacy_name,
-            "result": legacy_result.get("structuredContent").cloned().unwrap_or(Value::Null)
+            "result": handler_result.get("structuredContent").cloned().unwrap_or(Value::Null)
         },
-        "isError": legacy_result.get("isError").and_then(Value::as_bool).unwrap_or(false)
+        "isError": handler_result.get("isError").and_then(Value::as_bool).unwrap_or(false)
     })
 }
 
-fn compact_profile_content(
+fn canonical_tool_content(
     tool_name: &str,
-    call: &CompactLegacyCall,
-    legacy_content: &[Value],
+    call: &CanonicalHandlerCall,
+    handler_content: &[Value],
 ) -> Vec<Value> {
-    legacy_content
+    handler_content
         .iter()
         .enumerate()
         .map(|(index, item)| {
             if index == 0 && item.get("type").and_then(Value::as_str) == Some("text") {
-                let legacy_text = item.get("text").and_then(Value::as_str).unwrap_or("");
+                let handler_text = item.get("text").and_then(Value::as_str).unwrap_or("");
                 json!({
                     "type": "text",
-                    "text": format!(
-                        "Compact {tool_name}/{} via {}. {legacy_text}",
-                        call.branch, call.legacy_name
-                    )
+                    "text": format!("{tool_name}/{}. {handler_text}", call.branch)
                 })
             } else {
                 item.clone()
@@ -346,17 +326,15 @@ fn compact_profile_content(
         .collect()
 }
 
-fn compact_invalid_request_result(tool_name: &str, message: String) -> Value {
+fn canonical_invalid_request_result(tool_name: &str, message: String) -> Value {
     json!({
         "content": [{
             "type": "text",
-            "text": format!("Invalid compact {tool_name} request: {message}")
+            "text": format!("Invalid {tool_name} request: {message}")
         }],
         "structuredContent": {
-            "profile": "compact",
             "tool": tool_name,
             "branch": Value::Null,
-            "legacy_tool": Value::Null,
             "error": {
                 "code": "InvalidRequest",
                 "message": message
@@ -369,7 +347,7 @@ fn compact_invalid_request_result(tool_name: &str, message: String) -> Value {
 fn compact_arguments_object(arguments: Value) -> Result<serde_json::Map<String, Value>> {
     match arguments {
         Value::Object(map) => Ok(map),
-        _ => Err(anyhow!("compact tool arguments must be an object")),
+        _ => Err(anyhow!("canonical tool arguments must be an object")),
     }
 }
 
@@ -1305,8 +1283,8 @@ mod tests {
     };
 
     use super::{
-        McpProcessConfig, McpService, McpToolProfile, action_summary, build_tool_definitions,
-        build_tool_registry, compact_legacy_call, effective_capture_screen, handle_action_call,
+        McpProcessConfig, McpService, action_summary, build_tool_definitions, build_tool_registry,
+        canonical_handler_call, effective_capture_screen, handle_action_call,
         handle_session_tool_call, handle_tool_call, invalid_request_tool_error, list_apps_summary,
         parse_app_selector, parse_app_state_detail, parse_screenshot_target, parse_window_target,
         tool_definitions, tools_list_result,
@@ -1368,9 +1346,8 @@ mod tests {
         }
     }
 
-    fn process_config(profile: McpToolProfile, browser_eval_enabled: bool) -> McpProcessConfig {
+    fn process_config(browser_eval_enabled: bool) -> McpProcessConfig {
         McpProcessConfig {
-            profile,
             browser_eval_enabled,
             model_supports_images_override: None,
             diagnostics: Vec::new(),
@@ -1378,13 +1355,13 @@ mod tests {
     }
 
     #[test]
-    fn inactive_profile_tools_fail_before_service_dispatch() {
+    fn old_surface_tools_fail_before_service_dispatch() {
         let service = FakeService::default();
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
         let model = ModelSessionInfo::default();
-        let registry = build_tool_registry(&process_config(McpToolProfile::Compact, false), &model);
+        let registry = build_tool_registry(&process_config(false), &model);
 
-        let legacy_result = handle_session_tool_call(
+        let old_surface_result = handle_session_tool_call(
             &service,
             &heuristics,
             &model,
@@ -1392,11 +1369,11 @@ mod tests {
             "get_app_state",
             json!({"detail": "full"}),
         )
-        .expect("inactive legacy tool returns tool error");
-        assert_eq!(legacy_result["isError"], true);
+        .expect("old surface tool returns tool error");
+        assert_eq!(old_surface_result["isError"], true);
         assert_eq!(
-            legacy_result["structuredContent"]["code"],
-            "ToolNotInActiveProfile"
+            old_surface_result["structuredContent"]["code"],
+            "UnknownTool"
         );
 
         let eval_result = handle_session_tool_call(
@@ -1428,7 +1405,7 @@ mod tests {
         });
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
         let model = ModelSessionInfo::default();
-        let registry = build_tool_registry(&process_config(McpToolProfile::Legacy, true), &model);
+        let registry = build_tool_registry(&process_config(true), &model);
 
         let result = handle_session_tool_call(
             &service,
@@ -1441,7 +1418,10 @@ mod tests {
         .expect("frozen eval policy should permit dispatch");
 
         assert_eq!(result["isError"], false);
-        assert_eq!(result["structuredContent"]["value"]["title"], "ok");
+        assert_eq!(
+            result["structuredContent"]["result"]["value"]["title"],
+            "ok"
+        );
         let mut requests = service.take_requests();
         assert_eq!(requests.len(), 1);
         match requests.remove(0) {
@@ -1456,7 +1436,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_legacy_call_maps_branch_names() {
+    fn canonical_handler_call_maps_branch_names() {
         let cases = [
             (
                 "status",
@@ -1521,8 +1501,8 @@ mod tests {
         ];
 
         for (tool, arguments, expected_name, expected_arguments) in cases {
-            let call = compact_legacy_call(tool, arguments).expect("compact call maps");
-            assert_eq!(call.legacy_name, expected_name, "{tool} legacy name");
+            let call = canonical_handler_call(tool, arguments).expect("canonical call maps");
+            assert_eq!(call.handler_name, expected_name, "{tool} handler name");
             assert_eq!(call.arguments, expected_arguments, "{tool} arguments");
         }
     }
@@ -1540,7 +1520,7 @@ mod tests {
         });
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
         let model = ModelSessionInfo::default();
-        let registry = build_tool_registry(&process_config(McpToolProfile::Compact, false), &model);
+        let registry = build_tool_registry(&process_config(false), &model);
 
         let result = handle_session_tool_call(
             &service,
@@ -1550,12 +1530,10 @@ mod tests {
             "desktop_keyboard",
             json!({"operation": "press_key", "key": "Enter"}),
         )
-        .expect("compact desktop keyboard call");
+        .expect("desktop keyboard call");
         assert_eq!(result["isError"], false);
-        assert_eq!(result["structuredContent"]["profile"], "compact");
         assert_eq!(result["structuredContent"]["tool"], "desktop_keyboard");
         assert_eq!(result["structuredContent"]["branch"], "press_key");
-        assert_eq!(result["structuredContent"]["legacy_tool"], "press_key");
         assert_eq!(
             result["structuredContent"]["result"]["message"],
             "pressed key"
@@ -1563,8 +1541,8 @@ mod tests {
         assert!(
             result["content"][0]["text"]
                 .as_str()
-                .expect("compact text")
-                .starts_with("Compact desktop_keyboard/press_key via press_key.")
+                .expect("result text")
+                .starts_with("desktop_keyboard/press_key.")
         );
 
         let mut requests = service.take_requests();
@@ -1583,7 +1561,7 @@ mod tests {
         let service = FakeService::default();
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
         let model = ModelSessionInfo::default();
-        let registry = build_tool_registry(&process_config(McpToolProfile::Compact, false), &model);
+        let registry = build_tool_registry(&process_config(false), &model);
 
         let result = handle_session_tool_call(
             &service,
@@ -1593,10 +1571,9 @@ mod tests {
             "status",
             json!({"component": "desktop"}),
         )
-        .expect("compact invalid request result");
+        .expect("invalid request result");
 
         assert_eq!(result["isError"], true);
-        assert_eq!(result["structuredContent"]["profile"], "compact");
         assert_eq!(result["structuredContent"]["tool"], "status");
         assert_eq!(result["structuredContent"]["branch"], Value::Null);
         assert_eq!(
@@ -1844,25 +1821,24 @@ mod tests {
     #[test]
     fn action_tool_schemas_are_strict_and_snapshot_scoped_where_needed() {
         let tools = tool_definitions(&ModelSessionInfo::default());
-        let click = tools
-            .as_array()
-            .expect("tools")
-            .iter()
-            .find(|tool| tool["name"] == "click")
-            .expect("click tool");
-        let schema = &click["inputSchema"];
-        assert_eq!(schema["additionalProperties"], false);
-        assert_eq!(schema["required"], json!([]));
-        assert!(schema["properties"].get("snapshot_id").is_some());
-        assert!(schema.get("anyOf").is_none());
+        let find_tool = |name: &str| {
+            tools
+                .as_array()
+                .expect("tools")
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("{name} tool"))
+        };
 
-        let activate = tools
-            .as_array()
-            .expect("tools")
-            .iter()
-            .find(|tool| tool["name"] == "activate_element")
-            .expect("activate_element tool");
-        assert_eq!(activate["inputSchema"]["required"], json!([]));
+        let pointer = find_tool("desktop_pointer");
+        let schema = &pointer["inputSchema"];
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["required"], json!(["operation"]));
+        assert!(schema["properties"].get("snapshot_id").is_some());
+        assert!(schema.get("allOf").is_some());
+
+        let activate = find_tool("desktop_action");
+        assert_eq!(activate["inputSchema"]["required"], json!(["operation"]));
         assert_eq!(activate["inputSchema"]["additionalProperties"], false);
         assert!(
             activate["inputSchema"]["properties"]
@@ -1870,40 +1846,25 @@ mod tests {
                 .is_some()
         );
 
-        let secondary = tools
-            .as_array()
-            .expect("tools")
-            .iter()
-            .find(|tool| tool["name"] == "perform_secondary_action")
-            .expect("perform_secondary_action tool");
-        assert_eq!(secondary["inputSchema"]["required"], json!([]));
-        assert!(secondary["inputSchema"]["properties"].get("x").is_some());
-        assert!(secondary["inputSchema"]["properties"].get("y").is_some());
+        assert!(
+            activate["inputSchema"]["properties"]
+                .get("action_name")
+                .is_some()
+        );
 
-        let type_text = tools
-            .as_array()
-            .expect("tools")
-            .iter()
-            .find(|tool| tool["name"] == "type_text")
-            .expect("type_text tool");
+        let type_text = find_tool("desktop_keyboard");
         assert_eq!(type_text["inputSchema"]["additionalProperties"], false);
-        assert_eq!(type_text["inputSchema"]["required"], json!(["text"]));
+        assert_eq!(type_text["inputSchema"]["required"], json!(["operation"]));
+        assert_eq!(
+            type_text["inputSchema"]["allOf"][0]["then"]["required"],
+            json!(["text"])
+        );
 
-        let get_app_state = tools
-            .as_array()
-            .expect("tools")
-            .iter()
-            .find(|tool| tool["name"] == "get_app_state")
-            .expect("get_app_state tool");
+        let get_app_state = find_tool("observe");
         assert!(
             get_app_state["description"]
                 .as_str()
-                .is_some_and(
-                    |description| description.contains("Defaults to compact detail")
-                        && description.contains("capture.inspection_image_path")
-                        && !description.contains("screenshot_path")
-                        && !description.contains("raw/original")
-                )
+                .is_some_and(|description| description.contains("Observe before acting"))
         );
         let get_app_state_schema = &get_app_state["inputSchema"];
         assert_eq!(
@@ -1925,12 +1886,7 @@ mod tests {
                 .is_some()
         );
 
-        let screenshot = tools
-            .as_array()
-            .expect("tools")
-            .iter()
-            .find(|tool| tool["name"] == "screenshot")
-            .expect("screenshot tool");
+        let screenshot = find_tool("capture_desktop");
         let screenshot_schema = &screenshot["inputSchema"];
         assert_eq!(screenshot_schema["additionalProperties"], false);
         assert!(screenshot_schema["properties"].get("display_id").is_some());
@@ -3346,7 +3302,7 @@ mod tests {
     }
     #[test]
     fn tools_list_registry_preserves_names_and_image_schema_gate() {
-        let tools_value = build_tool_definitions(true);
+        let tools_value = build_tool_definitions(true, false);
         let tools = tools_value.as_array().expect("tools array");
         let names = tools
             .iter()
@@ -3356,112 +3312,73 @@ mod tests {
             names,
             vec![
                 "doctor",
-                "setup_accessibility",
-                "setup_window_targeting",
-                "list_apps",
-                "list_windows",
-                "focused_window",
-                "activate_window",
-                "screenshot",
-                "get_app_state",
-                "hold_session",
-                "unlock_session",
-                "release_session",
-                "session_presence_status",
-                "focus_element",
-                "activate_element",
-                "select_element",
-                "expand_element",
-                "collapse_element",
-                "toggle_element",
-                "click",
-                "perform_action",
-                "perform_secondary_action",
-                "scroll",
-                "drag",
-                "type_text",
-                "press_key",
-                "set_value",
-                "browser_status",
-                "browser_list_tabs",
-                "browser_open",
-                "browser_claim_tab",
-                "browser_move_mouse",
-                "browser_navigate",
-                "browser_snapshot",
-                "browser_screenshot",
-                "browser_click",
-                "browser_type_text",
-                "browser_press_key",
-                "browser_scroll",
-                "phone_observe",
-                "phone_status",
-                "phone_list_devices",
-                "phone_refresh_capabilities",
-                "phone_pair_wireless",
-                "phone_connect",
-                "phone_disconnect",
-                "phone_screenshot",
-                "phone_tap",
-                "phone_swipe",
-                "phone_type_text",
-                "phone_press_key",
-                "phone_install_companion",
-                "phone_companion_status",
+                "status",
+                "list_resources",
+                "observe",
+                "capture_screen",
                 "phone_accessibility_tree",
                 "phone_notifications",
-                "phone_notification_open",
-                "phone_notification_dismiss",
+                "capture_desktop",
+                "setup_desktop",
+                "session_presence",
+                "activate_window",
+                "desktop_semantic",
+                "browser_claim_tab",
+                "browser_move_mouse",
+                "phone_connection",
+                "phone_pair_wireless",
+                "phone_setup",
+                "phone_app_force_stop",
+                "desktop_toggle",
+                "desktop_scroll",
+                "browser_scroll",
+                "desktop_pointer",
+                "desktop_keyboard",
+                "desktop_action",
+                "desktop_set_value",
+                "browser_open",
+                "browser_navigate",
+                "browser_input",
+                "phone_pointer",
+                "phone_keyboard",
                 "phone_notification_action",
                 "phone_notification_reply",
-                "phone_app_current",
-                "phone_app_list",
-                "phone_app_launch",
-                "phone_app_open_intent",
-                "phone_app_force_stop",
+                "phone_app_action",
                 "phone_app_install",
-                "phone_open_settings",
             ]
         );
 
-        let get_app_state = tools
+        let observe = tools
             .iter()
-            .find(|tool| tool["name"] == "get_app_state")
-            .expect("get_app_state tool");
+            .find(|tool| tool["name"] == "observe")
+            .expect("observe tool");
         assert!(
-            get_app_state["inputSchema"]["properties"]
+            observe["inputSchema"]["properties"]
                 .get("capture_screen")
                 .is_some()
         );
         assert!(
-            get_app_state["inputSchema"]["properties"]["screenshot_delivery"]["description"]
+            observe["description"]
                 .as_str()
-                .is_some_and(
-                    |description| description.contains("capture.inspection_image_path")
-                        && description.contains("inspection image block")
-                )
+                .is_some_and(|description| description.contains("snapshot_id"))
         );
 
-        let text_only_tools = build_tool_definitions(false);
-        let text_only_get_app_state = text_only_tools
+        let text_only_tools = build_tool_definitions(false, false);
+        let text_only_observe = text_only_tools
             .as_array()
             .expect("tools array")
             .iter()
-            .find(|tool| tool["name"] == "get_app_state")
-            .expect("get_app_state tool");
+            .find(|tool| tool["name"] == "observe")
+            .expect("observe tool");
         assert!(
-            text_only_get_app_state["inputSchema"]["properties"]
+            text_only_observe["inputSchema"]["properties"]
                 .get("capture_screen")
                 .is_none()
         );
         assert!(
-            text_only_get_app_state["description"]
+            text_only_observe["description"]
                 .as_str()
-                .is_some_and(
-                    |description| description.contains("capture.inspection_image_path")
-                        && !description.contains("screenshot_path")
-                        && !description.contains("raw/original")
-                )
+                .is_some_and(|description| description.contains("Observe before acting"))
         );
     }
 

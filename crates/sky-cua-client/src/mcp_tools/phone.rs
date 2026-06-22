@@ -23,8 +23,8 @@ use sky_cua_platform::model::{
 
 mod args;
 mod response;
-mod schema;
 
+use super::{McpService, invalid_request_tool_error, tool_error};
 use args::{
     parse_optional_bool, parse_optional_duration_ms, parse_optional_limit, parse_phone_apk_paths,
     parse_phone_app_install_mode, parse_phone_backend, parse_phone_coordinate,
@@ -37,9 +37,6 @@ use response::{
     phone_list_devices_result, phone_notifications_result, phone_observe_result,
     phone_pair_wireless_result, phone_screenshot_result, phone_status_result,
 };
-pub(super) use schema::push_tool_definitions;
-
-use super::{McpService, invalid_request_tool_error, tool_error};
 
 pub(super) fn is_phone_tool(tool_name: &str) -> bool {
     matches!(

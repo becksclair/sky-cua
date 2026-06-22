@@ -70,12 +70,10 @@ CLAUDE_MCP_ADD_TIMEOUT_SECONDS = 30
 CLAUDE_CODE_DENY_RULES = ("mcp__computer-use", "mcp__computer-use__*")
 CLAUDE_CODE_ALLOW_RULES = ("mcp__sky-cua", "mcp__sky-cua__*")
 AT_SPI_RESTART_TIMEOUT_SECONDS = 5
-MCP_TOOL_PROFILE_ENV = "SKY_CUA_MCP_TOOL_PROFILE"
 MCP_BROWSER_EVAL_ENV = "SKY_CUA_BROWSER_EVAL"
 MCP_MODEL_SUPPORTS_IMAGES_ENV = "SKY_CUA_MODEL_SUPPORTS_IMAGES"
 MCP_LAUNCH_POLICY_STATE = "mcp-launch-policy.json"
 RECOGNIZED_MCP_LAUNCH_ENV = (
-    MCP_TOOL_PROFILE_ENV,
     MCP_BROWSER_EVAL_ENV,
     MCP_MODEL_SUPPORTS_IMAGES_ENV,
 )
@@ -83,12 +81,11 @@ RECOGNIZED_MCP_LAUNCH_ENV = (
 
 @dataclass(frozen=True)
 class McpLaunchPolicy:
-    tool_profile: str = "legacy"
     browser_eval: str | None = None
     model_supports_images: str | None = None
 
     def env(self) -> dict[str, str]:
-        env = {MCP_TOOL_PROFILE_ENV: self.tool_profile}
+        env: dict[str, str] = {}
         if self.browser_eval is not None:
             env[MCP_BROWSER_EVAL_ENV] = self.browser_eval
         if self.model_supports_images is not None:
@@ -98,13 +95,6 @@ class McpLaunchPolicy:
 
 def current_platform() -> str:
     return current_runtime_platform()
-
-
-def normalize_tool_profile(value: str, *, source: str) -> str:
-    normalized = value.strip().lower()
-    if normalized in {"legacy", "compact"}:
-        return normalized
-    raise ValueError(f"{source} must be 'legacy' or 'compact', got {value!r}")
 
 
 def normalize_on_off(value: str, *, source: str) -> str:
@@ -136,9 +126,6 @@ def load_persisted_mcp_launch_policy(target_dir: Path) -> McpLaunchPolicy | None
     if not isinstance(raw, dict):
         raise ValueError(f"persisted MCP launch policy must be a JSON object: {path}")
     return McpLaunchPolicy(
-        tool_profile=normalize_tool_profile(
-            str(raw.get("tool_profile", "legacy")), source=f"{path}:tool_profile"
-        ),
         browser_eval=(
             normalize_on_off(str(raw["browser_eval"]), source=f"{path}:browser_eval")
             if raw.get("browser_eval") is not None
@@ -157,7 +144,6 @@ def load_persisted_mcp_launch_policy(target_dir: Path) -> McpLaunchPolicy | None
 def resolve_mcp_launch_policy(
     target_dir: Path,
     *,
-    tool_profile: str | None = None,
     browser_eval: str | None = None,
     model_supports_images: str | None = None,
     environ: dict[str, str] | None = None,
@@ -166,11 +152,6 @@ def resolve_mcp_launch_policy(
     env = os.environ if environ is None else environ
     persisted = load_persisted_mcp_launch_policy(target_dir)
 
-    env_tool_profile = (
-        normalize_tool_profile(env[MCP_TOOL_PROFILE_ENV], source=MCP_TOOL_PROFILE_ENV)
-        if MCP_TOOL_PROFILE_ENV in env
-        else None
-    )
     env_browser_eval = (
         normalize_on_off(env[MCP_BROWSER_EVAL_ENV], source=MCP_BROWSER_EVAL_ENV)
         if MCP_BROWSER_EVAL_ENV in env
@@ -185,13 +166,6 @@ def resolve_mcp_launch_policy(
     )
 
     return McpLaunchPolicy(
-        tool_profile=(
-            normalize_tool_profile(tool_profile, source="--mcp-tool-profile")
-            if tool_profile is not None
-            else (
-                persisted.tool_profile if persisted is not None else (env_tool_profile or "legacy")
-            )
-        ),
         browser_eval=(
             normalize_on_off(browser_eval, source="--browser-eval")
             if browser_eval is not None
@@ -216,7 +190,6 @@ def resolve_mcp_launch_policy(
 def write_mcp_launch_policy_state(target_dir: Path, policy: McpLaunchPolicy) -> Path:
     path = target_dir / MCP_LAUNCH_POLICY_STATE
     payload = {
-        "tool_profile": policy.tool_profile,
         "browser_eval": policy.browser_eval,
         "model_supports_images": policy.model_supports_images,
     }
@@ -383,7 +356,6 @@ def generate_mcp_config(
                     "SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT",
                     "SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH",
                     "SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY",
-                    MCP_TOOL_PROFILE_ENV,
                     "SKY_CUA_OVERLAY_BACKEND",
                     "SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE",
                     "SKY_CUA_OVERLAY_HOST_PATH",
@@ -913,7 +885,6 @@ def install_local_mcp_server(
     refresh_accessibility: bool = True,
     install_input_helper: bool = False,
     input_helper_group: str | None = None,
-    mcp_tool_profile: str | None = None,
     browser_eval: str | None = None,
     model_supports_images: str | None = None,
 ) -> tuple[Path, Path]:
@@ -926,7 +897,6 @@ def install_local_mcp_server(
     """
     launch_policy = resolve_mcp_launch_policy(
         target_dir,
-        tool_profile=mcp_tool_profile,
         browser_eval=browser_eval,
         model_supports_images=model_supports_images,
     )
@@ -1065,12 +1035,6 @@ def main() -> int:
         help="Claude Code config directory for --host claude-code (default: ~/.claude).",
     )
     parser.add_argument(
-        "--mcp-tool-profile",
-        choices=("legacy", "compact"),
-        default=None,
-        help="Persist the MCP tool surface profile for launched servers.",
-    )
-    parser.add_argument(
         "--browser-eval",
         choices=("on", "off"),
         default=None,
@@ -1136,7 +1100,6 @@ def main() -> int:
         ),
         install_input_helper=args.input_helper,
         input_helper_group=args.input_helper_group,
-        mcp_tool_profile=args.mcp_tool_profile,
         browser_eval=args.browser_eval,
         model_supports_images=args.model_supports_images,
     )

@@ -7,7 +7,6 @@ use sky_cua_platform::model::{
 
 mod args;
 mod response;
-mod schema;
 
 #[cfg(test)]
 pub(super) use args::BrowserTabTextFilter;
@@ -31,8 +30,8 @@ use response::{
 };
 pub(super) use response::{browser_open_summary, browser_status_summary};
 #[cfg(test)]
-pub(super) use schema::BROWSER_EVAL_ENV;
-pub(super) use schema::{browser_eval_enabled, push_tool_definitions};
+pub(super) use sky_cua_platform::model::BROWSER_EVAL_ENV;
+pub(super) use sky_cua_platform::model::browser_eval_enabled;
 
 use super::{McpService, invalid_request_tool_error, tool_error};
 

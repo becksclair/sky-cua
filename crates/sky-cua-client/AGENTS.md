@@ -1,7 +1,7 @@
 # sky-cua-client Guide
 
-`sky-cua-client` is the MCP stdio client and service launcher. It exposes
-the `computer-use` tool surface and translates service responses into MCP
+`sky-cua-client` is the MCP stdio client and service launcher. It exposes the
+canonical sky-cua MCP tool surface and translates service responses into MCP
 text plus structured content. Useful local probes:
 
 ```bash
@@ -13,7 +13,9 @@ cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen i
 ## Layout
 
 - `src/mcp_server.rs` — JSON-RPC framing, session init, message read/write.
-- `src/mcp_tools.rs` — tool definitions, schemas, argument parsing, handlers.
+- `src/mcp_tools.rs` — tool dispatch, argument parsing, and response shaping.
+- `src/mcp_tools/definitions.rs` — advertised canonical tool definitions and
+  schemas.
 - `src/output_shapes.rs` — compact/full snapshot shaping (`AppStateDetail`,
   `compact_snapshot`), reused by both the MCP path and `src/operator_cli.rs`.
 - `src/heuristics.rs` — app guidance lookup (`HeuristicsRegistry`); enrich
@@ -22,13 +24,13 @@ cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen i
 
 ## Conventions
 
-- Tool names are stable: `list_apps`, `get_app_state`, `click`,
-  `perform_secondary_action`, `scroll`, `drag`, `type_text`, `press_key`,
-  `set_value`.
+- Public MCP tool names are canonical and grouped by surface: `status`,
+  `list_resources`, `observe`, `capture_screen`, `capture_desktop`,
+  `desktop_*`, `browser_*`, and `phone_*`.
 - Return both operator-friendly `content` text and machine-usable
   `structuredContent`. Keep operator CLI output machine-friendly JSON and
   preserve `clear-portal-tokens` output compatibility.
-- Keep `get_app_state` summaries explicit about portal lifecycle and
+- Keep desktop observation summaries explicit about portal lifecycle and
   downgrade diagnostics.
 - Never break newline-delimited JSON-RPC support (Codex depends on it), and
   never use login shells in `.mcp.json` — startup stdout noise corrupts MCP
@@ -36,8 +38,8 @@ cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen i
 
 ## Gotchas
 
-- `get_app_state detail: "compact"` must retain screenshot metadata, element
-  indices/bounds, diagnostics, and app identity.
+- `observe(surface="desktop", detail="compact")` must retain screenshot
+  metadata, element indices/bounds, diagnostics, and app identity.
 - Tool call success should not imply UI success; summaries should encourage
   fresh state checks where needed.
 - If installed plugin startup fails, direct stdio probing of

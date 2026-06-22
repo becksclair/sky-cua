@@ -129,7 +129,6 @@ def fast_deploy(args: argparse.Namespace) -> int:
         restart_runtime=True,
         bundle_root=bundle_root,
         refresh_accessibility=False,
-        mcp_tool_profile=getattr(args, "mcp_tool_profile", None),
         browser_eval=getattr(args, "browser_eval", None),
         model_supports_images=getattr(args, "model_supports_images", None),
     )
@@ -225,12 +224,6 @@ def main(argv: list[str] | None = None) -> int:
         default="claude-code",
         choices=MCP_HOST_CHOICES,
         help="Host config format for the installed MCP-server runtime (default: claude-code).",
-    )
-    parser.add_argument(
-        "--mcp-tool-profile",
-        choices=("legacy", "compact"),
-        default=None,
-        help="Persist the MCP tool surface profile for the refreshed local MCP install.",
     )
     parser.add_argument(
         "--browser-eval",

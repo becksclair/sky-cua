@@ -1,9 +1,9 @@
 """Tests for the phone-use live smoke harness (no real device required).
 
-Covers the profile registry and skip-reason logic, PASS/SKIP/FAIL/RESULT line
+Covers tool discovery and skip-reason logic, PASS/SKIP/FAIL/RESULT line
 formatting, argparse wiring, sanitization, and the MCP result parsing helpers,
-all with fakes/monkeypatch for the MCP transport so nothing touches adb, scrcpy,
-or a phone.
+all with fakes/monkeypatch for the MCP transport so nothing touches adb,
+scrcpy, or a phone.
 """
 
 from __future__ import annotations
@@ -46,7 +46,63 @@ class FakeClient:
 
     def tools_call(self, request_id: int, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((name, arguments))
-        return self.responses.get(name, {"structuredContent": {}, "isError": False})
+        key = self._response_key(name, arguments)
+        return self.responses.get(key, {"structuredContent": {}, "isError": False})
+
+    @staticmethod
+    def _response_key(name: str, arguments: dict[str, Any]) -> str:
+        match name:
+            case "status":
+                return {
+                    "phone": "phone_status",
+                    "phone_companion": "phone_companion_status",
+                }.get(str(arguments.get("component")), name)
+            case "list_resources":
+                surface = arguments.get("surface")
+                resource = arguments.get("resource")
+                if not isinstance(surface, str) or not isinstance(resource, str):
+                    return name
+                return {
+                    ("phone", "devices"): "phone_list_devices",
+                    ("phone", "apps"): "phone_app_list",
+                    ("phone", "current_app"): "phone_app_current",
+                }.get((surface, resource), name)
+            case "observe":
+                return "phone_observe" if arguments.get("surface") == "phone" else name
+            case "capture_screen":
+                return "phone_screenshot" if arguments.get("surface") == "phone" else name
+            case "phone_connection":
+                return {
+                    "connect": "phone_connect",
+                    "disconnect": "phone_disconnect",
+                    "refresh": "phone_refresh_capabilities",
+                }.get(str(arguments.get("operation")), name)
+            case "phone_pointer":
+                return {"tap": "phone_tap", "swipe": "phone_swipe"}.get(
+                    str(arguments.get("operation")), name
+                )
+            case "phone_keyboard":
+                return {
+                    "type_text": "phone_type_text",
+                    "press_key": "phone_press_key",
+                }.get(str(arguments.get("operation")), name)
+            case "phone_setup":
+                return {
+                    "install_companion": "phone_install_companion",
+                    "open_settings": "phone_open_settings",
+                }.get(str(arguments.get("operation")), name)
+            case "phone_notification_action":
+                return {
+                    "open": "phone_notification_open",
+                    "dismiss": "phone_notification_dismiss",
+                    "action": "phone_notification_action",
+                }.get(str(arguments.get("operation")), name)
+            case "phone_app_action":
+                return {
+                    "launch": "phone_app_launch",
+                    "open_intent": "phone_app_open_intent",
+                }.get(str(arguments.get("operation")), name)
+        return name
 
 
 def ok(structured: dict[str, Any]) -> dict[str, Any]:
@@ -57,15 +113,11 @@ def err(structured: dict[str, Any]) -> dict[str, Any]:
     return {"structuredContent": structured, "isError": True}
 
 
-def compact_ok(
-    tool: str, branch: str, legacy_tool: str, structured: dict[str, Any]
-) -> dict[str, Any]:
+def canonical_ok(tool: str, branch: str, structured: dict[str, Any]) -> dict[str, Any]:
     return {
         "structuredContent": {
-            "profile": "compact",
             "tool": tool,
             "branch": branch,
-            "legacy_tool": legacy_tool,
             "result": structured,
         },
         "isError": False,
@@ -80,7 +132,6 @@ def make_smoke(
     wireless_host: str | None = None,
     pair_host: str | None = None,
     pairing_code: str | None = None,
-    tool_profile: str = smoke.TOOL_PROFILE_LEGACY,
 ) -> tuple[smoke.PhoneSmoke, FakeClient]:
     client = FakeClient(responses)
     options = smoke.PhoneSmokeOptions(
@@ -89,7 +140,6 @@ def make_smoke(
         wireless_host=wireless_host,
         pair_host=pair_host,
         pairing_code=pairing_code,
-        tool_profile=tool_profile,
     )
     return smoke.PhoneSmoke(client, options), client  # pyright: ignore[reportArgumentType]
 
@@ -218,21 +268,11 @@ def test_tool_names_from_raw_tools_list() -> None:
     }
 
 
-def test_require_expected_phone_tools_passes_with_complete_surface() -> None:
-    client = FakeClient(tools=[{"name": name} for name in smoke.EXPECTED_PHONE_TOOLS])
+def test_require_expected_phone_tools_passes_with_canonical_surface() -> None:
+    client = FakeClient(tools=[{"name": name} for name in smoke.CANONICAL_EXPECTED_PHONE_TOOLS])
     result = smoke.require_expected_phone_tools(client)  # pyright: ignore[reportArgumentType]
     assert result.passed
-    assert "phone_tools=" in result.detail
-
-
-def test_require_expected_phone_tools_passes_with_compact_surface() -> None:
-    client = FakeClient(tools=[{"name": name} for name in smoke.COMPACT_EXPECTED_PHONE_TOOLS])
-    result = smoke.require_expected_phone_tools(
-        client,  # pyright: ignore[reportArgumentType]
-        tool_profile=smoke.TOOL_PROFILE_COMPACT,
-    )
-    assert result.passed
-    assert "compact_phone_tools=" in result.detail
+    assert "canonical_phone_tools=" in result.detail
 
 
 def test_require_expected_phone_tools_fails_when_missing() -> None:
@@ -241,17 +281,15 @@ def test_require_expected_phone_tools_fails_when_missing() -> None:
         smoke.require_expected_phone_tools(client)  # pyright: ignore[reportArgumentType]
 
 
-def test_compact_smoke_maps_phone_calls_and_unwraps_results() -> None:
+def test_canonical_smoke_maps_phone_calls_and_unwraps_results() -> None:
     driver, client = make_smoke(
         {
-            "status": compact_ok(
+            "phone_status": canonical_ok(
                 "status",
                 "phone",
-                "phone_status",
                 {"adb_available": True, "devices": [{"serial": "emulator-5554"}]},
             )
         },
-        tool_profile=smoke.TOOL_PROFILE_COMPACT,
     )
 
     result = driver.status(refresh_devices=True)
@@ -262,8 +300,8 @@ def test_compact_smoke_maps_phone_calls_and_unwraps_results() -> None:
     ]
 
 
-def test_compact_smoke_maps_phone_actions() -> None:
-    driver, client = make_smoke(tool_profile=smoke.TOOL_PROFILE_COMPACT)
+def test_canonical_smoke_maps_phone_actions() -> None:
+    driver, client = make_smoke()
 
     driver.connect("emulator-5554")
     driver.screenshot("session")
@@ -504,7 +542,11 @@ def test_overlay_step_fails_when_gesture_falls_back_to_adb() -> None:
             "sess-1",
             {"rpc_reachable": True, "native_overlay": True},
         )
-    tap_call = next(args for name, args in client.calls if name == "phone_tap")
+    tap_call = next(
+        args
+        for name, args in client.calls
+        if name == "phone_pointer" and args.get("operation") == "tap"
+    )
     assert tap_call["use_device_coordinates"] is True
 
 
@@ -1031,9 +1073,9 @@ def test_overlay_step_passes_and_fires_tap_and_swipe(
     assert "native_overlay=true" in result.detail
     assert "gesture_backend=companion" in result.detail
     # The overlay path drives both per-action animations via real dispatches.
-    called = [name for name, _ in client.calls]
-    assert "phone_tap" in called
-    assert "phone_swipe" in called
+    called = [(name, args.get("operation")) for name, args in client.calls]
+    assert ("phone_pointer", "tap") in called
+    assert ("phone_pointer", "swipe") in called
 
 
 def test_overlay_step_skips_when_companion_lacks_native_overlay() -> None:

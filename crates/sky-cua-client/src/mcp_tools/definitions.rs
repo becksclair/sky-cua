@@ -2,9 +2,7 @@
 //! and annotations. Split from `mcp_tools.rs` along the contract-family
 //! boundary; dispatch and response shaping stay in the parent module.
 
-use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
-use std::sync::LazyLock;
+use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
@@ -18,34 +16,17 @@ use super::annotations::{
     LOCAL_DESTRUCTIVE_ACTION, LOCAL_NAVIGATION_ACTION, LOCAL_STATEFUL_ACTION, READ_ONLY_TOOL,
     ToolAnnotations,
 };
+#[cfg(test)]
 use super::browser;
-use super::phone;
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum McpToolProfile {
-    Legacy,
-    Compact,
-}
-
-impl McpToolProfile {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Legacy => "legacy",
-            Self::Compact => "compact",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum McpConfigDiagnostic {
-    InvalidToolProfile { value: String },
     InvalidBrowserEval { value: String },
     InvalidModelSupportsImages { value: String },
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct McpProcessConfig {
-    pub(crate) profile: McpToolProfile,
     pub(crate) browser_eval_enabled: bool,
     pub(crate) model_supports_images_override: Option<bool>,
     #[allow(dead_code)]
@@ -54,17 +35,15 @@ pub(crate) struct McpProcessConfig {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum InactiveToolReason {
-    OtherProfile,
     BrowserEvalDisabled,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct McpToolRegistry {
-    pub(crate) profile: McpToolProfile,
     pub(crate) browser_eval_enabled: bool,
     tools: Value,
     active_names: BTreeSet<String>,
-    inactive_names: BTreeMap<String, InactiveToolReason>,
+    inactive_names: BTreeSet<String>,
 }
 
 impl McpToolRegistry {
@@ -79,22 +58,14 @@ impl McpToolRegistry {
     }
 
     pub(crate) fn inactive_reason(&self, name: &str) -> Option<InactiveToolReason> {
-        self.inactive_names.get(name).copied()
+        self.inactive_names
+            .contains(name)
+            .then_some(InactiveToolReason::BrowserEvalDisabled)
     }
 }
 
 pub(crate) fn mcp_process_config_from_env() -> McpProcessConfig {
     let mut diagnostics = Vec::new();
-    let profile = match std::env::var("SKY_CUA_MCP_TOOL_PROFILE") {
-        Ok(value) => match parse_mcp_tool_profile_runtime(Some(&value)) {
-            Ok(profile) => profile,
-            Err(()) => {
-                diagnostics.push(McpConfigDiagnostic::InvalidToolProfile { value });
-                McpToolProfile::Legacy
-            }
-        },
-        Err(_) => McpToolProfile::Legacy,
-    };
     let browser_eval_enabled = match std::env::var(BROWSER_EVAL_ENV) {
         Ok(value) => match parse_browser_eval_runtime(&value) {
             Some(value) => value,
@@ -117,19 +88,9 @@ pub(crate) fn mcp_process_config_from_env() -> McpProcessConfig {
     };
 
     McpProcessConfig {
-        profile,
         browser_eval_enabled,
         model_supports_images_override,
         diagnostics,
-    }
-}
-
-pub(crate) fn parse_mcp_tool_profile_runtime(value: Option<&str>) -> Result<McpToolProfile, ()> {
-    match value.map(str::trim) {
-        None | Some("") => Ok(McpToolProfile::Legacy),
-        Some("legacy") => Ok(McpToolProfile::Legacy),
-        Some("compact") => Ok(McpToolProfile::Compact),
-        Some(_) => Err(()),
     }
 }
 
@@ -154,30 +115,14 @@ pub(crate) fn build_tool_registry(
     model: &ModelSessionInfo,
 ) -> McpToolRegistry {
     let can_receive_images = model.can_receive_images();
-    let legacy_tools =
-        build_tool_definitions_for_policy(can_receive_images, process.browser_eval_enabled);
-    let compact_tools =
-        build_compact_tool_definitions(can_receive_images, process.browser_eval_enabled);
-    let (tools, inactive_profile_tools) = match process.profile {
-        McpToolProfile::Legacy => (legacy_tools.clone(), compact_tools),
-        McpToolProfile::Compact => (compact_tools.clone(), legacy_tools),
-    };
+    let tools = build_tool_definitions(can_receive_images, process.browser_eval_enabled);
     let active_names = tool_names(&tools);
-    let mut inactive_names = BTreeMap::new();
-    for name in tool_names(&inactive_profile_tools) {
-        if !active_names.contains(&name) {
-            inactive_names.insert(name, InactiveToolReason::OtherProfile);
-        }
-    }
+    let mut inactive_names = BTreeSet::new();
     if !process.browser_eval_enabled && !active_names.contains("browser_eval") {
-        inactive_names.insert(
-            "browser_eval".to_string(),
-            InactiveToolReason::BrowserEvalDisabled,
-        );
+        inactive_names.insert("browser_eval".to_string());
     }
 
     McpToolRegistry {
-        profile: process.profile,
         browser_eval_enabled: process.browser_eval_enabled,
         tools,
         active_names,
@@ -197,8 +142,7 @@ fn tool_names(tools: &Value) -> BTreeSet<String> {
 
 #[cfg(test)]
 pub(crate) fn tool_definitions(model: &ModelSessionInfo) -> Value {
-    let index = usize::from(model.can_receive_images());
-    TOOL_DEFINITIONS_CACHE[index].clone()
+    build_tool_definitions(model.can_receive_images(), browser::browser_eval_enabled())
 }
 
 #[cfg(test)]
@@ -208,356 +152,32 @@ pub(crate) fn tools_list_result(model: &ModelSessionInfo) -> Value {
     })
 }
 
-#[cfg(test)]
-static TOOL_DEFINITIONS_CACHE: LazyLock<[Value; 2]> =
-    LazyLock::new(|| [build_tool_definitions(false), build_tool_definitions(true)]);
-
-#[cfg(test)]
-pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
-    build_tool_definitions_for_policy(can_receive_images, browser::browser_eval_enabled())
-}
-
-pub(crate) fn build_tool_definitions_for_policy(
+pub(crate) fn build_tool_definitions(
     can_receive_images: bool,
     browser_eval_enabled: bool,
 ) -> Value {
-    let point_description = "With snapshot_id from a captured get_app_state or screenshot result, x/y are pixels in that snapshot; otherwise live screen coordinates.";
-    let drag_point_description = "With snapshot_id from a captured get_app_state or screenshot result, coordinates are pixels in that snapshot; otherwise live screen coordinates.";
-    let mut tools = json!([
-        {
-            "name": "doctor",
-            "description": "Report desktop readiness: environment, session-env repair, semantic tree, capture, windows, input, browser, and presence diagnostics.",
-            "annotations": READ_ONLY_TOOL.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "setup_accessibility",
-            "description": "Enable toolkit accessibility for AT-SPI semantic trees and return before/after readiness. Target apps may need restart.",
-            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "setup_window_targeting",
-            "description": "Install/enable the bundled GNOME window-control extension and report exact window-targeting status.",
-            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "list_apps",
-            "description": "List accessible desktop apps from window/accessibility backends plus session-env diagnostics.",
-            "annotations": READ_ONLY_TOOL.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "list_windows",
-            "description": "List desktop windows with window_id, backend, bounds, focus, display, and terminal metadata. Use for targeted screenshots or exact activation.",
-            "annotations": READ_ONLY_TOOL.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "focused_window",
-            "description": "Return the focused desktop window from native windowing backends, including display placement when known.",
-            "annotations": READ_ONLY_TOOL.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "activate_window",
-            "description": "Activate a desktop window by window_id or selector. Reports unsupported backends honestly. For visual inspection, use screenshot with the same target.",
-            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": window_target_schema(),
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "screenshot",
-            "description": if can_receive_images {
-                "Capture a fresh visual frame. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop. Use the returned snapshot_id for pixel actions; if capture source geometry is missing, retry the targeted screenshot once before broad fallbacks."
-            } else {
-                "Capture a fresh visual frame and return capture.inspection_image_path plus snapshot_id. Default: primary display. Window targets activate/focus-verify then crop; display_* captures one monitor; capture_all_displays captures the virtual desktop. Use the returned snapshot_id for pixel actions; if capture source geometry is missing, retry the targeted screenshot once before broad fallbacks."
-            },
-            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": screenshot_properties(can_receive_images),
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "get_app_state",
-            "description": if can_receive_images {
-                format!("Return token-bounded desktop state: app identity, displays, diagnostics, accessibility elements, text/value readback, and optional capture metadata. Defaults to compact detail and {APP_STATE_DEFAULT_ELEMENT_LIMIT} elements; use element_query/offset/limit or detail=full. Inspect capture.inspection_image_path when present.")
-            } else {
-                format!("Return token-bounded desktop state: app identity, displays, diagnostics, accessibility elements, text/value readback, and optional capture metadata. Defaults to compact detail and {APP_STATE_DEFAULT_ELEMENT_LIMIT} elements; use element_query/offset/limit or detail=full. Inspect capture.inspection_image_path when present.")
-            },
-            "annotations": READ_ONLY_TOOL.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": get_app_state_properties(can_receive_images),
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "hold_session",
-            "description": "Hold session presence by inhibiting lock and/or suspend; optionally unlock first.",
-            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": session_presence_hold_properties(true),
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "unlock_session",
-            "description": "Unlock the session when supported, then hold lock/suspend inhibitors.",
-            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": session_presence_hold_properties(false),
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "release_session",
-            "description": "Release session-presence inhibitors; optionally re-lock when supported.",
-            "annotations": LOCAL_NAVIGATION_ACTION.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "relock": {
-                        "type": "boolean",
-                        "description": "Re-lock after releasing inhibitors. Defaults to false."
-                    }
-                },
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "session_presence_status",
-            "description": "Report session-presence support and current lock/suspend inhibitor state.",
-            "annotations": READ_ONLY_TOOL.to_value(),
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }
-        },
-        semantic_element_tool(
-            "focus_element",
-            "Move semantic focus to an accessibility element from the latest snapshot.",
-            LOCAL_NAVIGATION_ACTION,
-        ),
-        semantic_element_tool(
-            "activate_element",
-            "Run an element's default semantic action, such as pressing a button or opening a menu.",
-            LOCAL_DESTRUCTIVE_ACTION,
-        ),
-        semantic_element_tool(
-            "select_element",
-            "Select a tab, list item, radio item, row, or similar selectable element.",
-            LOCAL_NAVIGATION_ACTION,
-        ),
-        semantic_element_tool(
-            "expand_element",
-            "Expand a collapsed menu, combo box, disclosure, tree item, or similar element.",
-            LOCAL_NAVIGATION_ACTION,
-        ),
-        semantic_element_tool(
-            "collapse_element",
-            "Collapse an expanded menu, combo box, disclosure, tree item, or similar element.",
-            LOCAL_NAVIGATION_ACTION,
-        ),
-        semantic_element_tool(
-            "toggle_element",
-            "Toggle a checkbox, switch, toggle button, or similar binary element.",
-            LOCAL_STATEFUL_ACTION,
-        ),
-        action_tool(
-            "click",
-            "Click a snapshot element_index, or x/y coordinates.",
-            LOCAL_DESTRUCTIVE_ACTION,
-            json!({
-                "element_index": { "type": "integer", "minimum": 0 },
-                "x": coordinate_schema(&format!("X coordinate. {point_description}")),
-                "y": coordinate_schema(&format!("Y coordinate. {point_description}"))
-            }),
-            json!([]),
-        ),
-        action_tool(
-            "perform_action",
-            "Invoke a named/indexed AT-SPI action. Prefer dedicated tools for common focus, activation, selection, expand/collapse, and toggles.",
-            LOCAL_DESTRUCTIVE_ACTION,
-            json!({
-                "element_index": { "type": "integer", "minimum": 0 },
-                "element_identifier": {
-                    "type": "string",
-                    "description": "Direct backend_ref from get_app_state; bypasses element_index lookup."
-                },
-                "role": { "type": "string" },
-                "name": { "type": "string" },
-                "text": { "type": "string" },
-                "states": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                },
-                "action_index": {
-                    "type": ["integer", "string"],
-                    "description": "Zero-based AT-SPI action index. Defaults to 0."
-                },
-                "action_name": {
-                    "type": "string",
-                    "description": "AT-SPI action name from the target element."
-                },
-                "action": {
-                    "type": "string",
-                    "description": "Compatibility alias: action name or numeric action-index string."
-                }
-            }),
-            json!([]),
-        ),
-        action_tool(
-            "perform_secondary_action",
-            "Perform secondary/context click on a snapshot element_index or x/y coordinates.",
-            LOCAL_DESTRUCTIVE_ACTION,
-            json!({
-                "element_index": { "type": "integer", "minimum": 0 },
-                "x": coordinate_schema(&format!("X coordinate. {point_description}")),
-                "y": coordinate_schema(&format!("Y coordinate. {point_description}")),
-                "action": { "type": "string" }
-            }),
-            json!([]),
-        ),
-        action_tool(
-            "scroll",
-            "Scroll inside a snapshot element, or the focused area.",
-            LOCAL_STATEFUL_ACTION,
-            json!({
-                "element_index": { "type": "integer", "minimum": 0 },
-                "direction": {
-                    "type": "string",
-                    "enum": ["up", "down"]
-                },
-                "pages": { "type": "integer", "minimum": 1 }
-            }),
-            json!(["direction"]),
-        ),
-        action_tool(
-            "drag",
-            "Drag from one element/point to another.",
-            LOCAL_DESTRUCTIVE_ACTION,
-            json!({
-                "element_index": { "type": "integer", "minimum": 0 },
-                "x": coordinate_schema(&format!("Drag start X coordinate. {drag_point_description}")),
-                "y": coordinate_schema(&format!("Drag start Y coordinate. {drag_point_description}")),
-                "from_x": coordinate_schema(&format!("Drag start X coordinate. {drag_point_description}")),
-                "from_y": coordinate_schema(&format!("Drag start Y coordinate. {drag_point_description}")),
-                "to_x": coordinate_schema(&format!("Drag end X coordinate. {drag_point_description}")),
-                "to_y": coordinate_schema(&format!("Drag end Y coordinate. {drag_point_description}")),
-                "to_element_index": { "type": "integer", "minimum": 0 }
-            }),
-            json!([]),
-        ),
-        action_tool(
-            "type_text",
-            "Type literal text into the focused control. Optional snapshot/window target activates first.",
-            LOCAL_DESTRUCTIVE_ACTION,
-            keyboard_target_properties(json!({
-                "text": { "type": "string" }
-            })),
-            json!(["text"]),
-        ),
-        action_tool(
-            "press_key",
-            "Press a key or chord in the focused control. Optional snapshot/window target activates first.",
-            LOCAL_DESTRUCTIVE_ACTION,
-            keyboard_target_properties(json!({
-                "key": { "type": "string" }
-            })),
-            json!(["key"]),
-        ),
-        action_tool(
-            "set_value",
-            "Set an editable element through a proven semantic write path. Target by element_index, element_identifier, or selector; verify with get_app_state readback.",
-            // Overwrites existing content (destructive), but writing the
-            // same value twice converges to the same state (idempotent).
-            ToolAnnotations {
-                read_only: false,
-                destructive: true,
-                idempotent: true,
-                open_world: false,
-            },
-            json!({
-                "element_index": { "type": "integer", "minimum": 0 },
-                "element_identifier": {
-                    "type": "string",
-                    "description": "Direct backend_ref from get_app_state; bypasses element_index lookup."
-                },
-                "role": { "type": "string" },
-                "name": { "type": "string" },
-                "text": { "type": "string" },
-                "states": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                },
-                "value": { "type": "string" }
-            }),
-            json!(["value"]),
-        )
-    ]);
-
-    let tool_array = tools
-        .as_array_mut()
-        .expect("tool definition registry should be a JSON array");
-    browser::push_tool_definitions(tool_array, browser_eval_enabled);
-    phone::push_tool_definitions(tool_array);
-
-    tools
+    build_compact_tool_definitions(can_receive_images, browser_eval_enabled)
 }
 
 fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled: bool) -> Value {
     let mut tools = json!([
         compact_tool(
             "doctor",
-            "Run sky-cua readiness diagnostics for desktop, browser, phone, and session-presence integration.",
+            "Run sky-cua readiness diagnostics for desktop capture/input, browser integration, and session presence.",
             READ_ONLY_TOOL,
             json!({}),
             json!([])
         ),
         compact_tool(
             "status",
-            "Report status for browser, phone, phone companion, or session presence.",
+            "Report browser, phone, phone_companion, or session_presence health.",
             READ_ONLY_TOOL,
             json!({"component": {"type": "string", "enum": ["browser", "phone", "phone_companion", "session_presence"]}}),
             json!(["component"])
         ),
         compact_tool_with_constraints(
             "list_resources",
-            "List bounded resources such as desktop windows/apps, browser tabs, phone devices/apps, or current focused resources.",
+            "List bounded resources. Valid pairs: desktop apps/windows/focused_window; browser tabs; phone devices/apps/current_app.",
             READ_ONLY_TOOL,
             compact_list_resources_properties(),
             json!(["surface", "resource"]),
@@ -565,7 +185,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "observe",
-            "Observe desktop, browser, or phone state using the compact profile branch selected by surface.",
+            "Read structured state. Desktop returns elements and snapshot_id; browser requires tab_id; phone can include accessibility/notifications. Observe before acting; detail=\"compact\" is observation verbosity.",
             READ_ONLY_TOOL,
             compact_observe_properties(can_receive_images),
             json!(["surface"]),
@@ -573,7 +193,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "capture_screen",
-            "Capture browser or phone screen state. Use capture_desktop for desktop screenshots.",
+            "Capture a browser-tab or phone image only. Browser requires tab_id. Use capture_desktop for desktop screenshots.",
             READ_ONLY_TOOL,
             compact_capture_screen_properties(),
             json!(["surface"]),
@@ -595,7 +215,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool(
             "capture_desktop",
-            "Capture a desktop display or window; this may activate/focus a target window before capture.",
+            "Capture a fresh desktop frame. Omit targets for primary display; target one window/display or capture_all_displays. Use the returned snapshot_id and capture source geometry for pixel actions.",
             LOCAL_NAVIGATION_ACTION,
             screenshot_properties(can_receive_images),
             json!([])
@@ -630,7 +250,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_semantic",
-            "Focus, select, expand, or collapse a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
+            "Focus, select, expand, or collapse a desktop element from observe(surface=\"desktop\").",
             LOCAL_NAVIGATION_ACTION,
             compact_desktop_semantic_properties(
                 json!({"operation": {"type": "string", "enum": ["focus", "select", "expand", "collapse"]}})
@@ -640,14 +260,14 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool(
             "browser_claim_tab",
-            "Claim an existing browser tab for control.",
+            "Claim an existing browser tab and make it controllable for observe, capture_screen, navigation, input, scroll, and eval.",
             LOCAL_NAVIGATION_ACTION,
             browser_tab_properties(),
             json!(["tab_id"])
         ),
         compact_tool(
             "browser_move_mouse",
-            "Move the visible browser agent cursor in CSS-pixel coordinates.",
+            "Move the visible browser agent cursor in CSS-pixel coordinates without clicking.",
             LOCAL_NAVIGATION_ACTION,
             compact_browser_point_properties(),
             json!(["tab_id", "x", "y"])
@@ -683,7 +303,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_toggle",
-            "Toggle a desktop semantic element. Use element_index from observe(surface=\"desktop\").",
+            "Toggle a desktop element from observe(surface=\"desktop\").",
             LOCAL_STATEFUL_ACTION,
             compact_desktop_semantic_properties(json!({})),
             json!([]),
@@ -691,20 +311,20 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_scroll",
-            "Scroll desktop element.",
+            "Scroll a desktop target. Provide direction plus snapshot-bound target or coordinates; re-observe before reusing element indexes.",
             LOCAL_STATEFUL_ACTION,
             compact_desktop_semantic_properties(json!({
                 "direction": {"type": "string", "enum": ["up", "down"]},
-                "pages": {"type": "number", "exclusiveMinimum": 0},
-                "steps": {"type": "integer"},
-                "delta_y": {"type": "number"}
+                "pages": {"type": "integer", "minimum": 1, "description": "Preferred magnitude: number of page-sized scroll steps."},
+                "steps": {"type": "integer", "description": "Discrete wheel step count; use pages for page-sized motion."},
+                "delta_y": {"type": "number", "description": "Smooth vertical delta; use pages for page-sized motion."}
             })),
             json!(["direction"]),
             compact_desktop_snapshot_selector_constraint()
         ),
         compact_tool_with_constraints(
             "browser_scroll",
-            "Scroll an open-world browser page.",
+            "Scroll an open-world browser page. Omit x/y for viewport scroll; provide at least one non-zero delta_x or delta_y. Targeted scroll will move the visible browser agent cursor first.",
             ToolAnnotations {
                 read_only: false,
                 destructive: false,
@@ -717,7 +337,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_pointer",
-            "Click, secondary-click, or drag on the desktop. Provide explicit x/y coordinates; do not call with only operation.",
+            "Click, secondary-click, or drag on the desktop. Use coordinates or snapshot-bound targets; do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_desktop_pointer_properties(),
             json!(["operation"]),
@@ -725,7 +345,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_keyboard",
-            "Type text or press a key on the desktop. Provide text for type_text or key for press_key; optional window target fields can scope focus.",
+            "Type text or press a key on the desktop. Focus first; text for type_text, key for press_key, e.g. Enter, Escape, Tab, Ctrl+A, Meta+A.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_desktop_keyboard_properties(),
             json!(["operation"]),
@@ -733,7 +353,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_action",
-            "Activate a desktop semantic element or perform a named/indexed action. Use element_index from observe(surface=\"desktop\"); do not call with only operation.",
+            "Activate a desktop element or perform its named/indexed action from observe(surface=\"desktop\"); do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_desktop_action_properties(),
             json!(["operation"]),
@@ -741,7 +361,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "desktop_set_value",
-            "Set a desktop semantic element value. Include value plus element_index from observe(surface=\"desktop\").",
+            "Set a desktop element value. Include replacement value plus target from observe(surface=\"desktop\").",
             ToolAnnotations {
                 read_only: false,
                 destructive: true,
@@ -754,7 +374,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool(
             "browser_open",
-            "Open a new open-world browser tab.",
+            "Create a browser tab at url, or about:blank when url is omitted. Returns a tab_id for later browser calls.",
             ToolAnnotations {
                 read_only: false,
                 destructive: false,
@@ -766,7 +386,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool(
             "browser_navigate",
-            "Navigate a claimed open-world browser tab.",
+            "Navigate a claimed browser tab to an HTTP(S) URL or about:blank.",
             ToolAnnotations {
                 read_only: false,
                 destructive: false,
@@ -778,7 +398,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "browser_input",
-            "Click, type text, or press a key in an open-world browser tab. click requires x/y; type_text requires text; press_key requires key.",
+            "Click, type text, or press a key in a claimed browser tab. click uses x/y CSS pixels; keys look like Enter, Escape, Tab, Ctrl+K.",
             super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
             compact_browser_input_properties(),
             json!(["operation", "tab_id"]),
@@ -786,7 +406,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "phone_pointer",
-            "Tap or swipe on a connected phone.",
+            "Tap or swipe on a connected phone. Use phone_snapshot_id for screenshot pixels or use_device_coordinates for raw pixels.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_phone_pointer_properties(),
             json!(["operation"]),
@@ -794,7 +414,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool_with_constraints(
             "phone_keyboard",
-            "Type text or press a key on a connected phone.",
+            "Type text or press a key on a connected phone. Focus first; press_key accepts KEYCODE_* names, aliases, or numeric keycodes.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_phone_keyboard_properties(),
             json!(["operation"]),
@@ -810,12 +430,24 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         compact_tool(
             "phone_notification_reply",
-            "Reply inline to a connected-phone notification.",
+            "Reply inline to a connected-phone notification using event_id and inline-reply action_id from the same fresh event.",
             LOCAL_DESTRUCTIVE_ACTION,
             with_phone_selector(json!({
-                "event_id": non_empty_string_schema(),
-                "action_id": non_empty_string_schema(),
-                "text": non_empty_string_schema()
+                "event_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "event_id from fresh phone notifications."
+                },
+                "action_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Inline-reply action_id from that event."
+                },
+                "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Reply text."
+                }
             })),
             json!(["event_id", "action_id", "text"])
         ),
@@ -837,7 +469,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         )
     ]);
     if browser_eval_enabled {
-        tools.as_array_mut().expect("compact tool array").push(compact_tool(
+        tools.as_array_mut().expect("tool array").push(compact_tool(
             "browser_eval",
             "Evaluate JavaScript in a claimed browser tab. This is hidden unless browser eval is explicitly enabled.",
             super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
@@ -883,10 +515,10 @@ fn compact_tool_with_constraints(
     let input_schema = tool
         .get_mut("inputSchema")
         .and_then(Value::as_object_mut)
-        .expect("compact tool inputSchema must be an object");
+        .expect("tool inputSchema must be an object");
     let constraints = constraints
         .as_object()
-        .unwrap_or_else(|| panic!("compact tool constraints must be object: {constraints:?}"));
+        .unwrap_or_else(|| panic!("tool constraints must be object: {constraints:?}"));
     input_schema.extend(constraints.clone());
     tool
 }
@@ -1162,7 +794,11 @@ fn action_tool_properties(mut properties: Value) -> Value {
         .expect("action tool properties must be object");
     property_map.insert(
         "snapshot_id".to_string(),
-        json!({"type": "string", "minLength": 1}),
+        json!({
+            "type": "string",
+            "minLength": 1,
+            "description": "Snapshot id."
+        }),
     );
     properties
 }
@@ -1172,15 +808,26 @@ fn semantic_selector_properties() -> Value {
         "element_index": {
             "type": "integer",
             "minimum": 0,
-            "description": "Element index from the latest desktop observation."
+            "description": "Snapshot element index."
         },
         "element_identifier": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "Element backend_ref."
         },
-        "role": {"type": "string"},
-        "name": non_empty_string_schema(),
-        "text": non_empty_string_schema(),
+        "role": {
+            "type": "string"
+        },
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Element name."
+        },
+        "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Element text."
+        },
         "states": {
             "type": "array",
             "items": {"type": "string"}
@@ -1207,7 +854,7 @@ fn browser_tab_id_schema() -> Value {
     json!({
         "type": "string",
         "minLength": 1,
-        "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs)."
+        "description": "Browser tab id."
     })
 }
 
@@ -1280,8 +927,8 @@ fn compact_browser_scroll_properties() -> Value {
     merge_properties(
         compact_browser_point_properties(),
         json!({
-            "delta_x": {"type": "number", "description": "Horizontal wheel delta in CSS pixels."},
-            "delta_y": {"type": "number", "description": "Vertical wheel delta in CSS pixels."}
+            "delta_x": {"type": "number", "description": "Horizontal wheel delta in CSS pixels; at least one delta must be non-zero."},
+            "delta_y": {"type": "number", "description": "Vertical wheel delta in CSS pixels; at least one delta must be non-zero."}
         }),
     )
 }
@@ -1315,7 +962,7 @@ fn compact_browser_scroll_constraints() -> Value {
 
 fn browser_snapshot_window_properties() -> Value {
     json!({
-        "element_query": {"type": "string"},
+        "element_query": {"type": "string", "maxLength": APP_STATE_MAX_ELEMENT_QUERY_CHARS},
         "element_offset": {"type": "integer", "minimum": 0},
         "element_limit": {
             "type": "integer",
@@ -1328,14 +975,16 @@ fn browser_snapshot_window_properties() -> Value {
 fn phone_session_id_schema() -> Value {
     json!({
         "type": "string",
-        "description": "session_id from phone_connection(connect) or list_resources(surface=phone, resource=devices)."
+        "minLength": 1,
+        "description": "Phone session id."
     })
 }
 
 fn phone_serial_schema() -> Value {
     json!({
         "type": "string",
-        "description": "ADB serial from list_resources(surface=phone, resource=devices). session_id is preferred when both are present."
+        "minLength": 1,
+        "description": "ADB serial."
     })
 }
 
@@ -1413,7 +1062,11 @@ fn compact_phone_setup_constraints() -> Value {
 fn compact_phone_pointer_properties() -> Value {
     with_phone_selector(json!({
         "operation": {"type": "string", "enum": ["tap", "swipe"]},
-        "phone_snapshot_id": {"type": "string"},
+        "phone_snapshot_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Phone snapshot id."
+        },
         "x": {"type": "number", "minimum": 0},
         "y": {"type": "number", "minimum": 0},
         "start_x": {"type": "number", "minimum": 0},
@@ -1421,7 +1074,7 @@ fn compact_phone_pointer_properties() -> Value {
         "end_x": {"type": "number", "minimum": 0},
         "end_y": {"type": "number", "minimum": 0},
         "duration_ms": {"type": "integer", "minimum": 0},
-        "use_device_coordinates": {"type": "boolean"}
+        "use_device_coordinates": {"type": "boolean", "description": "Raw device pixels."}
     }))
 }
 
@@ -1466,8 +1119,16 @@ fn compact_phone_keyboard_constraints() -> Value {
 fn compact_phone_notification_action_properties() -> Value {
     with_phone_selector(json!({
         "operation": {"type": "string", "enum": ["open", "dismiss", "action"]},
-        "event_id": non_empty_string_schema(),
-        "action_id": non_empty_string_schema()
+        "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Notification event id."
+        },
+        "action_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Notification action id."
+        }
     }))
 }
 
@@ -1493,9 +1154,17 @@ fn compact_phone_notification_action_constraints() -> Value {
 fn compact_phone_app_action_properties() -> Value {
     with_phone_selector(json!({
         "operation": {"type": "string", "enum": ["launch", "open_intent"]},
-        "package_name": non_empty_string_schema(),
+        "package_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Android package name."
+        },
         "activity": {"type": "string"},
-        "intent_uri": non_empty_string_schema()
+        "intent_uri": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Intent URI or deep link."
+        }
     }))
 }
 
@@ -1516,9 +1185,18 @@ fn compact_phone_app_action_constraints() -> Value {
 
 fn compact_phone_app_install_properties() -> Value {
     with_phone_selector(json!({
-        "apk_paths": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-        "apk_path": {"type": "string", "minLength": 1},
-        "mode": {"type": "string", "enum": ["single", "multiple", "multi_package"]},
+        "apk_paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+            "description": "APK paths."
+        },
+        "apk_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Single APK path; apk_paths wins if both are present."
+        },
+        "mode": {"type": "string", "enum": ["single", "multiple", "multi_package"], "description": "Install strategy hint."},
         "reinstall": {"type": "boolean"},
         "allow_downgrade": {"type": "boolean"},
         "allow_test_apk": {"type": "boolean"},
@@ -1635,31 +1313,6 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
     properties
 }
 
-fn session_presence_hold_properties(include_unlock: bool) -> Value {
-    let mut properties = json!({
-        "inhibit_lock": {
-            "type": "boolean",
-            "description": "Hold the lock/screensaver inhibitor. Defaults to true."
-        },
-        "inhibit_suspend": {
-            "type": "boolean",
-            "description": "Hold the suspend inhibitor. Defaults to true."
-        }
-    });
-
-    if include_unlock && let Some(property_map) = properties.as_object_mut() {
-        property_map.insert(
-            "unlock".to_string(),
-            json!({
-                "type": "boolean",
-                "description": "Unlock before holding inhibitors when supported. Defaults to false."
-            }),
-        );
-    }
-
-    properties
-}
-
 fn coordinate_schema(description: &str) -> Value {
     json!({
         "type": "number",
@@ -1711,79 +1364,11 @@ fn keyboard_target_properties(mut properties: Value) -> Value {
     properties
 }
 
-fn semantic_element_tool(name: &str, description: &str, annotations: ToolAnnotations) -> Value {
-    action_tool(
-        name,
-        description,
-        annotations,
-        json!({
-            "element_index": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "Element index from the latest get_app_state snapshot."
-            },
-            "element_identifier": {
-                "type": "string",
-                "description": "Direct backend_ref from get_app_state; bypasses element_index lookup."
-            },
-            "role": {
-                "type": "string",
-                "description": "Semantic selector role from the latest snapshot."
-            },
-            "name": {
-                "type": "string",
-                "description": "Semantic selector name from the latest snapshot."
-            },
-            "text": {
-                "type": "string",
-                "description": "Selector text matched against name, description, or value."
-            },
-            "states": {
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "Selector states; all listed states must match."
-            }
-        }),
-        json!([]),
-    )
-}
-
-fn action_tool(
-    name: &str,
-    description: &str,
-    annotations: ToolAnnotations,
-    mut properties: Value,
-    required: Value,
-) -> Value {
-    let Some(property_map) = properties.as_object_mut() else {
-        panic!("action_tool called with non-object properties for {name}")
-    };
-    property_map.insert(
-        "snapshot_id".to_string(),
-        json!({
-            "type": "string",
-            "description": "snapshot_id from get_app_state or screenshot; coordinate translation requires capture metadata."
-        }),
-    );
-    let input_schema = json!({
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": false
-    });
-    json!({
-        "name": name,
-        "description": description,
-        "annotations": annotations.to_value(),
-        "inputSchema": input_schema
-    })
-}
-
 #[cfg(test)]
 mod annotation_tests {
     use super::{
-        InactiveToolReason, McpConfigDiagnostic, McpProcessConfig, McpToolProfile,
-        build_tool_definitions, build_tool_registry, mcp_process_config_from_env,
+        InactiveToolReason, McpConfigDiagnostic, McpProcessConfig, build_tool_definitions,
+        build_tool_registry, mcp_process_config_from_env,
     };
     use crate::mcp_server::ModelSessionInfo;
     use serde_json::{Value, json};
@@ -1803,95 +1388,46 @@ mod annotation_tests {
     /// so it must be a deliberate decision.
     const EXPECTED: &[AnnotationRow] = &[
         ("doctor", (true, false, true, false)),
-        ("setup_accessibility", (false, false, true, false)),
-        // Deliberate judgment call: installs a GNOME Shell extension, but the
-        // install is reversible, idempotent, and cannot destroy user data, so
-        // it is pinned non-destructive rather than worst-case.
-        ("setup_window_targeting", (false, false, true, false)),
-        ("list_apps", (true, false, true, false)),
-        ("list_windows", (true, false, true, false)),
-        ("focused_window", (true, false, true, false)),
-        ("activate_window", (false, false, true, false)),
-        ("screenshot", (false, false, true, false)),
-        ("get_app_state", (true, false, true, false)),
-        ("hold_session", (false, false, true, false)),
-        ("unlock_session", (false, false, true, false)),
-        ("release_session", (false, false, true, false)),
-        ("session_presence_status", (true, false, true, false)),
-        ("focus_element", (false, false, true, false)),
-        ("activate_element", (false, true, false, false)),
-        ("select_element", (false, false, true, false)),
-        ("expand_element", (false, false, true, false)),
-        ("collapse_element", (false, false, true, false)),
-        ("toggle_element", (false, false, false, false)),
-        ("click", (false, true, false, false)),
-        ("perform_action", (false, true, false, false)),
-        ("perform_secondary_action", (false, true, false, false)),
-        ("scroll", (false, false, false, false)),
-        ("drag", (false, true, false, false)),
-        ("type_text", (false, true, false, false)),
-        ("press_key", (false, true, false, false)),
-        ("set_value", (false, true, true, false)),
-        ("browser_status", (true, false, true, false)),
-        ("browser_list_tabs", (true, false, true, false)),
-        ("browser_open", (false, false, false, true)),
-        ("browser_claim_tab", (false, false, true, false)),
-        ("browser_move_mouse", (false, false, true, false)),
-        // Deliberate judgment call: navigation can discard unsaved page
-        // state, but it is pinned non-destructive + idempotent because
-        // re-navigating to the same URL converges and codex would otherwise
-        // gate every page load behind an approval.
-        ("browser_navigate", (false, false, true, true)),
-        ("browser_snapshot", (true, false, true, false)),
-        ("browser_screenshot", (true, false, true, false)),
-        ("browser_click", (false, true, false, true)),
-        ("browser_type_text", (false, true, false, true)),
-        ("browser_press_key", (false, true, false, true)),
-        ("browser_scroll", (false, false, false, true)),
-        ("browser_eval", (false, true, false, true)),
-        // Phone Use: read-only observation tools.
-        ("phone_observe", (true, false, true, false)),
-        ("phone_status", (true, false, true, false)),
-        ("phone_list_devices", (true, false, true, false)),
-        ("phone_companion_status", (true, false, true, false)),
+        ("status", (true, false, true, false)),
+        ("list_resources", (true, false, true, false)),
+        ("observe", (true, false, true, false)),
+        ("capture_screen", (true, false, true, false)),
         ("phone_accessibility_tree", (true, false, true, false)),
         ("phone_notifications", (true, false, true, false)),
-        ("phone_app_current", (true, false, true, false)),
-        ("phone_app_list", (true, false, true, false)),
-        // Phone Use: local navigation actions — reversible, idempotent, and
-        // unable to trigger arbitrary in-app behavior. force_stop terminates an
-        // app but re-running converges to the same stopped state, so it is
-        // pinned idempotent rather than worst-case destructive.
-        ("phone_refresh_capabilities", (false, false, true, false)),
+        ("capture_desktop", (false, false, true, false)),
+        ("setup_desktop", (false, false, true, false)),
+        ("session_presence", (false, false, true, false)),
+        ("activate_window", (false, false, true, false)),
+        ("desktop_semantic", (false, false, true, false)),
+        ("browser_claim_tab", (false, false, true, false)),
+        ("browser_move_mouse", (false, false, true, false)),
+        ("phone_connection", (false, false, true, false)),
         ("phone_pair_wireless", (false, false, true, false)),
-        ("phone_connect", (false, false, true, false)),
-        ("phone_disconnect", (false, false, true, false)),
-        ("phone_install_companion", (false, false, true, false)),
+        ("phone_setup", (false, false, true, false)),
         ("phone_app_force_stop", (false, false, true, false)),
-        // Unlike the idempotent companion install, installing arbitrary APKs
-        // (reinstall/downgrade/test) can overwrite or downgrade an existing app,
-        // so it is destructive and not idempotent.
-        ("phone_app_install", (false, true, false, false)),
-        ("phone_open_settings", (false, false, true, false)),
-        // Phone Use: arbitrary device input and app/notification actions that
-        // can press any control in any app, so the destructive hint stays true.
-        ("phone_screenshot", (true, false, true, false)),
-        ("phone_tap", (false, true, false, false)),
-        ("phone_swipe", (false, true, false, false)),
-        ("phone_type_text", (false, true, false, false)),
-        ("phone_press_key", (false, true, false, false)),
-        ("phone_app_launch", (false, true, false, false)),
-        ("phone_app_open_intent", (false, true, false, false)),
-        ("phone_notification_open", (false, true, false, false)),
-        ("phone_notification_dismiss", (false, true, false, false)),
+        ("desktop_toggle", (false, false, false, false)),
+        ("desktop_scroll", (false, false, false, false)),
+        ("browser_scroll", (false, false, false, true)),
+        ("desktop_pointer", (false, true, false, false)),
+        ("desktop_keyboard", (false, true, false, false)),
+        ("desktop_action", (false, true, false, false)),
+        ("desktop_set_value", (false, true, true, false)),
+        ("browser_open", (false, false, false, true)),
+        ("browser_navigate", (false, false, true, true)),
+        ("browser_input", (false, true, false, true)),
+        ("phone_pointer", (false, true, false, false)),
+        ("phone_keyboard", (false, true, false, false)),
         ("phone_notification_action", (false, true, false, false)),
         ("phone_notification_reply", (false, true, false, false)),
+        ("phone_app_action", (false, true, false, false)),
+        ("phone_app_install", (false, true, false, false)),
+        ("browser_eval", (false, true, false, true)),
     ];
 
     #[test]
     fn every_tool_pins_honest_mcp_annotations() {
         for can_receive_images in [false, true] {
-            let tools = build_tool_definitions(can_receive_images);
+            let tools = build_tool_definitions(can_receive_images, false);
             let tools = tools.as_array().expect("tool definitions array");
             assert!(!tools.is_empty());
             for tool in tools {
@@ -1930,7 +1466,7 @@ mod annotation_tests {
 
     #[test]
     fn read_only_tools_never_mutate_per_their_own_hints() {
-        let tools = build_tool_definitions(true);
+        let tools = build_tool_definitions(true, false);
         for tool in tools.as_array().expect("tool definitions array") {
             let annotations = &tool["annotations"];
             if annotations["readOnlyHint"] == true {
@@ -1943,9 +1479,8 @@ mod annotation_tests {
         }
     }
 
-    fn process_config(profile: McpToolProfile, browser_eval_enabled: bool) -> McpProcessConfig {
+    fn process_config(browser_eval_enabled: bool) -> McpProcessConfig {
         McpProcessConfig {
-            profile,
             browser_eval_enabled,
             model_supports_images_override: None,
             diagnostics: Vec::new(),
@@ -1953,28 +1488,24 @@ mod annotation_tests {
     }
 
     #[test]
-    fn compact_registry_has_expected_name_budget() {
+    fn registry_has_expected_name_budget() {
         let model = ModelSessionInfo::default();
-        let registry = build_tool_registry(&process_config(McpToolProfile::Compact, false), &model);
-        assert_eq!(registry.profile, McpToolProfile::Compact);
+        let registry = build_tool_registry(&process_config(false), &model);
         assert_eq!(registry.active_names.len(), 34);
         assert!(registry.contains("observe"));
         assert!(registry.contains("browser_input"));
         let doctor = registry
             .tools
             .as_array()
-            .expect("compact tools array")
+            .expect("tools array")
             .iter()
             .find(|tool| tool["name"] == "doctor")
-            .expect("compact doctor");
+            .expect("doctor");
         assert_eq!(doctor["annotations"]["readOnlyHint"], true);
         assert_eq!(doctor["annotations"]["idempotentHint"], true);
         assert!(!registry.contains("browser_eval"));
         assert!(!registry.contains("get_app_state"));
-        assert_eq!(
-            registry.inactive_reason("get_app_state"),
-            Some(InactiveToolReason::OtherProfile)
-        );
+        assert_eq!(registry.inactive_reason("get_app_state"), None);
         assert_eq!(
             registry.inactive_reason("browser_eval"),
             Some(InactiveToolReason::BrowserEvalDisabled)
@@ -1982,9 +1513,9 @@ mod annotation_tests {
     }
 
     #[test]
-    fn compact_registry_adds_browser_eval_only_when_enabled() {
+    fn registry_adds_browser_eval_only_when_enabled() {
         let model = ModelSessionInfo::default();
-        let registry = build_tool_registry(&process_config(McpToolProfile::Compact, true), &model);
+        let registry = build_tool_registry(&process_config(true), &model);
         assert_eq!(registry.active_names.len(), 35);
         assert!(registry.contains("browser_eval"));
         assert_eq!(registry.inactive_reason("browser_eval"), None);
@@ -1992,16 +1523,13 @@ mod annotation_tests {
 
     #[test]
     fn compact_action_tool_schemas_reject_vague_desktop_actions() {
-        let registry = build_tool_registry(
-            &process_config(McpToolProfile::Compact, true),
-            &ModelSessionInfo::default(),
-        );
-        let tools = registry.tools.as_array().expect("compact tools");
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+        let tools = registry.tools.as_array().expect("tools");
         let tool = |name: &str| -> &Value {
             tools
                 .iter()
                 .find(|tool| tool["name"] == name)
-                .unwrap_or_else(|| panic!("missing compact tool {name}"))
+                .unwrap_or_else(|| panic!("missing tool {name}"))
         };
 
         let pointer_schema = &tool("desktop_pointer")["inputSchema"];
@@ -2158,7 +1686,7 @@ mod annotation_tests {
         assert_eq!(
             tool("browser_input")["inputSchema"]["properties"]["tab_id"]["minLength"],
             1,
-            "compact browser tools must reject empty tab_id"
+            "browser tools must reject empty tab_id"
         );
         assert_eq!(
             tool("browser_input")["inputSchema"]["properties"]["text"]["minLength"],
@@ -2275,7 +1803,7 @@ mod annotation_tests {
         );
         assert!(
             tool("desktop_scroll")["inputSchema"]["properties"]["pages"].is_object(),
-            "desktop_scroll should expose the legacy pages field"
+            "desktop_scroll should expose the canonical pages field"
         );
         assert!(
             tool("desktop_scroll")["inputSchema"]["anyOf"]
@@ -2429,50 +1957,22 @@ mod annotation_tests {
     }
 
     #[test]
-    fn legacy_registry_preserves_current_default_budget() {
-        let model = ModelSessionInfo::default();
-        let registry = build_tool_registry(&process_config(McpToolProfile::Legacy, false), &model);
-        assert_eq!(registry.profile, McpToolProfile::Legacy);
-        assert_eq!(registry.active_names.len(), 66);
-        assert!(registry.contains("get_app_state"));
-        assert!(!registry.contains("observe"));
-        assert_eq!(
-            registry.inactive_reason("observe"),
-            Some(InactiveToolReason::OtherProfile)
-        );
-    }
-
-    #[test]
-    fn legacy_registry_adds_browser_eval_only_when_enabled() {
-        let model = ModelSessionInfo::default();
-        let registry = build_tool_registry(&process_config(McpToolProfile::Legacy, true), &model);
-        assert_eq!(registry.active_names.len(), 67);
-        assert!(registry.contains("browser_eval"));
-    }
-
-    #[test]
     fn mcp_runtime_config_invalid_values_fallback() {
         let _guard = ENV_LOCK.lock().expect("env lock poisoned");
         unsafe {
-            std::env::set_var("SKY_CUA_MCP_TOOL_PROFILE", "compact-ish");
             std::env::set_var("SKY_CUA_BROWSER_EVAL", "perhaps");
             std::env::set_var("SKY_CUA_MODEL_SUPPORTS_IMAGES", "sometimes");
         }
         let config = mcp_process_config_from_env();
         unsafe {
-            std::env::remove_var("SKY_CUA_MCP_TOOL_PROFILE");
             std::env::remove_var("SKY_CUA_BROWSER_EVAL");
             std::env::remove_var("SKY_CUA_MODEL_SUPPORTS_IMAGES");
         }
-        assert_eq!(config.profile, McpToolProfile::Legacy);
         assert!(!config.browser_eval_enabled);
         assert_eq!(config.model_supports_images_override, None);
         assert_eq!(
             config.diagnostics,
             vec![
-                McpConfigDiagnostic::InvalidToolProfile {
-                    value: "compact-ish".to_string()
-                },
                 McpConfigDiagnostic::InvalidBrowserEval {
                     value: "perhaps".to_string()
                 },
@@ -2487,16 +1987,13 @@ mod annotation_tests {
     fn browser_eval_runtime_config_matches_service_truthy_values() {
         let _guard = ENV_LOCK.lock().expect("env lock poisoned");
         unsafe {
-            std::env::set_var("SKY_CUA_MCP_TOOL_PROFILE", "compact");
             std::env::set_var("SKY_CUA_BROWSER_EVAL", "enabled");
             std::env::remove_var("SKY_CUA_MODEL_SUPPORTS_IMAGES");
         }
         let config = mcp_process_config_from_env();
         unsafe {
-            std::env::remove_var("SKY_CUA_MCP_TOOL_PROFILE");
             std::env::remove_var("SKY_CUA_BROWSER_EVAL");
         }
-        assert_eq!(config.profile, McpToolProfile::Compact);
         assert!(
             !config.browser_eval_enabled,
             "browser eval advertisement must use the same on/1/true truthy values as service execution"
@@ -2516,46 +2013,43 @@ mod annotation_tests {
     }
 
     #[test]
-    fn compact_tool_contract_fixture_matches_generated_registry() {
-        let generated = generated_compact_contract();
+    fn tool_contract_fixture_matches_generated_registry() {
+        let generated = generated_tool_contract();
         let tools = generated["tools"].as_array().expect("contract tools");
         let contract_names: Vec<&str> = tools
             .iter()
             .map(|tool| tool["name"].as_str().expect("contract tool name"))
             .collect();
-        let registry = build_tool_registry(
-            &process_config(McpToolProfile::Compact, true),
-            &ModelSessionInfo::default(),
-        );
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
         let advertised_names: Vec<&str> = registry
             .tools
             .as_array()
-            .expect("compact tools")
+            .expect("tools")
             .iter()
             .map(|tool| tool["name"].as_str().expect("tool name"))
             .collect();
         assert_eq!(contract_names, advertised_names);
 
         assert_fixture_matches(
-            "compact_tool_contract.json",
-            include_str!("../../tests/fixtures/compact_tool_contract.json"),
+            "tool_contract.json",
+            include_str!("../../tests/fixtures/tool_contract.json"),
             generated,
         );
     }
 
     #[test]
-    fn compact_call_cases_fixture_matches_contract() {
-        let generated = generated_compact_call_cases();
+    fn call_cases_fixture_matches_contract() {
+        let generated = generated_call_cases();
         let cases = generated["cases"].as_array().expect("call cases");
         assert!(
             cases.iter().all(|case| case["valid"].is_object()),
-            "every valid compact call case must be an object"
+            "every valid call case must be an object"
         );
         assert!(
             cases.iter().all(|case| case["invalid"].is_object()),
-            "every invalid compact call case must be an object"
+            "every invalid call case must be an object"
         );
-        let contract_branch_count: usize = generated_compact_contract()["tools"]
+        let contract_branch_count: usize = generated_tool_contract()["tools"]
             .as_array()
             .expect("contract tools")
             .iter()
@@ -2563,31 +2057,35 @@ mod annotation_tests {
             .sum();
         assert_eq!(cases.len(), contract_branch_count);
 
-        let registry = build_tool_registry(
-            &process_config(McpToolProfile::Compact, true),
-            &ModelSessionInfo::default(),
-        );
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
         for case in cases {
             let tool_name = case["tool"].as_str().expect("case tool");
             let schema = registry
                 .tools
                 .as_array()
-                .expect("compact tools")
+                .expect("tools")
                 .iter()
                 .find(|tool| tool["name"] == tool_name)
-                .unwrap_or_else(|| panic!("missing compact schema for {tool_name}"));
+                .unwrap_or_else(|| panic!("missing schema for {tool_name}"));
             assert!(
                 schema_accepts(&schema["inputSchema"], &case["valid"]),
-                "compact call case {}/{} is not valid for its generated schema: {}",
+                "call case {}/{} is not valid for its generated schema: {}",
                 tool_name,
                 case["branch"].as_str().expect("case branch"),
                 case["valid"]
             );
+            assert!(
+                !schema_accepts(&schema["inputSchema"], &case["invalid"]),
+                "call case {}/{} invalid sample was accepted by its generated schema: {}",
+                tool_name,
+                case["branch"].as_str().expect("case branch"),
+                case["invalid"]
+            );
         }
 
         assert_fixture_matches(
-            "compact_call_cases.json",
-            include_str!("../../tests/fixtures/compact_call_cases.json"),
+            "call_cases.json",
+            include_str!("../../tests/fixtures/call_cases.json"),
             generated,
         );
     }
@@ -2596,6 +2094,11 @@ mod annotation_tests {
         let Some(schema) = schema.as_object() else {
             return true;
         };
+        if let Some(expected_type) = schema.get("type")
+            && !schema_type_accepts(expected_type, instance)
+        {
+            return false;
+        }
         if let Some(required) = schema.get("required").and_then(Value::as_array) {
             let Some(instance_object) = instance.as_object() else {
                 return false;
@@ -2626,6 +2129,14 @@ mod annotation_tests {
                 return false;
             }
         }
+        if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64) {
+            let Some(value) = instance.as_f64() else {
+                return false;
+            };
+            if value > maximum {
+                return false;
+            }
+        }
         if let Some(minimum) = schema.get("exclusiveMinimum").and_then(Value::as_f64) {
             let Some(value) = instance.as_f64() else {
                 return false;
@@ -2634,11 +2145,27 @@ mod annotation_tests {
                 return false;
             }
         }
+        if let Some(maximum) = schema.get("exclusiveMaximum").and_then(Value::as_f64) {
+            let Some(value) = instance.as_f64() else {
+                return false;
+            };
+            if value >= maximum {
+                return false;
+            }
+        }
         if let Some(minimum) = schema.get("minLength").and_then(Value::as_u64) {
             let Some(value) = instance.as_str() else {
                 return false;
             };
-            if value.len() < minimum as usize {
+            if value.chars().count() < minimum as usize {
+                return false;
+            }
+        }
+        if let Some(maximum) = schema.get("maxLength").and_then(Value::as_u64) {
+            let Some(value) = instance.as_str() else {
+                return false;
+            };
+            if value.chars().count() > maximum as usize {
                 return false;
             }
         }
@@ -2650,11 +2177,27 @@ mod annotation_tests {
                 return false;
             }
         }
+        if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64) {
+            let Some(value) = instance.as_array() else {
+                return false;
+            };
+            if value.len() > maximum as usize {
+                return false;
+            }
+        }
         if let Some(minimum) = schema.get("minProperties").and_then(Value::as_u64) {
             let Some(value) = instance.as_object() else {
                 return false;
             };
             if value.len() < minimum as usize {
+                return false;
+            }
+        }
+        if let Some(maximum) = schema.get("maxProperties").and_then(Value::as_u64) {
+            let Some(value) = instance.as_object() else {
+                return false;
+            };
+            if value.len() > maximum as usize {
                 return false;
             }
         }
@@ -2693,6 +2236,14 @@ mod annotation_tests {
                 return false;
             }
         }
+        if let Some(item_schema) = schema.get("items")
+            && let Some(instance_array) = instance.as_array()
+            && !instance_array
+                .iter()
+                .all(|item| schema_accepts(item_schema, item))
+        {
+            return false;
+        }
         if let Some(all_of) = schema.get("allOf").and_then(Value::as_array)
             && !all_of.iter().all(|schema| schema_accepts(schema, instance))
         {
@@ -2720,6 +2271,38 @@ mod annotation_tests {
             return false;
         }
         true
+    }
+
+    fn schema_type_accepts(expected_type: &Value, instance: &Value) -> bool {
+        match expected_type {
+            Value::String(expected_type) => schema_single_type_accepts(expected_type, instance),
+            Value::Array(expected_types) => expected_types.iter().any(|expected_type| {
+                expected_type.as_str().is_some_and(|expected_type| {
+                    schema_single_type_accepts(expected_type, instance)
+                })
+            }),
+            _ => true,
+        }
+    }
+
+    fn schema_single_type_accepts(expected_type: &str, instance: &Value) -> bool {
+        match expected_type {
+            "array" => instance.is_array(),
+            "boolean" => instance.is_boolean(),
+            "integer" => instance
+                .as_i64()
+                .or_else(|| {
+                    instance
+                        .as_u64()
+                        .and_then(|value| i64::try_from(value).ok())
+                })
+                .is_some(),
+            "null" => instance.is_null(),
+            "number" => instance.is_number(),
+            "object" => instance.is_object(),
+            "string" => instance.is_string(),
+            _ => true,
+        }
     }
 
     fn assert_fixture_matches(name: &str, expected: &str, generated: Value) {
@@ -2750,52 +2333,22 @@ mod annotation_tests {
 
     fn generated_surface_matrix() -> Value {
         let mut rows = Vec::new();
-        for profile in [McpToolProfile::Legacy, McpToolProfile::Compact] {
-            for can_receive_images in [false, true] {
-                for browser_eval_enabled in [false, true] {
-                    let model = model_with_image_capability(can_receive_images);
-                    let registry =
-                        build_tool_registry(&process_config(profile, browser_eval_enabled), &model);
-                    let tools_list = registry.tools_list_result();
-                    let serialized = serde_json::to_string(&tools_list).expect("tools list json");
-                    rows.push(json!({
-                        "profile": profile.as_str(),
-                        "can_receive_images": can_receive_images,
-                        "browser_eval_enabled": browser_eval_enabled,
-                        "tool_count": registry.active_names.len(),
-                        "serialized_bytes": serialized.len(),
-                        "description_bytes": description_bytes(&registry.tools),
-                        "largest_schema_bytes": largest_schema_bytes(&registry.tools),
-                        "tools_list": tools_list
-                    }));
-                }
-            }
-        }
-
         for can_receive_images in [false, true] {
             for browser_eval_enabled in [false, true] {
-                let legacy = rows
-                    .iter()
-                    .find(|row| {
-                        row["profile"] == "legacy"
-                            && row["can_receive_images"] == can_receive_images
-                            && row["browser_eval_enabled"] == browser_eval_enabled
-                    })
-                    .expect("legacy row");
-                let compact = rows
-                    .iter()
-                    .find(|row| {
-                        row["profile"] == "compact"
-                            && row["can_receive_images"] == can_receive_images
-                            && row["browser_eval_enabled"] == browser_eval_enabled
-                    })
-                    .expect("compact row");
-                let legacy_bytes = legacy["serialized_bytes"].as_u64().expect("legacy bytes");
-                let compact_bytes = compact["serialized_bytes"].as_u64().expect("compact bytes");
-                assert!(
-                    compact_bytes * 100 <= legacy_bytes * 65,
-                    "compact profile exceeds 65% serialized budget for images={can_receive_images} eval={browser_eval_enabled}: compact={compact_bytes} legacy={legacy_bytes}"
-                );
+                let model = model_with_image_capability(can_receive_images);
+                let registry = build_tool_registry(&process_config(browser_eval_enabled), &model);
+                let tools_list = registry.tools_list_result();
+                let serialized = serde_json::to_string(&tools_list).expect("tools list json");
+                rows.push(json!({
+                    "surface": "canonical",
+                    "can_receive_images": can_receive_images,
+                    "browser_eval_enabled": browser_eval_enabled,
+                    "tool_count": registry.active_names.len(),
+                    "serialized_bytes": serialized.len(),
+                    "description_bytes": description_bytes(&registry.tools),
+                    "largest_schema_bytes": largest_schema_bytes(&registry.tools),
+                    "tools_list": tools_list
+                }));
             }
         }
 
@@ -2836,13 +2389,10 @@ mod annotation_tests {
             .unwrap_or(0)
     }
 
-    fn generated_compact_contract() -> Value {
-        let registry = build_tool_registry(
-            &process_config(McpToolProfile::Compact, true),
-            &ModelSessionInfo::default(),
-        );
-        let advertised = registry.tools.as_array().expect("compact tools");
-        let tools: Vec<Value> = compact_contract_tools()
+    fn generated_tool_contract() -> Value {
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+        let advertised = registry.tools.as_array().expect("tools");
+        let tools: Vec<Value> = canonical_contract_tools()
             .into_iter()
             .map(|mut contract| {
                 let name = contract["name"].as_str().expect("contract name");
@@ -2853,8 +2403,8 @@ mod annotation_tests {
                 let object = contract.as_object_mut().expect("contract object");
                 object.insert("annotations".to_string(), public["annotations"].clone());
                 object.insert("input_schema".to_string(), public["inputSchema"].clone());
-                object.insert("content_policy".to_string(), json!("profile_rewrite"));
-                object.insert("structured_policy".to_string(), json!("compact_envelope"));
+                object.insert("content_policy".to_string(), json!("canonical_rewrite"));
+                object.insert("structured_policy".to_string(), json!("canonical_envelope"));
                 contract
             })
             .collect();
@@ -2866,14 +2416,14 @@ mod annotation_tests {
         }));
         json!({
             "version": 1,
-            "profile": "compact",
+            "surface": "canonical",
             "default_tool_count": 34,
             "eval_tool_count": 35,
             "tools": tools
         })
     }
 
-    fn compact_contract_tools() -> Vec<Value> {
+    fn canonical_contract_tools() -> Vec<Value> {
         vec![
             contract_tool("doctor", vec![branch("diagnostics", "doctor", json!({}))]),
             contract_tool(
@@ -3306,28 +2856,27 @@ mod annotation_tests {
 
     fn branch(
         name: &'static str,
-        legacy_tool: &'static str,
+        handler_id: &'static str,
         minimal_valid_arguments: Value,
     ) -> Value {
         json!({
             "name": name,
-            "legacy_tool": legacy_tool,
-            "handler_id": legacy_tool,
+            "handler_id": handler_id,
             "minimal_valid_arguments": minimal_valid_arguments,
-            "expected_errors": ["InvalidRequest", "ToolNotInActiveProfile", "UnknownTool"]
+            "expected_errors": ["InvalidRequest", "FeatureDisabled", "UnknownTool"]
         })
     }
 
-    fn generated_compact_call_cases() -> Value {
+    fn generated_call_cases() -> Value {
         let mut cases = Vec::new();
-        for tool in compact_contract_tools() {
+        for tool in canonical_contract_tools() {
             let tool_name = tool["name"].as_str().expect("tool name");
             for branch in tool["branches"].as_array().expect("branches") {
                 let branch_name = branch["name"].as_str().expect("branch name");
                 cases.push(json!({
                     "tool": tool_name,
                     "branch": branch_name,
-                    "legacy_tool": branch["legacy_tool"],
+                    "handler_id": branch["handler_id"],
                     "valid": branch["minimal_valid_arguments"],
                     "invalid": invalid_call_case(&branch["minimal_valid_arguments"])
                 }));

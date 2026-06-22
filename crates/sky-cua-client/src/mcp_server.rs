@@ -479,14 +479,14 @@ mod tests {
         assert_eq!(session.supports_images, Some(false));
 
         let tools = tool_definitions(&session);
-        let get_app_state = tools
+        let observe = tools
             .as_array()
             .expect("tools")
             .iter()
-            .find(|tool| tool["name"] == "get_app_state")
-            .expect("get_app_state tool");
+            .find(|tool| tool["name"] == "observe")
+            .expect("observe tool");
         assert!(
-            get_app_state["inputSchema"]["properties"]
+            observe["inputSchema"]["properties"]
                 .get("capture_screen")
                 .is_none()
         );

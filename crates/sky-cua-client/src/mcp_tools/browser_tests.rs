@@ -13,7 +13,6 @@ use sky_cua_platform::model::{
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::ModelSessionInfo;
 
-use super::browser::push_tool_definitions;
 use super::browser::{
     BROWSER_EVAL_ENV, BrowserTabTextFilter, browser_list_tabs_summary, browser_open_summary,
     browser_snapshot_summary, browser_status_summary, parse_browser_open_url, parse_browser_point,
@@ -73,19 +72,17 @@ fn tool_names(tools: &serde_json::Value) -> Vec<&str> {
 
 #[test]
 fn browser_tool_definitions_are_always_advertised() {
-    let definitions = build_tool_definitions(false);
+    let definitions = build_tool_definitions(false, false);
     let names = tool_names(&definitions);
-    assert!(names.contains(&"browser_status"));
-    assert!(names.contains(&"browser_list_tabs"));
+    assert!(names.contains(&"status"));
+    assert!(names.contains(&"list_resources"));
+    assert!(names.contains(&"observe"));
+    assert!(names.contains(&"capture_screen"));
     assert!(names.contains(&"browser_open"));
     assert!(names.contains(&"browser_claim_tab"));
     assert!(names.contains(&"browser_move_mouse"));
     assert!(names.contains(&"browser_navigate"));
-    assert!(names.contains(&"browser_snapshot"));
-    assert!(names.contains(&"browser_screenshot"));
-    assert!(names.contains(&"browser_click"));
-    assert!(names.contains(&"browser_type_text"));
-    assert!(names.contains(&"browser_press_key"));
+    assert!(names.contains(&"browser_input"));
     assert!(names.contains(&"browser_scroll"));
     assert!(
         !names.contains(&"browser_eval"),
@@ -95,7 +92,7 @@ fn browser_tool_definitions_are_always_advertised() {
 
 #[test]
 fn browser_scroll_schema_matches_delta_defaults() {
-    let definitions = build_tool_definitions(false);
+    let definitions = build_tool_definitions(false, false);
     let scroll_tool = definitions
         .as_array()
         .expect("tools should be an array")
@@ -125,7 +122,7 @@ fn browser_scroll_schema_matches_delta_defaults() {
 
 #[test]
 fn browser_action_schemas_explain_simple_control_contract() {
-    let definitions = build_tool_definitions(false);
+    let definitions = build_tool_definitions(false, false);
     let tools = definitions.as_array().expect("tools should be an array");
     let find_tool = |name: &str| {
         tools
@@ -134,37 +131,37 @@ fn browser_action_schemas_explain_simple_control_contract() {
             .unwrap_or_else(|| panic!("{name} tool is advertised"))
     };
 
-    let list_description = find_tool("browser_list_tabs")["description"]
+    let list_description = find_tool("list_resources")["description"]
         .as_str()
-        .expect("browser_list_tabs description");
-    assert!(list_description.contains("browser_claim_tab"));
+        .expect("list_resources description");
+    assert!(list_description.contains("browser tabs"));
 
     let claim_description = find_tool("browser_claim_tab")["description"]
         .as_str()
         .expect("browser_claim_tab description");
-    assert!(claim_description.contains("before snapshot"));
+    assert!(claim_description.contains("controllable"));
 
-    let snapshot_description = find_tool("browser_snapshot")["description"]
+    let observe_description = find_tool("observe")["description"]
         .as_str()
-        .expect("browser_snapshot description");
-    assert!(snapshot_description.contains("token-bounded structured state"));
-    assert!(snapshot_description.contains("4000 text chars"));
+        .expect("observe description");
+    assert!(observe_description.contains("browser requires tab_id"));
 
-    let screenshot_description = find_tool("browser_screenshot")["description"]
+    let screenshot_description = find_tool("capture_screen")["description"]
         .as_str()
-        .expect("browser_screenshot description");
-    assert!(screenshot_description.contains("text-only sessions get screenshot_path"));
+        .expect("capture_screen description");
+    assert!(screenshot_description.contains("browser-tab or phone image"));
 
-    let click_description = find_tool("browser_click")["description"]
+    let input_description = find_tool("browser_input")["description"]
         .as_str()
-        .expect("browser_click description");
-    assert!(click_description.contains("visible browser agent cursor moves there first"));
+        .expect("browser_input description");
+    assert!(input_description.contains("click"));
+    assert!(input_description.contains("type text"));
 
     let move_description = find_tool("browser_move_mouse")["description"]
         .as_str()
         .expect("browser_move_mouse description");
     assert!(move_description.contains("without clicking"));
-    assert!(move_description.contains("browser_click"));
+    assert!(move_description.contains("without clicking"));
 
     let scroll_description = find_tool("browser_scroll")["description"]
         .as_str()
@@ -184,15 +181,15 @@ fn browser_action_schemas_explain_simple_control_contract() {
 
 #[test]
 fn browser_snapshot_schema_advertises_element_filtering() {
-    let definitions = build_tool_definitions(false);
-    let snapshot_tool = definitions
+    let definitions = build_tool_definitions(false, false);
+    let observe_tool = definitions
         .as_array()
         .expect("tools should be an array")
         .iter()
-        .find(|tool| tool["name"] == "browser_snapshot")
-        .expect("browser_snapshot tool is advertised");
+        .find(|tool| tool["name"] == "observe")
+        .expect("observe tool is advertised");
 
-    let properties = &snapshot_tool["inputSchema"]["properties"];
+    let properties = &observe_tool["inputSchema"]["properties"];
     assert!(properties.get("element_query").is_some());
     assert!(properties.get("element_offset").is_some());
     assert!(properties.get("element_limit").is_some());
@@ -1258,13 +1255,23 @@ fn browser_snapshot_offset_near_service_cap_clamps_requested_window() {
 
 #[test]
 fn browser_eval_tool_is_gated_behind_explicit_opt_in() {
-    let mut disabled = Vec::new();
-    push_tool_definitions(&mut disabled, false);
-    assert!(!disabled.iter().any(|tool| tool["name"] == "browser_eval"));
+    let disabled = build_tool_definitions(false, false);
+    assert!(
+        !disabled
+            .as_array()
+            .expect("tools")
+            .iter()
+            .any(|tool| tool["name"] == "browser_eval")
+    );
 
-    let mut enabled = Vec::new();
-    push_tool_definitions(&mut enabled, true);
-    assert!(enabled.iter().any(|tool| tool["name"] == "browser_eval"));
+    let enabled = build_tool_definitions(false, true);
+    assert!(
+        enabled
+            .as_array()
+            .expect("tools")
+            .iter()
+            .any(|tool| tool["name"] == "browser_eval")
+    );
 }
 
 #[test]

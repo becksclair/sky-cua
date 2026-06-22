@@ -11,19 +11,19 @@ coordinates across them.
 
 ## Coordinates
 
-- `get_app_state` and `screenshot` return `snapshot_id`. With a captured
-  snapshot that includes coordinate-mapping metadata, x/y plus `snapshot_id`
-  are pixels in that snapshot. Structure-only snapshot ids still scope
-  `element_index` lookups but cannot translate screenshot pixels. Without
+- `observe(surface="desktop")` and `capture_desktop` return `snapshot_id`.
+  With a captured snapshot that includes coordinate-mapping metadata, x/y plus
+  `snapshot_id` are pixels in that snapshot. Structure-only snapshot ids still
+  scope `element_index` lookups but cannot translate screenshot pixels. Without
   `snapshot_id`, x/y are live screen coordinates.
-- `screenshot` defaults to the primary display. Window targets (`window_id`,
-  `pid`, `app_id`, `wm_class`, `title`, terminal selectors) activate,
-  focus-verify, and crop. `display_*` captures one monitor;
-  `capture_all_displays` captures the virtual desktop.
-- Always pass the `snapshot_id` returned by the specific `get_app_state` or
-  `screenshot` call that produced the image for screenshot-based actions,
+- `capture_desktop` defaults to the primary display. Window targets
+  (`window_id`, `pid`, `app_id`, `wm_class`, `title`,
+  terminal selectors) activate, focus-verify, and crop. `display_*` captures
+  one monitor; `capture_all_displays` captures the virtual desktop.
+- Always pass the `snapshot_id` returned by the specific observation or capture
+  call that produced the image for screenshot-based actions,
   especially with cropped windows, non-primary displays, scaling, or negative
-  origins. If a targeted `screenshot` fails with
+  origins. If a targeted `capture_desktop` fails with
   `CaptureSourceGeometryMissing` or `targeted screenshot requires capture
   source geometry`, refresh the relevant window/display state and retry the
   targeted capture once. Fall back to `capture_all_displays` only when the
@@ -33,33 +33,34 @@ coordinates across them.
 
 ## State
 
-- In compact MCP profile, use `status(component="session_presence")` for
-  session-presence status, `list_resources(surface="desktop", resource=...)`
-  for apps/windows/focused window, `observe(surface="desktop")` for desktop
-  state, and `capture_desktop` for desktop screenshots. Legacy profiles expose
-  these as `session_presence_status`, `list_apps`, `list_windows`,
-  `focused_window`, `get_app_state`, and `screenshot`.
+- Use only tool names advertised by `tools/list`. Canonical response payloads
+  are under `structuredContent.result`; validation failures are under
+  `structuredContent.error`. Delegated branch failures keep the branch payload
+  under `structuredContent.result` and set `isError=true`.
+- Use `status(component="session_presence")` for session-presence status,
+  `list_resources(surface="desktop", resource=...)` for apps/windows/focused
+  window, `observe(surface="desktop")` for desktop state, and
+  `capture_desktop` for desktop screenshots.
 - Use `doctor` before the first action when desktop access, capture, input, or
   session presence may be unavailable. For remote lockable sessions, check
-  `doctor.session_presence`: in legacy profile use `unlock_session` when unlock
-  is supported, otherwise `hold_session` when inhibition is supported; in
-  compact profile use `session_presence(operation="unlock"|"hold")`.
+  `structuredContent.result.session_presence`. Use
+  `session_presence(operation="unlock"|"hold")` when supported.
   Presence is opt-in via `SKY_CUA_PRESENCE_ENABLED`; unsupported errors mean
   "not armed".
-- Use `list_windows` for exact `window_id`, focus, bounds, display, and
-  terminal metadata. Use `focused_window` only when current focus is the target.
-- `get_app_state` is structured state: diagnostics, element anchors, text/value
-  readback, optional focused-app screenshot. Default compact is usually enough;
-  use full only when you need verbose element details or full capability data.
-  Use `element_query`/`element_offset`/`element_limit` on dense trees. Use
-  `capture_screen: "never"` for structure-only passes and `"always"` for a
-  fresh focused-app image.
-- When `get_app_state` includes capture metadata, inspect
-  `capture.inspection_image_path` first. `capture.raw_capture_path` and
-  `capture.original_screenshot_path` are source/debug artifacts, not the
-  recommended visual inspection image.
-- `screenshot` is visual state. Use it instead of `get_app_state` for a
-  specific window/display image or pixel target. Use
+- Use `list_resources(surface="desktop", resource="windows")` for exact
+  `window_id`, focus, bounds, display, and terminal metadata. Use the
+  focused-window resource only when current focus is the target.
+- `observe(surface="desktop")` is structured state: diagnostics, element
+  anchors, text/value readback, optional focused-app screenshot. Default
+  compact detail is usually enough; use full only when you need verbose element
+  details or full capability data. Use `element_query`/`element_offset`/
+  `element_limit` on dense trees. Use `capture_screen: "never"` for
+  structure-only passes and `"always"` for a fresh focused-app image.
+- When an observation includes capture metadata, inspect
+  `capture.inspection_image_path` first. Other capture paths are source/debug
+  artifacts, not the recommended visual inspection image.
+- `capture_desktop` is visual state. Use it instead of structured observation
+  for a specific window/display image or pixel target. Use
   `screenshot_delivery: "inline"` only when local file paths are unreadable.
 - The accessibility tree is structure, not truth. Fallback trees have real
   window bounds but blunt roles; treat them as visual anchors. When tree and
@@ -80,31 +81,36 @@ coordinates across them.
 
 ## Actions
 
-- In compact MCP profile, desktop actions are grouped as `setup_desktop`,
-  `session_presence`, `desktop_semantic`, `desktop_toggle`, `desktop_scroll`,
+- Desktop actions are grouped as `setup_desktop`, `session_presence`,
+  `activate_window`, `desktop_semantic`, `desktop_toggle`, `desktop_scroll`,
   `desktop_pointer`, `desktop_keyboard`, `desktop_action`, and
-  `desktop_set_value`. Pick the operation branch from the tool schema.
-- For compact desktop actions, observe first, then pass a concrete target from
-  that observation. Do not call `desktop_pointer`, `desktop_keyboard`,
-  `desktop_action`, `desktop_semantic`, `desktop_toggle`, `desktop_scroll`, or
-  `desktop_set_value` with only `operation`; include `snapshot_id` plus
-  `element_index`/`element_identifier`/`name`/`text`, a window selector, or
-  explicit coordinates as the schema requires.
+  `desktop_set_value`.
+- For desktop actions, observe first, then pass a concrete target from that
+  observation. `desktop_semantic` uses `operation` plus a semantic target.
+  `desktop_action` uses `operation` plus a semantic target; `perform_action`
+  also requires `action_name` or `action_index`. `desktop_toggle` takes a
+  semantic target only. `desktop_scroll` takes `direction` plus a
+  snapshot-bound target or coordinates. `desktop_set_value` takes `value` plus
+  a semantic target. `desktop_pointer` takes `operation` plus coordinates or an
+  allowed snapshot target. `desktop_keyboard` takes `operation` plus `text` or
+  `key`; optional snapshot/window scope can activate the target window but does
+  not select an editable element.
 - Prefer semantic primitives when `semantic_actions` support them:
-  `focus_element`, `activate_element`, `select_element`, `expand_element`,
-  `collapse_element`, `toggle_element`, or named/indexed `perform_action`.
+  `desktop_semantic` for focus/select/expand/collapse, `desktop_toggle` for
+  toggles, and `desktop_action` for activate plus named/indexed custom actions.
 - Use physical click/drag/scroll for sliders, canvases, splitters,
   drag-and-drop, custom-painted widgets, and anything visible but unclear in
   the tree.
-- Use `set_value` only with a proven semantic write path and readback.
-  Otherwise click to focus, select all (`Cmd + A / Ctrl + A`) when replacing,
-  type, then verify with a fresh snapshot.
+- Use `desktop_set_value` only with a proven semantic write path and readback.
+  Otherwise click to focus, select all with the literal key payload `Ctrl+A` on
+  Linux/Windows or `Meta+A` on macOS when replacing, type, then verify with a
+  fresh snapshot.
 - `activate_window` targets by `window_id`, `pid`, `app_id`, `wm_class`,
-  `title`, or terminal selectors (`tty`, `terminal_pid`, ...). `workspace`
-  metadata is backend-native, not portable.
-- Do not pre-call `activate_window` before targeted `screenshot`; screenshot
-  already activates and focus-verifies. Use `activate_window` only when you
-  need focus without a fresh image.
+  `title`, or terminal selectors (`tty`, `terminal_pid`, ...).
+  `workspace` metadata is backend-native, not portable.
+- Do not pre-call activate-window before targeted desktop capture; targeted
+  capture already activates and focus-verifies. Use activate-window only when
+  you need focus without a fresh image.
 
 ## Linux notes
 

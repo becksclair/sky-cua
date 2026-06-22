@@ -157,7 +157,6 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
         restart_runtime: bool = False,
         bundle_root: Path | None = None,
         refresh_accessibility: bool = True,
-        mcp_tool_profile: str | None = None,
         browser_eval: str | None = None,
         model_supports_images: str | None = None,
     ) -> tuple[Path, Path]:
@@ -165,7 +164,6 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
         calls["host"] = host
         calls["bundle_root"] = bundle_root
         calls["refresh_accessibility"] = refresh_accessibility
-        calls["mcp_tool_profile"] = mcp_tool_profile
         calls["browser_eval"] = browser_eval
         calls["model_supports_images"] = model_supports_images
         return target / "bin" / "sky-cua-client", target / "claude_code_mcp.json"

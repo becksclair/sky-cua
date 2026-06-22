@@ -595,7 +595,7 @@ def test_mcp_launch_policy_uses_cli_persisted_env_default_precedence(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv(install_mcp_server.MCP_TOOL_PROFILE_ENV, "legacy")
+    monkeypatch.setenv("SKY_CUA_MCP_TOOL_PROFILE", "legacy")
     monkeypatch.setenv(install_mcp_server.MCP_BROWSER_EVAL_ENV, "off")
     monkeypatch.setenv(install_mcp_server.MCP_MODEL_SUPPORTS_IMAGES_ENV, "true")
 
@@ -604,7 +604,6 @@ def test_mcp_launch_policy_uses_cli_persisted_env_default_precedence(
         browser_eval="off",
     )
 
-    assert policy.tool_profile == "compact"
     assert policy.browser_eval == "off"
     assert policy.model_supports_images == "false"
 
@@ -612,17 +611,16 @@ def test_mcp_launch_policy_uses_cli_persisted_env_default_precedence(
 def test_mcp_launch_policy_rejects_invalid_recognized_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(install_mcp_server.MCP_TOOL_PROFILE_ENV, "tiny")
+    monkeypatch.setenv(install_mcp_server.MCP_BROWSER_EVAL_ENV, "tiny")
 
-    with pytest.raises(ValueError, match="SKY_CUA_MCP_TOOL_PROFILE"):
+    with pytest.raises(ValueError, match="SKY_CUA_BROWSER_EVAL"):
         install_mcp_server.resolve_mcp_launch_policy(tmp_path / "installed")
 
 
-def test_generic_mcp_config_pins_compact_launch_policy(tmp_path: Path) -> None:
+def test_generic_mcp_config_pins_canonical_launch_policy(tmp_path: Path) -> None:
     target_dir = tmp_path / "installed"
     client_path = target_dir / "bin" / "sky-cua-client"
     policy = install_mcp_server.McpLaunchPolicy(
-        tool_profile="compact",
         browser_eval="on",
         model_supports_images="false",
     )
@@ -630,18 +628,17 @@ def test_generic_mcp_config_pins_compact_launch_policy(tmp_path: Path) -> None:
     config = install_mcp_server.generate_mcp_config(client_path, target_dir, launch_policy=policy)
     server = config["mcpServers"]["computer-use"]  # type: ignore[index]
 
-    assert server["env"][install_mcp_server.MCP_TOOL_PROFILE_ENV] == "compact"  # type: ignore[index]
+    assert "SKY_CUA_MCP_TOOL_PROFILE" not in server["env"]  # type: ignore[operator]
     assert server["env"][install_mcp_server.MCP_BROWSER_EVAL_ENV] == "on"  # type: ignore[index]
     assert server["env"][install_mcp_server.MCP_MODEL_SUPPORTS_IMAGES_ENV] == "false"  # type: ignore[index]
     for name in install_mcp_server.RECOGNIZED_MCP_LAUNCH_ENV:
         assert name in server["env_vars"]  # type: ignore[operator]
 
 
-def test_pi_wrapper_exports_compact_launch_policy(tmp_path: Path) -> None:
+def test_pi_wrapper_exports_canonical_launch_policy(tmp_path: Path) -> None:
     target_dir = tmp_path / "installed"
     client_path = target_dir / "bin" / "sky-cua-client"
     policy = install_mcp_server.McpLaunchPolicy(
-        tool_profile="compact",
         browser_eval="on",
         model_supports_images="false",
     )
@@ -649,7 +646,7 @@ def test_pi_wrapper_exports_compact_launch_policy(tmp_path: Path) -> None:
     install_mcp_server.install_pi(target_dir, client_path, launch_policy=policy)
 
     wrapper_text = (target_dir / "pi_mcp_wrapper.sh").read_text(encoding="utf-8")
-    assert "export SKY_CUA_MCP_TOOL_PROFILE=compact\n" in wrapper_text
+    assert "SKY_CUA_MCP_TOOL_PROFILE" not in wrapper_text
     assert "export SKY_CUA_BROWSER_EVAL=on\n" in wrapper_text
     assert "export SKY_CUA_MODEL_SUPPORTS_IMAGES=false\n" in wrapper_text
 

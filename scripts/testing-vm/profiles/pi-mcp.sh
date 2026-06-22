@@ -12,9 +12,6 @@ remote_root="/workspace"
 target_dir="${HOME}/.local/share/sky-cua"
 pi_mcp="${HOME}/.pi/agent/mcp.json"
 install_policy_args=()
-if [[ -n "${SKY_CUA_MCP_TOOL_PROFILE:-}" ]]; then
-	install_policy_args+=(--mcp-tool-profile "${SKY_CUA_MCP_TOOL_PROFILE}")
-fi
 if [[ -n "${SKY_CUA_BROWSER_EVAL:-}" ]]; then
 	install_policy_args+=(--browser-eval "${SKY_CUA_BROWSER_EVAL}")
 fi

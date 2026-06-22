@@ -138,7 +138,6 @@ def test_testing_vm_opencode_sync_has_user_writable_latest_fallback() -> None:
     assert "warning: opencode update failed; continuing with existing install" in sync_script
     assert 'export PATH="${HOME}/.local/bin:${PATH}"' in opencode_profile
     for profile in (opencode_profile, pi_profile):
-        assert "install_policy_args+=(--mcp-tool-profile" in profile
         assert "install_policy_args+=(--browser-eval" in profile
         assert "install_policy_args+=(--model-supports-images" in profile
 
@@ -267,7 +266,7 @@ def test_testing_vm_runner_forwards_auth_only_to_agent_profiles(
     command_text = " ".join(commands[0])
     assert "OPENCODE_API_KEY=opencode-secret" in command_text
     assert "CONTEXT7_API_KEY=context-secret" in command_text
-    assert "SKY_CUA_MCP_TOOL_PROFILE=compact" in command_text
+    assert "SKY_CUA_MCP_TOOL_PROFILE" not in command_text
     assert "SKY_CUA_BROWSER_EVAL=on" in command_text
     assert "SKY_CUA_MODEL_SUPPORTS_IMAGES=false" in command_text
 
