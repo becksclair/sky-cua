@@ -11,9 +11,9 @@ use std::fmt::Write as _;
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::ModelSessionInfo;
 use crate::output_shapes::{
-    compact_snapshot, compact_snapshot_text_content, informational_runtime_summary,
-    list_apps_error_diagnostic, portal_approval_summary, setup_accessibility_is_error,
-    setup_window_targeting_is_error,
+    informational_runtime_summary, list_apps_error_diagnostic, portal_approval_summary,
+    setup_accessibility_is_error, setup_window_targeting_is_error, summary_snapshot,
+    summary_snapshot_text_content,
 };
 use crate::service_launcher::ServiceClient;
 
@@ -65,10 +65,10 @@ pub(crate) fn handle_session_tool_call(
             None => tool_error("UnknownTool", format!("unknown tool: {tool_name}")),
         };
     }
-    handle_canonical_tool_call(service, heuristics, model, registry, tool_name, arguments)
+    handle_grouped_tool_call(service, heuristics, model, registry, tool_name, arguments)
 }
 
-fn handle_canonical_tool_call(
+fn handle_grouped_tool_call(
     service: &impl McpService,
     heuristics: &HeuristicsRegistry,
     model: &ModelSessionInfo,
@@ -76,13 +76,13 @@ fn handle_canonical_tool_call(
     tool_name: &str,
     arguments: Value,
 ) -> Result<Value> {
-    let call = match canonical_handler_call(tool_name, arguments) {
+    if let Err(message) = registry.validate_arguments(tool_name, &arguments) {
+        return Ok(grouped_invalid_request_result(tool_name, message));
+    }
+    let call = match grouped_handler_call(tool_name, arguments) {
         Ok(call) => call,
         Err(error) => {
-            return Ok(canonical_invalid_request_result(
-                tool_name,
-                error.to_string(),
-            ));
+            return Ok(grouped_invalid_request_result(tool_name, error.to_string()));
         }
     };
     let handler_result = handle_tool_call_with_browser_eval_policy(
@@ -93,18 +93,18 @@ fn handle_canonical_tool_call(
         call.arguments.clone(),
         Some(registry.browser_eval_enabled),
     )?;
-    Ok(canonical_tool_result(tool_name, &call, handler_result))
+    Ok(grouped_tool_result(tool_name, &call, handler_result))
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct CanonicalHandlerCall {
+struct GroupedHandlerCall {
     handler_name: &'static str,
     branch: String,
     arguments: Value,
 }
 
-fn canonical_handler_call(tool_name: &str, arguments: Value) -> Result<CanonicalHandlerCall> {
-    let mut arguments = compact_arguments_object(arguments)?;
+fn grouped_handler_call(tool_name: &str, arguments: Value) -> Result<GroupedHandlerCall> {
+    let mut arguments = grouped_arguments_object(arguments)?;
     let (handler_name, branch) = match tool_name {
         "doctor" => ("doctor", "diagnostics".to_string()),
         "status" => match take_required_branch(&mut arguments, "component")?.as_str() {
@@ -260,35 +260,28 @@ fn canonical_handler_call(tool_name: &str, arguments: Value) -> Result<Canonical
                 ));
             }
         },
-        "phone_app_install" => {
-            normalize_compact_phone_app_install(&mut arguments)?;
-            ("phone_app_install", "default".to_string())
-        }
+        "phone_app_install" => ("phone_app_install", "default".to_string()),
         "phone_accessibility_tree" => ("phone_accessibility_tree", "default".to_string()),
         "phone_notifications" => ("phone_notifications", "default".to_string()),
         name => return Err(anyhow!("unknown tool: {name}")),
     };
-    Ok(CanonicalHandlerCall {
+    Ok(GroupedHandlerCall {
         handler_name,
         branch,
         arguments: Value::Object(arguments),
     })
 }
 
-fn canonical_tool_result(
-    tool_name: &str,
-    call: &CanonicalHandlerCall,
-    handler_result: Value,
-) -> Value {
+fn grouped_tool_result(tool_name: &str, call: &GroupedHandlerCall, handler_result: Value) -> Value {
     let content = handler_result
         .get("content")
         .and_then(Value::as_array)
-        .map(|content| canonical_tool_content(tool_name, call, content))
+        .map(|content| grouped_tool_content(tool_name, call, content))
         .unwrap_or_else(|| {
             vec![json!({
                 "type": "text",
                 "text": format!(
-                    "Canonical {tool_name}/{} completed.",
+                    "Grouped {tool_name}/{} completed.",
                     call.branch
                 )
             })]
@@ -304,9 +297,9 @@ fn canonical_tool_result(
     })
 }
 
-fn canonical_tool_content(
+fn grouped_tool_content(
     tool_name: &str,
-    call: &CanonicalHandlerCall,
+    call: &GroupedHandlerCall,
     handler_content: &[Value],
 ) -> Vec<Value> {
     handler_content
@@ -326,7 +319,7 @@ fn canonical_tool_content(
         .collect()
 }
 
-fn canonical_invalid_request_result(tool_name: &str, message: String) -> Value {
+fn grouped_invalid_request_result(tool_name: &str, message: String) -> Value {
     json!({
         "content": [{
             "type": "text",
@@ -344,32 +337,10 @@ fn canonical_invalid_request_result(tool_name: &str, message: String) -> Value {
     })
 }
 
-fn compact_arguments_object(arguments: Value) -> Result<serde_json::Map<String, Value>> {
+fn grouped_arguments_object(arguments: Value) -> Result<serde_json::Map<String, Value>> {
     match arguments {
         Value::Object(map) => Ok(map),
-        _ => Err(anyhow!("canonical tool arguments must be an object")),
-    }
-}
-
-fn normalize_compact_phone_app_install(
-    arguments: &mut serde_json::Map<String, Value>,
-) -> Result<()> {
-    if arguments.contains_key("apk_paths") {
-        return Ok(());
-    }
-    let Some(apk_path) = arguments.remove("apk_path") else {
-        return Ok(());
-    };
-    match apk_path {
-        Value::String(path) if !path.is_empty() => {
-            arguments.insert(
-                "apk_paths".to_string(),
-                Value::Array(vec![Value::String(path)]),
-            );
-            Ok(())
-        }
-        Value::String(_) => Err(anyhow!("phone_app_install apk_path must not be empty")),
-        _ => Err(anyhow!("phone_app_install apk_path must be a string")),
+        _ => Err(anyhow!("grouped tool arguments must be an object")),
     }
 }
 
@@ -568,8 +539,8 @@ fn handle_tool_call_with_browser_eval_policy(
             })? {
                 ServiceResponse::Screenshot { mut snapshot } => {
                     enrich_snapshot(heuristics, &mut snapshot);
-                    let structured_content = compact_snapshot(&snapshot);
-                    let mut text_content = compact_snapshot_text_content(&snapshot);
+                    let structured_content = summary_snapshot(&snapshot);
+                    let mut text_content = summary_snapshot_text_content(&snapshot);
 
                     let mut content = Vec::with_capacity(2);
                     if screenshot_delivery == ScreenshotDelivery::Inline
@@ -1277,14 +1248,13 @@ mod tests {
     use crate::mcp_server::ModelSessionInfo;
 
     use crate::output_shapes::{
-        compact_element, compact_snapshot, list_apps_error_diagnostic,
-        setup_accessibility_is_error, setup_window_targeting_is_error, snapshot_summary,
-        snapshot_text_content,
+        list_apps_error_diagnostic, setup_accessibility_is_error, setup_window_targeting_is_error,
+        snapshot_summary, snapshot_text_content, summary_element, summary_snapshot,
     };
 
     use super::{
         McpProcessConfig, McpService, action_summary, build_tool_definitions, build_tool_registry,
-        canonical_handler_call, effective_capture_screen, handle_action_call,
+        effective_capture_screen, grouped_handler_call, handle_action_call,
         handle_session_tool_call, handle_tool_call, invalid_request_tool_error, list_apps_summary,
         parse_app_selector, parse_app_state_detail, parse_screenshot_target, parse_window_target,
         tool_definitions, tools_list_result,
@@ -1421,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_handler_call_maps_branch_names() {
+    fn grouped_handler_call_maps_branch_names() {
         let cases = [
             (
                 "status",
@@ -1461,39 +1431,39 @@ mod tests {
             ),
             (
                 "phone_notification_action",
-                json!({"operation": "dismiss", "event_id": "n-1"}),
+                json!({"operation": "dismiss", "session_id": "phone-1", "event_id": "n-1"}),
                 "phone_notification_dismiss",
-                json!({"event_id": "n-1"}),
+                json!({"session_id": "phone-1", "event_id": "n-1"}),
             ),
             (
                 "phone_notification_reply",
-                json!({"event_id": "n-1", "action_id": "reply", "text": "hello"}),
+                json!({"session_id": "phone-1", "event_id": "n-1", "action_id": "reply", "text": "hello"}),
                 "phone_notification_reply",
-                json!({"event_id": "n-1", "action_id": "reply", "text": "hello"}),
+                json!({"session_id": "phone-1", "event_id": "n-1", "action_id": "reply", "text": "hello"}),
             ),
             (
                 "phone_app_action",
-                json!({"operation": "open_intent", "intent_uri": "intent://x"}),
+                json!({"operation": "open_intent", "session_id": "phone-1", "intent_uri": "intent://x"}),
                 "phone_app_open_intent",
-                json!({"intent_uri": "intent://x"}),
+                json!({"session_id": "phone-1", "intent_uri": "intent://x"}),
             ),
             (
                 "phone_app_install",
-                json!({"apk_path": "/tmp/app.apk", "mode": "single"}),
+                json!({"session_id": "phone-1", "apk_paths": ["/tmp/app.apk"], "mode": "single"}),
                 "phone_app_install",
-                json!({"apk_paths": ["/tmp/app.apk"], "mode": "single"}),
+                json!({"session_id": "phone-1", "apk_paths": ["/tmp/app.apk"], "mode": "single"}),
             ),
         ];
 
         for (tool, arguments, expected_name, expected_arguments) in cases {
-            let call = canonical_handler_call(tool, arguments).expect("canonical call maps");
+            let call = grouped_handler_call(tool, arguments).expect("grouped call maps");
             assert_eq!(call.handler_name, expected_name, "{tool} handler name");
             assert_eq!(call.arguments, expected_arguments, "{tool} arguments");
         }
     }
 
     #[test]
-    fn compact_desktop_keyboard_routes_to_typed_action_request() {
+    fn grouped_desktop_keyboard_routes_to_typed_action_request() {
         let service = FakeService::with_response(ServiceResponse::ExecuteAction {
             outcome: ActionOutcome {
                 success: true,
@@ -1542,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_invalid_request_returns_compact_error_envelope_without_dispatch() {
+    fn grouped_invalid_request_returns_grouped_error_envelope_without_dispatch() {
         let service = FakeService::default();
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
         let model = ModelSessionInfo::default();
@@ -1569,7 +1539,72 @@ mod tests {
     }
 
     #[test]
-    fn parses_compact_app_state_detail() {
+    fn grouped_schema_rejections_stop_before_dispatch() {
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(false), &model);
+        let cases = [
+            ("doctor", json!({"unexpected": true})),
+            (
+                "browser_input",
+                json!({"operation": "type_text", "tab_id": "tab-1", "text": "hello", "x": 1, "y": 1}),
+            ),
+            (
+                "phone_connection",
+                json!({"operation": "disconnect", "session_id": "phone-1", "install_companion": true}),
+            ),
+            (
+                "phone_pointer",
+                json!({"operation": "tap", "session_id": "phone-1", "x": 1, "y": 1}),
+            ),
+            (
+                "capture_desktop",
+                json!({"window_id": "window-1", "display_id": "display-1"}),
+            ),
+            ("browser_open", json!({"url": "junkabout:blank"})),
+            ("browser_open", json!({"url": "https://"})),
+            ("browser_open", json!({"url": "ftp://example.test"})),
+            (
+                "observe",
+                json!({"surface": "phone", "session_id": "phone-1", "screenshot_delivery": "inline"}),
+            ),
+            (
+                "capture_screen",
+                json!({"surface": "phone", "session_id": "phone-1", "tab_id": "tab-1"}),
+            ),
+            (
+                "list_resources",
+                json!({"surface": "desktop", "resource": "apps", "include_mdns": true}),
+            ),
+        ];
+
+        for (tool_name, arguments) in cases {
+            let service = FakeService::default();
+            let result = handle_session_tool_call(
+                &service,
+                &heuristics,
+                &model,
+                &registry,
+                tool_name,
+                arguments,
+            )
+            .unwrap_or_else(|error| panic!("{tool_name} should return invalid envelope: {error}"));
+            assert_eq!(result["isError"], true, "{tool_name} should be an error");
+            assert_eq!(result["structuredContent"]["tool"], tool_name);
+            assert_eq!(result["structuredContent"]["branch"], Value::Null);
+            assert_eq!(
+                result["structuredContent"]["error"]["code"], "InvalidRequest",
+                "{tool_name} should use grouped invalid envelope"
+            );
+            assert!(
+                service.take_requests().is_empty(),
+                "{tool_name} should not dispatch"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_summary_app_state_detail() {
         assert_eq!(
             parse_app_state_detail(&json!({"detail": "compact"})).unwrap(),
             AppStateDetail::Compact
@@ -1607,8 +1642,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_element_drops_verbose_description_but_keeps_backend_ref() {
-        let compact = compact_element(&ElementNode {
+    fn summary_element_drops_verbose_description_but_keeps_backend_ref() {
+        let summary = summary_element(&ElementNode {
             element_index: 7,
             parent_index: Some(1),
             role: "text".to_string(),
@@ -1637,18 +1672,18 @@ mod tests {
             backend_ref: Some("opaque-backend-ref".to_string()),
         });
 
-        assert_eq!(compact["element_index"], 7);
-        assert_eq!(compact["role"], "text");
-        assert!(compact.get("description").is_none());
-        assert_eq!(compact["value"], "query");
-        assert_eq!(compact["text"]["content"], "query");
-        assert_eq!(compact["supports_editable_text"], true);
-        assert_eq!(compact["backend_ref"], "opaque-backend-ref");
-        assert_eq!(compact["semantic_actions"][0], "set_value");
+        assert_eq!(summary["element_index"], 7);
+        assert_eq!(summary["role"], "text");
+        assert!(summary.get("description").is_none());
+        assert_eq!(summary["value"], "query");
+        assert_eq!(summary["text"]["content"], "query");
+        assert_eq!(summary["supports_editable_text"], true);
+        assert_eq!(summary["backend_ref"], "opaque-backend-ref");
+        assert_eq!(summary["semantic_actions"][0], "set_value");
     }
 
     #[test]
-    fn compact_snapshot_includes_doctor_report_and_agent_cursor() {
+    fn summary_snapshot_includes_doctor_report_and_agent_cursor() {
         let report = DoctorReport {
             environment: EnvironmentInfo {
                 session_kind: SessionKind::Wayland,
@@ -1789,16 +1824,16 @@ mod tests {
                 updated_at_ms: 1234,
             }),
         };
-        let compact = compact_snapshot(&snapshot);
-        assert_eq!(compact["environment"]["session_kind"], "wayland");
-        assert!(compact.get("doctor_report").is_some());
+        let summary = summary_snapshot(&snapshot);
+        assert_eq!(summary["environment"]["session_kind"], "wayland");
+        assert!(summary.get("doctor_report").is_some());
         assert_eq!(
-            compact["doctor_report"]["readiness"]["can_build_accessibility_tree"],
+            summary["doctor_report"]["readiness"]["can_build_accessibility_tree"],
             true
         );
-        assert_eq!(compact["agent_cursor"]["sequence"], 7);
+        assert_eq!(summary["agent_cursor"]["sequence"], 7);
         assert_eq!(
-            compact["agent_cursor"]["model_point"]["coordinate_space"],
+            summary["agent_cursor"]["model_point"]["coordinate_space"],
             "stream_pixels"
         );
     }
@@ -1849,7 +1884,7 @@ mod tests {
         assert!(
             get_app_state["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("Observe before acting"))
+                .is_some_and(|description| description.contains("Desktop returns elements"))
         );
         let get_app_state_schema = &get_app_state["inputSchema"];
         assert_eq!(
@@ -1899,8 +1934,8 @@ mod tests {
             screenshot["description"]
                 .as_str()
                 .is_some_and(|description| {
-                    description.contains("returned snapshot_id")
-                        && description.contains("capture source geometry")
+                    description.contains("Choose exactly one source")
+                        && description.contains("capture_all_displays")
                 })
         );
     }
@@ -2312,7 +2347,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_get_app_state_text_omits_verbose_elements_for_image_hosts() {
+    fn summary_get_app_state_text_omits_verbose_elements_for_image_hosts() {
         let service = FakeService::with_response(ServiceResponse::GetAppState {
             snapshot: Box::new(snapshot_with_verbose_element()),
         });
@@ -2345,7 +2380,7 @@ mod tests {
     }
 
     #[test]
-    fn get_app_state_defaults_to_compact_limited_element_view_for_mcp() {
+    fn get_app_state_defaults_to_summary_limited_element_view_for_mcp() {
         let mut snapshot = snapshot_with_verbose_element();
         snapshot.elements = (0..APP_STATE_DEFAULT_ELEMENT_LIMIT + 3)
             .map(|index| test_element(index, "button", &format!("Element {index}")))
@@ -2639,7 +2674,7 @@ mod tests {
         snapshot.elements = (0..3)
             .map(|index| test_element(index, "button", &format!("Element {index}")))
             .collect();
-        let canonical = serde_json::to_value(&snapshot).expect("canonical snapshot serializes");
+        let full = serde_json::to_value(&snapshot).expect("full snapshot serializes");
         let service = FakeService::with_response(ServiceResponse::GetAppState {
             snapshot: Box::new(snapshot),
         });
@@ -2661,12 +2696,8 @@ mod tests {
         let structured = result["structuredContent"]
             .as_object()
             .expect("structured content object");
-        for key in canonical
-            .as_object()
-            .expect("canonical snapshot object")
-            .keys()
-        {
-            assert!(structured.contains_key(key), "missing canonical key {key}");
+        for key in full.as_object().expect("full snapshot object").keys() {
+            assert!(structured.contains_key(key), "missing full-shape key {key}");
         }
         assert_eq!(structured["element_count"], 3);
         assert_eq!(structured["filtered_element_count"], 3);
@@ -3363,7 +3394,7 @@ mod tests {
         assert!(
             text_only_observe["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("Observe before acting"))
+                .is_some_and(|description| description.contains("Browser requires tab_id"))
         );
     }
 

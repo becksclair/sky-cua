@@ -11,8 +11,8 @@ use crate::app_state::AppStateDetail;
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_tools::enrich_snapshot;
 use crate::output_shapes::{
-    compact_snapshot, list_apps_error_diagnostic, setup_accessibility_is_error,
-    setup_window_targeting_is_error,
+    list_apps_error_diagnostic, setup_accessibility_is_error, setup_window_targeting_is_error,
+    summary_snapshot,
 };
 use crate::service_launcher::ServiceClient;
 
@@ -378,7 +378,7 @@ fn render_operator_response(
             }
             let payload = match args.detail {
                 AppStateDetail::Full => serde_json::to_value(&snapshot)?,
-                AppStateDetail::Compact => compact_snapshot(&snapshot),
+                AppStateDetail::Compact => summary_snapshot(&snapshot),
             };
             Ok(RenderedResponse {
                 payload,
@@ -657,9 +657,9 @@ mod tests {
     }
 
     #[test]
-    fn compact_get_app_state_matches_shared_compact_shape() {
+    fn summary_get_app_state_matches_shared_summary_shape() {
         let snapshot = sample_snapshot();
-        let expected = compact_snapshot(&snapshot);
+        let expected = summary_snapshot(&snapshot);
         let rendered = render_operator_response(
             &OperatorCommand::GetAppState(GetAppStateArgs {
                 selector: None,

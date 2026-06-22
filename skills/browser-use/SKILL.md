@@ -12,8 +12,8 @@ not reachable through the page.
 ## Ownership
 
 - Browser tab listing is `list_resources(surface="browser", resource="tabs")`,
-  page state is `observe(surface="browser")`, screenshots are
-  `capture_screen(surface="browser")`, and clicks/typing/keys are grouped
+  page state is `observe(surface="browser", tab_id=...)`, screenshots are
+  `capture_screen(surface="browser", tab_id=...)`, and clicks/typing/keys are grouped
   under `browser_input`.
 - `user_chrome` is the user's running Chrome-family browser and the only
   target.
@@ -27,8 +27,8 @@ not reachable through the page.
 
 ## Coordinates
 
-- One shared space: CSS pixels. `capture_screen(surface="browser")` pixels,
-  `observe(surface="browser")` bounds, and action coordinates line up
+- One shared space: CSS pixels. `capture_screen(surface="browser", tab_id=...)` pixels,
+  `observe(surface="browser", tab_id=...)` bounds, and action coordinates line up
   one-to-one. Never divide by `devicePixelRatio`; captures are already
   normalized.
 - Screenshots show only the visible viewport; scroll, then re-capture, for
@@ -38,12 +38,12 @@ not reachable through the page.
 
 ## State
 
-- Prefer `observe(surface="browser")` for title, URL, viewport, visible text,
+- Prefer `observe(surface="browser", tab_id=...)` for title, URL, viewport, visible text,
   and actionable element bounds. Defaults: 4000 text chars, 200 elements.
 - Dense pages: use `element_query`, then `element_offset`/`element_limit`.
   Use `text_limit: 0` for controls-only snapshots. Raise `text_limit` only
   when page text is the task.
-- Use `capture_screen(surface="browser")` for visual layout or pixel targeting.
+- Use `capture_screen(surface="browser", tab_id=...)` for visual layout or pixel targeting.
 - Tool success means input was dispatched; verify consequential changes with a
   fresh snapshot or screenshot.
 

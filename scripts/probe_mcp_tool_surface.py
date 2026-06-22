@@ -2,7 +2,7 @@
 """Probe the sky-cua MCP tool surface through real stdio transport.
 
 The probe is intentionally small and host-safe: it verifies advertised tools,
-canonical response envelopes, and degraded-but-structured status branches
+grouped response envelopes, and degraded-but-structured status branches
 without needing a particular desktop app, browser tab, or attached Android
 device.
 """
@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEV_CLIENT = REPO_ROOT / "bin" / "sky-cua-client"
 INSTALLED_CLIENT = REPO_ROOT / "dist" / "plugin" / "sky-cua" / "bin" / "sky-cua-client"
 
-CANONICAL_TOOLS: frozenset[str] = frozenset(
+GROUPED_TOOLS: frozenset[str] = frozenset(
     {
         "activate_window",
         "browser_claim_tab",
@@ -95,8 +95,8 @@ def tool_names(tools: Iterable[dict[str, Any]]) -> set[str]:
     return names
 
 
-def require_exact_canonical_tools(names: set[str]) -> None:
-    expected = set(CANONICAL_TOOLS)
+def require_exact_grouped_tools(names: set[str]) -> None:
+    expected = set(GROUPED_TOOLS)
     if BROWSER_EVAL_TOOL in names:
         expected.add(BROWSER_EVAL_TOOL)
     missing = sorted(expected - names)
@@ -107,10 +107,10 @@ def require_exact_canonical_tools(names: set[str]) -> None:
             details.append(f"missing={missing!r}")
         if extra:
             details.append(f"extra={extra!r}")
-        raise ProbeFailure("tools/list does not match canonical surface: " + " ".join(details))
+        raise ProbeFailure("tools/list does not match grouped surface: " + " ".join(details))
 
 
-def require_canonical_action_shape(tools: Iterable[dict[str, Any]]) -> None:
+def require_grouped_action_shape(tools: Iterable[dict[str, Any]]) -> None:
     by_name: dict[str, dict[str, Any]] = {}
     for tool in tools:
         name = tool.get("name")
@@ -148,6 +148,91 @@ def require_canonical_action_shape(tools: Iterable[dict[str, Any]]) -> None:
     if not _all_of_has_then_required(keyboard, "type_text", ["text"]):
         raise ProbeFailure("desktop_keyboard type_text branch must require text")
 
+    require_hardened_schema_shape(by_name)
+
+
+def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
+    browser_move = _tool_schema(by_name, "browser_move_mouse")
+    browser_input = _tool_schema(by_name, "browser_input")
+    browser_scroll = _tool_schema(by_name, "browser_scroll")
+    if "wait_for_arrival" not in _properties(browser_move):
+        raise ProbeFailure("browser_move_mouse must expose wait_for_arrival")
+    for name, schema in [("browser_input", browser_input), ("browser_scroll", browser_scroll)]:
+        if "wait_for_arrival" in _properties(schema):
+            raise ProbeFailure(f"{name} must not expose wait_for_arrival")
+
+    browser_open = _tool_schema(by_name, "browser_open")
+    if (
+        _properties(browser_open).get("url", {}).get("pattern")
+        != r"^(https?://[^\s]+|about:blank)$"
+    ):
+        raise ProbeFailure("browser URL schema must use the anchored HTTP/about:blank pattern")
+
+    pointer = _tool_schema(by_name, "phone_pointer")
+    if not _all_of_has_then_required(pointer, "tap", ["session_id", "x", "y"]):
+        raise ProbeFailure("phone_pointer tap must require session_id and tap coordinates")
+    if not _conditional_then_has_snapshot_or_raw(pointer, "tap"):
+        raise ProbeFailure("phone_pointer tap must require phone_snapshot_id or raw coordinates")
+    if not _all_of_has_then_required(
+        pointer, "swipe", ["session_id", "start_x", "start_y", "end_x", "end_y"]
+    ):
+        raise ProbeFailure("phone_pointer swipe must require session_id and swipe coordinates")
+    if not _conditional_then_has_snapshot_or_raw(pointer, "swipe"):
+        raise ProbeFailure("phone_pointer swipe must require phone_snapshot_id or raw coordinates")
+
+    observe_backend = _properties(_tool_schema(by_name, "observe")).get("backend", {})
+    capture_backend = _properties(_tool_schema(by_name, "capture_screen")).get("backend", {})
+    connect_backend = _properties(_tool_schema(by_name, "phone_connection")).get("backend", {})
+    for name, backend in [("observe", observe_backend), ("capture_screen", capture_backend)]:
+        enum = backend.get("enum")
+        if not isinstance(enum, list) or "none" in enum or "scrcpy" in enum:
+            raise ProbeFailure(f"{name} backend request enum must exclude none and scrcpy")
+    connect_enum = connect_backend.get("enum")
+    if not isinstance(connect_enum, list) or "none" in connect_enum:
+        raise ProbeFailure("phone_connection backend request enum must exclude none")
+    if not _all_of_has_then_required(
+        _tool_schema(by_name, "phone_connection"), "disconnect", ["session_id"]
+    ):
+        raise ProbeFailure("phone_connection disconnect must require session_id")
+
+    desktop_capture = _tool_schema(by_name, "capture_desktop")
+    desktop_capture_props = _properties(desktop_capture)
+    for name in ["display_id", "display_name"]:
+        if desktop_capture_props.get(name, {}).get("minLength") != 1:
+            raise ProbeFailure(f"capture_desktop {name} must reject empty strings")
+    if not _schema_contains_not_anyof_required(desktop_capture, "window_id", "display_id"):
+        raise ProbeFailure("capture_desktop must reject mixed window/display selectors")
+    if not _schema_contains_not_anyof_required(
+        desktop_capture, "capture_all_displays", "display_id"
+    ):
+        raise ProbeFailure(
+            "capture_desktop must reject capture_all_displays with display selectors"
+        )
+
+    desktop_scroll_props = _properties(_tool_schema(by_name, "desktop_scroll"))
+    if "pages" not in desktop_scroll_props or desktop_scroll_props["pages"].get("minimum") != 1:
+        raise ProbeFailure("desktop_scroll must expose positive pages")
+    if "steps" in desktop_scroll_props or "delta_y" in desktop_scroll_props:
+        raise ProbeFailure("desktop_scroll must not expose legacy magnitude fields")
+
+    install_props = _properties(_tool_schema(by_name, "phone_app_install"))
+    if "apk_path" in install_props:
+        raise ProbeFailure("phone_app_install must not expose apk_path alias")
+    install_required = _tool_schema(by_name, "phone_app_install").get("required")
+    if install_required != ["session_id", "apk_paths"]:
+        raise ProbeFailure("phone_app_install must require session_id and apk_paths")
+    if "activity" in _properties(_tool_schema(by_name, "phone_app_action")):
+        raise ProbeFailure("phone_app_action must not expose activity")
+
+    for name in ["phone_setup", "phone_app_force_stop"]:
+        annotations = by_name[name].get("annotations")
+        if (
+            not isinstance(annotations, dict)
+            or annotations.get("destructiveHint") is not True
+            or annotations.get("idempotentHint") is not True
+        ):
+            raise ProbeFailure(f"{name} must be destructive and idempotent")
+
 
 def _tool_schema(by_name: dict[str, dict[str, Any]], name: str) -> dict[str, Any]:
     tool = by_name.get(name)
@@ -166,6 +251,13 @@ def _all_of(schema: dict[str, Any]) -> list[dict[str, Any]]:
     return [entry for entry in value if isinstance(entry, dict)]
 
 
+def _properties(schema: dict[str, Any]) -> dict[str, Any]:
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        return properties
+    return {}
+
+
 def _all_of_has_conditional_required(
     schema: dict[str, Any], operation: str, required: list[str]
 ) -> bool:
@@ -180,9 +272,38 @@ def _all_of_has_then_required(schema: dict[str, Any], operation: str, required: 
     return any(
         _conditional_operation(entry) == operation
         and isinstance(entry.get("then"), dict)
-        and entry["then"].get("required") == required
+        and _required_contains(entry["then"], required)
         for entry in _all_of(schema)
     )
+
+
+def _required_contains(schema: dict[str, Any], required: list[str]) -> bool:
+    actual = schema.get("required")
+    return isinstance(actual, list) and set(required).issubset(actual)
+
+
+def _conditional_then_has_snapshot_or_raw(schema: dict[str, Any], operation: str) -> bool:
+    for entry in _all_of(schema):
+        if _conditional_operation(entry) != operation:
+            continue
+        then = entry.get("then")
+        if not isinstance(then, dict):
+            return False
+        any_of = then.get("anyOf")
+        if not isinstance(any_of, list):
+            return False
+        has_snapshot = any(
+            isinstance(branch, dict) and branch.get("required") == ["phone_snapshot_id"]
+            for branch in any_of
+        )
+        has_raw = any(
+            isinstance(branch, dict)
+            and branch.get("required") == ["use_device_coordinates"]
+            and _properties(branch).get("use_device_coordinates", {}).get("const") is True
+            for branch in any_of
+        )
+        return has_snapshot and has_raw
+    return False
 
 
 def _conditional_operation(schema: dict[str, Any]) -> str | None:
@@ -220,10 +341,27 @@ def _schema_has_any_required(schema: object, required: list[str]) -> bool:
     )
 
 
-def canonical_payload(result: dict[str, Any], *, tool: str, branch: str) -> dict[str, Any]:
+def _schema_contains_not_anyof_required(schema: dict[str, Any], first: str, second: str) -> bool:
+    for entry in _all_of(schema):
+        rejected = entry.get("not")
+        if not isinstance(rejected, dict):
+            continue
+        any_of = rejected.get("anyOf")
+        if not isinstance(any_of, list):
+            continue
+        for branch in any_of:
+            if not isinstance(branch, dict):
+                continue
+            required = branch.get("required")
+            if isinstance(required, list) and first in required and second in required:
+                return True
+    return False
+
+
+def grouped_payload(result: dict[str, Any], *, tool: str, branch: str) -> dict[str, Any]:
     payload = result.get("structuredContent")
     if not isinstance(payload, dict):
-        raise ProbeFailure(f"{tool} returned no canonical structuredContent: {result!r}")
+        raise ProbeFailure(f"{tool} returned no grouped structuredContent: {result!r}")
     expected = {
         "tool": tool,
         "branch": branch,
@@ -231,22 +369,24 @@ def canonical_payload(result: dict[str, Any], *, tool: str, branch: str) -> dict
     for key, value in expected.items():
         if payload.get(key) != value:
             raise ProbeFailure(
-                f"{tool} canonical envelope has wrong {key}: "
+                f"{tool} grouped envelope has wrong {key}: "
                 f"expected {value!r}, got {payload.get(key)!r}"
             )
     if not isinstance(payload.get("result"), dict):
-        raise ProbeFailure(f"{tool} canonical envelope omitted result map: {payload!r}")
+        raise ProbeFailure(f"{tool} grouped envelope omitted result map: {payload!r}")
     return payload
 
 
-def canonical_error_payload(result: dict[str, Any], *, tool: str, code: str) -> dict[str, Any]:
+def grouped_error_payload(result: dict[str, Any], *, tool: str, code: str) -> dict[str, Any]:
     if result.get("isError") is not True:
         raise ProbeFailure(f"{tool} invalid branch did not set isError: {result!r}")
     payload = result.get("structuredContent")
     if not isinstance(payload, dict):
         raise ProbeFailure(f"{tool} invalid branch returned no structuredContent: {result!r}")
     if payload.get("tool") != tool:
-        raise ProbeFailure(f"{tool} invalid branch returned wrong canonical identity: {payload!r}")
+        raise ProbeFailure(f"{tool} invalid branch returned wrong grouped identity: {payload!r}")
+    if payload.get("branch") is not None:
+        raise ProbeFailure(f"{tool} invalid branch did not return branch=null: {payload!r}")
     error = payload.get("error")
     if not isinstance(error, dict) or error.get("code") != code:
         raise ProbeFailure(f"{tool} invalid branch returned wrong error code: {payload!r}")
@@ -273,34 +413,49 @@ def make_client(*, installed: bool, phone_enabled: bool) -> McpClient:
     )
 
 
-def probe_canonical(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
+def probe_grouped(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
     steps: list[ProbeStep] = []
     client = make_client(installed=installed, phone_enabled=phone_enabled)
     try:
         client.initialize()
         tools = client.tools_list()
         names = tool_names(tools)
-        require_exact_canonical_tools(names)
-        require_canonical_action_shape(tools)
-        steps.append(step_pass("canonical.tools_list", f"tools={len(names)}"))
+        require_exact_grouped_tools(names)
+        require_grouped_action_shape(tools)
+        steps.append(step_pass("grouped.tools_list", f"tools={len(names)}"))
 
-        invalid = client.tools_call(10, "status", {"component": "__invalid__"})
-        canonical_error_payload(invalid, tool="status", code="InvalidRequest")
-        steps.append(step_pass("canonical.invalid_branch", "code=InvalidRequest"))
+        invalid_cases = [
+            (10, "status", {"component": "__invalid__"}),
+            (11, "doctor", {"unexpected": True}),
+            (
+                12,
+                "browser_input",
+                {"operation": "type_text", "tab_id": "tab-1", "text": "hello", "x": 1, "y": 1},
+            ),
+            (
+                13,
+                "phone_pointer",
+                {"operation": "tap", "session_id": "phone-1", "x": 1, "y": 1},
+            ),
+        ]
+        for request_id, tool, arguments in invalid_cases:
+            invalid = client.tools_call(request_id, tool, arguments)
+            grouped_error_payload(invalid, tool=tool, code="InvalidRequest")
+        steps.append(step_pass("grouped.invalid_branch", f"cases={len(invalid_cases)}"))
 
         for request_id, tool, arguments, branch in (
-            (11, "status", {"component": "browser"}, "browser"),
-            (12, "status", {"component": "phone"}, "phone"),
-            (13, "status", {"component": "session_presence"}, "session_presence"),
-            (14, "list_resources", {"surface": "desktop", "resource": "apps"}, "desktop/apps"),
-            (15, "list_resources", {"surface": "phone", "resource": "devices"}, "phone/devices"),
+            (20, "status", {"component": "browser"}, "browser"),
+            (21, "status", {"component": "phone"}, "phone"),
+            (22, "status", {"component": "session_presence"}, "session_presence"),
+            (23, "list_resources", {"surface": "desktop", "resource": "apps"}, "desktop/apps"),
+            (24, "list_resources", {"surface": "phone", "resource": "devices"}, "phone/devices"),
         ):
             result = client.tools_call(request_id, tool, arguments)
-            payload = canonical_payload(result, tool=tool, branch=branch)
-            result_error = bool(payload["result"].get("isError"))
+            grouped_payload(result, tool=tool, branch=branch)
+            result_error = result.get("isError") is True
             steps.append(
                 step_pass(
-                    f"canonical.{tool}.{branch.replace('/', '_')}",
+                    f"grouped.{tool}.{branch.replace('/', '_')}",
                     f"result_error={str(result_error).lower()}",
                 )
             )
@@ -331,7 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
-    return probe_canonical(installed=installed, phone_enabled=phone_enabled)
+    return probe_grouped(installed=installed, phone_enabled=phone_enabled)
 
 
 def main(argv: list[str] | None = None) -> int:

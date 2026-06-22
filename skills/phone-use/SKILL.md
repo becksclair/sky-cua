@@ -29,9 +29,12 @@ those surfaces are not reachable through a phone session.
   `phone_connection(operation="connect")`. Pairing codes are single-use and
   never echoed back. The resolved serial it returns is what you then connect to.
 - Connect before any observation or action — every other device-bound tool
-  requires an active session and returns a no-session response
-  (`PhoneNoSession`) otherwise. Connect mints the `session_id`; carry it on
-  every later call (preferred over raw `serial`). Disconnect invalidates it.
+  requires the active `session_id`. Connect mints it; carry that exact value on
+  every later call. Raw `serial` is discovery/connect-only. Disconnect
+  invalidates the session.
+- Default loop: discover devices, connect and retain `session_id`, observe with
+  that session, inspect `available_actions`, act with fresh coordinate
+  provenance, then observe again.
 - Connect targets the explicit `serial`, else the configured default, else the
   single attached device only when exactly one is in the authorized `device`
   state. An ambiguous multi-device set with no default, a missing serial, or a
@@ -48,20 +51,22 @@ those surfaces are not reachable through a phone session.
 
 ## Perception
 
-- `observe(surface="phone")` is the default perception tool after connecting.
+- `observe(surface="phone", session_id=...)` is the default perception tool after
+  connecting.
   One call returns a screenshot, a fresh `phone_snapshot_id`, current app,
   cursor state, the servicing `backend`, the `capability_profile_id` plus its
   `profile_refresh_state`, and the dynamic `available_actions` /
   `unavailable_actions` menu. Set `include_accessibility` /
   `include_notifications` to add those bounded companion-only sections.
-- `capture_screen(surface="phone")`, `phone_accessibility_tree`, and
-  `phone_notifications` remain available for focused work.
+- `capture_screen(surface="phone", session_id=...)`,
+  `phone_accessibility_tree`, and `phone_notifications` remain available for
+  focused work.
 - Image delivery is **not** caller-controllable: an inline image block vs a
   `screenshot_path` on disk is decided server-side from the model's image
   capability, not by any input field. Capture auto-routes to the companion
   on-device screenshot first (its frame carries native-overlay metadata) then
-  ADB `screencap`; forcing `backend=scrcpy` for a screenshot is unsupported and
-  returns `PhoneBackendUnavailable`.
+  ADB `screencap`; request schemas do not accept `backend=scrcpy` or
+  `backend=none` for observe/capture.
 
 ### Capability profile and the action menu
 
@@ -73,19 +78,20 @@ those surfaces are not reachable through a phone session.
 - `profile_refresh_state` is `detected` / `reused` / `refreshed` / `stale`. A
   `stale` profile means availability is no longer proven; companion and scrcpy
   are gated off and routing falls back to ADB-only.
-- The profile is invalidated on reconnect, companion install/update, permission/
-  orientation/display change, RPC failure, or wireless drop. The wireless
-  re-probe fires on `observe(surface="phone")`, not on a bare action, so
-  re-observe to surface a dropped link. Call
-  `phone_connection(operation="refresh")` after any stale/drift signal, after a
-  companion-to-ADB downgrade, or after a wireless reconnect, to re-prove
-  companion/scrcpy before relying on them.
+- The profile is invalidated on reconnect, companion install/update,
+  orientation/display change, RPC failure, or wireless drop. Runtime permission
+  revocation is not auto-detected mid-session; reconnect or call
+  `phone_connection(operation="refresh", session_id=...)` after permission state
+  may have changed. The wireless re-probe fires on
+  `observe(surface="phone", session_id=...)`, not on a bare action, so re-observe
+  to surface a dropped link.
 
 ## Coordinates and snapshots
 
 - `phone_pointer(operation="tap"|"swipe")` takes screenshot-pixel coordinates
   from a specific snapshot. A fresh `phone_snapshot_id` from
-  `observe(surface="phone")` or `capture_screen(surface="phone")` is mandatory
+  `observe(surface="phone", session_id=...)` or
+  `capture_screen(surface="phone", session_id=...)` is mandatory
   unless `use_device_coordinates=true`, in which case x/y are raw device pixels
   and no snapshot is needed (raw-point bounds are enforced only when the device
   display size is known). Omitting it without that flag returns
@@ -99,10 +105,10 @@ those surfaces are not reachable through a phone session.
   the screen rotated or resized since capture (orientation/resolution mismatch).
   The registry keeps only the last 16 snapshots per session. On any rejection,
   and after any rotation or display-size change, **re-observe for a fresh
-  snapshot before tapping** — `capture_screen(surface="phone")` and
-  `observe(surface="phone")` themselves fail closed with
-  `PhoneCapabilityProfileDrifted` when a fresh frame no longer matches the
-  cached display size.
+  snapshot before tapping** — `capture_screen(surface="phone", session_id=...)`
+  and `observe(surface="phone", session_id=...)` themselves fail closed with
+  `PhoneCapabilityProfileDrifted` when a fresh frame no longer matches the cached
+  display size.
 - **Prefer accessibility-tree bounds over visual estimation for tap targets on
   native UI.** `phone_accessibility_tree` reports each element's exact
   device-pixel `bounds`; tap the bounds center with `use_device_coordinates=true`
@@ -146,7 +152,7 @@ those surfaces are not reachable through a phone session.
   informational, not an error. The app-management family instead keys success on
   its `success` boolean. Read `backend`/`isError`, not the summary text. Tool
   success only means input was dispatched; verify consequential changes with a
-  fresh `observe(surface="phone")`.
+  fresh `observe(surface="phone", session_id=...)`.
 - **Expect first-run interstitials, especially in browsers.** A freshly
   installed or first-launched app commonly interposes consent sheets, permission
   prompts, or feature promos that steal focus before the screen you want — e.g.
@@ -217,10 +223,11 @@ successful action.
 
 ## Notifications and apps
 
-- Notification ids must come from a **fresh** `phone_notifications` or
-  `observe(surface="phone", include_notifications=true)` call. Stale/handled
-  ids are rejected (`PhoneNotificationOpRejected` / gone / expired). Re-list
-  before acting. Structural id rules:
+- Notification ids must come from a **fresh**
+  `phone_notifications(session_id=...)` or
+  `observe(surface="phone", session_id=..., include_notifications=true)` call.
+  Stale/handled ids are rejected (`PhoneNotificationOpRejected` / gone /
+  expired). Re-list before acting. Structural id rules:
   - `phone_notification_action(operation="open"|"dismiss")` takes only
     `event_id`.
   - `phone_notification_action(operation="action")` takes `event_id` plus a
@@ -232,18 +239,18 @@ successful action.
   - Check `can_open` / `can_dismiss` before an op. Successful ops refetch and
     return the fresh notification list.
 - App control: app/current-app listing uses
-  `list_resources(surface="phone", resource="apps"|"current_app")`;
+  `list_resources(surface="phone", resource="apps"|"current_app", session_id=...)`;
   launch/intent uses `phone_app_action`; force-stop uses
   `phone_app_force_stop`; install uses `phone_app_install`.
   Pass the exact `package_name` from app listing or current-app results, never a
   display label. Install reports the actual strategy it ran (single / multiple /
-  multi_package) and takes host-side APK paths, not device paths. Intent open
-  accepts an activity component, a deep link, or a full intent URI.
+  multi_package) and takes `apk_paths` host-side paths, not device paths. Intent
+  open accepts a deep link or a full intent URI; there is no `activity` field.
 
 ## Disconnecting
 
-`phone_connection(operation="disconnect")` ends the session — the `session_id`
-dies — and drops the cached profile, snapshot/cursor, and companion runtime. It
+`phone_connection(operation="disconnect", session_id=...)` ends the session — the
+`session_id` dies — and drops the cached profile, snapshot/cursor, and companion runtime. It
 tears down only a sky-cua-managed scrcpy mirror (adopted or operator-launched
 windows are never killed) and never touches operator-launched adb/scrcpy
 processes. For wireless serials it runs `adb disconnect` unless

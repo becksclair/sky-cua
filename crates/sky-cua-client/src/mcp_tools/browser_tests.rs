@@ -144,7 +144,7 @@ fn browser_action_schemas_explain_simple_control_contract() {
     let observe_description = find_tool("observe")["description"]
         .as_str()
         .expect("observe description");
-    assert!(observe_description.contains("browser requires tab_id"));
+    assert!(observe_description.contains("Browser requires tab_id"));
 
     let screenshot_description = find_tool("capture_screen")["description"]
         .as_str()

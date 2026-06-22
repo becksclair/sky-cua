@@ -14,11 +14,11 @@ const LIST_APPS_INFORMATIONAL_DIAGNOSTIC_CODES: &[&str] = &["SessionEnvRepaired"
 const SNAPSHOT_TEXT_ELEMENT_LIMIT: usize = 120;
 const SNAPSHOT_TEXT_FIELD_LIMIT: usize = 240;
 
-/// Borrowed view of an [`ElementNode`] used for the compact snapshot serialization.
+/// Borrowed view of an [`ElementNode`] used for summary snapshot serialization.
 /// Keeps all keys present (including `null` for `None` values) to preserve the contract
 /// that the previous `json!` macro implementation produced.
 #[derive(Serialize)]
-struct CompactElementNode<'a> {
+struct SummaryElementNode<'a> {
     element_index: usize,
     parent_index: Option<usize>,
     role: &'a str,
@@ -33,7 +33,7 @@ struct CompactElementNode<'a> {
     backend_ref: &'a Option<String>,
 }
 
-impl<'a> From<&'a ElementNode> for CompactElementNode<'a> {
+impl<'a> From<&'a ElementNode> for SummaryElementNode<'a> {
     fn from(element: &'a ElementNode) -> Self {
         Self {
             element_index: element.element_index,
@@ -52,9 +52,9 @@ impl<'a> From<&'a ElementNode> for CompactElementNode<'a> {
     }
 }
 
-/// Borrowed view of an [`AppStateSnapshot`] used for the compact serialization.
+/// Borrowed view of an [`AppStateSnapshot`] used for summary serialization.
 #[derive(Serialize)]
-struct CompactSnapshot<'a> {
+struct SummarySnapshot<'a> {
     detail: &'static str,
     snapshot_id: &'a str,
     created_at: &'a DateTime<Utc>,
@@ -65,7 +65,7 @@ struct CompactSnapshot<'a> {
     diagnostics: &'a Vec<DiagnosticEntry>,
     app_guidance: &'a Option<HeuristicMatch>,
     doctor_report: &'a Option<DoctorReport>,
-    elements: &'a [CompactElementNode<'a>],
+    elements: &'a [SummaryElementNode<'a>],
     element_count: usize,
     filtered_element_count: usize,
     elements_returned: usize,
@@ -152,23 +152,23 @@ fn inspection_image_scope(capture: &CaptureInfo) -> &'static str {
     }
 }
 
-pub(crate) fn compact_snapshot(snapshot: &AppStateSnapshot) -> Value {
+pub(crate) fn summary_snapshot(snapshot: &AppStateSnapshot) -> Value {
     let options = AppStateElementOptions::default();
     let selection = select_app_state_elements(snapshot, &options, None);
-    compact_snapshot_with_element_selection(snapshot, &selection)
+    summary_snapshot_with_element_selection(snapshot, &selection)
 }
 
-pub(crate) fn compact_snapshot_with_element_selection(
+pub(crate) fn summary_snapshot_with_element_selection(
     snapshot: &AppStateSnapshot,
     selection: &AppStateElementSelection<'_>,
 ) -> Value {
-    let compact_elements: Vec<CompactElementNode> = selection
+    let summary_elements: Vec<SummaryElementNode> = selection
         .elements
         .iter()
         .copied()
-        .map(CompactElementNode::from)
+        .map(SummaryElementNode::from)
         .collect();
-    let compact = CompactSnapshot {
+    let summary = SummarySnapshot {
         detail: "compact",
         snapshot_id: &snapshot.snapshot_id,
         created_at: &snapshot.created_at,
@@ -179,15 +179,15 @@ pub(crate) fn compact_snapshot_with_element_selection(
         diagnostics: &snapshot.diagnostics,
         app_guidance: &snapshot.app_guidance,
         doctor_report: &snapshot.doctor_report,
-        elements: &compact_elements,
+        elements: &summary_elements,
         element_count: snapshot.elements.len(),
         filtered_element_count: selection.filtered_count,
-        elements_returned: compact_elements.len(),
+        elements_returned: summary_elements.len(),
         element_offset: selection.offset,
         element_limit: selection.limit,
         element_query: selection.query,
     };
-    serde_json::to_value(compact).expect("CompactSnapshot serialization cannot fail")
+    serde_json::to_value(summary).expect("SummarySnapshot serialization cannot fail")
 }
 
 pub(crate) fn full_snapshot_with_element_selection(
@@ -264,7 +264,7 @@ pub(crate) fn snapshot_text_content(snapshot: &AppStateSnapshot) -> String {
     snapshot_text_content_with_elements(snapshot, true)
 }
 
-pub(crate) fn compact_snapshot_text_content(snapshot: &AppStateSnapshot) -> String {
+pub(crate) fn summary_snapshot_text_content(snapshot: &AppStateSnapshot) -> String {
     snapshot_text_content_with_elements(snapshot, false)
 }
 
@@ -613,7 +613,7 @@ fn append_text_field(out: &mut String, label: &str, value: Option<&str>) {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
     };
-    let value = compact_text_field(value, SNAPSHOT_TEXT_FIELD_LIMIT);
+    let value = summary_text_field(value, SNAPSHOT_TEXT_FIELD_LIMIT);
     let _ = write!(out, " {label}={value:?}");
 }
 
@@ -632,7 +632,7 @@ fn append_bounds(out: &mut String, bounds: &RectF) {
     );
 }
 
-pub(crate) fn compact_text_field(value: &str, max_chars: usize) -> String {
+pub(crate) fn summary_text_field(value: &str, max_chars: usize) -> String {
     let mut out = String::new();
     let mut chars = 0;
     let mut truncated = false;
@@ -705,9 +705,9 @@ pub(crate) fn informational_runtime_summary(diagnostics: &[DiagnosticEntry]) -> 
 }
 
 #[cfg(test)]
-pub(crate) fn compact_element(element: &ElementNode) -> Value {
-    serde_json::to_value(CompactElementNode::from(element))
-        .expect("CompactElementNode serialization cannot fail")
+pub(crate) fn summary_element(element: &ElementNode) -> Value {
+    serde_json::to_value(SummaryElementNode::from(element))
+        .expect("SummaryElementNode serialization cannot fail")
 }
 
 pub(crate) fn setup_window_targeting_is_error(report: &WindowTargetingSetupReport) -> bool {
@@ -729,8 +729,8 @@ pub(crate) fn list_apps_error_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::{
-        compact_snapshot, compact_text_field, full_snapshot_with_element_selection,
-        select_app_state_elements, string_matches_query,
+        full_snapshot_with_element_selection, select_app_state_elements, string_matches_query,
+        summary_snapshot, summary_text_field,
     };
     use crate::app_state::AppStateElementOptions;
     use chrono::Utc;
@@ -741,10 +741,10 @@ mod tests {
     };
 
     #[test]
-    fn compact_text_field_preserves_normalized_truncation_shape() {
-        assert_eq!(compact_text_field(" one \n two\tthree ", 9), "one two t...");
-        assert_eq!(compact_text_field("alpha beta", 6), "alpha ...");
-        assert_eq!(compact_text_field("alpha beta", 10), "alpha beta");
+    fn summary_text_field_preserves_normalized_truncation_shape() {
+        assert_eq!(summary_text_field(" one \n two\tthree ", 9), "one two t...");
+        assert_eq!(summary_text_field("alpha beta", 6), "alpha ...");
+        assert_eq!(summary_text_field("alpha beta", 10), "alpha beta");
     }
 
     #[test]
@@ -761,15 +761,15 @@ mod tests {
     }
 
     #[test]
-    fn compact_snapshot_projects_only_inspection_capture_path() {
+    fn summary_snapshot_projects_only_inspection_capture_path() {
         let mut snapshot = app_state_snapshot();
         snapshot.capture = Some(capture_with_paths(
             "/tmp/sky-cua/captures/snap-1.jpg",
             Some("/tmp/sky-cua/captures/snap-1-window.png"),
         ));
 
-        let compact = compact_snapshot(&snapshot);
-        let capture = &compact["capture"];
+        let summary = summary_snapshot(&snapshot);
+        let capture = &summary["capture"];
 
         assert_eq!(
             capture["inspection_image_path"],

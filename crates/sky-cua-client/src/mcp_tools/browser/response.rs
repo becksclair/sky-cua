@@ -11,7 +11,7 @@ use sky_cua_platform::model::{
 };
 
 use super::args::BrowserTabTextFilter;
-use crate::output_shapes::compact_text_field;
+use crate::output_shapes::summary_text_field;
 
 pub(crate) fn browser_status_summary(report: &BrowserStatusReport) -> String {
     let mut summary = String::from(if report.enabled {
@@ -215,8 +215,8 @@ fn append_browser_tab_match(summary: &mut String, tab: &BrowserTab) {
         summary,
         " [{}] title=\"{}\" url=\"{}\" active={}",
         tab.tab_id,
-        compact_text_field(title, 80),
-        compact_text_field(url, 160),
+        summary_text_field(title, 80),
+        summary_text_field(url, 160),
         tab.active
     );
 }
@@ -402,10 +402,10 @@ fn limit_browser_snapshot_text(snapshot_object: &mut serde_json::Map<String, Val
 pub(crate) fn browser_snapshot_summary(response: &BrowserSnapshotResponse) -> String {
     let mut text = format!("Captured browser snapshot for tab {}.", response.tab_id);
     if let Some(title) = response.title.as_deref().filter(|title| !title.is_empty()) {
-        let _ = write!(&mut text, " Title: \"{}\".", compact_text_field(title, 160));
+        let _ = write!(&mut text, " Title: \"{}\".", summary_text_field(title, 160));
     }
     if let Some(url) = response.url.as_deref().filter(|url| !url.is_empty()) {
-        let _ = write!(&mut text, " URL: {}.", compact_text_field(url, 240));
+        let _ = write!(&mut text, " URL: {}.", summary_text_field(url, 240));
     }
     if let Some(snapshot) = response.snapshot.as_ref() {
         append_browser_snapshot_viewport(&mut text, snapshot);
@@ -442,7 +442,7 @@ fn append_browser_snapshot_visible_text(text: &mut String, snapshot: &Value) {
     let Some(page_text) = snapshot
         .get("text")
         .and_then(Value::as_str)
-        .map(|value| compact_text_field(value, 800))
+        .map(|value| summary_text_field(value, 800))
         .filter(|value| !value.is_empty())
     else {
         return;
@@ -488,12 +488,12 @@ fn append_browser_snapshot_element(text: &mut String, element: &Value) {
     let name = element
         .get("name")
         .and_then(Value::as_str)
-        .map(|value| compact_text_field(value, 120))
+        .map(|value| summary_text_field(value, 120))
         .unwrap_or_default();
     let href = element
         .get("href")
         .and_then(Value::as_str)
-        .map(|value| compact_text_field(value, 160));
+        .map(|value| summary_text_field(value, 160));
     let bounds = element.get("bounds").map(browser_bounds_summary);
     let _ = write!(text, " [{index}] tag={tag}");
     if !role.is_empty() {

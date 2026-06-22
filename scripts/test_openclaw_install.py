@@ -66,7 +66,7 @@ def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
     assert BROWSER_SELECTION_ENV not in server["env"]
     assert server["enabled"] is True
     # Codex "approve" mode approves every tool call without user interaction;
-    # "auto" prompts for unannotated MCP tools (treated destructive/open-world).
+    # "auto" still prompts for annotated destructive/open-world sky-cua calls.
     assert server["codex"]["defaultToolsApprovalMode"] == "approve"
 
     assert len(calls) == 2
@@ -164,7 +164,7 @@ def test_openclaw_codex_home_toml_upsert_is_idempotent(
     parsed = tomllib.loads(second)
     assert parsed["mcp_servers"]["sky_cua"]["args"] == ["mcp"]
     # Always-allow at the codex layer: "approve" never prompts; "auto" would
-    # prompt for unannotated MCP tools.
+    # still prompt for destructive/open-world sky-cua tools.
     assert parsed["mcp_servers"]["sky_cua"]["default_tools_approval_mode"] == "approve"
 
 

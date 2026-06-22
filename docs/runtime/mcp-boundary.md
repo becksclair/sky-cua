@@ -170,12 +170,12 @@ OpenClaw's native codex runtime projects `mcp.servers.sky_cua` into
 Codex-native `mcp_servers` thread config on `thread/start`/`thread/resume`.
 The `codex.defaultToolsApprovalMode` field controls Codex's per-tool approval
 (`auto` | `prompt` | `approve`). The installer pins `approve`, which codex
-treats as "always approved without user interaction". `auto` is not enough:
-codex gates `auto` on MCP tool annotations (`destructiveHint`,
-`openWorldHint`), and tools without annotations — all sky-cua tools today —
-default to destructive and open-world, so every call raises a user approval
-that OpenClaw relays to chat. `openclaw mcp probe` passing does not cover
-this case; only an agent-turn check does.
+treats as "always approved without user interaction". `auto` is not enough for
+unattended OpenClaw turns: sky-cua tools are annotated, but real workflows still
+need destructive or open-world calls such as browser input, desktop input, and
+phone actions, so Codex would prompt and OpenClaw would relay that prompt to
+chat. `openclaw mcp probe` passing does not cover this case; only an agent-turn
+check does.
 
 The installer additionally pins a marker-managed `[mcp_servers.sky_cua]`
 block (including `default_tools_approval_mode = "approve"` and the sky-cua

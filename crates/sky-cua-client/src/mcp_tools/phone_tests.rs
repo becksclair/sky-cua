@@ -162,15 +162,15 @@ fn all_phone_tools_are_advertised() {
     assert_eq!(
         PHONE_TOOL_NAMES.len(),
         16,
-        "exactly 16 canonical phone-capable tools"
+        "exactly 16 grouped phone-capable tools"
     );
 }
 
 #[test]
 fn phone_tools_carry_session_selector_and_strict_schema() {
     let definitions = build_tool_definitions(true, false);
-    // Every device-bound tool exposes the shared session selector and forbids
-    // unknown properties.
+    // Every post-connect device-bound tool exposes session_id, rejects raw
+    // serial selectors, and forbids unknown properties.
     for name in [
         "phone_accessibility_tree",
         "phone_notifications",
@@ -190,8 +190,8 @@ fn phone_tools_carry_session_selector_and_strict_schema() {
             "{name} exposes session_id"
         );
         assert!(
-            schema["properties"].get("serial").is_some(),
-            "{name} exposes serial"
+            schema["properties"].get("serial").is_none(),
+            "{name} rejects serial"
         );
     }
 }
@@ -211,14 +211,28 @@ fn phone_action_schemas_pin_required_fields() {
     let pointer_constraints = &pointer["inputSchema"]["allOf"];
     assert_eq!(
         pointer_constraints[0]["then"]["required"],
-        json!(["x", "y"])
+        json!(["session_id", "x", "y"])
+    );
+    assert!(
+        pointer_constraints[0]["then"]["anyOf"]
+            .as_array()
+            .is_some_and(|any_of| {
+                any_of
+                    .iter()
+                    .any(|constraint| constraint["required"] == json!(["phone_snapshot_id"]))
+                    && any_of.iter().any(|constraint| {
+                        constraint["properties"]["use_device_coordinates"]["const"] == true
+                            && constraint["required"] == json!(["use_device_coordinates"])
+                    })
+            }),
+        "phone_pointer must require snapshot provenance or raw device coordinates"
     );
 
     let keyboard = find_tool(&definitions, "phone_keyboard");
     assert_eq!(keyboard["inputSchema"]["required"], json!(["operation"]));
     assert_eq!(
         keyboard["inputSchema"]["allOf"][0]["then"]["required"],
-        json!(["text"])
+        json!(["session_id", "text"])
     );
 
     let pair = find_tool(&definitions, "phone_pair_wireless");
@@ -235,17 +249,16 @@ fn phone_action_schemas_pin_required_fields() {
     );
 
     let install = find_tool(&definitions, "phone_app_install");
-    assert_eq!(install["inputSchema"]["required"], json!([]));
-    let install_any_of = install["inputSchema"]["allOf"]
-        .as_array()
-        .and_then(|all_of| {
-            all_of
-                .iter()
-                .find_map(|constraint| constraint["anyOf"].as_array())
-        })
-        .expect("phone_app_install anyOf constraint");
-    assert_eq!(install_any_of[0]["required"], json!(["apk_paths"]));
-    assert_eq!(install_any_of[1]["required"], json!(["apk_path"]));
+    assert_eq!(
+        install["inputSchema"]["required"],
+        json!(["session_id", "apk_paths"])
+    );
+    assert!(
+        install["inputSchema"]["properties"]
+            .get("apk_path")
+            .is_none(),
+        "phone_app_install no longer advertises apk_path"
+    );
     assert_eq!(
         install["inputSchema"]["properties"]["mode"]["enum"],
         json!(["single", "multiple", "multi_package"])
@@ -451,6 +464,7 @@ fn phone_app_install_maps_paths_and_mode() {
         &image_model(),
         "phone_app_install",
         json!({
+            "session_id": "phone-1",
             "apk_paths": ["/tmp/base.apk", "/tmp/split.apk"],
             "mode": "multiple",
             "grant_runtime_permissions": true

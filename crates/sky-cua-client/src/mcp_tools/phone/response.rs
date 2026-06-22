@@ -18,7 +18,7 @@ use sky_cua_platform::model::{
     PhonePairWirelessResponse, PhoneScreenshotResponse, PhoneSession, PhoneStatusReport,
 };
 
-use crate::output_shapes::compact_text_field;
+use crate::output_shapes::summary_text_field;
 
 /// Diagnostic codes that mark a phone tool result as an MCP error. These are
 /// honest "could not do it" states, not informational context, so they flip
@@ -559,7 +559,7 @@ pub(crate) fn phone_notifications_summary(response: &PhoneNotificationsResponse)
         let title = event
             .title
             .as_deref()
-            .map(|value| compact_text_field(value, 80))
+            .map(|value| summary_text_field(value, 80))
             .unwrap_or_default();
         let _ = write!(
             &mut summary,

@@ -1,4 +1,4 @@
-# Canonical MCP Tool Surface
+# Grouped MCP Tool Surface
 
 ## Status
 
@@ -6,7 +6,7 @@ Shipped. Last verified: 2026-06-22.
 
 ## Summary
 
-`sky-cua-client mcp` now advertises one canonical tool surface. There is no
+`sky-cua-client mcp` now advertises one grouped tool surface. There is no
 alternate public launch mode for the old names.
 The registry exposes 34 tools by default, or 35 when `SKY_CUA_BROWSER_EVAL` is
 enabled, while preserving desktop, browser, and Android phone workflows behind
@@ -20,15 +20,18 @@ The machine authorities are:
   public `tools/list` output across image capability and browser eval
   combinations.
 - `crates/sky-cua-client/tests/fixtures/tool_contract.json` for
-  canonical branch mappings, annotations, schemas, and response policy.
+  grouped branch mappings, annotations, schemas, and response policy.
 - `crates/sky-cua-client/tests/fixtures/call_cases.json` for minimal
-  valid and invalid canonical branch calls.
+  valid and invalid grouped branch calls.
 
-Canonical response envelopes include `structuredContent.tool`, `branch`, and
-`result`. Invalid branch requests return `structuredContent.error` before
-service dispatch.
+Grouped response envelopes include `structuredContent.tool`, `branch`, and
+`result`. Raw call arguments are validated against the advertised `inputSchema`
+before handler dispatch; invalid requests return top-level `isError=true`,
+`structuredContent.branch=null`, and `structuredContent.error` before service
+dispatch. Branch-exact schemas reject unknown keys and fields from the wrong
+surface/operation branch.
 
-Canonical tools:
+Grouped tools:
 
 `doctor`, `status`, `list_resources`, `observe`, `capture_screen`,
 `capture_desktop`, `setup_desktop`, `session_presence`, `activate_window`,
@@ -76,15 +79,15 @@ emitted into new host configs.
 - `uv run pytest`
 - `python3 scripts/build_plugin.py`
 - `python3 scripts/deploy_plugin.py --local-install-host opencode`
-- `python3 scripts/probe_mcp_tool_surface.py --installed` — exact 34-tool canonical surface
-- `SKY_CUA_BROWSER_EVAL=on python3 scripts/probe_mcp_tool_surface.py --installed` — exact 35-tool canonical surface
+- `python3 scripts/probe_mcp_tool_surface.py --installed` — exact 34-tool grouped surface
+- `SKY_CUA_BROWSER_EVAL=on python3 scripts/probe_mcp_tool_surface.py --installed` — exact 35-tool grouped surface
 - `python3 scripts/live_phone_use_smoke.py --profile adb-usb --serial emulator-5554 --installed` — 9 passed / 0 failed on `Pixel_9a`
 - `uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua ... --profile opencode-mcp --desktop-env KDE --wayland-display wayland-0 --sync-opencode-settings` — OpenCode Zenity and kdialog passed with action-tool evidence
 - `cargo test -p sky-cua-client`
 - `uv run pytest scripts/test_install_flows.py scripts/test_deploy_plugin.py scripts/test_gui_testing_vm.py scripts/test_live_phone_use_smoke.py scripts/test_probe_mcp_tool_surface.py`
 
 The broader cross-desktop VM matrix remains a release gate for display-specific
-runtime work, but the canonical installed MCP host path is proven through the
+runtime work, but the grouped installed MCP host path is proven through the
 OpenCode VM smoke.
 
 ## Related

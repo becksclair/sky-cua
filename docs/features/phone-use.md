@@ -72,9 +72,11 @@ and caches a per-session
 `PhoneCapabilityProfile`, and — when companion support is enabled — verifies,
 installs, or updates the companion APK, enables its required services, and
 establishes the RPC forward before finalizing the profile. The cache is per
-session and is invalidated on reconnect, companion install/update, permission
-change, orientation or display-size change, RPC failure, wireless disconnect,
-and explicit `phone_connection(operation="refresh")`.
+session and is invalidated on reconnect, companion install/update, orientation
+or display-size change, RPC failure, wireless disconnect, and explicit
+`phone_connection(operation="refresh")`. Permission revocation is not
+auto-detected mid-session; reconnect or refresh after permission state may have
+changed.
 
 Companion permission setup (as built): an install-bearing bootstrap — the same
 `allow_install` gate that authorizes the APK install
@@ -358,10 +360,11 @@ uv run python scripts/live_phone_workflow_smoke.py --workflow settings --agent c
 `--driver agent` (default) has an agent CLI run
 `phone_connection(operation="connect")` +
 `phone_setup(operation="install_companion")`; the ground-truth checks gate the
-pass. The default agent is `claude` (Claude Code reliably surfaces the phone MCP tools);
-`opencode` does NOT currently expose them to the agent (it sees the phone-use
-skill and falls back to bash/exploration), so it is unreliable here — the
-ground-truth gate catches that honestly. Tool-call evidence is parsed when the
+pass. The default agent is `claude` (Claude Code reliably surfaces the phone MCP
+tools). In this companion-setup harness, the default OpenCode model used during
+the 2026-06-20 run saw the phone-use skill but did not expose the phone MCP
+tools to the agent, so the ground-truth gate treats that condition honestly
+rather than counting prose as setup proof. Tool-call evidence is parsed when the
 agent emits structured tool events; `--require-tool-evidence` makes it a hard
 gate. `--driver direct` drives the MCP tools deterministically (no agent CLI).
 Proven live on the API-36 emulator 2026-06-20 (`--driver direct` 8/8, and

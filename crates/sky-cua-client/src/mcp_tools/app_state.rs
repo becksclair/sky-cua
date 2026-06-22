@@ -9,9 +9,9 @@ use crate::app_state::{
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::ModelSessionInfo;
 use crate::output_shapes::{
-    compact_snapshot_with_element_selection, full_snapshot_with_element_selection,
-    select_app_state_elements, snapshot_text_content_with_element_options,
-    snapshot_text_content_with_element_selection, text_app_state_element_selection,
+    full_snapshot_with_element_selection, select_app_state_elements,
+    snapshot_text_content_with_element_options, snapshot_text_content_with_element_selection,
+    summary_snapshot_with_element_selection, text_app_state_element_selection,
 };
 
 use super::{
@@ -60,7 +60,7 @@ pub(super) fn handle_get_app_state(
                     Some(selection) => full_snapshot_with_element_selection(&snapshot, selection)?,
                     None => serde_json::to_value(&snapshot)?,
                 },
-                AppStateDetail::Compact => compact_snapshot_with_element_selection(
+                AppStateDetail::Compact => summary_snapshot_with_element_selection(
                     &snapshot,
                     element_selection
                         .as_ref()

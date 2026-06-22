@@ -57,8 +57,9 @@
       "branch": "desktop/apps",
       "handler_id": "list_apps",
       "invalid": {
+        "include_mdns": true,
         "resource": "apps",
-        "surface": "__invalid__"
+        "surface": "desktop"
       },
       "tool": "list_resources",
       "valid": {
@@ -70,8 +71,9 @@
       "branch": "desktop/windows",
       "handler_id": "list_windows",
       "invalid": {
+        "include_mdns": true,
         "resource": "windows",
-        "surface": "__invalid__"
+        "surface": "desktop"
       },
       "tool": "list_resources",
       "valid": {
@@ -83,8 +85,9 @@
       "branch": "desktop/focused_window",
       "handler_id": "focused_window",
       "invalid": {
+        "include_mdns": true,
         "resource": "focused_window",
-        "surface": "__invalid__"
+        "surface": "desktop"
       },
       "tool": "list_resources",
       "valid": {
@@ -110,7 +113,8 @@
       "handler_id": "phone_list_devices",
       "invalid": {
         "resource": "devices",
-        "surface": "__invalid__"
+        "surface": "phone",
+        "window_id": "window-foreign"
       },
       "tool": "list_resources",
       "valid": {
@@ -123,11 +127,14 @@
       "handler_id": "phone_app_list",
       "invalid": {
         "resource": "apps",
-        "surface": "__invalid__"
+        "session_id": "phone-1",
+        "surface": "phone",
+        "window_id": "window-foreign"
       },
       "tool": "list_resources",
       "valid": {
         "resource": "apps",
+        "session_id": "phone-1",
         "surface": "phone"
       }
     },
@@ -136,11 +143,14 @@
       "handler_id": "phone_app_current",
       "invalid": {
         "resource": "current_app",
-        "surface": "__invalid__"
+        "session_id": "phone-1",
+        "surface": "phone",
+        "window_id": "window-foreign"
       },
       "tool": "list_resources",
       "valid": {
         "resource": "current_app",
+        "session_id": "phone-1",
         "surface": "phone"
       }
     },
@@ -148,7 +158,8 @@
       "branch": "desktop",
       "handler_id": "get_app_state",
       "invalid": {
-        "surface": "__invalid__"
+        "include_mdns": true,
+        "surface": "desktop"
       },
       "tool": "observe",
       "valid": {
@@ -172,10 +183,13 @@
       "branch": "phone",
       "handler_id": "phone_observe",
       "invalid": {
-        "surface": "__invalid__"
+        "session_id": "phone-1",
+        "surface": "phone",
+        "window_id": "window-foreign"
       },
       "tool": "observe",
       "valid": {
+        "session_id": "phone-1",
         "surface": "phone"
       }
     },
@@ -196,10 +210,13 @@
       "branch": "phone",
       "handler_id": "phone_screenshot",
       "invalid": {
-        "surface": "__invalid__"
+        "session_id": "phone-1",
+        "surface": "phone",
+        "window_id": "window-foreign"
       },
       "tool": "capture_screen",
       "valid": {
+        "session_id": "phone-1",
         "surface": "phone"
       }
     },
@@ -207,19 +224,23 @@
       "branch": "default",
       "handler_id": "phone_accessibility_tree",
       "invalid": {
-        "__unexpected": true
+        "session_id": false
       },
       "tool": "phone_accessibility_tree",
-      "valid": {}
+      "valid": {
+        "session_id": "phone-1"
+      }
     },
     {
       "branch": "default",
       "handler_id": "phone_notifications",
       "invalid": {
-        "__unexpected": true
+        "session_id": false
       },
       "tool": "phone_notifications",
-      "valid": {}
+      "valid": {
+        "session_id": "phone-1"
+      }
     },
     {
       "branch": "default",
@@ -397,22 +418,26 @@
       "branch": "disconnect",
       "handler_id": "phone_disconnect",
       "invalid": {
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "session_id": "phone-1"
       },
       "tool": "phone_connection",
       "valid": {
-        "operation": "disconnect"
+        "operation": "disconnect",
+        "session_id": "phone-1"
       }
     },
     {
       "branch": "refresh",
       "handler_id": "phone_refresh_capabilities",
       "invalid": {
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "session_id": "phone-1"
       },
       "tool": "phone_connection",
       "valid": {
-        "operation": "refresh"
+        "operation": "refresh",
+        "session_id": "phone-1"
       }
     },
     {
@@ -432,11 +457,13 @@
       "branch": "install_companion",
       "handler_id": "phone_install_companion",
       "invalid": {
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "session_id": "phone-1"
       },
       "tool": "phone_setup",
       "valid": {
-        "operation": "install_companion"
+        "operation": "install_companion",
+        "session_id": "phone-1"
       }
     },
     {
@@ -444,23 +471,27 @@
       "handler_id": "phone_open_settings",
       "invalid": {
         "operation": "__invalid__",
-        "screen": "accessibility"
+        "screen": "accessibility",
+        "session_id": "phone-1"
       },
       "tool": "phone_setup",
       "valid": {
         "operation": "open_settings",
-        "screen": "accessibility"
+        "screen": "accessibility",
+        "session_id": "phone-1"
       }
     },
     {
       "branch": "default",
       "handler_id": "phone_app_force_stop",
       "invalid": {
-        "package_name": false
+        "package_name": false,
+        "session_id": "phone-1"
       },
       "tool": "phone_app_force_stop",
       "valid": {
-        "package_name": "com.example.app"
+        "package_name": "com.example.app",
+        "session_id": "phone-1"
       }
     },
     {
@@ -669,9 +700,11 @@
       "branch": "type_text",
       "handler_id": "browser_type_text",
       "invalid": {
-        "operation": "__invalid__",
+        "operation": "type_text",
         "tab_id": "tab-1",
-        "text": "hello"
+        "text": "hello",
+        "x": 1,
+        "y": 1
       },
       "tool": "browser_input",
       "valid": {
@@ -699,13 +732,16 @@
       "branch": "tap",
       "handler_id": "phone_tap",
       "invalid": {
-        "operation": "__invalid__",
+        "operation": "tap",
+        "session_id": "phone-1",
         "x": 1,
         "y": 1
       },
       "tool": "phone_pointer",
       "valid": {
         "operation": "tap",
+        "phone_snapshot_id": "phone-snapshot-1",
+        "session_id": "phone-1",
         "x": 1,
         "y": 1
       }
@@ -717,6 +753,8 @@
         "end_x": 2,
         "end_y": 2,
         "operation": "__invalid__",
+        "phone_snapshot_id": "phone-snapshot-1",
+        "session_id": "phone-1",
         "start_x": 1,
         "start_y": 1
       },
@@ -725,6 +763,8 @@
         "end_x": 2,
         "end_y": 2,
         "operation": "swipe",
+        "phone_snapshot_id": "phone-snapshot-1",
+        "session_id": "phone-1",
         "start_x": 1,
         "start_y": 1
       }
@@ -734,11 +774,13 @@
       "handler_id": "phone_type_text",
       "invalid": {
         "operation": "__invalid__",
+        "session_id": "phone-1",
         "text": "hello"
       },
       "tool": "phone_keyboard",
       "valid": {
         "operation": "type_text",
+        "session_id": "phone-1",
         "text": "hello"
       }
     },
@@ -747,12 +789,14 @@
       "handler_id": "phone_press_key",
       "invalid": {
         "key": "BACK",
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "session_id": "phone-1"
       },
       "tool": "phone_keyboard",
       "valid": {
         "key": "BACK",
-        "operation": "press_key"
+        "operation": "press_key",
+        "session_id": "phone-1"
       }
     },
     {
@@ -760,12 +804,14 @@
       "handler_id": "phone_notification_open",
       "invalid": {
         "event_id": "event-1",
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "session_id": "phone-1"
       },
       "tool": "phone_notification_action",
       "valid": {
         "event_id": "event-1",
-        "operation": "open"
+        "operation": "open",
+        "session_id": "phone-1"
       }
     },
     {
@@ -773,12 +819,14 @@
       "handler_id": "phone_notification_dismiss",
       "invalid": {
         "event_id": "event-1",
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "session_id": "phone-1"
       },
       "tool": "phone_notification_action",
       "valid": {
         "event_id": "event-1",
-        "operation": "dismiss"
+        "operation": "dismiss",
+        "session_id": "phone-1"
       }
     },
     {
@@ -787,13 +835,15 @@
       "invalid": {
         "action_id": "action-1",
         "event_id": "event-1",
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "session_id": "phone-1"
       },
       "tool": "phone_notification_action",
       "valid": {
         "action_id": "action-1",
         "event_id": "event-1",
-        "operation": "action"
+        "operation": "action",
+        "session_id": "phone-1"
       }
     },
     {
@@ -802,12 +852,14 @@
       "invalid": {
         "action_id": false,
         "event_id": "event-1",
+        "session_id": "phone-1",
         "text": "reply"
       },
       "tool": "phone_notification_reply",
       "valid": {
         "action_id": "reply-1",
         "event_id": "event-1",
+        "session_id": "phone-1",
         "text": "reply"
       }
     },
@@ -816,12 +868,14 @@
       "handler_id": "phone_app_launch",
       "invalid": {
         "operation": "__invalid__",
-        "package_name": "com.example.app"
+        "package_name": "com.example.app",
+        "session_id": "phone-1"
       },
       "tool": "phone_app_action",
       "valid": {
         "operation": "launch",
-        "package_name": "com.example.app"
+        "package_name": "com.example.app",
+        "session_id": "phone-1"
       }
     },
     {
@@ -829,23 +883,29 @@
       "handler_id": "phone_app_open_intent",
       "invalid": {
         "intent_uri": "intent://example",
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "session_id": "phone-1"
       },
       "tool": "phone_app_action",
       "valid": {
         "intent_uri": "intent://example",
-        "operation": "open_intent"
+        "operation": "open_intent",
+        "session_id": "phone-1"
       }
     },
     {
       "branch": "default",
       "handler_id": "phone_app_install",
       "invalid": {
-        "apk_path": false
+        "apk_paths": false,
+        "session_id": "phone-1"
       },
       "tool": "phone_app_install",
       "valid": {
-        "apk_path": "/tmp/example.apk"
+        "apk_paths": [
+          "/tmp/example.apk"
+        ],
+        "session_id": "phone-1"
       }
     },
     {

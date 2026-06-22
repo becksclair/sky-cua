@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::app_state::{
     APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_QUERY_CHARS,
@@ -61,6 +61,26 @@ impl McpToolRegistry {
         self.inactive_names
             .contains(name)
             .then_some(InactiveToolReason::BrowserEvalDisabled)
+    }
+
+    pub(crate) fn validate_arguments(&self, name: &str, arguments: &Value) -> Result<(), String> {
+        let Some(schema) = self
+            .tools
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|tool| tool.get("inputSchema"))
+        else {
+            return Err(format!("missing input schema for {name}"));
+        };
+        if schema_accepts(schema, arguments) {
+            Ok(())
+        } else {
+            Err(format!(
+                "arguments do not match the advertised input schema for {name}"
+            ))
+        }
     }
 }
 
@@ -156,78 +176,80 @@ pub(crate) fn build_tool_definitions(
     can_receive_images: bool,
     browser_eval_enabled: bool,
 ) -> Value {
-    build_compact_tool_definitions(can_receive_images, browser_eval_enabled)
+    build_grouped_tool_definitions(can_receive_images, browser_eval_enabled)
 }
 
-fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled: bool) -> Value {
+fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled: bool) -> Value {
     let mut tools = json!([
-        compact_tool(
+        grouped_tool(
             "doctor",
             "Run sky-cua readiness diagnostics for desktop capture/input, browser integration, and session presence.",
             READ_ONLY_TOOL,
             json!({}),
             json!([])
         ),
-        compact_tool(
+        grouped_tool_with_constraints(
             "status",
             "Report browser, phone, phone_companion, or session_presence health.",
             READ_ONLY_TOOL,
-            json!({"component": {"type": "string", "enum": ["browser", "phone", "phone_companion", "session_presence"]}}),
-            json!(["component"])
+            status_properties(),
+            json!(["component"]),
+            status_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "list_resources",
             "List bounded resources. Valid pairs: desktop apps/windows/focused_window; browser tabs; phone devices/apps/current_app.",
             READ_ONLY_TOOL,
-            compact_list_resources_properties(),
+            list_resources_properties(),
             json!(["surface", "resource"]),
-            compact_list_resources_constraints()
+            list_resources_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "observe",
-            "Read structured state. Desktop returns elements and snapshot_id; browser requires tab_id; phone can include accessibility/notifications. Observe before acting; detail=\"compact\" is observation verbosity.",
+            "Read structured state for one surface. Desktop returns elements and snapshot_id; detail/capture policy apply only to desktop. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications.",
             READ_ONLY_TOOL,
-            compact_observe_properties(can_receive_images),
+            observe_properties(can_receive_images),
             json!(["surface"]),
-            compact_observe_constraints()
+            observe_constraints(can_receive_images)
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "capture_screen",
             "Capture a browser-tab or phone image only. Browser requires tab_id. Use capture_desktop for desktop screenshots.",
             READ_ONLY_TOOL,
-            compact_capture_screen_properties(),
+            capture_screen_properties(),
             json!(["surface"]),
-            compact_capture_screen_constraints()
+            capture_screen_constraints()
         ),
-        compact_tool(
+        grouped_tool(
             "phone_accessibility_tree",
-            "Read the full connected-phone accessibility tree.",
+            "Read the connected phone accessibility tree, optionally bounded by node_limit.",
             READ_ONLY_TOOL,
-            with_phone_selector(json!({"node_limit": limit_schema()})),
-            json!([])
+            with_phone_session(json!({"node_limit": limit_schema()})),
+            json!(["session_id"])
         ),
-        compact_tool(
+        grouped_tool(
             "phone_notifications",
             "Read recent connected-phone notifications.",
             READ_ONLY_TOOL,
-            with_phone_selector(json!({"limit": limit_schema()})),
-            json!([])
+            with_phone_session(json!({"limit": limit_schema()})),
+            json!(["session_id"])
         ),
-        compact_tool(
+        grouped_tool_with_constraints(
             "capture_desktop",
-            "Capture a fresh desktop frame. Omit targets for primary display; target one window/display or capture_all_displays. Use the returned snapshot_id and capture source geometry for pixel actions.",
+            "Capture a fresh desktop frame. Choose exactly one source: no selector for primary display, a window selector, one display selector, or capture_all_displays=true.",
             LOCAL_NAVIGATION_ACTION,
             screenshot_properties(can_receive_images),
-            json!([])
+            json!([]),
+            screenshot_constraints()
         ),
-        compact_tool(
+        grouped_tool(
             "setup_desktop",
             "Set up desktop accessibility or window targeting.",
             LOCAL_NAVIGATION_ACTION,
             json!({"operation": {"type": "string", "enum": ["accessibility", "window_targeting"]}}),
             json!(["operation"])
         ),
-        compact_tool(
+        grouped_tool_with_constraints(
             "session_presence",
             "Hold, unlock, or release session-presence inhibitors.",
             LOCAL_NAVIGATION_ACTION,
@@ -238,9 +260,10 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 "inhibit_suspend": {"type": "boolean", "description": "Defaults to true for hold/unlock."},
                 "relock": {"type": "boolean", "description": "For release only, relock after releasing when supported."}
             }),
-            json!(["operation"])
+            json!(["operation"]),
+            session_presence_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "activate_window",
             "Activate a desktop window by exact id or selector.",
             LOCAL_NAVIGATION_ACTION,
@@ -248,81 +271,90 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             json!([]),
             window_target_constraint()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "desktop_semantic",
             "Focus, select, expand, or collapse a desktop element from observe(surface=\"desktop\").",
             LOCAL_NAVIGATION_ACTION,
-            compact_desktop_semantic_properties(
+            desktop_semantic_properties(
                 json!({"operation": {"type": "string", "enum": ["focus", "select", "expand", "collapse"]}})
             ),
             json!(["operation"]),
-            compact_desktop_selector_constraint()
+            desktop_selector_constraint()
         ),
-        compact_tool(
+        grouped_tool(
             "browser_claim_tab",
             "Claim an existing browser tab and make it controllable for observe, capture_screen, navigation, input, scroll, and eval.",
             LOCAL_NAVIGATION_ACTION,
             browser_tab_properties(),
             json!(["tab_id"])
         ),
-        compact_tool(
+        grouped_tool(
             "browser_move_mouse",
             "Move the visible browser agent cursor in CSS-pixel coordinates without clicking.",
             LOCAL_NAVIGATION_ACTION,
-            compact_browser_point_properties(),
+            browser_point_properties(),
             json!(["tab_id", "x", "y"])
         ),
-        compact_tool(
+        grouped_tool_with_constraints(
             "phone_connection",
             "Connect, disconnect, or refresh a phone session.",
             LOCAL_NAVIGATION_ACTION,
-            compact_phone_connection_properties(),
-            json!(["operation"])
+            phone_connection_properties(),
+            json!(["operation"]),
+            phone_connection_constraints()
         ),
-        compact_tool(
+        grouped_tool(
             "phone_pair_wireless",
             "Pair Android wireless debugging using a host:port and one-time pairing code.",
             LOCAL_NAVIGATION_ACTION,
             json!({"host_port": non_empty_string_schema(), "pairing_code": non_empty_string_schema()}),
             json!(["host_port", "pairing_code"])
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "phone_setup",
             "Install the phone companion app or open a required Android settings screen.",
-            LOCAL_NAVIGATION_ACTION,
-            compact_phone_setup_properties(),
+            ToolAnnotations {
+                read_only: false,
+                destructive: true,
+                idempotent: true,
+                open_world: false
+            },
+            phone_setup_properties(),
             json!(["operation"]),
-            compact_phone_setup_constraints()
+            phone_setup_constraints()
         ),
-        compact_tool(
+        grouped_tool(
             "phone_app_force_stop",
             "Force-stop a connected phone app.",
-            LOCAL_NAVIGATION_ACTION,
-            with_phone_selector(json!({"package_name": non_empty_string_schema()})),
-            json!(["package_name"])
+            ToolAnnotations {
+                read_only: false,
+                destructive: true,
+                idempotent: true,
+                open_world: false
+            },
+            with_phone_session(json!({"package_name": non_empty_string_schema()})),
+            json!(["session_id", "package_name"])
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "desktop_toggle",
             "Toggle a desktop element from observe(surface=\"desktop\").",
             LOCAL_STATEFUL_ACTION,
-            compact_desktop_semantic_properties(json!({})),
+            desktop_semantic_properties(json!({})),
             json!([]),
-            compact_desktop_selector_constraint()
+            desktop_selector_constraint()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "desktop_scroll",
-            "Scroll a desktop target. Provide direction plus snapshot-bound target or coordinates; re-observe before reusing element indexes.",
+            "Scroll a snapshot-resolved desktop element. Pass direction and snapshot_id plus element_index, name, or text. Re-observe before reusing an element index.",
             LOCAL_STATEFUL_ACTION,
-            compact_desktop_semantic_properties(json!({
+            desktop_semantic_properties(json!({
                 "direction": {"type": "string", "enum": ["up", "down"]},
-                "pages": {"type": "integer", "minimum": 1, "description": "Preferred magnitude: number of page-sized scroll steps."},
-                "steps": {"type": "integer", "description": "Discrete wheel step count; use pages for page-sized motion."},
-                "delta_y": {"type": "number", "description": "Smooth vertical delta; use pages for page-sized motion."}
+                "pages": {"type": "integer", "minimum": 1, "description": "Page-sized scroll steps. Defaults to 1."}
             })),
             json!(["direction"]),
-            compact_desktop_snapshot_selector_constraint()
+            desktop_snapshot_selector_constraint()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "browser_scroll",
             "Scroll an open-world browser page. Omit x/y for viewport scroll; provide at least one non-zero delta_x or delta_y. Targeted scroll will move the visible browser agent cursor first.",
             ToolAnnotations {
@@ -331,35 +363,35 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 idempotent: false,
                 open_world: true
             },
-            compact_browser_scroll_properties(),
+            browser_scroll_properties(),
             json!(["tab_id"]),
-            compact_browser_scroll_constraints()
+            browser_scroll_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "desktop_pointer",
             "Click, secondary-click, or drag on the desktop. Use coordinates or snapshot-bound targets; do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
-            compact_desktop_pointer_properties(),
+            desktop_pointer_properties(),
             json!(["operation"]),
-            compact_desktop_pointer_constraints()
+            desktop_pointer_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "desktop_keyboard",
             "Type text or press a key on the desktop. Focus first; text for type_text, key for press_key, e.g. Enter, Escape, Tab, Ctrl+A, Meta+A.",
             LOCAL_DESTRUCTIVE_ACTION,
-            compact_desktop_keyboard_properties(),
+            desktop_keyboard_properties(),
             json!(["operation"]),
-            compact_desktop_keyboard_constraints()
+            desktop_keyboard_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "desktop_action",
             "Activate a desktop element or perform its named/indexed action from observe(surface=\"desktop\"); do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
-            compact_desktop_action_properties(),
+            desktop_action_properties(),
             json!(["operation"]),
-            compact_desktop_action_constraints()
+            desktop_action_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "desktop_set_value",
             "Set a desktop element value. Include replacement value plus target from observe(surface=\"desktop\").",
             ToolAnnotations {
@@ -368,11 +400,11 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 idempotent: true,
                 open_world: false
             },
-            compact_desktop_semantic_properties(json!({"value": {"type": "string"}})),
+            desktop_semantic_properties(json!({"value": {"type": "string"}})),
             json!(["value"]),
-            compact_desktop_selector_constraint()
+            desktop_selector_constraint()
         ),
-        compact_tool(
+        grouped_tool(
             "browser_open",
             "Create a browser tab at url, or about:blank when url is omitted. Returns a tab_id for later browser calls.",
             ToolAnnotations {
@@ -384,9 +416,9 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             browser_target_url_properties(false),
             json!([])
         ),
-        compact_tool(
+        grouped_tool(
             "browser_navigate",
-            "Navigate a claimed browser tab to an HTTP(S) URL or about:blank.",
+            "Navigate an opened or claimed browser tab to an HTTP(S) URL or about:blank.",
             ToolAnnotations {
                 read_only: false,
                 destructive: false,
@@ -396,43 +428,43 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             browser_target_url_properties(true),
             json!(["tab_id", "url"])
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "browser_input",
             "Click, type text, or press a key in a claimed browser tab. click uses x/y CSS pixels; keys look like Enter, Escape, Tab, Ctrl+K.",
             super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
-            compact_browser_input_properties(),
+            browser_input_properties(),
             json!(["operation", "tab_id"]),
-            compact_browser_input_constraints()
+            browser_input_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "phone_pointer",
             "Tap or swipe on a connected phone. Use phone_snapshot_id for screenshot pixels or use_device_coordinates for raw pixels.",
             LOCAL_DESTRUCTIVE_ACTION,
-            compact_phone_pointer_properties(),
+            phone_pointer_properties(),
             json!(["operation"]),
-            compact_phone_pointer_constraints()
+            phone_pointer_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "phone_keyboard",
             "Type text or press a key on a connected phone. Focus first; press_key accepts KEYCODE_* names, aliases, or numeric keycodes.",
             LOCAL_DESTRUCTIVE_ACTION,
-            compact_phone_keyboard_properties(),
+            phone_keyboard_properties(),
             json!(["operation"]),
-            compact_phone_keyboard_constraints()
+            phone_keyboard_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "phone_notification_action",
             "Open, dismiss, or run an action on a connected-phone notification.",
             LOCAL_DESTRUCTIVE_ACTION,
-            compact_phone_notification_action_properties(),
+            phone_notification_action_properties(),
             json!(["operation"]),
-            compact_phone_notification_action_constraints()
+            phone_notification_action_constraints()
         ),
-        compact_tool(
+        grouped_tool(
             "phone_notification_reply",
             "Reply inline to a connected-phone notification using event_id and inline-reply action_id from the same fresh event.",
             LOCAL_DESTRUCTIVE_ACTION,
-            with_phone_selector(json!({
+            with_phone_session(json!({
                 "event_id": {
                     "type": "string",
                     "minLength": 1,
@@ -449,27 +481,27 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                     "description": "Reply text."
                 }
             })),
-            json!(["event_id", "action_id", "text"])
+            json!(["session_id", "event_id", "action_id", "text"])
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "phone_app_action",
             "Launch a phone app or open an Android intent.",
             LOCAL_DESTRUCTIVE_ACTION,
-            compact_phone_app_action_properties(),
+            phone_app_action_properties(),
             json!(["operation"]),
-            compact_phone_app_action_constraints()
+            phone_app_action_constraints()
         ),
-        compact_tool_with_constraints(
+        grouped_tool_with_constraints(
             "phone_app_install",
             "Install an APK on a connected phone.",
             LOCAL_DESTRUCTIVE_ACTION,
-            compact_phone_app_install_properties(),
+            phone_app_install_properties(),
             json!([]),
-            compact_phone_app_install_constraints()
+            phone_app_install_constraints()
         )
     ]);
     if browser_eval_enabled {
-        tools.as_array_mut().expect("tool array").push(compact_tool(
+        tools.as_array_mut().expect("tool array").push(grouped_tool(
             "browser_eval",
             "Evaluate JavaScript in a claimed browser tab. This is hidden unless browser eval is explicitly enabled.",
             super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
@@ -483,7 +515,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
     tools
 }
 
-fn compact_tool(
+fn grouped_tool(
     name: &str,
     description: &str,
     annotations: ToolAnnotations,
@@ -503,7 +535,7 @@ fn compact_tool(
     })
 }
 
-fn compact_tool_with_constraints(
+fn grouped_tool_with_constraints(
     name: &str,
     description: &str,
     annotations: ToolAnnotations,
@@ -511,7 +543,7 @@ fn compact_tool_with_constraints(
     required: Value,
     constraints: Value,
 ) -> Value {
-    let mut tool = compact_tool(name, description, annotations, properties, required);
+    let mut tool = grouped_tool(name, description, annotations, properties, required);
     let input_schema = tool
         .get_mut("inputSchema")
         .and_then(Value::as_object_mut)
@@ -564,7 +596,96 @@ fn merge_properties(left: Value, right: Value) -> Value {
     Value::Object(merged)
 }
 
-fn compact_list_resources_properties() -> Value {
+fn status_properties() -> Value {
+    json!({"component": {"type": "string", "enum": ["browser", "phone", "phone_companion", "session_presence"]}})
+}
+
+fn status_constraints() -> Value {
+    exact_branch_constraints(
+        &status_properties(),
+        "component",
+        &[
+            ("browser", &["component"][..], &["component"][..]),
+            ("phone", &["component"][..], &["component"][..]),
+            ("phone_companion", &["component"][..], &["component"][..]),
+            ("session_presence", &["component"][..], &["component"][..]),
+        ],
+    )
+}
+
+fn exact_branch_constraints(
+    properties: &Value,
+    discriminator: &str,
+    branches: &[(&str, &[&str], &[&str])],
+) -> Value {
+    json!({
+        "allOf": branches
+            .iter()
+            .map(|(value, required, allowed)| {
+                exact_branch_condition(properties, &[(discriminator, *value)], required, allowed)
+            })
+            .collect::<Vec<_>>()
+    })
+}
+
+fn exact_branch_condition(
+    properties: &Value,
+    discriminators: &[(&str, &str)],
+    required: &[&str],
+    allowed: &[&str],
+) -> Value {
+    let mut if_properties = Map::new();
+    for (name, value) in discriminators {
+        if_properties.insert((*name).to_string(), json!({"const": value}));
+    }
+    json!({
+        "if": {
+            "properties": if_properties,
+            "required": discriminators.iter().map(|(name, _)| *name).collect::<Vec<_>>()
+        },
+        "then": exact_branch_schema(properties, discriminators, required, allowed)
+    })
+}
+
+fn exact_branch_schema(
+    properties: &Value,
+    discriminators: &[(&str, &str)],
+    required: &[&str],
+    allowed: &[&str],
+) -> Value {
+    let root_properties = properties
+        .as_object()
+        .unwrap_or_else(|| panic!("exact branch properties must be object: {properties:?}"));
+    let mut branch_properties = Map::new();
+    for name in allowed {
+        let schema = root_properties
+            .get(*name)
+            .unwrap_or_else(|| panic!("exact branch references unknown property {name}"));
+        branch_properties.insert((*name).to_string(), schema.clone());
+    }
+    for (name, value) in discriminators {
+        branch_properties.insert((*name).to_string(), json!({"const": value}));
+    }
+
+    let mut required_fields = Vec::new();
+    for (name, _) in discriminators {
+        required_fields.push(*name);
+    }
+    for name in required {
+        if !required_fields.contains(name) {
+            required_fields.push(*name);
+        }
+    }
+
+    json!({
+        "type": "object",
+        "properties": branch_properties,
+        "required": required_fields,
+        "additionalProperties": false
+    })
+}
+
+fn list_resources_properties() -> Value {
     json!({
         "surface": {"type": "string", "enum": ["desktop", "browser", "phone"]},
         "resource": {"type": "string", "enum": ["apps", "windows", "focused_window", "tabs", "devices", "current_app"]},
@@ -582,7 +703,6 @@ fn compact_list_resources_properties() -> Value {
             "description": "For phone devices only, include mDNS wireless-debugging records."
         },
         "session_id": phone_session_id_schema(),
-        "serial": phone_serial_schema(),
         "include_system": {
             "type": "boolean",
             "description": "For phone apps only, include system packages."
@@ -591,31 +711,22 @@ fn compact_list_resources_properties() -> Value {
     })
 }
 
-fn surface_resource_pair(surface: &str, resource: &str) -> Value {
-    json!({
-        "properties": {
-            "surface": {"const": surface},
-            "resource": {"const": resource}
-        },
-        "required": ["surface", "resource"]
-    })
-}
-
-fn compact_list_resources_constraints() -> Value {
+fn list_resources_constraints() -> Value {
+    let properties = list_resources_properties();
     json!({
         "oneOf": [
-            surface_resource_pair("desktop", "apps"),
-            surface_resource_pair("desktop", "windows"),
-            surface_resource_pair("desktop", "focused_window"),
-            surface_resource_pair("browser", "tabs"),
-            surface_resource_pair("phone", "devices"),
-            surface_resource_pair("phone", "apps"),
-            surface_resource_pair("phone", "current_app")
+            exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "apps")], &[], &["surface", "resource"]),
+            exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "windows")], &[], &["surface", "resource"]),
+            exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "focused_window")], &[], &["surface", "resource"]),
+            exact_branch_schema(&properties, &[("surface", "browser"), ("resource", "tabs")], &[], &["surface", "resource", "target", "url_contains", "title_contains"]),
+            exact_branch_schema(&properties, &[("surface", "phone"), ("resource", "devices")], &[], &["surface", "resource", "include_mdns"]),
+            exact_branch_schema(&properties, &[("surface", "phone"), ("resource", "apps")], &["session_id"], &["surface", "resource", "session_id", "include_system", "limit"]),
+            exact_branch_schema(&properties, &[("surface", "phone"), ("resource", "current_app")], &["session_id"], &["surface", "resource", "session_id"])
         ]
     })
 }
 
-fn compact_observe_properties(can_receive_images: bool) -> Value {
+fn observe_properties(can_receive_images: bool) -> Value {
     merge_properties(
         json!({
             "surface": {"type": "string", "enum": ["desktop", "browser", "phone"]},
@@ -635,57 +746,103 @@ fn compact_observe_properties(can_receive_images: bool) -> Value {
                 "type": "boolean",
                 "description": "For phone only, include recent notifications in the observation."
             },
-            "backend": phone_backend_schema()
+            "backend": phone_observe_backend_schema()
         }),
         merge_properties(
             get_app_state_properties(can_receive_images),
             merge_properties(
                 browser_snapshot_window_properties(),
-                phone_selector_properties(),
+                phone_session_properties(),
             ),
         ),
     )
 }
 
-fn compact_observe_constraints() -> Value {
-    json!({
-        "allOf": [
-            {
-                "if": {"properties": {"surface": {"const": "browser"}}, "required": ["surface"]},
-                "then": {"required": ["tab_id"]}
-            }
-        ]
-    })
+fn observe_constraints(can_receive_images: bool) -> Value {
+    let mut desktop_allowed = vec![
+        "surface",
+        "app_id",
+        "desktop_file_id",
+        "window_title",
+        "name",
+        "detail",
+        "element_query",
+        "element_offset",
+        "element_limit",
+    ];
+    if can_receive_images {
+        desktop_allowed.extend(["capture_screen", "screenshot_delivery"]);
+    }
+    let properties = observe_properties(can_receive_images);
+    exact_branch_constraints(
+        &properties,
+        "surface",
+        &[
+            ("desktop", &[][..], desktop_allowed.as_slice()),
+            (
+                "browser",
+                &["tab_id"][..],
+                &[
+                    "surface",
+                    "target",
+                    "tab_id",
+                    "text_limit",
+                    "element_query",
+                    "element_offset",
+                    "element_limit",
+                ][..],
+            ),
+            (
+                "phone",
+                &["session_id"][..],
+                &[
+                    "surface",
+                    "session_id",
+                    "include_accessibility",
+                    "include_notifications",
+                    "backend",
+                ][..],
+            ),
+        ],
+    )
 }
 
-fn compact_capture_screen_properties() -> Value {
+fn capture_screen_properties() -> Value {
     merge_properties(
         json!({
             "surface": {"type": "string", "enum": ["browser", "phone"]},
             "target": browser_target_schema(),
             "tab_id": browser_tab_id_schema(),
-            "backend": phone_backend_schema()
+            "backend": phone_observe_backend_schema()
         }),
-        phone_selector_properties(),
+        phone_session_properties(),
     )
 }
 
-fn compact_capture_screen_constraints() -> Value {
-    json!({
-        "allOf": [
-            {
-                "if": {"properties": {"surface": {"const": "browser"}}, "required": ["surface"]},
-                "then": {"required": ["tab_id"]}
-            }
-        ]
-    })
+fn capture_screen_constraints() -> Value {
+    exact_branch_constraints(
+        &capture_screen_properties(),
+        "surface",
+        &[
+            (
+                "browser",
+                &["tab_id"][..],
+                &["surface", "target", "tab_id"][..],
+            ),
+            (
+                "phone",
+                &["session_id"][..],
+                &["surface", "session_id", "backend"][..],
+            ),
+        ],
+    )
 }
 
-fn compact_desktop_semantic_properties(properties: Value) -> Value {
+fn desktop_semantic_properties(properties: Value) -> Value {
     action_tool_properties(merge_properties(properties, semantic_selector_properties()))
 }
 
-fn compact_desktop_pointer_properties() -> Value {
+fn desktop_pointer_properties() -> Value {
     action_tool_properties(merge_properties(
         json!({
             "operation": {"type": "string", "enum": ["click", "secondary_click", "drag"]},
@@ -701,7 +858,7 @@ fn compact_desktop_pointer_properties() -> Value {
     ))
 }
 
-fn compact_desktop_selector_constraint() -> Value {
+fn desktop_selector_constraint() -> Value {
     json!({
         "anyOf": [
             {"required": ["snapshot_id", "element_index"]},
@@ -712,7 +869,7 @@ fn compact_desktop_selector_constraint() -> Value {
     })
 }
 
-fn compact_desktop_snapshot_selector_constraint() -> Value {
+fn desktop_snapshot_selector_constraint() -> Value {
     json!({
         "anyOf": [
             {"required": ["snapshot_id", "element_index"]},
@@ -722,7 +879,7 @@ fn compact_desktop_snapshot_selector_constraint() -> Value {
     })
 }
 
-fn compact_desktop_point_or_selector_constraint() -> Value {
+fn desktop_point_or_selector_constraint() -> Value {
     json!({
         "anyOf": [
             {"required": ["x", "y"]},
@@ -733,16 +890,16 @@ fn compact_desktop_point_or_selector_constraint() -> Value {
     })
 }
 
-fn compact_desktop_pointer_constraints() -> Value {
+fn desktop_pointer_constraints() -> Value {
     json!({
         "allOf": [
             {
                 "if": {"properties": {"operation": {"const": "click"}}, "required": ["operation"]},
-                "then": compact_desktop_point_or_selector_constraint()
+                "then": desktop_point_or_selector_constraint()
             },
             {
                 "if": {"properties": {"operation": {"const": "secondary_click"}}, "required": ["operation"]},
-                "then": compact_desktop_point_or_selector_constraint()
+                "then": desktop_point_or_selector_constraint()
             },
             {
                 "if": {"properties": {"operation": {"const": "drag"}}, "required": ["operation"]},
@@ -758,7 +915,7 @@ fn compact_desktop_pointer_constraints() -> Value {
     })
 }
 
-fn compact_desktop_keyboard_properties() -> Value {
+fn desktop_keyboard_properties() -> Value {
     action_tool_properties(keyboard_target_properties(json!({
         "operation": {"type": "string", "enum": ["type_text", "press_key"]},
         "text": non_empty_string_schema(),
@@ -766,7 +923,7 @@ fn compact_desktop_keyboard_properties() -> Value {
     })))
 }
 
-fn compact_desktop_keyboard_constraints() -> Value {
+fn desktop_keyboard_constraints() -> Value {
     json!({
         "allOf": [
             {
@@ -781,7 +938,7 @@ fn compact_desktop_keyboard_constraints() -> Value {
     })
 }
 
-fn compact_desktop_action_properties() -> Value {
+fn desktop_action_properties() -> Value {
     action_tool_properties(merge_properties(
         json!({
             "operation": {"type": "string", "enum": ["activate", "perform_action"]},
@@ -800,10 +957,10 @@ fn compact_desktop_action_properties() -> Value {
     ))
 }
 
-fn compact_desktop_action_constraints() -> Value {
+fn desktop_action_constraints() -> Value {
     json!({
         "allOf": [
-            compact_desktop_selector_constraint(),
+            desktop_selector_constraint(),
             {
                 "if": {"properties": {"operation": {"const": "perform_action"}}, "required": ["operation"]},
                 "then": {
@@ -899,7 +1056,7 @@ fn browser_target_url_properties(require_tab: bool) -> Value {
         "target": browser_target_schema(),
         "url": {
             "type": "string",
-            "pattern": "^(https?://|about:blank$)"
+            "pattern": "^(https?://[^\\s]+|about:blank)$"
         }
     });
     if require_tab && let Some(map) = properties.as_object_mut() {
@@ -908,7 +1065,7 @@ fn browser_target_url_properties(require_tab: bool) -> Value {
     properties
 }
 
-fn compact_browser_point_properties() -> Value {
+fn browser_point_properties() -> Value {
     merge_properties(
         browser_tab_properties(),
         json!({
@@ -922,9 +1079,19 @@ fn compact_browser_point_properties() -> Value {
     )
 }
 
-fn compact_browser_input_properties() -> Value {
+fn browser_xy_properties() -> Value {
     merge_properties(
-        compact_browser_point_properties(),
+        browser_tab_properties(),
+        json!({
+            "x": {"type": "number", "minimum": 0, "description": "CSS pixel x coordinate."},
+            "y": {"type": "number", "minimum": 0, "description": "CSS pixel y coordinate."}
+        }),
+    )
+}
+
+fn browser_input_properties() -> Value {
+    merge_properties(
+        browser_xy_properties(),
         json!({
             "operation": {"type": "string", "enum": ["click", "type_text", "press_key"]},
             "text": non_empty_string_schema(),
@@ -933,28 +1100,33 @@ fn compact_browser_input_properties() -> Value {
     )
 }
 
-fn compact_browser_input_constraints() -> Value {
-    json!({
-        "allOf": [
-            {
-                "if": {"properties": {"operation": {"const": "click"}}, "required": ["operation"]},
-                "then": {"required": ["x", "y"]}
-            },
-            {
-                "if": {"properties": {"operation": {"const": "type_text"}}, "required": ["operation"]},
-                "then": {"required": ["text"]}
-            },
-            {
-                "if": {"properties": {"operation": {"const": "press_key"}}, "required": ["operation"]},
-                "then": {"required": ["key"]}
-            }
-        ]
-    })
+fn browser_input_constraints() -> Value {
+    exact_branch_constraints(
+        &browser_input_properties(),
+        "operation",
+        &[
+            (
+                "click",
+                &["tab_id", "x", "y"][..],
+                &["operation", "target", "tab_id", "x", "y"][..],
+            ),
+            (
+                "type_text",
+                &["tab_id", "text"][..],
+                &["operation", "target", "tab_id", "text"][..],
+            ),
+            (
+                "press_key",
+                &["tab_id", "key"][..],
+                &["operation", "target", "tab_id", "key"][..],
+            ),
+        ],
+    )
 }
 
-fn compact_browser_scroll_properties() -> Value {
+fn browser_scroll_properties() -> Value {
     merge_properties(
-        compact_browser_point_properties(),
+        browser_xy_properties(),
         json!({
             "delta_x": {"type": "number", "description": "Horizontal wheel delta in CSS pixels; at least one delta must be non-zero."},
             "delta_y": {"type": "number", "description": "Vertical wheel delta in CSS pixels; at least one delta must be non-zero."}
@@ -962,7 +1134,7 @@ fn compact_browser_scroll_properties() -> Value {
     )
 }
 
-fn compact_browser_scroll_constraints() -> Value {
+fn browser_scroll_constraints() -> Value {
     json!({
         "allOf": [
             {
@@ -1017,11 +1189,19 @@ fn phone_serial_schema() -> Value {
     })
 }
 
-fn phone_backend_schema() -> Value {
+fn phone_connect_backend_schema() -> Value {
     json!({
         "type": "string",
-        "enum": ["auto", "adb", "companion", "scrcpy", "none"],
-        "description": "Only honored by phone observe, phone screenshot, and phone connect branches."
+        "enum": ["auto", "adb", "companion", "scrcpy"],
+        "description": "Backend hint for phone connect."
+    })
+}
+
+fn phone_observe_backend_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["auto", "adb", "companion"],
+        "description": "Backend hint for phone observe and screenshot. scrcpy/none are response states, not request inputs."
     })
 }
 
@@ -1036,15 +1216,25 @@ fn with_phone_selector(properties: Value) -> Value {
     merge_properties(properties, phone_selector_properties())
 }
 
+fn phone_session_properties() -> Value {
+    json!({
+        "session_id": phone_session_id_schema()
+    })
+}
+
+fn with_phone_session(properties: Value) -> Value {
+    merge_properties(properties, phone_session_properties())
+}
+
 fn limit_schema() -> Value {
     json!({"type": "integer", "minimum": 0})
 }
 
-fn compact_phone_connection_properties() -> Value {
+fn phone_connection_properties() -> Value {
     merge_properties(
         with_phone_selector(json!({
             "operation": {"type": "string", "enum": ["connect", "disconnect", "refresh"]},
-            "backend": phone_backend_schema(),
+            "backend": phone_connect_backend_schema(),
             "install_companion": {"type": "boolean"},
             "start_scrcpy": {"type": "boolean"},
             "keep_wireless": {"type": "boolean"}
@@ -1053,8 +1243,38 @@ fn compact_phone_connection_properties() -> Value {
     )
 }
 
-fn compact_phone_setup_properties() -> Value {
-    with_phone_selector(json!({
+fn phone_connection_constraints() -> Value {
+    exact_branch_constraints(
+        &phone_connection_properties(),
+        "operation",
+        &[
+            (
+                "connect",
+                &[][..],
+                &[
+                    "operation",
+                    "serial",
+                    "backend",
+                    "install_companion",
+                    "start_scrcpy",
+                ][..],
+            ),
+            (
+                "disconnect",
+                &["session_id"][..],
+                &["operation", "session_id", "keep_wireless"][..],
+            ),
+            (
+                "refresh",
+                &["session_id"][..],
+                &["operation", "session_id"][..],
+            ),
+        ],
+    )
+}
+
+fn phone_setup_properties() -> Value {
+    with_phone_session(json!({
         "operation": {"type": "string", "enum": ["install_companion", "open_settings"]},
         "force_reinstall": {"type": "boolean"},
         "allow_downgrade": {"type": "boolean"},
@@ -1077,19 +1297,38 @@ fn compact_phone_setup_properties() -> Value {
     }))
 }
 
-fn compact_phone_setup_constraints() -> Value {
+fn phone_setup_constraints() -> Value {
+    let properties = phone_setup_properties();
     json!({
         "allOf": [
+            exact_branch_condition(
+                &properties,
+                &[("operation", "install_companion")],
+                &["session_id"],
+                &["operation", "session_id", "force_reinstall", "allow_downgrade"],
+            ),
+            exact_branch_condition(
+                &properties,
+                &[("operation", "open_settings")],
+                &["session_id", "screen"],
+                &["operation", "session_id", "screen", "package_name"],
+            ),
             {
-                "if": {"properties": {"operation": {"const": "open_settings"}}, "required": ["operation"]},
-                "then": {"required": ["screen"]}
+                "if": {
+                    "properties": {
+                        "operation": {"const": "open_settings"},
+                        "screen": {"const": "app_details"}
+                    },
+                    "required": ["operation", "screen"]
+                },
+                "then": {"required": ["package_name"]}
             }
         ]
     })
 }
 
-fn compact_phone_pointer_properties() -> Value {
-    with_phone_selector(json!({
+fn phone_pointer_properties() -> Value {
+    with_phone_session(json!({
         "operation": {"type": "string", "enum": ["tap", "swipe"]},
         "phone_snapshot_id": {
             "type": "string",
@@ -1107,46 +1346,58 @@ fn compact_phone_pointer_properties() -> Value {
     }))
 }
 
-fn compact_phone_pointer_constraints() -> Value {
+fn phone_pointer_constraints() -> Value {
     json!({
         "allOf": [
             {
                 "if": {"properties": {"operation": {"const": "tap"}}, "required": ["operation"]},
-                "then": {"required": ["x", "y"]}
+                "then": {
+                    "required": ["session_id", "x", "y"],
+                    "anyOf": [
+                        {"required": ["phone_snapshot_id"]},
+                        {"properties": {"use_device_coordinates": {"const": true}}, "required": ["use_device_coordinates"]}
+                    ]
+                }
             },
             {
                 "if": {"properties": {"operation": {"const": "swipe"}}, "required": ["operation"]},
-                "then": {"required": ["start_x", "start_y", "end_x", "end_y"]}
+                "then": {
+                    "required": ["session_id", "start_x", "start_y", "end_x", "end_y"],
+                    "anyOf": [
+                        {"required": ["phone_snapshot_id"]},
+                        {"properties": {"use_device_coordinates": {"const": true}}, "required": ["use_device_coordinates"]}
+                    ]
+                }
             }
         ]
     })
 }
 
-fn compact_phone_keyboard_properties() -> Value {
-    with_phone_selector(json!({
+fn phone_keyboard_properties() -> Value {
+    with_phone_session(json!({
         "operation": {"type": "string", "enum": ["type_text", "press_key"]},
         "text": non_empty_string_schema(),
         "key": non_empty_string_schema()
     }))
 }
 
-fn compact_phone_keyboard_constraints() -> Value {
+fn phone_keyboard_constraints() -> Value {
     json!({
         "allOf": [
             {
                 "if": {"properties": {"operation": {"const": "type_text"}}, "required": ["operation"]},
-                "then": {"required": ["text"]}
+                "then": {"required": ["session_id", "text"]}
             },
             {
                 "if": {"properties": {"operation": {"const": "press_key"}}, "required": ["operation"]},
-                "then": {"required": ["key"]}
+                "then": {"required": ["session_id", "key"]}
             }
         ]
     })
 }
 
-fn compact_phone_notification_action_properties() -> Value {
-    with_phone_selector(json!({
+fn phone_notification_action_properties() -> Value {
+    with_phone_session(json!({
         "operation": {"type": "string", "enum": ["open", "dismiss", "action"]},
         "event_id": {
             "type": "string",
@@ -1161,34 +1412,33 @@ fn compact_phone_notification_action_properties() -> Value {
     }))
 }
 
-fn compact_phone_notification_action_constraints() -> Value {
+fn phone_notification_action_constraints() -> Value {
     json!({
         "allOf": [
             {
                 "if": {"properties": {"operation": {"const": "open"}}, "required": ["operation"]},
-                "then": {"required": ["event_id"]}
+                "then": {"required": ["session_id", "event_id"]}
             },
             {
                 "if": {"properties": {"operation": {"const": "dismiss"}}, "required": ["operation"]},
-                "then": {"required": ["event_id"]}
+                "then": {"required": ["session_id", "event_id"]}
             },
             {
                 "if": {"properties": {"operation": {"const": "action"}}, "required": ["operation"]},
-                "then": {"required": ["event_id", "action_id"]}
+                "then": {"required": ["session_id", "event_id", "action_id"]}
             }
         ]
     })
 }
 
-fn compact_phone_app_action_properties() -> Value {
-    with_phone_selector(json!({
+fn phone_app_action_properties() -> Value {
+    with_phone_session(json!({
         "operation": {"type": "string", "enum": ["launch", "open_intent"]},
         "package_name": {
             "type": "string",
             "minLength": 1,
             "description": "Android package name."
         },
-        "activity": {"type": "string"},
         "intent_uri": {
             "type": "string",
             "minLength": 1,
@@ -1197,33 +1447,28 @@ fn compact_phone_app_action_properties() -> Value {
     }))
 }
 
-fn compact_phone_app_action_constraints() -> Value {
+fn phone_app_action_constraints() -> Value {
     json!({
         "allOf": [
             {
                 "if": {"properties": {"operation": {"const": "launch"}}, "required": ["operation"]},
-                "then": {"required": ["package_name"]}
+                "then": {"required": ["session_id", "package_name"]}
             },
             {
                 "if": {"properties": {"operation": {"const": "open_intent"}}, "required": ["operation"]},
-                "then": {"required": ["intent_uri"]}
+                "then": {"required": ["session_id", "intent_uri"]}
             }
         ]
     })
 }
 
-fn compact_phone_app_install_properties() -> Value {
-    with_phone_selector(json!({
+fn phone_app_install_properties() -> Value {
+    with_phone_session(json!({
         "apk_paths": {
             "type": "array",
             "minItems": 1,
             "items": {"type": "string", "minLength": 1},
             "description": "APK paths."
-        },
-        "apk_path": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Single APK path; apk_paths wins if both are present."
         },
         "mode": {"type": "string", "enum": ["single", "multiple", "multi_package"], "description": "Install strategy hint."},
         "reinstall": {"type": "boolean"},
@@ -1233,12 +1478,9 @@ fn compact_phone_app_install_properties() -> Value {
     }))
 }
 
-fn compact_phone_app_install_constraints() -> Value {
+fn phone_app_install_constraints() -> Value {
     json!({
-        "anyOf": [
-            {"required": ["apk_paths"]},
-            {"required": ["apk_path"]}
-        ]
+        "required": ["session_id", "apk_paths"]
     })
 }
 
@@ -1301,6 +1543,7 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
             "display_id".to_string(),
             json!({
                 "type": "string",
+                "minLength": 1,
                 "description": "Exact display_id from environment.displays."
             }),
         );
@@ -1308,6 +1551,7 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
             "display_name".to_string(),
             json!({
                 "type": "string",
+                "minLength": 1,
                 "description": "Display name/connector from environment.displays. Prefer display_id."
             }),
         );
@@ -1340,6 +1584,52 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
     }
 
     properties
+}
+
+fn screenshot_constraints() -> Value {
+    json!({
+        "allOf": [
+            {"not": {"anyOf": selector_pair_constraints(&WINDOW_SELECTOR_KEYS, &DISPLAY_SELECTOR_KEYS)}},
+            {"not": {"anyOf": selector_pair_constraints(&["capture_all_displays"], &WINDOW_SELECTOR_KEYS)}},
+            {"not": {"anyOf": selector_pair_constraints(&["capture_all_displays"], &DISPLAY_SELECTOR_KEYS)}},
+            {"not": {"anyOf": same_group_pair_constraints(&DISPLAY_SELECTOR_KEYS)}}
+        ]
+    })
+}
+
+const WINDOW_SELECTOR_KEYS: [&str; 9] = [
+    "window_id",
+    "pid",
+    "tty",
+    "terminal_pid",
+    "terminal_command",
+    "terminal_cwd",
+    "app_id",
+    "wm_class",
+    "title",
+];
+
+const DISPLAY_SELECTOR_KEYS: [&str; 3] = ["display_id", "display_name", "display_index"];
+
+fn selector_pair_constraints(left: &[&str], right: &[&str]) -> Vec<Value> {
+    left.iter()
+        .flat_map(|left| {
+            right
+                .iter()
+                .map(|right| json!({"required": [*left, *right]}))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn same_group_pair_constraints(keys: &[&str]) -> Vec<Value> {
+    let mut constraints = Vec::new();
+    for (index, left) in keys.iter().enumerate() {
+        for right in keys.iter().skip(index + 1) {
+            constraints.push(json!({"required": [*left, *right]}));
+        }
+    }
+    constraints
 }
 
 fn coordinate_schema(description: &str) -> Value {
@@ -1383,6 +1673,32 @@ fn window_target_constraint() -> Value {
     json!({"minProperties": 1})
 }
 
+fn session_presence_constraints() -> Value {
+    exact_branch_constraints(
+        &json!({
+            "operation": {"type": "string", "enum": ["hold", "unlock", "release"]},
+            "unlock": {"type": "boolean"},
+            "inhibit_lock": {"type": "boolean"},
+            "inhibit_suspend": {"type": "boolean"},
+            "relock": {"type": "boolean"}
+        }),
+        "operation",
+        &[
+            (
+                "hold",
+                &[][..],
+                &["operation", "unlock", "inhibit_lock", "inhibit_suspend"][..],
+            ),
+            (
+                "unlock",
+                &[][..],
+                &["operation", "inhibit_lock", "inhibit_suspend"][..],
+            ),
+            ("release", &[][..], &["operation", "relock"][..]),
+        ],
+    )
+}
+
 fn keyboard_target_properties(mut properties: Value) -> Value {
     let Value::Object(properties_map) = &mut properties else {
         return properties;
@@ -1393,11 +1709,277 @@ fn keyboard_target_properties(mut properties: Value) -> Value {
     properties
 }
 
+pub(crate) fn schema_accepts(schema: &Value, instance: &Value) -> bool {
+    let Some(schema) = schema.as_object() else {
+        return true;
+    };
+    if !schema
+        .keys()
+        .all(|keyword| schema_keyword_is_supported(keyword))
+    {
+        return false;
+    }
+    if let Some(expected_type) = schema.get("type")
+        && !schema_type_accepts(expected_type, instance)
+    {
+        return false;
+    }
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        let Some(instance_object) = instance.as_object() else {
+            return false;
+        };
+        if !required.iter().all(|field| {
+            field
+                .as_str()
+                .is_some_and(|field| instance_object.contains_key(field))
+        }) {
+            return false;
+        }
+    }
+    if let Some(expected) = schema.get("const")
+        && instance != expected
+    {
+        return false;
+    }
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
+        && !allowed.iter().any(|allowed| allowed == instance)
+    {
+        return false;
+    }
+    if let Some(minimum) = schema.get("minimum").and_then(Value::as_f64) {
+        let Some(value) = instance.as_f64() else {
+            return false;
+        };
+        if value < minimum {
+            return false;
+        }
+    }
+    if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64) {
+        let Some(value) = instance.as_f64() else {
+            return false;
+        };
+        if value > maximum {
+            return false;
+        }
+    }
+    if let Some(minimum) = schema.get("exclusiveMinimum").and_then(Value::as_f64) {
+        let Some(value) = instance.as_f64() else {
+            return false;
+        };
+        if value <= minimum {
+            return false;
+        }
+    }
+    if let Some(maximum) = schema.get("exclusiveMaximum").and_then(Value::as_f64) {
+        let Some(value) = instance.as_f64() else {
+            return false;
+        };
+        if value >= maximum {
+            return false;
+        }
+    }
+    if let Some(minimum) = schema.get("minLength").and_then(Value::as_u64) {
+        let Some(value) = instance.as_str() else {
+            return false;
+        };
+        if value.chars().count() < minimum as usize {
+            return false;
+        }
+    }
+    if let Some(maximum) = schema.get("maxLength").and_then(Value::as_u64) {
+        let Some(value) = instance.as_str() else {
+            return false;
+        };
+        if value.chars().count() > maximum as usize {
+            return false;
+        }
+    }
+    if let Some(minimum) = schema.get("minItems").and_then(Value::as_u64) {
+        let Some(value) = instance.as_array() else {
+            return false;
+        };
+        if value.len() < minimum as usize {
+            return false;
+        }
+    }
+    if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64) {
+        let Some(value) = instance.as_array() else {
+            return false;
+        };
+        if value.len() > maximum as usize {
+            return false;
+        }
+    }
+    if let Some(minimum) = schema.get("minProperties").and_then(Value::as_u64) {
+        let Some(value) = instance.as_object() else {
+            return false;
+        };
+        if value.len() < minimum as usize {
+            return false;
+        }
+    }
+    if let Some(maximum) = schema.get("maxProperties").and_then(Value::as_u64) {
+        let Some(value) = instance.as_object() else {
+            return false;
+        };
+        if value.len() > maximum as usize {
+            return false;
+        }
+    }
+    if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
+        let Some(value) = instance.as_str() else {
+            return false;
+        };
+        if !schema_pattern_accepts(pattern, value) {
+            return false;
+        }
+    }
+    if let Some(rejected) = schema.get("not")
+        && schema_accepts(rejected, instance)
+    {
+        return false;
+    }
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object)
+        && let Some(instance_object) = instance.as_object()
+    {
+        for (name, property_schema) in properties {
+            if let Some(property_value) = instance_object.get(name)
+                && !schema_accepts(property_schema, property_value)
+            {
+                return false;
+            }
+        }
+        if schema.get("additionalProperties") == Some(&Value::Bool(false))
+            && !instance_object
+                .keys()
+                .all(|name| properties.contains_key(name))
+        {
+            return false;
+        }
+    }
+    if let Some(item_schema) = schema.get("items")
+        && let Some(instance_array) = instance.as_array()
+        && !instance_array
+            .iter()
+            .all(|item| schema_accepts(item_schema, item))
+    {
+        return false;
+    }
+    if let Some(all_of) = schema.get("allOf").and_then(Value::as_array)
+        && !all_of.iter().all(|schema| schema_accepts(schema, instance))
+    {
+        return false;
+    }
+    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array)
+        && !any_of.iter().any(|schema| schema_accepts(schema, instance))
+    {
+        return false;
+    }
+    if let Some(one_of) = schema.get("oneOf").and_then(Value::as_array)
+        && one_of
+            .iter()
+            .filter(|schema| schema_accepts(schema, instance))
+            .count()
+            != 1
+    {
+        return false;
+    }
+    if let Some(if_schema) = schema.get("if")
+        && schema_accepts(if_schema, instance)
+        && let Some(then_schema) = schema.get("then")
+        && !schema_accepts(then_schema, instance)
+    {
+        return false;
+    }
+    true
+}
+
+fn schema_pattern_accepts(pattern: &str, value: &str) -> bool {
+    match pattern {
+        "^(https?://[^\\s]+|about:blank)$" => {
+            value == "about:blank"
+                || url_with_scheme_and_non_empty_rest(value, "http://")
+                || url_with_scheme_and_non_empty_rest(value, "https://")
+        }
+        _ => false,
+    }
+}
+
+fn schema_keyword_is_supported(keyword: &str) -> bool {
+    matches!(
+        keyword,
+        "additionalProperties"
+            | "allOf"
+            | "anyOf"
+            | "const"
+            | "description"
+            | "enum"
+            | "exclusiveMaximum"
+            | "exclusiveMinimum"
+            | "if"
+            | "items"
+            | "maxItems"
+            | "maxLength"
+            | "maxProperties"
+            | "maximum"
+            | "minItems"
+            | "minLength"
+            | "minProperties"
+            | "minimum"
+            | "not"
+            | "oneOf"
+            | "pattern"
+            | "properties"
+            | "required"
+            | "then"
+            | "type"
+    )
+}
+
+fn url_with_scheme_and_non_empty_rest(value: &str, scheme: &str) -> bool {
+    value
+        .strip_prefix(scheme)
+        .is_some_and(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
+}
+
+fn schema_type_accepts(expected_type: &Value, instance: &Value) -> bool {
+    match expected_type {
+        Value::String(expected_type) => schema_single_type_accepts(expected_type, instance),
+        Value::Array(expected_types) => expected_types.iter().any(|expected_type| {
+            expected_type
+                .as_str()
+                .is_some_and(|expected_type| schema_single_type_accepts(expected_type, instance))
+        }),
+        _ => false,
+    }
+}
+
+fn schema_single_type_accepts(expected_type: &str, instance: &Value) -> bool {
+    match expected_type {
+        "array" => instance.is_array(),
+        "boolean" => instance.is_boolean(),
+        "integer" => instance
+            .as_i64()
+            .or_else(|| {
+                instance
+                    .as_u64()
+                    .and_then(|value| i64::try_from(value).ok())
+            })
+            .is_some(),
+        "null" => instance.is_null(),
+        "number" => instance.is_number(),
+        "object" => instance.is_object(),
+        "string" => instance.is_string(),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod annotation_tests {
     use super::{
         InactiveToolReason, McpConfigDiagnostic, McpProcessConfig, build_tool_definitions,
-        build_tool_registry, mcp_process_config_from_env,
+        build_tool_registry, mcp_process_config_from_env, schema_accepts,
+        schema_keyword_is_supported,
     };
     use crate::mcp_server::ModelSessionInfo;
     use serde_json::{Value, json};
@@ -1432,8 +2014,8 @@ mod annotation_tests {
         ("browser_move_mouse", (false, false, true, false)),
         ("phone_connection", (false, false, true, false)),
         ("phone_pair_wireless", (false, false, true, false)),
-        ("phone_setup", (false, false, true, false)),
-        ("phone_app_force_stop", (false, false, true, false)),
+        ("phone_setup", (false, true, true, false)),
+        ("phone_app_force_stop", (false, true, true, false)),
         ("desktop_toggle", (false, false, false, false)),
         ("desktop_scroll", (false, false, false, false)),
         ("browser_scroll", (false, false, false, true)),
@@ -1551,7 +2133,7 @@ mod annotation_tests {
     }
 
     #[test]
-    fn compact_action_tool_schemas_reject_vague_desktop_actions() {
+    fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
         let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
         let tools = registry.tools.as_array().expect("tools");
         let tool = |name: &str| -> &Value {
@@ -1674,7 +2256,7 @@ mod annotation_tests {
                 .is_some_and(|constraints| {
                     constraints.iter().any(|constraint| {
                         constraint["if"]["properties"]["surface"]["const"] == "browser"
-                            && constraint["then"]["required"] == json!(["tab_id"])
+                            && constraint["then"]["required"] == json!(["surface", "tab_id"])
                     })
                 }),
             "observe browser branch must require tab_id"
@@ -1687,7 +2269,7 @@ mod annotation_tests {
                 .is_some_and(|constraints| {
                     constraints.iter().any(|constraint| {
                         constraint["if"]["properties"]["surface"]["const"] == "browser"
-                            && constraint["then"]["required"] == json!(["tab_id"])
+                            && constraint["then"]["required"] == json!(["surface", "tab_id"])
                     })
                 }),
             "capture_screen browser branch must require tab_id"
@@ -1728,7 +2310,7 @@ mod annotation_tests {
 
         assert_eq!(
             tool("browser_navigate")["inputSchema"]["properties"]["url"]["pattern"],
-            "^(https?://|about:blank$)"
+            "^(https?://[^\\s]+|about:blank)$"
         );
         assert_eq!(
             tool("browser_input")["inputSchema"]["properties"]["tab_id"]["minLength"],
@@ -1850,7 +2432,7 @@ mod annotation_tests {
         );
         assert!(
             tool("desktop_scroll")["inputSchema"]["properties"]["pages"].is_object(),
-            "desktop_scroll should expose the canonical pages field"
+            "desktop_scroll should expose the pages field"
         );
         let desktop_scroll_any_of = tool("desktop_scroll")["inputSchema"]["allOf"]
             .as_array()
@@ -1893,7 +2475,8 @@ mod annotation_tests {
                 .is_some_and(|constraints| {
                     constraints.iter().any(|constraint| {
                         constraint["if"]["properties"]["operation"]["const"] == "open_settings"
-                            && constraint["then"]["required"] == json!(["screen"])
+                            && constraint["then"]["required"]
+                                == json!(["operation", "session_id", "screen"])
                     })
                 }),
             "phone_setup open_settings branch must require screen"
@@ -1912,7 +2495,7 @@ mod annotation_tests {
                 .is_some_and(|constraints| {
                     constraints.iter().any(|constraint| {
                         constraint["if"]["properties"]["operation"]["const"] == "tap"
-                            && constraint["then"]["required"] == json!(["x", "y"])
+                            && constraint["then"]["required"] == json!(["session_id", "x", "y"])
                     })
                 }),
             "phone_pointer tap branch must require coordinates"
@@ -1924,7 +2507,7 @@ mod annotation_tests {
                     constraints.iter().any(|constraint| {
                         constraint["if"]["properties"]["operation"]["const"] == "swipe"
                             && constraint["then"]["required"]
-                                == json!(["start_x", "start_y", "end_x", "end_y"])
+                                == json!(["session_id", "start_x", "start_y", "end_x", "end_y"])
                     })
                 }),
             "phone_pointer swipe branch must require start/end coordinates"
@@ -1945,7 +2528,7 @@ mod annotation_tests {
                 .is_some_and(|constraints| {
                     constraints.iter().any(|constraint| {
                         constraint["if"]["properties"]["operation"]["const"] == "type_text"
-                            && constraint["then"]["required"] == json!(["text"])
+                            && constraint["then"]["required"] == json!(["session_id", "text"])
                     })
                 }),
             "phone_keyboard type_text branch must require text"
@@ -1966,7 +2549,8 @@ mod annotation_tests {
                 .is_some_and(|constraints| {
                     constraints.iter().any(|constraint| {
                         constraint["if"]["properties"]["operation"]["const"] == "action"
-                            && constraint["then"]["required"] == json!(["event_id", "action_id"])
+                            && constraint["then"]["required"]
+                                == json!(["session_id", "event_id", "action_id"])
                     })
                 }),
             "phone_notification_action action branch must require event_id and action_id"
@@ -1978,8 +2562,13 @@ mod annotation_tests {
             "phone_app_install apk_paths must be non-empty"
         );
         assert_eq!(
-            phone_install_schema["properties"]["apk_path"]["minLength"], 1,
-            "phone_app_install apk_path alias must be non-empty"
+            phone_install_schema["required"],
+            json!(["session_id", "apk_paths"]),
+            "phone_app_install must require session_id and apk_paths"
+        );
+        assert!(
+            phone_install_schema["properties"].get("apk_path").is_none(),
+            "phone_app_install apk_path alias must stay removed"
         );
         assert!(
             phone_install_schema["properties"]["grant_runtime_permissions"].is_object(),
@@ -2064,6 +2653,35 @@ mod annotation_tests {
     }
 
     #[test]
+    fn advertised_schemas_only_use_runtime_supported_keywords() {
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+        for tool in registry.tools.as_array().expect("tools array") {
+            let name = tool["name"].as_str().expect("tool name");
+            assert_schema_keywords_supported(&tool["inputSchema"], name);
+        }
+    }
+
+    #[test]
+    fn runtime_schema_validator_fails_closed_for_unsupported_schema_surface() {
+        assert!(!schema_accepts(
+            &json!({"type": "url"}),
+            &json!("https://example.test/")
+        ));
+        assert!(!schema_accepts(
+            &json!({"type": {"name": "string"}}),
+            &json!("hello")
+        ));
+        assert!(!schema_accepts(
+            &json!({"type": "string", "format": "uri"}),
+            &json!("https://example.test/")
+        ));
+        assert!(!schema_accepts(
+            &json!({"type": "string", "pattern": "^custom$"}),
+            &json!("custom")
+        ));
+    }
+
+    #[test]
     fn tool_contract_fixture_matches_generated_registry() {
         let generated = generated_tool_contract();
         let tools = generated["tools"].as_array().expect("contract tools");
@@ -2142,7 +2760,7 @@ mod annotation_tests {
     }
 
     #[test]
-    fn call_cases_match_canonical_dispatcher() {
+    fn call_cases_match_grouped_dispatcher() {
         for case in generated_call_cases()["cases"]
             .as_array()
             .expect("call cases")
@@ -2150,7 +2768,7 @@ mod annotation_tests {
             let tool_name = case["tool"].as_str().expect("case tool");
             let expected_branch = case["branch"].as_str().expect("case branch");
             let expected_handler = case["handler_id"].as_str().expect("case handler");
-            let call = crate::mcp_tools::canonical_handler_call(tool_name, case["valid"].clone())
+            let call = crate::mcp_tools::grouped_handler_call(tool_name, case["valid"].clone())
                 .unwrap_or_else(|error| {
                     panic!("call case {tool_name}/{expected_branch} did not dispatch: {error}")
                 });
@@ -2159,221 +2777,6 @@ mod annotation_tests {
                 call.handler_name, expected_handler,
                 "{tool_name}/{expected_branch} handler"
             );
-        }
-    }
-
-    fn schema_accepts(schema: &Value, instance: &Value) -> bool {
-        let Some(schema) = schema.as_object() else {
-            return true;
-        };
-        if let Some(expected_type) = schema.get("type")
-            && !schema_type_accepts(expected_type, instance)
-        {
-            return false;
-        }
-        if let Some(required) = schema.get("required").and_then(Value::as_array) {
-            let Some(instance_object) = instance.as_object() else {
-                return false;
-            };
-            if !required.iter().all(|field| {
-                field
-                    .as_str()
-                    .is_some_and(|field| instance_object.contains_key(field))
-            }) {
-                return false;
-            }
-        }
-        if let Some(expected) = schema.get("const")
-            && instance != expected
-        {
-            return false;
-        }
-        if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
-            && !allowed.iter().any(|allowed| allowed == instance)
-        {
-            return false;
-        }
-        if let Some(minimum) = schema.get("minimum").and_then(Value::as_f64) {
-            let Some(value) = instance.as_f64() else {
-                return false;
-            };
-            if value < minimum {
-                return false;
-            }
-        }
-        if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64) {
-            let Some(value) = instance.as_f64() else {
-                return false;
-            };
-            if value > maximum {
-                return false;
-            }
-        }
-        if let Some(minimum) = schema.get("exclusiveMinimum").and_then(Value::as_f64) {
-            let Some(value) = instance.as_f64() else {
-                return false;
-            };
-            if value <= minimum {
-                return false;
-            }
-        }
-        if let Some(maximum) = schema.get("exclusiveMaximum").and_then(Value::as_f64) {
-            let Some(value) = instance.as_f64() else {
-                return false;
-            };
-            if value >= maximum {
-                return false;
-            }
-        }
-        if let Some(minimum) = schema.get("minLength").and_then(Value::as_u64) {
-            let Some(value) = instance.as_str() else {
-                return false;
-            };
-            if value.chars().count() < minimum as usize {
-                return false;
-            }
-        }
-        if let Some(maximum) = schema.get("maxLength").and_then(Value::as_u64) {
-            let Some(value) = instance.as_str() else {
-                return false;
-            };
-            if value.chars().count() > maximum as usize {
-                return false;
-            }
-        }
-        if let Some(minimum) = schema.get("minItems").and_then(Value::as_u64) {
-            let Some(value) = instance.as_array() else {
-                return false;
-            };
-            if value.len() < minimum as usize {
-                return false;
-            }
-        }
-        if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64) {
-            let Some(value) = instance.as_array() else {
-                return false;
-            };
-            if value.len() > maximum as usize {
-                return false;
-            }
-        }
-        if let Some(minimum) = schema.get("minProperties").and_then(Value::as_u64) {
-            let Some(value) = instance.as_object() else {
-                return false;
-            };
-            if value.len() < minimum as usize {
-                return false;
-            }
-        }
-        if let Some(maximum) = schema.get("maxProperties").and_then(Value::as_u64) {
-            let Some(value) = instance.as_object() else {
-                return false;
-            };
-            if value.len() > maximum as usize {
-                return false;
-            }
-        }
-        if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
-            let Some(value) = instance.as_str() else {
-                return false;
-            };
-            if pattern == "^(https?://|about:blank$)"
-                && !(value == "about:blank"
-                    || value.starts_with("http://")
-                    || value.starts_with("https://"))
-            {
-                return false;
-            }
-        }
-        if let Some(rejected) = schema.get("not")
-            && schema_accepts(rejected, instance)
-        {
-            return false;
-        }
-        if let Some(properties) = schema.get("properties").and_then(Value::as_object)
-            && let Some(instance_object) = instance.as_object()
-        {
-            for (name, property_schema) in properties {
-                if let Some(property_value) = instance_object.get(name)
-                    && !schema_accepts(property_schema, property_value)
-                {
-                    return false;
-                }
-            }
-            if schema.get("additionalProperties") == Some(&Value::Bool(false))
-                && !instance_object
-                    .keys()
-                    .all(|name| properties.contains_key(name))
-            {
-                return false;
-            }
-        }
-        if let Some(item_schema) = schema.get("items")
-            && let Some(instance_array) = instance.as_array()
-            && !instance_array
-                .iter()
-                .all(|item| schema_accepts(item_schema, item))
-        {
-            return false;
-        }
-        if let Some(all_of) = schema.get("allOf").and_then(Value::as_array)
-            && !all_of.iter().all(|schema| schema_accepts(schema, instance))
-        {
-            return false;
-        }
-        if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array)
-            && !any_of.iter().any(|schema| schema_accepts(schema, instance))
-        {
-            return false;
-        }
-        if let Some(one_of) = schema.get("oneOf").and_then(Value::as_array)
-            && one_of
-                .iter()
-                .filter(|schema| schema_accepts(schema, instance))
-                .count()
-                != 1
-        {
-            return false;
-        }
-        if let Some(if_schema) = schema.get("if")
-            && schema_accepts(if_schema, instance)
-            && let Some(then_schema) = schema.get("then")
-            && !schema_accepts(then_schema, instance)
-        {
-            return false;
-        }
-        true
-    }
-
-    fn schema_type_accepts(expected_type: &Value, instance: &Value) -> bool {
-        match expected_type {
-            Value::String(expected_type) => schema_single_type_accepts(expected_type, instance),
-            Value::Array(expected_types) => expected_types.iter().any(|expected_type| {
-                expected_type.as_str().is_some_and(|expected_type| {
-                    schema_single_type_accepts(expected_type, instance)
-                })
-            }),
-            _ => true,
-        }
-    }
-
-    fn schema_single_type_accepts(expected_type: &str, instance: &Value) -> bool {
-        match expected_type {
-            "array" => instance.is_array(),
-            "boolean" => instance.is_boolean(),
-            "integer" => instance
-                .as_i64()
-                .or_else(|| {
-                    instance
-                        .as_u64()
-                        .and_then(|value| i64::try_from(value).ok())
-                })
-                .is_some(),
-            "null" => instance.is_null(),
-            "number" => instance.is_number(),
-            "object" => instance.is_object(),
-            "string" => instance.is_string(),
-            _ => true,
         }
     }
 
@@ -2396,6 +2799,38 @@ mod annotation_tests {
         );
     }
 
+    fn assert_schema_keywords_supported(schema: &Value, context: &str) {
+        let Some(schema) = schema.as_object() else {
+            return;
+        };
+        for keyword in schema.keys() {
+            assert!(
+                schema_keyword_is_supported(keyword),
+                "{context} inputSchema uses unsupported validation keyword {keyword}"
+            );
+        }
+        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+            for (name, property_schema) in properties {
+                assert_schema_keywords_supported(property_schema, &format!("{context}.{name}"));
+            }
+        }
+        if let Some(items) = schema.get("items") {
+            assert_schema_keywords_supported(items, &format!("{context}[]"));
+        }
+        for key in ["allOf", "anyOf", "oneOf"] {
+            if let Some(children) = schema.get(key).and_then(Value::as_array) {
+                for (index, child) in children.iter().enumerate() {
+                    assert_schema_keywords_supported(child, &format!("{context}.{key}[{index}]"));
+                }
+            }
+        }
+        for key in ["not", "if", "then"] {
+            if let Some(child) = schema.get(key) {
+                assert_schema_keywords_supported(child, &format!("{context}.{key}"));
+            }
+        }
+    }
+
     fn fixture_path(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
@@ -2412,7 +2847,7 @@ mod annotation_tests {
                 let tools_list = registry.tools_list_result();
                 let serialized = serde_json::to_string(&tools_list).expect("tools list json");
                 rows.push(json!({
-                    "surface": "canonical",
+                    "surface": "grouped",
                     "can_receive_images": can_receive_images,
                     "browser_eval_enabled": browser_eval_enabled,
                     "tool_count": registry.active_names.len(),
@@ -2464,7 +2899,7 @@ mod annotation_tests {
     fn generated_tool_contract() -> Value {
         let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
         let advertised = registry.tools.as_array().expect("tools");
-        let tools: Vec<Value> = canonical_contract_tools()
+        let tools: Vec<Value> = grouped_contract_tools()
             .into_iter()
             .map(|mut contract| {
                 let name = contract["name"].as_str().expect("contract name");
@@ -2475,8 +2910,8 @@ mod annotation_tests {
                 let object = contract.as_object_mut().expect("contract object");
                 object.insert("annotations".to_string(), public["annotations"].clone());
                 object.insert("input_schema".to_string(), public["inputSchema"].clone());
-                object.insert("content_policy".to_string(), json!("canonical_rewrite"));
-                object.insert("structured_policy".to_string(), json!("canonical_envelope"));
+                object.insert("content_policy".to_string(), json!("grouped_rewrite"));
+                object.insert("structured_policy".to_string(), json!("grouped_envelope"));
                 contract
             })
             .collect();
@@ -2488,14 +2923,14 @@ mod annotation_tests {
         }));
         json!({
             "version": 1,
-            "surface": "canonical",
+            "surface": "grouped",
             "default_tool_count": 34,
             "eval_tool_count": 35,
             "tools": tools
         })
     }
 
-    fn canonical_contract_tools() -> Vec<Value> {
+    fn grouped_contract_tools() -> Vec<Value> {
         vec![
             contract_tool("doctor", vec![branch("diagnostics", "doctor", json!({}))]),
             contract_tool(
@@ -2546,12 +2981,12 @@ mod annotation_tests {
                     branch(
                         "phone/apps",
                         "phone_app_list",
-                        json!({"surface": "phone", "resource": "apps"}),
+                        json!({"surface": "phone", "resource": "apps", "session_id": "phone-1"}),
                     ),
                     branch(
                         "phone/current_app",
                         "phone_app_current",
-                        json!({"surface": "phone", "resource": "current_app"}),
+                        json!({"surface": "phone", "resource": "current_app", "session_id": "phone-1"}),
                     ),
                 ],
             ),
@@ -2564,7 +2999,11 @@ mod annotation_tests {
                         "browser_snapshot",
                         json!({"surface": "browser", "tab_id": "tab-1"}),
                     ),
-                    branch("phone", "phone_observe", json!({"surface": "phone"})),
+                    branch(
+                        "phone",
+                        "phone_observe",
+                        json!({"surface": "phone", "session_id": "phone-1"}),
+                    ),
                 ],
             ),
             contract_tool(
@@ -2575,16 +3014,28 @@ mod annotation_tests {
                         "browser_screenshot",
                         json!({"surface": "browser", "tab_id": "tab-1"}),
                     ),
-                    branch("phone", "phone_screenshot", json!({"surface": "phone"})),
+                    branch(
+                        "phone",
+                        "phone_screenshot",
+                        json!({"surface": "phone", "session_id": "phone-1"}),
+                    ),
                 ],
             ),
             contract_tool(
                 "phone_accessibility_tree",
-                vec![branch("default", "phone_accessibility_tree", json!({}))],
+                vec![branch(
+                    "default",
+                    "phone_accessibility_tree",
+                    json!({"session_id": "phone-1"}),
+                )],
             ),
             contract_tool(
                 "phone_notifications",
-                vec![branch("default", "phone_notifications", json!({}))],
+                vec![branch(
+                    "default",
+                    "phone_notifications",
+                    json!({"session_id": "phone-1"}),
+                )],
             ),
             contract_tool(
                 "capture_desktop",
@@ -2673,12 +3124,12 @@ mod annotation_tests {
                     branch(
                         "disconnect",
                         "phone_disconnect",
-                        json!({"operation": "disconnect"}),
+                        json!({"operation": "disconnect", "session_id": "phone-1"}),
                     ),
                     branch(
                         "refresh",
                         "phone_refresh_capabilities",
-                        json!({"operation": "refresh"}),
+                        json!({"operation": "refresh", "session_id": "phone-1"}),
                     ),
                 ],
             ),
@@ -2696,12 +3147,12 @@ mod annotation_tests {
                     branch(
                         "install_companion",
                         "phone_install_companion",
-                        json!({"operation": "install_companion"}),
+                        json!({"operation": "install_companion", "session_id": "phone-1"}),
                     ),
                     branch(
                         "open_settings",
                         "phone_open_settings",
-                        json!({"operation": "open_settings", "screen": "accessibility"}),
+                        json!({"operation": "open_settings", "session_id": "phone-1", "screen": "accessibility"}),
                     ),
                 ],
             ),
@@ -2710,7 +3161,7 @@ mod annotation_tests {
                 vec![branch(
                     "default",
                     "phone_app_force_stop",
-                    json!({"package_name": "com.example.app"}),
+                    json!({"session_id": "phone-1", "package_name": "com.example.app"}),
                 )],
             ),
             contract_tool(
@@ -2833,12 +3284,12 @@ mod annotation_tests {
                     branch(
                         "tap",
                         "phone_tap",
-                        json!({"operation": "tap", "x": 1, "y": 1}),
+                        json!({"operation": "tap", "session_id": "phone-1", "phone_snapshot_id": "phone-snapshot-1", "x": 1, "y": 1}),
                     ),
                     branch(
                         "swipe",
                         "phone_swipe",
-                        json!({"operation": "swipe", "start_x": 1, "start_y": 1, "end_x": 2, "end_y": 2}),
+                        json!({"operation": "swipe", "session_id": "phone-1", "phone_snapshot_id": "phone-snapshot-1", "start_x": 1, "start_y": 1, "end_x": 2, "end_y": 2}),
                     ),
                 ],
             ),
@@ -2848,12 +3299,12 @@ mod annotation_tests {
                     branch(
                         "type_text",
                         "phone_type_text",
-                        json!({"operation": "type_text", "text": "hello"}),
+                        json!({"operation": "type_text", "session_id": "phone-1", "text": "hello"}),
                     ),
                     branch(
                         "press_key",
                         "phone_press_key",
-                        json!({"operation": "press_key", "key": "BACK"}),
+                        json!({"operation": "press_key", "session_id": "phone-1", "key": "BACK"}),
                     ),
                 ],
             ),
@@ -2863,17 +3314,17 @@ mod annotation_tests {
                     branch(
                         "open",
                         "phone_notification_open",
-                        json!({"operation": "open", "event_id": "event-1"}),
+                        json!({"operation": "open", "session_id": "phone-1", "event_id": "event-1"}),
                     ),
                     branch(
                         "dismiss",
                         "phone_notification_dismiss",
-                        json!({"operation": "dismiss", "event_id": "event-1"}),
+                        json!({"operation": "dismiss", "session_id": "phone-1", "event_id": "event-1"}),
                     ),
                     branch(
                         "action",
                         "phone_notification_action",
-                        json!({"operation": "action", "event_id": "event-1", "action_id": "action-1"}),
+                        json!({"operation": "action", "session_id": "phone-1", "event_id": "event-1", "action_id": "action-1"}),
                     ),
                 ],
             ),
@@ -2882,7 +3333,7 @@ mod annotation_tests {
                 vec![branch(
                     "default",
                     "phone_notification_reply",
-                    json!({"event_id": "event-1", "action_id": "reply-1", "text": "reply"}),
+                    json!({"session_id": "phone-1", "event_id": "event-1", "action_id": "reply-1", "text": "reply"}),
                 )],
             ),
             contract_tool(
@@ -2891,12 +3342,12 @@ mod annotation_tests {
                     branch(
                         "launch",
                         "phone_app_launch",
-                        json!({"operation": "launch", "package_name": "com.example.app"}),
+                        json!({"operation": "launch", "session_id": "phone-1", "package_name": "com.example.app"}),
                     ),
                     branch(
                         "open_intent",
                         "phone_app_open_intent",
-                        json!({"operation": "open_intent", "intent_uri": "intent://example"}),
+                        json!({"operation": "open_intent", "session_id": "phone-1", "intent_uri": "intent://example"}),
                     ),
                 ],
             ),
@@ -2905,7 +3356,7 @@ mod annotation_tests {
                 vec![branch(
                     "default",
                     "phone_app_install",
-                    json!({"apk_path": "/tmp/example.apk"}),
+                    json!({"session_id": "phone-1", "apk_paths": ["/tmp/example.apk"]}),
                 )],
             ),
             contract_tool(
@@ -2941,7 +3392,7 @@ mod annotation_tests {
 
     fn generated_call_cases() -> Value {
         let mut cases = Vec::new();
-        for tool in canonical_contract_tools() {
+        for tool in grouped_contract_tools() {
             let tool_name = tool["name"].as_str().expect("tool name");
             for branch in tool["branches"].as_array().expect("branches") {
                 let branch_name = branch["name"].as_str().expect("branch name");
@@ -2962,7 +3413,19 @@ mod annotation_tests {
 
     fn invalid_call_case(valid: &Value) -> Value {
         let mut invalid = valid.as_object().expect("valid case object").clone();
-        if invalid.contains_key("operation") {
+        if invalid.get("operation").and_then(Value::as_str) == Some("type_text")
+            && invalid.contains_key("tab_id")
+        {
+            invalid.insert("x".to_string(), json!(1));
+            invalid.insert("y".to_string(), json!(1));
+        } else if invalid.get("operation").and_then(Value::as_str) == Some("tap") {
+            invalid.remove("phone_snapshot_id");
+            invalid.remove("use_device_coordinates");
+        } else if invalid.get("surface").and_then(Value::as_str) == Some("phone") {
+            invalid.insert("window_id".to_string(), json!("window-foreign"));
+        } else if invalid.get("surface").and_then(Value::as_str) == Some("desktop") {
+            invalid.insert("include_mdns".to_string(), json!(true));
+        } else if invalid.contains_key("operation") {
             invalid.insert("operation".to_string(), json!("__invalid__"));
         } else if invalid.contains_key("surface") {
             invalid.insert("surface".to_string(), json!("__invalid__"));
