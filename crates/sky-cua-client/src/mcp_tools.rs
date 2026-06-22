@@ -25,7 +25,6 @@ mod phone;
 
 #[cfg(test)]
 use app_state::parse_app_state_detail;
-#[cfg(test)]
 pub(crate) use definitions::McpToolProfile;
 #[cfg(test)]
 pub(crate) use definitions::tools_list_result;
@@ -74,7 +73,212 @@ pub(crate) fn handle_session_tool_call(
             None => tool_error("UnknownTool", format!("unknown tool: {tool_name}")),
         };
     }
-    handle_tool_call(service, heuristics, model, tool_name, arguments)
+    match registry.profile {
+        McpToolProfile::Legacy => {
+            handle_tool_call(service, heuristics, model, tool_name, arguments)
+        }
+        McpToolProfile::Compact => {
+            handle_compact_tool_call(service, heuristics, model, tool_name, arguments)
+        }
+    }
+}
+
+fn handle_compact_tool_call(
+    service: &impl McpService,
+    heuristics: &HeuristicsRegistry,
+    model: &ModelSessionInfo,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<Value> {
+    let (legacy_name, legacy_arguments) = match compact_legacy_call(tool_name, arguments) {
+        Ok(call) => call,
+        Err(error) => return invalid_request_tool_error(error.to_string()),
+    };
+    handle_tool_call(service, heuristics, model, legacy_name, legacy_arguments)
+}
+
+fn compact_legacy_call(tool_name: &str, arguments: Value) -> Result<(&'static str, Value)> {
+    let mut arguments = compact_arguments_object(arguments)?;
+    let legacy_name = match tool_name {
+        "doctor" => "doctor",
+        "status" => match take_required_branch(&mut arguments, "component")?.as_str() {
+            "browser" => "browser_status",
+            "phone" => "phone_status",
+            "phone_companion" => "phone_companion_status",
+            "session_presence" => "session_presence_status",
+            component => return Err(anyhow!("unsupported status component: {component}")),
+        },
+        "list_resources" => {
+            let surface = take_required_branch(&mut arguments, "surface")?;
+            let resource = take_required_branch(&mut arguments, "resource")?;
+            match (surface.as_str(), resource.as_str()) {
+                ("desktop", "apps") => "list_apps",
+                ("desktop", "windows") => "list_windows",
+                ("desktop", "focused_window") => "focused_window",
+                ("browser", "tabs") => "browser_list_tabs",
+                ("phone", "devices") => "phone_list_devices",
+                ("phone", "apps") => "phone_app_list",
+                ("phone", "current_app") => "phone_app_current",
+                _ => {
+                    return Err(anyhow!(
+                        "unsupported list_resources pair: {surface}/{resource}"
+                    ));
+                }
+            }
+        }
+        "observe" => match take_required_branch(&mut arguments, "surface")?.as_str() {
+            "desktop" => "get_app_state",
+            "browser" => "browser_snapshot",
+            "phone" => "phone_observe",
+            surface => return Err(anyhow!("unsupported observe surface: {surface}")),
+        },
+        "capture_screen" => match take_required_branch(&mut arguments, "surface")?.as_str() {
+            "browser" => "browser_screenshot",
+            "phone" => "phone_screenshot",
+            surface => return Err(anyhow!("unsupported capture_screen surface: {surface}")),
+        },
+        "capture_desktop" => "screenshot",
+        "setup_desktop" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "accessibility" => "setup_accessibility",
+            "window_targeting" => "setup_window_targeting",
+            operation => return Err(anyhow!("unsupported setup_desktop operation: {operation}")),
+        },
+        "session_presence" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "hold" => "hold_session",
+            "unlock" => "unlock_session",
+            "release" => "release_session",
+            operation => {
+                return Err(anyhow!(
+                    "unsupported session_presence operation: {operation}"
+                ));
+            }
+        },
+        "activate_window" => "activate_window",
+        "desktop_semantic" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "focus" => "focus_element",
+            "select" => "select_element",
+            "expand" => "expand_element",
+            "collapse" => "collapse_element",
+            operation => {
+                return Err(anyhow!(
+                    "unsupported desktop_semantic operation: {operation}"
+                ));
+            }
+        },
+        "desktop_toggle" => "toggle_element",
+        "desktop_scroll" => "scroll",
+        "desktop_pointer" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "click" => "click",
+            "secondary_click" => "perform_secondary_action",
+            "drag" => "drag",
+            operation => {
+                return Err(anyhow!(
+                    "unsupported desktop_pointer operation: {operation}"
+                ));
+            }
+        },
+        "desktop_keyboard" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "type_text" => "type_text",
+            "press_key" => "press_key",
+            operation => {
+                return Err(anyhow!(
+                    "unsupported desktop_keyboard operation: {operation}"
+                ));
+            }
+        },
+        "desktop_action" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "activate" => "activate_element",
+            "perform_action" => "perform_action",
+            operation => return Err(anyhow!("unsupported desktop_action operation: {operation}")),
+        },
+        "desktop_set_value" => "set_value",
+        "browser_open" => "browser_open",
+        "browser_claim_tab" => "browser_claim_tab",
+        "browser_move_mouse" => "browser_move_mouse",
+        "browser_navigate" => "browser_navigate",
+        "browser_scroll" => "browser_scroll",
+        "browser_eval" => "browser_eval",
+        "browser_input" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "click" => "browser_click",
+            "type_text" => "browser_type_text",
+            "press_key" => "browser_press_key",
+            operation => return Err(anyhow!("unsupported browser_input operation: {operation}")),
+        },
+        "phone_connection" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "connect" => "phone_connect",
+            "disconnect" => "phone_disconnect",
+            "refresh" => "phone_refresh_capabilities",
+            operation => {
+                return Err(anyhow!(
+                    "unsupported phone_connection operation: {operation}"
+                ));
+            }
+        },
+        "phone_pair_wireless" => "phone_pair_wireless",
+        "phone_setup" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "install_companion" => "phone_install_companion",
+            "open_settings" => "phone_open_settings",
+            operation => return Err(anyhow!("unsupported phone_setup operation: {operation}")),
+        },
+        "phone_app_force_stop" => "phone_app_force_stop",
+        "phone_pointer" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "tap" => "phone_tap",
+            "swipe" => "phone_swipe",
+            operation => return Err(anyhow!("unsupported phone_pointer operation: {operation}")),
+        },
+        "phone_keyboard" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "type_text" => "phone_type_text",
+            "press_key" => "phone_press_key",
+            operation => return Err(anyhow!("unsupported phone_keyboard operation: {operation}")),
+        },
+        "phone_notification_action" => {
+            match take_required_branch(&mut arguments, "operation")?.as_str() {
+                "open" => "phone_notification_open",
+                "dismiss" => "phone_notification_dismiss",
+                "action" => "phone_notification_action",
+                operation => {
+                    return Err(anyhow!(
+                        "unsupported phone_notification_action operation: {operation}"
+                    ));
+                }
+            }
+        }
+        "phone_notification_reply" => "phone_notification_reply",
+        "phone_app_action" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "launch" => "phone_app_launch",
+            "open_intent" => "phone_app_open_intent",
+            operation => {
+                return Err(anyhow!(
+                    "unsupported phone_app_action operation: {operation}"
+                ));
+            }
+        },
+        "phone_app_install" => "phone_app_install",
+        "phone_accessibility_tree" => "phone_accessibility_tree",
+        "phone_notifications" => "phone_notifications",
+        name => return Err(anyhow!("unknown compact tool: {name}")),
+    };
+    Ok((legacy_name, Value::Object(arguments)))
+}
+
+fn compact_arguments_object(arguments: Value) -> Result<serde_json::Map<String, Value>> {
+    match arguments {
+        Value::Object(map) => Ok(map),
+        _ => Err(anyhow!("compact tool arguments must be an object")),
+    }
+}
+
+fn take_required_branch(
+    arguments: &mut serde_json::Map<String, Value>,
+    field: &'static str,
+) -> Result<String> {
+    let value = arguments
+        .remove(field)
+        .ok_or_else(|| anyhow!("missing required {field}"))?;
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow!("{field} must be a string"))
 }
 
 pub(crate) fn handle_tool_call(
@@ -961,7 +1165,7 @@ mod tests {
 
     use super::{
         McpProcessConfig, McpService, McpToolProfile, action_summary, build_tool_definitions,
-        build_tool_registry, effective_capture_screen, handle_action_call,
+        build_tool_registry, compact_legacy_call, effective_capture_screen, handle_action_call,
         handle_session_tool_call, handle_tool_call, invalid_request_tool_error, list_apps_summary,
         parse_app_selector, parse_app_state_detail, parse_screenshot_target, parse_window_target,
         tool_definitions, tools_list_result,
@@ -1066,6 +1270,104 @@ mod tests {
         assert_eq!(eval_result["isError"], true);
         assert_eq!(eval_result["structuredContent"]["code"], "FeatureDisabled");
         assert!(service.take_requests().is_empty());
+    }
+
+    #[test]
+    fn compact_legacy_call_maps_branch_names() {
+        let cases = [
+            (
+                "status",
+                json!({"component": "browser"}),
+                "browser_status",
+                json!({}),
+            ),
+            (
+                "list_resources",
+                json!({"surface": "desktop", "resource": "windows"}),
+                "list_windows",
+                json!({}),
+            ),
+            (
+                "observe",
+                json!({"surface": "browser", "tab_id": "tab-1"}),
+                "browser_snapshot",
+                json!({"tab_id": "tab-1"}),
+            ),
+            (
+                "capture_screen",
+                json!({"surface": "phone", "session_id": "phone-1"}),
+                "phone_screenshot",
+                json!({"session_id": "phone-1"}),
+            ),
+            (
+                "desktop_pointer",
+                json!({"operation": "secondary_click", "element_index": 2}),
+                "perform_secondary_action",
+                json!({"element_index": 2}),
+            ),
+            (
+                "browser_input",
+                json!({"operation": "press_key", "tab_id": "tab-1", "key": "Enter"}),
+                "browser_press_key",
+                json!({"tab_id": "tab-1", "key": "Enter"}),
+            ),
+            (
+                "phone_notification_action",
+                json!({"operation": "dismiss", "event_id": "n-1"}),
+                "phone_notification_dismiss",
+                json!({"event_id": "n-1"}),
+            ),
+            (
+                "phone_app_action",
+                json!({"operation": "open_intent", "intent_uri": "intent://x"}),
+                "phone_app_open_intent",
+                json!({"intent_uri": "intent://x"}),
+            ),
+        ];
+
+        for (tool, arguments, expected_name, expected_arguments) in cases {
+            let (legacy_name, legacy_arguments) =
+                compact_legacy_call(tool, arguments).expect("compact call maps");
+            assert_eq!(legacy_name, expected_name, "{tool} legacy name");
+            assert_eq!(legacy_arguments, expected_arguments, "{tool} arguments");
+        }
+    }
+
+    #[test]
+    fn compact_desktop_keyboard_routes_to_typed_action_request() {
+        let service = FakeService::with_response(ServiceResponse::ExecuteAction {
+            outcome: ActionOutcome {
+                success: true,
+                message: "pressed key".to_string(),
+                code: "ActionPerformed".to_string(),
+                diagnostics: Vec::new(),
+                agent_cursor: None,
+            },
+        });
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(McpToolProfile::Compact, false), &model);
+
+        let result = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "desktop_keyboard",
+            json!({"operation": "press_key", "key": "Enter"}),
+        )
+        .expect("compact desktop keyboard call");
+        assert_eq!(result["isError"], false);
+
+        let mut requests = service.take_requests();
+        assert_eq!(requests.len(), 1);
+        match requests.remove(0) {
+            ServiceRequest::ExecuteAction { request } => {
+                assert_eq!(request.action, ActionName::PressKey);
+                assert_eq!(request.arguments["key"], "Enter");
+            }
+            other => panic!("expected ExecuteAction request: {other:?}"),
+        }
     }
 
     #[test]

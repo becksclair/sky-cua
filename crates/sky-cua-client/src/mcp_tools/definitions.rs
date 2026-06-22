@@ -534,7 +534,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         compact_tool(
             "doctor",
             "Run sky-cua readiness diagnostics for desktop, browser, phone, and session-presence integration.",
-            READ_ONLY_TOOL,
+            LOCAL_NAVIGATION_ACTION,
             json!({}),
             json!([])
         ),
@@ -1240,6 +1240,15 @@ mod annotation_tests {
         assert_eq!(registry.active_names.len(), 34);
         assert!(registry.contains("observe"));
         assert!(registry.contains("browser_input"));
+        let doctor = registry
+            .tools
+            .as_array()
+            .expect("compact tools array")
+            .iter()
+            .find(|tool| tool["name"] == "doctor")
+            .expect("compact doctor");
+        assert_eq!(doctor["annotations"]["readOnlyHint"], false);
+        assert_eq!(doctor["annotations"]["idempotentHint"], true);
         assert!(!registry.contains("browser_eval"));
         assert!(!registry.contains("get_app_state"));
         assert_eq!(
