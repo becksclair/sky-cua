@@ -10,6 +10,16 @@ fi
 
 remote_root="/workspace"
 target_dir="${HOME}/.local/share/sky-cua"
+install_policy_args=()
+if [[ -n "${SKY_CUA_MCP_TOOL_PROFILE:-}" ]]; then
+	install_policy_args+=(--mcp-tool-profile "${SKY_CUA_MCP_TOOL_PROFILE}")
+fi
+if [[ -n "${SKY_CUA_BROWSER_EVAL:-}" ]]; then
+	install_policy_args+=(--browser-eval "${SKY_CUA_BROWSER_EVAL}")
+fi
+if [[ -n "${SKY_CUA_MODEL_SUPPORTS_IMAGES:-}" ]]; then
+	install_policy_args+=(--model-supports-images "${SKY_CUA_MODEL_SUPPORTS_IMAGES}")
+fi
 
 # Forward API keys from host if available
 export FIREWORKS_API_KEY="${FIREWORKS_API_KEY:-}"
@@ -18,7 +28,8 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 # Install sky-cua MCP server for OpenCode
 python3 "${remote_root}/scripts/install_mcp_server.py" \
 	--host opencode \
-	--target-dir "${target_dir}"
+	--target-dir "${target_dir}" \
+	"${install_policy_args[@]}"
 
 # Place the generated opencode.json in the workspace so OpenCode discovers it
 # (OpenCode reads opencode.json from the current directory)

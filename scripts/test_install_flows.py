@@ -25,6 +25,7 @@ from _plugin_bundle import (
 from _test_support import (
     write_minimal_bundle,
 )
+from deploy_freshness import STAMP_SUFFIX
 
 
 def test_install_bundle_uses_runtime_binary_paths(tmp_path: Path) -> None:
@@ -90,6 +91,63 @@ def test_generic_mcp_install_copies_all_current_platform_binaries(
         assert binary_path.exists()
         if not binary_path.name.endswith(".exe"):
             assert binary_path.stat().st_mode & 0o111
+
+
+def test_generic_mcp_install_copies_client_build_stamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    release_root = repo_root / "target" / "release"
+    release_root.mkdir(parents=True)
+    target_dir = tmp_path / "installed"
+    platform_id = install_mcp_server.current_platform()
+
+    for binary_name in install_mcp_server.platform_runtime_binary_base_names(platform_id):
+        source_name = runtime_binary_source_name(platform_id, binary_name)
+        source = release_root / source_name
+        source.write_text(binary_name, encoding="utf-8")
+        if binary_name == "sky-cua-client":
+            source.with_name(source.name + STAMP_SUFFIX).write_text(
+                '{"version":1}\n', encoding="utf-8"
+            )
+
+    monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
+
+    client_path = install_mcp_server.install_binaries(target_dir)
+
+    assert (
+        client_path.with_name(client_path.name + STAMP_SUFFIX).read_text(encoding="utf-8")
+        == '{"version":1}\n'
+    )
+
+
+def test_generic_mcp_install_removes_stale_client_build_stamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    release_root = repo_root / "target" / "release"
+    release_root.mkdir(parents=True)
+    target_dir = tmp_path / "installed"
+    platform_id = install_mcp_server.current_platform()
+    stale_client = target_dir / install_mcp_server.entrypoint_path(platform_id, "sky-cua-client")
+    stale_client.parent.mkdir(parents=True, exist_ok=True)
+    stale_client.write_text("old", encoding="utf-8")
+    stale_client.with_name(stale_client.name + STAMP_SUFFIX).write_text(
+        '{"source_fingerprint":"stale"}\n',
+        encoding="utf-8",
+    )
+
+    for binary_name in install_mcp_server.platform_runtime_binary_base_names(platform_id):
+        source_name = runtime_binary_source_name(platform_id, binary_name)
+        (release_root / source_name).write_text(binary_name, encoding="utf-8")
+
+    monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
+
+    client_path = install_mcp_server.install_binaries(target_dir)
+
+    assert not client_path.with_name(client_path.name + STAMP_SUFFIX).exists()
 
 
 def test_bundle_binary_install_copies_from_bundle_not_release_build(

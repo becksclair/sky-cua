@@ -59,6 +59,7 @@ from _plugin_bundle import (
     stop_unix_runtime_processes,
     stop_windows_cache_processes,
 )
+from deploy_freshness import STAMP_SUFFIX
 
 CLAUDE_MCP_ADD_TIMEOUT_SECONDS = 30
 
@@ -243,6 +244,24 @@ def copy_executable(src: Path, dst: Path) -> None:
             mode = temp_path.stat().st_mode
             temp_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         os.replace(temp_path, dst)
+    finally:
+        remove_path(temp_path)
+    copy_build_stamp_sidecar(src, dst)
+
+
+def copy_build_stamp_sidecar(src: Path, dst: Path) -> None:
+    src_stamp = src.with_name(src.name + STAMP_SUFFIX)
+    dst_stamp = dst.with_name(dst.name + STAMP_SUFFIX)
+    if not src_stamp.exists():
+        remove_path(dst_stamp)
+        return
+
+    ensure_parent(dst_stamp)
+    temp_path = atomic_sibling_path(dst_stamp, "tmp")
+    remove_path(temp_path)
+    try:
+        shutil.copy2(src_stamp, temp_path)
+        os.replace(temp_path, dst_stamp)
     finally:
         remove_path(temp_path)
 

@@ -177,6 +177,11 @@ AGENT_AUTH_ENV_KEYS = (
     "CONTEXT7_API_KEY",
     "SKY_CUA_SMOKE_KEEP_RAW_AGENT_LOG",
 )
+MCP_LAUNCH_POLICY_ENV_KEYS = (
+    "SKY_CUA_MCP_TOOL_PROFILE",
+    "SKY_CUA_BROWSER_EVAL",
+    "SKY_CUA_MODEL_SUPPORTS_IMAGES",
+)
 
 
 @dataclass(frozen=True)
@@ -1199,7 +1204,7 @@ def run_remote_profile(
         f"PATH={remote_root}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ]
     if profile in AGENT_AUTH_PROFILES:
-        for key in AGENT_AUTH_ENV_KEYS:
+        for key in (*AGENT_AUTH_ENV_KEYS, *MCP_LAUNCH_POLICY_ENV_KEYS):
             value = os.environ.get(key)
             if value:
                 profile_command.append(f"{key}={value}")
