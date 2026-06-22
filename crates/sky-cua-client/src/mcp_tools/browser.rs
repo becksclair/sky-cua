@@ -60,6 +60,7 @@ pub(super) fn handle_tool_call(
     tool_name: &str,
     arguments: Value,
     model: &crate::mcp_server::ModelSessionInfo,
+    browser_eval_enabled_policy: Option<bool>,
 ) -> Result<Value> {
     match tool_name {
         "browser_status" => match service.call(&browser_service_request(BrowserRequest::Status))? {
@@ -412,7 +413,7 @@ pub(super) fn handle_tool_call(
             }
         }
         "browser_eval" => {
-            if !browser_eval_enabled() {
+            if !browser_eval_enabled_policy.unwrap_or_else(browser_eval_enabled) {
                 return tool_error(
                     "BrowserEvalDisabled",
                     "browser_eval is disabled by default because it runs arbitrary \

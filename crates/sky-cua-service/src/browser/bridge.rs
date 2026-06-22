@@ -4,7 +4,7 @@ use sky_cua_platform::model::{
     BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
     BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
     BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserTargetKind, DiagnosticEntry,
-    browser_eval_enabled, normalize_browser_open_url,
+    normalize_browser_open_url,
 };
 use tokio::time::Instant as TokioInstant;
 
@@ -401,14 +401,30 @@ pub(crate) async fn press_key(
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn eval(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     expression: String,
 ) -> BrowserEvalResponse {
+    eval_with_policy(
+        target,
+        tab_id,
+        expression,
+        sky_cua_platform::model::browser_eval_enabled(),
+    )
+    .await
+}
+
+pub(crate) async fn eval_with_policy(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    expression: String,
+    browser_eval_enabled: bool,
+) -> BrowserEvalResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
-    if !browser_eval_enabled() {
+    if !browser_eval_enabled {
         return BrowserEvalResponse {
             target: resolved_target,
             tab_id: normalized_tab_id,

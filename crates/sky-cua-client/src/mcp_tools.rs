@@ -74,11 +74,16 @@ pub(crate) fn handle_session_tool_call(
         };
     }
     match registry.profile {
-        McpToolProfile::Legacy => {
-            handle_tool_call(service, heuristics, model, tool_name, arguments)
-        }
+        McpToolProfile::Legacy => handle_tool_call_with_browser_eval_policy(
+            service,
+            heuristics,
+            model,
+            tool_name,
+            arguments,
+            Some(registry.browser_eval_enabled),
+        ),
         McpToolProfile::Compact => {
-            handle_compact_tool_call(service, heuristics, model, tool_name, arguments)
+            handle_compact_tool_call(service, heuristics, model, registry, tool_name, arguments)
         }
     }
 }
@@ -87,6 +92,7 @@ fn handle_compact_tool_call(
     service: &impl McpService,
     heuristics: &HeuristicsRegistry,
     model: &ModelSessionInfo,
+    registry: &McpToolRegistry,
     tool_name: &str,
     arguments: Value,
 ) -> Result<Value> {
@@ -94,12 +100,13 @@ fn handle_compact_tool_call(
         Ok(call) => call,
         Err(error) => return Ok(compact_invalid_request_result(tool_name, error.to_string())),
     };
-    let legacy_result = handle_tool_call(
+    let legacy_result = handle_tool_call_with_browser_eval_policy(
         service,
         heuristics,
         model,
         call.legacy_name,
         call.arguments.clone(),
+        Some(registry.browser_eval_enabled),
     )?;
     Ok(compact_profile_result(tool_name, &call, legacy_result))
 }
@@ -383,6 +390,19 @@ pub(crate) fn handle_tool_call(
     tool_name: &str,
     arguments: Value,
 ) -> Result<Value> {
+    handle_tool_call_with_browser_eval_policy(
+        service, heuristics, model, tool_name, arguments, None,
+    )
+}
+
+fn handle_tool_call_with_browser_eval_policy(
+    service: &impl McpService,
+    heuristics: &HeuristicsRegistry,
+    model: &ModelSessionInfo,
+    tool_name: &str,
+    arguments: Value,
+    browser_eval_enabled: Option<bool>,
+) -> Result<Value> {
     match tool_name {
         "doctor" => match service.call(&ServiceRequest::Doctor)? {
             ServiceResponse::Doctor { report } => Ok(json!({
@@ -576,7 +596,7 @@ pub(crate) fn handle_tool_call(
         }
         "get_app_state" => app_state::handle_get_app_state(service, heuristics, arguments, model),
         name if browser::is_browser_tool(name) => {
-            browser::handle_tool_call(service, name, arguments, model)
+            browser::handle_tool_call(service, name, arguments, model, browser_eval_enabled)
         }
         name if phone::is_phone_tool(name) => {
             phone::handle_tool_call(service, name, arguments, model)
@@ -1235,14 +1255,14 @@ mod tests {
     use serde_json::{Value, json};
     use sky_cua_platform::model::{
         AccessibilitySetupReport, ActionName, ActionOutcome, ActionRequest, AgentCursorPoint,
-        AgentCursorState, AppInfo, AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope,
-        CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck,
-        DoctorDisplayTopologyReport, DoctorReadiness, DoctorReport, ElementNode,
-        ElementNumericValueReadback, ElementTextReadback, EnvironmentInfo, FocusedApp,
-        InputBackendKind, PortalCapabilities, RectF, ScrollDirection, SemanticBackendKind,
-        ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
-        SessionPresenceStatus, SetupCommandReport, ToolAvailability, ToolCapabilities,
-        WindowTargetingSetupReport,
+        AgentCursorState, AppInfo, AppStateSnapshot, BrowserEvalResponse, BrowserResponse,
+        BrowserTargetKind, CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode,
+        CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorDisplayTopologyReport,
+        DoctorReadiness, DoctorReport, ElementNode, ElementNumericValueReadback,
+        ElementTextReadback, EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities,
+        RectF, ScrollDirection, SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind,
+        SessionPresenceAction, SessionPresenceIntent, SessionPresenceStatus, SetupCommandReport,
+        ToolAvailability, ToolCapabilities, WindowTargetingSetupReport,
     };
 
     use crate::app_state::{
@@ -1365,6 +1385,48 @@ mod tests {
         assert_eq!(eval_result["isError"], true);
         assert_eq!(eval_result["structuredContent"]["code"], "FeatureDisabled");
         assert!(service.take_requests().is_empty());
+    }
+
+    #[test]
+    fn browser_eval_dispatch_uses_frozen_session_policy() {
+        unsafe { std::env::remove_var("SKY_CUA_BROWSER_EVAL") };
+        let service = FakeService::with_response(ServiceResponse::Browser {
+            response: BrowserResponse::Eval {
+                response: BrowserEvalResponse {
+                    target: BrowserTargetKind::UserChrome,
+                    tab_id: "tab-1".to_string(),
+                    value: Some(json!({"title": "ok"})),
+                    diagnostics: Vec::new(),
+                },
+            },
+        });
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(McpToolProfile::Legacy, true), &model);
+
+        let result = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "browser_eval",
+            json!({"tab_id": "tab-1", "expression": "document.title"}),
+        )
+        .expect("frozen eval policy should permit dispatch");
+
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["structuredContent"]["value"]["title"], "ok");
+        let mut requests = service.take_requests();
+        assert_eq!(requests.len(), 1);
+        match requests.remove(0) {
+            ServiceRequest::Browser { request } => {
+                assert!(matches!(
+                    request,
+                    sky_cua_platform::model::BrowserRequest::Eval { .. }
+                ));
+            }
+            other => panic!("expected browser eval request: {other:?}"),
+        }
     }
 
     #[test]

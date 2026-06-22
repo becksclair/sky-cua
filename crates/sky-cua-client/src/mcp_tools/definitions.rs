@@ -61,6 +61,7 @@ pub(crate) enum InactiveToolReason {
 #[derive(Debug, Clone)]
 pub(crate) struct McpToolRegistry {
     pub(crate) profile: McpToolProfile,
+    pub(crate) browser_eval_enabled: bool,
     tools: Value,
     active_names: BTreeSet<String>,
     inactive_names: BTreeMap<String, InactiveToolReason>,
@@ -169,6 +170,7 @@ pub(crate) fn build_tool_registry(
 
     McpToolRegistry {
         profile: process.profile,
+        browser_eval_enabled: process.browser_eval_enabled,
         tools,
         active_names,
         inactive_names,

@@ -18,7 +18,7 @@ mod transport;
 mod tests;
 
 pub(crate) use bridge::{
-    browser_bridge_diagnostics, browser_env_values_present, claim_tab, click, eval, list_tabs,
-    move_mouse, navigate, open_tab, press_key, screenshot, scroll, snapshot, type_text,
+    browser_bridge_diagnostics, browser_env_values_present, claim_tab, click, eval_with_policy,
+    list_tabs, move_mouse, navigate, open_tab, press_key, screenshot, scroll, snapshot, type_text,
 };
 pub(crate) use status::{browser_status_from_deferred_doctor, browser_status_from_doctor};

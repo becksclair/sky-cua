@@ -4,7 +4,9 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::{BROWSER_EVAL_ENV, BrowserTargetKind};
 use tokio::net::UnixListener;
 
-use crate::browser::bridge::{eval, list_tabs, move_mouse, navigate, open_tab, press_key};
+use crate::browser::bridge::{
+    eval, eval_with_policy, list_tabs, move_mouse, navigate, open_tab, press_key,
+};
 use crate::browser::protocol::{LIST_TABS_REQUEST_ID, read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
 use crate::browser::tabs::parse_tabs;
@@ -571,6 +573,24 @@ async fn eval_disabled_without_opt_in_returns_diagnostic() {
         Some(BrowserTargetKind::UserChrome),
         "515".to_string(),
         "(() => 1)()".to_string(),
+    )
+    .await;
+
+    assert_eq!(response.value, None);
+    assert_eq!(response.diagnostics.len(), 1);
+    assert_eq!(response.diagnostics[0].code, "BrowserEvalDisabled");
+}
+
+#[tokio::test]
+async fn eval_policy_argument_overrides_request_time_env() {
+    let _env_guard = env_lock().await;
+    unsafe { std::env::set_var(BROWSER_EVAL_ENV, "on") };
+
+    let response = eval_with_policy(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        "(() => 1)()".to_string(),
+        false,
     )
     .await;
 

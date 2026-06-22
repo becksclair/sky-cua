@@ -11,7 +11,7 @@ use sky_cua_platform::model::{
     BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, CaptureInfo,
     CaptureScreenMode, DiagnosticEntry, DisplayTarget, PhoneBackendKind, PhoneRequest,
     ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent, WindowInfo,
-    WindowTarget,
+    WindowTarget, browser_eval_enabled,
 };
 
 use crate::action_router::route_action;
@@ -34,6 +34,7 @@ pub struct ServiceDaemon {
     session_presence_config: SessionPresenceConfig,
     session_presence_held: tokio::sync::Mutex<bool>,
     desktop_lane: tokio::sync::Mutex<()>,
+    browser_eval_enabled: bool,
     socket_path: PathBuf,
 }
 
@@ -67,6 +68,7 @@ impl ServiceDaemon {
             session_presence_config: SessionPresenceConfig::from_env(),
             session_presence_held: tokio::sync::Mutex::new(false),
             desktop_lane: tokio::sync::Mutex::new(()),
+            browser_eval_enabled: browser_eval_enabled(),
             socket_path,
         })
     }
@@ -151,6 +153,7 @@ impl ServiceDaemon {
             session_presence_config: SessionPresenceConfig::disabled(),
             session_presence_held: tokio::sync::Mutex::new(false),
             desktop_lane: tokio::sync::Mutex::new(()),
+            browser_eval_enabled: false,
             socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
         })
     }
@@ -663,7 +666,13 @@ impl ServiceDaemon {
                 debug!(?target, ?tab_id, "handling browser_eval request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::Eval {
-                        response: crate::browser::eval(target, tab_id, expression).await,
+                        response: crate::browser::eval_with_policy(
+                            target,
+                            tab_id,
+                            expression,
+                            self.browser_eval_enabled,
+                        )
+                        .await,
                     },
                 }
             }
@@ -2530,6 +2539,7 @@ mod tests {
             session_presence_config,
             session_presence_held: tokio::sync::Mutex::new(false),
             desktop_lane: tokio::sync::Mutex::new(()),
+            browser_eval_enabled: false,
             socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
         }
     }
