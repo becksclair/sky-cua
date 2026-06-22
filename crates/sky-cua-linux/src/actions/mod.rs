@@ -346,9 +346,25 @@ where
         match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
                 if let Some((x, y)) = target_point {
-                    self.runtime
+                    if let Err(portal_error) = self
+                        .runtime
                         .portal_scroll_vertical_at(x, y, delta_y, steps)
-                        .await?;
+                        .await
+                    {
+                        if scroll_target_requested(&request)
+                            && let Ok(outcome) = self
+                                .linux_virtual_targeted_scroll_fallback(
+                                    &request,
+                                    delta_y,
+                                    steps,
+                                    &portal_error,
+                                )
+                                .await
+                        {
+                            return Ok(outcome);
+                        }
+                        return Err(portal_error);
+                    }
                 } else if let Some(delta_y) = delta_y {
                     self.runtime.portal_scroll_vertical_smooth(delta_y).await?;
                 } else {
@@ -405,6 +421,47 @@ where
                 "no physical input backend is available for scroll",
             )),
         }
+    }
+
+    async fn linux_virtual_targeted_scroll_fallback(
+        &self,
+        request: &ActionRequest,
+        delta_y: Option<f64>,
+        steps: i32,
+        portal_error: &BackendError,
+    ) -> Result<ActionOutcome, BackendError> {
+        let mut virtual_request = request.clone();
+        if let Some(environment) = virtual_request.environment.as_mut() {
+            environment.input_backend = InputBackendKind::LinuxVirtualInput;
+        }
+        let (x, y) =
+            action_point_for_backend(&virtual_request, InputBackendKind::LinuxVirtualInput)?;
+        if self
+            .runtime
+            .semantic_scroll_vertical_at(
+                x,
+                y,
+                delta_y,
+                steps,
+                virtual_request.resolved_focused_app.as_ref(),
+            )
+            .await
+            .unwrap_or(false)
+        {
+            return Ok(success_with_diagnostics(
+                "Scrolled through the AT-SPI value fallback for Linux virtual input.",
+                vec![portal_targeted_scroll_fallback_diagnostic(portal_error)],
+            ));
+        }
+        let dispatch_point = linux_virtual_dispatch_point(&virtual_request, (x, y));
+        let mut diagnostics = vec![portal_targeted_scroll_fallback_diagnostic(portal_error)];
+        diagnostics.extend(dispatch_point.diagnostics());
+        self.runtime
+            .virtual_scroll_vertical_at(dispatch_point.x, dispatch_point.y, steps)?;
+        Ok(success_with_diagnostics(
+            "Scrolled through the Linux virtual input fallback after the RemoteDesktop portal rejected targeted scroll.",
+            diagnostics,
+        ))
     }
 
     async fn drag(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
@@ -843,6 +900,16 @@ fn scroll_target_requested(request: &ActionRequest) -> bool {
     explicit_point(&request.arguments).is_some()
         || request.element_index.is_some()
         || request.resolved_element.is_some()
+}
+
+fn portal_targeted_scroll_fallback_diagnostic(error: &BackendError) -> DiagnosticEntry {
+    DiagnosticEntry {
+        code: "PortalTargetedScrollFallback".to_string(),
+        message:
+            "RemoteDesktop portal rejected targeted scroll; retried through Linux virtual input."
+                .to_string(),
+        details: Some(format!("portal_error={}: {}", error.code, error.message)),
+    }
 }
 
 fn semantic_backend_ref<'a>(
@@ -1303,6 +1370,7 @@ mod tests {
     struct FakeRuntime {
         semantic_default: bool,
         xtest_available: bool,
+        portal_scroll_at_denied: bool,
         policy: Option<ResolvedSetValueFallbackPolicy>,
         events: Mutex<Vec<String>>,
         diagnostics: Mutex<Vec<DiagnosticEntry>>,
@@ -1435,6 +1503,12 @@ mod tests {
             steps: i32,
         ) -> Result<(), BackendError> {
             self.push_event(format!("portal_scroll_at:{x},{y}:{delta_y:?}:{steps}"));
+            if self.portal_scroll_at_denied {
+                return Err(BackendError::new(
+                    BackendErrorCode::ActionUnsupportedForEnvironment,
+                    "Session is not allowed to call NotifyPointer methods",
+                ));
+            }
             Ok(())
         }
 
@@ -1952,6 +2026,62 @@ mod tests {
             "Scrolled through the RemoteDesktop portal."
         );
         assert_eq!(runtime.take_events(), vec!["portal_scroll_smooth:240"]);
+    }
+
+    #[tokio::test]
+    async fn executor_targeted_scroll_falls_back_to_virtual_input_when_portal_rejects_pointer_motion()
+     {
+        let runtime = FakeRuntime {
+            portal_scroll_at_denied: true,
+            ..FakeRuntime::default()
+        };
+        let mut request =
+            action_request(ActionName::Scroll, json!({"direction": "down", "pages": 1}));
+        request.resolved_element = Some(ElementNode {
+            element_index: 7,
+            parent_index: None,
+            role: "scroll_pane".to_string(),
+            name: Some("Scroll region".to_string()),
+            description: None,
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
+            state_flags: Vec::new(),
+            semantic_actions: Vec::new(),
+            bounds: Some(RectF {
+                x: 10.0,
+                y: 20.0,
+                width: 30.0,
+                height: 40.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            backend_ref: None,
+        });
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("targeted scroll should fall back to virtual input");
+
+        assert_eq!(
+            outcome.message,
+            "Scrolled through the Linux virtual input fallback after the RemoteDesktop portal rejected targeted scroll."
+        );
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "PortalTargetedScrollFallback")
+        );
+        assert_eq!(
+            runtime.take_events(),
+            vec![
+                "portal_scroll_at:25,40:Some(-120.0):1",
+                "semantic_scroll_at:25,40:Some(-120.0):1",
+                "virtual_scroll_at:25,40:1"
+            ]
+        );
     }
 
     #[tokio::test]

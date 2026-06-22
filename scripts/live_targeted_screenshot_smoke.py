@@ -22,7 +22,6 @@ from live_desktop_smoke import (  # type: ignore[import-not-found]
     McpClient,
     require_ok,
     run_zenity_input,
-    wait_for_app_snapshot,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -62,9 +61,7 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def diagnostic_codes(result: Mapping[str, Any]) -> set[str]:
-    structured = result.get("structuredContent")
-    if not isinstance(structured, Mapping):
-        return set()
+    structured = grouped_structured_result(result)
     diagnostics = structured.get("diagnostics")
     if not isinstance(diagnostics, list):
         return set()
@@ -76,8 +73,8 @@ def diagnostic_codes(result: Mapping[str, Any]) -> set[str]:
 
 
 def require_doctor_display_topology(result: Mapping[str, Any]) -> Mapping[str, Any]:
-    structured = result.get("structuredContent")
-    if not isinstance(structured, Mapping):
+    structured = grouped_structured_result(result)
+    if not structured:
         raise RuntimeError("doctor did not return structuredContent")
     topology = structured.get("display_topology")
     if not isinstance(topology, Mapping):
@@ -168,6 +165,50 @@ def zenity_ok_button_point(capture: Mapping[str, Any]) -> dict[str, float]:
     return {"x": pixel_width * 0.76, "y": pixel_height * 0.89}
 
 
+def grouped_structured_result(result: Mapping[str, Any]) -> Mapping[str, Any]:
+    structured = result.get("structuredContent") or {}
+    if not isinstance(structured, Mapping):
+        return {}
+    nested = structured.get("result")
+    return nested if isinstance(nested, Mapping) else structured
+
+
+def wait_for_desktop_snapshot(
+    client: McpClient, title_hint: str, *, deadline: float
+) -> Mapping[str, Any]:
+    request_id = 10
+    lowered = title_hint.lower()
+    while time.time() < deadline:
+        apps_result = client.tools_call(
+            request_id, "list_resources", {"surface": "desktop", "resource": "apps"}
+        )
+        request_id += 1
+        apps = grouped_structured_result(apps_result).get("apps")
+        if not isinstance(apps, list):
+            time.sleep(0.5)
+            continue
+        matching_app = next(
+            (
+                app
+                for app in apps
+                if isinstance(app, Mapping) and lowered in ((app.get("window_title") or "").lower())
+            ),
+            None,
+        )
+        app_id = matching_app.get("app_id") if isinstance(matching_app, Mapping) else None
+        if isinstance(app_id, str) and app_id:
+            result = client.tools_call(
+                request_id,
+                "observe",
+                {"surface": "desktop", "app_id": app_id},
+            )
+            request_id += 1
+            require_ok(result, "observe desktop app snapshot")
+            return grouped_structured_result(result)
+        time.sleep(0.5)
+    raise RuntimeError(f"timed out waiting for an app with title containing {title_hint!r}")
+
+
 def find_window_by_title_and_pid(
     client: McpClient,
     title: str,
@@ -176,9 +217,11 @@ def find_window_by_title_and_pid(
     *,
     request_id: int,
 ) -> Mapping[str, Any]:
-    result = client.tools_call(request_id, "list_windows", {})
+    result = client.tools_call(
+        request_id, "list_resources", {"surface": "desktop", "resource": "windows"}
+    )
     write_json(artifact_dir / f"windows-{request_id}.json", result)
-    windows = (result.get("structuredContent") or {}).get("windows") or []
+    windows = grouped_structured_result(result).get("windows") or []
     title_matches = [w for w in windows if isinstance(w, Mapping) and w.get("title") == title]
     window = next(
         (w for w in title_matches if w.get("pid") == pid),
@@ -251,11 +294,10 @@ def main() -> int:
                 client.initialize()
                 tools = {tool["name"] for tool in client.tools_list()}
                 missing = {
-                    "click",
-                    "focused_window",
-                    "get_app_state",
-                    "list_windows",
-                    "screenshot",
+                    "capture_desktop",
+                    "desktop_pointer",
+                    "list_resources",
+                    "observe",
                 } - tools
                 if missing:
                     raise RuntimeError(
@@ -267,7 +309,7 @@ def main() -> int:
                 require_ok(doctor_result, "doctor display topology")
                 require_doctor_display_topology(doctor_result)
 
-                app_snapshot = wait_for_app_snapshot(
+                app_snapshot = wait_for_desktop_snapshot(
                     client, TARGET_TITLE, deadline=time.time() + 30
                 )
                 write_json(artifact_dir / "target-app-state.json", app_snapshot)
@@ -287,19 +329,19 @@ def main() -> int:
                 )
                 time.sleep(0.8)
 
-                untargeted_result = client.tools_call(21, "screenshot", {})
+                untargeted_result = client.tools_call(21, "capture_desktop", {})
                 write_json(artifact_dir / "untargeted-screenshot-result.json", untargeted_result)
                 require_ok(untargeted_result, "untargeted screenshot reference")
-                untargeted_snapshot = untargeted_result.get("structuredContent")
+                untargeted_snapshot = grouped_structured_result(untargeted_result)
                 if not isinstance(untargeted_snapshot, Mapping):
                     raise RuntimeError("untargeted screenshot did not return structuredContent")
                 reference_capture = require_capture(untargeted_snapshot)
 
                 target = {"window_id": target_window["window_id"]}
-                screenshot_result = client.tools_call(22, "screenshot", target)
+                screenshot_result = client.tools_call(22, "capture_desktop", target)
                 write_json(artifact_dir / "targeted-screenshot-result.json", screenshot_result)
                 require_ok(screenshot_result, "targeted screenshot")
-                snapshot = screenshot_result.get("structuredContent")
+                snapshot = grouped_structured_result(screenshot_result)
                 if not isinstance(snapshot, Mapping):
                     raise RuntimeError("targeted screenshot did not return structuredContent")
                 snapshot_id = snapshot.get("snapshot_id")
@@ -316,9 +358,13 @@ def main() -> int:
                         f"result={json.dumps(screenshot_result, indent=2, sort_keys=True)}"
                     )
 
-                focused_result = client.tools_call(23, "focused_window", {})
+                focused_result = client.tools_call(
+                    23,
+                    "list_resources",
+                    {"surface": "desktop", "resource": "focused_window"},
+                )
                 write_json(artifact_dir / "focused-window-after-screenshot.json", focused_result)
-                focused_window = (focused_result.get("structuredContent") or {}).get("window")
+                focused_window = grouped_structured_result(focused_result).get("window")
                 if (
                     not isinstance(focused_window, Mapping)
                     or focused_window.get("title") != TARGET_TITLE
@@ -337,8 +383,8 @@ def main() -> int:
                 write_json(artifact_dir / "targeted-click-point.json", screenshot_point)
                 click_result = client.tools_call(
                     24,
-                    "click",
-                    {"snapshot_id": snapshot_id, **screenshot_point},
+                    "desktop_pointer",
+                    {"operation": "click", "snapshot_id": snapshot_id, **screenshot_point},
                 )
                 write_json(artifact_dir / "targeted-click-result.json", click_result)
                 require_ok(click_result, "targeted screenshot coordinate click")

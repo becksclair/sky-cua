@@ -485,8 +485,8 @@ def run_mcp_list_tabs_proof(
         tool_names.sort()
         result = client.tools_call(
             3,
-            "browser_list_tabs",
-            {"target": "user_chrome"},
+            "list_resources",
+            {"surface": "browser", "resource": "tabs", "target": "user_chrome"},
         )
     finally:
         try:
@@ -494,19 +494,21 @@ def run_mcp_list_tabs_proof(
         finally:
             stop_service_processes_for_socket(service_socket_path)
 
-    if "browser_list_tabs" not in tool_names:
-        raise RuntimeError(f"browser_list_tabs was not advertised by tools/list: {tool_names!r}")
+    if "list_resources" not in tool_names:
+        raise RuntimeError(f"list_resources was not advertised by tools/list: {tool_names!r}")
     structured = result.get("structuredContent")
     if not isinstance(structured, dict):
-        raise RuntimeError(f"browser_list_tabs returned no structuredContent: {result!r}")
+        raise RuntimeError(f"list_resources returned no structuredContent: {result!r}")
+    grouped_result = structured.get("result")
+    if not isinstance(grouped_result, dict):
+        raise RuntimeError(f"list_resources returned invalid grouped payload: {structured!r}")
+    structured = grouped_result
     tabs = structured.get("tabs")
     if not isinstance(tabs, list):
-        raise RuntimeError(f"browser_list_tabs returned invalid tabs payload: {structured!r}")
+        raise RuntimeError(f"list_resources returned invalid tabs payload: {structured!r}")
     diagnostics = structured.get("diagnostics", [])
     if not isinstance(diagnostics, list):
-        raise RuntimeError(
-            f"browser_list_tabs returned invalid diagnostics payload: {structured!r}"
-        )
+        raise RuntimeError(f"list_resources returned invalid diagnostics payload: {structured!r}")
     if diagnostics:
         raise RuntimeError(f"browser_list_tabs reported diagnostics: {diagnostics!r}")
     if not tabs:

@@ -211,7 +211,11 @@ fn phone_action_schemas_pin_required_fields() {
     let pointer_constraints = &pointer["inputSchema"]["allOf"];
     assert_eq!(
         pointer_constraints[0]["then"]["required"],
-        json!(["session_id", "x", "y"])
+        json!(["operation", "session_id", "x", "y"])
+    );
+    assert_eq!(
+        pointer_constraints[0]["then"]["additionalProperties"],
+        json!(false)
     );
     assert!(
         pointer_constraints[0]["then"]["anyOf"]
@@ -232,7 +236,11 @@ fn phone_action_schemas_pin_required_fields() {
     assert_eq!(keyboard["inputSchema"]["required"], json!(["operation"]));
     assert_eq!(
         keyboard["inputSchema"]["allOf"][0]["then"]["required"],
-        json!(["session_id", "text"])
+        json!(["operation", "session_id", "text"])
+    );
+    assert_eq!(
+        keyboard["inputSchema"]["allOf"][0]["then"]["additionalProperties"],
+        json!(false)
     );
 
     let pair = find_tool(&definitions, "phone_pair_wireless");
@@ -260,7 +268,7 @@ fn phone_action_schemas_pin_required_fields() {
         "phone_app_install no longer advertises apk_path"
     );
     assert_eq!(
-        install["inputSchema"]["properties"]["mode"]["enum"],
+        install["inputSchema"]["properties"]["mode"]["anyOf"][0]["enum"],
         json!(["single", "multiple", "multi_package"])
     );
     assert_eq!(install["annotations"]["destructiveHint"], true);
@@ -620,6 +628,32 @@ fn phone_notifications_maps_and_flags_error_on_diagnostic() {
             assert_eq!(request.session.session_id.as_deref(), Some("sess-1"));
             assert_eq!(request.limit, Some(5));
         }
+        other => panic!("expected notifications request, got {other:?}"),
+    }
+
+    let whitespace_service = FakeService::with_response(phone_service_response!(Notifications(
+        PhoneNotificationsResponse {
+            session_id: " ".to_string(),
+            serial: "ABC".to_string(),
+            backend: PhoneBackendKind::Adb,
+            listener_enabled: true,
+            events: Vec::new(),
+            truncated: false,
+            diagnostics: Vec::new(),
+        }
+    )));
+    let result = call(
+        &whitespace_service,
+        &image_model(),
+        "phone_notifications",
+        json!({"session_id": " "}),
+    );
+
+    assert_eq!(result["isError"], false);
+    match &whitespace_service.take_requests()[0] {
+        ServiceRequest::Phone {
+            request: PhoneRequest::Notifications(request),
+        } => assert_eq!(request.session.session_id.as_deref(), Some(" ")),
         other => panic!("expected notifications request, got {other:?}"),
     }
 }

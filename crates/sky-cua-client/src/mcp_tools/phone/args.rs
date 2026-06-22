@@ -14,10 +14,11 @@ use sky_cua_platform::model::{
 use super::super::{optional_non_empty_string, parse_optional_usize};
 
 /// Pull the shared `session_id`/`serial` selector out of any phone request.
-/// Both fields are optional and tolerate blank strings (treated as absent).
+/// Session IDs are literal: required post-connect calls must not collapse
+/// whitespace to "absent" and fall back to another active session.
 pub(crate) fn parse_phone_selector(arguments: &Value) -> Result<PhoneSessionSelector> {
     Ok(PhoneSessionSelector {
-        session_id: parse_optional_string(arguments, "session_id", "session_id")?,
+        session_id: parse_optional_literal_string(arguments, "session_id", "session_id")?,
         serial: parse_optional_string(arguments, "serial", "serial")?,
     })
 }
@@ -162,6 +163,28 @@ pub(crate) fn parse_optional_string(
         return Err(anyhow!("{label} must be a string"));
     };
     Ok(optional_non_empty_string(raw_value))
+}
+
+/// Parse an optional string field, treating only empty/null as absent.
+pub(crate) fn parse_optional_literal_string(
+    arguments: &Value,
+    name: &str,
+    label: &str,
+) -> Result<Option<String>> {
+    let Some(raw_value) = arguments.get(name) else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
+    }
+    let Some(raw_value) = raw_value.as_str() else {
+        return Err(anyhow!("{label} must be a string"));
+    };
+    if raw_value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(raw_value.to_owned()))
+    }
 }
 
 /// Parse an optional bool field, defaulting when absent or null.

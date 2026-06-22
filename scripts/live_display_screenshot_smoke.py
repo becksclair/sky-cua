@@ -46,6 +46,14 @@ def require_display_id(capture: Mapping[str, Any], expected: str, label: str) ->
         raise RuntimeError(f"{label} display_id={actual!r}, expected {expected!r}")
 
 
+def grouped_structured_result(result: Mapping[str, Any]) -> Mapping[str, Any]:
+    structured = result.get("structuredContent") or {}
+    if not isinstance(structured, Mapping):
+        return {}
+    nested = structured.get("result")
+    return nested if isinstance(nested, Mapping) else structured
+
+
 def require_positive_capture(capture: Mapping[str, Any], label: str) -> None:
     pixel_size = require_mapping(capture, "pixel_size")
     logical_rect = require_mapping(capture, "logical_rect")
@@ -69,7 +77,9 @@ def require_displays(snapshot: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 def require_windows(snapshot: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     windows = snapshot.get("windows")
     if not isinstance(windows, list) or not windows:
-        raise RuntimeError("display screenshot smoke requires windows from list_windows")
+        raise RuntimeError(
+            "display screenshot smoke requires windows from list_resources desktop/windows"
+        )
     return [window for window in windows if isinstance(window, Mapping)]
 
 
@@ -192,7 +202,7 @@ def main() -> int:
             try:
                 client.initialize()
                 tools = {tool["name"] for tool in client.tools_list()}
-                missing = {"click", "list_windows", "screenshot"} - tools
+                missing = {"capture_desktop", "desktop_pointer", "list_resources"} - tools
                 if missing:
                     raise RuntimeError(
                         f"MCP server did not advertise required tools: {sorted(missing)}"
@@ -204,12 +214,14 @@ def main() -> int:
                 require_doctor_display_topology(doctor_result)
 
                 time.sleep(0.8)
-                windows_result = client.tools_call(20, "list_windows", {})
+                windows_result = client.tools_call(
+                    20, "list_resources", {"surface": "desktop", "resource": "windows"}
+                )
                 write_json(artifact_dir / "windows-20.json", windows_result)
-                require_ok(windows_result, "list_windows")
-                windows_snapshot = windows_result.get("structuredContent")
+                require_ok(windows_result, "list_resources desktop/windows")
+                windows_snapshot = grouped_structured_result(windows_result)
                 if not isinstance(windows_snapshot, Mapping):
-                    raise RuntimeError("list_windows did not return structuredContent")
+                    raise RuntimeError("desktop/windows list did not return structuredContent")
                 displays = require_displays(windows_snapshot)
                 windows = require_windows(windows_snapshot)
                 target_window = find_window_by_title_and_pid(
@@ -217,10 +229,10 @@ def main() -> int:
                 )
                 write_json(artifact_dir / "displays.json", {"displays": displays})
 
-                default_result = client.tools_call(21, "screenshot", {})
+                default_result = client.tools_call(21, "capture_desktop", {})
                 write_json(artifact_dir / "default-primary-screenshot-result.json", default_result)
                 require_ok(default_result, "default primary screenshot")
-                default_snapshot = default_result.get("structuredContent")
+                default_snapshot = grouped_structured_result(default_result)
                 if not isinstance(default_snapshot, Mapping):
                     raise RuntimeError("default screenshot did not return structuredContent")
                 primary = primary_display(displays)
@@ -230,10 +242,12 @@ def main() -> int:
                 require_display_id(default_capture, primary_id, "default screenshot")
                 require_positive_capture(default_capture, "default screenshot")
 
-                primary_result = client.tools_call(22, "screenshot", {"display_id": primary_id})
+                primary_result = client.tools_call(
+                    22, "capture_desktop", {"display_id": primary_id}
+                )
                 write_json(artifact_dir / "explicit-primary-screenshot-result.json", primary_result)
                 require_ok(primary_result, "explicit primary display screenshot")
-                primary_snapshot = primary_result.get("structuredContent")
+                primary_snapshot = grouped_structured_result(primary_result)
                 if not isinstance(primary_snapshot, Mapping):
                     raise RuntimeError(
                         "explicit primary screenshot did not return structuredContent"
@@ -264,14 +278,14 @@ def main() -> int:
                 else:
                     secondary_id = display_id(secondary)
                     secondary_result = client.tools_call(
-                        23, "screenshot", {"display_id": secondary_id}
+                        23, "capture_desktop", {"display_id": secondary_id}
                     )
                     write_json(
                         artifact_dir / "explicit-secondary-screenshot-result.json",
                         secondary_result,
                     )
                     require_ok(secondary_result, "explicit secondary display screenshot")
-                    secondary_snapshot = secondary_result.get("structuredContent")
+                    secondary_snapshot = grouped_structured_result(secondary_result)
                     if not isinstance(secondary_snapshot, Mapping):
                         raise RuntimeError(
                             "explicit secondary screenshot did not return structuredContent"
@@ -285,10 +299,12 @@ def main() -> int:
                     )
                     require_positive_capture(secondary_capture, "explicit secondary screenshot")
 
-                all_result = client.tools_call(24, "screenshot", {"capture_all_displays": True})
+                all_result = client.tools_call(
+                    24, "capture_desktop", {"capture_all_displays": True}
+                )
                 write_json(artifact_dir / "all-displays-screenshot-result.json", all_result)
                 require_ok(all_result, "all-displays screenshot")
-                all_snapshot = all_result.get("structuredContent")
+                all_snapshot = grouped_structured_result(all_result)
                 if not isinstance(all_snapshot, Mapping):
                     raise RuntimeError("all-displays screenshot did not return structuredContent")
                 all_capture = require_capture(all_snapshot)
@@ -307,11 +323,11 @@ def main() -> int:
                 ):
                     target_display_id = target_display["display_id"]
                 target_result = client.tools_call(
-                    25, "screenshot", {"display_id": target_display_id}
+                    25, "capture_desktop", {"display_id": target_display_id}
                 )
                 write_json(artifact_dir / "target-display-screenshot-result.json", target_result)
                 require_ok(target_result, "target display screenshot")
-                target_snapshot = target_result.get("structuredContent")
+                target_snapshot = grouped_structured_result(target_result)
                 if not isinstance(target_snapshot, Mapping):
                     raise RuntimeError("target display screenshot did not return structuredContent")
                 target_snapshot_id = target_snapshot.get("snapshot_id")
@@ -330,7 +346,9 @@ def main() -> int:
                 )
                 write_json(artifact_dir / "target-display-click-point.json", click_point)
                 click_result = client.tools_call(
-                    26, "click", {"snapshot_id": target_snapshot_id, **click_point}
+                    26,
+                    "desktop_pointer",
+                    {"operation": "click", "snapshot_id": target_snapshot_id, **click_point},
                 )
                 write_json(artifact_dir / "target-display-click-result.json", click_result)
                 require_ok(click_result, "display screenshot coordinate click")

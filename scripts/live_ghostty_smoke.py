@@ -22,6 +22,7 @@ from typing import Any
 from live_desktop_smoke import (  # type: ignore[import-not-found]
     CLIENT,
     McpClient,
+    grouped_structured_result,
     require_no_portal_approval_pending,
     require_ok,
     wait_for_app_snapshot_result,
@@ -151,7 +152,7 @@ def main() -> int:
         try:
             client.initialize()
             tools = {tool["name"] for tool in client.tools_list()}
-            missing = sorted({"list_apps", "get_app_state", "type_text", "press_key"} - tools)
+            missing = sorted({"desktop_keyboard", "list_resources", "observe"} - tools)
             if missing:
                 raise RuntimeError(f"MCP server did not advertise required tools: {missing}")
 
@@ -197,20 +198,20 @@ def main() -> int:
 
             type_summary = client.tools_call(
                 30,
-                "type_text",
+                "desktop_keyboard",
                 {
+                    "operation": "type_text",
                     "snapshot_id": snapshot["snapshot_id"],
-                    "element_index": target["element_index"],
                     "text": SUMMARY_COMMAND,
                 },
             )
             require_ok(type_summary, "Ghostty summary type_text")
             run_summary = client.tools_call(
                 31,
-                "press_key",
+                "desktop_keyboard",
                 {
+                    "operation": "press_key",
                     "snapshot_id": snapshot["snapshot_id"],
-                    "element_index": target["element_index"],
                     "key": "Enter",
                 },
             )
@@ -226,20 +227,20 @@ def main() -> int:
 
             type_count = client.tools_call(
                 32,
-                "type_text",
+                "desktop_keyboard",
                 {
+                    "operation": "type_text",
                     "snapshot_id": snapshot["snapshot_id"],
-                    "element_index": target["element_index"],
                     "text": COUNT_COMMAND,
                 },
             )
             require_ok(type_count, "Ghostty count type_text")
             run_count = client.tools_call(
                 33,
-                "press_key",
+                "desktop_keyboard",
                 {
+                    "operation": "press_key",
                     "snapshot_id": snapshot["snapshot_id"],
-                    "element_index": target["element_index"],
                     "key": "Enter",
                 },
             )
@@ -269,10 +270,10 @@ def main() -> int:
                 )
             )
             print(
-                f"type_text result: {json.dumps(type_summary.get('structuredContent'), sort_keys=True)}"
+                f"type_text result: {json.dumps(grouped_structured_result(type_summary), sort_keys=True)}"
             )
             print(
-                f"press_key result: {json.dumps(run_summary.get('structuredContent'), sort_keys=True)}"
+                f"press_key result: {json.dumps(grouped_structured_result(run_summary), sort_keys=True)}"
             )
             print(f"summary bytes: {final_text!r}")
             print(f"count file: {count_text!r}")

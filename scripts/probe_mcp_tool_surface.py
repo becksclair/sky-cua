@@ -18,10 +18,10 @@ from pathlib import Path
 from typing import Any
 
 from _mcp_stdio import McpClient
+from _plugin_bundle import DEFAULT_CODEX_HOME, installed_plugin_root
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEV_CLIENT = REPO_ROOT / "bin" / "sky-cua-client"
-INSTALLED_CLIENT = REPO_ROOT / "dist" / "plugin" / "sky-cua" / "bin" / "sky-cua-client"
 
 GROUPED_TOOLS: frozenset[str] = frozenset(
     {
@@ -152,6 +152,14 @@ def require_grouped_action_shape(tools: Iterable[dict[str, Any]]) -> None:
 
 
 def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
+    status = _tool_schema(by_name, "status")
+    phone_status = _conditional_then_properties(status, "component", "phone")
+    if "refresh_devices" not in phone_status:
+        raise ProbeFailure("status phone branch must expose refresh_devices")
+    companion_status = _conditional_then_properties(status, "component", "phone_companion")
+    if "session_id" not in companion_status:
+        raise ProbeFailure("status phone_companion branch must expose session_id")
+
     browser_move = _tool_schema(by_name, "browser_move_mouse")
     browser_input = _tool_schema(by_name, "browser_input")
     browser_scroll = _tool_schema(by_name, "browser_scroll")
@@ -162,11 +170,12 @@ def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
             raise ProbeFailure(f"{name} must not expose wait_for_arrival")
 
     browser_open = _tool_schema(by_name, "browser_open")
-    if (
-        _properties(browser_open).get("url", {}).get("pattern")
-        != r"^(https?://[^\s]+|about:blank)$"
+    if not _optional_url_schema_accepts_only_http_about_or_absent(
+        _properties(browser_open).get("url", {})
     ):
-        raise ProbeFailure("browser URL schema must use the anchored HTTP/about:blank pattern")
+        raise ProbeFailure(
+            "browser_open URL schema must allow only anchored HTTP/about:blank or absent sentinels"
+        )
 
     pointer = _tool_schema(by_name, "phone_pointer")
     if not _all_of_has_then_required(pointer, "tap", ["session_id", "x", "y"]):
@@ -184,10 +193,10 @@ def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
     capture_backend = _properties(_tool_schema(by_name, "capture_screen")).get("backend", {})
     connect_backend = _properties(_tool_schema(by_name, "phone_connection")).get("backend", {})
     for name, backend in [("observe", observe_backend), ("capture_screen", capture_backend)]:
-        enum = backend.get("enum")
+        enum = _schema_enum_values(backend)
         if not isinstance(enum, list) or "none" in enum or "scrcpy" in enum:
             raise ProbeFailure(f"{name} backend request enum must exclude none and scrcpy")
-    connect_enum = connect_backend.get("enum")
+    connect_enum = _schema_enum_values(connect_backend)
     if not isinstance(connect_enum, list) or "none" in connect_enum:
         raise ProbeFailure("phone_connection backend request enum must exclude none")
     if not _all_of_has_then_required(
@@ -198,7 +207,7 @@ def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
     desktop_capture = _tool_schema(by_name, "capture_desktop")
     desktop_capture_props = _properties(desktop_capture)
     for name in ["display_id", "display_name"]:
-        if desktop_capture_props.get(name, {}).get("minLength") != 1:
+        if not _string_schema_branch_has_min_length(desktop_capture_props.get(name), 1):
             raise ProbeFailure(f"capture_desktop {name} must reject empty strings")
     if not _schema_contains_not_anyof_required(desktop_capture, "window_id", "display_id"):
         raise ProbeFailure("capture_desktop must reject mixed window/display selectors")
@@ -307,54 +316,114 @@ def _conditional_then_has_snapshot_or_raw(schema: dict[str, Any], operation: str
 
 
 def _conditional_operation(schema: dict[str, Any]) -> str | None:
+    return _conditional_const(schema, "operation")
+
+
+def _conditional_const(schema: dict[str, Any], field: str) -> str | None:
     condition = schema.get("if")
     if not isinstance(condition, dict):
         return None
     properties = condition.get("properties")
     if not isinstance(properties, dict):
         return None
-    operation = properties.get("operation")
-    if not isinstance(operation, dict):
+    constraint = properties.get(field)
+    if not isinstance(constraint, dict):
         return None
-    value = operation.get("const")
+    value = constraint.get("const")
     return value if isinstance(value, str) else None
+
+
+def _conditional_then_properties(
+    schema: dict[str, Any], discriminator: str, value: str
+) -> dict[str, Any]:
+    for entry in _all_of(schema):
+        if _conditional_const(entry, discriminator) == value and isinstance(
+            entry.get("then"), dict
+        ):
+            return _properties(entry["then"])
+    return {}
+
+
+def _optional_url_schema_accepts_only_http_about_or_absent(schema: object) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    any_of = schema.get("anyOf")
+    if not isinstance(any_of, list):
+        return schema.get("pattern") == r"^(https?://[^\s]+|about:blank)$"
+    has_url_pattern = any(
+        isinstance(entry, dict)
+        and entry.get("type") == "string"
+        and entry.get("pattern") == r"^(https?://[^\s]+|about:blank)$"
+        for entry in any_of
+    )
+    has_empty = any(
+        isinstance(entry, dict) and entry.get("type") == "string" and entry.get("const") == ""
+        for entry in any_of
+    )
+    has_null = any(isinstance(entry, dict) and entry.get("type") == "null" for entry in any_of)
+    return has_url_pattern and has_empty and has_null
+
+
+def _string_schema_branch_has_min_length(schema: object, min_length: int) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    if schema.get("type") == "string" and schema.get("minLength") == min_length:
+        return True
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list):
+        return any(_string_schema_branch_has_min_length(entry, min_length) for entry in any_of)
+    return False
+
+
+def _schema_enum_values(schema: object) -> list[Any] | None:
+    if not isinstance(schema, dict):
+        return None
+    enum = schema.get("enum")
+    if isinstance(enum, list):
+        return enum
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list):
+        for entry in any_of:
+            if isinstance(entry, dict) and isinstance(entry.get("enum"), list):
+                return entry["enum"]
+    return None
 
 
 def _schema_has_any_required(schema: object, required: list[str]) -> bool:
     if not isinstance(schema, dict):
         return False
-    all_of = schema.get("allOf")
-    if isinstance(all_of, list) and any(
-        _schema_has_any_required(entry, required) for entry in all_of
+    if isinstance(schema.get("required"), list) and any(
+        name in schema["required"] for name in required
     ):
         return True
-    any_of = schema.get("anyOf")
-    if isinstance(any_of, list):
-        return any(
-            isinstance(entry, dict)
-            and isinstance(entry.get("required"), list)
-            and any(name in entry["required"] for name in required)
-            for entry in any_of
-        )
-    return isinstance(schema.get("required"), list) and any(
-        name in schema["required"] for name in required
-    )
+    for composition in ("allOf", "anyOf", "oneOf"):
+        entries = schema.get(composition)
+        if isinstance(entries, list) and any(
+            _schema_has_any_required(entry, required) for entry in entries
+        ):
+            return True
+    then_schema = schema.get("then")
+    return isinstance(then_schema, dict) and _schema_has_any_required(then_schema, required)
 
 
 def _schema_contains_not_anyof_required(schema: dict[str, Any], first: str, second: str) -> bool:
     for entry in _all_of(schema):
         rejected = entry.get("not")
-        if not isinstance(rejected, dict):
-            continue
-        any_of = rejected.get("anyOf")
-        if not isinstance(any_of, list):
-            continue
-        for branch in any_of:
-            if not isinstance(branch, dict):
-                continue
-            required = branch.get("required")
-            if isinstance(required, list) and first in required and second in required:
-                return True
+        if _schema_mentions_required(rejected, first) and _schema_mentions_required(
+            rejected, second
+        ):
+            return True
+    return False
+
+
+def _schema_mentions_required(schema: object, name: str) -> bool:
+    if isinstance(schema, dict):
+        required = schema.get("required")
+        if isinstance(required, list) and name in required:
+            return True
+        return any(_schema_mentions_required(value, name) for value in schema.values())
+    if isinstance(schema, list):
+        return any(_schema_mentions_required(value, name) for value in schema)
     return False
 
 
@@ -393,29 +462,33 @@ def grouped_error_payload(result: dict[str, Any], *, tool: str, code: str) -> di
     return payload
 
 
-def resolve_client(installed: bool) -> Path:
-    client = INSTALLED_CLIENT if installed else DEV_CLIENT
+def resolve_client(installed: bool, codex_home: Path) -> Path:
+    client = (
+        installed_plugin_root(codex_home.expanduser().resolve()) / "bin" / "sky-cua-client"
+        if installed
+        else DEV_CLIENT
+    )
     if not client.exists():
         raise FileNotFoundError(f"MCP client binary not found: {client}")
     return client
 
 
-def make_client(*, installed: bool, phone_enabled: bool) -> McpClient:
+def make_client(*, installed: bool, phone_enabled: bool, codex_home: Path) -> McpClient:
     env = dict(os.environ)
     env.pop("SKY_CUA_MCP_TOOL_PROFILE", None)
     env.setdefault("SKY_CUA_MODEL_SUPPORTS_IMAGES", "false")
     if phone_enabled:
         env.setdefault("SKY_CUA_PHONE", "1")
     return McpClient(
-        [str(resolve_client(installed)), "mcp"],
+        [str(resolve_client(installed, codex_home)), "mcp"],
         base_env=env,
         client_name="mcp-tool-surface-probe",
     )
 
 
-def probe_grouped(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
+def probe_grouped(*, installed: bool, phone_enabled: bool, codex_home: Path) -> list[ProbeStep]:
     steps: list[ProbeStep] = []
-    client = make_client(installed=installed, phone_enabled=phone_enabled)
+    client = make_client(installed=installed, phone_enabled=phone_enabled, codex_home=codex_home)
     try:
         client.initialize()
         tools = client.tools_list()
@@ -470,7 +543,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--installed",
         action="store_true",
-        help="Probe dist/plugin/sky-cua/bin/sky-cua-client instead of bin/sky-cua-client.",
+        help="Probe the deployed Codex plugin cache payload instead of bin/sky-cua-client.",
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=DEFAULT_CODEX_HOME,
+        help=f"Codex home for --installed resolution (default: {DEFAULT_CODEX_HOME}).",
     )
     parser.add_argument(
         "--no-phone",
@@ -485,13 +564,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
-    return probe_grouped(installed=installed, phone_enabled=phone_enabled)
+def run(
+    *, installed: bool, phone_enabled: bool, codex_home: Path = DEFAULT_CODEX_HOME
+) -> list[ProbeStep]:
+    return probe_grouped(installed=installed, phone_enabled=phone_enabled, codex_home=codex_home)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    steps = run(installed=bool(args.installed), phone_enabled=not args.no_phone)
+    steps = run(
+        installed=bool(args.installed),
+        phone_enabled=not args.no_phone,
+        codex_home=args.codex_home,
+    )
     if args.json:
         print(json.dumps({"ok": True, "steps": [step.__dict__ for step in steps]}, indent=2))
     else:

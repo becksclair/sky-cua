@@ -34,6 +34,7 @@ from PIL import Image, ImageChops
 from live_desktop_smoke import (  # type: ignore[import-not-found]
     CLIENT,
     McpClient,
+    grouped_structured_result,
     require_no_portal_approval_pending,
     require_ok,
     wait_for_app_snapshot_result,
@@ -191,7 +192,7 @@ def main() -> int:
             client.initialize()
             tools = {tool["name"] for tool in client.tools_list()}
             missing = sorted(
-                {"list_apps", "get_app_state", "click", "drag", "type_text", "press_key"} - tools
+                {"desktop_keyboard", "desktop_pointer", "list_resources", "observe"} - tools
             )
             if missing:
                 raise RuntimeError(f"MCP server did not advertise required tools: {missing}")
@@ -229,8 +230,9 @@ def main() -> int:
             require_ok(
                 client.tools_call(
                     20,
-                    "click",
+                    "desktop_pointer",
                     {
+                        "operation": "click",
                         "x": float(new_image_bounds["x"])
                         + (float(new_image_bounds["width"]) / 2.0),
                         "y": float(new_image_bounds["y"])
@@ -242,10 +244,10 @@ def main() -> int:
             time.sleep(2)
 
             custom_document = client.tools_call(
-                21, "get_app_state", {"app_id": focused_app["app_id"]}
+                21, "observe", {"surface": "desktop", "app_id": focused_app["app_id"]}
             )
             require_ok(custom_document, "Krita Custom Document snapshot")
-            custom_snapshot = custom_document["structuredContent"]
+            custom_snapshot = grouped_structured_result(custom_document)
             custom_focused = custom_snapshot.get("focused_app") or {}
             if "custom document" not in ((custom_focused.get("window_title") or "").lower()):
                 raise RuntimeError(
@@ -256,26 +258,31 @@ def main() -> int:
             krita_frame = find_krita_frame(custom_snapshot)
             create_x, create_y = point_within(krita_frame["bounds"], *CREATE_BUTTON_IN_FRAME)
             require_ok(
-                client.tools_call(22, "click", {"x": create_x, "y": create_y}),
+                client.tools_call(
+                    22,
+                    "desktop_pointer",
+                    {"operation": "click", "x": create_x, "y": create_y},
+                ),
                 "Krita Custom Document Create click",
             )
             time.sleep(3)
 
             canvas_result = client.tools_call(
-                23, "get_app_state", {"app_id": focused_app["app_id"]}
+                23, "observe", {"surface": "desktop", "app_id": focused_app["app_id"]}
             )
             require_ok(canvas_result, "Krita canvas snapshot")
-            canvas_snapshot = canvas_result["structuredContent"]
+            canvas_snapshot = grouped_structured_result(canvas_result)
             canvas_frame = find_canvas_frame(canvas_snapshot)
             drag_from = point_within(canvas_frame["bounds"], *CANVAS_DRAG_START)
             drag_to = point_within(canvas_frame["bounds"], *CANVAS_DRAG_END)
             require_ok(
                 client.tools_call(
                     24,
-                    "drag",
+                    "desktop_pointer",
                     {
-                        "from_x": drag_from[0],
-                        "from_y": drag_from[1],
+                        "operation": "drag",
+                        "x": drag_from[0],
+                        "y": drag_from[1],
                         "to_x": drag_to[0],
                         "to_y": drag_to[1],
                     },
@@ -287,10 +294,10 @@ def main() -> int:
             require_ok(
                 client.tools_call(
                     25,
-                    "press_key",
+                    "desktop_keyboard",
                     {
+                        "operation": "press_key",
                         "snapshot_id": canvas_snapshot["snapshot_id"],
-                        "element_index": canvas_frame["element_index"],
                         "key": "Ctrl+S",
                     },
                 ),
@@ -300,23 +307,27 @@ def main() -> int:
 
             save_field_x, save_field_y = point_within(krita_frame["bounds"], *NAME_FIELD_IN_FRAME)
             require_ok(
-                client.tools_call(26, "click", {"x": save_field_x, "y": save_field_y}),
+                client.tools_call(
+                    26,
+                    "desktop_pointer",
+                    {"operation": "click", "x": save_field_x, "y": save_field_y},
+                ),
                 "Krita save-name field click",
             )
             time.sleep(0.5)
             require_ok(
                 client.tools_call(
                     27,
-                    "type_text",
-                    {"x": save_field_x, "y": save_field_y, "text": filename},
+                    "desktop_keyboard",
+                    {"operation": "type_text", "text": filename},
                 ),
                 "Krita filename type_text",
             )
             require_ok(
                 client.tools_call(
                     28,
-                    "press_key",
-                    {"x": save_field_x, "y": save_field_y, "key": "Enter"},
+                    "desktop_keyboard",
+                    {"operation": "press_key", "key": "Enter"},
                 ),
                 "Krita save confirmation",
             )

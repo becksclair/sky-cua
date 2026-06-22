@@ -137,6 +137,15 @@ and the idle auto-hide watchdog chain are documented in
   `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_SESSION_TYPE`,
   `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`); runtime repair is the fallback
   (`docs/features/session-env-repair.md`).
+- Compact MCP surface closeout: direct desktop/browser/phone tools stay
+  removed; live smoke harnesses call the grouped tools
+  (`observe`, `list_resources`, `capture_screen`, `desktop_pointer`,
+  `desktop_keyboard`, `desktop_scroll`, `desktop_set_value`). The focused
+  pre-install gate is `cargo fmt --check && cargo test -p sky-cua-client &&
+  uv run ruff format --check scripts && uv run ruff check scripts && uv run
+  basedpyright && uv run pytest scripts/test_probe_mcp_tool_surface.py
+  scripts/test_live_smoke_helpers.py scripts/test_gui_testing_vm.py`, plus
+  `git diff --check`.
 - Single channel id is `sky-cua@local`; the Heliasar marketplace and publish
   flow were retired. On Linux `computer-use@openai-bundled` (the compat plugin)
   is the enabled id and `sky-cua@local` stays a disabled payload carrier (the

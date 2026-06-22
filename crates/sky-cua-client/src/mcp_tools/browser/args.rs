@@ -38,10 +38,15 @@ pub(crate) fn parse_browser_open_url(arguments: &Value) -> Result<Option<String>
     let Some(raw_url) = raw_url.as_str() else {
         return Err(anyhow!("browser_open url must be a string"));
     };
-    let Some(url) = optional_non_empty_string(raw_url) else {
+    if raw_url.is_empty() {
         return Ok(None);
-    };
-    if let Some(url) = normalize_browser_open_url(&url) {
+    }
+    if raw_url.trim() != raw_url {
+        return Err(anyhow!(
+            "browser_open url must use http://, https://, or about:blank"
+        ));
+    }
+    if let Some(url) = normalize_browser_open_url(raw_url) {
         return Ok(Some(url));
     }
     Err(anyhow!(
@@ -50,7 +55,12 @@ pub(crate) fn parse_browser_open_url(arguments: &Value) -> Result<Option<String>
 }
 
 pub(crate) fn parse_required_browser_url(arguments: &Value, tool_name: &str) -> Result<String> {
-    let raw_url = parse_required_string(arguments, "url", &format!("{tool_name} url"))?;
+    let raw_url = parse_required_literal_string(arguments, "url", &format!("{tool_name} url"))?;
+    if raw_url.trim() != raw_url {
+        return Err(anyhow!(
+            "{tool_name} url must use http://, https://, or about:blank"
+        ));
+    }
     normalize_browser_open_url(&raw_url)
         .ok_or_else(|| anyhow!("{tool_name} url must use http://, https://, or about:blank"))
 }
@@ -89,8 +99,7 @@ pub(crate) fn parse_browser_tab_id(arguments: &Value) -> Result<String> {
     };
     let raw_tab_id = match raw_tab_id {
         Value::String(value) => value.as_str(),
-        Value::Number(value) => return Ok(value.to_string()),
-        _ => return Err(anyhow!("browser tab_id must be a string or integer")),
+        _ => return Err(anyhow!("browser tab_id must be a string")),
     };
     optional_non_empty_string(raw_tab_id).ok_or_else(|| anyhow!("browser tab_id is required"))
 }

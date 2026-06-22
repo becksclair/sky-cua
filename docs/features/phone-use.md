@@ -3,7 +3,7 @@
 ## Status
 
 Partial. Source-complete and green across the Rust workspace. The installed
-canonical MCP path and ADB-baseline emulator smoke are proven; broader
+grouped MCP path and ADB-baseline emulator smoke are proven; broader
 companion, scrcpy, and real-device release proof remain open. Last verified:
 2026-06-22.
 
@@ -19,7 +19,7 @@ optional companion app and optional scrcpy acceleration layered on top.
 ## Contract surface
 
 A static phone-capable tool family inside the single `computer-use` MCP server
-(no new server). Phone work uses the canonical grouped MCP surface:
+(no new server). Phone work uses the grouped MCP surface:
 
 - Session and discovery: `status(component="phone")`,
   `list_resources(surface="phone", resource="devices")`,
@@ -405,7 +405,7 @@ cursor planes proven, and skipped profiles.
 
 ## Known limitations
 
-- The installed canonical MCP path and ADB-baseline emulator smoke are proven,
+- The installed grouped MCP path and ADB-baseline emulator smoke are proven,
   but the full phone-use smoke matrix across wireless pairing, companion,
   scrcpy, adversarial geometry changes, and real devices is still pending.
 - Redmi/API-36 tablet lane is blocked until that device is connected. The

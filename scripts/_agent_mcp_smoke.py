@@ -17,6 +17,7 @@ from _smoke_config import env_flag
 from deploy_freshness import assert_runtime_fresh, deployed_client_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_OPENCODE_SMOKE_MODEL = "opencode-go/kimi-k2.7-code"
 DEFAULT_PI_SMOKE_MODEL = "opencode-go/kimi-k2.7-code"
 TOOL_FAILURE_STATUSES = {"canceled", "cancelled", "error", "failed", "failure", "timeout"}
 RESULT_PAYLOAD_KEYS = (
@@ -133,7 +134,11 @@ def run_agent(
     if agent == "opencode":
         # OpenCode requires a pseudo-TTY to produce output when invoked
         # non-interactively. Use `script` to provide one.
-        model_arg = f" --model {shlex.quote(model)}" if model else ""
+        opencode_model = model or os.environ.get(
+            "SKY_CUA_SMOKE_OPENCODE_MODEL", DEFAULT_OPENCODE_SMOKE_MODEL
+        )
+        selected_model = opencode_model
+        model_arg = f" --model {shlex.quote(opencode_model)}"
         command = f"opencode run --format json{model_arg} {shlex.quote(prompt)}"
         argv = [
             "script",

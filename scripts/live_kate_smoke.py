@@ -20,6 +20,7 @@ from typing import Any
 from live_desktop_smoke import (  # type: ignore[import-not-found]
     CLIENT,
     McpClient,
+    grouped_structured_result,
     require_no_portal_approval_pending,
     require_ok,
     wait_for_app_snapshot_result,
@@ -103,7 +104,9 @@ def main() -> int:
         try:
             client.initialize()
             tools = {tool["name"] for tool in client.tools_list()}
-            missing = sorted({"list_apps", "get_app_state", "set_value", "press_key"} - tools)
+            missing = sorted(
+                {"desktop_keyboard", "desktop_set_value", "list_resources", "observe"} - tools
+            )
             if missing:
                 raise RuntimeError(f"MCP server did not advertise required tools: {missing}")
 
@@ -139,7 +142,7 @@ def main() -> int:
 
             set_value = client.tools_call(
                 30,
-                "set_value",
+                "desktop_set_value",
                 {
                     "snapshot_id": snapshot["snapshot_id"],
                     "element_index": editor["element_index"],
@@ -147,7 +150,7 @@ def main() -> int:
                 },
             )
             require_ok(set_value, "Kate set_value")
-            set_diagnostics = (set_value.get("structuredContent") or {}).get("diagnostics") or []
+            set_diagnostics = grouped_structured_result(set_value).get("diagnostics") or []
             heuristic_diag = next(
                 (
                     entry
@@ -170,15 +173,15 @@ def main() -> int:
 
             save = client.tools_call(
                 31,
-                "press_key",
+                "desktop_keyboard",
                 {
+                    "operation": "press_key",
                     "snapshot_id": snapshot["snapshot_id"],
-                    "element_index": editor["element_index"],
                     "key": "Ctrl+S",
                 },
             )
             require_ok(save, "Kate save")
-            save_message = ((save.get("structuredContent") or {}).get("message") or "").lower()
+            save_message = (grouped_structured_result(save).get("message") or "").lower()
             if "x11 input fallback" not in save_message:
                 raise RuntimeError(
                     "Kate save did not route through the X11 keyboard fallback.\n"
@@ -213,7 +216,7 @@ def main() -> int:
                 )
             )
             print(f"set_value diagnostics: {json.dumps(set_diagnostics, sort_keys=True)}")
-            print(f"save result: {json.dumps(save.get('structuredContent'), sort_keys=True)}")
+            print(f"save result: {json.dumps(grouped_structured_result(save), sort_keys=True)}")
             print(f"final file bytes: {final_text!r}")
             print("\nLive Kate smoke completed successfully.")
             return 0

@@ -1,7 +1,7 @@
 # sky-cua-client Guide
 
 `sky-cua-client` is the MCP stdio client and service launcher. It exposes the
-canonical sky-cua MCP tool surface and translates service responses into MCP
+grouped sky-cua MCP tool surface and translates service responses into MCP
 text plus structured content. Useful local probes:
 
 ```bash
@@ -14,7 +14,7 @@ cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen i
 
 - `src/mcp_server.rs` — JSON-RPC framing, session init, message read/write.
 - `src/mcp_tools.rs` — tool dispatch, argument parsing, and response shaping.
-- `src/mcp_tools/definitions.rs` — advertised canonical tool definitions and
+- `src/mcp_tools/definitions.rs` — advertised grouped tool definitions and
   schemas.
 - `src/output_shapes.rs` — compact/full snapshot shaping (`AppStateDetail`,
   `compact_snapshot`), reused by both the MCP path and `src/operator_cli.rs`.
@@ -24,7 +24,7 @@ cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen i
 
 ## Conventions
 
-- Public MCP tool names are canonical and grouped by surface: `status`,
+- Public MCP tool names are grouped by surface: `status`,
   `list_resources`, `observe`, `capture_screen`, `capture_desktop`,
   `desktop_*`, `browser_*`, and `phone_*`.
 - Return both operator-friendly `content` text and machine-usable

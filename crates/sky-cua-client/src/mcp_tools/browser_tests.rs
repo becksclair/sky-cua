@@ -171,8 +171,14 @@ fn browser_action_schemas_explain_simple_control_contract() {
     assert!(scroll_description.contains("non-zero delta_x or delta_y"));
 
     let scroll_properties = &find_tool("browser_scroll")["inputSchema"]["properties"];
+    let scroll_x_number_schema = scroll_properties["x"]["anyOf"]
+        .as_array()
+        .expect("browser_scroll x should be nullable")
+        .iter()
+        .find(|schema| schema["type"] == "number")
+        .expect("browser_scroll x numeric branch");
     assert!(
-        !scroll_properties["x"]["description"]
+        !scroll_x_number_schema["description"]
             .as_str()
             .expect("browser_scroll x description")
             .contains("Wheel event")
@@ -194,11 +200,11 @@ fn browser_snapshot_schema_advertises_element_filtering() {
     assert!(properties.get("element_offset").is_some());
     assert!(properties.get("element_limit").is_some());
     assert_eq!(
-        properties["element_limit"]["maximum"],
+        properties["element_limit"]["anyOf"][0]["maximum"],
         BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT
     );
     assert_eq!(
-        properties["text_limit"]["maximum"],
+        properties["text_limit"]["anyOf"][0]["maximum"],
         BROWSER_SNAPSHOT_MAX_TEXT_LIMIT
     );
 }
@@ -227,15 +233,12 @@ fn parses_browser_open_url_allowlist() {
         Some("https://example.test/".to_string())
     );
     assert_eq!(
-        parse_browser_open_url(&json!({"url": " http://127.0.0.1:8080/page "})).unwrap(),
-        Some("http://127.0.0.1:8080/page".to_string())
-    );
-    assert_eq!(
         parse_browser_open_url(&json!({"url": "about:blank"})).unwrap(),
         Some("about:blank".to_string())
     );
     assert_eq!(parse_browser_open_url(&json!({"url": ""})).unwrap(), None);
     assert_eq!(parse_browser_open_url(&json!({"url": null})).unwrap(), None);
+    assert!(parse_browser_open_url(&json!({"url": " http://127.0.0.1:8080/page "})).is_err());
     assert!(parse_browser_open_url(&json!({"url": 123})).is_err());
     assert!(parse_browser_open_url(&json!({"url": {}})).is_err());
     assert!(parse_browser_open_url(&json!({"url": "file:///etc/passwd"})).is_err());
@@ -248,10 +251,7 @@ fn parses_browser_tab_id_and_point() {
         parse_browser_tab_id(&json!({"tab_id": " 123 "})).unwrap(),
         "123"
     );
-    assert_eq!(
-        parse_browser_tab_id(&json!({"tab_id": 456})).unwrap(),
-        "456"
-    );
+    assert!(parse_browser_tab_id(&json!({"tab_id": 456})).is_err());
     assert!(parse_browser_tab_id(&json!({"tab_id": ""})).is_err());
     assert!(parse_browser_tab_id(&json!({"tab_id": null})).is_err());
 
@@ -271,13 +271,12 @@ fn parses_browser_tab_id_and_point() {
 
 #[test]
 fn parses_browser_action_arguments() {
-    assert_eq!(
+    assert!(
         parse_required_browser_url(
             &json!({"url": " https://example.test/ "}),
             "browser_navigate"
         )
-        .unwrap(),
-        "https://example.test/"
+        .is_err()
     );
     assert!(
         parse_required_browser_url(&json!({"url": "file:///tmp/nope"}), "browser_navigate")

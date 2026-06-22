@@ -1,6 +1,6 @@
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    ActionRequest, CaptureInfo, CoordinateSpace, ElementNode, InputBackendKind,
+    ActionRequest, CaptureInfo, CoordinateSpace, ElementNode, InputBackendKind, RectF,
 };
 
 use crate::coords::{center_of, desktop_to_stream, logical_to_pixel, rect_contains_rect};
@@ -241,7 +241,9 @@ fn point_for_linux_virtual_element(
         .ok_or_else(|| missing_element_bounds_error(element, "Linux virtual input"))?;
     let center = center_of(bounds);
     match bounds.space {
-        CoordinateSpace::DesktopLogical => Ok(center),
+        CoordinateSpace::DesktopLogical => {
+            Ok(visible_center_for_desktop_logical_bounds(bounds, capture).unwrap_or(center))
+        }
         CoordinateSpace::StreamLogical => {
             let logical_rect = capture
                 .and_then(|capture| capture.logical_rect.as_ref())
@@ -252,6 +254,34 @@ fn point_for_linux_virtual_element(
             linux_virtual_point_from_screenshot_pixels(center, capture, true)
         }
     }
+}
+
+fn visible_center_for_desktop_logical_bounds(
+    bounds: &RectF,
+    capture: Option<&CaptureInfo>,
+) -> Option<(f64, f64)> {
+    if bounds.space != CoordinateSpace::DesktopLogical {
+        return None;
+    }
+    let capture = capture?;
+    let visible = capture
+        .source_logical_rect
+        .as_ref()
+        .or(capture.logical_rect.as_ref())?;
+    if visible.space != CoordinateSpace::DesktopLogical
+        || visible.width <= 0.0
+        || visible.height <= 0.0
+    {
+        return None;
+    }
+    let left = bounds.x.max(visible.x);
+    let top = bounds.y.max(visible.y);
+    let right = bounds.right().min(visible.right());
+    let bottom = bounds.bottom().min(visible.bottom());
+    if right <= left || bottom <= top {
+        return None;
+    }
+    Some((left + ((right - left) / 2.0), top + ((bottom - top) / 2.0)))
 }
 
 fn point_from_fields(
@@ -515,7 +545,7 @@ fn missing_linux_virtual_logical_rect_error() -> BackendError {
 mod tests {
     use super::{
         action_point_for_backend, drag_from_point, drag_to_point,
-        effective_pointer_input_backend_for_target, explicit_point,
+        effective_pointer_input_backend_for_target, explicit_point, point_for_element_for_backend,
         point_for_x11_element_through_portal, point_from_screenshot_pixels,
         virtual_scroll_steps_from_delta,
     };
@@ -1246,6 +1276,81 @@ mod tests {
                 InputBackendKind::LinuxVirtualInput
             ),
             (1040.0, 660.0)
+        );
+    }
+
+    #[test]
+    fn linux_virtual_element_point_uses_visible_center_for_oversized_desktop_bounds() {
+        let element = ElementNode {
+            element_index: 21,
+            parent_index: Some(20),
+            role: "panel".to_string(),
+            name: Some("Scroll region".to_string()),
+            description: None,
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
+            state_flags: vec!["showing".to_string(), "visible".to_string()],
+            semantic_actions: Vec::new(),
+            bounds: Some(RectF {
+                x: 64.0,
+                y: 481.0,
+                width: 409.0,
+                height: 1595.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            backend_ref: None,
+        };
+        let capture = CaptureInfo {
+            backend: CaptureBackendKind::PortalPipeWire,
+            image_backend: Some(CaptureBackendKind::PortalPipeWire),
+            capture_scope: CaptureScope::Unknown,
+            display: None,
+            coordinate_space: Some(CoordinateSpace::StreamPixels),
+            stream_id: Some("59".to_string()),
+            source_type: Some(1),
+            mapping_id: None,
+            source_logical_rect: Some(RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 800.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            logical_rect: Some(RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 800.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            pixel_size: Some(PixelSize {
+                width: 1440,
+                height: 900,
+            }),
+            original_pixel_size: Some(PixelSize {
+                width: 1280,
+                height: 800,
+            }),
+            logical_to_pixel_scale: Some(1.125),
+            screenshot_path: Some("/tmp/capture.jpg".to_string()),
+            original_screenshot_path: Some("/tmp/capture.png".to_string()),
+            model_image_format: Some(ModelImageFormat::Jpeg),
+            model_image_quality: Some(85),
+            model_image_bytes: Some(1234),
+            model_image_encode_ms: Some(7),
+        };
+
+        assert_eq!(
+            point_for_element_for_backend(
+                &element,
+                Some(&capture),
+                InputBackendKind::LinuxVirtualInput,
+                true
+            )
+            .expect("visible point should resolve"),
+            (268.5, 640.5)
         );
     }
 

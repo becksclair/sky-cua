@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import probe_mcp_tool_surface as probe
@@ -18,6 +20,16 @@ def test_tool_names_extracts_only_string_names() -> None:
     )
 
     assert names == {"status", "phone_connection"}
+
+
+def test_resolve_installed_client_uses_codex_plugin_cache(tmp_path: Path) -> None:
+    client = (
+        tmp_path / "plugins" / "cache" / "local" / "sky-cua" / "local" / "bin" / "sky-cua-client"
+    )
+    client.parent.mkdir(parents=True)
+    client.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert probe.resolve_client(installed=True, codex_home=tmp_path) == client
 
 
 def test_require_exact_grouped_tools_report_contract_violations() -> None:
@@ -100,6 +112,21 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
             "inputSchema": {"type": "object"},
         },
         {
+            "name": "status",
+            "inputSchema": {
+                "allOf": [
+                    {
+                        "if": {"properties": {"component": {"const": "phone"}}},
+                        "then": {"properties": {"refresh_devices": {"type": "boolean"}}},
+                    },
+                    {
+                        "if": {"properties": {"component": {"const": "phone_companion"}}},
+                        "then": {"properties": {"session_id": {"type": "string"}}},
+                    },
+                ]
+            },
+        },
+        {
             "name": "browser_move_mouse",
             "inputSchema": {"properties": {"wait_for_arrival": {"type": "boolean"}}},
         },
@@ -147,7 +174,19 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
             "description": "do not call with only operation",
             "inputSchema": {
                 "allOf": [
-                    {"anyOf": [{"required": ["element_index"]}]},
+                    {
+                        "if": {"properties": {"operation": {"const": "activate"}}},
+                        "then": {"anyOf": [{"required": ["snapshot_id", "element_index"]}]},
+                    },
+                    {
+                        "if": {"properties": {"operation": {"const": "perform_action"}}},
+                        "then": {
+                            "allOf": [
+                                {"anyOf": [{"required": ["snapshot_id", "element_index"]}]},
+                                {"anyOf": [{"required": ["action_name"]}]},
+                            ]
+                        },
+                    },
                 ]
             },
         },
@@ -229,12 +268,38 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
             "name": "capture_desktop",
             "inputSchema": {
                 "properties": {
-                    "display_id": {"minLength": 1},
-                    "display_name": {"minLength": 1},
+                    "display_id": {
+                        "anyOf": [
+                            {"type": "string", "minLength": 1},
+                            {"type": "string", "const": ""},
+                            {"type": "null"},
+                        ]
+                    },
+                    "display_name": {
+                        "anyOf": [
+                            {"type": "string", "minLength": 1},
+                            {"type": "string", "const": ""},
+                            {"type": "null"},
+                        ]
+                    },
                 },
                 "allOf": [
-                    {"not": {"anyOf": [{"required": ["window_id", "display_id"]}]}},
-                    {"not": {"anyOf": [{"required": ["capture_all_displays", "display_id"]}]}},
+                    {
+                        "not": {
+                            "allOf": [
+                                {"anyOf": [{"required": ["window_id"]}]},
+                                {"anyOf": [{"required": ["display_id"]}]},
+                            ]
+                        }
+                    },
+                    {
+                        "not": {
+                            "allOf": [
+                                {"required": ["capture_all_displays"]},
+                                {"anyOf": [{"required": ["display_id"]}]},
+                            ]
+                        }
+                    },
                 ],
             },
         },

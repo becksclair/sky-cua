@@ -33,6 +33,8 @@ not reachable through the page.
   normalized.
 - Screenshots show only the visible viewport; scroll, then re-capture, for
   off-screen targets.
+- Coordinates are valid for the snapshot/capture moment. Any scroll, resize,
+  navigation, or tab switch invalidates previous bounds.
 - Desktop `observe(surface="desktop")` coordinates are a different space; never reuse
   them here.
 
@@ -53,9 +55,9 @@ not reachable through the page.
   before clicking; call `browser_move_mouse` first only for hover or cursor
   placement without click.
 - `browser_scroll`: provide non-zero `delta_x` or `delta_y`. Omit x/y for
-  viewport scroll; provide x/y to move the cursor there and scroll the nearest
-  scrollable container, falling back to the viewport. This is scripted DOM
-  scrolling, not a real wheel event.
+  viewport scroll; provide x/y to move the cursor there and scroll the
+  browser-selected container, falling back to the viewport. This is scripted
+  DOM scrolling, not a real wheel event.
 - `browser_input(operation="type_text")` inserts literal text into the focused
   control; focus it first.
 - `browser_input(operation="press_key")` handles focused controls and page

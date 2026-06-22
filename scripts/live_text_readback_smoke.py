@@ -55,7 +55,7 @@ def main() -> int:
         require_ok(
             client.tools_call(
                 20,
-                "set_value",
+                "desktop_set_value",
                 {
                     "snapshot_id": snapshot["snapshot_id"],
                     "element_index": editable["element_index"],
@@ -78,8 +78,9 @@ def main() -> int:
         require_ok(
             client.tools_call(
                 22,
-                "click",
+                "desktop_pointer",
                 {
+                    "operation": "click",
                     "snapshot_id": updated["snapshot_id"],
                     "element_index": ok_button["element_index"],
                 },

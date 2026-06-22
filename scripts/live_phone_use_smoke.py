@@ -1128,7 +1128,8 @@ def profile_adversarial(smoke: PhoneSmoke, options: PhoneSmokeOptions) -> list[S
     """Bounded live adversarial cases that are safe without a device.
 
     - Wrong serial: ``phone_connect`` to a serial no device reports must error.
-    - Stale snapshot: ``phone_tap`` against a fabricated snapshot must error.
+    - Stale snapshot: ``phone_tap`` against a fabricated snapshot must error
+      after binding the action to a real session_id.
     """
     steps: list[StepResult] = []
     if adb_binary() is None:
@@ -1140,16 +1141,39 @@ def profile_adversarial(smoke: PhoneSmoke, options: PhoneSmokeOptions) -> list[S
     else:
         steps.append(step_fail("wrong_serial_rejected", "phone_connect accepted a bogus serial"))
 
-    stale = smoke.tap(None, STALE_SNAPSHOT_ID, 1.0, 1.0)
-    if result_is_error(stale):
-        steps.append(step_pass("stale_snapshot_rejected", "stale_snapshot_rejected=true"))
-    else:
-        steps.append(
-            step_fail(
+    def stale_snapshot_step() -> StepResult:
+        devices = require_devices_or_skip(smoke)
+        serial = choose_serial(options, devices, wireless=False)
+        try:
+            session_id, _ = connect_session(smoke, serial)
+        except SmokeFailure as failure:
+            return step_fail("stale_snapshot_rejected", str(failure))
+        try:
+            stale = smoke.tap(session_id, STALE_SNAPSHOT_ID, 1.0, 1.0)
+            codes = diagnostic_codes(stale)
+            snapshot_codes = [
+                code
+                for code in codes
+                if code.startswith("PhoneSnapshot") and code != "PhoneSnapshotRequired"
+            ]
+            if result_is_error(stale) and snapshot_codes:
+                return step_pass(
+                    "stale_snapshot_rejected",
+                    f"code={bounded_metadata(snapshot_codes[0])}",
+                )
+            if result_is_error(stale):
+                return step_fail(
+                    "stale_snapshot_rejected",
+                    f"phone_tap rejected with {','.join(codes) or 'no code'}; expected PhoneSnapshot*",
+                )
+            return step_fail(
                 "stale_snapshot_rejected",
                 "phone_tap accepted a fabricated snapshot id",
             )
-        )
+        finally:
+            smoke.disconnect(session_id)
+
+    steps.append(_step_or_skip("stale_snapshot_rejected", stale_snapshot_step))
 
     steps.append(
         _step_or_skip(

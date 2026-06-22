@@ -23,6 +23,7 @@ from typing import Any
 from live_desktop_smoke import (  # type: ignore[import-not-found]
     CLIENT,
     McpClient,
+    find_scroll_region,
     load_state,
     require_ok,
     run_pointer_fixture,
@@ -47,6 +48,16 @@ def require_real_wayland_session() -> None:
 
 def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def terminate_fixture(fixture: subprocess.Popen[str]) -> tuple[str, str]:
+    if fixture.poll() is None:
+        fixture.terminate()
+    try:
+        return fixture.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        fixture.kill()
+        return fixture.communicate(timeout=2)
 
 
 def hide_agent_cursor(service_socket_path: Path) -> dict[str, Any] | None:
@@ -113,13 +124,21 @@ def terminate_processes_for_temp_socket(service_socket_path: Path) -> None:
 
 
 def action_diagnostic_codes(result: dict[str, Any]) -> set[str]:
-    structured = result.get("structuredContent") or {}
+    structured = grouped_structured_result(result)
     diagnostics = structured.get("diagnostics") or []
     return {
         code
         for entry in diagnostics
         if isinstance(entry, dict) and isinstance(code := entry.get("code"), str)
     }
+
+
+def grouped_structured_result(result: dict[str, Any]) -> dict[str, Any]:
+    structured = result.get("structuredContent") or {}
+    if not isinstance(structured, dict):
+        return {}
+    nested = structured.get("result")
+    return nested if isinstance(nested, dict) else structured
 
 
 def require_gnome_eis_input_used(result: dict[str, Any], action: str, *, is_gnome: bool) -> None:
@@ -170,10 +189,28 @@ def main() -> int:
         client_env["SKY_CUA_SERVICE_SOCKET_PATH"] = str(service_socket_path)
         fixture = run_pointer_fixture(state_path, extra_env=fixture_env)
         try:
-            state = wait_for_stable_pointer_fixture(
-                state_path,
-                deadline=time.time() + fixture_ready_timeout,
-            )
+            try:
+                state = wait_for_stable_pointer_fixture(
+                    state_path,
+                    deadline=time.time() + fixture_ready_timeout,
+                )
+            except RuntimeError as first_error:
+                stdout, stderr = terminate_fixture(fixture)
+                write_json(
+                    artifact_dir / "fixture-startup-retry.json",
+                    {
+                        "error": str(first_error),
+                        "returncode": fixture.returncode,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                    },
+                )
+                state_path.unlink(missing_ok=True)
+                fixture = run_pointer_fixture(state_path, extra_env=fixture_env)
+                state = wait_for_stable_pointer_fixture(
+                    state_path,
+                    deadline=time.time() + fixture_ready_timeout,
+                )
             write_json(artifact_dir / "initial-state.json", state)
             print(f"Visible Wayland pointer fixture ready; artifacts: {artifact_dir}")
             print(f"points={json.dumps(state['points'], sort_keys=True)}")
@@ -183,12 +220,11 @@ def main() -> int:
                 client.initialize()
                 tools = {tool["name"] for tool in client.tools_list()}
                 required_tools = {
-                    "click",
-                    "drag",
-                    "scroll",
-                    "perform_secondary_action",
-                    "type_text",
-                    "press_key",
+                    "desktop_keyboard",
+                    "desktop_pointer",
+                    "desktop_scroll",
+                    "list_resources",
+                    "observe",
                 }
                 missing = sorted(required_tools - tools)
                 if missing:
@@ -203,11 +239,11 @@ def main() -> int:
                 # backend exposes PID. COSMIC's toplevel protocol does not.
                 list_result = client.tools_call(
                     99,
-                    "list_windows",
-                    {},
+                    "list_resources",
+                    {"surface": "desktop", "resource": "windows"},
                 )
                 write_json(artifact_dir / "pre-activate-windows.json", list_result)
-                windows = (list_result.get("structuredContent") or {}).get("windows") or []
+                windows = grouped_structured_result(list_result).get("windows") or []
                 title_matches = [w for w in windows if w.get("title") == "sky-cua pointer smoke"]
                 fixture_window = next(
                     (w for w in title_matches if w.get("pid") == fixture.pid),
@@ -240,11 +276,11 @@ def main() -> int:
                 # Verify the fixture is actually focused after activation.
                 focused_result = client.tools_call(
                     101,
-                    "focused_window",
-                    {},
+                    "list_resources",
+                    {"surface": "desktop", "resource": "focused_window"},
                 )
                 write_json(artifact_dir / "focused-window-after-activate.json", focused_result)
-                focused_window = (focused_result.get("structuredContent") or {}).get("window")
+                focused_window = grouped_structured_result(focused_result).get("window")
                 # All backends, including KWin (scripted active-window readback),
                 # must report the fixture as focused after verified activation.
                 if focused_window is None or focused_window.get("title") != "sky-cua pointer smoke":
@@ -262,8 +298,8 @@ def main() -> int:
                 click_point = state["points"]["click_button"]
                 click_result = client.tools_call(
                     102,
-                    "click",
-                    {"x": click_point["x"], "y": click_point["y"]},
+                    "desktop_pointer",
+                    {"operation": "click", "x": click_point["x"], "y": click_point["y"]},
                 )
                 write_json(artifact_dir / "click-result.json", click_result)
                 require_ok(click_result, "visible Wayland physical click")
@@ -294,8 +330,12 @@ def main() -> int:
                 secondary_point = state["points"]["secondary"]
                 secondary_result = client.tools_call(
                     103,
-                    "perform_secondary_action",
-                    {"x": secondary_point["x"], "y": secondary_point["y"]},
+                    "desktop_pointer",
+                    {
+                        "operation": "secondary_click",
+                        "x": secondary_point["x"],
+                        "y": secondary_point["y"],
+                    },
                 )
                 write_json(artifact_dir / "secondary-result.json", secondary_result)
                 require_ok(secondary_result, "visible Wayland secondary click")
@@ -316,8 +356,9 @@ def main() -> int:
                 drag_to = state["points"]["drag_to"]
                 drag_result = client.tools_call(
                     104,
-                    "drag",
+                    "desktop_pointer",
                     {
+                        "operation": "drag",
                         "x": drag_from["x"],
                         "y": drag_from["y"],
                         "to_x": drag_to["x"],
@@ -339,13 +380,37 @@ def main() -> int:
 
                 print(f"Waiting {step_delay:.1f}s before scroll...")
                 time.sleep(step_delay)
-                scroll_point = state["points"].get("scroll_safe", state["points"]["scroll"])
                 before_scroll = load_state(state_path) or {}
                 starting_scrolls = int(before_scroll.get("scroll_events", 0))
-                scroll_result = client.tools_call(
+                observe_result = client.tools_call(
                     105,
-                    "scroll",
-                    {"x": scroll_point["x"], "y": scroll_point["y"], "delta_y": -180.0},
+                    "observe",
+                    {
+                        "surface": "desktop",
+                        "detail": "full",
+                        "element_query": "Scroll region",
+                        "element_limit": 20,
+                    },
+                )
+                write_json(artifact_dir / "pre-scroll-observe.json", observe_result)
+                require_ok(observe_result, "visible Wayland pre-scroll observation")
+                observed = grouped_structured_result(observe_result)
+                snapshot_id = observed.get("snapshot_id")
+                if not isinstance(snapshot_id, str) or not snapshot_id:
+                    raise RuntimeError(
+                        "pre-scroll observation did not return a snapshot_id. "
+                        f"result={json.dumps(observe_result, indent=2)}"
+                    )
+                scroll_region = find_scroll_region(observed)
+                scroll_result = client.tools_call(
+                    106,
+                    "desktop_scroll",
+                    {
+                        "direction": "down",
+                        "pages": 1,
+                        "snapshot_id": snapshot_id,
+                        "element_index": scroll_region["element_index"],
+                    },
                 )
                 write_json(artifact_dir / "scroll-result.json", scroll_result)
                 require_ok(scroll_result, "visible Wayland physical scroll")
@@ -371,9 +436,9 @@ def main() -> int:
                 text_point = state["points"]["text_entry"]
                 text_value = "cosmic-text-smoke"
                 focus_result = client.tools_call(
-                    106,
-                    "click",
-                    {"x": text_point["x"], "y": text_point["y"]},
+                    107,
+                    "desktop_pointer",
+                    {"operation": "click", "x": text_point["x"], "y": text_point["y"]},
                 )
                 write_json(artifact_dir / "text-focus-result.json", focus_result)
                 require_ok(focus_result, "visible Wayland text-entry focus click")
@@ -391,9 +456,9 @@ def main() -> int:
                 write_json(artifact_dir / "text-focused-state.json", focused_entry_state)
 
                 type_result = client.tools_call(
-                    107,
-                    "type_text",
-                    {"text": text_value},
+                    108,
+                    "desktop_keyboard",
+                    {"operation": "type_text", "text": text_value},
                 )
                 write_json(artifact_dir / "type-result.json", type_result)
                 require_ok(type_result, "visible Wayland type_text")
@@ -408,9 +473,9 @@ def main() -> int:
                 )
 
                 key_result = client.tools_call(
-                    108,
-                    "press_key",
-                    {"key": "Enter"},
+                    109,
+                    "desktop_keyboard",
+                    {"operation": "press_key", "key": "Enter"},
                 )
                 write_json(artifact_dir / "press-key-result.json", key_result)
                 require_ok(key_result, "visible Wayland press_key")

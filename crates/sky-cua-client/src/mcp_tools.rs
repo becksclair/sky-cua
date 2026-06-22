@@ -1230,12 +1230,13 @@ mod tests {
     use serde_json::{Value, json};
     use sky_cua_platform::model::{
         AccessibilitySetupReport, ActionName, ActionOutcome, ActionRequest, AgentCursorPoint,
-        AgentCursorState, AppInfo, AppStateSnapshot, BrowserEvalResponse, BrowserResponse,
-        BrowserTargetKind, CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode,
-        CoordinateSpace, DiagnosticEntry, DoctorCheck, DoctorDisplayTopologyReport,
-        DoctorReadiness, DoctorReport, ElementNode, ElementNumericValueReadback,
-        ElementTextReadback, EnvironmentInfo, FocusedApp, InputBackendKind, PortalCapabilities,
-        RectF, ScrollDirection, SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind,
+        AgentCursorState, AppInfo, AppStateSnapshot, BrowserEvalResponse, BrowserRequest,
+        BrowserResponse, BrowserTargetKind, CaptureBackendKind, CaptureInfo, CaptureScope,
+        CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck,
+        DoctorDisplayTopologyReport, DoctorReadiness, DoctorReport, ElementNode,
+        ElementNumericValueReadback, ElementTextReadback, EnvironmentInfo, FocusedApp,
+        InputBackendKind, PhoneAppInstallMode, PhoneRequest, PortalCapabilities, RectF,
+        ScrollDirection, SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind,
         SessionPresenceAction, SessionPresenceIntent, SessionPresenceStatus, SetupCommandReport,
         ToolAvailability, ToolCapabilities, WindowTargetingSetupReport,
     };
@@ -1252,6 +1253,7 @@ mod tests {
         snapshot_summary, snapshot_text_content, summary_element, summary_snapshot,
     };
 
+    use super::definitions::schema_accepts;
     use super::{
         McpProcessConfig, McpService, action_summary, build_tool_definitions, build_tool_registry,
         effective_capture_screen, grouped_handler_call, handle_action_call,
@@ -1539,6 +1541,588 @@ mod tests {
     }
 
     #[test]
+    fn grouped_status_schema_allows_phone_branch_arguments() {
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(false), &model);
+
+        let phone_status_service = FakeService::with_response(ServiceResponse::Error {
+            code: "StatusProbe".to_string(),
+            message: "captured".to_string(),
+        });
+        let phone_status_result = handle_session_tool_call(
+            &phone_status_service,
+            &heuristics,
+            &model,
+            &registry,
+            "status",
+            json!({"component": "phone", "refresh_devices": true}),
+        )
+        .expect("phone status should pass grouped schema validation");
+        let mut requests = phone_status_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "phone status should dispatch, got result: {phone_status_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Phone {
+                request: PhoneRequest::Status(request),
+            } => assert!(request.refresh_devices),
+            other => panic!("expected phone status request: {other:?}"),
+        }
+
+        let companion_status_service = FakeService::with_response(ServiceResponse::Error {
+            code: "StatusProbe".to_string(),
+            message: "captured".to_string(),
+        });
+        let companion_status_result = handle_session_tool_call(
+            &companion_status_service,
+            &heuristics,
+            &model,
+            &registry,
+            "status",
+            json!({"component": "phone_companion", "session_id": "phone-1"}),
+        )
+        .expect("phone companion status should pass grouped schema validation");
+        let mut requests = companion_status_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "phone companion status should dispatch, got result: {companion_status_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Phone {
+                request: PhoneRequest::CompanionStatus(request),
+            } => assert_eq!(request.session.session_id.as_deref(), Some("phone-1")),
+            other => panic!("expected phone companion status request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn grouped_schema_allows_parser_tolerated_optional_sentinels() {
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(false), &model);
+
+        let cases = [
+            json!({"target": "", "url": ""}),
+            json!({"target": null, "url": null}),
+        ];
+
+        for arguments in cases {
+            let service = FakeService::with_response(ServiceResponse::Error {
+                code: "OpenProbe".to_string(),
+                message: "captured".to_string(),
+            });
+            let result = handle_session_tool_call(
+                &service,
+                &heuristics,
+                &model,
+                &registry,
+                "browser_open",
+                arguments,
+            )
+            .expect("browser_open sentinels should pass grouped schema validation");
+            let mut requests = service.take_requests();
+            assert_eq!(
+                requests.len(),
+                1,
+                "browser_open should dispatch, got result: {result}"
+            );
+            match requests.remove(0) {
+                ServiceRequest::Browser {
+                    request:
+                        BrowserRequest::Open {
+                            target: None,
+                            url: None,
+                        },
+                } => {}
+                other => panic!("expected blank browser open request: {other:?}"),
+            }
+        }
+
+        let scroll_service = FakeService::with_response(ServiceResponse::Error {
+            code: "ScrollProbe".to_string(),
+            message: "captured".to_string(),
+        });
+        let scroll_result = handle_session_tool_call(
+            &scroll_service,
+            &heuristics,
+            &model,
+            &registry,
+            "browser_scroll",
+            json!({
+                "tab_id": "tab-1",
+                "delta_y": 500,
+                "x": null,
+                "y": null
+            }),
+        )
+        .expect("browser_scroll null coordinates should pass grouped schema validation");
+        let mut requests = scroll_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "browser_scroll should dispatch, got result: {scroll_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Browser {
+                request:
+                    sky_cua_platform::model::BrowserRequest::Scroll {
+                        tab_id,
+                        delta_y,
+                        x,
+                        y,
+                        ..
+                    },
+            } => {
+                assert_eq!(tab_id, "tab-1");
+                assert_eq!(delta_y, 500.0);
+                assert_eq!(x, None);
+                assert_eq!(y, None);
+            }
+            other => panic!("expected viewport browser scroll request: {other:?}"),
+        }
+
+        let image_model = ModelSessionInfo {
+            supports_images: Some(true),
+        };
+        let image_registry = build_tool_registry(&process_config(false), &image_model);
+        let service = FakeService::with_response(ServiceResponse::Error {
+            code: "ObserveProbe".to_string(),
+            message: "captured".to_string(),
+        });
+        let result = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &image_model,
+            &image_registry,
+            "observe",
+            json!({
+                "surface": "desktop",
+                "detail": null,
+                "capture_screen": null,
+                "screenshot_delivery": null
+            }),
+        )
+        .expect("desktop observe sentinels should pass grouped schema validation");
+        let mut requests = service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "desktop observe should dispatch, got result: {result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::GetAppState {
+                selector: None,
+                capture_screen,
+            } => assert_eq!(capture_screen, CaptureScreenMode::IfChanged),
+            other => panic!("expected default desktop observe request: {other:?}"),
+        }
+
+        let pointer_service = FakeService::with_response(ServiceResponse::ExecuteAction {
+            outcome: ActionOutcome {
+                success: true,
+                message: "clicked".to_string(),
+                code: "ActionPerformed".to_string(),
+                diagnostics: Vec::new(),
+                agent_cursor: None,
+            },
+        });
+        let pointer_result = handle_session_tool_call(
+            &pointer_service,
+            &heuristics,
+            &model,
+            &registry,
+            "desktop_pointer",
+            json!({
+                "operation": "click",
+                "snapshot_id": "",
+                "element_index": 0,
+                "x": 12.5,
+                "y": 42.0
+            }),
+        )
+        .expect("desktop_pointer blank snapshot sentinel should pass grouped schema validation");
+        let mut requests = pointer_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "desktop_pointer should dispatch, got result: {pointer_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::ExecuteAction { request } => {
+                assert_eq!(request.action, ActionName::Click);
+                assert_eq!(request.snapshot_id, None);
+                assert_eq!(request.element_index, None);
+                assert_eq!(request.arguments["x"], 12.5);
+                assert_eq!(request.arguments["y"], 42.0);
+            }
+            other => panic!("expected click action request: {other:?}"),
+        }
+
+        let phone_service = FakeService::with_response(ServiceResponse::Error {
+            code: "InstallProbe".to_string(),
+            message: "captured".to_string(),
+        });
+        let phone_result = handle_session_tool_call(
+            &phone_service,
+            &heuristics,
+            &model,
+            &registry,
+            "phone_app_install",
+            json!({
+                "session_id": "phone-1",
+                "apk_paths": ["/tmp/base.apk"],
+                "mode": null,
+                "reinstall": null,
+                "allow_downgrade": null,
+                "allow_test_apk": null,
+                "grant_runtime_permissions": null
+            }),
+        )
+        .expect("phone app install sentinels should pass grouped schema validation");
+        let mut requests = phone_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "phone_app_install should dispatch, got result: {phone_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Phone {
+                request: PhoneRequest::AppInstall(request),
+            } => {
+                assert_eq!(request.apk_paths, vec!["/tmp/base.apk"]);
+                assert_eq!(request.mode, PhoneAppInstallMode::Single);
+                assert!(!request.reinstall);
+                assert!(!request.allow_downgrade);
+                assert!(!request.allow_test_apk);
+                assert!(!request.grant_runtime_permissions);
+            }
+            other => panic!("expected phone app install request: {other:?}"),
+        }
+
+        for package_name in [Value::Null, json!("")] {
+            let phone_setup_service = FakeService::with_response(ServiceResponse::Error {
+                code: "SettingsProbe".to_string(),
+                message: "captured".to_string(),
+            });
+            let phone_setup_result = handle_session_tool_call(
+                &phone_setup_service,
+                &heuristics,
+                &model,
+                &registry,
+                "phone_setup",
+                json!({
+                    "operation": "open_settings",
+                    "session_id": "phone-1",
+                    "screen": "accessibility",
+                    "package_name": package_name
+                }),
+            )
+            .expect("phone settings package sentinels should pass grouped schema validation");
+            let mut requests = phone_setup_service.take_requests();
+            assert_eq!(
+                requests.len(),
+                1,
+                "phone_setup should dispatch, got result: {phone_setup_result}"
+            );
+            match requests.remove(0) {
+                ServiceRequest::Phone {
+                    request: PhoneRequest::OpenSettings(request),
+                } => {
+                    assert_eq!(request.session.session_id.as_deref(), Some("phone-1"));
+                    assert_eq!(request.package_name, None);
+                }
+                other => panic!("expected phone open-settings request: {other:?}"),
+            }
+        }
+
+        let screenshot_service = FakeService::with_response(ServiceResponse::Screenshot {
+            snapshot: Box::new(snapshot_with_verbose_element()),
+        });
+        let screenshot_result = handle_session_tool_call(
+            &screenshot_service,
+            &heuristics,
+            &model,
+            &registry,
+            "capture_desktop",
+            json!({
+                "display_id": "kwin:HDMI-A-1",
+                "capture_all_displays": false,
+                "screenshot_delivery": null
+            }),
+        )
+        .expect("false all-displays sentinel with display selector should pass grouped schema");
+        let mut requests = screenshot_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "capture_desktop should dispatch, got result: {screenshot_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Screenshot {
+                target: None,
+                display_target: Some(display_target),
+                capture_all_displays: false,
+            } => assert_eq!(display_target.display_id.as_deref(), Some("kwin:HDMI-A-1")),
+            other => panic!("expected display screenshot request: {other:?}"),
+        }
+
+        let display_screenshot_service = FakeService::with_response(ServiceResponse::Screenshot {
+            snapshot: Box::new(snapshot_with_verbose_element()),
+        });
+        let display_screenshot_result = handle_session_tool_call(
+            &display_screenshot_service,
+            &heuristics,
+            &model,
+            &registry,
+            "capture_desktop",
+            json!({
+                "display_id": "kwin:HDMI-A-1",
+                "pid": 0
+            }),
+        )
+        .expect("ignored pid sentinel with display selector should pass grouped schema");
+        let mut requests = display_screenshot_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "display capture should dispatch, got result: {display_screenshot_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Screenshot {
+                target: None,
+                display_target: Some(display_target),
+                capture_all_displays: false,
+            } => assert_eq!(display_target.display_id.as_deref(), Some("kwin:HDMI-A-1")),
+            other => panic!("expected display screenshot request: {other:?}"),
+        }
+
+        let all_displays_service = FakeService::with_response(ServiceResponse::Screenshot {
+            snapshot: Box::new(snapshot_with_verbose_element()),
+        });
+        let all_displays_result = handle_session_tool_call(
+            &all_displays_service,
+            &heuristics,
+            &model,
+            &registry,
+            "capture_desktop",
+            json!({
+                "capture_all_displays": true,
+                "window_id": ""
+            }),
+        )
+        .expect("ignored window_id sentinel with all-displays capture should pass grouped schema");
+        let mut requests = all_displays_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "all-displays capture should dispatch, got result: {all_displays_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Screenshot {
+                target: None,
+                display_target: None,
+                capture_all_displays: true,
+            } => {}
+            other => panic!("expected all-displays screenshot request: {other:?}"),
+        }
+
+        let primary_screenshot_service = FakeService::with_response(ServiceResponse::Screenshot {
+            snapshot: Box::new(snapshot_with_verbose_element()),
+        });
+        let primary_screenshot_result = handle_session_tool_call(
+            &primary_screenshot_service,
+            &heuristics,
+            &model,
+            &registry,
+            "capture_desktop",
+            json!({"pid": 0, "title": ""}),
+        )
+        .expect("blank/zero window target sentinels should pass grouped schema");
+        let mut requests = primary_screenshot_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "primary capture should dispatch, got result: {primary_screenshot_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Screenshot {
+                target: None,
+                display_target: None,
+                capture_all_displays: false,
+            } => {}
+            other => panic!("expected primary screenshot request: {other:?}"),
+        }
+
+        let whitespace_title_screenshot_service =
+            FakeService::with_response(ServiceResponse::Screenshot {
+                snapshot: Box::new(snapshot_with_verbose_element()),
+            });
+        let whitespace_title_screenshot_result = handle_session_tool_call(
+            &whitespace_title_screenshot_service,
+            &heuristics,
+            &model,
+            &registry,
+            "capture_desktop",
+            json!({
+                "display_id": "kwin:HDMI-A-1",
+                "title": " "
+            }),
+        )
+        .expect(
+            "ignored whitespace title sentinel with display selector should pass grouped schema",
+        );
+        let mut requests = whitespace_title_screenshot_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "display capture should dispatch, got result: {whitespace_title_screenshot_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Screenshot {
+                target: None,
+                display_target: Some(display_target),
+                capture_all_displays: false,
+            } => assert_eq!(display_target.display_id.as_deref(), Some("kwin:HDMI-A-1")),
+            other => panic!("expected display screenshot request: {other:?}"),
+        }
+
+        let notifications_service = FakeService::with_response(ServiceResponse::Error {
+            code: "NotificationsProbe".to_string(),
+            message: "captured".to_string(),
+        });
+        let notifications_result = handle_session_tool_call(
+            &notifications_service,
+            &heuristics,
+            &model,
+            &registry,
+            "phone_notifications",
+            json!({"session_id": "phone-1", "limit": null}),
+        )
+        .expect("phone_notifications null limit should pass grouped schema validation");
+        let mut requests = notifications_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "phone_notifications should dispatch, got result: {notifications_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Phone {
+                request: PhoneRequest::Notifications(request),
+            } => assert_eq!(request.limit, None),
+            other => panic!("expected phone notifications request: {other:?}"),
+        }
+
+        let app_list_service = FakeService::with_response(ServiceResponse::Error {
+            code: "AppListProbe".to_string(),
+            message: "captured".to_string(),
+        });
+        let app_list_result = handle_session_tool_call(
+            &app_list_service,
+            &heuristics,
+            &model,
+            &registry,
+            "list_resources",
+            json!({
+                "surface": "phone",
+                "resource": "apps",
+                "session_id": "phone-1",
+                "include_system": null,
+                "limit": null
+            }),
+        )
+        .expect("phone app list null optionals should pass grouped schema validation");
+        let mut requests = app_list_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "phone app list should dispatch, got result: {app_list_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Phone {
+                request: PhoneRequest::AppList(request),
+            } => {
+                assert!(!request.include_system);
+                assert_eq!(request.limit, None);
+            }
+            other => panic!("expected phone app list request: {other:?}"),
+        }
+
+        let intent_service = FakeService::with_response(ServiceResponse::Error {
+            code: "IntentProbe".to_string(),
+            message: "captured".to_string(),
+        });
+        let intent_result = handle_session_tool_call(
+            &intent_service,
+            &heuristics,
+            &model,
+            &registry,
+            "phone_app_action",
+            json!({
+                "operation": "open_intent",
+                "session_id": "phone-1",
+                "intent_uri": "intent://example",
+                "package_name": "com.example"
+            }),
+        )
+        .expect("scoped phone open-intent should pass grouped schema validation");
+        let mut requests = intent_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "phone open-intent should dispatch, got result: {intent_result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::Phone {
+                request: PhoneRequest::AppOpenIntent(request),
+            } => {
+                assert_eq!(request.intent_uri, "intent://example");
+                assert_eq!(request.package_name.as_deref(), Some("com.example"));
+            }
+            other => panic!("expected phone app open-intent request: {other:?}"),
+        }
+
+        for package_name in [Value::Null, json!("")] {
+            let intent_service = FakeService::with_response(ServiceResponse::Error {
+                code: "IntentProbe".to_string(),
+                message: "captured".to_string(),
+            });
+            let intent_result = handle_session_tool_call(
+                &intent_service,
+                &heuristics,
+                &model,
+                &registry,
+                "phone_app_action",
+                json!({
+                    "operation": "open_intent",
+                    "session_id": "phone-1",
+                    "intent_uri": "intent://example",
+                    "package_name": package_name
+                }),
+            )
+            .expect("optional phone open-intent package sentinels should pass grouped schema");
+            let mut requests = intent_service.take_requests();
+            assert_eq!(
+                requests.len(),
+                1,
+                "phone open-intent should dispatch, got result: {intent_result}"
+            );
+            match requests.remove(0) {
+                ServiceRequest::Phone {
+                    request: PhoneRequest::AppOpenIntent(request),
+                } => {
+                    assert_eq!(request.intent_uri, "intent://example");
+                    assert_eq!(request.package_name, None);
+                }
+                other => panic!("expected phone app open-intent request: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn grouped_schema_rejections_stop_before_dispatch() {
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
         let model = ModelSessionInfo::default();
@@ -1550,12 +2134,233 @@ mod tests {
                 json!({"operation": "type_text", "tab_id": "tab-1", "text": "hello", "x": 1, "y": 1}),
             ),
             (
+                "browser_input",
+                json!({"operation": "type_text", "tab_id": 456, "text": "hello"}),
+            ),
+            (
+                "browser_input",
+                json!({"operation": "type_text", "tab_id": " ", "text": "hello"}),
+            ),
+            (
+                "browser_input",
+                json!({"operation": "press_key", "tab_id": "tab-1", "key": " "}),
+            ),
+            (
+                "desktop_pointer",
+                json!({
+                    "operation": "click",
+                    "x": 1,
+                    "y": 1,
+                    "to_x": 2
+                }),
+            ),
+            (
+                "desktop_pointer",
+                json!({
+                    "operation": "click",
+                    "snapshot_id": " ",
+                    "element_index": 0
+                }),
+            ),
+            (
+                "desktop_pointer",
+                json!({
+                    "operation": "click",
+                    "snapshot_id": "snapshot-1",
+                    "name": " "
+                }),
+            ),
+            (
+                "desktop_pointer",
+                json!({
+                    "operation": "drag",
+                    "snapshot_id": "",
+                    "element_index": 0,
+                    "to_element_index": 1
+                }),
+            ),
+            (
+                "desktop_keyboard",
+                json!({
+                    "operation": "type_text",
+                    "text": "hello",
+                    "key": "Enter"
+                }),
+            ),
+            (
+                "desktop_action",
+                json!({
+                    "operation": "activate",
+                    "snapshot_id": "snapshot-1",
+                    "element_index": 1,
+                    "action_name": "press"
+                }),
+            ),
+            (
+                "desktop_action",
+                json!({
+                    "operation": "activate",
+                    "element_identifier": " "
+                }),
+            ),
+            (
+                "desktop_action",
+                json!({
+                    "operation": "perform_action",
+                    "snapshot_id": "snapshot-1",
+                    "element_index": 0,
+                    "action_name": " "
+                }),
+            ),
+            ("activate_window", json!({"pid": 0})),
+            ("activate_window", json!({"window_id": ""})),
+            ("activate_window", json!({"title": " "})),
+            (
                 "phone_connection",
                 json!({"operation": "disconnect", "session_id": "phone-1", "install_companion": true}),
             ),
             (
                 "phone_pointer",
                 json!({"operation": "tap", "session_id": "phone-1", "x": 1, "y": 1}),
+            ),
+            (
+                "phone_pointer",
+                json!({
+                    "operation": "tap",
+                    "session_id": "phone-1",
+                    "phone_snapshot_id": " ",
+                    "x": 1,
+                    "y": 1
+                }),
+            ),
+            (
+                "phone_pointer",
+                json!({
+                    "operation": "tap",
+                    "session_id": "phone-1",
+                    "phone_snapshot_id": "snap-1",
+                    "x": 1,
+                    "y": 1,
+                    "duration_ms": 10
+                }),
+            ),
+            (
+                "phone_pointer",
+                json!({
+                    "operation": "tap",
+                    "session_id": "phone-1",
+                    "phone_snapshot_id": "snap-1",
+                    "x": 1,
+                    "y": 1,
+                    "start_x": 1
+                }),
+            ),
+            (
+                "phone_setup",
+                json!({
+                    "operation": "open_settings",
+                    "session_id": "phone-1",
+                    "screen": "app_details",
+                    "package_name": ""
+                }),
+            ),
+            (
+                "phone_setup",
+                json!({
+                    "operation": "open_settings",
+                    "session_id": "phone-1",
+                    "screen": "app_details",
+                    "package_name": " "
+                }),
+            ),
+            (
+                "phone_keyboard",
+                json!({
+                    "operation": "type_text",
+                    "session_id": "phone-1",
+                    "text": "hello",
+                    "key": "Enter"
+                }),
+            ),
+            (
+                "phone_keyboard",
+                json!({
+                    "operation": "press_key",
+                    "session_id": "phone-1",
+                    "key": " "
+                }),
+            ),
+            (
+                "phone_notification_action",
+                json!({
+                    "operation": "open",
+                    "session_id": "phone-1",
+                    "event_id": "event-1",
+                    "action_id": "reply"
+                }),
+            ),
+            (
+                "phone_notification_action",
+                json!({
+                    "operation": "open",
+                    "session_id": "phone-1",
+                    "event_id": " "
+                }),
+            ),
+            (
+                "phone_notification_reply",
+                json!({
+                    "session_id": "phone-1",
+                    "event_id": " ",
+                    "action_id": "reply",
+                    "text": "hello"
+                }),
+            ),
+            (
+                "phone_notification_reply",
+                json!({
+                    "session_id": "phone-1",
+                    "event_id": "event-1",
+                    "action_id": " ",
+                    "text": "hello"
+                }),
+            ),
+            (
+                "phone_app_action",
+                json!({
+                    "operation": "launch",
+                    "session_id": "phone-1",
+                    "package_name": "com.example",
+                    "intent_uri": "app://example"
+                }),
+            ),
+            (
+                "phone_app_action",
+                json!({
+                    "operation": "launch",
+                    "session_id": "phone-1",
+                    "package_name": ""
+                }),
+            ),
+            (
+                "phone_app_action",
+                json!({
+                    "operation": "launch",
+                    "session_id": "phone-1",
+                    "package_name": " "
+                }),
+            ),
+            (
+                "phone_app_action",
+                json!({
+                    "operation": "open_intent",
+                    "session_id": "phone-1",
+                    "intent_uri": " "
+                }),
+            ),
+            (
+                "phone_app_force_stop",
+                json!({"session_id": "phone-1", "package_name": " "}),
             ),
             (
                 "capture_desktop",
@@ -1856,6 +2661,20 @@ mod tests {
         assert_eq!(schema["required"], json!(["operation"]));
         assert!(schema["properties"].get("snapshot_id").is_some());
         assert!(schema.get("allOf").is_some());
+        assert!(
+            schema_accepts(
+                schema,
+                &json!({"operation": "drag", "snapshot_id": "snap-1", "element_index": 3, "to_x": 500, "to_y": 20})
+            ),
+            "desktop_pointer drag must allow an observed source element dragged to explicit coordinates"
+        );
+        assert!(
+            schema_accepts(
+                schema,
+                &json!({"operation": "drag", "snapshot_id": "snap-1", "from_x": 1, "from_y": 2, "to_element_index": 3})
+            ),
+            "desktop_pointer drag must allow explicit source coordinates dragged to an observed target element"
+        );
 
         let activate = find_tool("desktop_action");
         assert_eq!(activate["inputSchema"]["required"], json!(["operation"]));
@@ -1877,7 +2696,7 @@ mod tests {
         assert_eq!(type_text["inputSchema"]["required"], json!(["operation"]));
         assert_eq!(
             type_text["inputSchema"]["allOf"][0]["then"]["required"],
-            json!(["text"])
+            json!(["operation", "text"])
         );
 
         let get_app_state = find_tool("observe");
@@ -1888,7 +2707,7 @@ mod tests {
         );
         let get_app_state_schema = &get_app_state["inputSchema"];
         assert_eq!(
-            get_app_state_schema["properties"]["element_limit"]["maximum"],
+            get_app_state_schema["properties"]["element_limit"]["anyOf"][0]["maximum"],
             APP_STATE_MAX_ELEMENT_LIMIT
         );
         assert!(
@@ -1897,7 +2716,7 @@ mod tests {
                 .is_some()
         );
         assert_eq!(
-            get_app_state_schema["properties"]["element_query"]["maxLength"],
+            get_app_state_schema["properties"]["element_query"]["anyOf"][0]["maxLength"],
             APP_STATE_MAX_ELEMENT_QUERY_CHARS
         );
         assert!(
@@ -1924,6 +2743,27 @@ mod tests {
             screenshot_schema["properties"]
                 .get("capture_all_displays")
                 .is_some()
+        );
+        assert!(
+            schema_accepts(
+                screenshot_schema,
+                &json!({"display_id": "", "display_name": "HDMI-A-1"})
+            ),
+            "capture_desktop must allow blank display_id sentinels with an active display_name"
+        );
+        assert!(
+            schema_accepts(
+                screenshot_schema,
+                &json!({"display_index": null, "capture_all_displays": true})
+            ),
+            "capture_desktop must allow null display_index sentinels with all-display capture"
+        );
+        assert!(
+            !schema_accepts(
+                screenshot_schema,
+                &json!({"display_index": 0, "capture_all_displays": true})
+            ),
+            "capture_desktop must still reject active display selectors mixed with all-display capture"
         );
         assert!(
             screenshot["description"]
@@ -1991,6 +2831,20 @@ mod tests {
             display.display.unwrap().display_id.as_deref(),
             Some("kwin:HDMI-A-1")
         );
+
+        let display_with_false_all = parse_screenshot_target(
+            &json!({"display_id": "kwin:HDMI-A-1", "capture_all_displays": false}),
+        )
+        .expect("false all-displays sentinel should not count as a selector");
+        assert_eq!(
+            display_with_false_all
+                .display
+                .unwrap()
+                .display_id
+                .as_deref(),
+            Some("kwin:HDMI-A-1")
+        );
+        assert!(!display_with_false_all.capture_all_displays);
 
         let all = parse_screenshot_target(&json!({"capture_all_displays": true}))
             .expect("all-displays target is valid");

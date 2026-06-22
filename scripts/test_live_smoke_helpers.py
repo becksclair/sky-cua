@@ -981,6 +981,28 @@ def test_opencode_agent_runner_preserves_status_and_redacts_stdout(
     assert '"result": {"redacted": true}' in stdout
 
 
+def test_opencode_agent_runner_defaults_to_opencode_go_kimi_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> object:
+        captured["argv"] = argv
+        captured["env"] = kwargs["env"]
+        return _agent_mcp_smoke.subprocess.CompletedProcess(argv, returncode=0)
+
+    monkeypatch.setenv("OPENCODE_API_KEY", "opencode-secret")
+    monkeypatch.delenv("SKY_CUA_SMOKE_OPENCODE_MODEL", raising=False)
+    monkeypatch.setattr(_agent_mcp_smoke.subprocess, "run", fake_run)
+
+    proc = _agent_mcp_smoke.run_agent("opencode", "use sky cua", tmp_path, gate_deploy=False)
+
+    assert proc.returncode == 0
+    assert "--model opencode-go/kimi-k2.7-code" in captured["argv"][4]
+    env = cast(dict[str, str], captured["env"])
+    assert env["OPENCODE_API_KEY"] == "opencode-secret"
+
+
 def test_openclaw_agent_runner_preserves_state_and_auth_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

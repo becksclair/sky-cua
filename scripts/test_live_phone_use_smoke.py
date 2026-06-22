@@ -554,16 +554,31 @@ def test_profile_adversarial_passes_when_surface_rejects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(smoke, "adb_binary", lambda: "/usr/bin/adb")
-    driver, _ = make_smoke(
+    monkeypatch.setattr(
+        smoke,
+        "require_devices_or_skip",
+        lambda _driver: [{"serial": "emulator-5554", "state": "device"}],
+    )
+    monkeypatch.setattr(
+        smoke,
+        "connect_session",
+        lambda _driver, _serial: ("sess-1", ok({"session_id": "sess-1"})),
+    )
+    driver, client = make_smoke(
         {
             "phone_connect": err({"diagnostics": [{"code": "X", "message": "no"}]}),
-            "phone_tap": err({"diagnostics": [{"code": "Y", "message": "stale"}]}),
+            "phone_tap": err(
+                {"diagnostics": [{"code": "PhoneSnapshotUnknown", "message": "stale"}]}
+            ),
+            "phone_disconnect": ok({"disconnected": True}),
         }
     )
     results = smoke.profile_adversarial(driver, driver._options)  # pyright: ignore[reportPrivateUsage]
     by_name = {step.name: step for step in results}
     assert by_name["wrong_serial_rejected"].passed
     assert by_name["stale_snapshot_rejected"].passed
+    tap_call = next(name_args for name_args in client.calls if name_args[0] == "phone_pointer")
+    assert tap_call[1]["session_id"] == "sess-1"
     # The drift steps skip (named) because no device-change flags were passed.
     assert by_name["orientation_mismatch_rejected"].skipped
     assert by_name["resolution_mismatch_rejected"].skipped
@@ -583,6 +598,23 @@ def test_profile_adversarial_fails_when_bogus_serial_accepted(
     results = smoke.profile_adversarial(driver, driver._options)  # pyright: ignore[reportPrivateUsage]
     statuses = [step.status for step in results]
     assert smoke.StepStatus.FAIL in statuses
+
+
+def test_profile_adversarial_skips_stale_snapshot_without_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(smoke, "adb_binary", lambda: "/usr/bin/adb")
+    driver, _ = make_smoke(
+        {
+            "phone_connect": err({"diagnostics": [{"code": "X", "message": "no"}]}),
+            "phone_list_devices": ok({"devices": []}),
+        }
+    )
+    results = smoke.profile_adversarial(driver, driver._options)  # pyright: ignore[reportPrivateUsage]
+    by_name = {step.name: step for step in results}
+    assert by_name["wrong_serial_rejected"].passed
+    assert by_name["stale_snapshot_rejected"].skipped
+    assert "no authorized adb device" in by_name["stale_snapshot_rejected"].detail
 
 
 def test_profile_adversarial_skips_without_adb(

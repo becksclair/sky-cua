@@ -22,6 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from _agent_mcp_smoke import (
+    DEFAULT_OPENCODE_SMOKE_MODEL,
     DEFAULT_PI_SMOKE_MODEL,
     TOOL_FAILURE_STATUSES,
     dismissed_json_from_text,
@@ -43,7 +44,7 @@ FIXTURES = {
             "360",
         ],
         "title": "sky-cua agent smoke",
-        "prompt_suffix": "dismiss it by clicking OK",
+        "prompt_suffix": "dismiss it by confirming OK",
     },
     "kdialog": {
         "argv": [
@@ -54,7 +55,7 @@ FIXTURES = {
             "Agent sky-cua smoke dialog",
         ],
         "title": "sky-cua agent smoke",
-        "prompt_suffix": "dismiss it by clicking OK",
+        "prompt_suffix": "dismiss it by confirming OK",
     },
 }
 SKY_CUA_ACTION_TOOL_NAMES = {
@@ -497,6 +498,10 @@ def run_fixture_smoke(
     smoke_name = profile_name or fixture_name
     artifact_dir = make_artifact_dir(agent, smoke_name)
     effective_model = model
+    if agent == "opencode" and effective_model is None:
+        effective_model = os.environ.get(
+            "SKY_CUA_SMOKE_OPENCODE_MODEL", DEFAULT_OPENCODE_SMOKE_MODEL
+        )
     if agent == "pi" and effective_model is None:
         effective_model = os.environ.get("SKY_CUA_SMOKE_PI_MODEL", DEFAULT_PI_SMOKE_MODEL)
 
@@ -506,9 +511,10 @@ def run_fixture_smoke(
         prompt = (
             f"Use the sky-cua MCP tools (server name sky_cua, sky-cua, or computer-use). "
             f"Find the dialog titled '{fixture['title']}' and {fixture['prompt_suffix']}. "
-            f"Keep the interaction simple and direct; use window/state/click tools only as needed. "
+            f"Keep the interaction simple and direct; use window/state/click/keyboard tools only as needed. "
+            f"For a focused confirmation dialog, desktop_keyboard Enter is acceptable. "
             f"Do not use shell commands, process inspection, OCR, window-manager commands, "
-            f"keyboard shortcuts, or non-sky-cua desktop shortcuts as substitutes for sky-cua MCP tools. "
+            f"global keyboard shortcuts, or non-sky-cua desktop shortcuts as substitutes for sky-cua MCP tools. "
             f"Return a JSON object with keys: dialog_text (string or null), dismissed (boolean)."
         )
 
@@ -589,7 +595,11 @@ def main() -> int:
     parser.add_argument(
         "--model",
         default=None,
-        help=(f"Agent model override. Pi defaults to {DEFAULT_PI_SMOKE_MODEL} when omitted."),
+        help=(
+            "Agent model override. "
+            f"OpenCode defaults to {DEFAULT_OPENCODE_SMOKE_MODEL}; "
+            f"Pi defaults to {DEFAULT_PI_SMOKE_MODEL}."
+        ),
     )
     args = parser.parse_args()
     return run_fixture_smoke(agent=args.agent, fixture_name=args.fixture, model=args.model)

@@ -965,7 +965,10 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
         print(f"  1. Copy {config_path} to your opencode project root as opencode.json")
         print("     OR merge the 'mcp.sky_cua' section into your existing opencode.json")
         print("  2. Run: opencode mcp list")
-        print("  3. Run: opencode run 'Use the sky_cua MCP tool list_apps'")
+        print(
+            "  3. Run: opencode run 'Use the sky_cua MCP tool "
+            'list_resources with surface="desktop" and resource="apps"\''
+        )
         print("  4. Restart or reload the OpenCode session if it does not reconnect automatically")
     elif host == "claude-code":
         print("\nNext steps for Claude Code:")
@@ -975,7 +978,10 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
         print("  3. If ~/.claude exists, sky-cua skills were copied into ~/.claude/skills")
         print("  4. ~/.claude/settings.json now denies the built-in computer-use MCP and")
         print("     auto-approves the sky-cua tools (mcp__sky-cua__*)")
-        print("  5. Run: claude mcp list, then ask Claude to use the sky-cua list_apps tool")
+        print(
+            "  5. Run: claude mcp list, then ask Claude to use the sky-cua "
+            'list_resources tool with surface="desktop" and resource="apps"'
+        )
     elif host == "claude-desktop":
         print("\nNext steps for Claude Desktop:")
         print(f"  1. Merge {config_path} into your Claude Desktop config:")

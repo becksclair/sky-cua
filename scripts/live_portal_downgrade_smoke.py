@@ -55,7 +55,7 @@ def main() -> int:
         try:
             client.initialize()
             tools = {tool["name"] for tool in client.tools_list()}
-            missing = sorted({"list_apps", "get_app_state"} - tools)
+            missing = sorted({"list_resources", "observe"} - tools)
             if missing:
                 raise RuntimeError(f"MCP server did not advertise required tools: {missing}")
 

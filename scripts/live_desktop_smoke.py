@@ -32,15 +32,49 @@ def wait_for_app_snapshot(client: McpClient, title_hint: str, deadline: float) -
     return wait_for_app_snapshot_result(client, title_hint, deadline=deadline)["structuredContent"]
 
 
+def grouped_structured_result(result: dict[str, Any]) -> dict[str, Any]:
+    structured = result.get("structuredContent") or {}
+    if not isinstance(structured, dict):
+        return {}
+    nested = structured.get("result")
+    return nested if isinstance(nested, dict) else structured
+
+
+def normalized_grouped_result(result: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(result)
+    structured = result.get("structuredContent") or {}
+    normalized["structuredContent"] = grouped_structured_result(result)
+    if isinstance(structured, dict):
+        tool = structured.get("tool")
+        branch = structured.get("branch")
+        prefix = f"{tool}/{branch}. " if isinstance(tool, str) and isinstance(branch, str) else None
+        content = normalized.get("content")
+        if prefix and isinstance(content, list):
+            normalized_content: list[Any] = []
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    normalized_block = dict(block)
+                    text = normalized_block["text"]
+                    if text.startswith(prefix):
+                        normalized_block["text"] = text.removeprefix(prefix)
+                    normalized_content.append(normalized_block)
+                else:
+                    normalized_content.append(block)
+            normalized["content"] = normalized_content
+    return normalized
+
+
 def wait_for_app_snapshot_result(
     client: McpClient, title_hint: str, *, deadline: float
 ) -> dict[str, Any]:
     request_id = 10
     lowered = title_hint.lower()
     while time.time() < deadline:
-        apps_result = client.tools_call(request_id, "list_apps", {})
+        apps_result = client.tools_call(
+            request_id, "list_resources", {"surface": "desktop", "resource": "apps"}
+        )
         request_id += 1
-        apps = apps_result["structuredContent"]["apps"]
+        apps = grouped_structured_result(apps_result).get("apps") or []
         matching_app = next(
             (app for app in apps if lowered in ((app.get("window_title") or "").lower())),
             None,
@@ -48,11 +82,11 @@ def wait_for_app_snapshot_result(
         if matching_app is not None:
             result = client.tools_call(
                 request_id,
-                "get_app_state",
-                {"app_id": matching_app["app_id"]},
+                "observe",
+                {"surface": "desktop", "app_id": matching_app["app_id"]},
             )
             request_id += 1
-            return result
+            return normalized_grouped_result(result)
         time.sleep(0.5)
     raise RuntimeError(f"timed out waiting for an app with title containing {title_hint!r}")
 
@@ -94,6 +128,22 @@ def find_button(snapshot: dict[str, Any], label: str) -> dict[str, Any]:
         if name == lowered:
             return element
     raise RuntimeError(f"did not find a button named {label!r}")
+
+
+def find_scroll_region(snapshot: dict[str, Any]) -> dict[str, Any]:
+    candidates = [
+        element
+        for element in snapshot.get("elements", [])
+        if (element.get("name") or "") == "Scroll region"
+        and element.get("role") in {"panel", "scroll_pane", "scrollbar"}
+        and isinstance(element.get("element_index"), int)
+    ]
+    if candidates:
+        return candidates[0]
+    raise RuntimeError(
+        "did not find a unique scroll-region target element.\n"
+        f"elements={json.dumps(snapshot.get('elements', []), indent=2, sort_keys=True)}"
+    )
 
 
 def run_zenity_input(
@@ -375,7 +425,7 @@ def semantic_text_smoke(client: McpClient) -> None:
         require_ok(
             client.tools_call(
                 20,
-                "set_value",
+                "desktop_set_value",
                 {
                     "snapshot_id": snapshot["snapshot_id"],
                     "element_index": editable["element_index"],
@@ -396,8 +446,9 @@ def semantic_text_smoke(client: McpClient) -> None:
         require_ok(
             client.tools_call(
                 21,
-                "click",
+                "desktop_pointer",
                 {
+                    "operation": "click",
                     "snapshot_id": updated_snapshot["snapshot_id"],
                     "element_index": ok_button["element_index"],
                 },
@@ -427,8 +478,9 @@ def semantic_text_smoke(client: McpClient) -> None:
         require_ok(
             client.tools_call(
                 30,
-                "click",
+                "desktop_pointer",
                 {
+                    "operation": "click",
                     "snapshot_id": snapshot["snapshot_id"],
                     "element_index": editable["element_index"],
                 },
@@ -438,10 +490,10 @@ def semantic_text_smoke(client: McpClient) -> None:
         require_ok(
             client.tools_call(
                 31,
-                "type_text",
+                "desktop_keyboard",
                 {
+                    "operation": "type_text",
                     "snapshot_id": snapshot["snapshot_id"],
-                    "element_index": editable["element_index"],
                     "text": "typed-smoke",
                 },
             ),
@@ -460,10 +512,10 @@ def semantic_text_smoke(client: McpClient) -> None:
         require_ok(
             client.tools_call(
                 32,
-                "press_key",
+                "desktop_keyboard",
                 {
+                    "operation": "press_key",
                     "snapshot_id": typed_snapshot["snapshot_id"],
-                    "element_index": typed_editable["element_index"],
                     "key": "Enter",
                 },
             ),
@@ -490,7 +542,9 @@ def physical_pointer_smoke(client: McpClient) -> None:
         try:
             state = wait_for_stable_pointer_fixture(state_path, deadline=time.time() + 20)
             print(f"Pointer fixture ready: {json.dumps(state['points'], sort_keys=True)}")
-            apps = client.tools_call(39, "list_apps", {})["structuredContent"]["apps"]
+            apps = grouped_structured_result(
+                client.tools_call(39, "list_resources", {"surface": "desktop", "resource": "apps"})
+            ).get("apps", [])
             fixture_visible = any(
                 POINTER_TITLE.lower() in ((app.get("window_title") or "").lower()) for app in apps
             )
@@ -500,8 +554,8 @@ def physical_pointer_smoke(client: McpClient) -> None:
             require_ok(
                 client.tools_call(
                     40,
-                    "click",
-                    {"x": click_point["x"], "y": click_point["y"]},
+                    "desktop_pointer",
+                    {"operation": "click", "x": click_point["x"], "y": click_point["y"]},
                 ),
                 "physical click",
             )
@@ -517,8 +571,12 @@ def physical_pointer_smoke(client: McpClient) -> None:
             require_ok(
                 client.tools_call(
                     41,
-                    "perform_secondary_action",
-                    {"x": secondary_point["x"], "y": secondary_point["y"]},
+                    "desktop_pointer",
+                    {
+                        "operation": "secondary_click",
+                        "x": secondary_point["x"],
+                        "y": secondary_point["y"],
+                    },
                 ),
                 "physical secondary click",
             )
@@ -535,8 +593,9 @@ def physical_pointer_smoke(client: McpClient) -> None:
             require_ok(
                 client.tools_call(
                     42,
-                    "drag",
+                    "desktop_pointer",
                     {
+                        "operation": "drag",
                         "x": drag_from["x"],
                         "y": drag_from["y"],
                         "to_x": drag_to["x"],
@@ -553,14 +612,37 @@ def physical_pointer_smoke(client: McpClient) -> None:
             )
             print("physical drag smoke passed.")
 
-            scroll_point = state["points"]["scroll"]
+            observe_result = client.tools_call(
+                43,
+                "observe",
+                {
+                    "surface": "desktop",
+                    "detail": "full",
+                    "element_query": "Scroll region",
+                    "element_limit": 20,
+                },
+            )
+            require_ok(observe_result, "pre-scroll observation")
+            fixture_snapshot = grouped_structured_result(observe_result)
+            snapshot_id = fixture_snapshot.get("snapshot_id")
+            if not isinstance(snapshot_id, str) or not snapshot_id:
+                raise RuntimeError(
+                    "pre-scroll observation did not return a snapshot_id. "
+                    f"result={json.dumps(observe_result, indent=2, sort_keys=True)}"
+                )
+            scroll_region = find_scroll_region(fixture_snapshot)
             pointer_state = load_state(state_path) or {}
             starting_scrolls = int(pointer_state.get("scroll_events", 0))
             require_ok(
                 client.tools_call(
-                    43,
-                    "scroll",
-                    {"x": scroll_point["x"], "y": scroll_point["y"], "delta_y": -180.0},
+                    44,
+                    "desktop_scroll",
+                    {
+                        "direction": "down",
+                        "pages": 1,
+                        "snapshot_id": snapshot_id,
+                        "element_index": scroll_region["element_index"],
+                    },
                 ),
                 "physical scroll",
             )
@@ -615,7 +697,11 @@ def xwayland_visibility_probe(client: McpClient) -> None:
         lowered = title.lower()
 
         while time.time() < deadline:
-            apps = client.tools_call(request_id, "list_apps", {})["structuredContent"]["apps"]
+            apps = grouped_structured_result(
+                client.tools_call(
+                    request_id, "list_resources", {"surface": "desktop", "resource": "apps"}
+                )
+            ).get("apps", [])
             request_id += 1
             last_sample = [
                 {
@@ -641,31 +727,33 @@ def xwayland_visibility_probe(client: McpClient) -> None:
 
         if seen is None:
             raise RuntimeError(
-                "XWayland xmessage probe did not appear in list_apps.\n"
+                "XWayland xmessage probe did not appear in the desktop app resource list.\n"
                 f"Sample:\n{json.dumps(last_sample, indent=2, sort_keys=True)}"
             )
 
         snapshot = client.tools_call(
             request_id,
-            "get_app_state",
-            {"app_id": seen["app_id"]},
-        )["structuredContent"]
+            "observe",
+            {"surface": "desktop", "app_id": seen["app_id"]},
+        )
+        snapshot = grouped_structured_result(snapshot)
         request_id += 1
-        focused_snapshot = client.tools_call(request_id, "get_app_state", {})["structuredContent"]
+        focused_snapshot_result = client.tools_call(request_id, "observe", {"surface": "desktop"})
+        focused_snapshot = grouped_structured_result(focused_snapshot_result)
         print("XWayland xmessage probe visible in AT-SPI app list: True")
         print(f"XWayland focused app: {snapshot.get('focused_app')}")
         print(f"XWayland element count: {len(snapshot.get('elements', []))}")
         focused_app = snapshot.get("focused_app") or {}
         if focused_app.get("app_id") != seen.get("app_id"):
             raise RuntimeError(
-                "XWayland get_app_state did not stay on the selected window.\n"
+                "XWayland desktop observe did not stay on the selected window.\n"
                 f"selected={json.dumps(seen, indent=2, sort_keys=True)}\n"
                 f"focused={json.dumps(focused_app, indent=2, sort_keys=True)}"
             )
         default_focused_app = focused_snapshot.get("focused_app") or {}
         if default_focused_app.get("app_id") != seen.get("app_id"):
             raise RuntimeError(
-                "XWayland get_app_state without a selector did not follow the focused X11 window.\n"
+                "XWayland desktop observe without a selector did not follow the focused X11 window.\n"
                 f"selected={json.dumps(seen, indent=2, sort_keys=True)}\n"
                 f"default_focused={json.dumps(default_focused_app, indent=2, sort_keys=True)}"
             )
@@ -675,11 +763,11 @@ def xwayland_visibility_probe(client: McpClient) -> None:
         descendant_region = pick_x11_click_target(snapshot)
         click_result = client.tools_call(
             request_id,
-            "click",
-            x11_click_arguments(snapshot, descendant_region),
+            "desktop_pointer",
+            {"operation": "click", **x11_click_arguments(snapshot, descendant_region)},
         )
         require_ok(click_result, "XWayland descendant-region click")
-        click_message = (click_result.get("structuredContent") or {}).get("message")
+        click_message = grouped_structured_result(click_result).get("message")
         if click_message:
             print(f"XWayland click result: {click_message}")
         request_id += 1
@@ -746,12 +834,14 @@ def xwayland_visibility_probe(client: McpClient) -> None:
 
                 selector_snapshot = client.tools_call(
                     request_id,
-                    "get_app_state",
+                    "observe",
                     {
+                        "surface": "desktop",
                         "desktop_file_id": "xmessage.desktop",
                         "window_title": selector_beta_title,
                     },
-                )["structuredContent"]
+                )
+                selector_snapshot = grouped_structured_result(selector_snapshot)
                 selector_focused = selector_snapshot.get("focused_app") or {}
                 if selector_focused.get("window_title") != selector_beta_title:
                     raise RuntimeError(
@@ -785,15 +875,12 @@ def main() -> int:
         client.initialize()
         tools = {tool["name"] for tool in client.tools_list()}
         required_tools = {
-            "list_apps",
-            "get_app_state",
-            "click",
-            "perform_secondary_action",
-            "scroll",
-            "drag",
-            "type_text",
-            "press_key",
-            "set_value",
+            "desktop_keyboard",
+            "desktop_pointer",
+            "desktop_scroll",
+            "desktop_set_value",
+            "list_resources",
+            "observe",
         }
         missing = sorted(required_tools - tools)
         if missing:
@@ -803,9 +890,11 @@ def main() -> int:
         physical_pointer_smoke(client)
         xwayland_visibility_probe(client)
 
-        apps = client.tools_call(50, "list_apps", {})["structuredContent"]["apps"]
-        print(f"list_apps returned {len(apps)} apps.")
-        print("\nLive KDE smoke completed successfully.")
+        apps = grouped_structured_result(
+            client.tools_call(50, "list_resources", {"surface": "desktop", "resource": "apps"})
+        ).get("apps", [])
+        print(f"list_resources desktop/apps returned {len(apps)} apps.")
+        print("\nLive desktop smoke completed successfully.")
         return 0
     finally:
         client.close()

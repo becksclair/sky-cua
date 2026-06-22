@@ -33,7 +33,7 @@ coordinates across them.
 
 ## State
 
-- Use only tool names advertised by `tools/list`. Canonical response payloads
+- Use only tool names advertised by `tools/list`. Grouped response payloads
   are under `structuredContent.result`; validation failures are under
   `structuredContent.error`. Delegated branch failures keep the branch payload
   under `structuredContent.result` and set `isError=true`.
@@ -90,11 +90,11 @@ coordinates across them.
   `desktop_action` uses `operation` plus a semantic target; `perform_action`
   also requires `action_name` or `action_index`. `desktop_toggle` takes a
   semantic target only. `desktop_scroll` takes `direction` plus a
-  snapshot-bound target or coordinates. `desktop_set_value` takes `value` plus
-  a semantic target. `desktop_pointer` takes `operation` plus coordinates or an
-  allowed snapshot target. `desktop_keyboard` takes `operation` plus `text` or
-  `key`; optional snapshot/window scope can activate the target window but does
-  not select an editable element.
+  snapshot-bound target from the same observation. `desktop_set_value` takes
+  `value` plus a semantic target. `desktop_pointer` takes `operation` plus
+  coordinates or an allowed snapshot target. `desktop_keyboard` takes
+  `operation` plus `text` or `key`; optional snapshot/window scope can activate
+  the target window but does not select an editable element.
 - Prefer semantic primitives when `semantic_actions` support them:
   `desktop_semantic` for focus/select/expand/collapse, `desktop_toggle` for
   toggles, and `desktop_action` for activate plus named/indexed custom actions.

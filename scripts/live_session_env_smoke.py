@@ -26,6 +26,14 @@ from live_desktop_smoke import (
 )
 
 
+def grouped_structured_result(result: dict[str, Any]) -> dict[str, Any]:
+    structured = result.get("structuredContent") or {}
+    if not isinstance(structured, dict):
+        return {}
+    nested = structured.get("result")
+    return nested if isinstance(nested, dict) else structured
+
+
 def main() -> int:
     artifact_dir = Path("artifacts/session-env-smoke") / time.strftime("%Y%m%dT%H%M%SZ")
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -39,10 +47,10 @@ def main() -> int:
     try:
         client.initialize()
         doctor = client.tools_call(3, "doctor", {})
-        doctor_report = doctor["structuredContent"]
+        doctor_report = grouped_structured_result(doctor)
         require_session_env_doctor(doctor_report, artifact_dir)
 
-        apps = client.tools_call(4, "list_apps", {})
+        apps = client.tools_call(4, "list_resources", {"surface": "desktop", "resource": "apps"})
         (artifact_dir / "doctor.json").write_text(
             json.dumps(doctor, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -66,8 +74,9 @@ def main() -> int:
             require_ok(
                 client.tools_call(
                     6,
-                    "click",
+                    "desktop_pointer",
                     {
+                        "operation": "click",
                         "snapshot_id": snapshot["snapshot_id"],
                         "x": target_x,
                         "y": target_y,
@@ -78,16 +87,16 @@ def main() -> int:
             require_ok(
                 client.tools_call(
                     7,
-                    "type_text",
-                    {"text": "session-env-ok"},
+                    "desktop_keyboard",
+                    {"operation": "type_text", "text": "session-env-ok"},
                 ),
                 "fallback type_text",
             )
             require_ok(
                 client.tools_call(
                     8,
-                    "press_key",
-                    {"key": "Enter"},
+                    "desktop_keyboard",
+                    {"operation": "press_key", "key": "Enter"},
                 ),
                 "fallback press_key",
             )
@@ -95,7 +104,7 @@ def main() -> int:
             require_ok(
                 client.tools_call(
                     6,
-                    "set_value",
+                    "desktop_set_value",
                     {
                         "snapshot_id": snapshot["snapshot_id"],
                         "element_index": editable["element_index"],
@@ -111,8 +120,9 @@ def main() -> int:
             require_ok(
                 client.tools_call(
                     8,
-                    "click",
+                    "desktop_pointer",
                     {
+                        "operation": "click",
                         "snapshot_id": updated["snapshot_id"],
                         "element_index": ok_button["element_index"],
                     },
