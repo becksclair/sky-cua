@@ -8,7 +8,7 @@ use std::time::Duration;
 use runtime::{LinuxActionRuntime, SemanticAtspiAction, SemanticSetValueResult};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    ActionName, ActionOutcome, ActionRequest, DiagnosticEntry, InputBackendKind,
+    ActionName, ActionOutcome, ActionRequest, DiagnosticEntry, InputBackendKind, SessionKind,
 };
 use sky_cua_platform::{SetValueFallbackMode, SetValueRouting};
 use targeting::{
@@ -30,6 +30,32 @@ use key_sequence::parse_key_sequence;
 
 pub(crate) const SET_VALUE_PHYSICAL_FALLBACK_MESSAGE: &str =
     "Set the value through a heuristics-backed physical typing fallback.";
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LinuxVirtualDispatchPoint {
+    x: f64,
+    y: f64,
+    requested_x: f64,
+    requested_y: f64,
+    coordinate_scale: Option<f64>,
+}
+
+impl LinuxVirtualDispatchPoint {
+    fn diagnostics(self) -> Vec<DiagnosticEntry> {
+        let Some(scale) = self.coordinate_scale else {
+            return Vec::new();
+        };
+        vec![DiagnosticEntry {
+            code: "LinuxVirtualInputCoordinateScale".to_string(),
+            message: "Adjusted Linux virtual input coordinates for a scaled Wayland display."
+                .to_string(),
+            details: Some(format!(
+                "requested=({:.1},{:.1}) emitted=({:.1},{:.1}) coordinate_scale={scale:.2}",
+                self.requested_x, self.requested_y, self.x, self.y
+            )),
+        }]
+    }
+}
 
 pub(crate) struct LinuxActionExecutor<'a, R> {
     runtime: &'a R,
@@ -258,12 +284,18 @@ where
                 Ok(success(xtest_message))
             }
             InputBackendKind::LinuxVirtualInput => {
-                let diagnostic = self.runtime.virtual_pointer_mapping_diagnostic(x, y)?;
-                self.runtime.virtual_click_at(x, y, button)?;
-                Ok(success_with_optional_diagnostic(
-                    virtual_message,
-                    diagnostic,
-                ))
+                let dispatch_point = linux_virtual_dispatch_point(request, (x, y));
+                let mut diagnostics = dispatch_point.diagnostics();
+                if dispatch_point.coordinate_scale.is_none()
+                    && let Some(diagnostic) = self
+                        .runtime
+                        .virtual_pointer_mapping_diagnostic(dispatch_point.x, dispatch_point.y)?
+                {
+                    diagnostics.push(diagnostic);
+                }
+                self.runtime
+                    .virtual_click_at(dispatch_point.x, dispatch_point.y, button)?;
+                Ok(success_with_diagnostics(virtual_message, diagnostics))
             }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
                 Err(windows_input_backend_error(action_name))
@@ -322,7 +354,9 @@ where
                 Ok(success("Scrolled through the X11 input fallback."))
             }
             InputBackendKind::LinuxVirtualInput => {
+                let mut diagnostics = Vec::new();
                 if let Some((x, y)) = target_point {
+                    let dispatch_point = linux_virtual_dispatch_point(&request, (x, y));
                     if self
                         .runtime
                         .semantic_scroll_vertical_at(
@@ -339,12 +373,18 @@ where
                             "Scrolled through the AT-SPI value fallback for Linux virtual input.",
                         ));
                     }
-                    self.runtime.virtual_scroll_vertical_at(x, y, steps)?;
+                    diagnostics.extend(dispatch_point.diagnostics());
+                    self.runtime.virtual_scroll_vertical_at(
+                        dispatch_point.x,
+                        dispatch_point.y,
+                        steps,
+                    )?;
                 } else {
                     self.runtime.virtual_scroll_vertical(steps)?;
                 }
-                Ok(success(
+                Ok(success_with_diagnostics(
                     "Scrolled through the Linux virtual input fallback.",
+                    diagnostics,
                 ))
             }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
@@ -395,8 +435,18 @@ where
                 Ok(success("Dragged through the X11 input fallback."))
             }
             InputBackendKind::LinuxVirtualInput => {
-                self.runtime.virtual_drag(from, to)?;
-                Ok(success("Dragged through the Linux virtual input fallback."))
+                let dispatch_from = linux_virtual_dispatch_point(&request, from);
+                let dispatch_to = linux_virtual_dispatch_point(&request, to);
+                let mut diagnostics = dispatch_from.diagnostics();
+                diagnostics.extend(dispatch_to.diagnostics());
+                self.runtime.virtual_drag(
+                    (dispatch_from.x, dispatch_from.y),
+                    (dispatch_to.x, dispatch_to.y),
+                )?;
+                Ok(success_with_diagnostics(
+                    "Dragged through the Linux virtual input fallback.",
+                    diagnostics,
+                ))
             }
             InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
                 Err(windows_input_backend_error("drag"))
@@ -750,7 +800,13 @@ where
                         ))
                     }
                     InputBackendKind::LinuxVirtualInput => {
-                        self.runtime.virtual_click_at(x, y, MouseButton::Left)?;
+                        let dispatch_point = linux_virtual_dispatch_point(request, (x, y));
+                        diagnostics.extend(dispatch_point.diagnostics());
+                        self.runtime.virtual_click_at(
+                            dispatch_point.x,
+                            dispatch_point.y,
+                            MouseButton::Left,
+                        )?;
                         tokio::time::sleep(Duration::from_millis(40)).await;
                         self.runtime.virtual_press_key_sequence(&select_all)?;
                         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -842,6 +898,48 @@ fn windows_input_backend_error(action: &str) -> BackendError {
     )
 }
 
+fn linux_virtual_dispatch_point(
+    request: &ActionRequest,
+    point: (f64, f64),
+) -> LinuxVirtualDispatchPoint {
+    let Some(scale) = linux_virtual_coordinate_scale(request, point) else {
+        return LinuxVirtualDispatchPoint {
+            x: point.0,
+            y: point.1,
+            requested_x: point.0,
+            requested_y: point.1,
+            coordinate_scale: None,
+        };
+    };
+    LinuxVirtualDispatchPoint {
+        x: point.0 / scale,
+        y: point.1 / scale,
+        requested_x: point.0,
+        requested_y: point.1,
+        coordinate_scale: Some(scale),
+    }
+}
+
+fn linux_virtual_coordinate_scale(request: &ActionRequest, _point: (f64, f64)) -> Option<f64> {
+    let environment = request.environment.as_ref()?;
+    if environment.input_backend != InputBackendKind::LinuxVirtualInput {
+        return None;
+    }
+    if environment.session_kind != SessionKind::Wayland
+        && environment.xdg_session_type.as_deref() != Some("wayland")
+    {
+        return None;
+    }
+    if environment
+        .desktop_environment
+        .as_deref()
+        .is_some_and(|desktop| desktop.to_ascii_lowercase().contains("cosmic"))
+    {
+        return Some(2.0);
+    }
+    None
+}
+
 fn success(message: impl Into<String>) -> ActionOutcome {
     ActionOutcome {
         success: true,
@@ -863,13 +961,6 @@ pub(crate) fn success_with_diagnostics(
         diagnostics,
         agent_cursor: None,
     }
-}
-
-fn success_with_optional_diagnostic(
-    message: impl Into<String>,
-    diagnostic: Option<DiagnosticEntry>,
-) -> ActionOutcome {
-    success_with_diagnostics(message, diagnostic.into_iter().collect())
 }
 
 fn scroll_delta_y(arguments: &serde_json::Value) -> Result<Option<f64>, BackendError> {
@@ -1165,8 +1256,8 @@ mod tests {
     use sky_cua_platform::model::test_support::wayland_pipewire_environment;
     use sky_cua_platform::model::{
         ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
-        DiagnosticEntry, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind, PixelSize,
-        RectF,
+        DiagnosticEntry, DisplayInfo, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind,
+        PixelSize, RectF,
     };
     use sky_cua_platform::{SetValueFallbackMode, SetValueRouting};
     use std::sync::Mutex;
@@ -1572,6 +1663,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn executor_linux_virtual_click_scales_ydotool_coordinates_on_scaled_wayland_display() {
+        let runtime = FakeRuntime::default();
+        let mut request = action_request(ActionName::Click, json!({"x": 179.0, "y": 306.0}));
+        let mut environment = wayland_pipewire_environment();
+        environment.desktop_environment = Some("COSMIC".to_string());
+        environment.input_backend = InputBackendKind::LinuxVirtualInput;
+        environment.displays = vec![DisplayInfo {
+            display_id: "cosmic:Virtual-1".to_string(),
+            name: Some("Virtual-1".to_string()),
+            index: 0,
+            primary: true,
+            logical_rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 960.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            pixel_size: Some(PixelSize {
+                width: 1600,
+                height: 1200,
+            }),
+            scale_factor: Some(1.25),
+            backend: "cosmic".to_string(),
+        }];
+        request.environment = Some(environment);
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("click should succeed");
+
+        assert_eq!(
+            outcome.message,
+            "Clicked the target through the Linux virtual input fallback."
+        );
+        assert_eq!(runtime.take_events(), vec!["virtual_click:89.5,153:Left"]);
+        assert!(outcome.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "LinuxVirtualInputCoordinateScale"
+                && diagnostic
+                    .details
+                    .as_deref()
+                    .is_some_and(|details| details.contains("coordinate_scale=2.00"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn executor_linux_virtual_click_scales_ydotool_coordinates_on_cosmic_wayland() {
+        let runtime = FakeRuntime::default();
+        let mut request = action_request(ActionName::Click, json!({"x": 179.0, "y": 240.0}));
+        let mut environment = wayland_pipewire_environment();
+        environment.desktop_environment = Some("COSMIC".to_string());
+        environment.input_backend = InputBackendKind::LinuxVirtualInput;
+        environment.displays = vec![DisplayInfo {
+            display_id: "cosmic:Virtual-1".to_string(),
+            name: Some("Virtual-1".to_string()),
+            index: 0,
+            primary: true,
+            logical_rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 800.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            pixel_size: Some(PixelSize {
+                width: 1280,
+                height: 800,
+            }),
+            scale_factor: Some(1.0),
+            backend: "cosmic".to_string(),
+        }];
+        request.environment = Some(environment);
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("click should succeed");
+
+        assert_eq!(runtime.take_events(), vec!["virtual_click:89.5,120:Left"]);
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "LinuxVirtualInputCoordinateScale")
+        );
+    }
+
+    #[tokio::test]
     async fn executor_drag_requires_destination() {
         let runtime = FakeRuntime::default();
         let request = action_request(ActionName::Drag, json!({"from_x": 10.0, "from_y": 20.0}));
@@ -1771,6 +1951,46 @@ mod tests {
             ]
         );
         assert_eq!(outcome.diagnostics[0].code, "HeuristicSetValueFallbackUsed");
+    }
+
+    #[tokio::test]
+    async fn executor_set_value_scales_cosmic_linux_virtual_focus_click() {
+        let runtime = FakeRuntime {
+            policy: Some(ResolvedSetValueFallbackPolicy {
+                key: "cosmic text field".to_string(),
+                mode: SetValueFallbackMode::FocusClickSelectAllType,
+                routing: SetValueRouting::PreferPhysicalFallback,
+            }),
+            ..FakeRuntime::default()
+        };
+        let mut request = action_request(ActionName::SetValue, json!({"value": "replacement"}));
+        request.resolved_element = Some(element_with_backend_ref());
+        request.environment = Some(EnvironmentInfo {
+            desktop_environment: Some("COSMIC".to_string()),
+            input_backend: InputBackendKind::LinuxVirtualInput,
+            ..wayland_pipewire_environment()
+        });
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("set_value fallback should succeed");
+
+        assert_eq!(outcome.message, SET_VALUE_PHYSICAL_FALLBACK_MESSAGE);
+        assert_eq!(
+            runtime.take_events(),
+            vec![
+                "virtual_click:12.5,20:Left",
+                "virtual_key:Ctrl+a",
+                "virtual_text:replacement"
+            ]
+        );
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "LinuxVirtualInputCoordinateScale")
+        );
     }
 
     #[test]

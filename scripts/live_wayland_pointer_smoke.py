@@ -360,6 +360,11 @@ def main() -> int:
                 )
                 write_json(artifact_dir / "final-state.json", final_state)
                 print("Visible Wayland scroll passed.")
+                if os.environ.get("SKY_CUA_POINTER_SKIP_KEYBOARD") == "1":
+                    print("Skipping keyboard proof for this pointer-focused profile.")
+                    print(f"Holding final fixture state for {final_hold:.1f}s...")
+                    time.sleep(final_hold)
+                    return 0
 
                 print(f"Waiting {step_delay:.1f}s before text entry...")
                 time.sleep(step_delay)

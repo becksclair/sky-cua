@@ -173,11 +173,26 @@ impl LinuxVirtualInput {
     }
 
     pub fn type_text(&self, text: &str) -> Result<(), BackendError> {
-        match self.probe.adapter {
-            VirtualInputAdapterKind::PrivilegedHelper => {
-                let events = LinuxKeyResolver::from_environment()?.text_events(text)?;
-                self.run_helper(HelperCommand::KeyEvents { events })
+        if let Some(socket_path) = self.probe.helper_socket_path.as_deref()
+            && socket_is_connectable(socket_path)
+        {
+            match LinuxKeyResolver::from_environment()
+                .and_then(|resolver| resolver.text_events(text))
+                .and_then(|events| {
+                    run_helper_command(socket_path, HelperCommand::KeyEvents { events })
+                }) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if self.probe.adapter != VirtualInputAdapterKind::Ydotool
+                        || !self.probe.supports_keyboard() =>
+                {
+                    return Err(error);
+                }
+                Err(_) => {}
             }
+        }
+        match self.probe.adapter {
+            VirtualInputAdapterKind::PrivilegedHelper => Err(self.missing_helper_error()),
             VirtualInputAdapterKind::Ydotool => {
                 self.require_keyboard_adapter()?;
                 self.run_ydotool(type_text_args(text))
@@ -186,11 +201,26 @@ impl LinuxVirtualInput {
     }
 
     pub fn press_key_sequence(&self, keys: &[String]) -> Result<(), BackendError> {
-        match self.probe.adapter {
-            VirtualInputAdapterKind::PrivilegedHelper => {
-                let events = LinuxKeyResolver::from_environment()?.key_sequence_events(keys)?;
-                self.run_helper(HelperCommand::KeyEvents { events })
+        if let Some(socket_path) = self.probe.helper_socket_path.as_deref()
+            && socket_is_connectable(socket_path)
+        {
+            match LinuxKeyResolver::from_environment()
+                .and_then(|resolver| resolver.key_sequence_events(keys))
+                .and_then(|events| {
+                    run_helper_command(socket_path, HelperCommand::KeyEvents { events })
+                }) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if self.probe.adapter != VirtualInputAdapterKind::Ydotool
+                        || !self.probe.supports_keyboard() =>
+                {
+                    return Err(error);
+                }
+                Err(_) => {}
             }
+        }
+        match self.probe.adapter {
+            VirtualInputAdapterKind::PrivilegedHelper => Err(self.missing_helper_error()),
             VirtualInputAdapterKind::Ydotool => {
                 self.require_keyboard_adapter()?;
                 let events = key_sequence_events(keys)?;
@@ -208,15 +238,20 @@ impl LinuxVirtualInput {
         run_ydotool_command(&self.probe, args)
     }
 
-    fn run_helper(&self, command: HelperCommand) -> Result<(), BackendError> {
-        run_helper_command(self.helper_socket_path()?, command)
-    }
-
     fn helper_socket_path(&self) -> Result<&Path, BackendError> {
         self.probe.helper_socket_path.as_deref().ok_or_else(|| {
             BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "Linux privileged input helper socket path is missing",
+            )
+        })
+    }
+
+    fn missing_helper_error(&self) -> BackendError {
+        self.helper_socket_path().err().unwrap_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                "Linux privileged input helper socket is not connectable",
             )
         })
     }

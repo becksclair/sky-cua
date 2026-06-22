@@ -27,4 +27,4 @@ trap restore_display EXIT
 
 cosmic-randr mode --scale "$scaled_scale" "$output" "$scaled_width" "$scaled_height"
 sleep 2
-python scripts/live_wayland_pointer_smoke.py
+SKY_CUA_POINTER_SKIP_KEYBOARD=1 python scripts/live_wayland_pointer_smoke.py
