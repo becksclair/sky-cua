@@ -129,16 +129,18 @@ def test_gui_test_profile_copies_essential_codex_settings() -> None:
 def test_testing_vm_opencode_sync_has_user_writable_latest_fallback() -> None:
     script_root = Path(__file__).resolve().parents[1] / "scripts" / "testing-vm"
     sync_script = (script_root / "sync-opencode-to-vm.sh").read_text(encoding="utf-8")
-    profile = (script_root / "profiles" / "opencode-mcp.sh").read_text(encoding="utf-8")
+    opencode_profile = (script_root / "profiles" / "opencode-mcp.sh").read_text(encoding="utf-8")
+    pi_profile = (script_root / "profiles" / "pi-mcp.sh").read_text(encoding="utf-8")
 
     assert 'export PATH="$HOME/.local/bin:$PATH"' in sync_script
     assert "sudo -n npm install -g opencode-ai@latest" in sync_script
     assert "npm install -g --prefix ~/.local opencode-ai@latest" in sync_script
     assert "warning: opencode update failed; continuing with existing install" in sync_script
-    assert 'export PATH="${HOME}/.local/bin:${PATH}"' in profile
-    assert "install_policy_args+=(--mcp-tool-profile" in profile
-    assert "install_policy_args+=(--browser-eval" in profile
-    assert "install_policy_args+=(--model-supports-images" in profile
+    assert 'export PATH="${HOME}/.local/bin:${PATH}"' in opencode_profile
+    for profile in (opencode_profile, pi_profile):
+        assert "install_policy_args+=(--mcp-tool-profile" in profile
+        assert "install_policy_args+=(--browser-eval" in profile
+        assert "install_policy_args+=(--model-supports-images" in profile
 
 
 def test_testing_vm_pi_sync_has_user_writable_latest_fallback() -> None:

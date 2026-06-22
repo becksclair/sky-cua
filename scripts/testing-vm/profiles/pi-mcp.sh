@@ -11,11 +11,22 @@ fi
 remote_root="/workspace"
 target_dir="${HOME}/.local/share/sky-cua"
 pi_mcp="${HOME}/.pi/agent/mcp.json"
+install_policy_args=()
+if [[ -n "${SKY_CUA_MCP_TOOL_PROFILE:-}" ]]; then
+	install_policy_args+=(--mcp-tool-profile "${SKY_CUA_MCP_TOOL_PROFILE}")
+fi
+if [[ -n "${SKY_CUA_BROWSER_EVAL:-}" ]]; then
+	install_policy_args+=(--browser-eval "${SKY_CUA_BROWSER_EVAL}")
+fi
+if [[ -n "${SKY_CUA_MODEL_SUPPORTS_IMAGES:-}" ]]; then
+	install_policy_args+=(--model-supports-images "${SKY_CUA_MODEL_SUPPORTS_IMAGES}")
+fi
 
 # Install sky-cua MCP server for Pi
 python3 "${remote_root}/scripts/install_mcp_server.py" \
 	--host pi \
-	--target-dir "${target_dir}"
+	--target-dir "${target_dir}" \
+	"${install_policy_args[@]}"
 
 # Merge the generated pi_mcp.json into Pi's mcp.json
 if [[ -f "${pi_mcp}" ]]; then

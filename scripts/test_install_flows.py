@@ -637,6 +637,23 @@ def test_generic_mcp_config_pins_compact_launch_policy(tmp_path: Path) -> None:
         assert name in server["env_vars"]  # type: ignore[operator]
 
 
+def test_pi_wrapper_exports_compact_launch_policy(tmp_path: Path) -> None:
+    target_dir = tmp_path / "installed"
+    client_path = target_dir / "bin" / "sky-cua-client"
+    policy = install_mcp_server.McpLaunchPolicy(
+        tool_profile="compact",
+        browser_eval="on",
+        model_supports_images="false",
+    )
+
+    install_mcp_server.install_pi(target_dir, client_path, launch_policy=policy)
+
+    wrapper_text = (target_dir / "pi_mcp_wrapper.sh").read_text(encoding="utf-8")
+    assert "export SKY_CUA_MCP_TOOL_PROFILE=compact\n" in wrapper_text
+    assert "export SKY_CUA_BROWSER_EVAL=on\n" in wrapper_text
+    assert "export SKY_CUA_MODEL_SUPPORTS_IMAGES=false\n" in wrapper_text
+
+
 def test_codex_exec_plugin_mention_rejects_stale_compat_root(tmp_path: Path) -> None:
     codex_home = tmp_path / "codex-home"
     latest = codex_home / "plugins" / "cache" / "openai-bundled" / "computer-use" / "latest"
