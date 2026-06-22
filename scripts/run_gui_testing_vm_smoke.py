@@ -105,7 +105,10 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
         ),
         # This lane is a service-backed overlay/screenshot proof that still needs
         # a real Wayland session socket, so keep it outside the headless curated set.
-        VmProfileDescriptor("wayland-layer-shell-overlay"),
+        VmProfileDescriptor(
+            "wayland-layer-shell-overlay",
+            preauthorize_screenshot_portal=True,
+        ),
         VmProfileDescriptor(
             "wayland-pointer",
             curated=True,
@@ -1005,11 +1008,26 @@ def refresh_guest_portal_stack(
         f'export WAYLAND_DISPLAY="${{WAYLAND_DISPLAY:-{shlex.quote(wayland_display)}}}"; '
         "export XDG_SESSION_TYPE=wayland; "
         f"{desktop_exports}"
+        'mkdir -p "$HOME/.config/systemd/user"; '
+        "printf '%s\\n' "
+        "'[Unit]' "
+        "'Description=Portal service (sky-cua testing VM session override)' "
+        "'After=dbus.socket basic.target' "
+        "'' "
+        "'[Service]' "
+        "'Type=dbus' "
+        "'BusName=org.freedesktop.portal.Desktop' "
+        "'ExecStart=/usr/lib/xdg-desktop-portal' "
+        "'Slice=session.slice' "
+        '> "$HOME/.config/systemd/user/xdg-desktop-portal.service"; '
+        "systemctl --user daemon-reload >/dev/null 2>&1 || true; "
         "systemctl --user stop "
         "xdg-desktop-portal.service "
         "xdg-desktop-portal-gtk.service "
         "xdg-desktop-portal-gnome.service "
         "xdg-desktop-portal-cosmic.service "
+        "xdg-desktop-portal-hyprland.service "
+        "xdg-desktop-portal-wlr.service "
         "plasma-xdg-desktop-portal-kde.service "
         "xdg-permission-store.service "
         "xdg-document-portal.service >/dev/null 2>&1 || true; "
@@ -1135,9 +1153,18 @@ def desktop_environment_exports(desktop_env: str) -> str:
         f"export XDG_CURRENT_DESKTOP={quoted_desktop} && "
         f"export XDG_SESSION_DESKTOP={quoted_desktop} && "
         f"export DESKTOP_SESSION={quoted_desktop} && "
+        'if [ "$XDG_CURRENT_DESKTOP" = "Hyprland" ] && [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] '
+        '&& [ -d "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr" ]; then '
+        'export HYPRLAND_INSTANCE_SIGNATURE="$(ls "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr" 2>/dev/null | head -n1)"; '
+        "fi && "
         "systemctl --user import-environment "
         "XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE "
-        "XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS >/dev/null 2>&1 || true && "
+        "XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS "
+        "HYPRLAND_INSTANCE_SIGNATURE >/dev/null 2>&1 || true && "
+        "dbus-update-activation-environment --systemd "
+        "XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE "
+        "XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS "
+        "HYPRLAND_INSTANCE_SIGNATURE >/dev/null 2>&1 || true && "
     )
 
 

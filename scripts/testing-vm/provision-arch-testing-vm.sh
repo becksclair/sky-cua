@@ -244,6 +244,7 @@ import_session_environment() {
     DISPLAY \
     QT_QPA_PLATFORM \
     GDK_BACKEND \
+    HYPRLAND_INSTANCE_SIGNATURE \
     XCURSOR_THEME \
     XCURSOR_SIZE || true
   systemctl --user import-environment \
@@ -258,12 +259,29 @@ import_session_environment() {
     DISPLAY \
     QT_QPA_PLATFORM \
     GDK_BACKEND \
+    HYPRLAND_INSTANCE_SIGNATURE \
     XCURSOR_THEME \
     XCURSOR_SIZE || true
 }
 run_session() {
   import_session_environment
   exec "$@"
+}
+import_hyprland_instance_signature_after_start() {
+  (
+    for _ in {1..120}; do
+      signature="$(
+        ls "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr" 2>/dev/null | head -n1 || true
+      )"
+      if [[ -n "${signature}" ]]; then
+        export HYPRLAND_INSTANCE_SIGNATURE="${signature}"
+        dbus-update-activation-environment --systemd HYPRLAND_INSTANCE_SIGNATURE || true
+        systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE || true
+        exit 0
+      fi
+      sleep 0.25
+    done
+  ) &
 }
 
 case "${session}" in
@@ -311,6 +329,7 @@ case "${session}" in
     export XDG_SESSION_DESKTOP=Hyprland
     export DESKTOP_SESSION=Hyprland
     export XDG_SESSION_TYPE=wayland
+    import_hyprland_instance_signature_after_start
     run_session Hyprland
     ;;
   i3)
@@ -328,6 +347,20 @@ case "${session}" in
 esac
 EOF
 chmod +x /usr/local/bin/sky-cua-testing-vm-session
+
+install -d -o "${vm_user}" -g "${vm_user}" "/home/${vm_user}/.config/systemd/user"
+cat >"/home/${vm_user}/.config/systemd/user/xdg-desktop-portal.service" <<'EOF'
+[Unit]
+Description=Portal service (sky-cua testing VM session override)
+After=dbus.socket basic.target
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.portal.Desktop
+ExecStart=/usr/lib/xdg-desktop-portal
+Slice=session.slice
+EOF
+chown "${vm_user}:${vm_user}" "/home/${vm_user}/.config/systemd/user/xdg-desktop-portal.service"
 
 cat >/etc/greetd/config.toml <<EOF
 [terminal]

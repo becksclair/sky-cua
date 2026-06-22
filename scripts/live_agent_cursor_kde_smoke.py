@@ -356,7 +356,7 @@ def run_layer_shell_display_target_smoke(args: argparse.Namespace) -> int:
     service = start_service(socket_path, artifact_dir, mode=args.mode)
     try:
         fixture_state = wait_for_stable_pointer_fixture(
-            pointer_state_path, deadline=time.time() + 20
+            pointer_state_path, deadline=time.time() + pointer_fixture_ready_timeout()
         )
         point_logical = fixture_point(fixture_state, "click_button")
         wait_for_socket(socket_path, deadline=time.time() + 15)
@@ -460,7 +460,7 @@ def run_layer_shell_click_through_smoke(args: argparse.Namespace) -> int:
     service = start_service(socket_path, artifact_dir, mode=args.mode)
     try:
         fixture_state = wait_for_stable_pointer_fixture(
-            pointer_state_path, deadline=time.time() + 20
+            pointer_state_path, deadline=time.time() + pointer_fixture_ready_timeout()
         )
         click_logical = fixture_point(fixture_state, "click_button")
         wait_for_socket(socket_path, deadline=time.time() + 15)
@@ -597,7 +597,7 @@ def run_layer_shell_fixture_visible_smoke(args: argparse.Namespace) -> int:
     service = start_service(socket_path, artifact_dir, mode=args.mode)
     try:
         fixture_state = wait_for_stable_pointer_fixture(
-            pointer_state_path, deadline=time.time() + 20
+            pointer_state_path, deadline=time.time() + pointer_fixture_ready_timeout()
         )
         point_logical = fixture_point(fixture_state, "click_button")
         wait_for_socket(socket_path, deadline=time.time() + 15)
@@ -2264,6 +2264,10 @@ def load_pointer_state(state_path: Path) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return state if isinstance(state, dict) else None
+
+
+def pointer_fixture_ready_timeout() -> float:
+    return float(os.environ.get("SKY_CUA_POINTER_FIXTURE_READY_TIMEOUT_SECONDS", "20"))
 
 
 def wait_for_stable_pointer_fixture(state_path: Path, *, deadline: float) -> dict[str, Any]:
