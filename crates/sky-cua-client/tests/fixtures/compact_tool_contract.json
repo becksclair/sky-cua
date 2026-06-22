@@ -8,7 +8,7 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false,
-        "readOnlyHint": false
+        "readOnlyHint": true
       },
       "branches": [
         {
@@ -990,6 +990,28 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "element_index"
+            ]
+          },
+          {
+            "required": [
+              "element_identifier"
+            ]
+          },
+          {
+            "required": [
+              "name"
+            ]
+          },
+          {
+            "required": [
+              "text"
+            ]
+          }
+        ],
         "properties": {
           "element_identifier": {
             "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -1437,6 +1459,28 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "element_index"
+            ]
+          },
+          {
+            "required": [
+              "element_identifier"
+            ]
+          },
+          {
+            "required": [
+              "name"
+            ]
+          },
+          {
+            "required": [
+              "text"
+            ]
+          }
+        ],
         "properties": {
           "element_identifier": {
             "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -1498,6 +1542,28 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "element_index"
+            ]
+          },
+          {
+            "required": [
+              "element_identifier"
+            ]
+          },
+          {
+            "required": [
+              "name"
+            ]
+          },
+          {
+            "required": [
+              "text"
+            ]
+          }
+        ],
         "properties": {
           "amount": {
             "description": "Optional scroll amount passed through to the desktop backend.",
@@ -1677,6 +1743,136 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "click"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": [
+                    "x",
+                    "y"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "secondary_click"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": [
+                    "x",
+                    "y"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "drag"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": [
+                    "from_x",
+                    "from_y",
+                    "to_x",
+                    "to_y"
+                  ]
+                },
+                {
+                  "required": [
+                    "x",
+                    "y",
+                    "to_x",
+                    "to_y"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_index",
+                    "to_element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier",
+                    "to_element_index"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
         "properties": {
           "element_identifier": {
             "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -1791,6 +1987,97 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "window_id"
+                ]
+              },
+              {
+                "required": [
+                  "app_id"
+                ]
+              },
+              {
+                "required": [
+                  "title"
+                ]
+              },
+              {
+                "required": [
+                  "wm_class"
+                ]
+              },
+              {
+                "required": [
+                  "pid"
+                ]
+              },
+              {
+                "required": [
+                  "terminal_pid"
+                ]
+              },
+              {
+                "required": [
+                  "tty"
+                ]
+              },
+              {
+                "required": [
+                  "snapshot_id",
+                  "element_index"
+                ]
+              },
+              {
+                "required": [
+                  "element_identifier"
+                ]
+              },
+              {
+                "required": [
+                  "name"
+                ]
+              }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "type_text"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "press_key"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "key"
+              ]
+            }
+          }
+        ],
         "properties": {
           "app_id": {
             "type": "string"
@@ -1891,6 +2178,58 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "element_index"
+                ]
+              },
+              {
+                "required": [
+                  "element_identifier"
+                ]
+              },
+              {
+                "required": [
+                  "name"
+                ]
+              },
+              {
+                "required": [
+                  "text"
+                ]
+              }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "perform_action"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": [
+                    "action"
+                  ]
+                },
+                {
+                  "required": [
+                    "action_index"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
         "properties": {
           "action": {
             "description": "Named backend action when operation=perform_action.",
@@ -1971,6 +2310,28 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "element_index"
+            ]
+          },
+          {
+            "required": [
+              "element_identifier"
+            ]
+          },
+          {
+            "required": [
+              "name"
+            ]
+          },
+          {
+            "required": [
+              "text"
+            ]
+          }
+        ],
         "properties": {
           "element_identifier": {
             "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -2164,6 +2525,60 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "click"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "x",
+                "y"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "type_text"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "press_key"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "key"
+              ]
+            }
+          }
+        ],
         "properties": {
           "key": {
             "type": "string"

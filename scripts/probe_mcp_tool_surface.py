@@ -126,6 +126,112 @@ def forbid_tools(names: set[str], forbidden: frozenset[str], *, profile: str) ->
         raise ProbeFailure(f"{profile} tools/list advertised inactive tools: {present!r}")
 
 
+def require_compact_action_shape(tools: Iterable[dict[str, Any]]) -> None:
+    by_name = {tool.get("name"): tool for tool in tools if isinstance(tool.get("name"), str)}
+    doctor = by_name.get("doctor")
+    if not isinstance(doctor, dict):
+        raise ProbeFailure("compact tools/list omitted doctor")
+    doctor_annotations = doctor.get("annotations")
+    if (
+        not isinstance(doctor_annotations, dict)
+        or doctor_annotations.get("readOnlyHint") is not True
+    ):
+        raise ProbeFailure(f"compact doctor must be read-only diagnostics: {doctor!r}")
+
+    pointer = _tool_schema(by_name, "desktop_pointer")
+    pointer_description = str(by_name["desktop_pointer"].get("description", ""))
+    if "do not call with only operation" not in pointer_description:
+        raise ProbeFailure("desktop_pointer description must reject operation-only calls")
+    if not _all_of_has_conditional_required(pointer, "click", ["x", "y"]):
+        raise ProbeFailure("desktop_pointer click branch must require coordinates or selector")
+
+    action = _tool_schema(by_name, "desktop_action")
+    action_description = str(by_name["desktop_action"].get("description", ""))
+    if "do not call with only operation" not in action_description:
+        raise ProbeFailure("desktop_action description must reject operation-only calls")
+    if not _schema_has_any_required(
+        action, ["element_index", "element_identifier", "name", "text"]
+    ):
+        raise ProbeFailure("desktop_action must require a concrete selector")
+
+    keyboard = _tool_schema(by_name, "desktop_keyboard")
+    if not _all_of_has_then_required(keyboard, "press_key", ["key"]):
+        raise ProbeFailure("desktop_keyboard press_key branch must require key")
+    if not _all_of_has_then_required(keyboard, "type_text", ["text"]):
+        raise ProbeFailure("desktop_keyboard type_text branch must require text")
+
+
+def _tool_schema(by_name: dict[object, dict[str, Any]], name: str) -> dict[str, Any]:
+    tool = by_name.get(name)
+    if not isinstance(tool, dict):
+        raise ProbeFailure(f"compact tools/list omitted {name}")
+    schema = tool.get("inputSchema")
+    if not isinstance(schema, dict):
+        raise ProbeFailure(f"{name} omitted object inputSchema")
+    return schema
+
+
+def _all_of(schema: dict[str, Any]) -> list[dict[str, Any]]:
+    value = schema.get("allOf")
+    if not isinstance(value, list):
+        return []
+    return [entry for entry in value if isinstance(entry, dict)]
+
+
+def _all_of_has_conditional_required(
+    schema: dict[str, Any], operation: str, required: list[str]
+) -> bool:
+    return any(
+        _conditional_operation(entry) == operation
+        and _schema_has_any_required(entry.get("then"), required)
+        for entry in _all_of(schema)
+    )
+
+
+def _all_of_has_then_required(schema: dict[str, Any], operation: str, required: list[str]) -> bool:
+    return any(
+        _conditional_operation(entry) == operation
+        and isinstance(entry.get("then"), dict)
+        and entry["then"].get("required") == required
+        for entry in _all_of(schema)
+    )
+
+
+def _conditional_operation(schema: dict[str, Any]) -> str | None:
+    condition = schema.get("if")
+    if not isinstance(condition, dict):
+        return None
+    properties = condition.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    operation = properties.get("operation")
+    if not isinstance(operation, dict):
+        return None
+    value = operation.get("const")
+    return value if isinstance(value, str) else None
+
+
+def _schema_has_any_required(schema: object, required: list[str]) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list) and any(
+        _schema_has_any_required(entry, required) for entry in all_of
+    ):
+        return True
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list):
+        return any(
+            isinstance(entry, dict)
+            and isinstance(entry.get("required"), list)
+            and any(name in entry["required"] for name in required)
+            for entry in any_of
+        )
+    return isinstance(schema.get("required"), list) and any(
+        name in schema["required"] for name in required
+    )
+
+
 def compact_payload(result: dict[str, Any], *, tool: str, branch: str) -> dict[str, Any]:
     payload = result.get("structuredContent")
     if not isinstance(payload, dict):
@@ -201,9 +307,11 @@ def probe_compact(*, installed: bool, phone_enabled: bool) -> list[ProbeStep]:
     client = make_client("compact", installed=installed, phone_enabled=phone_enabled)
     try:
         client.initialize()
-        names = tool_names(client.tools_list())
+        tools = client.tools_list()
+        names = tool_names(tools)
         require_tools(names, COMPACT_REQUIRED_TOOLS, profile="compact")
         forbid_tools(names, LEGACY_SENTINELS, profile="compact")
+        require_compact_action_shape(tools)
         steps.append(step_pass("compact.tools_list", f"tools={len(names)}"))
 
         invalid = client.tools_call(10, "status", {"component": "__invalid__"})

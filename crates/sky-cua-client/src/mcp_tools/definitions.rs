@@ -536,7 +536,7 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
         compact_tool(
             "doctor",
             "Run sky-cua readiness diagnostics for desktop, browser, phone, and session-presence integration.",
-            LOCAL_NAVIGATION_ACTION,
+            READ_ONLY_TOOL,
             json!({}),
             json!([])
         ),
@@ -616,14 +616,15 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             window_target_schema(),
             json!([])
         ),
-        compact_tool(
+        compact_tool_with_constraints(
             "desktop_semantic",
-            "Focus, select, expand, or collapse a desktop semantic element.",
+            "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             LOCAL_NAVIGATION_ACTION,
             compact_desktop_semantic_properties(
                 json!({"operation": {"type": "string", "enum": ["focus", "select", "expand", "collapse"]}})
             ),
-            json!(["operation"])
+            json!(["operation"]),
+            compact_desktop_selector_constraint()
         ),
         compact_tool(
             "browser_claim_tab",
@@ -667,22 +668,24 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             with_phone_selector(json!({"package_name": {"type": "string"}})),
             json!(["package_name"])
         ),
-        compact_tool(
+        compact_tool_with_constraints(
             "desktop_toggle",
-            "Toggle a desktop semantic element.",
+            "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             LOCAL_STATEFUL_ACTION,
             compact_desktop_semantic_properties(json!({})),
-            json!([])
+            json!([]),
+            compact_desktop_selector_constraint()
         ),
-        compact_tool(
+        compact_tool_with_constraints(
             "desktop_scroll",
-            "Scroll a desktop semantic element or focused area.",
+            "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
             LOCAL_STATEFUL_ACTION,
             compact_desktop_semantic_properties(json!({
                 "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
                 "amount": {"type": "number", "description": "Optional scroll amount passed through to the desktop backend."}
             })),
-            json!(["direction"])
+            json!(["direction"]),
+            compact_desktop_selector_constraint()
         ),
         compact_tool(
             "browser_scroll",
@@ -696,30 +699,33 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             compact_browser_scroll_properties(),
             json!(["tab_id"])
         ),
-        compact_tool(
+        compact_tool_with_constraints(
             "desktop_pointer",
-            "Click, secondary-click, or drag on the desktop.",
+            "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_desktop_pointer_properties(),
-            json!(["operation"])
+            json!(["operation"]),
+            compact_desktop_pointer_constraints()
         ),
-        compact_tool(
+        compact_tool_with_constraints(
             "desktop_keyboard",
-            "Type text or press a key on the desktop.",
+            "Type text or press a key on the desktop. Provide text for type_text, key for press_key, and a window/element target instead of relying on ambient focus.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_desktop_keyboard_properties(),
-            json!(["operation"])
+            json!(["operation"]),
+            compact_desktop_keyboard_constraints()
         ),
-        compact_tool(
+        compact_tool_with_constraints(
             "desktop_action",
-            "Activate a desktop semantic element or perform a named/indexed action.",
+            "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             compact_desktop_action_properties(),
-            json!(["operation"])
+            json!(["operation"]),
+            compact_desktop_action_constraints()
         ),
-        compact_tool(
+        compact_tool_with_constraints(
             "desktop_set_value",
-            "Set a desktop semantic element value.",
+            "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
             ToolAnnotations {
                 read_only: false,
                 destructive: true,
@@ -727,7 +733,8 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 open_world: false
             },
             compact_desktop_semantic_properties(json!({"value": {"type": "string"}})),
-            json!(["value"])
+            json!(["value"]),
+            compact_desktop_selector_constraint()
         ),
         compact_tool(
             "browser_open",
@@ -753,12 +760,13 @@ fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled
             browser_target_url_properties(true),
             json!(["tab_id", "url"])
         ),
-        compact_tool(
+        compact_tool_with_constraints(
             "browser_input",
-            "Click, type text, or press a key in an open-world browser tab.",
+            "Click, type text, or press a key in an open-world browser tab. click requires x/y; type_text requires text; press_key requires key.",
             super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
             compact_browser_input_properties(),
-            json!(["operation", "tab_id"])
+            json!(["operation", "tab_id"]),
+            compact_browser_input_constraints()
         ),
         compact_tool(
             "phone_pointer",
@@ -838,6 +846,26 @@ fn compact_tool(
             "additionalProperties": false
         }
     })
+}
+
+fn compact_tool_with_constraints(
+    name: &str,
+    description: &str,
+    annotations: ToolAnnotations,
+    properties: Value,
+    required: Value,
+    constraints: Value,
+) -> Value {
+    let mut tool = compact_tool(name, description, annotations, properties, required);
+    let input_schema = tool
+        .get_mut("inputSchema")
+        .and_then(Value::as_object_mut)
+        .expect("compact tool inputSchema must be an object");
+    let constraints = constraints
+        .as_object()
+        .unwrap_or_else(|| panic!("compact tool constraints must be object: {constraints:?}"));
+    input_schema.extend(constraints.clone());
+    tool
 }
 
 fn merge_properties(left: Value, right: Value) -> Value {
@@ -943,12 +971,94 @@ fn compact_desktop_pointer_properties() -> Value {
     ))
 }
 
+fn compact_desktop_selector_constraint() -> Value {
+    json!({
+        "anyOf": [
+            {"required": ["element_index"]},
+            {"required": ["element_identifier"]},
+            {"required": ["name"]},
+            {"required": ["text"]}
+        ]
+    })
+}
+
+fn compact_desktop_point_or_selector_constraint() -> Value {
+    json!({
+        "anyOf": [
+            {"required": ["x", "y"]},
+            {"required": ["element_index"]},
+            {"required": ["element_identifier"]},
+            {"required": ["name"]},
+            {"required": ["text"]}
+        ]
+    })
+}
+
+fn compact_desktop_pointer_constraints() -> Value {
+    json!({
+        "allOf": [
+            {
+                "if": {"properties": {"operation": {"const": "click"}}, "required": ["operation"]},
+                "then": compact_desktop_point_or_selector_constraint()
+            },
+            {
+                "if": {"properties": {"operation": {"const": "secondary_click"}}, "required": ["operation"]},
+                "then": compact_desktop_point_or_selector_constraint()
+            },
+            {
+                "if": {"properties": {"operation": {"const": "drag"}}, "required": ["operation"]},
+                "then": {
+                    "anyOf": [
+                        {"required": ["from_x", "from_y", "to_x", "to_y"]},
+                        {"required": ["x", "y", "to_x", "to_y"]},
+                        {"required": ["element_index", "to_element_index"]},
+                        {"required": ["element_identifier", "to_element_index"]}
+                    ]
+                }
+            }
+        ]
+    })
+}
+
 fn compact_desktop_keyboard_properties() -> Value {
     action_tool_properties(keyboard_target_properties(json!({
         "operation": {"type": "string", "enum": ["type_text", "press_key"]},
         "text": {"type": "string"},
         "key": {"type": "string"}
     })))
+}
+
+fn compact_desktop_window_or_element_constraint() -> Value {
+    json!({
+        "anyOf": [
+            {"required": ["window_id"]},
+            {"required": ["app_id"]},
+            {"required": ["title"]},
+            {"required": ["wm_class"]},
+            {"required": ["pid"]},
+            {"required": ["terminal_pid"]},
+            {"required": ["tty"]},
+            {"required": ["snapshot_id", "element_index"]},
+            {"required": ["element_identifier"]},
+            {"required": ["name"]}
+        ]
+    })
+}
+
+fn compact_desktop_keyboard_constraints() -> Value {
+    json!({
+        "allOf": [
+            compact_desktop_window_or_element_constraint(),
+            {
+                "if": {"properties": {"operation": {"const": "type_text"}}, "required": ["operation"]},
+                "then": {"required": ["text"]}
+            },
+            {
+                "if": {"properties": {"operation": {"const": "press_key"}}, "required": ["operation"]},
+                "then": {"required": ["key"]}
+            }
+        ]
+    })
 }
 
 fn compact_desktop_action_properties() -> Value {
@@ -967,6 +1077,23 @@ fn compact_desktop_action_properties() -> Value {
         }),
         semantic_selector_properties(),
     ))
+}
+
+fn compact_desktop_action_constraints() -> Value {
+    json!({
+        "allOf": [
+            compact_desktop_selector_constraint(),
+            {
+                "if": {"properties": {"operation": {"const": "perform_action"}}, "required": ["operation"]},
+                "then": {
+                    "anyOf": [
+                        {"required": ["action"]},
+                        {"required": ["action_index"]}
+                    ]
+                }
+            }
+        ]
+    })
 }
 
 fn action_tool_properties(mut properties: Value) -> Value {
@@ -1063,6 +1190,25 @@ fn compact_browser_input_properties() -> Value {
             "key": {"type": "string"}
         }),
     )
+}
+
+fn compact_browser_input_constraints() -> Value {
+    json!({
+        "allOf": [
+            {
+                "if": {"properties": {"operation": {"const": "click"}}, "required": ["operation"]},
+                "then": {"required": ["x", "y"]}
+            },
+            {
+                "if": {"properties": {"operation": {"const": "type_text"}}, "required": ["operation"]},
+                "then": {"required": ["text"]}
+            },
+            {
+                "if": {"properties": {"operation": {"const": "press_key"}}, "required": ["operation"]},
+                "then": {"required": ["key"]}
+            }
+        ]
+    })
 }
 
 fn compact_browser_scroll_properties() -> Value {
@@ -1630,7 +1776,7 @@ mod annotation_tests {
             .iter()
             .find(|tool| tool["name"] == "doctor")
             .expect("compact doctor");
-        assert_eq!(doctor["annotations"]["readOnlyHint"], false);
+        assert_eq!(doctor["annotations"]["readOnlyHint"], true);
         assert_eq!(doctor["annotations"]["idempotentHint"], true);
         assert!(!registry.contains("browser_eval"));
         assert!(!registry.contains("get_app_state"));
@@ -1651,6 +1797,92 @@ mod annotation_tests {
         assert_eq!(registry.active_names.len(), 35);
         assert!(registry.contains("browser_eval"));
         assert_eq!(registry.inactive_reason("browser_eval"), None);
+    }
+
+    #[test]
+    fn compact_action_tool_schemas_reject_vague_desktop_actions() {
+        let registry = build_tool_registry(
+            &process_config(McpToolProfile::Compact, false),
+            &ModelSessionInfo::default(),
+        );
+        let tools = registry.tools.as_array().expect("compact tools");
+        let tool = |name: &str| -> &Value {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("missing compact tool {name}"))
+        };
+
+        let pointer_schema = &tool("desktop_pointer")["inputSchema"];
+        assert!(
+            pointer_schema["description"].is_null(),
+            "tool-level description should stay on the MCP tool object"
+        );
+        assert!(
+            pointer_schema["allOf"]
+                .as_array()
+                .is_some_and(|constraints| {
+                    constraints.iter().any(|constraint| {
+                        constraint["if"]["properties"]["operation"]["const"] == "click"
+                            && constraint["then"]["anyOf"]
+                                .as_array()
+                                .is_some_and(|any_of| {
+                                    any_of
+                                        .iter()
+                                        .any(|item| item["required"] == json!(["x", "y"]))
+                                })
+                    })
+                }),
+            "desktop_pointer click branch must require coordinates or a selector"
+        );
+        assert!(
+            tool("desktop_pointer")["description"]
+                .as_str()
+                .expect("desktop_pointer description")
+                .contains("do not call with only operation")
+        );
+
+        let action_schema = &tool("desktop_action")["inputSchema"];
+        assert!(
+            action_schema["allOf"]
+                .as_array()
+                .is_some_and(|constraints| {
+                    constraints
+                        .iter()
+                        .any(|constraint| constraint["anyOf"].as_array().is_some())
+                }),
+            "desktop_action must require an element selector"
+        );
+        assert!(
+            action_schema["allOf"]
+                .as_array()
+                .is_some_and(|constraints| {
+                    constraints.iter().any(|constraint| {
+                        constraint["if"]["properties"]["operation"]["const"] == "perform_action"
+                            && constraint["then"]["anyOf"]
+                                .as_array()
+                                .is_some_and(|any_of| {
+                                    any_of
+                                        .iter()
+                                        .any(|item| item["required"] == json!(["action"]))
+                                })
+                    })
+                }),
+            "desktop_action perform_action branch must require action or action_index"
+        );
+
+        let keyboard_schema = &tool("desktop_keyboard")["inputSchema"];
+        assert!(
+            keyboard_schema["allOf"]
+                .as_array()
+                .is_some_and(|constraints| {
+                    constraints.iter().any(|constraint| {
+                        constraint["if"]["properties"]["operation"]["const"] == "press_key"
+                            && constraint["then"]["required"] == json!(["key"])
+                    })
+                }),
+            "desktop_keyboard press_key branch must require key"
+        );
     }
 
     #[test]

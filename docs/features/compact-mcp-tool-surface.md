@@ -75,12 +75,20 @@ recognized policy environment is `SKY_CUA_MCP_TOOL_PROFILE`,
 - `uv run pytest scripts/test_openclaw_install.py`
 - `uv run pytest scripts/test_deploy_freshness.py`
 - `uv run pytest scripts/test_probe_mcp_tool_surface.py`
+- `uv run pytest scripts/test_live_smoke_helpers.py`
 - `uv run ruff check ...`
 - `uv run basedpyright`
 
 Direct and staged-installed stdio probes verified compact/legacy profile
 isolation, compact `tools/list` count, compact success/error response envelopes,
 inactive-tool rejection, and degraded desktop/browser/phone status branches.
+The installed probe also lints model-facing compact action shape: `doctor` is
+read-only, and high-risk compact desktop/browser action tools advertise
+operation-specific selector/coordinate/text/key requirements so agents do not
+issue ambient-focus clicks or keypresses.
+OpenCode compact host proof dismissed a live Zenity dialog through compact tools
+(`list_resources`, `observe`, `desktop_action`) with redacted artifact evidence
+under `artifacts/opencode-zenity-smoke/`.
 
 ## Known Limitations
 

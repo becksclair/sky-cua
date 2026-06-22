@@ -233,6 +233,26 @@ def test_agent_smoke_accepts_action_tool_evidence(tmp_path: Path) -> None:
     assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(stdout) is True
 
 
+def test_agent_smoke_accepts_compact_action_tool_evidence(tmp_path: Path) -> None:
+    stdout = tmp_path / "agent.stdout.log"
+    stdout.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "type": "tool",
+                    "tool": "sky_cua_desktop_pointer",
+                    "state": {"status": "completed", "output": "clicked"},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(stdout) is True
+
+
 def test_agent_smoke_rejects_read_only_tool_as_action_evidence(tmp_path: Path) -> None:
     stdout = tmp_path / "agent.stdout.log"
     stdout.write_text(

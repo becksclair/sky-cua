@@ -105,3 +105,60 @@ def test_tool_error_code_reads_json_rpc_data_code() -> None:
         == "ToolNotInActiveProfile"
     )
     assert probe.tool_error_code({"result": {}}) is None
+
+
+def test_require_compact_action_shape_rejects_vague_action_tools() -> None:
+    base_tools = [
+        {
+            "name": "doctor",
+            "annotations": {"readOnlyHint": True},
+            "inputSchema": {"type": "object"},
+        },
+        {
+            "name": "desktop_pointer",
+            "description": "do not call with only operation",
+            "inputSchema": {
+                "allOf": [
+                    {
+                        "if": {"properties": {"operation": {"const": "click"}}},
+                        "then": {"anyOf": [{"required": ["x", "y"]}]},
+                    }
+                ]
+            },
+        },
+        {
+            "name": "desktop_action",
+            "description": "do not call with only operation",
+            "inputSchema": {
+                "allOf": [
+                    {"anyOf": [{"required": ["element_index"]}]},
+                ]
+            },
+        },
+        {
+            "name": "desktop_keyboard",
+            "inputSchema": {
+                "allOf": [
+                    {
+                        "if": {"properties": {"operation": {"const": "press_key"}}},
+                        "then": {"required": ["key"]},
+                    },
+                    {
+                        "if": {"properties": {"operation": {"const": "type_text"}}},
+                        "then": {"required": ["text"]},
+                    },
+                ]
+            },
+        },
+    ]
+
+    probe.require_compact_action_shape(base_tools)
+
+    vague_pointer = [dict(tool) for tool in base_tools]
+    vague_pointer[1] = {
+        "name": "desktop_pointer",
+        "description": "Click things",
+        "inputSchema": {"type": "object"},
+    }
+    with pytest.raises(probe.ProbeFailure, match="desktop_pointer"):
+        probe.require_compact_action_shape(vague_pointer)

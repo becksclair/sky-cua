@@ -84,6 +84,12 @@ coordinates across them.
   `session_presence`, `desktop_semantic`, `desktop_toggle`, `desktop_scroll`,
   `desktop_pointer`, `desktop_keyboard`, `desktop_action`, and
   `desktop_set_value`. Pick the operation branch from the tool schema.
+- For compact desktop actions, observe first, then pass a concrete target from
+  that observation. Do not call `desktop_pointer`, `desktop_keyboard`,
+  `desktop_action`, `desktop_semantic`, `desktop_toggle`, `desktop_scroll`, or
+  `desktop_set_value` with only `operation`; include `snapshot_id` plus
+  `element_index`/`element_identifier`/`name`/`text`, a window selector, or
+  explicit coordinates as the schema requires.
 - Prefer semantic primitives when `semantic_actions` support them:
   `focus_element`, `activate_element`, `select_element`, `expand_element`,
   `collapse_element`, `toggle_element`, or named/indexed `perform_action`.

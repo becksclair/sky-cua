@@ -9694,10 +9694,10 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": false,
-      "description_bytes": 1918,
-      "largest_schema_bytes": 1661,
+      "description_bytes": 2700,
+      "largest_schema_bytes": 1922,
       "profile": "compact",
-      "serialized_bytes": 28940,
+      "serialized_bytes": 32143,
       "tool_count": 34,
       "tools_list": {
         "tools": [
@@ -9706,7 +9706,7 @@
               "destructiveHint": false,
               "idempotentHint": true,
               "openWorldHint": false,
-              "readOnlyHint": false
+              "readOnlyHint": true
             },
             "description": "Run sky-cua readiness diagnostics for desktop, browser, phone, and session-presence integration.",
             "inputSchema": {
@@ -10229,9 +10229,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Focus, select, expand, or collapse a desktop semantic element.",
+            "description": "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -10522,9 +10544,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Toggle a desktop semantic element.",
+            "description": "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -10567,9 +10611,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Scroll a desktop semantic element or focused area.",
+            "description": "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "amount": {
                   "description": "Optional scroll amount passed through to the desktop backend.",
@@ -10679,9 +10745,139 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop.",
+            "description": "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "secondary_click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "drag"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "from_x",
+                          "from_y",
+                          "to_x",
+                          "to_y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "x",
+                          "y",
+                          "to_x",
+                          "to_y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index",
+                          "to_element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier",
+                          "to_element_index"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -10762,9 +10958,100 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Type text or press a key on the desktop.",
+            "description": "Type text or press a key on the desktop. Provide text for type_text, key for press_key, and a window/element target instead of relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "window_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "app_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "title"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "wm_class"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "pid"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "terminal_pid"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "tty"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "snapshot_id",
+                        "element_index"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "element_identifier"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "type_text"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "press_key"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "app_id": {
                   "type": "string"
@@ -10831,9 +11118,61 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Activate a desktop semantic element or perform a named/indexed action.",
+            "description": "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "element_index"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "element_identifier"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "text"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "perform_action"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "action"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "action_index"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "action": {
                   "description": "Named backend action when operation=perform_action.",
@@ -10894,9 +11233,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Set a desktop semantic element value.",
+            "description": "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -11007,9 +11368,63 @@
               "openWorldHint": true,
               "readOnlyHint": false
             },
-            "description": "Click, type text, or press a key in an open-world browser tab.",
+            "description": "Click, type text, or press a key in an open-world browser tab. click requires x/y; type_text requires text; press_key requires key.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "type_text"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "press_key"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "key": {
                   "type": "string"
@@ -11351,10 +11766,10 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": false,
-      "description_bytes": 2021,
-      "largest_schema_bytes": 1661,
+      "description_bytes": 2803,
+      "largest_schema_bytes": 1922,
       "profile": "compact",
-      "serialized_bytes": 29583,
+      "serialized_bytes": 32786,
       "tool_count": 35,
       "tools_list": {
         "tools": [
@@ -11363,7 +11778,7 @@
               "destructiveHint": false,
               "idempotentHint": true,
               "openWorldHint": false,
-              "readOnlyHint": false
+              "readOnlyHint": true
             },
             "description": "Run sky-cua readiness diagnostics for desktop, browser, phone, and session-presence integration.",
             "inputSchema": {
@@ -11886,9 +12301,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Focus, select, expand, or collapse a desktop semantic element.",
+            "description": "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -12179,9 +12616,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Toggle a desktop semantic element.",
+            "description": "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -12224,9 +12683,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Scroll a desktop semantic element or focused area.",
+            "description": "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "amount": {
                   "description": "Optional scroll amount passed through to the desktop backend.",
@@ -12336,9 +12817,139 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop.",
+            "description": "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "secondary_click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "drag"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "from_x",
+                          "from_y",
+                          "to_x",
+                          "to_y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "x",
+                          "y",
+                          "to_x",
+                          "to_y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index",
+                          "to_element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier",
+                          "to_element_index"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -12419,9 +13030,100 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Type text or press a key on the desktop.",
+            "description": "Type text or press a key on the desktop. Provide text for type_text, key for press_key, and a window/element target instead of relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "window_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "app_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "title"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "wm_class"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "pid"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "terminal_pid"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "tty"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "snapshot_id",
+                        "element_index"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "element_identifier"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "type_text"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "press_key"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "app_id": {
                   "type": "string"
@@ -12488,9 +13190,61 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Activate a desktop semantic element or perform a named/indexed action.",
+            "description": "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "element_index"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "element_identifier"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "text"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "perform_action"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "action"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "action_index"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "action": {
                   "description": "Named backend action when operation=perform_action.",
@@ -12551,9 +13305,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Set a desktop semantic element value.",
+            "description": "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -12664,9 +13440,63 @@
               "openWorldHint": true,
               "readOnlyHint": false
             },
-            "description": "Click, type text, or press a key in an open-world browser tab.",
+            "description": "Click, type text, or press a key in an open-world browser tab. click requires x/y; type_text requires text; press_key requires key.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "type_text"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "press_key"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "key": {
                   "type": "string"
@@ -13042,10 +13872,10 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": true,
-      "description_bytes": 1918,
+      "description_bytes": 2700,
       "largest_schema_bytes": 2050,
       "profile": "compact",
-      "serialized_bytes": 29512,
+      "serialized_bytes": 32715,
       "tool_count": 34,
       "tools_list": {
         "tools": [
@@ -13054,7 +13884,7 @@
               "destructiveHint": false,
               "idempotentHint": true,
               "openWorldHint": false,
-              "readOnlyHint": false
+              "readOnlyHint": true
             },
             "description": "Run sky-cua readiness diagnostics for desktop, browser, phone, and session-presence integration.",
             "inputSchema": {
@@ -13603,9 +14433,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Focus, select, expand, or collapse a desktop semantic element.",
+            "description": "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -13896,9 +14748,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Toggle a desktop semantic element.",
+            "description": "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -13941,9 +14815,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Scroll a desktop semantic element or focused area.",
+            "description": "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "amount": {
                   "description": "Optional scroll amount passed through to the desktop backend.",
@@ -14053,9 +14949,139 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop.",
+            "description": "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "secondary_click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "drag"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "from_x",
+                          "from_y",
+                          "to_x",
+                          "to_y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "x",
+                          "y",
+                          "to_x",
+                          "to_y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index",
+                          "to_element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier",
+                          "to_element_index"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -14136,9 +15162,100 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Type text or press a key on the desktop.",
+            "description": "Type text or press a key on the desktop. Provide text for type_text, key for press_key, and a window/element target instead of relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "window_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "app_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "title"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "wm_class"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "pid"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "terminal_pid"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "tty"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "snapshot_id",
+                        "element_index"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "element_identifier"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "type_text"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "press_key"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "app_id": {
                   "type": "string"
@@ -14205,9 +15322,61 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Activate a desktop semantic element or perform a named/indexed action.",
+            "description": "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "element_index"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "element_identifier"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "text"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "perform_action"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "action"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "action_index"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "action": {
                   "description": "Named backend action when operation=perform_action.",
@@ -14268,9 +15437,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Set a desktop semantic element value.",
+            "description": "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -14381,9 +15572,63 @@
               "openWorldHint": true,
               "readOnlyHint": false
             },
-            "description": "Click, type text, or press a key in an open-world browser tab.",
+            "description": "Click, type text, or press a key in an open-world browser tab. click requires x/y; type_text requires text; press_key requires key.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "type_text"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "press_key"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "key": {
                   "type": "string"
@@ -14725,10 +15970,10 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": true,
-      "description_bytes": 2021,
+      "description_bytes": 2803,
       "largest_schema_bytes": 2050,
       "profile": "compact",
-      "serialized_bytes": 30155,
+      "serialized_bytes": 33358,
       "tool_count": 35,
       "tools_list": {
         "tools": [
@@ -14737,7 +15982,7 @@
               "destructiveHint": false,
               "idempotentHint": true,
               "openWorldHint": false,
-              "readOnlyHint": false
+              "readOnlyHint": true
             },
             "description": "Run sky-cua readiness diagnostics for desktop, browser, phone, and session-presence integration.",
             "inputSchema": {
@@ -15286,9 +16531,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Focus, select, expand, or collapse a desktop semantic element.",
+            "description": "Focus, select, expand, or collapse a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -15579,9 +16846,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Toggle a desktop semantic element.",
+            "description": "Toggle a desktop semantic element. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -15624,9 +16913,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Scroll a desktop semantic element or focused area.",
+            "description": "Scroll a desktop semantic element or focused area. Prefer a selector from observe(surface=\"desktop\") over relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "amount": {
                   "description": "Optional scroll amount passed through to the desktop backend.",
@@ -15736,9 +17047,139 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop.",
+            "description": "Click, secondary-click, or drag on the desktop. For click/secondary_click provide a selector from observe(surface=\"desktop\") or explicit x/y coordinates; do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "secondary_click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "drag"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "from_x",
+                          "from_y",
+                          "to_x",
+                          "to_y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "x",
+                          "y",
+                          "to_x",
+                          "to_y"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_index",
+                          "to_element_index"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "element_identifier",
+                          "to_element_index"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -15819,9 +17260,100 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Type text or press a key on the desktop.",
+            "description": "Type text or press a key on the desktop. Provide text for type_text, key for press_key, and a window/element target instead of relying on ambient focus.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "window_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "app_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "title"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "wm_class"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "pid"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "terminal_pid"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "tty"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "snapshot_id",
+                        "element_index"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "element_identifier"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "type_text"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "press_key"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "app_id": {
                   "type": "string"
@@ -15888,9 +17420,61 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Activate a desktop semantic element or perform a named/indexed action.",
+            "description": "Activate a desktop semantic element or perform a named/indexed action. Target by element_index, element_identifier, name, or text from observe(surface=\"desktop\"); do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "element_index"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "element_identifier"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "text"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "perform_action"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "action"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "action_index"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "action": {
                   "description": "Named backend action when operation=perform_action.",
@@ -15951,9 +17535,31 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Set a desktop semantic element value.",
+            "description": "Set a desktop semantic element value. Include value plus an element selector from observe(surface=\"desktop\").",
             "inputSchema": {
               "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "element_index"
+                  ]
+                },
+                {
+                  "required": [
+                    "element_identifier"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ],
               "properties": {
                 "element_identifier": {
                   "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
@@ -16064,9 +17670,63 @@
               "openWorldHint": true,
               "readOnlyHint": false
             },
-            "description": "Click, type text, or press a key in an open-world browser tab.",
+            "description": "Click, type text, or press a key in an open-world browser tab. click requires x/y; type_text requires text; press_key requires key.",
             "inputSchema": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "click"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "type_text"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "operation": {
+                        "const": "press_key"
+                      }
+                    },
+                    "required": [
+                      "operation"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "key": {
                   "type": "string"
