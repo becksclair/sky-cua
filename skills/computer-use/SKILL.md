@@ -33,11 +33,19 @@ coordinates across them.
 
 ## State
 
+- In compact MCP profile, use `status(component="session_presence")` for
+  session-presence status, `list_resources(surface="desktop", resource=...)`
+  for apps/windows/focused window, `observe(surface="desktop")` for desktop
+  state, and `capture_desktop` for desktop screenshots. Legacy profiles expose
+  these as `session_presence_status`, `list_apps`, `list_windows`,
+  `focused_window`, `get_app_state`, and `screenshot`.
 - Use `doctor` before the first action when desktop access, capture, input, or
   session presence may be unavailable. For remote lockable sessions, check
-  `doctor.session_presence`: use `unlock_session` when unlock is supported,
-  otherwise `hold_session` when inhibition is supported. Presence is opt-in via
-  `SKY_CUA_PRESENCE_ENABLED`; unsupported errors mean "not armed".
+  `doctor.session_presence`: in legacy profile use `unlock_session` when unlock
+  is supported, otherwise `hold_session` when inhibition is supported; in
+  compact profile use `session_presence(operation="unlock"|"hold")`.
+  Presence is opt-in via `SKY_CUA_PRESENCE_ENABLED`; unsupported errors mean
+  "not armed".
 - Use `list_windows` for exact `window_id`, focus, bounds, display, and
   terminal metadata. Use `focused_window` only when current focus is the target.
 - `get_app_state` is structured state: diagnostics, element anchors, text/value
@@ -72,6 +80,10 @@ coordinates across them.
 
 ## Actions
 
+- In compact MCP profile, desktop actions are grouped as `setup_desktop`,
+  `session_presence`, `desktop_semantic`, `desktop_toggle`, `desktop_scroll`,
+  `desktop_pointer`, `desktop_keyboard`, `desktop_action`, and
+  `desktop_set_value`. Pick the operation branch from the tool schema.
 - Prefer semantic primitives when `semantic_actions` support them:
   `focus_element`, `activate_element`, `select_element`, `expand_element`,
   `collapse_element`, `toggle_element`, or named/indexed `perform_action`.

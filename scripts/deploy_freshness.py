@@ -178,13 +178,13 @@ def resolve_client_path_for_freshness(client_path: Path, repo_root: Path = REPO_
         candidate_path = client_path.resolve(strict=False)
     except OSError:
         return client_path
-    if candidate_path != wrapper_path:
-        return client_path
-
     if runtime_platform := _runtime_platform():
         bundled_runtime = client_path.parent / "runtimes" / runtime_platform / CLIENT_BINARY_NAME
         if bundled_runtime.exists():
             return bundled_runtime
+
+    if candidate_path != wrapper_path:
+        return client_path
 
     source_runtime = repo_root / "target" / "release" / CLIENT_BINARY_NAME
     if source_runtime.exists():

@@ -11,6 +11,11 @@ not reachable through the page.
 
 ## Ownership
 
+- In compact MCP profile, browser tab listing is
+  `list_resources(surface="browser", resource="tabs")`, page state is
+  `observe(surface="browser")`, screenshots are `capture_screen(surface="browser")`,
+  and clicks/typing/keys are grouped under `browser_input`. Legacy profiles
+  expose these as the direct `browser_*` names.
 - `user_chrome` is the user's running Chrome-family browser and the only
   target.
 - New tab: `browser_open`. Existing tab: `browser_list_tabs` ->

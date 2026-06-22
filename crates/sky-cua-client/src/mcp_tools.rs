@@ -383,7 +383,8 @@ fn take_required_branch(
         .ok_or_else(|| anyhow!("{field} must be a string"))
 }
 
-pub(crate) fn handle_tool_call(
+#[cfg(test)]
+fn handle_tool_call(
     service: &impl McpService,
     heuristics: &HeuristicsRegistry,
     model: &ModelSessionInfo,

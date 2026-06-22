@@ -11,9 +11,16 @@ those surfaces are not reachable through a phone session.
 
 ## Connecting
 
-- Start with `phone_status` (adb path, server state, active sessions, default
-  serial/backend) and `phone_list_devices` (the serial it returns is the value
-  you feed to `phone_connect`). Neither tool accepts a session/serial selector.
+- In compact MCP profile, phone discovery is
+  `list_resources(surface="phone", resource="devices")`, status is
+  `status(component="phone")`, connect/disconnect/refresh are grouped under
+  `phone_connection`, setup under `phone_setup`, and app launch/intent under
+  `phone_app_action`. Legacy profiles expose the direct `phone_*` names.
+- In legacy profile, start with `phone_status` (adb path, server state, active
+  sessions, default serial/backend) and `phone_list_devices` (the serial it
+  returns is the value you feed to `phone_connect`). In compact profile, use
+  the equivalent `status` and `list_resources` branches. Neither accepts a
+  session/serial selector.
 - Device states are distinct; only `device` is usable for connect. An
   `unauthorized` device needs the on-device "allow USB debugging" prompt
   accepted first. `offline`/`connecting`/`bootloader`/`recovery` cannot be

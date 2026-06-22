@@ -129,6 +129,33 @@ def test_repo_wrapper_freshness_uses_runtime_binary_mtime(tmp_path: Path) -> Non
     assert fresh.client_path == runtime
 
 
+def test_installed_wrapper_freshness_uses_bundled_runtime_mtime(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path / "r")
+    wrapper = tmp_path / "install" / "bin" / "sky-cua-client"
+    runtime = wrapper.parent / "runtimes" / "linux-x64" / "sky-cua-client"
+    wrapper.parent.mkdir(parents=True)
+    runtime.parent.mkdir(parents=True)
+    wrapper.write_text(
+        '#!/bin/sh\nexec "$(dirname "$0")/runtimes/linux-x64/sky-cua-client" "$@"\n',
+        encoding="utf-8",
+    )
+    runtime.write_bytes(b"binary")
+
+    for path in [
+        repo / "Cargo.toml",
+        repo / "Cargo.lock",
+        repo / "crates" / "sky-cua-service" / "Cargo.toml",
+        repo / "crates" / "sky-cua-service" / "src" / "lib.rs",
+        wrapper,
+    ]:
+        os.utime(path, (1000, 1000))
+    os.utime(runtime, (2000, 2000))
+
+    fresh = df.check_client_freshness(wrapper, repo)
+    assert fresh.fresh
+    assert fresh.client_path == runtime
+
+
 def test_allow_stale_env(monkeypatch) -> None:
     monkeypatch.delenv(df.ALLOW_STALE_ENV, raising=False)
     assert not df.allow_stale()
