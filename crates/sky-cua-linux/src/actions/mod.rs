@@ -8,7 +8,8 @@ use std::time::Duration;
 use runtime::{LinuxActionRuntime, SemanticAtspiAction, SemanticSetValueResult};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    ActionName, ActionOutcome, ActionRequest, DiagnosticEntry, InputBackendKind, SessionKind,
+    ActionName, ActionOutcome, ActionRequest, DiagnosticEntry, EnvironmentInfo, InputBackendKind,
+    SessionKind,
 };
 use sky_cua_platform::{SetValueFallbackMode, SetValueRouting};
 use targeting::{
@@ -39,6 +40,15 @@ struct LinuxVirtualDispatchPoint {
     requested_y: f64,
     coordinate_scale: Option<f64>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LinuxVirtualCoordinateTransform {
+    scale: f64,
+    origin_x: f64,
+    origin_y: f64,
+}
+
+const COSMIC_YDOTOOL_ABSOLUTE_SCALE: f64 = 2.0;
 
 impl LinuxVirtualDispatchPoint {
     fn diagnostics(self) -> Vec<DiagnosticEntry> {
@@ -902,7 +912,7 @@ fn linux_virtual_dispatch_point(
     request: &ActionRequest,
     point: (f64, f64),
 ) -> LinuxVirtualDispatchPoint {
-    let Some(scale) = linux_virtual_coordinate_scale(request, point) else {
+    let Some(transform) = linux_virtual_coordinate_transform(request, point) else {
         return LinuxVirtualDispatchPoint {
             x: point.0,
             y: point.1,
@@ -912,15 +922,18 @@ fn linux_virtual_dispatch_point(
         };
     };
     LinuxVirtualDispatchPoint {
-        x: point.0 / scale,
-        y: point.1 / scale,
+        x: transform.origin_x + ((point.0 - transform.origin_x) / transform.scale),
+        y: transform.origin_y + ((point.1 - transform.origin_y) / transform.scale),
         requested_x: point.0,
         requested_y: point.1,
-        coordinate_scale: Some(scale),
+        coordinate_scale: Some(transform.scale),
     }
 }
 
-fn linux_virtual_coordinate_scale(request: &ActionRequest, _point: (f64, f64)) -> Option<f64> {
+fn linux_virtual_coordinate_transform(
+    request: &ActionRequest,
+    point: (f64, f64),
+) -> Option<LinuxVirtualCoordinateTransform> {
     let environment = request.environment.as_ref()?;
     if environment.input_backend != InputBackendKind::LinuxVirtualInput {
         return None;
@@ -935,9 +948,33 @@ fn linux_virtual_coordinate_scale(request: &ActionRequest, _point: (f64, f64)) -
         .as_deref()
         .is_some_and(|desktop| desktop.to_ascii_lowercase().contains("cosmic"))
     {
-        return Some(2.0);
+        return cosmic_linux_virtual_coordinate_transform(environment, point);
     }
     None
+}
+
+fn cosmic_linux_virtual_coordinate_transform(
+    environment: &EnvironmentInfo,
+    point: (f64, f64),
+) -> Option<LinuxVirtualCoordinateTransform> {
+    let display = environment
+        .displays
+        .iter()
+        .find(|display| {
+            point.0 >= display.logical_rect.x
+                && point.0 <= display.logical_rect.right()
+                && point.1 >= display.logical_rect.y
+                && point.1 <= display.logical_rect.bottom()
+        })
+        .or_else(|| environment.displays.iter().find(|display| display.primary))
+        .or_else(|| environment.displays.first());
+    let origin_x = display.map_or(0.0, |display| display.logical_rect.x);
+    let origin_y = display.map_or(0.0, |display| display.logical_rect.y);
+    Some(LinuxVirtualCoordinateTransform {
+        scale: COSMIC_YDOTOOL_ABSOLUTE_SCALE,
+        origin_x,
+        origin_y,
+    })
 }
 
 fn success(message: impl Into<String>) -> ActionOutcome {
@@ -1710,7 +1747,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executor_linux_virtual_click_scales_ydotool_coordinates_on_cosmic_wayland() {
+    async fn executor_linux_virtual_click_preserves_scaled_display_origin() {
+        let runtime = FakeRuntime::default();
+        let mut request = action_request(ActionName::Click, json!({"x": 1400.0, "y": 260.0}));
+        let mut environment = wayland_pipewire_environment();
+        environment.desktop_environment = Some("COSMIC".to_string());
+        environment.input_backend = InputBackendKind::LinuxVirtualInput;
+        environment.displays = vec![
+            DisplayInfo {
+                display_id: "cosmic:Virtual-1".to_string(),
+                name: Some("Virtual-1".to_string()),
+                index: 0,
+                primary: true,
+                logical_rect: RectF {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1280.0,
+                    height: 800.0,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+                pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 800,
+                }),
+                scale_factor: Some(1.0),
+                backend: "cosmic".to_string(),
+            },
+            DisplayInfo {
+                display_id: "cosmic:Virtual-2".to_string(),
+                name: Some("Virtual-2".to_string()),
+                index: 1,
+                primary: false,
+                logical_rect: RectF {
+                    x: 1280.0,
+                    y: 0.0,
+                    width: 640.0,
+                    height: 480.0,
+                    space: CoordinateSpace::DesktopLogical,
+                },
+                pixel_size: Some(PixelSize {
+                    width: 1280,
+                    height: 960,
+                }),
+                scale_factor: Some(2.0),
+                backend: "cosmic".to_string(),
+            },
+        ];
+        request.environment = Some(environment);
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("click should succeed");
+
+        assert_eq!(
+            outcome.message,
+            "Clicked the target through the Linux virtual input fallback."
+        );
+        assert_eq!(runtime.take_events(), vec!["virtual_click:1340,130:Left"]);
+    }
+
+    #[tokio::test]
+    async fn executor_linux_virtual_click_scales_unscaled_cosmic_wayland_coordinates() {
         let runtime = FakeRuntime::default();
         let mut request = action_request(ActionName::Click, json!({"x": 179.0, "y": 240.0}));
         let mut environment = wayland_pipewire_environment();

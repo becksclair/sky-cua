@@ -68,6 +68,8 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
     let input_backend = select_input_backend(
         session_kind.clone(),
         &portal_capabilities,
+        desktop_environment.as_deref(),
+        compositor.as_deref(),
         x11::input_xtest::xtest_is_available(),
         virtual_input_available,
     );
@@ -149,6 +151,8 @@ fn select_capture_backend(
 fn select_input_backend(
     session_kind: SessionKind,
     portal_capabilities: &PortalCapabilities,
+    desktop_environment: Option<&str>,
+    compositor: Option<&str>,
     xtest_available: bool,
     virtual_input_available: bool,
 ) -> InputBackendKind {
@@ -169,16 +173,34 @@ fn select_input_backend(
             }
         }
         SessionKind::Wayland => {
-            if portal_capabilities.remote_desktop_version.is_some() {
+            let remote_desktop_available = portal_capabilities.remote_desktop_version.is_some();
+            if remote_desktop_available
+                && should_prefer_portal_input(desktop_environment, compositor)
+            {
                 InputBackendKind::PortalRemoteDesktop
             } else if virtual_input_available {
                 InputBackendKind::LinuxVirtualInput
+            } else if remote_desktop_available {
+                InputBackendKind::PortalRemoteDesktop
             } else {
                 InputBackendKind::None
             }
         }
         SessionKind::Windows | SessionKind::Unsupported => InputBackendKind::None,
     }
+}
+
+fn should_prefer_portal_input(desktop_environment: Option<&str>, compositor: Option<&str>) -> bool {
+    fn matches_portal_first_desktop(value: &str) -> bool {
+        let value = value.to_ascii_lowercase();
+        value.contains("kde")
+            || value.contains("plasma")
+            || value.contains("kwin")
+            || value.contains("gnome")
+    }
+
+    desktop_environment.is_some_and(matches_portal_first_desktop)
+        || compositor.is_some_and(matches_portal_first_desktop)
 }
 
 fn input_backend_override(
@@ -467,13 +489,13 @@ mod tests {
             CaptureBackendKind::X11
         );
         assert_eq!(
-            select_input_backend(SessionKind::X11, &capabilities, true, true),
+            select_input_backend(SessionKind::X11, &capabilities, None, None, true, true),
             InputBackendKind::XTest
         );
     }
 
     #[test]
-    fn wayland_session_prefers_portal_capture_and_remote_desktop_input() {
+    fn kde_wayland_session_prefers_portal_capture_and_remote_desktop_input() {
         let capabilities = PortalCapabilities {
             screencast_version: Some(5),
             remote_desktop_version: Some(2),
@@ -488,7 +510,60 @@ mod tests {
             CaptureBackendKind::PortalPipeWire
         );
         assert_eq!(
-            select_input_backend(SessionKind::Wayland, &capabilities, true, true),
+            select_input_backend(
+                SessionKind::Wayland,
+                &capabilities,
+                Some("KDE"),
+                Some("kde-kwin-wayland"),
+                true,
+                true
+            ),
+            InputBackendKind::PortalRemoteDesktop
+        );
+    }
+
+    #[test]
+    fn non_kde_wayland_session_prefers_available_linux_virtual_input() {
+        let capabilities = PortalCapabilities {
+            screencast_version: Some(5),
+            remote_desktop_version: Some(2),
+            screenshot_version: Some(2),
+            available_source_types: None,
+            available_cursor_modes: None,
+            available_device_types: None,
+        };
+
+        assert_eq!(
+            select_input_backend(
+                SessionKind::Wayland,
+                &capabilities,
+                Some("COSMIC"),
+                None,
+                false,
+                true
+            ),
+            InputBackendKind::LinuxVirtualInput
+        );
+        assert_eq!(
+            select_input_backend(
+                SessionKind::Wayland,
+                &capabilities,
+                Some("GNOME"),
+                Some("gnome-shell"),
+                false,
+                true
+            ),
+            InputBackendKind::PortalRemoteDesktop
+        );
+        assert_eq!(
+            select_input_backend(
+                SessionKind::Wayland,
+                &capabilities,
+                Some("GNOME"),
+                Some("gnome-shell"),
+                false,
+                false
+            ),
             InputBackendKind::PortalRemoteDesktop
         );
     }
@@ -505,11 +580,18 @@ mod tests {
         };
 
         assert_eq!(
-            select_input_backend(SessionKind::Wayland, &capabilities, false, true),
+            select_input_backend(SessionKind::Wayland, &capabilities, None, None, false, true),
             InputBackendKind::LinuxVirtualInput
         );
         assert_eq!(
-            select_input_backend(SessionKind::Wayland, &capabilities, false, false),
+            select_input_backend(
+                SessionKind::Wayland,
+                &capabilities,
+                None,
+                None,
+                false,
+                false
+            ),
             InputBackendKind::None
         );
     }

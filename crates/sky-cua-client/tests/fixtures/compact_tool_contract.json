@@ -226,6 +226,106 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "resource": {
+                "const": "apps"
+              },
+              "surface": {
+                "const": "desktop"
+              }
+            },
+            "required": [
+              "surface",
+              "resource"
+            ]
+          },
+          {
+            "properties": {
+              "resource": {
+                "const": "windows"
+              },
+              "surface": {
+                "const": "desktop"
+              }
+            },
+            "required": [
+              "surface",
+              "resource"
+            ]
+          },
+          {
+            "properties": {
+              "resource": {
+                "const": "focused_window"
+              },
+              "surface": {
+                "const": "desktop"
+              }
+            },
+            "required": [
+              "surface",
+              "resource"
+            ]
+          },
+          {
+            "properties": {
+              "resource": {
+                "const": "tabs"
+              },
+              "surface": {
+                "const": "browser"
+              }
+            },
+            "required": [
+              "surface",
+              "resource"
+            ]
+          },
+          {
+            "properties": {
+              "resource": {
+                "const": "devices"
+              },
+              "surface": {
+                "const": "phone"
+              }
+            },
+            "required": [
+              "surface",
+              "resource"
+            ]
+          },
+          {
+            "properties": {
+              "resource": {
+                "const": "apps"
+              },
+              "surface": {
+                "const": "phone"
+              }
+            },
+            "required": [
+              "surface",
+              "resource"
+            ]
+          },
+          {
+            "properties": {
+              "resource": {
+                "const": "current_app"
+              },
+              "surface": {
+                "const": "phone"
+              }
+            },
+            "required": [
+              "surface",
+              "resource"
+            ]
+          }
+        ],
         "properties": {
           "include_mdns": {
             "description": "For phone devices only, include mDNS wireless-debugging records.",
@@ -343,6 +443,25 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "surface": {
+                  "const": "browser"
+                }
+              },
+              "required": [
+                "surface"
+              ]
+            },
+            "then": {
+              "required": [
+                "tab_id"
+              ]
+            }
+          }
+        ],
         "properties": {
           "app_id": {
             "type": "string"
@@ -428,6 +547,7 @@
           },
           "tab_id": {
             "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "minLength": 1,
             "type": "string"
           },
           "target": {
@@ -494,6 +614,25 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "surface": {
+                  "const": "browser"
+                }
+              },
+              "required": [
+                "surface"
+              ]
+            },
+            "then": {
+              "required": [
+                "tab_id"
+              ]
+            }
+          }
+        ],
         "properties": {
           "backend": {
             "description": "Only honored by phone observe, phone screenshot, and phone connect branches.",
@@ -523,6 +662,7 @@
           },
           "tab_id": {
             "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "minLength": 1,
             "type": "string"
           },
           "target": {
@@ -652,6 +792,7 @@
         "additionalProperties": false,
         "properties": {
           "app_id": {
+            "minLength": 1,
             "type": "string"
           },
           "capture_all_displays": {
@@ -673,7 +814,7 @@
           },
           "pid": {
             "description": "Process ID from list_windows. 0 is ignored.",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "screenshot_delivery": {
@@ -685,28 +826,34 @@
             "type": "string"
           },
           "terminal_command": {
+            "minLength": 1,
             "type": "string"
           },
           "terminal_cwd": {
+            "minLength": 1,
             "type": "string"
           },
           "terminal_pid": {
             "description": "Terminal process ID from list_windows terminal metadata. 0 is ignored.",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "title": {
+            "minLength": 1,
             "type": "string"
           },
           "tty": {
             "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+            "minLength": 1,
             "type": "string"
           },
           "window_id": {
             "description": "Exact window_id from list_windows.",
+            "minLength": 1,
             "type": "string"
           },
           "wm_class": {
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -881,38 +1028,46 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "minProperties": 1,
         "properties": {
           "app_id": {
+            "minLength": 1,
             "type": "string"
           },
           "pid": {
             "description": "Process ID from list_windows. 0 is ignored.",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "terminal_command": {
+            "minLength": 1,
             "type": "string"
           },
           "terminal_cwd": {
+            "minLength": 1,
             "type": "string"
           },
           "terminal_pid": {
             "description": "Terminal process ID from list_windows terminal metadata. 0 is ignored.",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "title": {
+            "minLength": 1,
             "type": "string"
           },
           "tty": {
             "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+            "minLength": 1,
             "type": "string"
           },
           "window_id": {
             "description": "Exact window_id from list_windows.",
+            "minLength": 1,
             "type": "string"
           },
           "wm_class": {
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -940,7 +1095,8 @@
           "legacy_tool": "focus_element",
           "minimal_valid_arguments": {
             "element_index": 1,
-            "operation": "focus"
+            "operation": "focus",
+            "snapshot_id": "snapshot-1"
           },
           "name": "focus"
         },
@@ -954,7 +1110,8 @@
           "legacy_tool": "select_element",
           "minimal_valid_arguments": {
             "element_index": 1,
-            "operation": "select"
+            "operation": "select",
+            "snapshot_id": "snapshot-1"
           },
           "name": "select"
         },
@@ -968,7 +1125,8 @@
           "legacy_tool": "expand_element",
           "minimal_valid_arguments": {
             "element_index": 1,
-            "operation": "expand"
+            "operation": "expand",
+            "snapshot_id": "snapshot-1"
           },
           "name": "expand"
         },
@@ -982,7 +1140,8 @@
           "legacy_tool": "collapse_element",
           "minimal_valid_arguments": {
             "element_index": 1,
-            "operation": "collapse"
+            "operation": "collapse",
+            "snapshot_id": "snapshot-1"
           },
           "name": "collapse"
         }
@@ -993,6 +1152,7 @@
         "anyOf": [
           {
             "required": [
+              "snapshot_id",
               "element_index"
             ]
           },
@@ -1003,18 +1163,20 @@
           },
           {
             "required": [
+              "snapshot_id",
               "name"
             ]
           },
           {
             "required": [
+              "snapshot_id",
               "text"
             ]
           }
         ],
         "properties": {
           "element_identifier": {
-            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "minLength": 1,
             "type": "string"
           },
           "element_index": {
@@ -1023,6 +1185,7 @@
             "type": "integer"
           },
           "name": {
+            "minLength": 1,
             "type": "string"
           },
           "operation": {
@@ -1038,7 +1201,7 @@
             "type": "string"
           },
           "snapshot_id": {
-            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "minLength": 1,
             "type": "string"
           },
           "states": {
@@ -1048,12 +1211,12 @@
             "type": "array"
           },
           "text": {
+            "minLength": 1,
             "type": "string"
           }
         },
         "required": [
-          "operation",
-          "element_index"
+          "operation"
         ],
         "type": "object"
       },
@@ -1088,6 +1251,7 @@
         "properties": {
           "tab_id": {
             "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "minLength": 1,
             "type": "string"
           },
           "target": {
@@ -1136,6 +1300,7 @@
         "properties": {
           "tab_id": {
             "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "minLength": 1,
             "type": "string"
           },
           "target": {
@@ -1295,9 +1460,11 @@
         "additionalProperties": false,
         "properties": {
           "host_port": {
+            "minLength": 1,
             "type": "string"
           },
           "pairing_code": {
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -1340,7 +1507,8 @@
           "handler_id": "phone_open_settings",
           "legacy_tool": "phone_open_settings",
           "minimal_valid_arguments": {
-            "operation": "open_settings"
+            "operation": "open_settings",
+            "screen": "accessibility"
           },
           "name": "open_settings"
         }
@@ -1348,6 +1516,25 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "open_settings"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "screen"
+              ]
+            }
+          }
+        ],
         "properties": {
           "allow_downgrade": {
             "type": "boolean"
@@ -1362,13 +1549,19 @@
             ],
             "type": "string"
           },
+          "package_name": {
+            "description": "Target package for app-scoped screens such as app_details.",
+            "minLength": 1,
+            "type": "string"
+          },
           "screen": {
             "enum": [
               "accessibility",
-              "notification_listener",
-              "developer_options",
+              "notification_access",
+              "overlay_permission",
+              "app_details",
               "wireless_debugging",
-              "app_info"
+              "battery_optimization"
             ],
             "type": "string"
           },
@@ -1416,6 +1609,7 @@
         "additionalProperties": false,
         "properties": {
           "package_name": {
+            "minLength": 1,
             "type": "string"
           },
           "serial": {
@@ -1452,7 +1646,8 @@
           "handler_id": "toggle_element",
           "legacy_tool": "toggle_element",
           "minimal_valid_arguments": {
-            "element_index": 1
+            "element_index": 1,
+            "snapshot_id": "snapshot-1"
           },
           "name": "default"
         }
@@ -1463,6 +1658,7 @@
         "anyOf": [
           {
             "required": [
+              "snapshot_id",
               "element_index"
             ]
           },
@@ -1473,18 +1669,20 @@
           },
           {
             "required": [
+              "snapshot_id",
               "name"
             ]
           },
           {
             "required": [
+              "snapshot_id",
               "text"
             ]
           }
         ],
         "properties": {
           "element_identifier": {
-            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "minLength": 1,
             "type": "string"
           },
           "element_index": {
@@ -1493,13 +1691,14 @@
             "type": "integer"
           },
           "name": {
+            "minLength": 1,
             "type": "string"
           },
           "role": {
             "type": "string"
           },
           "snapshot_id": {
-            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "minLength": 1,
             "type": "string"
           },
           "states": {
@@ -1509,12 +1708,11 @@
             "type": "array"
           },
           "text": {
+            "minLength": 1,
             "type": "string"
           }
         },
-        "required": [
-          "element_index"
-        ],
+        "required": [],
         "type": "object"
       },
       "name": "desktop_toggle",
@@ -1537,7 +1735,9 @@
           "handler_id": "scroll",
           "legacy_tool": "scroll",
           "minimal_valid_arguments": {
-            "direction": "down"
+            "direction": "down",
+            "element_index": 1,
+            "snapshot_id": "snapshot-1"
           },
           "name": "default"
         }
@@ -1548,41 +1748,36 @@
         "anyOf": [
           {
             "required": [
+              "snapshot_id",
               "element_index"
             ]
           },
           {
             "required": [
-              "element_identifier"
-            ]
-          },
-          {
-            "required": [
+              "snapshot_id",
               "name"
             ]
           },
           {
             "required": [
+              "snapshot_id",
               "text"
             ]
           }
         ],
         "properties": {
-          "amount": {
-            "description": "Optional scroll amount passed through to the desktop backend.",
+          "delta_y": {
             "type": "number"
           },
           "direction": {
             "enum": [
               "up",
-              "down",
-              "left",
-              "right"
+              "down"
             ],
             "type": "string"
           },
           "element_identifier": {
-            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "minLength": 1,
             "type": "string"
           },
           "element_index": {
@@ -1591,13 +1786,18 @@
             "type": "integer"
           },
           "name": {
+            "minLength": 1,
             "type": "string"
+          },
+          "pages": {
+            "exclusiveMinimum": 0,
+            "type": "number"
           },
           "role": {
             "type": "string"
           },
           "snapshot_id": {
-            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "minLength": 1,
             "type": "string"
           },
           "states": {
@@ -1606,13 +1806,16 @@
             },
             "type": "array"
           },
+          "steps": {
+            "type": "integer"
+          },
           "text": {
+            "minLength": 1,
             "type": "string"
           }
         },
         "required": [
-          "direction",
-          "element_index"
+          "direction"
         ],
         "type": "object"
       },
@@ -1645,6 +1848,60 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "properties": {
+                  "delta_x": {
+                    "not": {
+                      "const": 0
+                    }
+                  }
+                },
+                "required": [
+                  "delta_x"
+                ]
+              },
+              {
+                "properties": {
+                  "delta_y": {
+                    "not": {
+                      "const": 0
+                    }
+                  }
+                },
+                "required": [
+                  "delta_y"
+                ]
+              }
+            ]
+          },
+          {
+            "if": {
+              "required": [
+                "x"
+              ]
+            },
+            "then": {
+              "required": [
+                "y"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "y"
+              ]
+            },
+            "then": {
+              "required": [
+                "x"
+              ]
+            }
+          }
+        ],
         "properties": {
           "delta_x": {
             "description": "Horizontal wheel delta in CSS pixels.",
@@ -1656,6 +1913,7 @@
           },
           "tab_id": {
             "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "minLength": 1,
             "type": "string"
           },
           "target": {
@@ -1769,21 +2027,19 @@
                 },
                 {
                   "required": [
+                    "snapshot_id",
                     "element_index"
                   ]
                 },
                 {
                   "required": [
-                    "element_identifier"
-                  ]
-                },
-                {
-                  "required": [
+                    "snapshot_id",
                     "name"
                   ]
                 },
                 {
                   "required": [
+                    "snapshot_id",
                     "text"
                   ]
                 }
@@ -1811,21 +2067,19 @@
                 },
                 {
                   "required": [
+                    "snapshot_id",
                     "element_index"
                   ]
                 },
                 {
                   "required": [
-                    "element_identifier"
-                  ]
-                },
-                {
-                  "required": [
+                    "snapshot_id",
                     "name"
                   ]
                 },
                 {
                   "required": [
+                    "snapshot_id",
                     "text"
                   ]
                 }
@@ -1863,13 +2117,8 @@
                 },
                 {
                   "required": [
+                    "snapshot_id",
                     "element_index",
-                    "to_element_index"
-                  ]
-                },
-                {
-                  "required": [
-                    "element_identifier",
                     "to_element_index"
                   ]
                 }
@@ -1879,7 +2128,7 @@
         ],
         "properties": {
           "element_identifier": {
-            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "minLength": 1,
             "type": "string"
           },
           "element_index": {
@@ -1896,6 +2145,7 @@
             "type": "number"
           },
           "name": {
+            "minLength": 1,
             "type": "string"
           },
           "operation": {
@@ -1910,7 +2160,7 @@
             "type": "string"
           },
           "snapshot_id": {
-            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "minLength": 1,
             "type": "string"
           },
           "states": {
@@ -1920,6 +2170,7 @@
             "type": "array"
           },
           "text": {
+            "minLength": 1,
             "type": "string"
           },
           "to_element_index": {
@@ -1944,9 +2195,7 @@
           }
         },
         "required": [
-          "operation",
-          "x",
-          "y"
+          "operation"
         ],
         "type": "object"
       },
@@ -1995,61 +2244,6 @@
         "additionalProperties": false,
         "allOf": [
           {
-            "anyOf": [
-              {
-                "required": [
-                  "window_id"
-                ]
-              },
-              {
-                "required": [
-                  "app_id"
-                ]
-              },
-              {
-                "required": [
-                  "title"
-                ]
-              },
-              {
-                "required": [
-                  "wm_class"
-                ]
-              },
-              {
-                "required": [
-                  "pid"
-                ]
-              },
-              {
-                "required": [
-                  "terminal_pid"
-                ]
-              },
-              {
-                "required": [
-                  "tty"
-                ]
-              },
-              {
-                "required": [
-                  "snapshot_id",
-                  "element_index"
-                ]
-              },
-              {
-                "required": [
-                  "element_identifier"
-                ]
-              },
-              {
-                "required": [
-                  "name"
-                ]
-              }
-            ]
-          },
-          {
             "if": {
               "properties": {
                 "operation": {
@@ -2086,9 +2280,11 @@
         ],
         "properties": {
           "app_id": {
+            "minLength": 1,
             "type": "string"
           },
           "key": {
+            "minLength": 1,
             "type": "string"
           },
           "operation": {
@@ -2100,39 +2296,46 @@
           },
           "pid": {
             "description": "Process ID from list_windows. 0 is ignored.",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "snapshot_id": {
-            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "minLength": 1,
             "type": "string"
           },
           "terminal_command": {
+            "minLength": 1,
             "type": "string"
           },
           "terminal_cwd": {
+            "minLength": 1,
             "type": "string"
           },
           "terminal_pid": {
             "description": "Terminal process ID from list_windows terminal metadata. 0 is ignored.",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "text": {
+            "minLength": 1,
             "type": "string"
           },
           "title": {
+            "minLength": 1,
             "type": "string"
           },
           "tty": {
             "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+            "minLength": 1,
             "type": "string"
           },
           "window_id": {
             "description": "Exact window_id from list_windows.",
+            "minLength": 1,
             "type": "string"
           },
           "wm_class": {
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -2162,7 +2365,8 @@
           "legacy_tool": "activate_element",
           "minimal_valid_arguments": {
             "element_index": 1,
-            "operation": "activate"
+            "operation": "activate",
+            "snapshot_id": "snapshot-1"
           },
           "name": "activate"
         },
@@ -2176,7 +2380,9 @@
           "legacy_tool": "perform_action",
           "minimal_valid_arguments": {
             "action_index": 0,
-            "operation": "perform_action"
+            "element_index": 1,
+            "operation": "perform_action",
+            "snapshot_id": "snapshot-1"
           },
           "name": "perform_action"
         }
@@ -2189,6 +2395,7 @@
             "anyOf": [
               {
                 "required": [
+                  "snapshot_id",
                   "element_index"
                 ]
               },
@@ -2199,11 +2406,13 @@
               },
               {
                 "required": [
+                  "snapshot_id",
                   "name"
                 ]
               },
               {
                 "required": [
+                  "snapshot_id",
                   "text"
                 ]
               }
@@ -2224,7 +2433,7 @@
               "anyOf": [
                 {
                   "required": [
-                    "action"
+                    "action_name"
                   ]
                 },
                 {
@@ -2237,17 +2446,18 @@
           }
         ],
         "properties": {
-          "action": {
-            "description": "Named backend action when operation=perform_action.",
-            "type": "string"
-          },
           "action_index": {
             "description": "Indexed backend action when operation=perform_action.",
             "minimum": 0,
             "type": "integer"
           },
+          "action_name": {
+            "description": "Named backend action when operation=perform_action.",
+            "minLength": 1,
+            "type": "string"
+          },
           "element_identifier": {
-            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "minLength": 1,
             "type": "string"
           },
           "element_index": {
@@ -2256,6 +2466,7 @@
             "type": "integer"
           },
           "name": {
+            "minLength": 1,
             "type": "string"
           },
           "operation": {
@@ -2269,7 +2480,7 @@
             "type": "string"
           },
           "snapshot_id": {
-            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "minLength": 1,
             "type": "string"
           },
           "states": {
@@ -2279,12 +2490,12 @@
             "type": "array"
           },
           "text": {
+            "minLength": 1,
             "type": "string"
           }
         },
         "required": [
-          "operation",
-          "element_index"
+          "operation"
         ],
         "type": "object"
       },
@@ -2309,6 +2520,7 @@
           "legacy_tool": "set_value",
           "minimal_valid_arguments": {
             "element_index": 1,
+            "snapshot_id": "snapshot-1",
             "value": "hello"
           },
           "name": "default"
@@ -2320,6 +2532,7 @@
         "anyOf": [
           {
             "required": [
+              "snapshot_id",
               "element_index"
             ]
           },
@@ -2330,18 +2543,20 @@
           },
           {
             "required": [
+              "snapshot_id",
               "name"
             ]
           },
           {
             "required": [
+              "snapshot_id",
               "text"
             ]
           }
         ],
         "properties": {
           "element_identifier": {
-            "description": "Direct backend_ref from desktop observation; bypasses element_index lookup.",
+            "minLength": 1,
             "type": "string"
           },
           "element_index": {
@@ -2350,13 +2565,14 @@
             "type": "integer"
           },
           "name": {
+            "minLength": 1,
             "type": "string"
           },
           "role": {
             "type": "string"
           },
           "snapshot_id": {
-            "description": "snapshot_id from observe(surface=desktop) or capture_desktop; coordinate translation requires capture metadata.",
+            "minLength": 1,
             "type": "string"
           },
           "states": {
@@ -2366,6 +2582,7 @@
             "type": "array"
           },
           "text": {
+            "minLength": 1,
             "type": "string"
           },
           "value": {
@@ -2373,8 +2590,7 @@
           }
         },
         "required": [
-          "value",
-          "element_index"
+          "value"
         ],
         "type": "object"
       },
@@ -2413,7 +2629,7 @@
             "type": "string"
           },
           "url": {
-            "description": "HTTP(S), file, about, data, or chrome URL accepted by the browser bridge.",
+            "pattern": "^(https?://|about:blank$)",
             "type": "string"
           }
         },
@@ -2452,6 +2668,7 @@
         "properties": {
           "tab_id": {
             "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "minLength": 1,
             "type": "string"
           },
           "target": {
@@ -2462,7 +2679,7 @@
             "type": "string"
           },
           "url": {
-            "description": "HTTP(S), file, about, data, or chrome URL accepted by the browser bridge.",
+            "pattern": "^(https?://|about:blank$)",
             "type": "string"
           }
         },
@@ -2589,6 +2806,7 @@
         ],
         "properties": {
           "key": {
+            "minLength": 1,
             "type": "string"
           },
           "operation": {
@@ -2601,6 +2819,7 @@
           },
           "tab_id": {
             "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "minLength": 1,
             "type": "string"
           },
           "target": {
@@ -2611,6 +2830,7 @@
             "type": "string"
           },
           "text": {
+            "minLength": 1,
             "type": "string"
           },
           "wait_for_arrival": {
@@ -2681,15 +2901,57 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "tap"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "x",
+                "y"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "swipe"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "start_x",
+                "start_y",
+                "end_x",
+                "end_y"
+              ]
+            }
+          }
+        ],
         "properties": {
           "duration_ms": {
             "minimum": 0,
             "type": "integer"
           },
           "end_x": {
+            "minimum": 0,
             "type": "number"
           },
           "end_y": {
+            "minimum": 0,
             "type": "number"
           },
           "operation": {
@@ -2711,18 +2973,22 @@
             "type": "string"
           },
           "start_x": {
+            "minimum": 0,
             "type": "number"
           },
           "start_y": {
+            "minimum": 0,
             "type": "number"
           },
           "use_device_coordinates": {
             "type": "boolean"
           },
           "x": {
+            "minimum": 0,
             "type": "number"
           },
           "y": {
+            "minimum": 0,
             "type": "number"
           }
         },
@@ -2774,8 +3040,45 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "type_text"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "press_key"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "key"
+              ]
+            }
+          }
+        ],
         "properties": {
           "key": {
+            "minLength": 1,
             "type": "string"
           },
           "operation": {
@@ -2794,6 +3097,7 @@
             "type": "string"
           },
           "text": {
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -2860,11 +3164,67 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "open"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "event_id"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "dismiss"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "event_id"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "action"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "event_id",
+                "action_id"
+              ]
+            }
+          }
+        ],
         "properties": {
           "action_id": {
+            "minLength": 1,
             "type": "string"
           },
           "event_id": {
+            "minLength": 1,
             "type": "string"
           },
           "operation": {
@@ -2909,6 +3269,7 @@
           "handler_id": "phone_notification_reply",
           "legacy_tool": "phone_notification_reply",
           "minimal_valid_arguments": {
+            "action_id": "reply-1",
             "event_id": "event-1",
             "text": "reply"
           },
@@ -2919,7 +3280,12 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "action_id": {
+            "minLength": 1,
+            "type": "string"
+          },
           "event_id": {
+            "minLength": 1,
             "type": "string"
           },
           "serial": {
@@ -2931,11 +3297,13 @@
             "type": "string"
           },
           "text": {
+            "minLength": 1,
             "type": "string"
           }
         },
         "required": [
           "event_id",
+          "action_id",
           "text"
         ],
         "type": "object"
@@ -2974,7 +3342,7 @@
           "handler_id": "phone_app_open_intent",
           "legacy_tool": "phone_app_open_intent",
           "minimal_valid_arguments": {
-            "action": "android.intent.action.VIEW",
+            "intent_uri": "intent://example",
             "operation": "open_intent"
           },
           "name": "open_intent"
@@ -2983,26 +3351,48 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
-        "properties": {
-          "action": {
-            "type": "string"
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "launch"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "package_name"
+              ]
+            }
           },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "open_intent"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "intent_uri"
+              ]
+            }
+          }
+        ],
+        "properties": {
           "activity": {
             "type": "string"
           },
-          "data_uri": {
-            "type": "string"
-          },
-          "extras": {
-            "type": "object"
-          },
-          "flags": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "mime_type": {
+          "intent_uri": {
+            "minLength": 1,
             "type": "string"
           },
           "operation": {
@@ -3013,6 +3403,7 @@
             "type": "string"
           },
           "package_name": {
+            "minLength": 1,
             "type": "string"
           },
           "serial": {
@@ -3057,6 +3448,18 @@
       "content_policy": "profile_rewrite",
       "input_schema": {
         "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "apk_paths"
+            ]
+          },
+          {
+            "required": [
+              "apk_path"
+            ]
+          }
+        ],
         "properties": {
           "allow_downgrade": {
             "type": "boolean"
@@ -3065,19 +3468,25 @@
             "type": "boolean"
           },
           "apk_path": {
+            "minLength": 1,
             "type": "string"
           },
           "apk_paths": {
             "items": {
+              "minLength": 1,
               "type": "string"
             },
+            "minItems": 1,
             "type": "array"
+          },
+          "grant_runtime_permissions": {
+            "type": "boolean"
           },
           "mode": {
             "enum": [
-              "install",
-              "streaming",
-              "fastdeploy"
+              "single",
+              "multiple",
+              "multi_package"
             ],
             "type": "string"
           },
@@ -3127,10 +3536,12 @@
         "additionalProperties": false,
         "properties": {
           "expression": {
+            "minLength": 1,
             "type": "string"
           },
           "tab_id": {
             "description": "tab_id from browser_open, browser_claim_tab, or list_resources(surface=browser, resource=tabs).",
+            "minLength": 1,
             "type": "string"
           },
           "target": {

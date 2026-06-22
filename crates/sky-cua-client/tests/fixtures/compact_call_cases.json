@@ -300,52 +300,60 @@
       "branch": "focus",
       "invalid": {
         "element_index": 1,
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "snapshot_id": "snapshot-1"
       },
       "legacy_tool": "focus_element",
       "tool": "desktop_semantic",
       "valid": {
         "element_index": 1,
-        "operation": "focus"
+        "operation": "focus",
+        "snapshot_id": "snapshot-1"
       }
     },
     {
       "branch": "select",
       "invalid": {
         "element_index": 1,
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "snapshot_id": "snapshot-1"
       },
       "legacy_tool": "select_element",
       "tool": "desktop_semantic",
       "valid": {
         "element_index": 1,
-        "operation": "select"
+        "operation": "select",
+        "snapshot_id": "snapshot-1"
       }
     },
     {
       "branch": "expand",
       "invalid": {
         "element_index": 1,
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "snapshot_id": "snapshot-1"
       },
       "legacy_tool": "expand_element",
       "tool": "desktop_semantic",
       "valid": {
         "element_index": 1,
-        "operation": "expand"
+        "operation": "expand",
+        "snapshot_id": "snapshot-1"
       }
     },
     {
       "branch": "collapse",
       "invalid": {
         "element_index": 1,
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "snapshot_id": "snapshot-1"
       },
       "legacy_tool": "collapse_element",
       "tool": "desktop_semantic",
       "valid": {
         "element_index": 1,
-        "operation": "collapse"
+        "operation": "collapse",
+        "snapshot_id": "snapshot-1"
       }
     },
     {
@@ -434,12 +442,14 @@
     {
       "branch": "open_settings",
       "invalid": {
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "screen": "accessibility"
       },
       "legacy_tool": "phone_open_settings",
       "tool": "phone_setup",
       "valid": {
-        "operation": "open_settings"
+        "operation": "open_settings",
+        "screen": "accessibility"
       }
     },
     {
@@ -456,23 +466,29 @@
     {
       "branch": "default",
       "invalid": {
-        "element_index": false
+        "element_index": false,
+        "snapshot_id": "snapshot-1"
       },
       "legacy_tool": "toggle_element",
       "tool": "desktop_toggle",
       "valid": {
-        "element_index": 1
+        "element_index": 1,
+        "snapshot_id": "snapshot-1"
       }
     },
     {
       "branch": "default",
       "invalid": {
-        "direction": false
+        "direction": false,
+        "element_index": 1,
+        "snapshot_id": "snapshot-1"
       },
       "legacy_tool": "scroll",
       "tool": "desktop_scroll",
       "valid": {
-        "direction": "down"
+        "direction": "down",
+        "element_index": 1,
+        "snapshot_id": "snapshot-1"
       }
     },
     {
@@ -567,38 +583,46 @@
       "branch": "activate",
       "invalid": {
         "element_index": 1,
-        "operation": "__invalid__"
+        "operation": "__invalid__",
+        "snapshot_id": "snapshot-1"
       },
       "legacy_tool": "activate_element",
       "tool": "desktop_action",
       "valid": {
         "element_index": 1,
-        "operation": "activate"
+        "operation": "activate",
+        "snapshot_id": "snapshot-1"
       }
     },
     {
       "branch": "perform_action",
       "invalid": {
         "action_index": 0,
-        "operation": "__invalid__"
+        "element_index": 1,
+        "operation": "__invalid__",
+        "snapshot_id": "snapshot-1"
       },
       "legacy_tool": "perform_action",
       "tool": "desktop_action",
       "valid": {
         "action_index": 0,
-        "operation": "perform_action"
+        "element_index": 1,
+        "operation": "perform_action",
+        "snapshot_id": "snapshot-1"
       }
     },
     {
       "branch": "default",
       "invalid": {
         "element_index": false,
+        "snapshot_id": "snapshot-1",
         "value": "hello"
       },
       "legacy_tool": "set_value",
       "tool": "desktop_set_value",
       "valid": {
         "element_index": 1,
+        "snapshot_id": "snapshot-1",
         "value": "hello"
       }
     },
@@ -775,12 +799,14 @@
     {
       "branch": "default",
       "invalid": {
-        "event_id": false,
+        "action_id": false,
+        "event_id": "event-1",
         "text": "reply"
       },
       "legacy_tool": "phone_notification_reply",
       "tool": "phone_notification_reply",
       "valid": {
+        "action_id": "reply-1",
         "event_id": "event-1",
         "text": "reply"
       }
@@ -801,13 +827,13 @@
     {
       "branch": "open_intent",
       "invalid": {
-        "action": "android.intent.action.VIEW",
+        "intent_uri": "intent://example",
         "operation": "__invalid__"
       },
       "legacy_tool": "phone_app_open_intent",
       "tool": "phone_app_action",
       "valid": {
-        "action": "android.intent.action.VIEW",
+        "intent_uri": "intent://example",
         "operation": "open_intent"
       }
     },

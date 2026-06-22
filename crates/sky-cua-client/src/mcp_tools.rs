@@ -275,7 +275,10 @@ fn compact_legacy_call(tool_name: &str, arguments: Value) -> Result<CompactLegac
                 ));
             }
         },
-        "phone_app_install" => ("phone_app_install", "default".to_string()),
+        "phone_app_install" => {
+            normalize_compact_phone_app_install(&mut arguments)?;
+            ("phone_app_install", "default".to_string())
+        }
         "phone_accessibility_tree" => ("phone_accessibility_tree", "default".to_string()),
         "phone_notifications" => ("phone_notifications", "default".to_string()),
         name => return Err(anyhow!("unknown compact tool: {name}")),
@@ -367,6 +370,28 @@ fn compact_arguments_object(arguments: Value) -> Result<serde_json::Map<String, 
     match arguments {
         Value::Object(map) => Ok(map),
         _ => Err(anyhow!("compact tool arguments must be an object")),
+    }
+}
+
+fn normalize_compact_phone_app_install(
+    arguments: &mut serde_json::Map<String, Value>,
+) -> Result<()> {
+    if arguments.contains_key("apk_paths") {
+        return Ok(());
+    }
+    let Some(apk_path) = arguments.remove("apk_path") else {
+        return Ok(());
+    };
+    match apk_path {
+        Value::String(path) if !path.is_empty() => {
+            arguments.insert(
+                "apk_paths".to_string(),
+                Value::Array(vec![Value::String(path)]),
+            );
+            Ok(())
+        }
+        Value::String(_) => Err(anyhow!("phone_app_install apk_path must not be empty")),
+        _ => Err(anyhow!("phone_app_install apk_path must be a string")),
     }
 }
 
@@ -1476,10 +1501,22 @@ mod tests {
                 json!({"event_id": "n-1"}),
             ),
             (
+                "phone_notification_reply",
+                json!({"event_id": "n-1", "action_id": "reply", "text": "hello"}),
+                "phone_notification_reply",
+                json!({"event_id": "n-1", "action_id": "reply", "text": "hello"}),
+            ),
+            (
                 "phone_app_action",
                 json!({"operation": "open_intent", "intent_uri": "intent://x"}),
                 "phone_app_open_intent",
                 json!({"intent_uri": "intent://x"}),
+            ),
+            (
+                "phone_app_install",
+                json!({"apk_path": "/tmp/app.apk", "mode": "single"}),
+                "phone_app_install",
+                json!({"apk_paths": ["/tmp/app.apk"], "mode": "single"}),
             ),
         ];
 
