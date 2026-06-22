@@ -2,6 +2,8 @@
 //! and annotations. Split from `mcp_tools.rs` along the contract-family
 //! boundary; dispatch and response shaping stay in the parent module.
 
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
 use std::sync::LazyLock;
 
 use serde_json::{Value, json};
@@ -10,6 +12,7 @@ use crate::app_state::{
     APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_QUERY_CHARS,
 };
 use crate::mcp_server::ModelSessionInfo;
+use sky_cua_platform::model::BROWSER_EVAL_ENV;
 
 use super::annotations::{
     LOCAL_DESTRUCTIVE_ACTION, LOCAL_NAVIGATION_ACTION, LOCAL_STATEFUL_ACTION, READ_ONLY_TOOL,
@@ -18,21 +21,196 @@ use super::annotations::{
 use super::browser;
 use super::phone;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum McpToolProfile {
+    Legacy,
+    Compact,
+}
+
+impl McpToolProfile {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Compact => "compact",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) enum McpConfigDiagnostic {
+    InvalidToolProfile { value: String },
+    InvalidBrowserEval { value: String },
+    InvalidModelSupportsImages { value: String },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct McpProcessConfig {
+    pub(crate) profile: McpToolProfile,
+    pub(crate) browser_eval_enabled: bool,
+    pub(crate) model_supports_images_override: Option<bool>,
+    #[allow(dead_code)]
+    pub(crate) diagnostics: Vec<McpConfigDiagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum InactiveToolReason {
+    OtherProfile,
+    BrowserEvalDisabled,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct McpToolRegistry {
+    pub(crate) profile: McpToolProfile,
+    tools: Value,
+    active_names: BTreeSet<String>,
+    inactive_names: BTreeMap<String, InactiveToolReason>,
+}
+
+impl McpToolRegistry {
+    pub(crate) fn tools_list_result(&self) -> Value {
+        json!({
+            "tools": self.tools.clone()
+        })
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.active_names.contains(name)
+    }
+
+    pub(crate) fn inactive_reason(&self, name: &str) -> Option<InactiveToolReason> {
+        self.inactive_names.get(name).copied()
+    }
+}
+
+pub(crate) fn mcp_process_config_from_env() -> McpProcessConfig {
+    let mut diagnostics = Vec::new();
+    let profile = match std::env::var("SKY_CUA_MCP_TOOL_PROFILE") {
+        Ok(value) => match parse_mcp_tool_profile_runtime(Some(&value)) {
+            Ok(profile) => profile,
+            Err(()) => {
+                diagnostics.push(McpConfigDiagnostic::InvalidToolProfile { value });
+                McpToolProfile::Legacy
+            }
+        },
+        Err(_) => McpToolProfile::Legacy,
+    };
+    let browser_eval_enabled = match std::env::var(BROWSER_EVAL_ENV) {
+        Ok(value) => match parse_bool_runtime(&value) {
+            Some(value) => value,
+            None => {
+                diagnostics.push(McpConfigDiagnostic::InvalidBrowserEval { value });
+                false
+            }
+        },
+        Err(_) => false,
+    };
+    let model_supports_images_override = match std::env::var("SKY_CUA_MODEL_SUPPORTS_IMAGES") {
+        Ok(value) => match parse_bool_runtime(&value) {
+            Some(value) => Some(value),
+            None => {
+                diagnostics.push(McpConfigDiagnostic::InvalidModelSupportsImages { value });
+                None
+            }
+        },
+        Err(_) => None,
+    };
+
+    McpProcessConfig {
+        profile,
+        browser_eval_enabled,
+        model_supports_images_override,
+        diagnostics,
+    }
+}
+
+pub(crate) fn parse_mcp_tool_profile_runtime(value: Option<&str>) -> Result<McpToolProfile, ()> {
+    match value.map(str::trim) {
+        None | Some("") => Ok(McpToolProfile::Legacy),
+        Some("legacy") => Ok(McpToolProfile::Legacy),
+        Some("compact") => Ok(McpToolProfile::Compact),
+        Some(_) => Err(()),
+    }
+}
+
+fn parse_bool_runtime(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" | "supported" | "enabled" => Some(true),
+        "0" | "false" | "no" | "off" | "unsupported" | "disabled" => Some(false),
+        _ => None,
+    }
+}
+
+pub(crate) fn build_tool_registry(
+    process: &McpProcessConfig,
+    model: &ModelSessionInfo,
+) -> McpToolRegistry {
+    let can_receive_images = model.can_receive_images();
+    let legacy_tools =
+        build_tool_definitions_for_policy(can_receive_images, process.browser_eval_enabled);
+    let compact_tools =
+        build_compact_tool_definitions(can_receive_images, process.browser_eval_enabled);
+    let (tools, inactive_profile_tools) = match process.profile {
+        McpToolProfile::Legacy => (legacy_tools.clone(), compact_tools),
+        McpToolProfile::Compact => (compact_tools.clone(), legacy_tools),
+    };
+    let active_names = tool_names(&tools);
+    let mut inactive_names = BTreeMap::new();
+    for name in tool_names(&inactive_profile_tools) {
+        if !active_names.contains(&name) {
+            inactive_names.insert(name, InactiveToolReason::OtherProfile);
+        }
+    }
+    if !process.browser_eval_enabled && !active_names.contains("browser_eval") {
+        inactive_names.insert(
+            "browser_eval".to_string(),
+            InactiveToolReason::BrowserEvalDisabled,
+        );
+    }
+
+    McpToolRegistry {
+        profile: process.profile,
+        tools,
+        active_names,
+        inactive_names,
+    }
+}
+
+fn tool_names(tools: &Value) -> BTreeSet<String> {
+    tools
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+#[cfg(test)]
 pub(crate) fn tool_definitions(model: &ModelSessionInfo) -> Value {
     let index = usize::from(model.can_receive_images());
     TOOL_DEFINITIONS_CACHE[index].clone()
 }
 
+#[cfg(test)]
 pub(crate) fn tools_list_result(model: &ModelSessionInfo) -> Value {
     json!({
         "tools": tool_definitions(model)
     })
 }
 
+#[cfg(test)]
 static TOOL_DEFINITIONS_CACHE: LazyLock<[Value; 2]> =
     LazyLock::new(|| [build_tool_definitions(false), build_tool_definitions(true)]);
 
+#[cfg(test)]
 pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
+    build_tool_definitions_for_policy(can_receive_images, browser::browser_eval_enabled())
+}
+
+pub(crate) fn build_tool_definitions_for_policy(
+    can_receive_images: bool,
+    browser_eval_enabled: bool,
+) -> Value {
     let point_description = "With snapshot_id from a captured get_app_state or screenshot result, x/y are pixels in that snapshot; otherwise live screen coordinates.";
     let drag_point_description = "With snapshot_id from a captured get_app_state or screenshot result, coordinates are pixels in that snapshot; otherwise live screen coordinates.";
     let mut tools = json!([
@@ -345,10 +523,303 @@ pub(crate) fn build_tool_definitions(can_receive_images: bool) -> Value {
     let tool_array = tools
         .as_array_mut()
         .expect("tool definition registry should be a JSON array");
-    browser::push_tool_definitions(tool_array, browser::browser_eval_enabled());
+    browser::push_tool_definitions(tool_array, browser_eval_enabled);
     phone::push_tool_definitions(tool_array);
 
     tools
+}
+
+fn build_compact_tool_definitions(can_receive_images: bool, browser_eval_enabled: bool) -> Value {
+    let mut tools = json!([
+        compact_tool(
+            "doctor",
+            "Run sky-cua readiness diagnostics for desktop, browser, phone, and session-presence integration.",
+            READ_ONLY_TOOL,
+            json!({}),
+            json!([])
+        ),
+        compact_tool(
+            "status",
+            "Report status for browser, phone, phone companion, or session presence.",
+            READ_ONLY_TOOL,
+            json!({"component": {"type": "string", "enum": ["browser", "phone", "phone_companion", "session_presence"]}}),
+            json!(["component"])
+        ),
+        compact_tool(
+            "list_resources",
+            "List bounded resources such as desktop windows/apps, browser tabs, phone devices/apps, or current focused resources.",
+            READ_ONLY_TOOL,
+            json!({"surface": {"type": "string", "enum": ["desktop", "browser", "phone"]}, "resource": {"type": "string"}}),
+            json!(["surface", "resource"])
+        ),
+        compact_tool(
+            "observe",
+            "Observe desktop, browser, or phone state using the compact profile branch selected by surface.",
+            READ_ONLY_TOOL,
+            json!({"surface": {"type": "string", "enum": ["desktop", "browser", "phone"]}}),
+            json!(["surface"])
+        ),
+        compact_tool(
+            "capture_screen",
+            "Capture browser or phone screen state. Use capture_desktop for desktop screenshots.",
+            READ_ONLY_TOOL,
+            json!({"surface": {"type": "string", "enum": ["browser", "phone"]}}),
+            json!(["surface"])
+        ),
+        compact_tool(
+            "phone_accessibility_tree",
+            "Read the full connected-phone accessibility tree.",
+            READ_ONLY_TOOL,
+            json!({}),
+            json!([])
+        ),
+        compact_tool(
+            "phone_notifications",
+            "Read recent connected-phone notifications.",
+            READ_ONLY_TOOL,
+            json!({}),
+            json!([])
+        ),
+        compact_tool(
+            "capture_desktop",
+            "Capture a desktop display or window; this may activate/focus a target window before capture.",
+            LOCAL_NAVIGATION_ACTION,
+            screenshot_properties(can_receive_images),
+            json!([])
+        ),
+        compact_tool(
+            "setup_desktop",
+            "Set up desktop accessibility or window targeting.",
+            LOCAL_NAVIGATION_ACTION,
+            json!({"operation": {"type": "string", "enum": ["accessibility", "window_targeting"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "session_presence",
+            "Hold, unlock, or release session-presence inhibitors.",
+            LOCAL_NAVIGATION_ACTION,
+            json!({"operation": {"type": "string", "enum": ["hold", "unlock", "release"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "activate_window",
+            "Activate a desktop window by exact id or selector.",
+            LOCAL_NAVIGATION_ACTION,
+            window_target_schema(),
+            json!([])
+        ),
+        compact_tool(
+            "desktop_semantic",
+            "Focus, select, expand, or collapse a desktop semantic element.",
+            LOCAL_NAVIGATION_ACTION,
+            json!({"operation": {"type": "string", "enum": ["focus", "select", "expand", "collapse"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "browser_claim_tab",
+            "Claim an existing browser tab for control.",
+            LOCAL_NAVIGATION_ACTION,
+            json!({"tab_id": {"type": "string"}}),
+            json!(["tab_id"])
+        ),
+        compact_tool(
+            "browser_move_mouse",
+            "Move the visible browser agent cursor in CSS-pixel coordinates.",
+            LOCAL_NAVIGATION_ACTION,
+            json!({"tab_id": {"type": "string"}, "x": {"type": "number", "minimum": 0}, "y": {"type": "number", "minimum": 0}}),
+            json!(["tab_id", "x", "y"])
+        ),
+        compact_tool(
+            "phone_connection",
+            "Connect, disconnect, or refresh a phone session.",
+            LOCAL_NAVIGATION_ACTION,
+            json!({"operation": {"type": "string", "enum": ["connect", "disconnect", "refresh"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "phone_pair_wireless",
+            "Pair Android wireless debugging using a host:port and one-time pairing code.",
+            LOCAL_NAVIGATION_ACTION,
+            json!({"host_port": {"type": "string"}, "pairing_code": {"type": "string"}}),
+            json!(["host_port", "pairing_code"])
+        ),
+        compact_tool(
+            "phone_setup",
+            "Install the phone companion app or open a required Android settings screen.",
+            LOCAL_NAVIGATION_ACTION,
+            json!({"operation": {"type": "string", "enum": ["install_companion", "open_settings"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "phone_app_force_stop",
+            "Force-stop a connected phone app.",
+            LOCAL_NAVIGATION_ACTION,
+            json!({"package_name": {"type": "string"}}),
+            json!(["package_name"])
+        ),
+        compact_tool(
+            "desktop_toggle",
+            "Toggle a desktop semantic element.",
+            LOCAL_STATEFUL_ACTION,
+            json!({}),
+            json!([])
+        ),
+        compact_tool(
+            "desktop_scroll",
+            "Scroll a desktop semantic element or focused area.",
+            LOCAL_STATEFUL_ACTION,
+            json!({"direction": {"type": "string", "enum": ["up", "down", "left", "right"]}}),
+            json!(["direction"])
+        ),
+        compact_tool(
+            "browser_scroll",
+            "Scroll an open-world browser page.",
+            ToolAnnotations {
+                read_only: false,
+                destructive: false,
+                idempotent: false,
+                open_world: true
+            },
+            json!({"tab_id": {"type": "string"}}),
+            json!(["tab_id"])
+        ),
+        compact_tool(
+            "desktop_pointer",
+            "Click, secondary-click, or drag on the desktop.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({"operation": {"type": "string", "enum": ["click", "secondary_click", "drag"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "desktop_keyboard",
+            "Type text or press a key on the desktop.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({"operation": {"type": "string", "enum": ["type_text", "press_key"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "desktop_action",
+            "Activate a desktop semantic element or perform a named/indexed action.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({"operation": {"type": "string", "enum": ["activate", "perform_action"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "desktop_set_value",
+            "Set a desktop semantic element value.",
+            ToolAnnotations {
+                read_only: false,
+                destructive: true,
+                idempotent: true,
+                open_world: false
+            },
+            json!({"value": {"type": "string"}}),
+            json!(["value"])
+        ),
+        compact_tool(
+            "browser_open",
+            "Open a new open-world browser tab.",
+            ToolAnnotations {
+                read_only: false,
+                destructive: false,
+                idempotent: false,
+                open_world: true
+            },
+            json!({}),
+            json!([])
+        ),
+        compact_tool(
+            "browser_navigate",
+            "Navigate a claimed open-world browser tab.",
+            ToolAnnotations {
+                read_only: false,
+                destructive: false,
+                idempotent: true,
+                open_world: true
+            },
+            json!({"tab_id": {"type": "string"}, "url": {"type": "string"}}),
+            json!(["tab_id", "url"])
+        ),
+        compact_tool(
+            "browser_input",
+            "Click, type text, or press a key in an open-world browser tab.",
+            super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
+            json!({"operation": {"type": "string", "enum": ["click", "type_text", "press_key"]}, "tab_id": {"type": "string"}}),
+            json!(["operation", "tab_id"])
+        ),
+        compact_tool(
+            "phone_pointer",
+            "Tap or swipe on a connected phone.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({"operation": {"type": "string", "enum": ["tap", "swipe"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "phone_keyboard",
+            "Type text or press a key on a connected phone.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({"operation": {"type": "string", "enum": ["type_text", "press_key"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "phone_notification_action",
+            "Open, dismiss, or run an action on a connected-phone notification.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({"operation": {"type": "string", "enum": ["open", "dismiss", "action"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "phone_notification_reply",
+            "Reply inline to a connected-phone notification.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({"event_id": {"type": "string"}, "text": {"type": "string"}}),
+            json!(["event_id", "text"])
+        ),
+        compact_tool(
+            "phone_app_action",
+            "Launch a phone app or open an Android intent.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({"operation": {"type": "string", "enum": ["launch", "open_intent"]}}),
+            json!(["operation"])
+        ),
+        compact_tool(
+            "phone_app_install",
+            "Install an APK on a connected phone.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({}),
+            json!([])
+        )
+    ]);
+    if browser_eval_enabled {
+        tools.as_array_mut().expect("compact tool array").push(compact_tool(
+            "browser_eval",
+            "Evaluate JavaScript in a claimed browser tab. This is hidden unless browser eval is explicitly enabled.",
+            super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
+            json!({"tab_id": {"type": "string"}, "expression": {"type": "string"}}),
+            json!(["tab_id", "expression"]),
+        ));
+    }
+    tools
+}
+
+fn compact_tool(
+    name: &str,
+    description: &str,
+    annotations: ToolAnnotations,
+    properties: Value,
+    required: Value,
+) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "annotations": annotations.to_value(),
+        "inputSchema": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false
+        }
+    })
 }
 
 fn get_app_state_properties(can_receive_images: bool) -> Value {
@@ -591,7 +1062,14 @@ fn action_tool(
 
 #[cfg(test)]
 mod annotation_tests {
-    use super::build_tool_definitions;
+    use super::{
+        InactiveToolReason, McpConfigDiagnostic, McpProcessConfig, McpToolProfile,
+        build_tool_definitions, build_tool_registry, mcp_process_config_from_env,
+    };
+    use crate::mcp_server::ModelSessionInfo;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// (read_only, destructive, idempotent, open_world) per tool.
     type AnnotationRow = (&'static str, (bool, bool, bool, bool));
@@ -743,5 +1221,98 @@ mod annotation_tests {
                 );
             }
         }
+    }
+
+    fn process_config(profile: McpToolProfile, browser_eval_enabled: bool) -> McpProcessConfig {
+        McpProcessConfig {
+            profile,
+            browser_eval_enabled,
+            model_supports_images_override: None,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn compact_registry_has_expected_name_budget() {
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(McpToolProfile::Compact, false), &model);
+        assert_eq!(registry.profile, McpToolProfile::Compact);
+        assert_eq!(registry.active_names.len(), 34);
+        assert!(registry.contains("observe"));
+        assert!(registry.contains("browser_input"));
+        assert!(!registry.contains("browser_eval"));
+        assert!(!registry.contains("get_app_state"));
+        assert_eq!(
+            registry.inactive_reason("get_app_state"),
+            Some(InactiveToolReason::OtherProfile)
+        );
+        assert_eq!(
+            registry.inactive_reason("browser_eval"),
+            Some(InactiveToolReason::BrowserEvalDisabled)
+        );
+    }
+
+    #[test]
+    fn compact_registry_adds_browser_eval_only_when_enabled() {
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(McpToolProfile::Compact, true), &model);
+        assert_eq!(registry.active_names.len(), 35);
+        assert!(registry.contains("browser_eval"));
+        assert_eq!(registry.inactive_reason("browser_eval"), None);
+    }
+
+    #[test]
+    fn legacy_registry_preserves_current_default_budget() {
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(McpToolProfile::Legacy, false), &model);
+        assert_eq!(registry.profile, McpToolProfile::Legacy);
+        assert_eq!(registry.active_names.len(), 66);
+        assert!(registry.contains("get_app_state"));
+        assert!(!registry.contains("observe"));
+        assert_eq!(
+            registry.inactive_reason("observe"),
+            Some(InactiveToolReason::OtherProfile)
+        );
+    }
+
+    #[test]
+    fn legacy_registry_adds_browser_eval_only_when_enabled() {
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(McpToolProfile::Legacy, true), &model);
+        assert_eq!(registry.active_names.len(), 67);
+        assert!(registry.contains("browser_eval"));
+    }
+
+    #[test]
+    fn mcp_runtime_config_invalid_values_fallback() {
+        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+        unsafe {
+            std::env::set_var("SKY_CUA_MCP_TOOL_PROFILE", "compact-ish");
+            std::env::set_var("SKY_CUA_BROWSER_EVAL", "perhaps");
+            std::env::set_var("SKY_CUA_MODEL_SUPPORTS_IMAGES", "sometimes");
+        }
+        let config = mcp_process_config_from_env();
+        unsafe {
+            std::env::remove_var("SKY_CUA_MCP_TOOL_PROFILE");
+            std::env::remove_var("SKY_CUA_BROWSER_EVAL");
+            std::env::remove_var("SKY_CUA_MODEL_SUPPORTS_IMAGES");
+        }
+        assert_eq!(config.profile, McpToolProfile::Legacy);
+        assert!(!config.browser_eval_enabled);
+        assert_eq!(config.model_supports_images_override, None);
+        assert_eq!(
+            config.diagnostics,
+            vec![
+                McpConfigDiagnostic::InvalidToolProfile {
+                    value: "compact-ish".to_string()
+                },
+                McpConfigDiagnostic::InvalidBrowserEval {
+                    value: "perhaps".to_string()
+                },
+                McpConfigDiagnostic::InvalidModelSupportsImages {
+                    value: "sometimes".to_string()
+                }
+            ]
+        );
     }
 }

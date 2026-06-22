@@ -25,7 +25,14 @@ mod phone;
 
 #[cfg(test)]
 use app_state::parse_app_state_detail;
+#[cfg(test)]
+pub(crate) use definitions::McpToolProfile;
+#[cfg(test)]
 pub(crate) use definitions::tools_list_result;
+pub(crate) use definitions::{
+    InactiveToolReason, McpProcessConfig, McpToolRegistry, build_tool_registry,
+    mcp_process_config_from_env,
+};
 #[cfg(test)]
 pub(crate) use definitions::{build_tool_definitions, tool_definitions};
 #[cfg(test)]
@@ -41,6 +48,33 @@ impl McpService for ServiceClient {
     fn call(&self, request: &ServiceRequest) -> Result<ServiceResponse> {
         ServiceClient::call(self, request)
     }
+}
+
+pub(crate) fn handle_session_tool_call(
+    service: &impl McpService,
+    heuristics: &HeuristicsRegistry,
+    model: &ModelSessionInfo,
+    registry: &McpToolRegistry,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<Value> {
+    if !registry.contains(tool_name) {
+        return match registry.inactive_reason(tool_name) {
+            Some(InactiveToolReason::BrowserEvalDisabled) => tool_error(
+                "FeatureDisabled",
+                "browser_eval is disabled for this MCP process",
+            ),
+            Some(InactiveToolReason::OtherProfile) => tool_error(
+                "ToolNotInActiveProfile",
+                format!(
+                    "tool {tool_name} is not active in the {} MCP tool profile",
+                    registry.profile.as_str()
+                ),
+            ),
+            None => tool_error("UnknownTool", format!("unknown tool: {tool_name}")),
+        };
+    }
+    handle_tool_call(service, heuristics, model, tool_name, arguments)
 }
 
 pub(crate) fn handle_tool_call(
@@ -926,8 +960,9 @@ mod tests {
     };
 
     use super::{
-        McpService, action_summary, build_tool_definitions, effective_capture_screen,
-        handle_action_call, handle_tool_call, invalid_request_tool_error, list_apps_summary,
+        McpProcessConfig, McpService, McpToolProfile, action_summary, build_tool_definitions,
+        build_tool_registry, effective_capture_screen, handle_action_call,
+        handle_session_tool_call, handle_tool_call, invalid_request_tool_error, list_apps_summary,
         parse_app_selector, parse_app_state_detail, parse_screenshot_target, parse_window_target,
         tool_definitions, tools_list_result,
     };
@@ -986,6 +1021,51 @@ mod tests {
             ServiceRequest::ExecuteAction { request } => *request,
             other => panic!("expected one ExecuteAction request: {other:?}"),
         }
+    }
+
+    fn process_config(profile: McpToolProfile, browser_eval_enabled: bool) -> McpProcessConfig {
+        McpProcessConfig {
+            profile,
+            browser_eval_enabled,
+            model_supports_images_override: None,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn inactive_profile_tools_fail_before_service_dispatch() {
+        let service = FakeService::default();
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(McpToolProfile::Compact, false), &model);
+
+        let legacy_result = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "get_app_state",
+            json!({"detail": "full"}),
+        )
+        .expect("inactive legacy tool returns tool error");
+        assert_eq!(legacy_result["isError"], true);
+        assert_eq!(
+            legacy_result["structuredContent"]["code"],
+            "ToolNotInActiveProfile"
+        );
+
+        let eval_result = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "browser_eval",
+            json!({"expression": "document.title"}),
+        )
+        .expect("disabled eval returns feature error");
+        assert_eq!(eval_result["isError"], true);
+        assert_eq!(eval_result["structuredContent"]["code"], "FeatureDisabled");
+        assert!(service.take_requests().is_empty());
     }
 
     #[test]

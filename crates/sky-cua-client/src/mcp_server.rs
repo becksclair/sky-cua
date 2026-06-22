@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
@@ -19,8 +20,14 @@ enum MessageFraming {
 
 #[derive(Debug, Clone, Default)]
 struct ServerSession {
-    initialized: bool,
+    config: Option<Arc<McpSessionConfig>>,
+}
+
+#[derive(Debug, Clone)]
+struct McpSessionConfig {
+    _process: crate::mcp_tools::McpProcessConfig,
     model: ModelSessionInfo,
+    registry: crate::mcp_tools::McpToolRegistry,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -154,8 +161,17 @@ fn handle_message(
 
     match method {
         "initialize" => {
-            session.initialized = true;
-            session.model = parse_model_session_info(&body);
+            if session.config.is_some() {
+                return Ok(Some(already_initialized(id)));
+            }
+            let process = crate::mcp_tools::mcp_process_config_from_env();
+            let model = parse_model_session_info(&body, process.model_supports_images_override);
+            let registry = crate::mcp_tools::build_tool_registry(&process, &model);
+            session.config = Some(Arc::new(McpSessionConfig {
+                _process: process,
+                model,
+                registry,
+            }));
             let protocol_version = body
                 .pointer("/params/protocolVersion")
                 .and_then(Value::as_str)
@@ -179,19 +195,19 @@ fn handle_message(
         }
         "notifications/initialized" | "initialized" => Ok(None),
         "tools/list" => {
-            if !session.initialized {
+            let Some(config) = &session.config else {
                 return Ok(Some(not_initialized(id)));
-            }
+            };
             Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": crate::mcp_tools::tools_list_result(&session.model)
+                "result": config.registry.tools_list_result()
             })))
         }
         "tools/call" => {
-            if !session.initialized {
+            let Some(config) = &session.config else {
                 return Ok(Some(not_initialized(id)));
-            }
+            };
             let tool_name = body
                 .pointer("/params/name")
                 .and_then(Value::as_str)
@@ -200,10 +216,11 @@ fn handle_message(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let result = crate::mcp_tools::handle_tool_call(
+            let result = crate::mcp_tools::handle_session_tool_call(
                 service,
                 heuristics,
-                &session.model,
+                &config.model,
+                &config.registry,
                 tool_name,
                 arguments,
             )?;
@@ -225,21 +242,35 @@ fn handle_message(
     }
 }
 
+fn already_initialized(id: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": -32600,
+            "message": "MCP session is already initialized",
+            "data": {
+                "code": "AlreadyInitialized"
+            }
+        }
+    })
+}
+
 fn not_initialized(id: Value) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id,
         "error": {
             "code": -32002,
-            "message": "Not initialized"
+            "message": "Not initialized",
+            "data": {
+                "code": "NotInitialized"
+            }
         }
     })
 }
 
-fn parse_model_session_info(body: &Value) -> ModelSessionInfo {
-    let env_override = std::env::var("SKY_CUA_MODEL_SUPPORTS_IMAGES")
-        .ok()
-        .and_then(|value| parse_bool_like(&Value::String(value)));
+fn parse_model_session_info(body: &Value, env_override: Option<bool>) -> ModelSessionInfo {
     let supports_images = env_override.or_else(|| model_supports_images_from_initialize(body));
     ModelSessionInfo { supports_images }
 }
@@ -433,15 +464,18 @@ mod tests {
 
     #[test]
     fn initialize_model_capabilities_gate_capture_schema() {
-        let session = parse_model_session_info(&json!({
-            "method": "initialize",
-            "params": {
-                "model": "gpt-5.3-codex-spark",
-                "modelCapabilities": {
-                    "images": false
+        let session = parse_model_session_info(
+            &json!({
+                "method": "initialize",
+                "params": {
+                    "model": "gpt-5.3-codex-spark",
+                    "modelCapabilities": {
+                        "images": false
+                    }
                 }
-            }
-        }));
+            }),
+            None,
+        );
         assert_eq!(session.supports_images, Some(false));
 
         let tools = tool_definitions(&session);
