@@ -52,6 +52,14 @@ impl PhoneManager {
         Self
     }
 
+    pub(crate) fn current_time_ms() -> u64 {
+        0
+    }
+
+    pub(crate) async fn expire_idle_companion_overlays(&mut self, _now_ms: u64) -> Vec<String> {
+        Vec::new()
+    }
+
     pub(crate) async fn handle(&mut self, request: PhoneRequest) -> PhoneResponse {
         match request {
             PhoneRequest::ListDevices(_) => PhoneResponse::Devices(devices()),

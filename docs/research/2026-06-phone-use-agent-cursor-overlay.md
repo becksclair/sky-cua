@@ -43,7 +43,7 @@ The companion accessibility service now draws the agent cursor and a glowing scr
 
 Three new/changed wire methods carry this (see `docs/runtime/phone-companion-protocol.md`):
 
-- `overlay_active { active }` → `{ active, glow_supported }` toggles the persistent glow; the host calls it on session hold/release.
+- `overlay_active { active }` → `{ active, glow_supported }` toggles the active-session glow; the host lights it on connect, clears it on idle expiry or release, and can relight it on later session-bound activity.
 - `overlay_gesture { kind, points, duration_ms }` → `{ animated }` animates one action. It is visual only and never dispatches real input.
 - `screenshot` with the include-overlay flag false now makes the companion hide the overlay for the capture and restore it afterward, so model-facing screenshots are clean; `contains_native_overlay` reflects what was captured.
 

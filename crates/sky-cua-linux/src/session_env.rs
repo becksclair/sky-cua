@@ -1,11 +1,12 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     path::{Path, PathBuf},
     process::Command,
 };
 
 use sky_cua_platform::{
+    CLIENT_CLEARED_SESSION_ENV_KEYS_ENV, CLIENT_SESSION_ENV_REPAIRS_ENV,
     GRAPHICAL_SESSION_ENV_KEYS,
     model::{DoctorSessionEnvRepair, DoctorSessionEnvReport},
 };
@@ -25,8 +26,10 @@ const DEFAULT_PATH_DIRS: &[&str] = &[
 pub fn hydrate_session_env() -> DoctorSessionEnvReport {
     let mut report = DoctorSessionEnvReport::default();
     normalize_path(&mut report);
-    hydrate_desktop_env_from_process_tree(&mut report);
-    hydrate_desktop_env_from_systemd(&mut report);
+    merge_client_launch_repairs(&mut report);
+    let blocked_keys = client_cleared_graphical_keys();
+    hydrate_desktop_env_from_process_tree(&mut report, &blocked_keys);
+    hydrate_desktop_env_from_systemd(&mut report, &blocked_keys);
 
     if env_var("XDG_RUNTIME_DIR").is_none()
         && let Some(runtime) = xdg_runtime_dir()
@@ -58,25 +61,51 @@ pub fn hydrate_session_env() -> DoctorSessionEnvReport {
     report
 }
 
+fn merge_client_launch_repairs(report: &mut DoctorSessionEnvReport) {
+    let Some(raw_repairs) = env_var(CLIENT_SESSION_ENV_REPAIRS_ENV) else {
+        return;
+    };
+    match serde_json::from_str::<Vec<DoctorSessionEnvRepair>>(&raw_repairs) {
+        Ok(repairs) => {
+            for repair in repairs {
+                if !GRAPHICAL_SESSION_ENV_KEYS.contains(&repair.key.as_str()) {
+                    continue;
+                }
+                report.repaired.push(DoctorSessionEnvRepair {
+                    key: repair.key,
+                    source: "client-launch".to_string(),
+                    value: repair.value,
+                });
+            }
+        }
+        Err(error) => report.notes.push(format!(
+            "client launch session-env repair report was invalid: {error}"
+        )),
+    }
+}
+
+fn client_cleared_graphical_keys() -> HashSet<String> {
+    let Some(raw_keys) = env_var(CLIENT_CLEARED_SESSION_ENV_KEYS_ENV) else {
+        return HashSet::new();
+    };
+    serde_json::from_str::<Vec<String>>(&raw_keys)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|key| GRAPHICAL_SESSION_ENV_KEYS.contains(&key.as_str()))
+        .collect()
+}
+
 /// Backward-compatible wrapper for older callers that only need mutation.
 pub fn hydrate_session_bus_env() {
     let _ = hydrate_session_env();
 }
 
-fn hydrate_desktop_env_from_process_tree(report: &mut DoctorSessionEnvReport) {
+fn hydrate_desktop_env_from_process_tree(
+    report: &mut DoctorSessionEnvReport,
+    blocked_keys: &HashSet<String>,
+) {
     for process_env in desktop_process_environments() {
-        for key in GRAPHICAL_SESSION_ENV_KEYS {
-            if env_var(key).is_some() {
-                continue;
-            }
-            if let Some(value) = process_env
-                .get(*key)
-                .filter(|value| !value.trim().is_empty())
-            {
-                unsafe { env::set_var(key, value) };
-                push_repair(report, *key, "process-tree", Some(value.clone()));
-            }
-        }
+        hydrate_desktop_env_from_map(report, "process-tree", &process_env, blocked_keys);
 
         if GRAPHICAL_SESSION_ENV_KEYS
             .iter()
@@ -87,20 +116,24 @@ fn hydrate_desktop_env_from_process_tree(report: &mut DoctorSessionEnvReport) {
     }
 }
 
-fn hydrate_desktop_env_from_systemd(report: &mut DoctorSessionEnvReport) {
+fn hydrate_desktop_env_from_systemd(
+    report: &mut DoctorSessionEnvReport,
+    blocked_keys: &HashSet<String>,
+) {
     let Some(systemd_env) = systemd_user_environment(report) else {
         return;
     };
-    hydrate_desktop_env_from_map(report, "systemd-user", &systemd_env);
+    hydrate_desktop_env_from_map(report, "systemd-user", &systemd_env, blocked_keys);
 }
 
 fn hydrate_desktop_env_from_map(
     report: &mut DoctorSessionEnvReport,
     source: &str,
     values: &HashMap<String, String>,
+    blocked_keys: &HashSet<String>,
 ) {
     for key in GRAPHICAL_SESSION_ENV_KEYS {
-        if env_var(key).is_some() {
+        if env_var(key).is_some() || blocked_keys.contains(*key) {
             continue;
         }
         if let Some(value) = values.get(*key).filter(|value| !value.trim().is_empty()) {
@@ -404,6 +437,57 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn client_launch_repairs_are_reported_without_mutating_again() {
+        let _restore = EnvRestore::capture(&[CLIENT_SESSION_ENV_REPAIRS_ENV]);
+        let repairs = vec![
+            DoctorSessionEnvRepair {
+                key: "XDG_SESSION_TYPE".to_string(),
+                source: "ignored".to_string(),
+                value: Some("wayland".to_string()),
+            },
+            DoctorSessionEnvRepair {
+                key: "UNRELATED".to_string(),
+                source: "ignored".to_string(),
+                value: Some("nope".to_string()),
+            },
+        ];
+        unsafe {
+            std::env::set_var(
+                CLIENT_SESSION_ENV_REPAIRS_ENV,
+                serde_json::to_string(&repairs).expect("repairs should serialize"),
+            );
+        }
+        let mut report = DoctorSessionEnvReport::default();
+
+        merge_client_launch_repairs(&mut report);
+
+        assert_eq!(report.repaired.len(), 1);
+        assert_eq!(report.repaired[0].key, "XDG_SESSION_TYPE");
+        assert_eq!(report.repaired[0].source, "client-launch");
+        assert_eq!(report.repaired[0].value.as_deref(), Some("wayland"));
+    }
+
+    #[test]
+    #[serial]
+    fn client_cleared_graphical_keys_filters_to_session_keys() {
+        let _restore = EnvRestore::capture(&[CLIENT_CLEARED_SESSION_ENV_KEYS_ENV]);
+        unsafe {
+            std::env::set_var(
+                CLIENT_CLEARED_SESSION_ENV_KEYS_ENV,
+                serde_json::to_string(&vec!["DISPLAY", "UNRELATED", "WAYLAND_DISPLAY"])
+                    .expect("keys should serialize"),
+            );
+        }
+
+        let cleared = client_cleared_graphical_keys();
+
+        assert!(cleared.contains("DISPLAY"));
+        assert!(cleared.contains("WAYLAND_DISPLAY"));
+        assert!(!cleared.contains("UNRELATED"));
+    }
+
+    #[test]
     fn parses_systemd_show_environment_output() {
         let environment = parse_systemd_environment(
             b"DISPLAY=:1\nWAYLAND_DISPLAY=wayland-1\nBAD LINE=value\nEMPTY=\nNO_EQUALS\n",
@@ -433,7 +517,7 @@ mod tests {
             ("WAYLAND_DISPLAY".to_string(), "wayland-7".to_string()),
         ]);
 
-        hydrate_desktop_env_from_map(&mut report, "systemd-user", &values);
+        hydrate_desktop_env_from_map(&mut report, "systemd-user", &values, &HashSet::new());
 
         assert_eq!(std::env::var("DISPLAY").ok().as_deref(), Some(":existing"));
         assert_eq!(
@@ -443,6 +527,32 @@ mod tests {
         assert_eq!(report.repaired.len(), 1);
         assert_eq!(report.repaired[0].key, "WAYLAND_DISPLAY");
         assert_eq!(report.repaired[0].source, "systemd-user");
+    }
+
+    #[test]
+    #[serial]
+    fn map_hydration_skips_client_cleared_keys() {
+        let _restore = EnvRestore::capture(&["DISPLAY", "WAYLAND_DISPLAY"]);
+        unsafe {
+            std::env::remove_var("DISPLAY");
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+        let mut report = DoctorSessionEnvReport::default();
+        let values = HashMap::from([
+            ("DISPLAY".to_string(), "localhost:10.0".to_string()),
+            ("WAYLAND_DISPLAY".to_string(), "wayland-0".to_string()),
+        ]);
+        let blocked_keys = HashSet::from(["DISPLAY".to_string()]);
+
+        hydrate_desktop_env_from_map(&mut report, "process-tree", &values, &blocked_keys);
+
+        assert_eq!(std::env::var("DISPLAY").ok(), None);
+        assert_eq!(
+            std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+            Some("wayland-0")
+        );
+        assert_eq!(report.repaired.len(), 1);
+        assert_eq!(report.repaired[0].key, "WAYLAND_DISPLAY");
     }
 
     #[test]

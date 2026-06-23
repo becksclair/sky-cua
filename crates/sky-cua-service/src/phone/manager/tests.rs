@@ -4012,6 +4012,87 @@ async fn connect_and_disconnect_toggle_overlay_active() {
     assert_eq!(parsed["params"]["active"], serde_json::json!(false));
 }
 
+#[tokio::test]
+async fn idle_watchdog_turns_overlay_active_off_without_disconnect() {
+    let server = RecordingCompanion::start().await;
+    let runner = Arc::new(FakeCommandRunner::new());
+    script_device_probes(&runner);
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    let package = selection.companion_package.clone();
+    script_verified_installed_companion(&runner, &package, 2, "0.1.1");
+    let port_arg = format!("tcp:{}", server.port);
+    runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
+    selection.companion_enabled = true;
+    selection.companion_auto_install = true;
+    selection.companion_rpc_port = server.port;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
+    let mut manager = PhoneManager::with_runner(runner, selection);
+
+    let session = connect(&mut manager).await;
+    assert!(
+        server.request_for("overlay_active").is_some(),
+        "connect must light the edge glow"
+    );
+
+    let expired = manager
+        .expire_idle_companion_overlays(session.created_at_ms + 20_000)
+        .await;
+    assert_eq!(expired, vec![session.session_id.clone()]);
+    assert!(
+        manager.sessions.contains_key(&session.session_id),
+        "idle overlay expiry must not remove the phone session"
+    );
+    let off = server
+        .recorded()
+        .into_iter()
+        .filter(|body| body.contains("\"method\":\"overlay_active\""))
+        .find(|body| body.contains("\"active\":false"))
+        .expect("idle expiry must turn the edge glow off");
+    let parsed: serde_json::Value = serde_json::from_str(&off).expect("json body");
+    assert_eq!(parsed["params"]["active"], serde_json::json!(false));
+}
+
+#[tokio::test]
+async fn session_activity_relights_overlay_after_idle_expiry() {
+    use sky_cua_platform::model::PhoneCompanionStatusRequest;
+
+    let server = RecordingCompanion::start().await;
+    let runner = Arc::new(FakeCommandRunner::new());
+    script_device_probes(&runner);
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    let package = selection.companion_package.clone();
+    script_verified_installed_companion(&runner, &package, 2, "0.1.1");
+    let port_arg = format!("tcp:{}", server.port);
+    runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
+    selection.companion_enabled = true;
+    selection.companion_auto_install = true;
+    selection.companion_rpc_port = server.port;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
+    let mut manager = PhoneManager::with_runner(runner, selection);
+
+    let session = connect(&mut manager).await;
+    let _ = manager
+        .expire_idle_companion_overlays(session.created_at_ms + 20_000)
+        .await;
+
+    let _ = manager
+        .handle(PhoneRequest::CompanionStatus(PhoneCompanionStatusRequest {
+            session: selector(&session.session_id),
+        }))
+        .await;
+
+    let relit = server
+        .recorded()
+        .into_iter()
+        .filter(|body| body.contains("\"method\":\"overlay_active\""))
+        .filter(|body| body.contains("\"active\":true"))
+        .count();
+    assert_eq!(
+        relit, 2,
+        "connect lights once and post-idle session activity must relight once"
+    );
+}
+
 // ===========================================================================
 // Config wiring: primary_target_models / wireless_auto_connect /
 // companion_operator_mode / visible_overlay

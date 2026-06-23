@@ -54,6 +54,8 @@ use super::device;
 use super::scrcpy;
 use super::snapshot::{DEFAULT_SNAPSHOT_CAPACITY, PhoneSnapshotRegistry};
 
+const COMPANION_OVERLAY_IDLE_TIMEOUT_MS: u64 = 20_000;
+
 /// One cached capability profile plus the wall-clock time it was detected, used
 /// to compute staleness against the resolved cache TTL.
 struct CachedProfile {
@@ -84,6 +86,14 @@ struct SessionEntry {
     cursor: PhoneCursorTracker,
     companion: Option<CompanionRuntime>,
     companion_diagnostics: Vec<DiagnosticEntry>,
+    /// Last host-side use of this session that should keep the phone-native
+    /// "agent in control" overlay lit. A watchdog clears the overlay after a
+    /// bounded idle window even if the MCP client exits without disconnecting.
+    last_overlay_activity_ms: u64,
+    /// Whether the manager believes the companion's persistent active overlay is
+    /// currently lit for this session. This avoids repeated off calls and lets a
+    /// later action relight the overlay after the idle watchdog cleared it.
+    overlay_active: bool,
     /// The managed scrcpy mirror for this session, present only when `phone_connect`
     /// launched one and it stayed up. `None` means no sky-cua-owned mirror is
     /// running (scrcpy was not requested, did not resolve, or failed to launch).
@@ -191,6 +201,10 @@ impl PhoneManager {
         }
     }
 
+    pub(crate) fn current_time_ms() -> u64 {
+        now_ms()
+    }
+
     /// Prime the host-derived phone-scale scrcpy `--max-size` cap.
     ///
     /// Called by the daemon before a scrcpy-bearing connect with a value derived
@@ -281,6 +295,10 @@ impl PhoneManager {
     /// with [`PhoneRequest`]; every arm returns the contractually-correct
     /// [`PhoneResponse`] variant.
     pub(crate) async fn handle(&mut self, request: PhoneRequest) -> PhoneResponse {
+        if let Some(selector) = phone_request_activity_selector(&request) {
+            self.touch_companion_overlay_activity(selector, now_ms())
+                .await;
+        }
         match request {
             PhoneRequest::Status(request) => {
                 PhoneResponse::Status(self.status(request.refresh_devices).await)
@@ -698,13 +716,15 @@ impl PhoneManager {
                 cursor: PhoneCursorTracker::new(&session_id, &serial),
                 companion: companion_runtime,
                 companion_diagnostics: connect_diagnostics,
+                last_overlay_activity_ms: now,
+                overlay_active: false,
                 scrcpy: scrcpy_runtime,
             },
         );
 
-        // Light the persistent "agent in control" edge glow on the device once a
-        // session with a reachable companion is established. Best-effort: a glow
-        // failure never fails the connect (see `set_companion_overlay_active`).
+        // Light the host-owned "agent in control" overlay lease on the device
+        // once a session with a reachable companion is established. Best-effort:
+        // a glow failure never fails the connect (see `set_companion_overlay_active`).
         if companion_reachable {
             self.set_companion_overlay_active(&session_id, true).await;
         }
@@ -1400,6 +1420,38 @@ pub(super) fn no_companion_diagnostic() -> DiagnosticEntry {
         code: super::companion::protocol::error_codes::DISABLED_SERVICE.to_string(),
         message: "no reachable companion for this session".to_string(),
         details: None,
+    }
+}
+
+fn phone_request_activity_selector(request: &PhoneRequest) -> Option<&PhoneSessionSelector> {
+    match request {
+        PhoneRequest::Status(_)
+        | PhoneRequest::ListDevices(_)
+        | PhoneRequest::PairWireless(_)
+        | PhoneRequest::Connect(_)
+        | PhoneRequest::Disconnect(_) => None,
+        PhoneRequest::Observe(request) => Some(&request.session),
+        PhoneRequest::RefreshCapabilities(request) => Some(&request.session),
+        PhoneRequest::Screenshot(request) => Some(&request.session),
+        PhoneRequest::Tap(request) => Some(&request.session),
+        PhoneRequest::Swipe(request) => Some(&request.session),
+        PhoneRequest::TypeText(request) => Some(&request.session),
+        PhoneRequest::PressKey(request) => Some(&request.session),
+        PhoneRequest::InstallCompanion(request) => Some(&request.session),
+        PhoneRequest::CompanionStatus(request) => Some(&request.session),
+        PhoneRequest::AccessibilityTree(request) => Some(&request.session),
+        PhoneRequest::Notifications(request) => Some(&request.session),
+        PhoneRequest::NotificationOpen(request) => Some(&request.session),
+        PhoneRequest::NotificationDismiss(request) => Some(&request.session),
+        PhoneRequest::NotificationAction(request) => Some(&request.session),
+        PhoneRequest::NotificationReply(request) => Some(&request.session),
+        PhoneRequest::AppCurrent(request) => Some(&request.session),
+        PhoneRequest::AppList(request) => Some(&request.session),
+        PhoneRequest::AppLaunch(request) => Some(&request.session),
+        PhoneRequest::AppOpenIntent(request) => Some(&request.session),
+        PhoneRequest::AppForceStop(request) => Some(&request.session),
+        PhoneRequest::AppInstall(request) => Some(&request.session),
+        PhoneRequest::OpenSettings(request) => Some(&request.session),
     }
 }
 

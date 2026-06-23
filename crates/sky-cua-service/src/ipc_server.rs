@@ -92,6 +92,7 @@ pub async fn run_service() -> Result<()> {
     let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let _session_presence_watchdog = daemon.spawn_session_presence_watchdog();
     let _scrcpy_liveness_watchdog = daemon.spawn_scrcpy_liveness_watchdog();
+    let _phone_overlay_idle_watchdog = daemon.spawn_phone_overlay_idle_watchdog();
     let connections = Arc::new(ConnectionTracker::default());
     info!("sky-cua-service listening on {}", socket_path.display());
 
@@ -213,6 +214,7 @@ async fn drain_pending_connections(
 /// runs, which is the stomping bug this guard exists to prevent.
 #[cfg(unix)]
 fn acquire_singleton_lock(socket_path: &std::path::Path) -> Result<Option<std::fs::File>> {
+    use std::io::Write;
     use std::os::unix::io::AsRawFd;
 
     let mut lock_name = socket_path
@@ -223,6 +225,7 @@ fn acquire_singleton_lock(socket_path: &std::path::Path) -> Result<Option<std::f
     let lock_path = socket_path.with_file_name(lock_name);
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .truncate(false)
         .write(true)
         .open(&lock_path)?;
@@ -234,7 +237,11 @@ fn acquire_singleton_lock(socket_path: &std::path::Path) -> Result<Option<std::f
             Err(std::io::Error::last_os_error())
         }
     })? {
-        FlockOutcome::Acquired => Ok(Some(lock_file)),
+        FlockOutcome::Acquired => {
+            lock_file.set_len(0)?;
+            (&lock_file).write_all(std::process::id().to_string().as_bytes())?;
+            Ok(Some(lock_file))
+        }
         FlockOutcome::Held => Ok(None),
     }
 }
@@ -289,6 +296,7 @@ pub async fn run_service() -> Result<()> {
     let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let _session_presence_watchdog = daemon.spawn_session_presence_watchdog();
     let _scrcpy_liveness_watchdog = daemon.spawn_scrcpy_liveness_watchdog();
+    let _phone_overlay_idle_watchdog = daemon.spawn_phone_overlay_idle_watchdog();
     let connections = Arc::new(ConnectionTracker::default());
     info!("sky-cua-service listening on {}", local_addr);
 
@@ -447,6 +455,13 @@ mod tests {
         let first = acquire_singleton_lock(&socket_path)
             .expect("first acquisition should not error")
             .expect("first acquisition should win the lock");
+        let lock_path = socket_path.with_file_name("service.sock.lock");
+        assert_eq!(
+            std::fs::read_to_string(&lock_path)
+                .expect("lock file should contain owner pid")
+                .trim(),
+            std::process::id().to_string()
+        );
         let second =
             acquire_singleton_lock(&socket_path).expect("contended probe should not error");
         assert!(second.is_none(), "second daemon must not acquire the lock");

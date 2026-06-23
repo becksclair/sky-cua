@@ -258,7 +258,10 @@ them:
   (and the visible-overlay config is on). A mapped mirror with no reachable
   companion reports false.
 - Phone-native overlay: drawn on the device by the companion's accessibility
-  service. Non-focusable and non-touchable; it does not intercept taps.
+  service. Non-focusable and non-touchable; it does not intercept taps. Its
+  active edge glow auto-clears after 20 seconds without session-bound phone
+  activity, relights on the next session-bound request, and clears immediately on
+  disconnect. This visual active indicator is not session validity.
 
 `PhoneCursorState` reports the post-action cursor in both device and screenshot
 planes, tagged with the `snapshot_id` it was captured against — a screenshot

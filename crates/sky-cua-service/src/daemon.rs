@@ -142,6 +142,35 @@ impl ServiceDaemon {
         })
     }
 
+    /// Spawn a background task that clears the phone-native companion
+    /// "agent in control" indicator after 20s of session inactivity. This is a
+    /// visual lease, not a session teardown: later phone activity can relight the
+    /// indicator without forcing agents to reconnect.
+    pub fn spawn_phone_overlay_idle_watchdog(
+        self: &std::sync::Arc<Self>,
+    ) -> tokio::task::JoinHandle<()> {
+        let daemon = std::sync::Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                let expired = daemon
+                    .phone
+                    .lock()
+                    .await
+                    .expire_idle_companion_overlays(crate::phone::PhoneManager::current_time_ms())
+                    .await;
+                for session_id in expired {
+                    debug!(
+                        session_id,
+                        "phone companion active overlay expired after idle timeout"
+                    );
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_tests() -> std::io::Result<Self> {
         Ok(Self {

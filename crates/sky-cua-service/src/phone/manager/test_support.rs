@@ -221,6 +221,8 @@ impl PhoneManager {
                     client: CompanionClient::new(companion_port, token),
                 }),
                 companion_diagnostics: Vec::new(),
+                last_overlay_activity_ms: detected_at_ms,
+                overlay_active: self.selection.visible_overlay,
                 scrcpy: None,
             },
         );
@@ -307,6 +309,8 @@ impl PhoneManager {
                 cursor: PhoneCursorTracker::new(session_id.clone(), serial.to_string()),
                 companion: None,
                 companion_diagnostics: Vec::new(),
+                last_overlay_activity_ms: detected_at_ms,
+                overlay_active: false,
                 scrcpy: Some(ScrcpyRuntime {
                     process,
                     child: Some(child),
@@ -420,6 +424,8 @@ impl PhoneManager {
                 cursor: PhoneCursorTracker::new(session_id.clone(), serial.to_string()),
                 companion: None,
                 companion_diagnostics: Vec::new(),
+                last_overlay_activity_ms: detected_at_ms,
+                overlay_active: false,
                 scrcpy: Some(ScrcpyRuntime {
                     process,
                     child: None,

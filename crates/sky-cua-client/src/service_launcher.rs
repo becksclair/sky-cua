@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(windows)]
 use std::net::TcpStream;
@@ -7,10 +9,14 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use sky_cua_platform::model::{ServiceRequest, ServiceResponse};
+use sky_cua_platform::{
+    CLIENT_CLEARED_SESSION_ENV_KEYS_ENV,
+    model::{DoctorSessionEnvRepair, ServiceRequest, ServiceResponse},
+};
+use sky_cua_platform::{CLIENT_SESSION_ENV_REPAIRS_ENV, GRAPHICAL_SESSION_ENV_KEYS};
 #[cfg(unix)]
 use sky_cua_platform::{SERVICE_SOCKET_PATH_ENV, service_socket_path};
 #[cfg(windows)]
@@ -24,6 +30,8 @@ const STARTUP_HEALTH_READ_TIMEOUT: Duration = Duration::from_millis(250);
 const STARTUP_HEALTH_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const STARTUP_HEALTH_ATTEMPTS: usize = 160;
+#[cfg(unix)]
+const STALE_SERVICE_TERMINATION_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone)]
 pub struct ServiceClient {
     endpoint: ServiceEndpoint,
@@ -38,8 +46,13 @@ impl ServiceClient {
         // Startup probes must fail fast; a stale or half-ready daemon should not
         // consume the entire MCP server startup window before we even spawn a
         // fresh service instance.
-        if client.startup_health(&launch_environment).is_ok() {
-            return Ok(client);
+        match client.startup_health(&launch_environment) {
+            Ok(_) => return Ok(client),
+            Err(error) => {
+                if is_stale_startup_health_error(&error) {
+                    client.displace_stale_service(&error)?;
+                }
+            }
         }
 
         client.spawn_service(&launch_environment)?;
@@ -48,12 +61,17 @@ impl ServiceClient {
     }
 
     fn startup_health(&self, launch_environment: &LaunchEnvironment) -> Result<ServiceResponse> {
-        let response = self.call_with_timeouts(
+        let (response, owner_pid) = self.call_with_timeouts_with_peer(
             &ServiceRequest::Health,
             STARTUP_HEALTH_READ_TIMEOUT,
             STARTUP_HEALTH_WRITE_TIMEOUT,
         )?;
-        launch_environment.ensure_startup_health(&response)?;
+        if let Err(error) = launch_environment.ensure_startup_health(&response) {
+            return Err(anyhow!(StaleStartupService {
+                detail: error.to_string(),
+                owner_pid,
+            }));
+        }
         Ok(response)
     }
 
@@ -105,13 +123,23 @@ impl ServiceClient {
         read_timeout: Duration,
         write_timeout: Duration,
     ) -> Result<ServiceResponse> {
+        self.call_with_timeouts_with_peer(request, read_timeout, write_timeout)
+            .map(|(response, _)| response)
+    }
+
+    fn call_with_timeouts_with_peer(
+        &self,
+        request: &ServiceRequest,
+        read_timeout: Duration,
+        write_timeout: Duration,
+    ) -> Result<(ServiceResponse, Option<u32>)> {
         // Attempt 1: try cached stream if available.
         let mut cached_response: Option<Result<ServiceResponse>> = None;
         if let Some(stream) = self.take_cached_stream() {
             match self.perform_call_on_stream(stream, request, read_timeout, write_timeout) {
-                Ok((response, stream)) => {
+                Ok((response, stream, owner_pid)) => {
                     self.store_cached_stream(stream);
-                    return Ok(response);
+                    return Ok((response, owner_pid));
                 }
                 Err(error) if is_stale_stream_error(&error) => {
                     self.clear_cached_stream();
@@ -131,10 +159,10 @@ impl ServiceClient {
 
         // Attempt 2: fresh connection.
         let stream = self.endpoint.connect()?;
-        let (response, stream) =
+        let (response, stream, owner_pid) =
             self.perform_call_on_stream(stream, request, read_timeout, write_timeout)?;
         self.store_cached_stream(stream);
-        Ok(response)
+        Ok((response, owner_pid))
     }
 
     fn perform_call_on_stream(
@@ -143,7 +171,8 @@ impl ServiceClient {
         request: &ServiceRequest,
         read_timeout: Duration,
         write_timeout: Duration,
-    ) -> Result<(ServiceResponse, EitherStream)> {
+    ) -> Result<(ServiceResponse, EitherStream, Option<u32>)> {
+        let owner_pid = stream.peer_pid();
         stream
             .set_read_timeout(Some(read_timeout))
             .context("failed to set a read timeout on the sky-cua-service socket")?;
@@ -163,7 +192,7 @@ impl ServiceClient {
         }
         let response: ServiceResponse = serde_json::from_str(line.trim_end())?;
         let stream = reader.into_inner();
-        Ok((response, stream))
+        Ok((response, stream, owner_pid))
     }
 
     fn new(launch_environment: &LaunchEnvironment) -> Result<Self> {
@@ -197,12 +226,7 @@ impl ServiceClient {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-        // Forward reconstructed desktop session env vars so the service can
-        // initialize its platform backends even when the MCP host did not pass
-        // them through.
-        for (key, value) in launch_environment.repaired_desktop_vars() {
-            command.env(key, value);
-        }
+        configure_launch_environment_env(&mut command, launch_environment);
 
         self.endpoint.configure_service_command(&mut command);
         let child = command
@@ -246,6 +270,31 @@ impl ServiceClient {
             *child_guard = None;
         }
         Ok(())
+    }
+
+    #[cfg(unix)]
+    fn displace_stale_service(&self, reason: &anyhow::Error) -> Result<()> {
+        let fallback_owner_pid = reason
+            .downcast_ref::<StaleStartupService>()
+            .and_then(|error| error.owner_pid);
+        match self.endpoint.terminate_stale_owners(fallback_owner_pid) {
+            Ok(killed) if !killed.is_empty() => {
+                self.clear_cached_stream();
+                self.endpoint.wait_for_singleton_release()?;
+                Ok(())
+            }
+            Ok(_) => Err(anyhow!(
+                "existing sky-cua-service is stale ({reason}) but its singleton owner could not be identified"
+            )),
+            Err(error) => Err(error).context("failed to terminate stale sky-cua-service"),
+        }
+    }
+
+    #[cfg(windows)]
+    fn displace_stale_service(&self, reason: &anyhow::Error) -> Result<()> {
+        Err(anyhow!(
+            "existing sky-cua-service is stale ({reason}) and automatic daemon replacement is not implemented on Windows"
+        ))
     }
 }
 
@@ -304,6 +353,46 @@ impl ServiceEndpoint {
             }
         }
     }
+
+    #[cfg(unix)]
+    fn terminate_stale_owners(&self, fallback_owner_pid: Option<u32>) -> Result<Vec<u32>> {
+        let Self::Unix(path) = self;
+        let candidates = owner_pids_for_termination(path, fallback_owner_pid)?;
+        let mut killed = Vec::new();
+        for pid in candidates {
+            // SAFETY: `kill` with SIGTERM has no Rust-side memory safety
+            // preconditions. Candidate PIDs are either the connected Unix
+            // socket peer or a lock-file owner that still looks like our
+            // service binary.
+            let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+            if result == 0 {
+                killed.push(pid);
+            } else {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ESRCH) {
+                    killed.push(pid);
+                } else {
+                    return Err(error.into());
+                }
+            }
+        }
+        Ok(killed)
+    }
+
+    #[cfg(unix)]
+    fn wait_for_singleton_release(&self) -> Result<()> {
+        let Self::Unix(path) = self;
+        let deadline = Instant::now() + STALE_SERVICE_TERMINATION_TIMEOUT;
+        while Instant::now() < deadline {
+            if singleton_lock_is_available(path)? {
+                return Ok(());
+            }
+            thread::sleep(STARTUP_POLL_INTERVAL);
+        }
+        Err(anyhow!(
+            "timed out waiting for stale sky-cua-service singleton lock to release"
+        ))
+    }
 }
 
 #[cfg(unix)]
@@ -312,7 +401,7 @@ fn service_socket_path_for_launch_environment(launch_environment: &LaunchEnviron
         return service_socket_path();
     }
 
-    if std::env::var_os("XDG_RUNTIME_DIR").is_none()
+    if std::env::var_os("XDG_RUNTIME_DIR").is_none_or(|value| value.is_empty())
         && let Some(runtime_dir) = launch_environment.repaired_desktop_var("XDG_RUNTIME_DIR")
     {
         return PathBuf::from(runtime_dir)
@@ -323,6 +412,104 @@ fn service_socket_path_for_launch_environment(launch_environment: &LaunchEnviron
     service_socket_path()
 }
 
+#[cfg(unix)]
+fn service_lock_path(socket_path: &std::path::Path) -> PathBuf {
+    let mut lock_name = socket_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("service.sock"));
+    lock_name.push(".lock");
+    socket_path.with_file_name(lock_name)
+}
+
+#[cfg(unix)]
+fn read_singleton_owner_pid(socket_path: &std::path::Path) -> Result<Option<u32>> {
+    let lock_path = service_lock_path(socket_path);
+    let Ok(raw) = std::fs::read_to_string(&lock_path) else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let pid = trimmed.parse::<u32>().with_context(|| {
+        format!(
+            "invalid sky-cua-service singleton owner pid in {}",
+            lock_path.display()
+        )
+    })?;
+    Ok((pid > 1).then_some(pid))
+}
+
+#[cfg(unix)]
+fn owner_pids_for_termination(
+    socket_path: &std::path::Path,
+    peer_pid: Option<u32>,
+) -> Result<Vec<u32>> {
+    let mut candidates = BTreeSet::new();
+    if let Some(pid) = peer_pid {
+        candidates.insert(pid);
+    }
+    if let Some(pid) = read_singleton_owner_pid(socket_path)?
+        && pid_looks_like_sky_cua_service(pid)
+    {
+        candidates.insert(pid);
+    }
+    Ok(candidates.into_iter().collect())
+}
+
+#[cfg(unix)]
+fn pid_looks_like_sky_cua_service(pid: u32) -> bool {
+    let proc_root = PathBuf::from(format!("/proc/{pid}"));
+    let exe_name = std::fs::read_link(proc_root.join("exe"))
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name.to_os_string()));
+    let cmdline = std::fs::read(proc_root.join("cmdline")).ok();
+    process_identity_looks_like_sky_cua_service(exe_name.as_deref(), cmdline.as_deref())
+}
+
+#[cfg(unix)]
+fn process_identity_looks_like_sky_cua_service(
+    exe_name: Option<&std::ffi::OsStr>,
+    cmdline: Option<&[u8]>,
+) -> bool {
+    exe_name.is_some_and(|name| name == "sky-cua-service")
+        || cmdline.is_some_and(|bytes| {
+            bytes
+                .split(|byte| *byte == 0)
+                .filter_map(|part| std::str::from_utf8(part).ok())
+                .any(|part| {
+                    std::path::Path::new(part)
+                        .file_name()
+                        .is_some_and(|name| name == "sky-cua-service")
+                })
+        })
+}
+
+#[cfg(unix)]
+fn singleton_lock_is_available(socket_path: &std::path::Path) -> Result<bool> {
+    use std::os::unix::io::AsRawFd;
+
+    let lock_path = service_lock_path(socket_path);
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)?;
+    let result = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result == 0 {
+        let _ = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) };
+        Ok(true)
+    } else {
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => Ok(false),
+            Some(libc::EINTR) => Ok(false),
+            _ => Err(error.into()),
+        }
+    }
+}
+
 impl std::fmt::Display for ServiceEndpoint {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -330,6 +517,37 @@ impl std::fmt::Display for ServiceEndpoint {
             Self::Unix(path) => write!(formatter, "{}", path.display()),
             #[cfg(windows)]
             Self::Tcp(addr) => write!(formatter, "{addr}"),
+        }
+    }
+}
+
+fn configure_launch_environment_env(command: &mut Command, launch_environment: &LaunchEnvironment) {
+    // Forward reconstructed desktop session env vars so the service can
+    // initialize its platform backends even when the MCP host did not pass
+    // them through.
+    if launch_environment.detached_graphical_env() {
+        for key in GRAPHICAL_SESSION_ENV_KEYS {
+            command.env_remove(key);
+        }
+        if let Ok(serialized) = serde_json::to_string(GRAPHICAL_SESSION_ENV_KEYS) {
+            command.env(CLIENT_CLEARED_SESSION_ENV_KEYS_ENV, serialized);
+        }
+    }
+    for (key, value) in launch_environment.repaired_desktop_vars() {
+        command.env(key, value);
+    }
+    if !launch_environment.repaired_desktop_vars().is_empty() {
+        let repairs = launch_environment
+            .repaired_desktop_vars()
+            .iter()
+            .map(|(key, value)| DoctorSessionEnvRepair {
+                key: key.clone(),
+                source: "client-launch".to_string(),
+                value: Some(value.clone()),
+            })
+            .collect::<Vec<_>>();
+        if let Ok(serialized) = serde_json::to_string(&repairs) {
+            command.env(CLIENT_SESSION_ENV_REPAIRS_ENV, serialized);
         }
     }
 }
@@ -391,6 +609,40 @@ impl EitherStream {
             Self::Tcp(stream) => stream.set_write_timeout(timeout),
         }
     }
+
+    fn peer_pid(&self) -> Option<u32> {
+        match self {
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => unix_stream_peer_pid(stream),
+            #[cfg(all(unix, not(target_os = "linux")))]
+            Self::Unix(_stream) => None,
+            #[cfg(windows)]
+            Self::Tcp(_stream) => None,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn unix_stream_peer_pid(stream: &UnixStream) -> Option<u32> {
+    use std::mem::MaybeUninit;
+    use std::os::unix::io::AsRawFd;
+
+    let mut credentials = MaybeUninit::<libc::ucred>::uninit();
+    let mut credentials_len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            credentials.as_mut_ptr().cast(),
+            &mut credentials_len,
+        )
+    };
+    if result != 0 || credentials_len < std::mem::size_of::<libc::ucred>() as libc::socklen_t {
+        return None;
+    }
+    let credentials = unsafe { credentials.assume_init() };
+    (credentials.pid > 1).then_some(credentials.pid as u32)
 }
 
 fn is_stale_stream_error(error: &anyhow::Error) -> bool {
@@ -401,6 +653,28 @@ fn is_stale_stream_error(error: &anyhow::Error) -> bool {
         || error_string.contains("connection closed before response")
         || error_string.contains("not connected")
         || error_string.contains("unexpected eof")
+}
+
+#[derive(Debug)]
+struct StaleStartupService {
+    detail: String,
+    owner_pid: Option<u32>,
+}
+
+impl std::fmt::Display for StaleStartupService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "existing sky-cua-service is stale: {}",
+            self.detail
+        )
+    }
+}
+
+impl std::error::Error for StaleStartupService {}
+
+fn is_stale_startup_health_error(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<StaleStartupService>().is_some()
 }
 
 fn service_path() -> PathBuf {
@@ -454,11 +728,15 @@ fn resolve_service_tcp_addr() -> Result<String> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::ffi::OsStr;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Mutex;
 
-    use sky_cua_platform::SERVICE_SOCKET_PATH_ENV;
+    use sky_cua_platform::{
+        CLIENT_CLEARED_SESSION_ENV_KEYS_ENV, CLIENT_SESSION_ENV_REPAIRS_ENV,
+        SERVICE_SOCKET_PATH_ENV,
+    };
 
     use super::*;
 
@@ -482,6 +760,56 @@ mod tests {
     }
 
     #[test]
+    fn detached_launch_env_removes_stale_graphical_keys_before_repairs() {
+        let launch_environment =
+            LaunchEnvironment::from_repaired_desktop_vars_and_detached_for_tests(
+                vec![
+                    ("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string()),
+                    ("DISPLAY".to_string(), ":0".to_string()),
+                ],
+                true,
+            );
+        let mut command = Command::new("sky-cua-service");
+
+        configure_launch_environment_env(&mut command, &launch_environment);
+
+        assert_eq!(command_env_value(&command, "WAYLAND_DISPLAY"), Some(None));
+        assert_eq!(
+            command_env_value(&command, "XDG_RUNTIME_DIR"),
+            Some(Some(OsStr::new("/run/user/1000")))
+        );
+        assert_eq!(
+            command_env_value(&command, "DISPLAY"),
+            Some(Some(OsStr::new(":0")))
+        );
+
+        let raw_repairs = command_env_value(&command, CLIENT_SESSION_ENV_REPAIRS_ENV)
+            .and_then(|value| value)
+            .and_then(OsStr::to_str)
+            .expect("client launch repairs should be serialized");
+        let repairs = serde_json::from_str::<Vec<DoctorSessionEnvRepair>>(raw_repairs)
+            .expect("client launch repairs should be valid JSON");
+        assert_eq!(repairs.len(), 2);
+        assert!(
+            repairs
+                .iter()
+                .all(|repair| repair.source == "client-launch")
+        );
+        assert!(repairs.iter().any(|repair| {
+            repair.key == "XDG_RUNTIME_DIR" && repair.value.as_deref() == Some("/run/user/1000")
+        }));
+
+        let raw_cleared = command_env_value(&command, CLIENT_CLEARED_SESSION_ENV_KEYS_ENV)
+            .and_then(|value| value)
+            .and_then(OsStr::to_str)
+            .expect("client cleared keys should be serialized");
+        let cleared =
+            serde_json::from_str::<Vec<String>>(raw_cleared).expect("cleared keys should be JSON");
+        assert!(cleared.iter().any(|key| key == "DISPLAY"));
+        assert!(cleared.iter().any(|key| key == "WAYLAND_DISPLAY"));
+    }
+
+    #[test]
     fn unix_service_endpoint_uses_repaired_runtime_dir_before_cache_fallback() {
         let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
@@ -489,6 +817,31 @@ mod tests {
         unsafe {
             std::env::remove_var(SERVICE_SOCKET_PATH_ENV);
             std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+        let launch_environment = LaunchEnvironment::from_repaired_desktop_vars_for_tests(vec![(
+            "XDG_RUNTIME_DIR".to_string(),
+            "/run/user/1000".to_string(),
+        )]);
+
+        let endpoint = ServiceEndpoint::new(&launch_environment).expect("endpoint should resolve");
+
+        restore_env(SERVICE_SOCKET_PATH_ENV, old_socket_path);
+        restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
+        match endpoint {
+            ServiceEndpoint::Unix(path) => {
+                assert_eq!(path, PathBuf::from("/run/user/1000/sky-cua/service.sock"));
+            }
+        }
+    }
+
+    #[test]
+    fn unix_service_endpoint_treats_empty_runtime_dir_as_missing() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
+        let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe {
+            std::env::remove_var(SERVICE_SOCKET_PATH_ENV);
+            std::env::set_var("XDG_RUNTIME_DIR", "");
         }
         let launch_environment = LaunchEnvironment::from_repaired_desktop_vars_for_tests(vec![(
             "XDG_RUNTIME_DIR".to_string(),
@@ -536,6 +889,81 @@ mod tests {
         let error = anyhow!("sky-cua-service connection closed before response");
 
         assert!(is_stale_stream_error(&error));
+    }
+
+    #[test]
+    fn startup_health_stale_error_is_typed() {
+        let error = anyhow!(StaleStartupService {
+            detail: "DISPLAY".to_string(),
+            owner_pid: Some(4242),
+        });
+
+        assert!(is_stale_startup_health_error(&error));
+        assert_eq!(
+            error
+                .downcast_ref::<StaleStartupService>()
+                .and_then(|error| error.owner_pid),
+            Some(4242)
+        );
+    }
+
+    #[test]
+    fn unix_service_lock_path_sits_next_to_socket() {
+        assert_eq!(
+            service_lock_path(std::path::Path::new("/tmp/sky-cua/service.sock")),
+            PathBuf::from("/tmp/sky-cua/service.sock.lock")
+        );
+    }
+
+    #[test]
+    fn unix_service_lock_owner_pid_parses_valid_lock_file() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sky-cua-client-lock-pid-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        let socket_path = temp_dir.join("service.sock");
+        fs::write(service_lock_path(&socket_path), "4242\n").expect("write lock pid");
+
+        let pid = read_singleton_owner_pid(&socket_path).expect("pid should parse");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        assert_eq!(pid, Some(4242));
+    }
+
+    #[test]
+    fn unix_service_termination_ignores_unverified_lock_pid_when_peer_is_known() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sky-cua-client-peer-pid-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        let socket_path = temp_dir.join("service.sock");
+        fs::write(service_lock_path(&socket_path), "4242\n").expect("write lock pid");
+
+        let pids =
+            owner_pids_for_termination(&socket_path, Some(7777)).expect("pid should resolve");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        assert_eq!(pids, vec![7777]);
+    }
+
+    #[test]
+    fn unix_service_process_identity_matches_service_binary_name() {
+        assert!(process_identity_looks_like_sky_cua_service(
+            Some(OsStr::new("sky-cua-service")),
+            None,
+        ));
+        assert!(process_identity_looks_like_sky_cua_service(
+            None,
+            Some(b"/home/bex/.local/share/sky-cua/bin/sky-cua-service\0daemon\0"),
+        ));
+        assert!(!process_identity_looks_like_sky_cua_service(
+            Some(OsStr::new("unrelated")),
+            Some(b"/usr/bin/unrelated\0"),
+        ));
     }
 
     #[test]
@@ -603,6 +1031,16 @@ mod tests {
         );
         terminate_child(&client)?;
         Ok(())
+    }
+
+    fn command_env_value<'a>(
+        command: &'a Command,
+        key: &str,
+    ) -> Option<Option<&'a std::ffi::OsStr>> {
+        command
+            .get_envs()
+            .find(|(candidate, _)| *candidate == key)
+            .map(|(_, value)| value)
     }
 
     fn child_id(client: &ServiceClient) -> Result<u32> {

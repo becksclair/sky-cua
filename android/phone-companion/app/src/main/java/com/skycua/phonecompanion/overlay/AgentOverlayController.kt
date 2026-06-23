@@ -117,9 +117,9 @@ class AgentOverlayController(
      * Shows or hides the persistent "agent in control" overlay. When activating,
      * the overlay is attached, a looping ambient animator drives the breathing
      * glow and the travelling wave, and the cursor is parked at screen centre so
-     * the pointer is visible for the whole connected session. When deactivating
-     * (on disconnect), the animators stop and the window is removed. Idempotent;
-     * the overlay never auto-hides while active.
+     * the pointer is visible immediately. When deactivating (on host idle expiry
+     * or disconnect), the animators stop and the window is removed. Idempotent;
+     * the host owns the active lease and may relight it without reconnecting.
      *
      * @return whether the overlay is active after the call (always equals
      *   [active] when the view layer is available).

@@ -19,12 +19,15 @@ const DEFAULT_PATH_DIRS: &[&str] = &[
 #[derive(Debug, Clone)]
 pub(crate) struct LaunchEnvironment {
     repaired_desktop_vars: Vec<(String, String)>,
+    detached_graphical_env: bool,
 }
 
 impl LaunchEnvironment {
     pub(crate) fn probe() -> Self {
+        let detached_graphical_env = remote_or_detached_launch();
         Self {
-            repaired_desktop_vars: probe_desktop_env_vars(),
+            repaired_desktop_vars: probe_desktop_env_vars(detached_graphical_env),
+            detached_graphical_env,
         }
     }
 
@@ -39,8 +42,16 @@ impl LaunchEnvironment {
             .map(|(_, value)| value.as_str())
     }
 
+    pub(crate) fn detached_graphical_env(&self) -> bool {
+        self.detached_graphical_env
+    }
+
     pub(crate) fn ensure_startup_health(&self, response: &ServiceResponse) -> Result<()> {
-        ensure_health_satisfies_desktop_env(response, &self.repaired_desktop_vars)?;
+        ensure_health_satisfies_desktop_env(
+            response,
+            &self.repaired_desktop_vars,
+            !self.detached_graphical_env,
+        )?;
         ensure_health_satisfies_browser_env(response)
     }
 
@@ -50,6 +61,18 @@ impl LaunchEnvironment {
     ) -> Self {
         Self {
             repaired_desktop_vars,
+            detached_graphical_env: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_repaired_desktop_vars_and_detached_for_tests(
+        repaired_desktop_vars: Vec<(String, String)>,
+        detached_graphical_env: bool,
+    ) -> Self {
+        Self {
+            repaired_desktop_vars,
+            detached_graphical_env,
         }
     }
 }
@@ -60,26 +83,39 @@ impl LaunchEnvironment {
 /// the service backends cannot initialize. This function attempts to
 /// reconstruct the missing values from common well-known sources.
 #[must_use]
-fn probe_desktop_env_vars() -> Vec<(String, String)> {
+fn probe_desktop_env_vars(remote_or_detached: bool) -> Vec<(String, String)> {
     if !cfg!(target_os = "linux") {
         return Vec::new();
     }
 
     let mut found = Vec::new();
-    let needs = |key: &str| std::env::var_os(key).is_none();
+    let should_repair = |key: &str| {
+        env_missing_or_empty(key)
+            || (remote_or_detached && GRAPHICAL_SESSION_ENV_KEYS.contains(&key))
+    };
 
-    if needs("XDG_RUNTIME_DIR") {
-        let uid = current_uid();
-        let candidate = PathBuf::from(format!("/run/user/{uid}"));
-        if candidate.is_dir() {
-            found.push((
-                "XDG_RUNTIME_DIR".to_string(),
-                candidate.to_string_lossy().to_string(),
-            ));
+    if let Some(session_env) = graphical_session_environment() {
+        for key in GRAPHICAL_SESSION_ENV_KEYS {
+            if should_repair(key)
+                && let Some(value) = session_env
+                    .get(*key)
+                    .filter(|value| !value.trim().is_empty())
+            {
+                push_repaired_var(&mut found, *key, value.clone());
+            }
         }
     }
 
-    if needs("DBUS_SESSION_BUS_ADDRESS")
+    if should_repair("XDG_RUNTIME_DIR") && !has_repaired_var(&found, "XDG_RUNTIME_DIR") {
+        let uid = current_uid();
+        let candidate = PathBuf::from(format!("/run/user/{uid}"));
+        if candidate.is_dir() {
+            push_repaired_var(&mut found, "XDG_RUNTIME_DIR", candidate.to_string_lossy());
+        }
+    }
+
+    if should_repair("DBUS_SESSION_BUS_ADDRESS")
+        && !has_repaired_var(&found, "DBUS_SESSION_BUS_ADDRESS")
         && let Some(runtime_dir) = found
             .iter()
             .find(|(k, _)| k == "XDG_RUNTIME_DIR")
@@ -88,14 +124,16 @@ fn probe_desktop_env_vars() -> Vec<(String, String)> {
     {
         let socket = runtime_dir.join("bus");
         if socket.exists() {
-            found.push((
-                "DBUS_SESSION_BUS_ADDRESS".to_string(),
+            push_repaired_var(
+                &mut found,
+                "DBUS_SESSION_BUS_ADDRESS",
                 format!("unix:path={}", socket.display()),
-            ));
+            );
         }
     }
 
-    if needs("WAYLAND_DISPLAY")
+    if should_repair("WAYLAND_DISPLAY")
+        && !has_repaired_var(&found, "WAYLAND_DISPLAY")
         && let Some(runtime_dir) = found
             .iter()
             .find(|(k, _)| k == "XDG_RUNTIME_DIR")
@@ -104,19 +142,21 @@ fn probe_desktop_env_vars() -> Vec<(String, String)> {
     {
         for name in &["wayland-0", "wayland-1", "wayland-2"] {
             if runtime_dir.join(name).exists() {
-                found.push(("WAYLAND_DISPLAY".to_string(), (*name).to_string()));
+                push_repaired_var(&mut found, "WAYLAND_DISPLAY", (*name).to_string());
                 break;
             }
         }
     }
 
-    if needs("DISPLAY")
+    if should_repair("DISPLAY")
+        && !has_repaired_var(&found, "DISPLAY")
         && let Some(display) = probe_x11_display()
     {
-        found.push(("DISPLAY".to_string(), display));
+        push_repaired_var(&mut found, "DISPLAY", display);
     }
 
-    if needs("XDG_CURRENT_DESKTOP")
+    if should_repair("XDG_CURRENT_DESKTOP")
+        && !has_repaired_var(&found, "XDG_CURRENT_DESKTOP")
         && let Ok(output) = std::process::Command::new("loginctl")
             .args([
                 "show-session",
@@ -128,20 +168,18 @@ fn probe_desktop_env_vars() -> Vec<(String, String)> {
     {
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !stdout.is_empty() && stdout != "n/a" {
-            found.push(("XDG_CURRENT_DESKTOP".to_string(), stdout));
+            push_repaired_var(&mut found, "XDG_CURRENT_DESKTOP", stdout);
         }
     }
 
-    if needs("XDG_SESSION_TYPE") {
-        let wayland_present = found.iter().any(|(k, _)| k == "WAYLAND_DISPLAY")
-            || std::env::var_os("WAYLAND_DISPLAY").is_some();
-        let display_present =
-            found.iter().any(|(k, _)| k == "DISPLAY") || std::env::var_os("DISPLAY").is_some();
+    if should_repair("XDG_SESSION_TYPE") && !has_repaired_var(&found, "XDG_SESSION_TYPE") {
+        let wayland_present = repaired_or_env_present(&found, "WAYLAND_DISPLAY");
+        let display_present = repaired_or_env_present(&found, "DISPLAY");
 
         if wayland_present {
-            found.push(("XDG_SESSION_TYPE".to_string(), "wayland".to_string()));
+            push_repaired_var(&mut found, "XDG_SESSION_TYPE", "wayland");
         } else if display_present {
-            found.push(("XDG_SESSION_TYPE".to_string(), "x11".to_string()));
+            push_repaired_var(&mut found, "XDG_SESSION_TYPE", "x11");
         }
     }
 
@@ -150,13 +188,14 @@ fn probe_desktop_env_vars() -> Vec<(String, String)> {
             if *key == "PATH" {
                 continue;
             }
-            if needs(key)
+            if should_repair(key)
+                && systemd_fallback_key_allowed(key, remote_or_detached)
                 && let Some(value) = systemd_env
                     .get(*key)
                     .filter(|value| !value.trim().is_empty())
                 && !found.iter().any(|(found_key, _)| found_key == key)
             {
-                found.push(((*key).to_string(), value.clone()));
+                push_repaired_var(&mut found, *key, value.clone());
             }
         }
     }
@@ -166,6 +205,305 @@ fn probe_desktop_env_vars() -> Vec<(String, String)> {
     }
 
     found
+}
+
+fn systemd_fallback_key_allowed(key: &str, remote_or_detached: bool) -> bool {
+    !remote_or_detached || SELECTED_SESSION_SYSTEMD_FILL_KEYS.contains(&key)
+}
+
+fn push_repaired_var(
+    found: &mut Vec<(String, String)>,
+    key: impl Into<String>,
+    value: impl Into<String>,
+) {
+    let key = key.into();
+    let value = value.into();
+    if let Some((_, existing)) = found
+        .iter_mut()
+        .find(|(existing_key, _)| existing_key == &key)
+    {
+        *existing = value;
+    } else {
+        found.push((key, value));
+    }
+}
+
+fn has_repaired_var(found: &[(String, String)], key: &str) -> bool {
+    found.iter().any(|(found_key, _)| found_key == key)
+}
+
+fn repaired_or_env_present(found: &[(String, String)], key: &str) -> bool {
+    has_repaired_var(found, key) || !env_missing_or_empty(key)
+}
+
+fn remote_or_detached_launch() -> bool {
+    std::env::var_os("SSH_CONNECTION").is_some()
+        || std::env::var_os("SSH_TTY").is_some()
+        || std::env::var_os("TMUX").is_some()
+        || std::env::var("XDG_SESSION_TYPE")
+            .is_ok_and(|value| matches!(value.as_str(), "tty" | "unspecified"))
+        || std::env::var("DISPLAY").is_ok_and(|value| forwarded_x11_display(&value))
+        || env_missing_or_empty("XDG_RUNTIME_DIR")
+        || (env_missing_or_empty("DISPLAY") && env_missing_or_empty("WAYLAND_DISPLAY"))
+}
+
+fn env_missing_or_empty(key: &str) -> bool {
+    std::env::var_os(key).is_none_or(|value| value.is_empty())
+}
+
+fn forwarded_x11_display(value: &str) -> bool {
+    let trimmed = value.trim().to_ascii_lowercase();
+    if trimmed.is_empty() || trimmed.starts_with(':') || trimmed.starts_with("unix:") {
+        return false;
+    }
+    let host = if let Some(rest) = trimmed.strip_prefix('[') {
+        let Some((host, _)) = rest.split_once("]:") else {
+            return false;
+        };
+        host
+    } else {
+        let Some((host, _)) = trimmed.split_once(':') else {
+            return false;
+        };
+        host
+    };
+    host == "localhost" || host == "localhost/unix" || host == "::1" || host.starts_with("127.")
+}
+
+fn graphical_session_environment() -> Option<HashMap<String, String>> {
+    let session = selected_graphical_session()?;
+    let mut environment = HashMap::new();
+    if let Some(process_env) = session.leader.and_then(read_process_environ) {
+        environment.extend(process_env);
+    }
+    if let Some(systemd_env) = systemd_user_environment() {
+        fill_missing_selected_session_systemd_environment(&mut environment, systemd_env);
+    }
+    if let Some(session_type) = session.session_type.filter(|value| !value.is_empty()) {
+        environment.insert("XDG_SESSION_TYPE".to_string(), session_type);
+    }
+    if let Some(desktop) = session.desktop.filter(|value| !value.is_empty()) {
+        insert_if_missing_or_empty(&mut environment, "XDG_CURRENT_DESKTOP", desktop.clone());
+        insert_if_missing_or_empty(&mut environment, "DESKTOP_SESSION", desktop);
+    }
+    if let Some(display) = session.display.filter(|value| !value.is_empty()) {
+        insert_if_missing_or_empty(&mut environment, "DISPLAY", display);
+    }
+    if environment.is_empty() {
+        None
+    } else {
+        Some(environment)
+    }
+}
+
+fn insert_if_missing_or_empty(environment: &mut HashMap<String, String>, key: &str, value: String) {
+    if environment
+        .get(key)
+        .is_none_or(|existing| existing.is_empty())
+    {
+        environment.insert(key.to_string(), value);
+    }
+}
+
+const SELECTED_SESSION_SYSTEMD_FILL_KEYS: &[&str] =
+    &["DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"];
+
+fn fill_missing_selected_session_systemd_environment(
+    environment: &mut HashMap<String, String>,
+    fallback: HashMap<String, String>,
+) {
+    for (key, value) in fallback {
+        if !SELECTED_SESSION_SYSTEMD_FILL_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        environment.entry(key).or_insert(value);
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct LogindSession {
+    id: String,
+    uid: Option<u32>,
+    remote: bool,
+    active: bool,
+    state: Option<String>,
+    class: Option<String>,
+    session_type: Option<String>,
+    desktop: Option<String>,
+    display: Option<String>,
+    leader: Option<u32>,
+}
+
+fn selected_graphical_session() -> Option<LogindSession> {
+    let output = std::process::Command::new("loginctl")
+        .args(["list-sessions", "--no-legend"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let session_ids = parse_loginctl_session_ids(&String::from_utf8_lossy(&output.stdout));
+    let current_uid = current_uid();
+    let mut candidates = session_ids
+        .into_iter()
+        .filter_map(show_logind_session)
+        .filter(|session| session.uid == Some(current_uid))
+        .filter(is_graphical_logind_session)
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(logind_session_rank);
+    candidates.pop()
+}
+
+fn parse_loginctl_session_ids(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn show_logind_session(id: String) -> Option<LogindSession> {
+    let output = std::process::Command::new("loginctl")
+        .args([
+            "show-session",
+            &id,
+            "-p",
+            "Id",
+            "-p",
+            "User",
+            "-p",
+            "Type",
+            "-p",
+            "Class",
+            "-p",
+            "State",
+            "-p",
+            "Active",
+            "-p",
+            "Remote",
+            "-p",
+            "Desktop",
+            "-p",
+            "Display",
+            "-p",
+            "Leader",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(parse_logind_session_properties(
+        &id,
+        &String::from_utf8_lossy(&output.stdout),
+    ))
+}
+
+fn parse_logind_session_properties(id: &str, output: &str) -> LogindSession {
+    let values = parse_key_value_lines(output);
+    LogindSession {
+        id: values
+            .get("Id")
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .unwrap_or_else(|| id.to_string()),
+        uid: values
+            .get("User")
+            .and_then(|value| value.parse::<u32>().ok()),
+        remote: values.get("Remote").is_some_and(|value| value == "yes"),
+        active: values.get("Active").is_some_and(|value| value == "yes"),
+        state: values
+            .get("State")
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        class: values
+            .get("Class")
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        session_type: values
+            .get("Type")
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        desktop: values
+            .get("Desktop")
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        display: values
+            .get("Display")
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        leader: values
+            .get("Leader")
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|leader| *leader > 1),
+    }
+}
+
+fn parse_key_value_lines(output: &str) -> HashMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let split = line.find('=')?;
+            let (key, value) = line.split_at(split);
+            if key.is_empty() || key.chars().any(char::is_whitespace) {
+                return None;
+            }
+            Some((key.to_string(), value[1..].to_string()))
+        })
+        .collect()
+}
+
+fn is_graphical_logind_session(session: &LogindSession) -> bool {
+    if session.remote || session.class.as_deref() == Some("manager") {
+        return false;
+    }
+    matches!(
+        session.session_type.as_deref(),
+        Some("wayland" | "x11" | "mir")
+    ) || session
+        .desktop
+        .as_ref()
+        .is_some_and(|value| !value.is_empty())
+        || session
+            .display
+            .as_ref()
+            .is_some_and(|value| !value.is_empty())
+}
+
+fn logind_session_rank(session: &LogindSession) -> (u8, u8, u8, u8, String) {
+    let active = u8::from(session.active);
+    let running = u8::from(matches!(
+        session.state.as_deref(),
+        Some("active" | "online")
+    ));
+    let typed = u8::from(matches!(
+        session.session_type.as_deref(),
+        Some("wayland" | "x11" | "mir")
+    ));
+    let has_desktop = u8::from(session.desktop.is_some());
+    (active, running, typed, has_desktop, session.id.clone())
+}
+
+fn read_process_environ(pid: u32) -> Option<HashMap<String, String>> {
+    let bytes = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    Some(parse_environ(&bytes))
+}
+
+fn parse_environ(bytes: &[u8]) -> HashMap<String, String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter_map(|entry| {
+            if entry.is_empty() {
+                return None;
+            }
+            let split = entry.iter().position(|byte| *byte == b'=')?;
+            let (key, value) = entry.split_at(split);
+            let key = std::str::from_utf8(key).ok()?.to_string();
+            let value = std::str::from_utf8(&value[1..]).ok()?.to_string();
+            Some((key, value))
+        })
+        .collect()
 }
 
 fn systemd_user_environment() -> Option<HashMap<String, String>> {
@@ -182,17 +520,7 @@ fn systemd_user_environment() -> Option<HashMap<String, String>> {
 }
 
 fn parse_systemd_user_environment(output: &str) -> HashMap<String, String> {
-    output
-        .lines()
-        .filter_map(|line| {
-            let split = line.find('=')?;
-            let (key, value) = line.split_at(split);
-            if key.is_empty() || key.chars().any(char::is_whitespace) {
-                return None;
-            }
-            Some((key.to_string(), value[1..].to_string()))
-        })
-        .collect()
+    parse_key_value_lines(output)
 }
 
 fn systemctl_path() -> &'static str {
@@ -251,21 +579,26 @@ fn current_uid() -> u32 {
 fn ensure_health_satisfies_desktop_env(
     response: &ServiceResponse,
     desktop_vars: &[(String, String)],
+    trust_client_graphical_env: bool,
 ) -> Result<()> {
     if !cfg!(target_os = "linux") {
         return Ok(());
     }
 
-    let mut required = GRAPHICAL_SESSION_ENV_KEYS
-        .iter()
-        .copied()
-        .filter_map(|key| {
-            std::env::var(key)
-                .ok()
-                .filter(|value| !value.is_empty())
-                .map(|value| (key, value))
-        })
-        .collect::<Vec<_>>();
+    let mut required = if trust_client_graphical_env {
+        GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .copied()
+            .filter_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .map(|value| (key, value))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     // Health equality is scoped to the graphical-session set. Repaired PATH
     // is launch-spawn material only (DESKTOP_LAUNCH_ENV_KEYS): every host has
     // a different PATH, so requiring the daemon's PATH to equal this client's
@@ -273,12 +606,8 @@ fn ensure_health_satisfies_desktop_env(
     // others.
     for (key, value) in desktop_vars {
         let key = key.as_str();
-        if GRAPHICAL_SESSION_ENV_KEYS.contains(&key)
-            && !value.is_empty()
-            && !required
-                .iter()
-                .any(|(required_key, _)| *required_key == key)
-        {
+        if GRAPHICAL_SESSION_ENV_KEYS.contains(&key) && !value.is_empty() {
+            required.retain(|(required_key, _)| *required_key != key);
             required.push((key, value.clone()));
         }
     }
@@ -390,7 +719,7 @@ mod tests {
             "/client/specific/path:/usr/bin".to_string(),
         )];
 
-        assert!(ensure_health_satisfies_desktop_env(&response, &desktop_vars).is_ok());
+        assert!(ensure_health_satisfies_desktop_env(&response, &desktop_vars, true).is_ok());
     }
 
     #[test]
@@ -406,10 +735,225 @@ mod tests {
             ("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string()),
         ];
 
-        let error = ensure_health_satisfies_desktop_env(&response, &desktop_vars)
+        let error = ensure_health_satisfies_desktop_env(&response, &desktop_vars, true)
             .expect_err("stale service env should be rejected");
 
         assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn startup_health_prefers_repaired_graphical_session_over_remote_display() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_values = GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        unsafe {
+            for key in GRAPHICAL_SESSION_ENV_KEYS {
+                std::env::remove_var(key);
+            }
+            std::env::set_var("DISPLAY", "localhost:10.0");
+        }
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::from([("DISPLAY".to_string(), ":0".to_string())]),
+            browser_env: BTreeMap::new(),
+        };
+        let desktop_vars = vec![("DISPLAY".to_string(), ":0".to_string())];
+
+        let result = ensure_health_satisfies_desktop_env(&response, &desktop_vars, false);
+
+        for (key, value) in old_values {
+            restore_env(key, value);
+        }
+        assert!(
+            result.is_ok(),
+            "selected graphical session should override the remote shell DISPLAY"
+        );
+    }
+
+    #[test]
+    fn detached_startup_health_does_not_require_unrepaired_inherited_display() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_values = GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        unsafe {
+            for key in GRAPHICAL_SESSION_ENV_KEYS {
+                std::env::remove_var(key);
+            }
+            std::env::set_var("DISPLAY", "localhost:10.0");
+        }
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::from([(
+                "XDG_RUNTIME_DIR".to_string(),
+                "/run/user/1000".to_string(),
+            )]),
+            browser_env: BTreeMap::new(),
+        };
+        let desktop_vars = vec![("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string())];
+
+        let result = ensure_health_satisfies_desktop_env(&response, &desktop_vars, false);
+
+        for (key, value) in old_values {
+            restore_env(key, value);
+        }
+        assert!(
+            result.is_ok(),
+            "detached health should ignore stale inherited display when it was not repaired"
+        );
+    }
+
+    #[test]
+    fn empty_graphical_env_values_are_treated_as_detached() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_values = GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        unsafe {
+            for key in GRAPHICAL_SESSION_ENV_KEYS {
+                std::env::set_var(key, "");
+            }
+        }
+
+        let detached = remote_or_detached_launch();
+
+        for (key, value) in old_values {
+            restore_env(key, value);
+        }
+        assert!(detached, "empty forwarded env vars should be repaired");
+    }
+
+    #[test]
+    fn missing_session_bus_alone_does_not_make_graphical_identity_untrusted() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_values = GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
+        let old_ssh_tty = std::env::var_os("SSH_TTY");
+        unsafe {
+            std::env::remove_var("SSH_CONNECTION");
+            std::env::remove_var("SSH_TTY");
+            std::env::remove_var("DBUS_SESSION_BUS_ADDRESS");
+            std::env::set_var("DISPLAY", ":55");
+            std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+            std::env::set_var("XDG_SESSION_TYPE", "x11");
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+
+        let detached = remote_or_detached_launch();
+
+        for (key, value) in old_values {
+            restore_env(key, value);
+        }
+        restore_env("SSH_CONNECTION", old_ssh_connection);
+        restore_env("SSH_TTY", old_ssh_tty);
+        assert!(
+            !detached,
+            "a missing session bus should repair only the bus, not override a valid display"
+        );
+    }
+
+    #[test]
+    fn forwarded_x11_display_is_treated_as_detached_without_ssh_hints() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_values = GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
+        let old_ssh_tty = std::env::var_os("SSH_TTY");
+        unsafe {
+            std::env::remove_var("SSH_CONNECTION");
+            std::env::remove_var("SSH_TTY");
+            std::env::set_var("DISPLAY", "localhost:10.0");
+            std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+            std::env::remove_var("XDG_SESSION_TYPE");
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+
+        let detached = remote_or_detached_launch();
+
+        for (key, value) in old_values {
+            restore_env(key, value);
+        }
+        restore_env("SSH_CONNECTION", old_ssh_connection);
+        restore_env("SSH_TTY", old_ssh_tty);
+        assert!(
+            detached,
+            "loopback X11 forwarding should be repaired even when SSH hints are stripped"
+        );
+    }
+
+    #[test]
+    fn tmux_launch_is_treated_as_detached_even_with_full_graphical_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_values = GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        let old_tmux = std::env::var_os("TMUX");
+        let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
+        let old_ssh_tty = std::env::var_os("SSH_TTY");
+        unsafe {
+            std::env::remove_var("SSH_CONNECTION");
+            std::env::remove_var("SSH_TTY");
+            std::env::set_var("TMUX", "/tmp/tmux-1000/default,123,0");
+            std::env::set_var("DISPLAY", ":55");
+            std::env::set_var("WAYLAND_DISPLAY", "wayland-55");
+            std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+            std::env::set_var("XDG_SESSION_TYPE", "wayland");
+        }
+
+        let detached = remote_or_detached_launch();
+
+        for (key, value) in old_values {
+            restore_env(key, value);
+        }
+        restore_env("TMUX", old_tmux);
+        restore_env("SSH_CONNECTION", old_ssh_connection);
+        restore_env("SSH_TTY", old_ssh_tty);
+        assert!(
+            detached,
+            "tmux panes can retain stale graphical identity from a previous desktop session"
+        );
+    }
+
+    #[test]
+    fn forwarded_x11_display_detector_keeps_local_unix_displays_trusted() {
+        assert!(forwarded_x11_display("localhost:10.0"));
+        assert!(forwarded_x11_display("127.0.0.1:10.0"));
+        assert!(forwarded_x11_display("[::1]:10.0"));
+        assert!(!forwarded_x11_display(":0"));
+        assert!(!forwarded_x11_display("unix/:0"));
+        assert!(!forwarded_x11_display("unix:0"));
+    }
+
+    #[test]
+    fn repaired_or_env_present_treats_empty_env_as_missing() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let old_display = std::env::var_os("DISPLAY");
+        unsafe {
+            std::env::set_var("DISPLAY", "");
+        }
+
+        let present_without_repair = repaired_or_env_present(&[], "DISPLAY");
+        let present_with_repair =
+            repaired_or_env_present(&[("DISPLAY".to_string(), ":0".to_string())], "DISPLAY");
+
+        restore_env("DISPLAY", old_display);
+        assert!(
+            !present_without_repair,
+            "empty display env should not infer a session type"
+        );
+        assert!(present_with_repair);
     }
 
     #[test]
@@ -450,7 +994,7 @@ mod tests {
             browser_env: BTreeMap::new(),
         };
 
-        let result = ensure_health_satisfies_desktop_env(&response, &[]);
+        let result = ensure_health_satisfies_desktop_env(&response, &[], true);
 
         restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
         let error = result.expect_err("stale service env should be rejected");
@@ -474,7 +1018,7 @@ mod tests {
             browser_env: BTreeMap::new(),
         };
 
-        let result = ensure_health_satisfies_desktop_env(&response, &[]);
+        let result = ensure_health_satisfies_desktop_env(&response, &[], true);
 
         restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
         let error = result.expect_err("stale service env value should be rejected");
@@ -574,6 +1118,182 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn parses_loginctl_session_ids_from_table_output() {
+        let ids = parse_loginctl_session_ids(
+            "1 1000 bex - 1254 manager - no -\n5 1000 bex seat0 26330 user tty3 no -\n",
+        );
+
+        assert_eq!(ids, vec!["1".to_string(), "5".to_string()]);
+    }
+
+    #[test]
+    fn graphical_logind_session_filter_rejects_remote_and_manager_sessions() {
+        let manager = parse_logind_session_properties(
+            "1",
+            "Id=1\nUser=1000\nRemote=no\nClass=manager\nType=unspecified\nActive=yes\nState=active\n",
+        );
+        let ssh = parse_logind_session_properties(
+            "7",
+            "Id=7\nUser=1000\nRemote=yes\nClass=user\nType=tty\nActive=yes\nState=active\n",
+        );
+        let graphical = parse_logind_session_properties(
+            "5",
+            "Id=5\nUser=1000\nRemote=no\nClass=user\nType=wayland\nDesktop=KDE\nLeader=26330\nActive=yes\nState=active\n",
+        );
+
+        assert!(!is_graphical_logind_session(&manager));
+        assert!(!is_graphical_logind_session(&ssh));
+        assert!(is_graphical_logind_session(&graphical));
+        assert_eq!(graphical.session_type.as_deref(), Some("wayland"));
+        assert_eq!(graphical.desktop.as_deref(), Some("KDE"));
+        assert_eq!(graphical.leader, Some(26330));
+    }
+
+    #[test]
+    fn graphical_logind_session_rank_prefers_active_typed_sessions() {
+        let stale = parse_logind_session_properties(
+            "4",
+            "Id=4\nUser=1000\nRemote=no\nClass=user\nType=x11\nDesktop=KDE\nActive=no\nState=closing\n",
+        );
+        let active = parse_logind_session_properties(
+            "5",
+            "Id=5\nUser=1000\nRemote=no\nClass=user\nType=wayland\nDesktop=KDE\nActive=yes\nState=active\n",
+        );
+
+        assert!(logind_session_rank(&active) > logind_session_rank(&stale));
+    }
+
+    #[test]
+    fn parses_nul_separated_process_environment() {
+        let environment = parse_environ(
+            b"DISPLAY=:0\0WAYLAND_DISPLAY=wayland-0\0EMPTY=\0NO_EQUALS\0XDG_SESSION_TYPE=wayland\0",
+        );
+
+        assert_eq!(environment.get("DISPLAY").map(String::as_str), Some(":0"));
+        assert_eq!(
+            environment.get("WAYLAND_DISPLAY").map(String::as_str),
+            Some("wayland-0")
+        );
+        assert_eq!(environment.get("EMPTY").map(String::as_str), Some(""));
+        assert!(!environment.contains_key("NO_EQUALS"));
+    }
+
+    #[test]
+    fn selected_session_systemd_environment_fills_only_support_keys() {
+        let mut environment = HashMap::from([
+            ("DISPLAY".to_string(), ":selected".to_string()),
+            ("XDG_SESSION_TYPE".to_string(), "wayland".to_string()),
+        ]);
+        let systemd_env = HashMap::from([
+            ("DISPLAY".to_string(), "localhost:10.0".to_string()),
+            (
+                "DBUS_SESSION_BUS_ADDRESS".to_string(),
+                "unix:path=/run/user/1000/bus".to_string(),
+            ),
+            ("WAYLAND_DISPLAY".to_string(), "wayland-stale".to_string()),
+        ]);
+
+        fill_missing_selected_session_systemd_environment(&mut environment, systemd_env);
+
+        assert_eq!(
+            environment.get("DISPLAY").map(String::as_str),
+            Some(":selected")
+        );
+        assert_eq!(environment.get("WAYLAND_DISPLAY"), None);
+        assert_eq!(
+            environment
+                .get("DBUS_SESSION_BUS_ADDRESS")
+                .map(String::as_str),
+            Some("unix:path=/run/user/1000/bus")
+        );
+    }
+
+    #[test]
+    fn selected_session_systemd_environment_does_not_supply_stale_display_identity() {
+        let mut environment = HashMap::new();
+        let systemd_env = HashMap::from([
+            ("DISPLAY".to_string(), "localhost:10.0".to_string()),
+            ("WAYLAND_DISPLAY".to_string(), "wayland-stale".to_string()),
+            ("XDG_CURRENT_DESKTOP".to_string(), "SSH".to_string()),
+            (
+                "DBUS_SESSION_BUS_ADDRESS".to_string(),
+                "unix:path=/run/user/1000/bus".to_string(),
+            ),
+        ]);
+
+        fill_missing_selected_session_systemd_environment(&mut environment, systemd_env);
+
+        assert!(!environment.contains_key("DISPLAY"));
+        assert!(!environment.contains_key("WAYLAND_DISPLAY"));
+        assert!(!environment.contains_key("XDG_CURRENT_DESKTOP"));
+        assert_eq!(
+            environment
+                .get("DBUS_SESSION_BUS_ADDRESS")
+                .map(String::as_str),
+            Some("unix:path=/run/user/1000/bus")
+        );
+    }
+
+    #[test]
+    fn selected_logind_metadata_replaces_empty_leader_values() {
+        let mut environment = HashMap::from([
+            ("XDG_CURRENT_DESKTOP".to_string(), String::new()),
+            ("DESKTOP_SESSION".to_string(), String::new()),
+            ("DISPLAY".to_string(), String::new()),
+            ("WAYLAND_DISPLAY".to_string(), "wayland-live".to_string()),
+        ]);
+
+        insert_if_missing_or_empty(&mut environment, "XDG_CURRENT_DESKTOP", "KDE".to_string());
+        insert_if_missing_or_empty(&mut environment, "DESKTOP_SESSION", "KDE".to_string());
+        insert_if_missing_or_empty(&mut environment, "DISPLAY", ":0".to_string());
+        insert_if_missing_or_empty(
+            &mut environment,
+            "WAYLAND_DISPLAY",
+            "wayland-logind".to_string(),
+        );
+
+        assert_eq!(
+            environment.get("XDG_CURRENT_DESKTOP").map(String::as_str),
+            Some("KDE")
+        );
+        assert_eq!(
+            environment.get("DESKTOP_SESSION").map(String::as_str),
+            Some("KDE")
+        );
+        assert_eq!(environment.get("DISPLAY").map(String::as_str), Some(":0"));
+        assert_eq!(
+            environment.get("WAYLAND_DISPLAY").map(String::as_str),
+            Some("wayland-live")
+        );
+    }
+
+    #[test]
+    fn logind_display_metadata_never_becomes_wayland_display() {
+        let mut environment =
+            HashMap::from([("XDG_SESSION_TYPE".to_string(), "wayland".to_string())]);
+
+        insert_if_missing_or_empty(&mut environment, "DISPLAY", ":0".to_string());
+
+        assert_eq!(environment.get("DISPLAY").map(String::as_str), Some(":0"));
+        assert_eq!(environment.get("WAYLAND_DISPLAY"), None);
+    }
+
+    #[test]
+    fn detached_systemd_fallback_rejects_display_identity_keys() {
+        assert!(!systemd_fallback_key_allowed("DISPLAY", true));
+        assert!(!systemd_fallback_key_allowed("WAYLAND_DISPLAY", true));
+        assert!(!systemd_fallback_key_allowed("XDG_SESSION_TYPE", true));
+        assert!(!systemd_fallback_key_allowed("XDG_CURRENT_DESKTOP", true));
+        assert!(!systemd_fallback_key_allowed("DESKTOP_SESSION", true));
+        assert!(systemd_fallback_key_allowed(
+            "DBUS_SESSION_BUS_ADDRESS",
+            true
+        ));
+        assert!(systemd_fallback_key_allowed("XDG_RUNTIME_DIR", true));
+        assert!(systemd_fallback_key_allowed("DISPLAY", false));
     }
 
     fn restore_env(key: &str, old_value: Option<std::ffi::OsString>) {

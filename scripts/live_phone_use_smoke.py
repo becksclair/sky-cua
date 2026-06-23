@@ -915,9 +915,10 @@ def _notification_observe_step(
 def overlay_step(smoke: PhoneSmoke, session_id: str, companion_caps: dict[str, Any]) -> StepResult:
     """Exercise the phone-native agent overlay over an established companion session.
 
-    The persistent "agent in control" edge glow is toggled on by the host when the
-    session establishes (``overlay_active(true)``) and off on disconnect; each
-    successful tap/swipe fires ``overlay_gesture`` inside the host's action path.
+    The "agent in control" edge glow is a host-owned active lease: connect lights
+    it, idle expiry or disconnect clears it, and later session-bound activity can
+    relight it. Each successful tap/swipe fires ``overlay_gesture`` inside the
+    host's action path.
     The smoke drives the MCP boundary, not the companion RPC directly, so it
     proves the overlay path through what the surface exposes: the companion must
     advertise ``native_overlay`` (the glow/cursor plane), a benign device-space tap
@@ -1010,9 +1011,9 @@ def profile_companion(smoke: PhoneSmoke, options: PhoneSmokeOptions) -> list[Ste
         )
     )
 
-    # Phone-native agent overlay: the session is already holding the "agent in
-    # control" glow (overlay_active(true) fired on connect); exercise the
-    # per-action overlay_gesture animations and assert the native overlay plane.
+    # Phone-native agent overlay: the active glow is a host-owned lease that may
+    # clear after idle, while each successful coordinate action still exercises
+    # the per-action overlay_gesture animations and native overlay plane.
     steps.append(
         _step_or_skip("phone_overlay", lambda: overlay_step(smoke, session_id, companion_caps))
     )

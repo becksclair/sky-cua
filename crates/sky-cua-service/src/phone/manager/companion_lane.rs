@@ -57,14 +57,63 @@ impl PhoneManager {
         let Some(entry) = self.sessions.get_mut(session_id) else {
             return;
         };
+        if entry.overlay_active == active {
+            return;
+        }
         let Some(runtime) = entry.companion.as_mut() else {
             return;
         };
-        if let Err(error) = runtime.client.overlay_active(active).await
-            && error.is_fallback()
-        {
-            entry.companion = None;
-            self.invalidate_companion(session_id);
+        match runtime.client.overlay_active(active).await {
+            Ok(_) => {
+                entry.overlay_active = active;
+            }
+            Err(error) if error.is_fallback() => {
+                entry.overlay_active = false;
+                entry.companion = None;
+                self.invalidate_companion(session_id);
+            }
+            Err(_) => {}
+        }
+    }
+
+    /// Clear the companion's persistent active overlay for sessions that have
+    /// seen no phone activity for the configured idle window. The session remains
+    /// valid; a later session-bound request relights the overlay.
+    pub(crate) async fn expire_idle_companion_overlays(&mut self, now_ms: u64) -> Vec<String> {
+        let expired = self
+            .sessions
+            .iter()
+            .filter_map(|(session_id, entry)| {
+                (entry.overlay_active
+                    && now_ms.saturating_sub(entry.last_overlay_activity_ms)
+                        >= super::COMPANION_OVERLAY_IDLE_TIMEOUT_MS)
+                    .then(|| session_id.clone())
+            })
+            .collect::<Vec<_>>();
+
+        for session_id in &expired {
+            self.set_companion_overlay_active(session_id, false).await;
+        }
+
+        expired
+    }
+
+    pub(super) async fn touch_companion_overlay_activity(
+        &mut self,
+        selector: &PhoneSessionSelector,
+        now_ms: u64,
+    ) {
+        let Some(session_id) = self.resolve_session_id(selector) else {
+            return;
+        };
+        let should_relight = if let Some(entry) = self.sessions.get_mut(&session_id) {
+            entry.last_overlay_activity_ms = now_ms;
+            entry.companion.is_some() && !entry.overlay_active
+        } else {
+            false
+        };
+        if should_relight {
+            self.set_companion_overlay_active(&session_id, true).await;
         }
     }
 

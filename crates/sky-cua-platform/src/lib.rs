@@ -38,6 +38,12 @@ pub const BROWSER_ENV_HEALTH_KEYS: &[&str] = &[
     "CODEX_BROWSER_USE_SOCKET_DIR",
     "SKY_CUA_BROWSER",
 ];
+/// JSON-encoded `DoctorSessionEnvRepair` records forwarded by the MCP client
+/// when it repairs a detached launch environment before spawning the daemon.
+pub const CLIENT_SESSION_ENV_REPAIRS_ENV: &str = "SKY_CUA_CLIENT_SESSION_ENV_REPAIRS";
+/// JSON-encoded graphical session keys intentionally removed by the MCP client
+/// before spawning the daemon from a detached or remote launch environment.
+pub const CLIENT_CLEARED_SESSION_ENV_KEYS_ENV: &str = "SKY_CUA_CLIENT_CLEARED_SESSION_ENV_KEYS";
 
 pub use app_instructions::{
     AppInstructionEntry, AppInstructionIndex, SetValueFallbackMode, SetValueRouting,

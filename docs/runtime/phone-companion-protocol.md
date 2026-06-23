@@ -336,7 +336,10 @@ are backed by the same single full-screen `TYPE_ACCESSIBILITY_OVERLAY` view.
 
 Toggle the persistent "agent in control" breathing screen-edge glow. The host
 calls this with `active: true` when a phone session establishes with a reachable
-companion, and `active: false` on disconnect/release.
+companion, `active: false` after 20 seconds without session-bound phone activity,
+`active: true` again when session-bound activity resumes, and `active: false` on
+disconnect/release. Idle expiry only clears the visual active indicator; it does
+not invalidate the host `session_id`.
 
 - Params: `{ "active": true }`
 - Result: `{ "active": true, "glow_supported": true }`

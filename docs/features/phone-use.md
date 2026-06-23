@@ -127,8 +127,8 @@ Three backends, deterministically routed from the cached profile:
 - Companion (preferred when enabled and healthy): native gesture dispatch,
   accessibility window tree, on-device screenshots, notification events and
   actions, and the phone-native agent overlay (animated cursor plus the
-  persistent "agent in control" edge glow), reached over a localhost-only RPC
-  through a host-managed ADB forward with an ephemeral session token.
+  leased "agent in control" edge glow), reached over a localhost-only RPC through
+  a host-managed ADB forward with an ephemeral session token.
 - scrcpy (optional acceleration): host-rendered mirror/control window with
   host-visible overlay support and codec-failure retry. When `[phone] max_size`
   is unset, the mirror is capped to a phone-scale size derived from the host
@@ -168,15 +168,18 @@ that one view:
 - A pronounced pink screen-edge glow signals that the agent is in control while a
   phone session is held: a gently breathing border with a bright wave of light
   travelling around the perimeter (a rotating sweep gradient). The host turns it
-  on when a session establishes with a reachable companion and off on
-  disconnect/release. All geometry is sized in dp from the display density so the
-  glow reads at a consistent physical size rather than vanishing on a high-DPI
-  panel.
+  on when a session establishes with a reachable companion, clears it after 20
+  seconds without session-bound phone activity, turns it back on when activity
+  resumes, and turns it off immediately on disconnect/release. This is an overlay
+  lease, not session lifetime: an idle-cleared session keeps the same
+  `session_id` and cached state. All geometry is sized in dp from the display
+  density so the glow reads at a consistent physical size rather than vanishing
+  on a high-DPI panel.
 - The cursor is the same `cursor-chat` pointer the desktop agent uses, scaled up
   and seated in a soft pink halo. It is parked at screen centre the moment the
-  session connects so the pointer is visible immediately, and it — like the glow
-  — persists for the whole connected session and never auto-hides; only
-  disconnect removes the overlay.
+  session connects so the pointer is visible immediately. The phone-native
+  active overlay auto-hides with the 20-second idle lease above; disconnect also
+  removes it.
 - The cursor animates per action: a tap shows an expanding, fading ripple; a
   swipe or drag moves the cursor along the path with a fading trail. The edge
   glow pulses brighter for the action's duration, then returns to the breathing
@@ -258,10 +261,10 @@ behavior is unchanged.
 - `visible_overlay` (default `true`; env `SKY_CUA_PHONE_VISIBLE_OVERLAY`):
   whether the on-phone agent overlay (edge glow, cursor, per-action gesture
   animation) is shown. When `false`, the host suppresses every companion
-  visible-overlay call — `overlay_active` on connect/disconnect/refresh and
-  `overlay_gesture` after an action — so the device draws no agent overlay, while
-  the real input still dispatches. The session's reported cursor capabilities and
-  backend capabilities then carry `host_visible_overlay=false` and
+  visible-overlay call — `overlay_active` on connect/disconnect/refresh, idle
+  expiry/relight, and `overlay_gesture` after an action — so the device draws no
+  agent overlay, while the real input still dispatches. The session's reported
+  cursor capabilities and backend capabilities then carry `host_visible_overlay=false` and
   `phone_native_overlay=false` with a config-grounded `visible_overlay_reason`.
   The screenshot-synthetic cursor is a separate plane driven by
   `screenshot_cursor` and is unaffected. ADB-only sessions continue to report
