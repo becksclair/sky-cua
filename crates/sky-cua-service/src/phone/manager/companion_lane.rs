@@ -19,7 +19,7 @@ use super::{CompanionRuntime, PhoneManager, no_session_diagnostic, selector_ids}
 use crate::phone::adb::{
     ACCESSIBILITY_SERVICE_CLASS_SUFFIX, InstallOutcome, NOTIFICATION_LISTENER_CLASS_SUFFIX,
     SecureServiceOutcome, SecureServiceState, ensure_notification_listener,
-    ensure_secure_list_service, forward_tcp, install_replace,
+    ensure_secure_list_service, forward_tcp, install_replace, uninstall_package,
 };
 use crate::phone::companion;
 use crate::phone::companion::client::CompanionClient;
@@ -39,11 +39,12 @@ impl PhoneManager {
     /// The glow is drawn on the device by the companion's accessibility-service
     /// overlay; it is a purely visual signal that a phone session is held, so a
     /// failure must never abort the connect/disconnect that triggered it. A
-    /// transport failure drops the companion runtime and marks the profile so
-    /// later routing falls back to ADB, mirroring `companion_gesture`. A
-    /// per-method error (e.g. the accessibility service unavailable, reported via
-    /// `glow_supported=false`) is swallowed: the session is still usable without
-    /// the glow. A session with no reachable companion is a no-op.
+    /// transport failure drops the companion runtime and marks the profile stale,
+    /// mirroring `companion_gesture`: companion-only actions fail closed while
+    /// fallback-capable families may degrade. A per-method error (e.g. the
+    /// accessibility service unavailable, reported via `glow_supported=false`) is
+    /// swallowed: the session is still usable without the glow. A session with no
+    /// reachable companion is a no-op.
     pub(super) async fn set_companion_overlay_active(&mut self, session_id: &str, active: bool) {
         // When the on-device visible overlay is disabled in config, the host never
         // issues the companion's visible-overlay calls, so the edge glow stays off.
@@ -139,20 +140,68 @@ impl PhoneManager {
             };
         }
 
+        let install_allowed = options.allow_install;
         let mut auto_install_attempted = false;
-        if decision.requires_install() && options.allow_install {
+        if decision.requires_install() && install_allowed {
             auto_install_attempted = true;
             // Reuse the shared ADB-lane install primitive and CAPTURE the outcome.
             let adb_path = self.configured_adb_path();
-            match install_replace(
+            let install_outcome = install_replace(
                 self.runner.as_ref(),
                 adb_path,
                 serial,
                 &expected.apk_path,
                 expected.allow_downgrade,
             )
-            .await
-            {
+            .await;
+            match install_outcome {
+                Ok(outcome)
+                    if options.force_reinstall
+                        && outcome.failure_class.as_deref()
+                            == Some("INSTALL_FAILED_UPDATE_INCOMPATIBLE") =>
+                {
+                    diagnostics.push(install_outcome_diagnostic(&decision, &outcome));
+                    match uninstall_package(self.runner.as_ref(), adb_path, serial, &package).await
+                    {
+                        Ok(uninstall) if uninstall.success => {
+                            diagnostics.push(DiagnosticEntry {
+                                code: "PhoneCompanionReplacedIncompatiblePackage".to_string(),
+                                message: "removed existing companion package after Android \
+                                          rejected an update with incompatible signatures"
+                                    .to_string(),
+                                details: None,
+                            });
+                            match install_replace(
+                                self.runner.as_ref(),
+                                adb_path,
+                                serial,
+                                &expected.apk_path,
+                                expected.allow_downgrade,
+                            )
+                            .await
+                            {
+                                Ok(retry) => {
+                                    diagnostics.push(install_outcome_diagnostic(&decision, &retry));
+                                }
+                                Err(error) => {
+                                    diagnostics.push(crate::phone::adb::command_error_diagnostic(
+                                        "adb install -r",
+                                        &error,
+                                    ));
+                                }
+                            }
+                        }
+                        Ok(uninstall) => diagnostics.push(DiagnosticEntry {
+                            code: "PhoneCompanionUninstallFailed".to_string(),
+                            message: "could not remove incompatible existing companion package"
+                                .to_string(),
+                            details: (!uninstall.message.is_empty()).then_some(uninstall.message),
+                        }),
+                        Err(error) => diagnostics.push(
+                            crate::phone::adb::command_error_diagnostic("adb uninstall", &error),
+                        ),
+                    }
+                }
                 Ok(outcome) => diagnostics.push(install_outcome_diagnostic(&decision, &outcome)),
                 Err(error) => diagnostics.push(crate::phone::adb::command_error_diagnostic(
                     "adb install -r",
@@ -189,12 +238,12 @@ impl PhoneManager {
         // Enable the companion's required secure-settings services (accessibility
         // + notification listener) as part of an install-bearing bootstrap, so a
         // freshly deployed companion is immediately usable instead of requiring a
-        // manual trip through Android settings. Gated on `allow_install` — the
-        // same operator/explicit signal that authorizes the APK install — and run
-        // only after the signature gate above, never for an untrusted package. The
-        // grant is verified against the companion's health probe below; a
-        // read-merge-write never clobbers the user's existing services.
-        if options.allow_install {
+        // manual trip through Android settings. Gated on the same decision that
+        // authorized the APK install/update, and run only after the signature gate
+        // above, never for an untrusted package. The grant is verified against the
+        // companion's health probe below; a read-merge-write never clobbers the
+        // user's existing services.
+        if install_allowed {
             self.ensure_companion_permissions(serial, &package, &mut diagnostics)
                 .await;
         }
@@ -374,7 +423,7 @@ impl PhoneManager {
         // a manual confirmation the adb write cannot satisfy; a still-disabled
         // service yields an actionable diagnostic and (for accessibility) opens
         // the on-device settings screen so setup can be finished by hand.
-        if runtime.is_some() && options.allow_install {
+        if runtime.is_some() && install_allowed {
             self.flag_companion_permission_gaps(serial, &profile.companion, &mut diagnostics)
                 .await;
         }

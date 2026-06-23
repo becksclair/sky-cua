@@ -37,7 +37,7 @@ impl PhoneManager {
     /// snapshot, composite the synthetic cursor when a fresh cursor exists, and
     /// return device size + coordinate mapping + cursor capabilities.
     pub(super) async fn screenshot(&mut self, request: PhoneScreenshotRequest) -> PhoneResponse {
-        let Some(ctx) = self.action_context(&request.session) else {
+        let Some(ctx) = self.fresh_action_context(&request.session).await else {
             return PhoneResponse::Status(self.status(false).await);
         };
         match self
@@ -319,7 +319,7 @@ impl PhoneManager {
         self.invalidate_on_observe_triggers(&probe.session_id, &probe.serial)
             .await;
 
-        let Some(ctx) = self.action_context(&request.session) else {
+        let Some(ctx) = self.fresh_action_context(&request.session).await else {
             return observe_no_session(&request.session);
         };
         let session = self

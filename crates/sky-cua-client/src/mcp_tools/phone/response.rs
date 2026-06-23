@@ -108,14 +108,11 @@ fn phone_diagnostic_is_error_code(code: &str) -> bool {
             | "version_mismatch"
             | "secure_window"
             | "unsupported_api"
-            // NOTE: `disabled_service` is intentionally NOT listed. The service
-            // reuses that companion-domain code for its local "no reachable
-            // companion; routed to ADB" marker, which rides along on a
-            // *successful* ADB-fallback screenshot/observe. The genuine
-            // companion-domain `disabled_service` failures (accessibility/
-            // notifications, which have no ADB fallback) already flip `isError`
-            // via the `backend == None` rule above, so adding the literal here
-            // would only mislabel successful ADB fallbacks as errors.
+            // NOTE: `disabled_service` is intentionally NOT listed. It can ride
+            // along on a successful ADB-fallback screenshot/observe after a
+            // companion screenshot attempt fails. Companion-only failures already
+            // flip `isError` through `backend == None`, so adding the literal here
+            // would mislabel successful perception fallback as an error.
             | "oem_policy"
             | "throttled"
             | "transient"

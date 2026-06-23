@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 from collections.abc import Sequence
@@ -15,6 +16,7 @@ from _plugin_bundle import remove_path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_ROOT = REPO_ROOT / "dist" / "plugin" / "sky-cua" / "skills"
 DEFAULT_DEST_ROOT = Path.home() / ".openclaw" / "workspace" / "skills"
+DEFAULT_AGENTS_DEST_ROOT = Path.home() / ".agents" / "skills"
 SKILL_NAMES = SKY_CUA_SKILLS
 STAGE_DIR_NAME = ".sky-cua-openclaw-skills-stage"
 COMMITTED_MARKER_NAME = "COMMITTED"
@@ -115,9 +117,48 @@ def sync_openclaw_workspace_skills(
         remove_path(stage_root)
 
 
+def _replace_symlink(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
+    backup_path = destination.with_name(f".{destination.name}.backup-{os.getpid()}")
+    remove_path(temp_path)
+    remove_path(backup_path)
+    try:
+        temp_path.symlink_to(source, target_is_directory=True)
+        if destination.exists() or destination.is_symlink():
+            os.replace(destination, backup_path)
+            try:
+                os.replace(temp_path, destination)
+            except OSError:
+                os.replace(backup_path, destination)
+                raise
+            remove_path(backup_path)
+        else:
+            os.replace(temp_path, destination)
+    finally:
+        remove_path(temp_path)
+        remove_path(backup_path)
+
+
+def sync_agents_skill_symlinks(
+    source_root: Path = REPO_ROOT / "skills",
+    dest_root: Path = DEFAULT_AGENTS_DEST_ROOT,
+    skill_names: Sequence[str] = SKILL_NAMES,
+) -> None:
+    """Link sky-cua-owned skills into the global agents skill root."""
+    source_root = source_root.resolve()
+    dest_root = dest_root.expanduser()
+    _validate_source_skills(source_root, skill_names)
+    for skill_name in skill_names:
+        _replace_symlink(source_root / skill_name, dest_root / skill_name)
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sync bundled sky-cua browser/computer-use skills into OpenClaw workspace."
+        description=(
+            "Sync bundled sky-cua skills into OpenClaw and link repo skills into "
+            "the global agents skill root."
+        )
     )
     parser.add_argument(
         "--source-root",
@@ -131,6 +172,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=DEFAULT_DEST_ROOT,
         help="OpenClaw workspace skills root. Defaults to ~/.openclaw/workspace/skills.",
     )
+    parser.add_argument(
+        "--agents-dest-root",
+        type=Path,
+        default=DEFAULT_AGENTS_DEST_ROOT,
+        help="Global agents skills root. Defaults to ~/.agents/skills.",
+    )
+    parser.add_argument(
+        "--skip-agents",
+        action="store_true",
+        help="Do not update ~/.agents/skills symlinks.",
+    )
     return parser.parse_args(argv)
 
 
@@ -139,6 +191,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     sync_openclaw_workspace_skills(args.source_root, args.dest_root)
     for skill_name in SKILL_NAMES:
         print(f"Synced {skill_name} to {args.dest_root.expanduser() / skill_name}")
+    if not args.skip_agents:
+        sync_agents_skill_symlinks(dest_root=args.agents_dest_root)
+        for skill_name in SKILL_NAMES:
+            print(f"Linked {skill_name} to {args.agents_dest_root.expanduser() / skill_name}")
     return 0
 
 

@@ -416,6 +416,7 @@ pub(in crate::phone) fn parse_package_list(stdout: &str) -> Vec<String> {
 /// marker is present.
 pub(in crate::phone) fn parse_install_failure(output: &str) -> Option<String> {
     for token in output.split(|c: char| c.is_whitespace() || c == '[' || c == ']') {
+        let token = token.trim_end_matches(|c: char| c.is_ascii_punctuation() && c != '_');
         if token.starts_with("INSTALL_FAILED_") || token.starts_with("INSTALL_PARSE_FAILED_") {
             return Some(token.to_string());
         }

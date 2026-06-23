@@ -176,6 +176,20 @@ pub(in crate::phone) async fn install_replace(
     .await
 }
 
+/// Remove one package before an explicit reinstall recovery. Used only after
+/// Android refuses `install -r` with an incompatible existing signature.
+pub(in crate::phone) async fn uninstall_package(
+    runner: &dyn CommandRunner,
+    configured_adb_path: Option<&str>,
+    serial: &str,
+    package: &str,
+) -> Result<InputOutcome, CommandError> {
+    let adb = resolve_adb_path(configured_adb_path);
+    let argv = serial_args(serial, &["uninstall", package]);
+    let output = runner.run(&adb, &argv).await?;
+    Ok(input_outcome(&adb, &argv, &output))
+}
+
 /// Host-managed `adb -s S forward tcp:<host_port> tcp:<device_port>` used to
 /// reach the companion RPC endpoint.
 pub(in crate::phone) async fn forward_tcp(

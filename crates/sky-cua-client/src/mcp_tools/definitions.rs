@@ -77,11 +77,198 @@ impl McpToolRegistry {
         if schema_accepts(schema, arguments) {
             Ok(())
         } else {
-            Err(format!(
-                "arguments do not match the advertised input schema for {name}"
-            ))
+            Err(schema_rejection_message(name, arguments))
         }
     }
+}
+
+fn schema_rejection_message(name: &str, arguments: &Value) -> String {
+    let mut message = format!("arguments do not match the advertised input schema for {name}");
+    if let Some(hint) = schema_rejection_hint(name, arguments) {
+        message.push_str(". Hint: ");
+        message.push_str(hint);
+    }
+    message
+}
+
+fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> {
+    match name {
+        "status" => Some(
+            "`status` expects top-level `component` set to `browser`, `phone`, \
+             `phone_companion`, or `session_presence`; only phone status accepts \
+             `refresh_devices`, and phone_companion status may include `session_id`.",
+        ),
+        "list_resources" => Some(
+            "`list_resources` expects a valid top-level `surface`/`resource` pair. \
+             Phone `apps` and `current_app` require top-level `session_id`; browser \
+             `tabs` may use `url_contains`/`title_contains`; desktop resources do \
+             not accept phone or browser fields.",
+        ),
+        "observe" => Some(
+            "`observe` expects one surface branch: desktop uses desktop observation \
+             fields, browser requires top-level `tab_id`, and phone requires \
+             top-level `session_id`; do not mix fields from another surface.",
+        ),
+        "capture_screen" => Some(
+            "`capture_screen` is only for browser or phone. Browser capture requires \
+             top-level `surface=\"browser\"` and `tab_id`; phone capture requires \
+             `surface=\"phone\"` and `session_id`. Use `capture_desktop` for \
+             desktop screenshots.",
+        ),
+        "phone_pointer" if phone_snapshot_id_contains_embedded_fields(arguments) => Some(
+            "`phone_snapshot_id` must be only the opaque snapshot id string; put \
+             `operation`, `session_id`, coordinates, and `use_device_coordinates` as \
+             separate top-level JSON keys.",
+        ),
+        "phone_pointer" => Some(
+            "`phone_pointer` expects one flat JSON object. For tap, provide top-level \
+             `operation`, `session_id`, `x`, `y`, and either `phone_snapshot_id` or \
+             `use_device_coordinates=true`.",
+        ),
+        "browser_scroll" => Some(
+            "`browser_scroll` expects top-level `tab_id` plus non-zero `delta_x` or \
+             `delta_y`; omit both `x` and `y` for viewport scroll, or provide both \
+             as top-level numbers for targeted scroll.",
+        ),
+        "browser_input" => Some(
+            "`browser_input` expects one flat JSON object with top-level `operation` \
+             and `tab_id`; click uses top-level `x`/`y`, while type_text uses \
+             top-level `text`.",
+        ),
+        "browser_open" => Some(
+            "`browser_open` creates a new claimed tab. Omit `url` or use a top-level \
+             HTTP(S) URL or `about:blank`; it returns the `tab_id` for later calls.",
+        ),
+        "browser_navigate" => Some(
+            "`browser_navigate` expects top-level `tab_id` plus `url`; URL must be \
+             HTTP(S) or exactly `about:blank`.",
+        ),
+        "browser_claim_tab" | "browser_move_mouse" | "browser_eval" => Some(
+            "Browser tools expect top-level `tab_id` from `browser_open` or \
+             `list_resources(surface=\"browser\", resource=\"tabs\")` after claiming \
+             an existing tab.",
+        ),
+        "capture_desktop" => Some(
+            "`capture_desktop` expects one flat JSON object. Choose exactly one \
+             capture source: no selector for primary display, one window selector, \
+             one display selector, or `capture_all_displays=true`; do not mix them.",
+        ),
+        "activate_window" => Some(
+            "`activate_window` expects one top-level window selector such as \
+             `window_id`, `pid`, `app_id`, `wm_class`, `title`, or a terminal \
+             selector from `list_resources(surface=\"desktop\", resource=\"windows\")`.",
+        ),
+        "desktop_pointer" if desktop_snapshot_id_contains_embedded_fields(arguments) => Some(
+            "`snapshot_id` must be only the opaque desktop snapshot id string; put \
+             `operation`, coordinates, `element_index`, `name`, or `text` as \
+             separate top-level JSON keys.",
+        ),
+        "desktop_pointer" => Some(
+            "`desktop_pointer` expects one flat JSON object. For click, provide \
+             top-level `operation` plus either `x`/`y`, or `snapshot_id` with \
+             `element_index`, `name`, or `text`; drag uses top-level \
+             `x`/`y`/`to_x`/`to_y` or `from_x`/`from_y`/`to_x`/`to_y`.",
+        ),
+        "desktop_scroll" => Some(
+            "`desktop_scroll` expects top-level `direction` plus a snapshot-resolved \
+             target: `snapshot_id` with `element_index`, `name`, or `text`; it does \
+             not accept freeform x/y coordinates.",
+        ),
+        "desktop_keyboard" => Some(
+            "`desktop_keyboard` expects top-level `operation`; `type_text` uses \
+             top-level `text`, while `press_key` uses top-level `key`.",
+        ),
+        "desktop_semantic" | "desktop_toggle" | "desktop_set_value" => Some(
+            "Desktop semantic tools expect one flat JSON object with a top-level \
+             target: either `element_identifier`, or `snapshot_id` with \
+             `element_index`, `name`, or `text`.",
+        ),
+        "desktop_action" => Some(
+            "`desktop_action` expects top-level `operation` plus a semantic target. \
+             `perform_action` also needs top-level `action_name` or `action_index`.",
+        ),
+        "setup_desktop" => Some(
+            "`setup_desktop` expects top-level `operation` set to `accessibility` or \
+             `window_targeting`.",
+        ),
+        "session_presence" => Some(
+            "`session_presence` expects top-level `operation` set to `hold`, \
+             `unlock`, or `release`; hold/unlock accept inhibitor booleans, and \
+             release accepts `relock`.",
+        ),
+        "phone_connection" => Some(
+            "`phone_connection` expects top-level `operation`. `connect` may use \
+             top-level `serial`, `backend`, `install_companion`, and `start_scrcpy`; \
+             `disconnect`/`refresh` require top-level `session_id` and do not accept \
+             connect-only fields.",
+        ),
+        "phone_setup" => Some(
+            "`phone_setup` expects top-level `operation` and `session_id`. \
+             `install_companion` accepts install flags; `open_settings` requires \
+             top-level `screen`, and `screen=\"app_details\"` also needs \
+             `package_name`.",
+        ),
+        "phone_accessibility_tree" | "phone_notifications" | "phone_app_force_stop" => Some(
+            "This phone tool requires top-level `session_id` from \
+             `phone_connection(operation=\"connect\")`; app force-stop also requires \
+             top-level `package_name`.",
+        ),
+        "phone_keyboard" => Some(
+            "`phone_keyboard` expects top-level `operation` and `session_id`; \
+             `type_text` uses top-level `text`, while `press_key` uses top-level \
+             `key`.",
+        ),
+        "phone_notification_action" => Some(
+            "`phone_notification_action` expects top-level `operation`, `session_id`, \
+             and `event_id`; only `operation=\"action\"` also accepts top-level \
+             `action_id` from the same fresh notification event.",
+        ),
+        "phone_notification_reply" => Some(
+            "`phone_notification_reply` expects top-level `session_id`, `event_id`, \
+             inline-reply `action_id`, and non-empty `text` from the same fresh \
+             notification event.",
+        ),
+        "phone_app_action" => Some(
+            "`phone_app_action` expects top-level `operation` and `session_id`; \
+             `launch` requires `package_name`, while `open_intent` requires \
+             `intent_uri` and may include `package_name`.",
+        ),
+        "phone_app_install" => Some(
+            "`phone_app_install` expects top-level `session_id` and non-empty \
+             `apk_paths` array of host paths; there is no `apk_path` singular field.",
+        ),
+        "phone_pair_wireless" => Some(
+            "`phone_pair_wireless` expects top-level `host_port` and one-time \
+             `pairing_code` from Android Wireless debugging.",
+        ),
+        _ => None,
+    }
+}
+
+fn phone_snapshot_id_contains_embedded_fields(arguments: &Value) -> bool {
+    let Some(snapshot_id) = arguments.get("phone_snapshot_id").and_then(Value::as_str) else {
+        return false;
+    };
+    string_contains_embedded_argument_fields(snapshot_id)
+}
+
+fn desktop_snapshot_id_contains_embedded_fields(arguments: &Value) -> bool {
+    let Some(snapshot_id) = arguments.get("snapshot_id").and_then(Value::as_str) else {
+        return false;
+    };
+    string_contains_embedded_argument_fields(snapshot_id)
+}
+
+fn string_contains_embedded_argument_fields(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    value.contains('\n')
+        || lower.contains("\"operation\"")
+        || lower.contains("\"x\"")
+        || lower.contains("\"y\"")
+        || lower.contains("\"element_index\"")
+        || lower.contains("\"name\"")
+        || lower.contains("\"text\"")
+        || lower.contains("\"use_device_coordinates\"")
 }
 
 pub(crate) fn mcp_process_config_from_env() -> McpProcessConfig {
@@ -560,7 +747,59 @@ fn grouped_tool_with_constraints(
         .unwrap_or_else(|| panic!("tool constraints must be object: {constraints:?}"));
     input_schema.extend(constraints.clone());
     normalize_root_composition_schema(input_schema);
+    normalize_required_property_schemas(input_schema);
     tool
+}
+
+fn normalize_required_property_schemas(input_schema: &mut serde_json::Map<String, Value>) {
+    let mut normalized = Value::Object(input_schema.clone());
+    normalize_required_property_schemas_in_value(&mut normalized);
+    *input_schema = normalized
+        .as_object()
+        .expect("normalized input schema must remain an object")
+        .clone();
+}
+
+fn normalize_required_property_schemas_in_value(schema: &mut Value) {
+    match schema {
+        Value::Object(object) => {
+            let missing_required = object
+                .get("required")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .filter(|field| {
+                    !object
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .is_some_and(|properties| properties.contains_key(*field))
+                })
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+
+            if !missing_required.is_empty() {
+                let properties = object
+                    .entry("properties".to_string())
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .expect("schema properties must be an object");
+                for field in missing_required {
+                    properties.entry(field).or_insert_with(|| json!({}));
+                }
+            }
+
+            for value in object.values_mut() {
+                normalize_required_property_schemas_in_value(value);
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                normalize_required_property_schemas_in_value(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn normalize_root_composition_schema(input_schema: &mut serde_json::Map<String, Value>) {
@@ -641,49 +880,56 @@ fn exact_branch_constraints(
     branches: &[(&str, &[&str], &[&str])],
 ) -> Value {
     json!({
-        "allOf": branches
+        "allOf": [exact_branch_one_of(
+            properties,
+            &branches
+                .iter()
+                .map(|(value, required, allowed)| {
+                    (vec![(discriminator, *value)], *required, *allowed, None)
+                })
+                .collect::<Vec<_>>(),
+        )]
+    })
+}
+
+fn exact_branch_one_of(
+    properties: &Value,
+    branches: &[(Vec<(&str, &str)>, &[&str], &[&str], Option<Value>)],
+) -> Value {
+    json!({
+        "oneOf": branches
             .iter()
-            .map(|(value, required, allowed)| {
-                exact_branch_condition(properties, &[(discriminator, *value)], required, allowed)
+            .map(|(discriminators, required, allowed, extra)| {
+                let mut schema = exact_branch_schema(properties, discriminators, required, allowed);
+                if let Some(extra) = extra {
+                    merge_schema_constraints(&mut schema, extra);
+                }
+                schema
             })
             .collect::<Vec<_>>()
     })
 }
 
-fn exact_branch_condition(
+fn exact_branch_schema_with_constraints(
     properties: &Value,
     discriminators: &[(&str, &str)],
     required: &[&str],
     allowed: &[&str],
+    extra_constraints: Value,
 ) -> Value {
-    let mut if_properties = Map::new();
-    for (name, value) in discriminators {
-        if_properties.insert((*name).to_string(), json!({"const": value}));
-    }
-    json!({
-        "if": {
-            "properties": if_properties,
-            "required": discriminators.iter().map(|(name, _)| *name).collect::<Vec<_>>()
-        },
-        "then": exact_branch_schema(properties, discriminators, required, allowed)
-    })
+    let mut schema = exact_branch_schema(properties, discriminators, required, allowed);
+    merge_schema_constraints(&mut schema, &extra_constraints);
+    schema
 }
 
-fn exact_branch_condition_with_then(
-    properties: &Value,
-    discriminators: &[(&str, &str)],
-    required: &[&str],
-    allowed: &[&str],
-    extra_then: Value,
-) -> Value {
-    let mut condition = exact_branch_condition(properties, discriminators, required, allowed);
-    if let Some(then) = condition.get_mut("then").and_then(Value::as_object_mut) {
-        let extra = extra_then
-            .as_object()
-            .unwrap_or_else(|| panic!("extra then constraints must be object: {extra_then:?}"));
-        then.extend(extra.clone());
-    }
-    condition
+fn merge_schema_constraints(schema: &mut Value, extra_constraints: &Value) {
+    let schema = schema
+        .as_object_mut()
+        .expect("branch schema constraints target must be object");
+    let extra = extra_constraints.as_object().unwrap_or_else(|| {
+        panic!("extra branch constraints must be object: {extra_constraints:?}")
+    });
+    schema.extend(extra.clone());
 }
 
 fn exact_branch_schema(
@@ -899,12 +1145,13 @@ fn desktop_pointer_properties() -> Value {
 
 fn desktop_selector_constraint() -> Value {
     json!({
-        "anyOf": [
-            snapshot_selector_constraint(&["element_index"]),
-            {"required": ["element_identifier"]},
-            snapshot_selector_constraint(&["name"]),
-            snapshot_selector_constraint(&["text"])
-        ]
+        "anyOf": desktop_selector_alternatives()
+    })
+}
+
+fn desktop_one_selector_constraint() -> Value {
+    json!({
+        "oneOf": desktop_selector_alternatives()
     })
 }
 
@@ -929,6 +1176,15 @@ fn desktop_point_or_selector_constraint() -> Value {
     })
 }
 
+fn desktop_selector_alternatives() -> Vec<Value> {
+    vec![
+        snapshot_selector_constraint(&["element_index"]),
+        json!({"required": ["element_identifier"]}),
+        snapshot_selector_constraint(&["name"]),
+        snapshot_selector_constraint(&["text"]),
+    ]
+}
+
 fn snapshot_selector_constraint(fields: &[&str]) -> Value {
     let mut required = vec!["snapshot_id"];
     required.extend_from_slice(fields);
@@ -946,54 +1202,55 @@ fn snapshot_selector_constraint(fields: &[&str]) -> Value {
 
 fn desktop_pointer_constraints() -> Value {
     let properties = desktop_pointer_properties();
+    let branches = vec![
+        exact_branch_schema_with_constraints(
+            &properties,
+            &[("operation", "click")],
+            &[],
+            &desktop_pointer_click_allowed_fields(),
+            desktop_point_or_selector_constraint(),
+        ),
+        exact_branch_schema_with_constraints(
+            &properties,
+            &[("operation", "secondary_click")],
+            &[],
+            &desktop_pointer_click_allowed_fields(),
+            desktop_point_or_selector_constraint(),
+        ),
+        exact_branch_schema_with_constraints(
+            &properties,
+            &[("operation", "drag")],
+            &[],
+            &desktop_pointer_drag_allowed_fields(),
+            json!({
+                "anyOf": [
+                    {"required": ["from_x", "from_y", "to_x", "to_y"]},
+                    {"required": ["x", "y", "to_x", "to_y"]},
+                    snapshot_selector_constraint(&["element_index", "to_element_index"]),
+                    {
+                        "allOf": [
+                            snapshot_selector_constraint(&["element_index"]),
+                            {"required": ["to_x", "to_y"]}
+                        ]
+                    },
+                    {
+                        "allOf": [
+                            snapshot_selector_constraint(&["to_element_index"]),
+                            {"required": ["from_x", "from_y"]}
+                        ]
+                    },
+                    {
+                        "allOf": [
+                            snapshot_selector_constraint(&["to_element_index"]),
+                            {"required": ["x", "y"]}
+                        ]
+                    }
+                ]
+            }),
+        ),
+    ];
     json!({
-        "allOf": [
-            exact_branch_condition_with_then(
-                &properties,
-                &[("operation", "click")],
-                &[],
-                &desktop_pointer_click_allowed_fields(),
-                desktop_point_or_selector_constraint(),
-            ),
-            exact_branch_condition_with_then(
-                &properties,
-                &[("operation", "secondary_click")],
-                &[],
-                &desktop_pointer_click_allowed_fields(),
-                desktop_point_or_selector_constraint(),
-            ),
-            exact_branch_condition_with_then(
-                &properties,
-                &[("operation", "drag")],
-                &[],
-                &desktop_pointer_drag_allowed_fields(),
-                json!({
-                    "anyOf": [
-                        {"required": ["from_x", "from_y", "to_x", "to_y"]},
-                        {"required": ["x", "y", "to_x", "to_y"]},
-                        snapshot_selector_constraint(&["element_index", "to_element_index"]),
-                        {
-                            "allOf": [
-                                snapshot_selector_constraint(&["element_index"]),
-                                {"required": ["to_x", "to_y"]}
-                            ]
-                        },
-                        {
-                            "allOf": [
-                                snapshot_selector_constraint(&["to_element_index"]),
-                                {"required": ["from_x", "from_y"]}
-                            ]
-                        },
-                        {
-                            "allOf": [
-                                snapshot_selector_constraint(&["to_element_index"]),
-                                {"required": ["x", "y"]}
-                            ]
-                        }
-                    ]
-                }),
-            )
-        ]
+        "allOf": [{"oneOf": branches}]
     })
 }
 
@@ -1106,32 +1363,37 @@ fn desktop_action_properties() -> Value {
 
 fn desktop_action_constraints() -> Value {
     let properties = desktop_action_properties();
+    let branches = vec![
+        exact_branch_schema_with_constraints(
+            &properties,
+            &[("operation", "activate")],
+            &[],
+            &desktop_action_allowed_fields(&[]),
+            desktop_selector_constraint(),
+        ),
+        exact_branch_schema_with_constraints(
+            &properties,
+            &[("operation", "perform_action")],
+            &[],
+            &desktop_action_allowed_fields(&["action_name", "action_index"]),
+            desktop_selector_action_constraint(),
+        ),
+    ];
+    json!({
+        "allOf": [{"oneOf": branches}]
+    })
+}
+
+fn desktop_selector_action_constraint() -> Value {
     json!({
         "allOf": [
-            exact_branch_condition_with_then(
-                &properties,
-                &[("operation", "activate")],
-                &[],
-                &desktop_action_allowed_fields(&[]),
-                desktop_selector_constraint(),
-            ),
-            exact_branch_condition_with_then(
-                &properties,
-                &[("operation", "perform_action")],
-                &[],
-                &desktop_action_allowed_fields(&["action_name", "action_index"]),
-                json!({
-                    "allOf": [
-                        desktop_selector_constraint(),
-                        {
-                            "anyOf": [
-                                {"required": ["action_name"]},
-                                {"required": ["action_index"]}
-                            ]
-                        }
-                    ]
-                }),
-            )
+            desktop_one_selector_constraint(),
+            {
+                "anyOf": [
+                    {"required": ["action_name"]},
+                    {"required": ["action_index"]}
+                ]
+            }
         ]
     })
 }
@@ -1333,12 +1595,19 @@ fn browser_scroll_constraints() -> Value {
                 ]
             },
             {
-                "if": {"required": ["x"], "properties": {"x": {"type": "number"}}},
-                "then": {"required": ["y"], "properties": {"y": {"type": "number"}}}
-            },
-            {
-                "if": {"required": ["y"], "properties": {"y": {"type": "number"}}},
-                "then": {"required": ["x"], "properties": {"x": {"type": "number"}}}
+                "if": {
+                    "anyOf": [
+                        {"required": ["x"], "properties": {"x": {"type": "number"}}},
+                        {"required": ["y"], "properties": {"y": {"type": "number"}}}
+                    ]
+                },
+                "then": {
+                    "required": ["x", "y"],
+                    "properties": {
+                        "x": {"type": "number"},
+                        "y": {"type": "number"}
+                    }
+                }
             }
         ]
     })
@@ -1526,20 +1795,28 @@ fn phone_setup_properties() -> Value {
 
 fn phone_setup_constraints() -> Value {
     let properties = phone_setup_properties();
+    let branches = vec![
+        exact_branch_schema(
+            &properties,
+            &[("operation", "install_companion")],
+            &["session_id"],
+            &[
+                "operation",
+                "session_id",
+                "force_reinstall",
+                "allow_downgrade",
+            ],
+        ),
+        exact_branch_schema(
+            &properties,
+            &[("operation", "open_settings")],
+            &["session_id", "screen"],
+            &["operation", "session_id", "screen", "package_name"],
+        ),
+    ];
     json!({
         "allOf": [
-            exact_branch_condition(
-                &properties,
-                &[("operation", "install_companion")],
-                &["session_id"],
-                &["operation", "session_id", "force_reinstall", "allow_downgrade"],
-            ),
-            exact_branch_condition(
-                &properties,
-                &[("operation", "open_settings")],
-                &["session_id", "screen"],
-                &["operation", "session_id", "screen", "package_name"],
-            ),
+            {"oneOf": branches},
             {
                 "if": {
                     "properties": {
@@ -1585,33 +1862,51 @@ fn phone_pointer_properties() -> Value {
 
 fn phone_pointer_constraints() -> Value {
     let properties = phone_pointer_properties();
+    let branches = vec![
+        exact_branch_schema_with_constraints(
+            &properties,
+            &[("operation", "tap")],
+            &["session_id", "x", "y"],
+            &[
+                "operation",
+                "session_id",
+                "phone_snapshot_id",
+                "x",
+                "y",
+                "use_device_coordinates",
+            ],
+            json!({
+                "anyOf": [
+                    {"required": ["phone_snapshot_id"]},
+                    {"properties": {"use_device_coordinates": {"const": true}}, "required": ["use_device_coordinates"]}
+                ]
+            }),
+        ),
+        exact_branch_schema_with_constraints(
+            &properties,
+            &[("operation", "swipe")],
+            &["session_id", "start_x", "start_y", "end_x", "end_y"],
+            &[
+                "operation",
+                "session_id",
+                "phone_snapshot_id",
+                "start_x",
+                "start_y",
+                "end_x",
+                "end_y",
+                "duration_ms",
+                "use_device_coordinates",
+            ],
+            json!({
+                "anyOf": [
+                    {"required": ["phone_snapshot_id"]},
+                    {"properties": {"use_device_coordinates": {"const": true}}, "required": ["use_device_coordinates"]}
+                ]
+            }),
+        ),
+    ];
     json!({
-        "allOf": [
-            exact_branch_condition_with_then(
-                &properties,
-                &[("operation", "tap")],
-                &["session_id", "x", "y"],
-                &["operation", "session_id", "phone_snapshot_id", "x", "y", "use_device_coordinates"],
-                json!({
-                    "anyOf": [
-                        {"required": ["phone_snapshot_id"]},
-                        {"properties": {"use_device_coordinates": {"const": true}}, "required": ["use_device_coordinates"]}
-                    ]
-                }),
-            ),
-            exact_branch_condition_with_then(
-                &properties,
-                &[("operation", "swipe")],
-                &["session_id", "start_x", "start_y", "end_x", "end_y"],
-                &["operation", "session_id", "phone_snapshot_id", "start_x", "start_y", "end_x", "end_y", "duration_ms", "use_device_coordinates"],
-                json!({
-                    "anyOf": [
-                        {"required": ["phone_snapshot_id"]},
-                        {"properties": {"use_device_coordinates": {"const": true}}, "required": ["use_device_coordinates"]}
-                    ]
-                }),
-            )
-        ]
+        "allOf": [{"oneOf": branches}]
     })
 }
 
@@ -1716,21 +2011,22 @@ fn phone_app_action_constraints() -> Value {
             }),
         );
     }
+    let branches = vec![
+        exact_branch_schema(
+            &launch_properties,
+            &[("operation", "launch")],
+            &["session_id", "package_name"],
+            &["operation", "session_id", "package_name"],
+        ),
+        exact_branch_schema(
+            &properties,
+            &[("operation", "open_intent")],
+            &["session_id", "intent_uri"],
+            &["operation", "session_id", "intent_uri", "package_name"],
+        ),
+    ];
     json!({
-        "allOf": [
-            exact_branch_condition(
-                &launch_properties,
-                &[("operation", "launch")],
-                &["session_id", "package_name"],
-                &["operation", "session_id", "package_name"],
-            ),
-            exact_branch_condition(
-                &properties,
-                &[("operation", "open_intent")],
-                &["session_id", "intent_uri"],
-                &["operation", "session_id", "intent_uri", "package_name"],
-            )
-        ]
+        "allOf": [{"oneOf": branches}]
     })
 }
 
@@ -1860,21 +2156,23 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
 
 fn screenshot_constraints() -> Value {
     json!({
-        "allOf": [
-            {"not": {"allOf": [
-                any_active_selector_constraint(&WINDOW_SELECTOR_KEYS),
-                any_active_selector_constraint(&DISPLAY_SELECTOR_KEYS)
-            ]}},
-            {"not": {"allOf": [
-                capture_all_true_constraint(),
-                any_active_selector_constraint(&WINDOW_SELECTOR_KEYS)
-            ]}},
-            {"not": {"allOf": [
-                capture_all_true_constraint(),
-                any_active_selector_constraint(&DISPLAY_SELECTOR_KEYS)
-            ]}},
-            {"not": {"anyOf": same_group_pair_constraints(&DISPLAY_SELECTOR_KEYS)}}
-        ]
+        "not": {
+            "anyOf": [
+                {"allOf": [
+                    any_active_selector_constraint(&WINDOW_SELECTOR_KEYS),
+                    one_active_selector_constraint(&DISPLAY_SELECTOR_KEYS)
+                ]},
+                {"allOf": [
+                    capture_all_true_constraint(),
+                    any_active_selector_constraint(&WINDOW_SELECTOR_KEYS)
+                ]},
+                {"allOf": [
+                    capture_all_true_constraint(),
+                    any_active_selector_constraint(&DISPLAY_SELECTOR_KEYS)
+                ]},
+                {"anyOf": same_group_pair_constraints(&DISPLAY_SELECTOR_KEYS)}
+            ]
+        }
     })
 }
 
@@ -1895,6 +2193,12 @@ const DISPLAY_SELECTOR_KEYS: [&str; 3] = ["display_id", "display_name", "display
 fn any_active_selector_constraint(selectors: &[&str]) -> Value {
     json!({
         "anyOf": selectors.iter().map(|selector| active_selector_constraint(selector)).collect::<Vec<_>>()
+    })
+}
+
+fn one_active_selector_constraint(selectors: &[&str]) -> Value {
+    json!({
+        "oneOf": selectors.iter().map(|selector| active_selector_constraint(selector)).collect::<Vec<_>>()
     })
 }
 
@@ -2340,6 +2644,77 @@ mod annotation_tests {
         ("browser_eval", (false, true, false, true)),
     ];
 
+    fn exact_branch<'a>(schema: &'a Value, discriminator: &str, value: &str) -> &'a Value {
+        schema["allOf"]
+            .as_array()
+            .and_then(|all_of| {
+                all_of.iter().find_map(|constraint| {
+                    constraint["oneOf"].as_array().and_then(|one_of| {
+                        one_of
+                            .iter()
+                            .find(|branch| branch["properties"][discriminator]["const"] == value)
+                    })
+                })
+            })
+            .unwrap_or_else(|| panic!("missing {discriminator}={value} exact branch"))
+    }
+
+    fn assert_no_duplicate_merge_keys_in_all_of(schema: &Value) {
+        match schema {
+            Value::Object(object) => {
+                if let Some(all_of) = object.get("allOf").and_then(Value::as_array) {
+                    for key in ["if", "not", "anyOf", "oneOf"] {
+                        let key_count = all_of
+                            .iter()
+                            .filter(|item| {
+                                item.as_object()
+                                    .is_some_and(|object| object.contains_key(key))
+                            })
+                            .count();
+                        assert!(
+                            key_count <= 1,
+                            "schema contains duplicate {key} constraints under one allOf: {schema:?}"
+                        );
+                    }
+                }
+                for value in object.values() {
+                    assert_no_duplicate_merge_keys_in_all_of(value);
+                }
+            }
+            Value::Array(items) => {
+                for value in items {
+                    assert_no_duplicate_merge_keys_in_all_of(value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_required_properties_are_self_contained(schema: &Value) {
+        match schema {
+            Value::Object(object) => {
+                if let Some(required) = object.get("required").and_then(Value::as_array) {
+                    let properties = object.get("properties").and_then(Value::as_object);
+                    for field in required.iter().filter_map(Value::as_str) {
+                        assert!(
+                            properties.is_some_and(|properties| properties.contains_key(field)),
+                            "schema requires {field:?} without defining it in local properties: {schema:?}"
+                        );
+                    }
+                }
+                for value in object.values() {
+                    assert_required_properties_are_self_contained(value);
+                }
+            }
+            Value::Array(items) => {
+                for value in items {
+                    assert_required_properties_are_self_contained(value);
+                }
+            }
+            _ => {}
+        }
+    }
+
     #[test]
     fn every_tool_pins_honest_mcp_annotations() {
         for can_receive_images in [false, true] {
@@ -2455,47 +2830,28 @@ mod annotation_tests {
             "tool-level description should stay on the MCP tool object"
         );
         assert!(
-            pointer_schema["allOf"]
+            exact_branch(pointer_schema, "operation", "click")["anyOf"]
                 .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "click"
-                            && constraint["then"]["anyOf"]
-                                .as_array()
-                                .is_some_and(|any_of| {
-                                    any_of
-                                        .iter()
-                                        .any(|item| item["required"] == json!(["x", "y"]))
-                                        && any_of.iter().any(|item| {
-                                            item["required"]
-                                                == json!(["snapshot_id", "element_index"])
-                                        })
-                                        && !any_of.iter().any(|item| {
-                                            item["required"] == json!(["element_identifier"])
-                                        })
-                                })
-                    })
+                .is_some_and(|any_of| {
+                    any_of
+                        .iter()
+                        .any(|item| item["required"] == json!(["x", "y"]))
+                        && any_of
+                            .iter()
+                            .any(|item| item["required"] == json!(["snapshot_id", "element_index"]))
+                        && !any_of
+                            .iter()
+                            .any(|item| item["required"] == json!(["element_identifier"]))
                 }),
             "desktop_pointer click branch must require coordinates or a snapshot selector"
         );
         assert!(
-            pointer_schema["allOf"]
+            exact_branch(pointer_schema, "operation", "drag")["anyOf"]
                 .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "drag"
-                            && constraint["then"]["anyOf"]
-                                .as_array()
-                                .is_some_and(|any_of| {
-                                    !any_of.iter().any(|item| {
-                                        item["required"]
-                                            == json!([
-                                                "snapshot_id",
-                                                "element_identifier",
-                                                "to_element_index"
-                                            ])
-                                    })
-                                })
+                .is_some_and(|any_of| {
+                    !any_of.iter().any(|item| {
+                        item["required"]
+                            == json!(["snapshot_id", "element_identifier", "to_element_index"])
                     })
                 }),
             "desktop_pointer drag must not advertise unsupported direct backend-ref starts"
@@ -2556,6 +2912,8 @@ mod annotation_tests {
                 Value::String("object".to_string()),
                 "MCP adapters expect root inputSchema.type=object"
             );
+            assert_no_duplicate_merge_keys_in_all_of(schema);
+            assert_required_properties_are_self_contained(schema);
             for key in ["anyOf", "oneOf"] {
                 assert!(
                     schema.get(key).is_none(),
@@ -2566,27 +2924,15 @@ mod annotation_tests {
 
         let observe_schema = &tool("observe")["inputSchema"];
         assert!(
-            observe_schema["allOf"]
-                .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["surface"]["const"] == "browser"
-                            && constraint["then"]["required"] == json!(["surface", "tab_id"])
-                    })
-                }),
+            exact_branch(observe_schema, "surface", "browser")["required"]
+                == json!(["surface", "tab_id"]),
             "observe browser branch must require tab_id"
         );
 
         let capture_schema = &tool("capture_screen")["inputSchema"];
         assert!(
-            capture_schema["allOf"]
-                .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["surface"]["const"] == "browser"
-                            && constraint["then"]["required"] == json!(["surface", "tab_id"])
-                    })
-                }),
+            exact_branch(capture_schema, "surface", "browser")["required"]
+                == json!(["surface", "tab_id"]),
             "capture_screen browser branch must require tab_id"
         );
 
@@ -2613,14 +2959,16 @@ mod annotation_tests {
                 .as_array()
                 .is_some_and(|all_of| {
                     all_of.iter().any(|constraint| {
-                        constraint["if"]["required"] == json!(["x"])
-                            && constraint["then"]["required"] == json!(["y"])
-                    }) && all_of.iter().any(|constraint| {
-                        constraint["if"]["required"] == json!(["y"])
-                            && constraint["then"]["required"] == json!(["x"])
+                        constraint["if"]["anyOf"].as_array().is_some_and(|any_of| {
+                            constraint["then"]["required"] == json!(["x", "y"])
+                                && constraint["then"]["properties"]["x"]["type"] == "number"
+                                && constraint["then"]["properties"]["y"]["type"] == "number"
+                                && any_of.iter().any(|item| item["required"] == json!(["x"]))
+                                && any_of.iter().any(|item| item["required"] == json!(["y"]))
+                        })
                     })
                 }),
-            "browser_scroll must require x/y together"
+            "browser_scroll must require numeric x/y together"
         );
 
         assert_eq!(
@@ -2677,52 +3025,40 @@ mod annotation_tests {
             "desktop text selectors must reject empty strings"
         );
         assert!(
-            action_schema["allOf"]
+            exact_branch(action_schema, "operation", "activate")["anyOf"]
                 .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "activate"
-                            && constraint["then"]["anyOf"]
-                                .as_array()
-                                .is_some_and(|any_of| {
-                                    any_of.iter().any(|item| {
-                                        item["required"] == json!(["snapshot_id", "element_index"])
-                                    }) && any_of.iter().any(|item| {
-                                        item["required"] == json!(["element_identifier"])
-                                    }) && any_of.iter().any(|item| {
-                                        item["required"] == json!(["snapshot_id", "name"])
-                                    }) && any_of.iter().any(|item| {
-                                        item["required"] == json!(["snapshot_id", "text"])
-                                    })
-                                })
-                    })
+                .is_some_and(|any_of| {
+                    any_of
+                        .iter()
+                        .any(|item| item["required"] == json!(["snapshot_id", "element_index"]))
+                        && any_of
+                            .iter()
+                            .any(|item| item["required"] == json!(["element_identifier"]))
+                        && any_of
+                            .iter()
+                            .any(|item| item["required"] == json!(["snapshot_id", "name"]))
+                        && any_of
+                            .iter()
+                            .any(|item| item["required"] == json!(["snapshot_id", "text"]))
                 }),
             "desktop_action must require snapshot_id for snapshot-bound selectors"
         );
         assert!(
-            action_schema["allOf"]
+            exact_branch(action_schema, "operation", "perform_action")["allOf"]
                 .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "perform_action"
-                            && constraint["then"]["allOf"]
-                                .as_array()
-                                .is_some_and(|all_of| {
-                                    all_of.iter().any(|item| {
-                                        item["anyOf"].as_array().is_some_and(|any_of| {
-                                            any_of.iter().any(|selector| {
-                                                selector["required"]
-                                                    == json!(["snapshot_id", "element_index"])
-                                            })
-                                        })
-                                    }) && all_of.iter().any(|item| {
-                                        item["anyOf"].as_array().is_some_and(|any_of| {
-                                            any_of.iter().any(|item| {
-                                                item["required"] == json!(["action_name"])
-                                            })
-                                        })
-                                    })
-                                })
+                .is_some_and(|all_of| {
+                    all_of.iter().any(|item| {
+                        item["oneOf"].as_array().is_some_and(|one_of| {
+                            one_of.iter().any(|selector| {
+                                selector["required"] == json!(["snapshot_id", "element_index"])
+                            })
+                        })
+                    }) && all_of.iter().any(|item| {
+                        item["anyOf"].as_array().is_some_and(|any_of| {
+                            any_of
+                                .iter()
+                                .any(|item| item["required"] == json!(["action_name"]))
+                        })
                     })
                 }),
             "desktop_action perform_action branch must require action_name or action_index"
@@ -2738,15 +3074,10 @@ mod annotation_tests {
             "desktop_keyboard press_key must reject empty key"
         );
         assert!(
-            keyboard_schema["allOf"]
-                .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "press_key"
-                            && constraint["then"]["required"] == json!(["operation", "key"])
-                            && constraint["then"]["additionalProperties"] == json!(false)
-                    })
-                }),
+            exact_branch(keyboard_schema, "operation", "press_key")["required"]
+                == json!(["operation", "key"])
+                && exact_branch(keyboard_schema, "operation", "press_key")["additionalProperties"]
+                    == json!(false),
             "desktop_keyboard press_key branch must require key"
         );
 
@@ -2809,15 +3140,8 @@ mod annotation_tests {
             ])
         );
         assert!(
-            phone_setup_schema["allOf"]
-                .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "open_settings"
-                            && constraint["then"]["required"]
-                                == json!(["operation", "session_id", "screen"])
-                    })
-                }),
+            exact_branch(phone_setup_schema, "operation", "open_settings")["required"]
+                == json!(["operation", "session_id", "screen"]),
             "phone_setup open_settings branch must require screen"
         );
 
@@ -2829,36 +3153,24 @@ mod annotation_tests {
             );
         }
         assert!(
-            phone_pointer_schema["allOf"]
-                .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "tap"
-                            && constraint["then"]["required"]
-                                == json!(["operation", "session_id", "x", "y"])
-                            && constraint["then"]["additionalProperties"] == json!(false)
-                    })
-                }),
+            exact_branch(phone_pointer_schema, "operation", "tap")["required"]
+                == json!(["operation", "session_id", "x", "y"])
+                && exact_branch(phone_pointer_schema, "operation", "tap")["additionalProperties"]
+                    == json!(false),
             "phone_pointer tap branch must require coordinates"
         );
         assert!(
-            phone_pointer_schema["allOf"]
-                .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "swipe"
-                            && constraint["then"]["required"]
-                                == json!([
-                                    "operation",
-                                    "session_id",
-                                    "start_x",
-                                    "start_y",
-                                    "end_x",
-                                    "end_y"
-                                ])
-                            && constraint["then"]["additionalProperties"] == json!(false)
-                    })
-                }),
+            exact_branch(phone_pointer_schema, "operation", "swipe")["required"]
+                == json!([
+                    "operation",
+                    "session_id",
+                    "start_x",
+                    "start_y",
+                    "end_x",
+                    "end_y"
+                ])
+                && exact_branch(phone_pointer_schema, "operation", "swipe")["additionalProperties"]
+                    == json!(false),
             "phone_pointer swipe branch must require start/end coordinates"
         );
 
@@ -2872,16 +3184,10 @@ mod annotation_tests {
             "phone_keyboard press_key must reject empty key"
         );
         assert!(
-            phone_keyboard_schema["allOf"]
-                .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "type_text"
-                            && constraint["then"]["required"]
-                                == json!(["operation", "session_id", "text"])
-                            && constraint["then"]["additionalProperties"] == json!(false)
-                    })
-                }),
+            exact_branch(phone_keyboard_schema, "operation", "type_text")["required"]
+                == json!(["operation", "session_id", "text"])
+                && exact_branch(phone_keyboard_schema, "operation", "type_text")["additionalProperties"]
+                    == json!(false),
             "phone_keyboard type_text branch must require text"
         );
 
@@ -2895,16 +3201,10 @@ mod annotation_tests {
             "phone_notification_action must reject empty action ids"
         );
         assert!(
-            phone_notification_schema["allOf"]
-                .as_array()
-                .is_some_and(|constraints| {
-                    constraints.iter().any(|constraint| {
-                        constraint["if"]["properties"]["operation"]["const"] == "action"
-                            && constraint["then"]["required"]
-                                == json!(["operation", "session_id", "event_id", "action_id"])
-                            && constraint["then"]["additionalProperties"] == json!(false)
-                    })
-                }),
+            exact_branch(phone_notification_schema, "operation", "action")["required"]
+                == json!(["operation", "session_id", "event_id", "action_id"])
+                && exact_branch(phone_notification_schema, "operation", "action")["additionalProperties"]
+                    == json!(false),
             "phone_notification_action action branch must require event_id and action_id"
         );
 

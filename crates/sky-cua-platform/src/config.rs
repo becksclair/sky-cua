@@ -20,6 +20,7 @@ use serde::Deserialize;
 
 /// Test/operator override for the machine config file location.
 pub const MACHINE_CONFIG_PATH_ENV: &str = "SKY_CUA_CONFIG_PATH";
+pub const REPO_ROOT_ENV: &str = "SKY_CUA_REPO_ROOT";
 
 pub const BROWSER_SELECTION_ENV: &str = "SKY_CUA_BROWSER";
 
@@ -299,7 +300,7 @@ pub fn resolve_phone_selection(phone: &PhoneConfig) -> ResolvedPhoneSelection {
             .unwrap_or_else(|| PHONE_DEFAULT_COMPANION_PACKAGE.to_string()),
         companion_apk_path: env_string(PHONE_COMPANION_APK_ENV)
             .or_else(|| normalize(phone.companion_apk_path.clone()))
-            .unwrap_or_else(|| PHONE_DEFAULT_COMPANION_APK_PATH.to_string()),
+            .unwrap_or_else(default_companion_apk_path),
         companion_expected_cert_sha256: env_string(PHONE_COMPANION_CERT_SHA256_ENV)
             .or_else(|| normalize(phone.companion_expected_cert_sha256.clone())),
         companion_apk_sha256: env_string(PHONE_COMPANION_APK_SHA256_ENV)
@@ -324,6 +325,16 @@ fn normalize(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn default_companion_apk_path() -> String {
+    let Some(root) = env_string(REPO_ROOT_ENV) else {
+        return PHONE_DEFAULT_COMPANION_APK_PATH.to_string();
+    };
+    PathBuf::from(root)
+        .join(PHONE_DEFAULT_COMPANION_APK_PATH)
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[cfg(test)]
@@ -423,6 +434,7 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
             PHONE_CAPABILITY_CACHE_TTL_MS_ENV,
             PHONE_ADB_ENV,
             PHONE_TARGET_MODELS_ENV,
+            REPO_ROOT_ENV,
         ]);
         let config = parse_machine_config("browser = \"chrome\"\n").expect("valid config");
         assert_eq!(config.phone, PhoneConfig::default());
@@ -445,6 +457,17 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
         );
         assert!(resolved.adb_path.is_none());
         assert!(resolved.primary_target_models.is_empty());
+    }
+
+    #[test]
+    fn default_companion_apk_path_resolves_under_repo_root_env() {
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = EnvGuard::set(&[(REPO_ROOT_ENV, "/opt/sky-cua")]);
+        let resolved = resolve_phone_selection(&PhoneConfig::default());
+        assert_eq!(
+            resolved.companion_apk_path,
+            "/opt/sky-cua/resources/android/phone-companion.apk"
+        );
     }
 
     #[test]

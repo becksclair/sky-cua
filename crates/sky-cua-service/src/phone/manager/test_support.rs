@@ -133,8 +133,8 @@ impl PhoneManager {
         }
     }
 
-    /// Test-only: register a session whose cached profile reports a reachable
-    /// companion and whose runtime holds a [`CompanionClient`] dialing
+    /// Test-only: register a session whose cached profile reports a reachable,
+    /// gesture-capable companion and whose runtime holds a [`CompanionClient`] dialing
     /// `companion_port` with `token`. Used by the app-management routing tests
     /// to drive companion-preferred dispatch and ADB fallback against an
     /// in-process fake companion server, without standing up the full
@@ -152,6 +152,12 @@ impl PhoneManager {
         );
         companion.installed = true;
         companion.rpc_reachable = true;
+        companion.gesture_dispatch = true;
+        companion.screenshot = true;
+        companion.accessibility_tree = true;
+        companion.notifications = true;
+        companion.native_overlay = true;
+        companion.native_overlay_pass_through = true;
         let mut profile = PhoneCapabilityProfile {
             profile_id: format!("{session_id}-profile"),
             session_id: session_id.to_string(),

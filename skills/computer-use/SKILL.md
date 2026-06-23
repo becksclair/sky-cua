@@ -112,6 +112,97 @@ coordinates across them.
   capture already activates and focus-verifies. Use activate-window only when
   you need focus without a fresh image.
 
+### Desktop argument shape
+
+Every desktop action is one flat JSON object. `snapshot_id` is only the opaque
+id string from the matching desktop observe/capture result; never pack
+`operation`, coordinates, or selector fields inside it.
+
+Valid state and capture calls:
+
+```json
+{
+  "surface": "desktop",
+  "capture_screen": "always"
+}
+```
+
+```json
+{
+  "window_id": "win-..."
+}
+```
+
+```json
+{
+  "display_id": "display-..."
+}
+```
+
+Valid coordinate click:
+
+```json
+{
+  "operation": "click",
+  "snapshot_id": "desktop-...",
+  "x": 640,
+  "y": 420
+}
+```
+
+Valid snapshot element click:
+
+```json
+{
+  "operation": "click",
+  "snapshot_id": "desktop-...",
+  "element_index": 12
+}
+```
+
+Valid semantic action:
+
+```json
+{
+  "operation": "perform_action",
+  "snapshot_id": "desktop-...",
+  "element_index": 12,
+  "action_name": "press"
+}
+```
+
+Valid desktop scroll:
+
+```json
+{
+  "direction": "down",
+  "snapshot_id": "desktop-...",
+  "element_index": 12,
+  "pages": 1
+}
+```
+
+Valid keyboard calls:
+
+```json
+{
+  "operation": "type_text",
+  "text": "hello"
+}
+```
+
+```json
+{
+  "operation": "press_key",
+  "key": "Enter"
+}
+```
+
+`capture_desktop` chooses exactly one source: no selector for the primary
+display, one window selector, one display selector, or
+`capture_all_displays=true`. Do not mix window selectors with display selectors
+or all-displays capture.
+
 ## Linux notes
 
 - `activate_window` success is focus-verified on Linux, including KDE/KWin;

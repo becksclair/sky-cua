@@ -329,6 +329,16 @@ fn install_failure_extracts_known_class() {
 }
 
 #[test]
+fn install_failure_strips_trailing_punctuation_from_known_class() {
+    let out =
+        "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package signatures do not match]";
+    assert_eq!(
+        parse_install_failure(out).as_deref(),
+        Some("INSTALL_FAILED_UPDATE_INCOMPATIBLE")
+    );
+}
+
+#[test]
 fn install_failure_parse_failed_class() {
     let out = "Failure [INSTALL_PARSE_FAILED_NO_CERTIFICATES]";
     assert_eq!(

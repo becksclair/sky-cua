@@ -9,7 +9,7 @@ use sky_cua_platform::config::{PhoneConfig, resolve_phone_selection};
 use sky_cua_platform::model::{
     PhoneBackendKind, PhoneCapabilityRefreshState, PhoneConnectRequest, PhoneConnectionKind,
     PhoneObserveRequest, PhoneRequest, PhoneResponse, PhoneScreenshotRequest, PhoneSessionSelector,
-    PhoneTapRequest, PixelSize,
+    PhoneTapRequest, PhoneTypeTextRequest, PixelSize,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -183,6 +183,24 @@ fn script_verified_installed_companion(
     );
 }
 
+fn script_installed_companion_without_cert(
+    runner: &FakeCommandRunner,
+    package: &str,
+    version_code: u64,
+    version_name: &str,
+) {
+    runner.set_stdout(
+        "adb",
+        &["-s", SERIAL, "shell", "pm", "path", package],
+        "package:/data/app/companion.apk",
+    );
+    runner.set_stdout(
+        "adb",
+        &["-s", SERIAL, "shell", "dumpsys", "package", package],
+        &format!("versionCode={version_code}\nversionName={version_name}\n"),
+    );
+}
+
 /// A companion-enabled manager (auto-install on) over a scripted runner. The
 /// companion package is reported as not installed (so the bootstrap decides
 /// `Install`), and the install command is scripted by the caller so each test
@@ -245,8 +263,14 @@ async fn connect_builds_a_real_session_and_profile() {
     // ADB-only: no companion, baseline capabilities present.
     assert!(session.capabilities.adb);
     assert!(!session.capabilities.companion);
+    assert!(
+        !session.capabilities.gestures,
+        "quick capabilities must not advertise coordinate input without a companion gesture lane"
+    );
     assert!(!session.capability_profile.companion.rpc_reachable);
-    // The action menu is tailored: companion-gated actions are unavailable.
+    // The action menu is tailored: companion-gated actions are unavailable,
+    // including coordinate gestures now that visible feedback is part of the
+    // coordinate-action contract.
     assert!(
         session
             .capability_profile
@@ -257,9 +281,9 @@ async fn connect_builds_a_real_session_and_profile() {
     assert!(
         session
             .capability_profile
-            .available_actions
+            .unavailable_actions
             .iter()
-            .any(|a| a.action == "phone_tap" && a.backend == PhoneBackendKind::Adb)
+            .any(|a| a.action == "phone_tap")
     );
 }
 
@@ -367,14 +391,22 @@ async fn connect_is_idempotent_for_same_serial() {
 }
 
 #[tokio::test]
-async fn connect_forced_adb_skips_companion_bootstrap() {
+async fn connect_forced_adb_bootstraps_installed_companion_but_keeps_adb_dispatch() {
+    let server = RecordingCompanion::start().await;
     let runner = Arc::new(FakeCommandRunner::new());
     script_device_probes(&runner);
     let mut selection = resolve_phone_selection(&PhoneConfig::default());
     let package = selection.companion_package.clone();
-    runner.set_stdout("adb", &["-s", SERIAL, "shell", "pm", "path", &package], "");
+    selection.companion_apk_path = "../../resources/android/phone-companion.apk".to_string();
+    script_installed_companion_without_cert(&runner, &package, 1, "1.0.0");
+    let apk = selection.companion_apk_path.clone();
+    runner.set_stdout("adb", &["-s", SERIAL, "install", "-r", &apk], "Success");
+    let port_arg = format!("tcp:{}", server.port);
+    runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
     selection.companion_enabled = true;
-    selection.companion_auto_install = true;
+    selection.companion_auto_install = false;
+    selection.companion_rpc_port = server.port;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
     let mut manager = PhoneManager::with_runner(runner.clone(), selection);
 
     match manager
@@ -388,24 +420,36 @@ async fn connect_forced_adb_skips_companion_bootstrap() {
     {
         PhoneResponse::Connected(session) => {
             assert_eq!(session.backend, PhoneBackendKind::Adb);
-            assert!(!session.capability_profile.companion.rpc_reachable);
+            assert!(
+                session.capability_profile.companion.rpc_reachable,
+                "forced adb input must still bootstrap an installed companion: {:?}",
+                session.capability_profile.companion
+            );
+            assert!(session.capability_profile.companion.native_overlay);
         }
         other => panic!("unexpected: {other:?}"),
     }
 
     let calls = runner.recorded_calls();
     assert!(
-        !calls.iter().any(|call| call.contains(" install -r ")),
-        "forced adb connect must not install companion: {calls:?}"
+        !calls
+            .iter()
+            .any(|call| call == &format!("adb -s {SERIAL} install -r {apk}")),
+        "forced adb connect must not install/update when install is not allowed: {calls:?}"
     );
     assert!(
-        !calls.iter().any(|call| call.contains(" forward tcp:")),
-        "forced adb connect must not forward companion RPC: {calls:?}"
+        calls.iter().any(|call| call.contains(" forward tcp:")),
+        "forced adb connect must forward companion RPC: {calls:?}"
     );
+    let active = server
+        .request_for("overlay_active")
+        .expect("forced adb connect must light the companion overlay");
+    let parsed: serde_json::Value = serde_json::from_str(&active).expect("json body");
+    assert_eq!(parsed["params"]["active"], serde_json::json!(true));
 }
 
 #[tokio::test]
-async fn screenshot_then_tap_routes_through_adb_with_profile_id() {
+async fn screenshot_then_tap_requires_companion_for_input() {
     let (mut manager, runner) = adb_only_manager();
     let session = connect(&mut manager).await;
     // ADB `screencap` returns a device-resolution frame, so the capture size
@@ -420,12 +464,6 @@ async fn screenshot_then_tap_routes_through_adb_with_profile_id() {
             stderr: Vec::new(),
         },
     );
-    runner.set_stdout(
-        "adb",
-        &["-s", SERIAL, "shell", "input", "tap", "10", "20"],
-        "",
-    );
-
     let snapshot_id = match manager
         .handle(PhoneRequest::Screenshot(PhoneScreenshotRequest {
             session: selector(&session.session_id),
@@ -447,7 +485,9 @@ async fn screenshot_then_tap_routes_through_adb_with_profile_id() {
         other => panic!("unexpected: {other:?}"),
     };
 
-    // A tap referencing the fresh snapshot dispatches through ADB and reports it.
+    // A tap referencing the fresh snapshot still fails closed: screenshots may
+    // use ADB, but coordinate input requires the companion gesture lane so the
+    // device receives visible agent feedback.
     match manager
         .handle(PhoneRequest::Tap(PhoneTapRequest {
             session: selector(&session.session_id),
@@ -460,14 +500,23 @@ async fn screenshot_then_tap_routes_through_adb_with_profile_id() {
     {
         PhoneResponse::Action(action) => {
             assert_eq!(action.action, "phone_tap");
-            assert_eq!(action.backend, PhoneBackendKind::Adb);
+            assert_eq!(action.backend, PhoneBackendKind::None);
             assert_eq!(
                 action.capability_profile_id,
                 session.capability_profile.profile_id
             );
-            assert!(action.diagnostics.is_empty(), "{:?}", action.diagnostics);
-            // A successful action updates the cursor.
-            assert!(action.cursor.is_some());
+            assert!(
+                action
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == "PhoneCompanionRequired"),
+                "{:?}",
+                action.diagnostics
+            );
+            assert!(
+                action.cursor.is_none(),
+                "failed companion-required action must not move cursor"
+            );
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -534,7 +583,7 @@ async fn forced_adb_screenshot_honors_requested_backend_with_companion_available
     selection.companion_enabled = true;
     selection.companion_rpc_port = port;
     selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
-    let mut manager = PhoneManager::with_runner(runner, selection);
+    let mut manager = PhoneManager::with_runner(runner.clone(), selection);
     let session = connect(&mut manager).await;
     assert!(session.capability_profile.companion.screenshot);
 
@@ -737,14 +786,9 @@ async fn tap_without_snapshot_requires_one() {
 }
 
 #[tokio::test]
-async fn device_coordinate_tap_skips_snapshot_requirement() {
+async fn device_coordinate_tap_still_requires_companion() {
     let (mut manager, runner) = adb_only_manager();
     let session = connect(&mut manager).await;
-    runner.set_stdout(
-        "adb",
-        &["-s", SERIAL, "shell", "input", "tap", "100", "200"],
-        "",
-    );
     match manager
         .handle(PhoneRequest::Tap(PhoneTapRequest {
             session: selector(&session.session_id),
@@ -756,8 +800,23 @@ async fn device_coordinate_tap_skips_snapshot_requirement() {
         .await
     {
         PhoneResponse::Action(action) => {
-            assert_eq!(action.backend, PhoneBackendKind::Adb);
-            assert!(action.diagnostics.is_empty(), "{:?}", action.diagnostics);
+            assert_eq!(action.backend, PhoneBackendKind::None);
+            assert!(
+                action
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == "PhoneCompanionRequired"),
+                "{:?}",
+                action.diagnostics
+            );
+            assert!(
+                runner
+                    .recorded_calls()
+                    .iter()
+                    .all(|call| !call.contains(" shell input tap ")),
+                "ADB tap fallback must not be used: {:?}",
+                runner.recorded_calls()
+            );
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -920,9 +979,15 @@ async fn within_ttl_observe_reports_reused_state() {
 }
 
 #[tokio::test]
-async fn stale_observe_uses_stale_aware_action_menu() {
+async fn stale_observe_refreshes_profile_before_reporting_actions() {
+    let server = RecordingCompanion::start().await;
     let runner = Arc::new(FakeCommandRunner::new());
     script_device_probes(&runner);
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    let package = selection.companion_package.clone();
+    script_verified_installed_companion(&runner, &package, 2, "0.1.1");
+    let port_arg = format!("tcp:{}", server.port);
+    runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
     runner.set_output(
         "adb",
         &["-s", SERIAL, "exec-out", "screencap", "-p"],
@@ -932,14 +997,17 @@ async fn stale_observe_uses_stale_aware_action_menu() {
             stderr: Vec::new(),
         },
     );
-    let mut selection = resolve_phone_selection(&PhoneConfig::default());
-    selection.capability_cache_ttl_ms = 1;
-    let mut manager = PhoneManager::with_runner(runner, selection);
-    let detected_at = PhoneManager::now_ms_for_tests().saturating_sub(1_000);
+    selection.companion_enabled = true;
+    selection.companion_auto_install = false;
+    selection.companion_rpc_port = server.port;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
+    selection.capability_cache_ttl_ms = 30_000;
+    let mut manager = PhoneManager::with_runner(runner.clone(), selection);
+    let detected_at = PhoneManager::now_ms_for_tests().saturating_sub(60_000);
     manager.insert_companion_session_for_tests(
         "sess-stale",
         SERIAL,
-        1,
+        server.port,
         COMPANION_TOKEN,
         detected_at,
     );
@@ -957,24 +1025,34 @@ async fn stale_observe_uses_stale_aware_action_menu() {
         PhoneResponse::Observe(observe) => {
             assert_eq!(
                 observe.profile_refresh_state,
-                PhoneCapabilityRefreshState::Stale
+                PhoneCapabilityRefreshState::Reused,
+                "stale observe should silently refresh before reporting actions"
             );
-            let launch = observe
+            let tap = observe
                 .available_actions
                 .iter()
-                .find(|action| action.action == "phone_app_launch")
-                .expect("phone_app_launch stays available through ADB");
+                .find(|action| action.action == "phone_tap")
+                .expect("phone_tap should remain available after refresh");
             assert_eq!(
-                launch.backend,
-                PhoneBackendKind::Adb,
-                "stale profiles must not advertise companion app-op routing"
+                tap.backend,
+                PhoneBackendKind::Companion,
+                "refreshed profile must keep pointer actions companion-backed"
             );
             assert!(
                 observe
                     .unavailable_actions
                     .iter()
-                    .any(|action| action.action == "phone_notifications"),
-                "companion-only actions must move to unavailable on a stale profile"
+                    .all(|action| action.action != "phone_tap" && action.action != "phone_swipe"),
+                "refreshed profile must not report pointer actions unavailable: {:?}",
+                observe.unavailable_actions
+            );
+            assert!(
+                runner
+                    .recorded_calls()
+                    .iter()
+                    .all(|call| !call.contains(".SetupActivity")),
+                "stale observe must not foreground the companion setup UI: {:?}",
+                runner.recorded_calls()
             );
         }
         other => panic!("unexpected: {other:?}"),
@@ -1036,6 +1114,192 @@ async fn capture_with_drifted_size_marks_profile_stale() {
         "a capture whose size drifts from the cached display_size must mark stale"
     );
     assert_eq!(after.refresh_state, PhoneCapabilityRefreshState::Stale);
+}
+
+/// A stored stale profile means the device/profile facts themselves need to be
+/// re-detected (for example after display drift), not merely that the companion
+/// TTL expired. A live companion RPC refresh must not clear that stored stale bit
+/// without re-running the full device profile probe.
+#[tokio::test]
+async fn stored_stale_profile_rebuilds_instead_of_live_companion_refresh() {
+    let server = RecordingCompanion::start().await;
+    let runner = Arc::new(FakeCommandRunner::new());
+    script_device_probes(&runner);
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    let package = selection.companion_package.clone();
+    script_verified_installed_companion(&runner, &package, 2, "0.1.1");
+    let port_arg = format!("tcp:{}", server.port);
+    runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
+    selection.companion_enabled = true;
+    selection.companion_auto_install = false;
+    selection.companion_rpc_port = server.port;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
+    let mut manager = PhoneManager::with_runner(runner.clone(), selection);
+    let detected_at = PhoneManager::now_ms_for_tests();
+    manager.insert_companion_session_for_tests(
+        "sess-drift",
+        SERIAL,
+        server.port,
+        COMPANION_TOKEN,
+        detected_at,
+    );
+
+    let cached = manager
+        .profiles
+        .get_mut("sess-drift")
+        .expect("cached profile");
+    cached.profile.stale = true;
+    cached.profile.refresh_state = PhoneCapabilityRefreshState::Stale;
+
+    let ctx = manager
+        .fresh_action_context(&selector("sess-drift"))
+        .await
+        .expect("fresh context after rebuild");
+    assert!(
+        !ctx.profile.stale,
+        "full rebuild should clear stored drift stale"
+    );
+
+    let calls = runner.recorded_calls();
+    assert!(
+        calls.iter().any(|call| call.contains(".SetupActivity")),
+        "stored drift stale must take the full bootstrap/rebuild path, not only live capabilities RPC: {calls:?}"
+    );
+    assert!(
+        server
+            .recorded()
+            .iter()
+            .any(|request| request.contains("\"method\":\"capabilities\"")),
+        "rebuild still proves the companion after setup"
+    );
+}
+
+/// Text/key operations are ADB-only in v1. They must not run the foregrounding
+/// companion bootstrap before dispatching, or the text/key event can land in the
+/// companion setup UI instead of the current target app.
+#[tokio::test]
+async fn stale_keyboard_action_does_not_launch_setup_activity() {
+    let server = RecordingCompanion::start().await;
+    let runner = Arc::new(FakeCommandRunner::new());
+    script_device_probes(&runner);
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    let package = selection.companion_package.clone();
+    script_verified_installed_companion(&runner, &package, 2, "0.1.1");
+    let port_arg = format!("tcp:{}", server.port);
+    runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
+    selection.companion_enabled = true;
+    selection.companion_auto_install = false;
+    selection.companion_rpc_port = server.port;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
+    let mut manager = PhoneManager::with_runner(runner.clone(), selection);
+    let session = connect(&mut manager).await;
+
+    if let Some(entry) = manager.sessions.get_mut(&session.session_id) {
+        entry.companion = None;
+    }
+    let cached = manager
+        .profiles
+        .get_mut(&session.session_id)
+        .expect("cached profile");
+    cached.detected_at_ms = super::now_ms().saturating_sub(60_000);
+    runner.set_stdout("adb", &["-s", SERIAL, "shell", "input text 'hello'"], "");
+    let before_call_count = runner.recorded_calls().len();
+
+    match manager
+        .handle(PhoneRequest::TypeText(PhoneTypeTextRequest {
+            session: selector(&session.session_id),
+            text: "hello".to_string(),
+        }))
+        .await
+    {
+        PhoneResponse::Action(action) => {
+            assert_eq!(action.backend, PhoneBackendKind::Adb);
+            assert!(action.diagnostics.is_empty(), "{action:?}");
+            assert_eq!(
+                action.profile_refresh_state,
+                PhoneCapabilityRefreshState::Stale
+            );
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    let new_calls = &runner.recorded_calls()[before_call_count..];
+    assert!(
+        new_calls
+            .iter()
+            .any(|call| call == &format!("adb -s {SERIAL} shell input text 'hello'")),
+        "keyboard action should still dispatch through ADB: {new_calls:?}"
+    );
+    assert!(
+        new_calls
+            .iter()
+            .all(|call| !call.contains(".SetupActivity")),
+        "keyboard action must not foreground companion setup before typing: {new_calls:?}"
+    );
+}
+
+/// Snapshot-invalid coordinate actions should fail before any stale capability
+/// refresh can launch the companion setup activity. They cannot dispatch anyway,
+/// so setup would only steal foreground.
+#[tokio::test]
+async fn stale_snapshotless_tap_does_not_launch_setup_activity() {
+    let server = RecordingCompanion::start().await;
+    let runner = Arc::new(FakeCommandRunner::new());
+    script_device_probes(&runner);
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    let package = selection.companion_package.clone();
+    script_verified_installed_companion(&runner, &package, 2, "0.1.1");
+    let port_arg = format!("tcp:{}", server.port);
+    runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
+    selection.companion_enabled = true;
+    selection.companion_auto_install = false;
+    selection.companion_rpc_port = server.port;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
+    let mut manager = PhoneManager::with_runner(runner.clone(), selection);
+    let session = connect(&mut manager).await;
+
+    if let Some(entry) = manager.sessions.get_mut(&session.session_id) {
+        entry.companion = None;
+    }
+    let cached = manager
+        .profiles
+        .get_mut(&session.session_id)
+        .expect("cached profile");
+    cached.detected_at_ms = super::now_ms().saturating_sub(60_000);
+    let before_call_count = runner.recorded_calls().len();
+
+    match manager
+        .handle(PhoneRequest::Tap(PhoneTapRequest {
+            session: selector(&session.session_id),
+            phone_snapshot_id: None,
+            x: 10.0,
+            y: 20.0,
+            use_device_coordinates: false,
+        }))
+        .await
+    {
+        PhoneResponse::Action(action) => {
+            assert_eq!(action.backend, PhoneBackendKind::None);
+            assert!(
+                action
+                    .diagnostics
+                    .iter()
+                    .any(|diag| diag.code == "PhoneSnapshotRequired"),
+                "{action:?}"
+            );
+            assert_eq!(
+                action.profile_refresh_state,
+                PhoneCapabilityRefreshState::Stale
+            );
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    let new_calls = &runner.recorded_calls()[before_call_count..];
+    assert!(
+        new_calls.is_empty(),
+        "snapshotless tap must fail before setup or input side effects: {new_calls:?}"
+    );
 }
 
 #[tokio::test]
@@ -1142,12 +1406,6 @@ async fn tap_accepts_landscape_snapshot_when_rotation_matches_profile() {
             stderr: Vec::new(),
         },
     );
-    runner.set_stdout(
-        "adb",
-        &["-s", SERIAL, "shell", "input", "tap", "10", "20"],
-        "",
-    );
-
     let snapshot_id = match manager
         .handle(PhoneRequest::Screenshot(PhoneScreenshotRequest {
             session: selector(&session.session_id),
@@ -1171,10 +1429,13 @@ async fn tap_accepts_landscape_snapshot_when_rotation_matches_profile() {
         .await
     {
         PhoneResponse::Action(action) => {
-            assert_eq!(action.backend, PhoneBackendKind::Adb);
+            assert_eq!(action.backend, PhoneBackendKind::None);
             assert!(
-                action.diagnostics.is_empty(),
-                "rotation-matched landscape snapshot must be actionable: {:?}",
+                action
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == "PhoneCompanionRequired"),
+                "rotation-matched landscape snapshot must pass snapshot validation and fail only on companion routing: {:?}",
                 action.diagnostics
             );
         }
@@ -1352,11 +1613,6 @@ async fn tap_accepts_snapshot_when_size_matches_profile() {
             stderr: Vec::new(),
         },
     );
-    runner.set_stdout(
-        "adb",
-        &["-s", SERIAL, "shell", "input", "tap", "10", "20"],
-        "",
-    );
     let snapshot_id = match manager
         .handle(PhoneRequest::Screenshot(PhoneScreenshotRequest {
             session: selector(&session.session_id),
@@ -1381,10 +1637,13 @@ async fn tap_accepts_snapshot_when_size_matches_profile() {
         .await
     {
         PhoneResponse::Action(action) => {
-            assert_eq!(action.backend, PhoneBackendKind::Adb);
+            assert_eq!(action.backend, PhoneBackendKind::None);
             assert!(
-                action.diagnostics.is_empty(),
-                "a matching snapshot must not be rejected: {:?}",
+                action
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == "PhoneCompanionRequired"),
+                "a matching snapshot must pass snapshot validation and fail only on companion routing: {:?}",
                 action.diagnostics
             );
         }
@@ -1773,7 +2032,7 @@ async fn bootstrap_falls_back_to_health_when_capabilities_unavailable() {
     let package = selection.companion_package.clone();
     // Companion already installed with a verified matching cert -> UpToDate; no
     // install command needed.
-    script_verified_installed_companion(&runner, &package, 1, "1.0.0");
+    script_verified_installed_companion(&runner, &package, 2, "0.1.1");
     let port = server.port;
     let port_arg = format!("tcp:{port}");
     runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
@@ -1810,7 +2069,7 @@ async fn connect_bootstraps_enabled_companion_even_without_auto_install() {
     script_device_probes(&runner);
     let mut selection = resolve_phone_selection(&PhoneConfig::default());
     let package = selection.companion_package.clone();
-    script_verified_installed_companion(&runner, &package, 1, "1.0.0");
+    script_verified_installed_companion(&runner, &package, 2, "0.1.1");
     let port = server.port;
     let port_arg = format!("tcp:{port}");
     runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
@@ -1899,8 +2158,8 @@ async fn app_launch_falls_back_to_adb_when_companion_unreachable() {
 
 /// A fallback-class companion failure on `phone_notifications` must invalidate
 /// the cached companion capability, not just drop the live runtime: the cached
-/// profile stops advertising a reachable companion, so subsequent coordinate and
-/// screenshot routing both fall back to ADB.
+/// profile stops advertising a reachable companion, so subsequent coordinate
+/// routing fails closed while screenshot routing can still fall back to ADB.
 #[tokio::test]
 async fn notifications_fallback_invalidates_cached_companion_capability() {
     let runner = Arc::new(FakeCommandRunner::new());
@@ -1933,8 +2192,8 @@ async fn notifications_fallback_invalidates_cached_companion_capability() {
         other => panic!("unexpected: {other:?}"),
     }
 
-    // The cached companion capability is now invalidated, and both routing
-    // decisions fall back to ADB.
+    // The cached companion capability is now invalidated: coordinate actions no
+    // longer have a fallback, while screenshots can still degrade to ADB.
     let after = manager
         .cached_profile_for_tests("sess-1", now)
         .expect("cached profile");
@@ -1949,10 +2208,9 @@ async fn notifications_fallback_invalidates_cached_companion_capability() {
         "invalidation must set the stale bool in lockstep with refresh_state"
     );
     assert_eq!(after.refresh_state, PhoneCapabilityRefreshState::Stale);
-    assert_eq!(
-        manager.coordinate_backend(&after),
-        PhoneBackendKind::Adb,
-        "coordinate routing must fall back to ADB after invalidation"
+    assert!(
+        manager.coordinate_backend(&after).is_err(),
+        "coordinate routing must require the companion after invalidation"
     );
     assert_eq!(
         manager.screenshot_backend(&after),
@@ -3610,20 +3868,13 @@ impl RecordingCompanion {
 }
 
 /// A successful phone tap on a companion-reachable session animates the phone-side
-/// agent overlay: `finish_action` issues an `overlay_gesture` with kind `tap` and
-/// the device point. This fires even though the tap itself is dispatched via ADB
-/// (the session's `gesture_dispatch` capability is not proven), proving the
-/// overlay draw is independent of the input-dispatch backend.
+/// agent overlay: the real tap dispatches through the companion gesture lane and
+/// `finish_action` issues an `overlay_gesture` with kind `tap` and the device
+/// point.
 #[tokio::test]
 async fn tap_animates_overlay_gesture_when_companion_reachable() {
     let server = RecordingCompanion::start().await;
     let runner = Arc::new(FakeCommandRunner::new());
-    // Tap dispatches through ADB because gesture_dispatch is left unproven below.
-    runner.set_stdout(
-        "adb",
-        &["-s", SERIAL, "shell", "input", "tap", "100", "200"],
-        "",
-    );
     let selection = resolve_phone_selection(&PhoneConfig::default());
     let mut manager = PhoneManager::with_runner(runner, selection);
     let now = PhoneManager::now_ms_for_tests();
@@ -3642,10 +3893,9 @@ async fn tap_animates_overlay_gesture_when_companion_reachable() {
         PhoneResponse::Action(action) => action,
         other => panic!("unexpected: {other:?}"),
     };
-    // The tap routes to ADB (gesture_dispatch unproven), yet the overlay draws.
     assert_eq!(
         action.backend,
-        PhoneBackendKind::Adb,
+        PhoneBackendKind::Companion,
         "{:?}",
         action.diagnostics
     );
@@ -3669,13 +3919,6 @@ async fn swipe_animates_overlay_gesture_with_two_points() {
 
     let server = RecordingCompanion::start().await;
     let runner = Arc::new(FakeCommandRunner::new());
-    runner.set_stdout(
-        "adb",
-        &[
-            "-s", SERIAL, "shell", "input", "swipe", "10", "20", "30", "40", "400",
-        ],
-        "",
-    );
     let selection = resolve_phone_selection(&PhoneConfig::default());
     let mut manager = PhoneManager::with_runner(runner, selection);
     let now = PhoneManager::now_ms_for_tests();
@@ -3699,7 +3942,7 @@ async fn swipe_animates_overlay_gesture_with_two_points() {
     };
     assert_eq!(
         action.backend,
-        PhoneBackendKind::Adb,
+        PhoneBackendKind::Companion,
         "{:?}",
         action.diagnostics
     );
@@ -3731,7 +3974,7 @@ async fn connect_and_disconnect_toggle_overlay_active() {
     // Companion already installed with a verified matching cert -> UpToDate; the
     // forward and the RPC port match the recording server so the bootstrap probe
     // reaches it.
-    script_verified_installed_companion(&runner, &package, 1, "1.0.0");
+    script_verified_installed_companion(&runner, &package, 2, "0.1.1");
     let port_arg = format!("tcp:{}", server.port);
     runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
     selection.companion_enabled = true;
@@ -3941,6 +4184,45 @@ async fn connect_suppresses_auto_install_when_operator_mode_off() {
     );
 }
 
+/// An installed companion that is trusted but older than the staged APK is still
+/// governed by the same install gate: connect may forward/probe it, but must not
+/// run `adb install -r` unless auto-install or an explicit install request allows it.
+#[tokio::test]
+async fn connect_suppresses_trusted_companion_update_when_auto_install_off() {
+    let server = RecordingCompanion::start().await;
+    let runner = Arc::new(FakeCommandRunner::new());
+    script_device_probes(&runner);
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    let package = selection.companion_package.clone();
+    script_verified_installed_companion(&runner, &package, 1, "1.0.0");
+    let port_arg = format!("tcp:{}", server.port);
+    runner.set_stdout("adb", &["-s", SERIAL, "forward", &port_arg, &port_arg], "");
+    selection.companion_enabled = true;
+    selection.companion_auto_install = false;
+    selection.companion_rpc_port = server.port;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
+    let apk = selection.companion_apk_path.clone();
+    let mut manager = PhoneManager::with_runner(runner.clone(), selection);
+
+    let session = connect(&mut manager).await;
+
+    assert!(
+        session.capability_profile.companion.rpc_reachable,
+        "an installed companion should still be forwarded/probed without installing"
+    );
+    let calls = runner.recorded_calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call == &format!("adb -s {SERIAL} install -r {apk}")),
+        "older trusted companion must not update when auto-install is off: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|call| call.contains(" forward tcp:")),
+        "connect should still forward installed companion RPC: {calls:?}"
+    );
+}
+
 /// With operator mode at its default (true) and auto-install on, the same
 /// not-installed connect DOES run the install convenience (default behavior).
 #[tokio::test]
@@ -3968,18 +4250,14 @@ async fn connect_runs_auto_install_with_operator_mode_default() {
     );
 }
 
-/// With `visible_overlay` off, a connect/tap against a reachable companion issues
-/// NO visible-overlay calls (`overlay_active` / `overlay_gesture`), and the
-/// session's cursor capabilities report the resolved disabled state honestly.
+/// With `visible_overlay` off, a connect/tap against a reachable companion still
+/// dispatches real input through the companion gesture lane but issues NO
+/// visible-overlay calls (`overlay_active` / `overlay_gesture`), and the session's
+/// cursor capabilities report the resolved disabled state honestly.
 #[tokio::test]
 async fn visible_overlay_off_suppresses_companion_overlay_calls() {
     let server = RecordingCompanion::start().await;
     let runner = Arc::new(FakeCommandRunner::new());
-    runner.set_stdout(
-        "adb",
-        &["-s", SERIAL, "shell", "input", "tap", "100", "200"],
-        "",
-    );
     let mut selection = resolve_phone_selection(&PhoneConfig::default());
     // The crux: the visible overlay is disabled in config.
     selection.visible_overlay = false;
@@ -4001,10 +4279,11 @@ async fn visible_overlay_off_suppresses_companion_overlay_calls() {
         PhoneResponse::Action(action) => action,
         other => panic!("unexpected: {other:?}"),
     };
-    // The real input still dispatched (the suppression is cosmetic only).
+    // The real input still dispatched through the companion gesture lane (the
+    // suppression is cosmetic only).
     assert_eq!(
         action.backend,
-        PhoneBackendKind::Adb,
+        PhoneBackendKind::Companion,
         "{:?}",
         action.diagnostics
     );

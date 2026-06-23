@@ -77,7 +77,8 @@ those surfaces are not reachable through a phone session.
   names the gate (disabled permission, missing companion, wrong API level).
 - `profile_refresh_state` is `detected` / `reused` / `refreshed` / `stale`. A
   `stale` profile means availability is no longer proven; companion and scrcpy
-  are gated off and routing falls back to ADB-only.
+  are gated off. Re-observe or refresh before acting, because coordinate actions
+  fail closed until the companion gesture lane is re-proven.
 - The profile is invalidated on reconnect, companion install/update,
   orientation/display change, RPC failure, or wireless drop. Runtime permission
   revocation is not auto-detected mid-session; reconnect or call
@@ -127,12 +128,55 @@ those surfaces are not reachable through a phone session.
   in the next screenshot (it marks exactly where the last action landed), and
   correct relative to it rather than re-estimating from scratch.
 
+### Phone pointer argument shape
+
+Every phone tool call is one flat JSON object. Keep `operation`, `session_id`,
+coordinates, and provenance as top-level keys. `phone_snapshot_id` is only the
+opaque snapshot id string; never concatenate JSON fields into that string.
+
+Valid screenshot-coordinate tap:
+
+```json
+{
+  "operation": "tap",
+  "session_id": "phone-sess-...",
+  "phone_snapshot_id": "phone-...",
+  "x": 720,
+  "y": 1558
+}
+```
+
+Valid raw device-pixel tap:
+
+```json
+{
+  "operation": "tap",
+  "session_id": "phone-sess-...",
+  "use_device_coordinates": true,
+  "x": 540,
+  "y": 1200
+}
+```
+
+Invalid nested-string shape:
+
+```json
+{
+  "phone_snapshot_id": "phone-...\n  \"operation\": \"tap\",\n  \"x\": 720,\n  \"y\": 1558"
+}
+```
+
+If schema validation rejects a pointer action, fix the JSON shape or re-observe
+for a fresh snapshot; do not fall back to `adb shell input tap`, because that
+bypasses companion routing and visual feedback.
+
 ## Actions
 
 - Routing is per tool family, not a single ladder:
-  - `phone_pointer(operation="tap"|"swipe")` prefers the companion gesture path
-    when it is proven (fresh profile, RPC reachable, gesture capability), else
-    ADB.
+  - `phone_pointer(operation="tap"|"swipe")` requires the companion gesture path
+    (fresh profile, RPC reachable, gesture capability). If it is not proven, the
+    action returns `backend=none` with `PhoneCompanionRequired`; it must not
+    silently use ADB.
   - `phone_keyboard(operation="type_text"|"press_key")` has **no** companion
     path in v1 and always route through ADB (`input text`, `input keyevent`).
     There is no
@@ -140,9 +184,10 @@ those surfaces are not reachable through a phone session.
     target field first (e.g. tap it); whitespace is preserved and only an empty
     string is rejected. Press-key accepts a keycode name (`KEYCODE_BACK`), a
     bare alias (`home`), or a numeric keycode (`4`).
-  - scrcpy never services tap/swipe/type/key dispatch or screenshots; control
-    always reaches the device via ADB even while scrcpy mirrors. Its only runtime
-    effect is the host-visible cursor-overlay plane.
+  - scrcpy never services tap/swipe/type/key dispatch or screenshots; coordinate
+    control reaches the device through the companion, and text/key input reaches
+    the device through ADB. scrcpy's only runtime effect is the host-visible
+    cursor-overlay plane.
 - **Reading success/failure is structured, not prose.** Every action-bearing
   response (observe, screenshot, tap/swipe/type/press, and all notification ops)
   carries a `backend` field. `backend=none` means nothing ran — the op was
@@ -165,18 +210,17 @@ those surfaces are not reachable through a phone session.
 
 ## Companion lifecycle
 
-- The companion is optional; ADB is the control authority. Without a reachable
-  companion the session is still fully usable for tap/swipe/type/key/screenshot
-  and app management via ADB. The companion only adds richer native gestures,
-  on-device screenshots with overlay metadata, the accessibility tree,
-  notifications, and the native cursor overlay.
-- `phone_accessibility_tree` and the entire `phone_notifications` family are
-  **companion-only in v1 with no ADB fallback**: with no reachable companion
-  they return `backend=none` with `PhoneCompanionRequired` and produce nothing.
-  This is a hard gate, not a degrade — unlike gestures and screenshots, which do
-  fall back to ADB.
-- Recovery when companion-only actions are unavailable or a session has
-  downgraded to ADB: `status(component="phone_companion")` reports the
+- The companion is mandatory for visible coordinate control. Without a reachable
+  companion gesture lane, `phone_pointer(operation="tap"|"swipe")` returns
+  `backend=none` with `PhoneCompanionRequired`; it must not silently use ADB.
+  ADB still handles text/key input, app management, setup, and screenshot
+  fallback.
+- `phone_accessibility_tree`, the entire `phone_notifications` family, and
+  coordinate gestures are **companion-only in v1 with no ADB fallback**: with no
+  reachable companion they return `backend=none` with `PhoneCompanionRequired`
+  and produce nothing.
+- Recovery when companion-only actions are unavailable or a session lacks a
+  reachable companion: `status(component="phone_companion")` reports the
   companion's installed version, signature match, permission grants, RPC
   reachability, and the latest bootstrap diagnostics — use it to diagnose *why*
   the companion is unreachable. `phone_setup(operation="install_companion")` forces an install/
@@ -246,6 +290,66 @@ successful action.
   display label. Install reports the actual strategy it ran (single / multiple /
   multi_package) and takes `apk_paths` host-side paths, not device paths. Intent
   open accepts a deep link or a full intent URI; there is no `activity` field.
+
+### Phone management argument shape
+
+Valid connect, then refresh:
+
+```json
+{
+  "operation": "connect",
+  "serial": "emulator-5554",
+  "install_companion": true
+}
+```
+
+```json
+{
+  "operation": "refresh",
+  "session_id": "phone-sess-..."
+}
+```
+
+`serial`, `install_companion`, and `start_scrcpy` are connect-only. Disconnect
+and refresh use `session_id`, not `serial`.
+
+Valid setup and install:
+
+```json
+{
+  "operation": "open_settings",
+  "session_id": "phone-sess-...",
+  "screen": "app_details",
+  "package_name": "com.example.app"
+}
+```
+
+```json
+{
+  "session_id": "phone-sess-...",
+  "apk_paths": ["/tmp/base.apk"]
+}
+```
+
+Valid notification action and reply:
+
+```json
+{
+  "operation": "action",
+  "session_id": "phone-sess-...",
+  "event_id": "notif-...",
+  "action_id": "reply"
+}
+```
+
+```json
+{
+  "session_id": "phone-sess-...",
+  "event_id": "notif-...",
+  "action_id": "reply",
+  "text": "On it"
+}
+```
 
 ## Disconnecting
 

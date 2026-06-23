@@ -180,9 +180,9 @@ that one view:
 - The cursor animates per action: a tap shows an expanding, fading ripple; a
   swipe or drag moves the cursor along the path with a fading trail. The edge
   glow pulses brighter for the action's duration, then returns to the breathing
-  baseline. Animations are visual only — they never dispatch input (the real
-  tap/swipe is dispatched separately through the companion `gesture` method or
-  ADB `input`).
+  baseline. The overlay animation is visual only, but coordinate input is now
+  companion-owned: tap/swipe must dispatch through the companion `gesture` method
+  so real input and visible feedback stay coupled.
 - All overlay coordinates are Android device pixels (post-rotation display
   pixels), the same space gestures use. No host/desktop coordinate mapping is
   involved for the phone-native plane.
@@ -438,16 +438,11 @@ cursor planes proven, and skipped profiles.
   RPC bootstrap. The argv exposure is bounded (`hidepid`, ephemeral 15-min token,
   localhost-only, ADB-gated); the logcat-readback handshake remains the future
   hardening. See `docs/runtime/phone-companion-protocol.md`.
-- ADB `input tap`/`swipe` dispatch coordinates in the device's displayed
-  (rotated) frame — the same frame the agent's screenshot uses — so no rotation
-  transform is applied on the ADB input path. Validated 2026-06-17 on a Samsung
-  Galaxy S24 (SM-S948B) via a dialer-keypad A/B in forced landscape: tapping a
-  key at its displayed-frame position entered the digit; the natural-frame
-  transform did not. The `device_point_to_natural`/`build_mapping` helpers
-  remain as unused scaffolding for any device that proves to need natural-frame
-  input. Re-validation note: rotation reads from `dumpsys display`
-  (`mCurrentOrientation=N`, N in 0..3) because this Samsung's `dumpsys input`
-  exposes no `SurfaceOrientation` line.
+- Coordinate input is companion-only: normal tap/swipe requests fail with
+  `PhoneCompanionRequired` when the companion gesture lane is not fresh,
+  reachable, and gesture-capable. ADB `input tap`/`swipe` is no longer used as
+  the normal coordinate fallback; ADB remains the setup, text/key, app-management,
+  and screenshot-fallback lane.
 - The companion's exported `SetupActivity` lets a malicious co-resident app
   inject its own RPC token (local privilege escalation). Accepted as risk on
   2026-06-17 for trusted local use; the logcat-readback handshake redesign is

@@ -38,6 +38,21 @@ def test_sync_openclaw_workspace_skills_copies_bundled_skills_and_preserves_othe
     assert not (dest_root / sync_skills.STAGE_DIR_NAME).exists()
 
 
+def test_sync_agents_skill_symlinks_links_all_sky_cua_skills(tmp_path: Path) -> None:
+    source_root = tmp_path / "repo" / "skills"
+    dest_root = tmp_path / "agents" / "skills"
+    for skill_name in sync_skills.SKILL_NAMES:
+        write_skill(source_root, skill_name, f"source {skill_name}")
+
+    sync_skills.sync_agents_skill_symlinks(source_root, dest_root)
+
+    for skill_name in sync_skills.SKILL_NAMES:
+        destination = dest_root / skill_name
+        assert destination.is_symlink()
+        assert destination.resolve() == (source_root / skill_name).resolve()
+        assert f"source {skill_name}" in read_marker(dest_root, skill_name)
+
+
 def test_sync_openclaw_workspace_skills_missing_source_preserves_existing_destinations(
     tmp_path: Path,
 ) -> None:

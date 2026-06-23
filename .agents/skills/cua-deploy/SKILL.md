@@ -11,7 +11,7 @@ description: >-
 
 # cua-deploy
 
-Automates the sky-cua change-to-ship pipeline: build -> deploy/package -> sync OpenClaw workspace skills -> commit -> push.
+Automates the sky-cua change-to-ship pipeline: build -> deploy/package -> sync agent skills -> commit -> push.
 Determine the appropriate lane from context and task scope; never run more pipeline than was asked.
 
 There is no marketplace and no publish flow. The two distribution lanes are:
@@ -24,23 +24,30 @@ There is no marketplace and no publish flow. The two distribution lanes are:
   and installs in bundle mode (no build, no cargo). Materializes the compat plugin from the
   bundled preflight.
 
-## OpenClaw workspace skills sync
+## Agent skills sync
 
 For any deploy or publish lane, also replace the bundled sky-cua skills in
 OpenClaw's workspace skill root. This keeps OpenClaw agents on the same
-browser/computer-use instructions as the deployed plugin.
+browser/computer-use/phone-use instructions as the deployed plugin.
+
+Also link the repo-local sky-cua skills into the global agent skill root:
+`~/.agents/skills/{computer-use,browser-use,phone-use}` -> `skills/*`. This
+keeps opencode/oracle/worker-style agents on the current repo skill text,
+including `phone-use`.
 
 Run after the deploy/publish command succeeds. The helper copies from the actual
-bundle payload at `dist/plugin/sky-cua/skills`, so `--no-build` lanes sync the
-existing bundle instead of the live source tree:
+bundle payload at `dist/plugin/sky-cua/skills` for OpenClaw, so `--no-build`
+lanes sync the existing bundle there; global agent skills are symlinks to the
+repo-local skill directories:
 
 ```bash
 python3 scripts/sync_openclaw_workspace_skills.py
 ```
 
 Only replace the sky-cua-owned skill folders above; do not delete unrelated
-skills in `~/.openclaw/workspace/skills`. The helper stages both skills first
-and rolls back prior destinations if replacement fails.
+skills in `~/.openclaw/workspace/skills` or `~/.agents/skills`. The helper
+stages OpenClaw copies first and rolls back prior destinations if replacement
+fails.
 
 ## Lanes
 

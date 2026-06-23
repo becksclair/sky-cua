@@ -46,6 +46,7 @@ use sky_cua_platform::model::{
 
 use super::adb;
 use super::command::{CommandRunner, RealCommandRunner};
+use super::companion;
 use super::companion::client::CompanionClient;
 use super::companion::identity::CompanionBootstrapOptions;
 use super::cursor::PhoneCursorTracker;
@@ -612,37 +613,31 @@ impl PhoneManager {
         // mirror launches).
         profile.scrcpy = self.detect_scrcpy_capabilities().await;
 
-        // Companion bootstrap (install/update + forward + token + probe) runs
-        // only when enabled and either auto-install or an explicit request asks
-        // for it. A failure degrades to ADB baseline with a structured field.
-        // Bootstrap whenever the companion is enabled so an already-installed
-        // companion is connected (forward + token + probe) even without an
-        // install. `allow_install` gates only the APK install/update step, so
-        // auto-install or an explicit `install_companion` request still drives a
-        // (re)install when one is actually required.
-        let skip_companion_for_forced_backend = matches!(
-            request.backend,
-            Some(PhoneBackendKind::Adb | PhoneBackendKind::Scrcpy)
-        );
-        let (companion_runtime, mut connect_diagnostics) =
-            if self.selection.companion_enabled && !skip_companion_for_forced_backend {
-                // The silent auto-install convenience is gated by operator mode; an
-                // explicit `install_companion` request always allows the install.
-                let allow_install = self.operator_auto_install() || request.install_companion;
-                self.bootstrap_companion_with_options(
-                    &serial,
-                    &mut profile,
-                    now,
-                    CompanionBootstrapOptions {
-                        allow_install,
-                        force_reinstall: false,
-                        allow_downgrade: None,
-                    },
-                )
-                .await
-            } else {
-                (None, Vec::new())
-            };
+        // Companion bootstrap (forward + token + probe, plus optional
+        // install/update) runs whenever the companion is enabled. A requested
+        // input backend such as `adb` controls dispatch preference only; it must
+        // not suppress companion observability, accessibility, notifications, or
+        // the on-device agent overlay. `allow_install` gates only APK
+        // install/update, so an already-installed companion is connected even
+        // when auto-install is off or ADB input was requested.
+        let (companion_runtime, mut connect_diagnostics) = if self.selection.companion_enabled {
+            // The silent auto-install convenience is gated by operator mode; an
+            // explicit `install_companion` request always allows the install.
+            let allow_install = self.operator_auto_install() || request.install_companion;
+            self.bootstrap_companion_with_options(
+                &serial,
+                &mut profile,
+                now,
+                CompanionBootstrapOptions {
+                    allow_install,
+                    force_reinstall: false,
+                    allow_downgrade: None,
+                },
+            )
+            .await
+        } else {
+            (None, Vec::new())
+        };
 
         // Optional scrcpy mirror: launch only when the caller asked for it
         // (explicit `start_scrcpy` or `backend == Scrcpy`). A launch failure never
@@ -834,26 +829,21 @@ impl PhoneManager {
         .await;
         profile.scrcpy = self.detect_scrcpy_capabilities().await;
 
-        let skip_companion_for_forced_backend = matches!(
-            requested_backend,
-            Some(PhoneBackendKind::Adb | PhoneBackendKind::Scrcpy)
-        );
-        let (companion_runtime, companion_diagnostics) =
-            if self.selection.companion_enabled && !skip_companion_for_forced_backend {
-                self.bootstrap_companion_with_options(
-                    &serial,
-                    &mut profile,
-                    now,
-                    CompanionBootstrapOptions {
-                        allow_install,
-                        force_reinstall: false,
-                        allow_downgrade: None,
-                    },
-                )
-                .await
-            } else {
-                (None, Vec::new())
-            };
+        let (companion_runtime, companion_diagnostics) = if self.selection.companion_enabled {
+            self.bootstrap_companion_with_options(
+                &serial,
+                &mut profile,
+                now,
+                CompanionBootstrapOptions {
+                    allow_install,
+                    force_reinstall: false,
+                    allow_downgrade: None,
+                },
+            )
+            .await
+        } else {
+            (None, Vec::new())
+        };
 
         let capabilities = self.backend_capabilities(&profile);
         routing::populate_actions(&mut profile, &capabilities);
@@ -1099,6 +1089,136 @@ impl PhoneManager {
         })
     }
 
+    /// Resolve an [`ActionContext`] and silently refresh a stale capability
+    /// profile before returning it. Real phone workflows often spend longer than
+    /// the short capability TTL reading app UI; the next observe/tap should
+    /// re-prove the companion instead of degrading to ADB and hiding companion
+    /// pointer actions from the agent.
+    pub(super) async fn fresh_action_context(
+        &mut self,
+        selector: &PhoneSessionSelector,
+    ) -> Option<ActionContext> {
+        let session_id = self.resolve_session_id(selector)?;
+        let serial = self.sessions.get(&session_id)?.session.serial.clone();
+        let profile = self.cached_profile(&session_id, now_ms())?;
+        if !profile.stale {
+            return Some(ActionContext {
+                session_id,
+                serial,
+                profile,
+            });
+        }
+
+        let stored_profile_stale = self
+            .profiles
+            .get(&session_id)
+            .is_some_and(|cached| cached.profile.stale);
+        if !stored_profile_stale && self.refresh_live_companion_session(&session_id).await {
+            let mut profile = self.profiles.get(&session_id)?.profile.clone();
+            if matches!(
+                profile.refresh_state,
+                PhoneCapabilityRefreshState::Detected | PhoneCapabilityRefreshState::Refreshed
+            ) {
+                profile.refresh_state = PhoneCapabilityRefreshState::Reused;
+            }
+            return Some(ActionContext {
+                session_id,
+                serial,
+                profile,
+            });
+        }
+
+        let allow_install = self.operator_auto_install();
+        let requested_backend = self
+            .sessions
+            .get(&session_id)
+            .map(|entry| entry.session.backend)
+            .filter(|backend| !matches!(backend, PhoneBackendKind::Auto | PhoneBackendKind::None));
+        self.rebuild_session(
+            &session_id,
+            PhoneCapabilityRefreshState::Refreshed,
+            allow_install,
+            requested_backend,
+        )
+        .await;
+        let mut profile = self.profiles.get(&session_id)?.profile.clone();
+        if matches!(
+            profile.refresh_state,
+            PhoneCapabilityRefreshState::Detected | PhoneCapabilityRefreshState::Refreshed
+        ) {
+            profile.refresh_state = PhoneCapabilityRefreshState::Reused;
+        }
+        Some(ActionContext {
+            session_id,
+            serial,
+            profile,
+        })
+    }
+
+    /// Refresh a stale profile through the already-authorized companion RPC lane
+    /// without launching the companion setup activity. This is the normal
+    /// long-running agent loop: a session can outlive the short capability TTL
+    /// while the user app is foregrounded, and the next observe/tap must not bring
+    /// the setup UI to the front just to re-prove capabilities. If the cached
+    /// token is expired/invalid or the RPC lane is gone, return `false` so the
+    /// full bootstrap path can mint and deliver a fresh token.
+    async fn refresh_live_companion_session(&mut self, session_id: &str) -> bool {
+        let caps = {
+            let Some(entry) = self.sessions.get_mut(session_id) else {
+                return false;
+            };
+            let Some(runtime) = entry.companion.as_mut() else {
+                return false;
+            };
+            match runtime.client.capabilities().await {
+                Ok(caps) => caps,
+                Err(_) => return false,
+            }
+        };
+
+        let now = now_ms();
+        let Some(existing_profile) = self
+            .sessions
+            .get(session_id)
+            .map(|entry| entry.session.capability_profile.clone())
+        else {
+            return false;
+        };
+        let mut profile = existing_profile;
+        let previous = profile.companion.clone();
+        profile.detected_at_ms = now;
+        profile.refresh_state = PhoneCapabilityRefreshState::Reused;
+        profile.stale = false;
+        profile.companion = companion::capabilities_from_response(
+            &caps,
+            None,
+            previous.installed_cert_sha256.as_deref(),
+            previous.expected_cert_sha256.as_deref(),
+            previous.apk_sha256.as_deref(),
+            false,
+            previous.allow_downgrade,
+        );
+        profile.companion.rpc_token_expires_at_ms = previous.rpc_token_expires_at_ms;
+        profile.companion.expected_version = previous.expected_version;
+        profile.scrcpy = self.detect_scrcpy_capabilities().await;
+        let capabilities = self.backend_capabilities(&profile);
+        routing::populate_actions(&mut profile, &capabilities);
+
+        if let Some(entry) = self.sessions.get_mut(session_id) {
+            entry.session.capability_profile = profile.clone();
+            entry.session.capabilities = capabilities;
+            entry.session.companion = Some(profile.companion.clone());
+        }
+        self.profiles.insert(
+            session_id.to_string(),
+            CachedProfile {
+                profile,
+                detected_at_ms: now,
+            },
+        );
+        true
+    }
+
     /// Resolve the serial a `phone_connect` should target: the explicit request
     /// serial, else the configured default, else the single connected device when
     /// exactly one is present. `None` means the target is ambiguous or absent.
@@ -1177,13 +1297,14 @@ impl PhoneManager {
     fn backend_capabilities(&self, profile: &PhoneCapabilityProfile) -> PhoneBackendCapabilities {
         let companion = &profile.companion;
         let companion_up = !profile.stale && companion.rpc_reachable;
+        let companion_gestures = companion_up && companion.gesture_dispatch;
         let scrcpy_up = !profile.stale && profile.scrcpy.active;
         PhoneBackendCapabilities {
             adb: true,
             companion: companion_up,
             scrcpy: scrcpy_up,
             screenshot: true,
-            gestures: true,
+            gestures: companion_gestures,
             text_input: true,
             key_input: true,
             accessibility_tree: companion_up && companion.accessibility_tree,
@@ -1273,11 +1394,11 @@ pub(super) fn phone_disabled_diagnostic() -> DiagnosticEntry {
 }
 
 /// Structured diagnostic when a companion action is attempted with no live
-/// companion runtime for the session; routing falls back to ADB.
+/// companion runtime for the session.
 pub(super) fn no_companion_diagnostic() -> DiagnosticEntry {
     DiagnosticEntry {
         code: super::companion::protocol::error_codes::DISABLED_SERVICE.to_string(),
-        message: "no reachable companion for this session; routed to ADB".to_string(),
+        message: "no reachable companion for this session".to_string(),
         details: None,
     }
 }

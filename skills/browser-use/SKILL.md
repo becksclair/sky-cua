@@ -63,3 +63,67 @@ not reachable through the page.
 - `browser_input(operation="press_key")` handles focused controls and page
   shortcuts. Use literal key strings such as `Enter`, `Escape`, `Tab`,
   `Ctrl+K`, and `Ctrl+L`.
+
+### Browser argument shape
+
+Every browser action after `browser_open` or `browser_claim_tab` carries the
+claimed `tab_id` as a top-level key. Do not put `tab_id`, coordinates, deltas,
+or operation fields inside another string value.
+
+Valid open and navigate:
+
+```json
+{
+  "url": "about:blank"
+}
+```
+
+```json
+{
+  "tab_id": "tab-1",
+  "url": "https://example.com"
+}
+```
+
+Valid viewport scroll:
+
+```json
+{
+  "tab_id": "tab-1",
+  "delta_y": 600
+}
+```
+
+Valid targeted scroll:
+
+```json
+{
+  "tab_id": "tab-1",
+  "x": 500,
+  "y": 700,
+  "delta_y": 600
+}
+```
+
+Valid clicks and typing:
+
+```json
+{
+  "operation": "click",
+  "tab_id": "tab-1",
+  "x": 500,
+  "y": 700
+}
+```
+
+```json
+{
+  "operation": "type_text",
+  "tab_id": "tab-1",
+  "text": "hello"
+}
+```
+
+For `browser_scroll`, omit both `x` and `y` for viewport scroll, or provide
+both as top-level numbers for targeted scroll. Browser URLs must be HTTP(S) or
+exactly `about:blank`; reuse the returned/claimed `tab_id` on every later call.

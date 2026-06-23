@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
-use serde_json::json;
+use serde_json::{Value, json};
 use sky_cua_platform::model::{
     CoordinateSpace, DiagnosticEntry, PhoneActionResponse, PhoneAppInfo, PhoneAppInstallMode,
     PhoneAppResponse, PhoneAppResponseKind, PhoneBackendCapabilities, PhoneBackendKind,
@@ -199,6 +199,21 @@ fn phone_tools_carry_session_selector_and_strict_schema() {
 #[test]
 fn phone_action_schemas_pin_required_fields() {
     let definitions = build_tool_definitions(false, false);
+    let operation_branch = |schema: &Value, operation: &str| -> Value {
+        schema["allOf"]
+            .as_array()
+            .and_then(|all_of| {
+                all_of.iter().find_map(|constraint| {
+                    constraint["oneOf"].as_array().and_then(|one_of| {
+                        one_of
+                            .iter()
+                            .find(|branch| branch["properties"]["operation"]["const"] == operation)
+                    })
+                })
+            })
+            .unwrap_or_else(|| panic!("missing operation={operation} branch"))
+            .clone()
+    };
 
     let pointer = find_tool(&definitions, "phone_pointer");
     assert_eq!(pointer["inputSchema"]["required"], json!(["operation"]));
@@ -208,40 +223,33 @@ fn phone_action_schemas_pin_required_fields() {
             .is_some()
     );
 
-    let pointer_constraints = &pointer["inputSchema"]["allOf"];
+    let tap_branch = operation_branch(&pointer["inputSchema"], "tap");
     assert_eq!(
-        pointer_constraints[0]["then"]["required"],
+        tap_branch["required"],
         json!(["operation", "session_id", "x", "y"])
     );
-    assert_eq!(
-        pointer_constraints[0]["then"]["additionalProperties"],
-        json!(false)
-    );
+    assert_eq!(tap_branch["additionalProperties"], json!(false));
     assert!(
-        pointer_constraints[0]["then"]["anyOf"]
-            .as_array()
-            .is_some_and(|any_of| {
-                any_of
-                    .iter()
-                    .any(|constraint| constraint["required"] == json!(["phone_snapshot_id"]))
-                    && any_of.iter().any(|constraint| {
-                        constraint["properties"]["use_device_coordinates"]["const"] == true
-                            && constraint["required"] == json!(["use_device_coordinates"])
-                    })
-            }),
+        tap_branch["anyOf"].as_array().is_some_and(|any_of| {
+            any_of
+                .iter()
+                .any(|constraint| constraint["required"] == json!(["phone_snapshot_id"]))
+                && any_of.iter().any(|constraint| {
+                    constraint["properties"]["use_device_coordinates"]["const"] == true
+                        && constraint["required"] == json!(["use_device_coordinates"])
+                })
+        }),
         "phone_pointer must require snapshot provenance or raw device coordinates"
     );
 
     let keyboard = find_tool(&definitions, "phone_keyboard");
     assert_eq!(keyboard["inputSchema"]["required"], json!(["operation"]));
+    let type_text_branch = operation_branch(&keyboard["inputSchema"], "type_text");
     assert_eq!(
-        keyboard["inputSchema"]["allOf"][0]["then"]["required"],
+        type_text_branch["required"],
         json!(["operation", "session_id", "text"])
     );
-    assert_eq!(
-        keyboard["inputSchema"]["allOf"][0]["then"]["additionalProperties"],
-        json!(false)
-    );
+    assert_eq!(type_text_branch["additionalProperties"], json!(false));
 
     let pair = find_tool(&definitions, "phone_pair_wireless");
     assert_eq!(

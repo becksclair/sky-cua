@@ -1,10 +1,11 @@
 //! ADB baseline backend.
 //!
 //! Owns host-tooling probing (`adb` path/version/server status), device
-//! enumeration (`adb devices -l`, mDNS), pairing/connect, and the shell
-//! primitives every higher backend builds on: `screencap`, `input tap/swipe/
-//! text/keyevent`, `wm size`/`wm density`, `dumpsys`, `pm`/`am`, install, and
-//! forward. Everything here goes through [`CommandRunner`], never
+//! enumeration (`adb devices -l`, mDNS), pairing/connect, and shell primitives:
+//! `screencap`, `input tap/swipe/text/keyevent`, `wm size`/`wm density`,
+//! `dumpsys`, `pm`/`am`, install, and forward. Coordinate control is routed by
+//! the phone manager and may deliberately avoid the ADB input primitives.
+//! Everything here goes through [`CommandRunner`], never
 //! `std::process::Command` directly.
 //!
 //! The module is split into small, individually test-covered units:
@@ -38,7 +39,7 @@ mod tests;
 // variants. All are wired, so no unused-import expectation is needed.
 pub(super) use install::{
     InstallOutcome, forward_tcp, install_multi_package, install_multiple, install_replace,
-    install_single,
+    install_single, uninstall_package,
 };
 // Re-export the companion secure-settings enablement surface the companion lane
 // consumes as `adb::*` to make a freshly deployed companion immediately usable.
@@ -428,9 +429,9 @@ pub(super) async fn screencap_png(
 /// Result of an `adb shell input` primitive: whether the command exited 0 and a
 /// bounded message for diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct InputOutcome {
-    pub(super) success: bool,
-    pub(super) message: String,
+pub(in crate::phone) struct InputOutcome {
+    pub(in crate::phone) success: bool,
+    pub(in crate::phone) message: String,
 }
 
 pub(in crate::phone::adb) fn input_outcome(
@@ -454,6 +455,7 @@ pub(in crate::phone::adb) fn input_outcome(
 
 /// `adb -s S shell input tap x y` (device coordinates, already rounded by the
 /// mapping lane).
+#[allow(dead_code)]
 pub(super) async fn input_tap(
     runner: &dyn CommandRunner,
     configured_adb_path: Option<&str>,
@@ -469,6 +471,7 @@ pub(super) async fn input_tap(
 }
 
 /// `adb -s S shell input swipe x1 y1 x2 y2 [duration_ms]`.
+#[allow(dead_code)]
 pub(super) async fn input_swipe(
     runner: &dyn CommandRunner,
     configured_adb_path: Option<&str>,

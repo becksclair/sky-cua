@@ -1541,6 +1541,218 @@ mod tests {
     }
 
     #[test]
+    fn grouped_schema_rejections_include_shape_repair_hints() {
+        let service = FakeService::default();
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(false), &model);
+
+        let malformed_phone_pointer = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "phone_pointer",
+            json!({
+                "phone_snapshot_id": "phone-123\n  \"operation\": \"tap\",\n  \"x\": 720,\n  \"y\": 1558"
+            }),
+        )
+        .expect("malformed phone pointer should return invalid request");
+        assert_eq!(malformed_phone_pointer["isError"], true);
+        let phone_message = malformed_phone_pointer["structuredContent"]["error"]["message"]
+            .as_str()
+            .expect("phone pointer error message");
+        assert!(phone_message.contains("phone_snapshot_id"));
+        assert!(phone_message.contains("separate top-level JSON keys"));
+
+        let malformed_browser_scroll = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "browser_scroll",
+            json!({"delta_y": 500}),
+        )
+        .expect("malformed browser scroll should return invalid request");
+        assert_eq!(malformed_browser_scroll["isError"], true);
+        let scroll_message = malformed_browser_scroll["structuredContent"]["error"]["message"]
+            .as_str()
+            .expect("browser scroll error message");
+        assert!(scroll_message.contains("top-level `tab_id`"));
+        assert!(scroll_message.contains("delta_y"));
+
+        let malformed_browser_input = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "browser_input",
+            json!({"operation": "type_text", "tab_id": "tab-1", "text": "hello", "x": 1, "y": 2}),
+        )
+        .expect("malformed browser input should return invalid request");
+        assert_eq!(malformed_browser_input["isError"], true);
+        let input_message = malformed_browser_input["structuredContent"]["error"]["message"]
+            .as_str()
+            .expect("browser input error message");
+        assert!(input_message.contains("top-level `operation`"));
+        assert!(input_message.contains("type_text uses"));
+
+        let malformed_desktop_pointer = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "desktop_pointer",
+            json!({
+                "snapshot_id": "desktop-123\n  \"operation\": \"click\",\n  \"element_index\": 1"
+            }),
+        )
+        .expect("malformed desktop pointer should return invalid request");
+        assert_eq!(malformed_desktop_pointer["isError"], true);
+        let pointer_message = malformed_desktop_pointer["structuredContent"]["error"]["message"]
+            .as_str()
+            .expect("desktop pointer error message");
+        assert!(pointer_message.contains("opaque desktop snapshot id"));
+        assert!(pointer_message.contains("separate top-level JSON keys"));
+
+        let malformed_desktop_scroll = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "desktop_scroll",
+            json!({"direction": "down", "x": 1, "y": 2}),
+        )
+        .expect("malformed desktop scroll should return invalid request");
+        assert_eq!(malformed_desktop_scroll["isError"], true);
+        let desktop_scroll_message =
+            malformed_desktop_scroll["structuredContent"]["error"]["message"]
+                .as_str()
+                .expect("desktop scroll error message");
+        assert!(desktop_scroll_message.contains("snapshot-resolved"));
+        assert!(desktop_scroll_message.contains("does not accept freeform x/y"));
+
+        let malformed_capture = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "capture_desktop",
+            json!({"window_id": "win-1", "display_id": "display-1"}),
+        )
+        .expect("malformed desktop capture should return invalid request");
+        assert_eq!(malformed_capture["isError"], true);
+        let capture_message = malformed_capture["structuredContent"]["error"]["message"]
+            .as_str()
+            .expect("desktop capture error message");
+        assert!(capture_message.contains("Choose exactly one capture source"));
+        assert!(capture_message.contains("do not mix them"));
+
+        let malformed_desktop_action = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "desktop_action",
+            json!({"operation": "perform_action", "snapshot_id": "desktop-1", "element_index": 1}),
+        )
+        .expect("malformed desktop action should return invalid request");
+        assert_eq!(malformed_desktop_action["isError"], true);
+        let desktop_action_message =
+            malformed_desktop_action["structuredContent"]["error"]["message"]
+                .as_str()
+                .expect("desktop action error message");
+        assert!(desktop_action_message.contains("semantic target"));
+        assert!(desktop_action_message.contains("action_name"));
+
+        let malformed_observe = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "observe",
+            json!({"surface": "phone", "tab_id": "tab-1"}),
+        )
+        .expect("malformed observe should return invalid request");
+        assert_eq!(malformed_observe["isError"], true);
+        let observe_message = malformed_observe["structuredContent"]["error"]["message"]
+            .as_str()
+            .expect("observe error message");
+        assert!(observe_message.contains("phone requires"));
+        assert!(observe_message.contains("do not mix fields"));
+
+        let malformed_list_resources = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "list_resources",
+            json!({"surface": "phone", "resource": "apps"}),
+        )
+        .expect("malformed list resources should return invalid request");
+        assert_eq!(malformed_list_resources["isError"], true);
+        let list_message = malformed_list_resources["structuredContent"]["error"]["message"]
+            .as_str()
+            .expect("list resources error message");
+        assert!(list_message.contains("Phone `apps`"));
+        assert!(list_message.contains("session_id"));
+
+        let malformed_phone_connection = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "phone_connection",
+            json!({"operation": "disconnect", "serial": "emulator-5554", "install_companion": true}),
+        )
+        .expect("malformed phone connection should return invalid request");
+        assert_eq!(malformed_phone_connection["isError"], true);
+        let connection_message =
+            malformed_phone_connection["structuredContent"]["error"]["message"]
+                .as_str()
+                .expect("phone connection error message");
+        assert!(connection_message.contains("disconnect"));
+        assert!(connection_message.contains("connect-only fields"));
+
+        let malformed_phone_install = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "phone_app_install",
+            json!({"session_id": "phone-1", "apk_path": "/tmp/app.apk"}),
+        )
+        .expect("malformed phone install should return invalid request");
+        assert_eq!(malformed_phone_install["isError"], true);
+        let install_message = malformed_phone_install["structuredContent"]["error"]["message"]
+            .as_str()
+            .expect("phone install error message");
+        assert!(install_message.contains("apk_paths"));
+        assert!(install_message.contains("no `apk_path`"));
+
+        let malformed_browser_navigate = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "browser_navigate",
+            json!({"tab_id": "tab-1", "url": "ftp://example.test"}),
+        )
+        .expect("malformed browser navigate should return invalid request");
+        assert_eq!(malformed_browser_navigate["isError"], true);
+        let navigate_message = malformed_browser_navigate["structuredContent"]["error"]["message"]
+            .as_str()
+            .expect("browser navigate error message");
+        assert!(navigate_message.contains("HTTP(S)"));
+        assert!(navigate_message.contains("about:blank"));
+
+        assert!(
+            service.take_requests().is_empty(),
+            "schema-rejected calls must not dispatch"
+        );
+    }
+
+    #[test]
     fn grouped_status_schema_allows_phone_branch_arguments() {
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
         let model = ModelSessionInfo::default();
@@ -1684,6 +1896,57 @@ mod tests {
             }
             other => panic!("expected viewport browser scroll request: {other:?}"),
         }
+
+        let scroll_null_x_service = FakeService::with_response(ServiceResponse::Error {
+            code: "ScrollProbe".to_string(),
+            message: "captured".to_string(),
+        });
+        let scroll_null_x_result = handle_session_tool_call(
+            &scroll_null_x_service,
+            &heuristics,
+            &model,
+            &registry,
+            "browser_scroll",
+            json!({
+                "tab_id": "tab-1",
+                "delta_y": 500,
+                "x": null
+            }),
+        )
+        .expect("browser_scroll null coordinate sentinel should pass grouped schema validation");
+        assert_eq!(
+            scroll_null_x_service.take_requests().len(),
+            1,
+            "browser_scroll null coordinate should dispatch, got result: {scroll_null_x_result}"
+        );
+
+        let scroll_half_point_service = FakeService::default();
+        let scroll_half_point_result = handle_session_tool_call(
+            &scroll_half_point_service,
+            &heuristics,
+            &model,
+            &registry,
+            "browser_scroll",
+            json!({
+                "tab_id": "tab-1",
+                "delta_y": 500,
+                "x": 10
+            }),
+        )
+        .expect("browser_scroll half coordinate should return an invalid envelope");
+        assert_eq!(scroll_half_point_result["isError"], true);
+        assert_eq!(
+            scroll_half_point_result["structuredContent"]["branch"],
+            Value::Null
+        );
+        assert_eq!(
+            scroll_half_point_result["structuredContent"]["error"]["code"],
+            "InvalidRequest"
+        );
+        assert!(
+            scroll_half_point_service.take_requests().is_empty(),
+            "browser_scroll numeric half coordinate should not dispatch"
+        );
 
         let image_model = ModelSessionInfo {
             supports_images: Some(true),
@@ -2694,10 +2957,19 @@ mod tests {
         let type_text = find_tool("desktop_keyboard");
         assert_eq!(type_text["inputSchema"]["additionalProperties"], false);
         assert_eq!(type_text["inputSchema"]["required"], json!(["operation"]));
-        assert_eq!(
-            type_text["inputSchema"]["allOf"][0]["then"]["required"],
-            json!(["operation", "text"])
-        );
+        let type_text_branch = type_text["inputSchema"]["allOf"]
+            .as_array()
+            .and_then(|all_of| {
+                all_of.iter().find_map(|constraint| {
+                    constraint["oneOf"].as_array().and_then(|one_of| {
+                        one_of.iter().find(|branch| {
+                            branch["properties"]["operation"]["const"] == "type_text"
+                        })
+                    })
+                })
+            })
+            .expect("desktop_keyboard type_text branch");
+        assert_eq!(type_text_branch["required"], json!(["operation", "text"]));
 
         let get_app_state = find_tool("observe");
         assert!(

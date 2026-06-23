@@ -175,9 +175,11 @@ for genuine per-method application errors (for example `open_intent` rejecting a
 unparseable intent URI). The two are indistinguishable on the wire, so promoting
 all `bad_request` responses to a session-wide fallback would tear down the whole
 companion session over one benign per-method rejection. The host therefore treats
-`bad_request` as a non-fallback per-method error; the affected action still falls
-back to ADB on its own. (A future companion revision could split the per-method
-use into a method-scoped code so `bad_request` becomes purely dispatch-level.)
+`bad_request` as a non-fallback per-method error; method families with an
+alternate lane may fall back on their own, while companion-only families fail
+that action without invalidating the session. (A future companion revision could
+split the per-method use into a method-scoped code so `bad_request` becomes
+purely dispatch-level.)
 
 A per-method application error is a *successful* RPC that reports the operation
 could not be performed (a secure window, an expired notification, etc.). The host
@@ -348,9 +350,9 @@ fallback trigger.
 ### `overlay_gesture`
 
 Animate the agent cursor for one action. **Visual only — it must not dispatch any
-real input**; the real tap/swipe is dispatched separately by the `gesture` method
-(or ADB `input`). The host calls this after each successful phone action when the
-companion is reachable.
+real input**; the real tap/swipe is dispatched separately by the companion
+`gesture` method. The host calls this after each successful coordinate action
+when the companion is reachable.
 
 - Params:
 

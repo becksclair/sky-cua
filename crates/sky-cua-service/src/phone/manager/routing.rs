@@ -3,15 +3,15 @@
 //! Routing is deterministic and read straight from the session's cached
 //! capability profile: companion (when its RPC is reachable and the specific
 //! capability is proven) is preferred, then scrcpy when a live mapped mirror
-//! exists, then the ADB baseline. Every response states the backend that actually
-//! serviced it and the capability profile id in force, and a stale profile
-//! rejects backends it can no longer prove.
+//! exists, then the ADB baseline for non-coordinate operations. Every response
+//! states the backend that actually serviced it and the capability profile id in
+//! force, and a stale profile rejects backends it can no longer prove.
 //!
-//! Coordinate actions (`phone_tap`, `phone_swipe`) require a fresh
-//! `phone_snapshot_id` (unless the caller opts into device coordinates) and run
-//! through the snapshot lane's stale/mismatch/out-of-bounds validation before any
-//! dispatch. After a successful action the per-session cursor tracker is updated
-//! and a synthetic cursor is composited into the next screenshot.
+//! Coordinate actions (`phone_tap`, `phone_swipe`) require a reachable companion
+//! gesture lane plus a fresh `phone_snapshot_id` (unless the caller opts into
+//! device coordinates). They run through snapshot stale/mismatch/out-of-bounds
+//! validation before dispatch and never fall back to ADB, so visible phone-side
+//! feedback stays coupled to real input.
 
 use sky_cua_platform::model::{
     DiagnosticEntry, PhoneActionResponse, PhoneAvailableAction, PhoneBackendCapabilities,
@@ -61,10 +61,23 @@ impl PhoneManager {
     // ===================================================================
 
     /// `phone_tap`: translate snapshot coordinates to device pixels (or accept
-    /// raw device coordinates), dispatch through the preferred backend, and update
-    /// the cursor on success.
+    /// raw device coordinates), dispatch through the companion gesture lane, and
+    /// update the cursor on success.
     pub(super) async fn tap(&mut self, request: PhoneTapRequest) -> PhoneActionResponse {
-        let Some(ctx) = self.action_context(&request.session) else {
+        let Some(pre_ctx) = self.action_context(&request.session) else {
+            return action_no_session(&request.session, "phone_tap");
+        };
+        if let Err(diag) = self.device_point_for(
+            &pre_ctx,
+            request.phone_snapshot_id.as_deref(),
+            request.x,
+            request.y,
+            request.use_device_coordinates,
+        ) {
+            return action_failure(&pre_ctx, "phone_tap", diag);
+        }
+
+        let Some(ctx) = self.fresh_action_context(&request.session).await else {
             return action_no_session(&request.session, "phone_tap");
         };
 
@@ -83,7 +96,10 @@ impl PhoneManager {
             y: request.y,
         });
 
-        let backend = self.coordinate_backend(&ctx.profile);
+        let backend = match self.coordinate_backend(&ctx.profile) {
+            Ok(backend) => backend,
+            Err(diag) => return action_failure(&ctx, "phone_tap", diag),
+        };
         let result = self.dispatch_tap(&ctx, backend, device_point).await;
         let overlay_gesture = Some(OverlayGestureSpec {
             kind: "tap",
@@ -105,7 +121,25 @@ impl PhoneManager {
 
     /// `phone_swipe`: same translation/routing as tap, over a start/end pair.
     pub(super) async fn swipe(&mut self, request: PhoneSwipeRequest) -> PhoneActionResponse {
-        let Some(ctx) = self.action_context(&request.session) else {
+        let Some(pre_ctx) = self.action_context(&request.session) else {
+            return action_no_session(&request.session, "phone_swipe");
+        };
+        for (x, y) in [
+            (request.start_x, request.start_y),
+            (request.end_x, request.end_y),
+        ] {
+            if let Err(diag) = self.device_point_for(
+                &pre_ctx,
+                request.phone_snapshot_id.as_deref(),
+                x,
+                y,
+                request.use_device_coordinates,
+            ) {
+                return action_failure(&pre_ctx, "phone_swipe", diag);
+            }
+        }
+
+        let Some(ctx) = self.fresh_action_context(&request.session).await else {
             return action_no_session(&request.session, "phone_swipe");
         };
 
@@ -134,7 +168,10 @@ impl PhoneManager {
             y: request.end_y,
         });
 
-        let backend = self.coordinate_backend(&ctx.profile);
+        let backend = match self.coordinate_backend(&ctx.profile) {
+            Ok(backend) => backend,
+            Err(diag) => return action_failure(&ctx, "phone_swipe", diag),
+        };
         let result = self
             .dispatch_swipe(&ctx, backend, start, end, request.duration_ms)
             .await;
@@ -217,7 +254,7 @@ impl PhoneManager {
         .await
     }
 
-    /// Dispatch a tap through the chosen backend.
+    /// Dispatch a tap through the companion gesture lane.
     async fn dispatch_tap(
         &mut self,
         ctx: &ActionContext,
@@ -236,20 +273,11 @@ impl PhoneManager {
                     .await?;
                 Ok(dispatched)
             }
-            _ => adb::input_tap(
-                self.runner.as_ref(),
-                self.configured_adb_path(),
-                &ctx.serial,
-                point.x.round() as i32,
-                point.y.round() as i32,
-            )
-            .await
-            .map(|outcome| outcome.success)
-            .map_err(|error| adb::command_error_diagnostic("adb shell input tap", &error)),
+            _ => Err(companion_required_diagnostic()),
         }
     }
 
-    /// Dispatch a swipe through the chosen backend.
+    /// Dispatch a swipe through the companion gesture lane.
     async fn dispatch_swipe(
         &mut self,
         ctx: &ActionContext,
@@ -268,17 +296,7 @@ impl PhoneManager {
                 )
                 .await
             }
-            _ => adb::input_swipe(
-                self.runner.as_ref(),
-                self.configured_adb_path(),
-                &ctx.serial,
-                (start.x.round() as i32, start.y.round() as i32),
-                (end.x.round() as i32, end.y.round() as i32),
-                duration_ms,
-            )
-            .await
-            .map(|outcome| outcome.success)
-            .map_err(|error| adb::command_error_diagnostic("adb shell input swipe", &error)),
+            _ => Err(companion_required_diagnostic()),
         }
     }
 
@@ -319,7 +337,8 @@ impl PhoneManager {
             Err(error) => {
                 if error.is_fallback() {
                     // The companion is no longer reachable; drop it and mark the
-                    // profile so subsequent routing falls back to ADB.
+                    // profile stale so coordinate actions fail closed until a
+                    // refresh or reconnect re-proves gesture dispatch.
                     entry.companion = None;
                     self.invalidate_companion(&ctx.session_id);
                 }
@@ -336,11 +355,11 @@ impl PhoneManager {
     ///
     /// Visual only: it draws a tap ripple or a swipe/drag trail and pulses the
     /// edge glow on the device; it never dispatches real input (that already
-    /// happened via the companion `gesture` or ADB `input`). A session with no
-    /// reachable companion is a no-op. A transport failure drops the companion
-    /// runtime and marks the profile so later routing falls back to ADB, mirroring
-    /// `companion_gesture`; a per-method error is swallowed (the action already
-    /// succeeded — only the cosmetic overlay is unavailable).
+    /// happened via the companion `gesture`). A session with no reachable
+    /// companion is a no-op. A transport failure drops the companion runtime and
+    /// marks the profile stale, mirroring `companion_gesture`; a per-method error
+    /// is swallowed (the action already succeeded — only the cosmetic overlay is
+    /// unavailable).
     async fn animate_overlay_gesture(&mut self, session_id: &str, spec: OverlayGestureSpec) {
         // The per-action overlay draw is one of the companion visible-overlay
         // calls; with the visible overlay disabled in config the host never issues
@@ -515,10 +534,10 @@ impl PhoneManager {
         };
 
         // Animate the agent cursor on the device for a successful coordinate
-        // action whenever the companion is reachable to draw it. This is purely
-        // visual (it never dispatches real input) and fires regardless of whether
-        // the gesture itself was dispatched via the companion or ADB. Best-effort:
-        // a visual failure never changes the action result.
+        // action whenever the companion is reachable to draw it. Companion-owned
+        // coordinate dispatch means this visual feedback is coupled to the real
+        // input path; this extra overlay call remains best-effort, so a visual
+        // failure never changes the action result.
         if success && let Some(spec) = overlay_gesture {
             self.animate_overlay_gesture(&ctx.session_id, spec).await;
         }
@@ -545,13 +564,16 @@ impl PhoneManager {
     // ===================================================================
 
     /// Backend for a coordinate action: companion gestures when proven and
-    /// reachable on a fresh profile, else ADB. scrcpy is not used for coordinate
-    /// dispatch in v1 (it reuses the SDK mouse; control goes through ADB).
-    pub(super) fn coordinate_backend(&self, profile: &PhoneCapabilityProfile) -> PhoneBackendKind {
+    /// reachable on a fresh profile. ADB is intentionally not a coordinate
+    /// fallback because the companion owns both real input and visible feedback.
+    pub(super) fn coordinate_backend(
+        &self,
+        profile: &PhoneCapabilityProfile,
+    ) -> Result<PhoneBackendKind, DiagnosticEntry> {
         if !profile.stale && profile.companion.rpc_reachable && profile.companion.gesture_dispatch {
-            PhoneBackendKind::Companion
+            Ok(PhoneBackendKind::Companion)
         } else {
-            PhoneBackendKind::Adb
+            Err(companion_required_diagnostic())
         }
     }
 
@@ -669,11 +691,8 @@ pub(super) fn populate_actions(
     let mut available = Vec::new();
     let mut unavailable = Vec::new();
 
-    let coordinate_backend = if caps.companion && profile.companion.gesture_dispatch {
-        PhoneBackendKind::Companion
-    } else {
-        PhoneBackendKind::Adb
-    };
+    let coordinate_backend = (caps.companion && profile.companion.gesture_dispatch)
+        .then_some(PhoneBackendKind::Companion);
     let screenshot_backend = if caps.companion && profile.companion.screenshot {
         PhoneBackendKind::Companion
     } else {
@@ -700,8 +719,6 @@ pub(super) fn populate_actions(
     // Always-available ADB baseline actions.
     add("phone_observe", screenshot_backend);
     add("phone_screenshot", screenshot_backend);
-    add("phone_tap", coordinate_backend);
-    add("phone_swipe", coordinate_backend);
     add("phone_type_text", PhoneBackendKind::Adb);
     add("phone_press_key", PhoneBackendKind::Adb);
     add("phone_app_current", PhoneBackendKind::Adb);
@@ -713,6 +730,18 @@ pub(super) fn populate_actions(
     add("phone_open_settings", PhoneBackendKind::Adb);
 
     // Companion-gated actions.
+    if let Some(backend) = coordinate_backend {
+        add("phone_tap", backend);
+        add("phone_swipe", backend);
+    } else {
+        for action in ["phone_tap", "phone_swipe"] {
+            unavailable.push(PhoneUnavailableAction {
+                action: action.to_string(),
+                reason: "companion gesture dispatch not enabled or unreachable".to_string(),
+                detail: None,
+            });
+        }
+    }
     if caps.accessibility_tree {
         add("phone_accessibility_tree", PhoneBackendKind::Companion);
     } else {
@@ -791,6 +820,14 @@ fn action_failure(
     }
 }
 
+fn companion_required_diagnostic() -> DiagnosticEntry {
+    DiagnosticEntry {
+        code: "PhoneCompanionRequired".to_string(),
+        message: "coordinate actions require a reachable companion with gesture dispatch; reconnect or run phone_setup before tapping or swiping".to_string(),
+        details: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -836,7 +873,7 @@ mod tests {
             companion,
             scrcpy: false,
             screenshot: true,
-            gestures: true,
+            gestures: companion,
             text_input: true,
             key_input: true,
             accessibility_tree: companion,
@@ -891,16 +928,36 @@ mod tests {
     }
 
     #[test]
-    fn populate_actions_falls_back_to_adb_without_companion() {
+    fn populate_actions_gates_coordinates_without_companion() {
         let mut profile = profile_with(PhoneCompanionCapabilities::absent("pkg"));
         populate_actions(&mut profile, &caps(false));
 
-        let tap = profile
+        assert!(
+            profile
+                .available_actions
+                .iter()
+                .all(|a| a.action != "phone_tap" && a.action != "phone_swipe"),
+            "coordinate actions must not advertise ADB fallback: {:?}",
+            profile.available_actions
+        );
+        assert!(
+            profile
+                .unavailable_actions
+                .iter()
+                .any(|a| a.action == "phone_tap")
+        );
+        assert!(
+            profile
+                .unavailable_actions
+                .iter()
+                .any(|a| a.action == "phone_swipe")
+        );
+        let screenshot = profile
             .available_actions
             .iter()
-            .find(|a| a.action == "phone_tap")
-            .expect("tap available");
-        assert_eq!(tap.backend, PhoneBackendKind::Adb);
+            .find(|a| a.action == "phone_screenshot")
+            .expect("screenshot available");
+        assert_eq!(screenshot.backend, PhoneBackendKind::Adb);
         // Without a companion, launch / open-intent fall back to ADB affordances.
         assert!(
             profile
