@@ -42,9 +42,8 @@ use wayland_client::{
 
 use crate::{
     cursor_asset,
-    layer_shell::{
-        CursorImage, draw_cursor_asset, ensure_layer_pool_capacity, layer_buffer_pool_size,
-    },
+    layer_shell::{ensure_layer_pool_capacity, layer_buffer_pool_size},
+    renderer::{CursorImage, draw_cursor_asset},
 };
 
 const INITIAL_ROUNDTRIPS: usize = 4;

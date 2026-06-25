@@ -319,6 +319,7 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             kind: OverlayHostMessageKind::Capabilities,
             state: None,
+            gesture: None,
             reason: None,
         }
     }

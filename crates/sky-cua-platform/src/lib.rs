@@ -4,8 +4,14 @@ pub mod config;
 pub mod diagnostics;
 pub mod fd_hygiene;
 pub mod model;
+pub mod overlay_spec_generated;
 pub mod paths;
 pub mod snapshot;
+
+pub use overlay_spec_generated::overlay_spec;
+
+#[cfg(test)]
+mod overlay_spec_tests;
 
 /// Environment keys repaired by the client launcher, forwarded to spawned
 /// service processes, and reported in daemon desktop health. Includes `PATH`

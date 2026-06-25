@@ -119,6 +119,7 @@ impl OverlayController {
                 system_cursor_backend: AgentCursorSystemCursorBackendKind::None,
                 needs_user_install: false,
                 reason: Some(format!("{AGENT_CURSOR_ENV}=never")),
+                ..Default::default()
             };
         }
 
@@ -308,6 +309,7 @@ impl OverlayController {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind,
                 state,
+                gesture: None,
                 reason,
             };
             match self.host.send(message) {
@@ -381,6 +383,7 @@ impl OverlayController {
                 system_cursor_backend: AgentCursorSystemCursorBackendKind::None,
                 needs_user_install: false,
                 reason: Some(self.host.default_reason()),
+                ..Default::default()
             };
         };
 
@@ -976,6 +979,7 @@ mod tests {
                     sky_cua_platform::model::AgentCursorSystemCursorBackendKind::HyprlandConfig,
                 needs_user_install: false,
                 reason: Some("mismatched host".to_string()),
+                ..Default::default()
             }),
             state: None,
             diagnostics: Vec::new(),
@@ -1510,6 +1514,7 @@ mod tests {
                 sky_cua_platform::model::AgentCursorSystemCursorBackendKind::HyprlandConfig,
             needs_user_install: false,
             reason: Some(reason.to_string()),
+            ..Default::default()
         }
     }
 
@@ -1580,8 +1585,7 @@ mod tests {
 
     #[cfg(unix)]
     fn write_fake_overlay_host(path: &std::path::Path) {
-        std::fs::write(
-            path,
+        let script = format!(
             r#"#!/usr/bin/env python3
 import json
 import os
@@ -1589,7 +1593,7 @@ import socket
 import sys
 
 if len(sys.argv) != 4 or sys.argv[1:3] != ["serve", "--socket"]:
-    raise SystemExit(f"unexpected argv: {sys.argv!r}")
+    raise SystemExit(f"unexpected argv: {{sys.argv!r}}")
 
 socket_path = sys.argv[3]
 try:
@@ -1601,7 +1605,7 @@ server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 server.bind(socket_path)
 server.listen(8)
 state = None
-capabilities = {
+capabilities = {{
     "backend": "wayland_layer_shell",
     "visible_overlay": True,
     "screenshot_synthetic_cursor": False,
@@ -1609,7 +1613,7 @@ capabilities = {
     "capture_exclusion": False,
     "needs_user_install": False,
     "reason": "fake host",
-}
+}}
 
 while True:
     conn, _ = server.accept()
@@ -1631,21 +1635,21 @@ while True:
             if state is not None:
                 state["visible"] = False
             if message.get("reason"):
-                diagnostics.append({
+                diagnostics.append({{
                     "code": "OverlayCursorHidden",
                     "message": "Overlay host hid the cursor.",
                     "details": message["reason"],
-                })
+                }})
         elif kind == "show":
             if state is not None:
                 state["visible"] = True
-        reply = {
-            "version": 1,
+        reply = {{
+            "version": {version},
             "ok": True,
             "capabilities": capabilities,
             "state": state,
             "diagnostics": diagnostics,
-        }
+        }}
         conn.sendall(json.dumps(reply).encode("utf-8") + b"\n")
         if kind == "shutdown":
             break
@@ -1656,8 +1660,9 @@ try:
 except FileNotFoundError:
     pass
 "#,
-        )
-        .expect("write fake overlay host");
+            version = OVERLAY_HOST_PROTOCOL_VERSION
+        );
+        std::fs::write(path, script).expect("write fake overlay host");
         let mut permissions = std::fs::metadata(path)
             .expect("fake host metadata")
             .permissions();

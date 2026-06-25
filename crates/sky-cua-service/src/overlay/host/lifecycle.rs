@@ -203,6 +203,7 @@ impl<E: OverlayHostEndpoint> Drop for ManagedOverlayHost<E> {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             kind: OverlayHostMessageKind::Shutdown,
             state: None,
+            gesture: None,
             reason: None,
         });
         let deadline = Instant::now() + HOST_STOP_TIMEOUT;

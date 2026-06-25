@@ -84,9 +84,10 @@ pub enum CoordinateSpace {
     StreamPixels,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentCursorBackendKind {
+    #[default]
     None,
     ScreenshotSynthetic,
     WaylandLayerShell,
@@ -140,6 +141,62 @@ pub enum AgentCursorPlane {
     ScreenshotSynthetic,
 }
 
+/// A generic 2D point used for gesture coordinates. The coordinate space is
+/// carried by the container, not the point itself.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct Point2 {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentOverlayGestureKind {
+    Tap,
+    Drag,
+    Swipe,
+    NoNo,
+}
+
+/// A one-shot animation event sent to the overlay host. Events are not
+/// persistent cursor state: a host restart must not replay old gesture events.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentOverlayGestureEvent {
+    pub event_id: String,
+    pub sequence: u64,
+    pub kind: AgentOverlayGestureKind,
+    pub coordinate_space: CoordinateSpace,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapping_id: Option<String>,
+    pub points: Vec<Point2>,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_action: Option<ActionName>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentOverlayCoverageKind {
+    #[default]
+    None,
+    Full,
+    Partial,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentOverlayEffectsCapabilities {
+    pub glide: bool,
+    pub rotation: bool,
+    pub halo: bool,
+    pub ripple: bool,
+    pub trail: bool,
+    pub edge_glow: bool,
+    pub inward_wave: bool,
+    pub no_no_render: bool,
+    pub hit_test: bool,
+    pub sound: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentCursorPoint {
     pub x: f64,
@@ -164,7 +221,7 @@ pub struct AgentCursorState {
     pub updated_at_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentCursorCapabilities {
     pub backend: AgentCursorBackendKind,
     #[serde(default)]
@@ -186,6 +243,24 @@ pub struct AgentCursorCapabilities {
     pub needs_user_install: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<AgentOverlayEffectsCapabilities>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<AgentOverlayCoverageKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_coordinate_spaces: Vec<CoordinateSpace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_gesture_points: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_schema_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_output_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendered_output_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

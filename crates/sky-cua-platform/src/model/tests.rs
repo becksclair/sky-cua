@@ -3,12 +3,14 @@ use super::{
     ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
     AgentCursorPlane, AgentCursorPoint, AgentCursorPointerTrackingBackendKind,
     AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
-    AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace, DisplayInfo,
-    DisplayIntersection, DisplayRef, DoctorCheck, DoctorReadiness, DoctorReport,
-    DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode, ElementNumericValueReadback,
-    ElementTextReadback, ElementTextSelection, EnvironmentInfo, InputBackendKind, ModelImageFormat,
-    PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
-    SessionKind, SetupCommandReport, WindowInfo, WindowTarget, WindowTargetingSetupReport,
+    AgentOverlayCoverageKind, AgentOverlayEffectsCapabilities, AgentOverlayGestureEvent,
+    AgentOverlayGestureKind, AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope,
+    CoordinateSpace, DisplayInfo, DisplayIntersection, DisplayRef, DoctorCheck, DoctorReadiness,
+    DoctorReport, DoctorSessionEnvRepair, DoctorSessionEnvReport, ElementNode,
+    ElementNumericValueReadback, ElementTextReadback, ElementTextSelection, EnvironmentInfo,
+    InputBackendKind, ModelImageFormat, PixelSize, Point2, PortalCapabilities, RectF,
+    SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport,
+    WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
 use chrono::Utc;
 use serde_json::json;
@@ -581,6 +583,7 @@ fn agent_cursor_capabilities_report_backend_as_snake_case() {
         system_cursor_backend: AgentCursorSystemCursorBackendKind::WaylandClientUnsupported,
         needs_user_install: false,
         reason: None,
+        ..Default::default()
     })
     .expect("capabilities should serialize");
 
@@ -739,4 +742,114 @@ fn agent_cursor_service_requests_preserve_json_wire_shape() {
         "stream_pixels"
     );
     assert!(rendered["state"]["model_point"].get("mapping_id").is_none());
+}
+
+#[test]
+fn point2_serializes_as_plain_x_y() {
+    let rendered = serde_json::to_value(Point2 { x: 1.5, y: 2.5 }).expect("serialize point");
+    assert_eq!(rendered["x"], 1.5);
+    assert_eq!(rendered["y"], 2.5);
+}
+
+#[test]
+fn agent_overlay_gesture_kind_serializes_snake_case() {
+    assert_eq!(
+        serde_json::to_value(AgentOverlayGestureKind::NoNo).expect("serialize"),
+        json!("no_no")
+    );
+}
+
+#[test]
+fn agent_overlay_gesture_event_round_trips() {
+    let event = AgentOverlayGestureEvent {
+        event_id: "evt-1".to_string(),
+        sequence: 42,
+        kind: AgentOverlayGestureKind::Tap,
+        coordinate_space: CoordinateSpace::DesktopLogical,
+        mapping_id: Some("mapping".to_string()),
+        points: vec![Point2 { x: 100.0, y: 200.0 }],
+        duration_ms: 300,
+        source_action: Some(ActionName::Click),
+    };
+    let rendered = serde_json::to_value(&event).expect("serialize event");
+    assert_eq!(rendered["event_id"], "evt-1");
+    assert_eq!(rendered["sequence"], 42);
+    assert_eq!(rendered["kind"], "tap");
+    assert_eq!(rendered["coordinate_space"], "desktop_logical");
+    assert_eq!(
+        rendered["points"].as_array().expect("points")[0]["x"],
+        100.0
+    );
+    assert_eq!(rendered["duration_ms"], 300);
+    assert_eq!(rendered["source_action"], "click");
+    let round_tripped: AgentOverlayGestureEvent =
+        serde_json::from_value(rendered).expect("deserialize");
+    assert_eq!(round_tripped, event);
+}
+
+#[test]
+fn agent_cursor_capabilities_accepts_old_wire_shape_with_new_nested_fields() {
+    let old = json!({
+        "backend": "wayland_layer_shell",
+        "visible_overlay": true,
+        "screenshot_synthetic_cursor": true,
+        "click_through": true,
+        "capture_exclusion": false,
+        "needs_user_install": false
+    });
+    let caps: AgentCursorCapabilities = serde_json::from_value(old).expect("deserialize old caps");
+    assert_eq!(caps.coverage, None);
+    assert_eq!(caps.effects, None);
+    assert!(caps.supported_coordinate_spaces.is_empty());
+    assert_eq!(caps.protocol_version, None);
+}
+
+#[test]
+fn agent_cursor_capabilities_serializes_nested_effects_and_coverage() {
+    let caps = AgentCursorCapabilities {
+        backend: AgentCursorBackendKind::WaylandLayerShell,
+        renderer_backend: AgentCursorRendererBackendKind::Wgpu,
+        visible_overlay: true,
+        screenshot_synthetic_cursor: false,
+        click_through: true,
+        capture_exclusion: true,
+        pointer_tracking_backend: AgentCursorPointerTrackingBackendKind::KwinEffectSignal,
+        pointer_tracking_exact: true,
+        system_cursor_hide_supported: true,
+        system_cursor_hidden: true,
+        system_cursor_backend: AgentCursorSystemCursorBackendKind::HyprlandConfig,
+        needs_user_install: false,
+        reason: None,
+        effects: Some(AgentOverlayEffectsCapabilities {
+            glide: true,
+            rotation: true,
+            halo: true,
+            ripple: true,
+            trail: true,
+            edge_glow: true,
+            inward_wave: true,
+            no_no_render: true,
+            hit_test: false,
+            sound: false,
+        }),
+        coverage: Some(AgentOverlayCoverageKind::Full),
+        supported_coordinate_spaces: vec![CoordinateSpace::DesktopLogical],
+        max_gesture_points: Some(10),
+        protocol_version: Some(2),
+        effect_schema_version: Some(1),
+        active_output_count: Some(1),
+        rendered_output_count: Some(1),
+        adapter_name: Some("test-adapter".to_string()),
+    };
+    let rendered = serde_json::to_value(&caps).expect("serialize caps");
+    assert_eq!(rendered["coverage"], "full");
+    assert_eq!(rendered["effects"]["glide"], true);
+    assert_eq!(
+        rendered["supported_coordinate_spaces"][0],
+        "desktop_logical"
+    );
+    assert_eq!(rendered["protocol_version"], 2);
+    let round_tripped: AgentCursorCapabilities =
+        serde_json::from_value(rendered).expect("deserialize");
+    assert_eq!(round_tripped, caps);
 }

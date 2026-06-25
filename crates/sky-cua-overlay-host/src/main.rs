@@ -67,6 +67,7 @@ fn set_cursor_from_args(args: Vec<String>) -> Result<()> {
             source_action: None,
             updated_at_ms: 0,
         }),
+        gesture: None,
         reason: None,
     });
     print_reply(&reply)
@@ -451,6 +452,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
+                gesture: None,
                 reason: None,
             },
         );
@@ -467,6 +469,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::Capabilities,
                 state: None,
+                gesture: None,
                 reason: None,
             },
         );
@@ -481,6 +484,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
+                gesture: None,
                 reason: None,
             },
         );
@@ -506,6 +510,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
+                gesture: None,
                 reason: None,
             },
         );
@@ -518,6 +523,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::Hide,
                 state: None,
+                gesture: None,
                 reason: Some("capture".to_string()),
             },
         );
@@ -535,6 +541,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
+                gesture: None,
                 reason: None,
             },
         );
@@ -562,6 +569,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
+                gesture: None,
                 reason: None,
             },
         );
@@ -574,6 +582,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
+                gesture: None,
                 reason: None,
             },
         );
@@ -602,6 +611,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
+                gesture: None,
                 reason: None,
             },
         );
@@ -614,6 +624,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
+                gesture: None,
                 reason: None,
             },
         );
@@ -643,6 +654,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
+                gesture: None,
                 reason: None,
             },
         );
@@ -655,6 +667,7 @@ mod tests {
                 version: OVERLAY_HOST_PROTOCOL_VERSION,
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
+                gesture: None,
                 reason: None,
             },
         );

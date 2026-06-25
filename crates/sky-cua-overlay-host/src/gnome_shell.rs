@@ -58,7 +58,8 @@ impl GnomeShellOverlayBackend {
         match message.kind {
             OverlayHostMessageKind::Hello
             | OverlayHostMessageKind::Ping
-            | OverlayHostMessageKind::Capabilities => {
+            | OverlayHostMessageKind::Capabilities
+            | OverlayHostMessageKind::AnimateGesture => {
                 self.refresh_status();
                 self.reply(true, Vec::new())
             }
@@ -208,6 +209,7 @@ impl GnomeShellOverlayBackend {
                     .clone()
                     .unwrap_or_else(|| BACKEND_REASON.to_string()),
             ),
+            ..Default::default()
         }
     }
 }

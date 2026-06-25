@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sky_cua_platform::model::{
     AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPointerTrackingBackendKind,
     AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
-    DiagnosticEntry,
+    AgentOverlayGestureEvent, DiagnosticEntry,
 };
 
 #[cfg(target_os = "linux")]
@@ -13,11 +13,13 @@ mod layer_shell;
 mod playground;
 #[cfg(target_os = "linux")]
 mod pointer_tracking;
+#[cfg(target_os = "linux")]
+mod renderer;
 mod system_cursor;
 #[cfg(target_os = "linux")]
 mod x11;
 
-pub const OVERLAY_HOST_PROTOCOL_VERSION: u32 = 1;
+pub const OVERLAY_HOST_PROTOCOL_VERSION: u32 = 2;
 
 /// Run the interactive desktop pointer playground (Wayland layer-shell only).
 #[cfg(target_os = "linux")]
@@ -60,6 +62,8 @@ pub struct OverlayHostMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<AgentCursorState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gesture: Option<AgentOverlayGestureEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
@@ -73,6 +77,7 @@ pub enum OverlayHostMessageKind {
     Show,
     Ping,
     Shutdown,
+    AnimateGesture,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -118,6 +123,7 @@ impl NoopOverlayBackend {
             system_cursor_backend: AgentCursorSystemCursorBackendKind::None,
             needs_user_install: false,
             reason: Some("no visible overlay backend selected".to_string()),
+            ..Default::default()
         }
     }
 
@@ -151,6 +157,16 @@ impl NoopOverlayBackend {
                 self.state = message.state;
                 self.reply(true, Vec::new())
             }
+            OverlayHostMessageKind::AnimateGesture => self.reply(
+                true,
+                vec![diagnostic(
+                    "OverlayGestureNotSupported",
+                    "Noop backend does not render gestures.",
+                    message.gesture.map(|gesture| {
+                        format!("event_id={} kind={:?}", gesture.event_id, gesture.kind)
+                    }),
+                )],
+            ),
             OverlayHostMessageKind::Hide => {
                 if let Some(state) = self.state.as_mut() {
                     state.visible = false;
@@ -393,6 +409,7 @@ pub fn probe_environment_reply() -> OverlayHostReply {
         version: OVERLAY_HOST_PROTOCOL_VERSION,
         kind: OverlayHostMessageKind::Capabilities,
         state: None,
+        gesture: None,
         reason: None,
     })
 }
@@ -434,7 +451,8 @@ mod tests {
     };
     use image::GenericImageView;
     use sky_cua_platform::model::{
-        ActionName, AgentCursorBackendKind, AgentCursorPoint, AgentCursorState, CoordinateSpace,
+        ActionName, AgentCursorBackendKind, AgentCursorPoint, AgentCursorState,
+        AgentOverlayGestureEvent, AgentOverlayGestureKind, CoordinateSpace, Point2,
     };
 
     #[test]
@@ -443,6 +461,7 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             kind: OverlayHostMessageKind::SetCursor,
             state: Some(cursor_state()),
+            gesture: None,
             reason: None,
         };
 
@@ -463,6 +482,7 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             kind: OverlayHostMessageKind::SetCursor,
             state: Some(cursor_state()),
+            gesture: None,
             reason: None,
         });
         assert!(set.ok);
@@ -472,6 +492,7 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             kind: OverlayHostMessageKind::Hide,
             state: None,
+            gesture: None,
             reason: Some("capture".to_string()),
         });
         assert!(!hidden.state.as_ref().expect("state").visible);
@@ -486,6 +507,7 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             kind: OverlayHostMessageKind::Show,
             state: hidden.state.clone(),
+            gesture: None,
             reason: None,
         });
         assert!(shown.state.expect("state").visible);
@@ -494,6 +516,7 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             kind: OverlayHostMessageKind::Show,
             state: None,
+            gesture: None,
             reason: None,
         });
         assert!(cleared.state.is_none());
@@ -507,6 +530,7 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
             kind: OverlayHostMessageKind::Capabilities,
             state: None,
+            gesture: None,
             reason: None,
         });
 
@@ -514,6 +538,92 @@ mod tests {
         assert_eq!(
             reply.diagnostics.first().map(|entry| entry.code.as_str()),
             Some("OverlayProtocolVersionMismatch")
+        );
+    }
+
+    #[test]
+    fn old_protocol_version_mismatch_fails_loudly() {
+        let mut backend = NoopOverlayBackend::default();
+
+        let reply = backend.handle_message(OverlayHostMessage {
+            version: 1,
+            kind: OverlayHostMessageKind::Capabilities,
+            state: None,
+            gesture: None,
+            reason: None,
+        });
+
+        assert!(!reply.ok);
+        assert_eq!(
+            reply.diagnostics.first().map(|entry| entry.code.as_str()),
+            Some("OverlayProtocolVersionMismatch")
+        );
+    }
+
+    #[test]
+    fn animate_gesture_message_round_trips() {
+        let message = OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::AnimateGesture,
+            state: None,
+            gesture: Some(AgentOverlayGestureEvent {
+                event_id: "evt-1".to_string(),
+                sequence: 1,
+                kind: AgentOverlayGestureKind::Tap,
+                coordinate_space: CoordinateSpace::DesktopLogical,
+                mapping_id: None,
+                points: vec![Point2 { x: 100.0, y: 200.0 }],
+                duration_ms: 250,
+                source_action: Some(ActionName::Click),
+            }),
+            reason: None,
+        };
+        let rendered = serde_json::to_value(&message).expect("serialize animate gesture");
+        assert_eq!(rendered["kind"], "animate_gesture");
+        assert_eq!(rendered["gesture"]["kind"], "tap");
+        let round_tripped: OverlayHostMessage =
+            serde_json::from_value(rendered).expect("deserialize animate gesture");
+        assert_eq!(round_tripped, message);
+    }
+
+    #[test]
+    fn old_message_without_gesture_field_deserializes() {
+        let old = serde_json::json!({
+            "version": OVERLAY_HOST_PROTOCOL_VERSION,
+            "kind": "set_cursor",
+            "state": null
+        });
+        let message: OverlayHostMessage =
+            serde_json::from_value(old).expect("deserialize old message without gesture");
+        assert_eq!(message.kind, OverlayHostMessageKind::SetCursor);
+        assert!(message.gesture.is_none());
+    }
+
+    #[test]
+    fn noop_backend_acknowledges_animate_gesture_with_diagnostic() {
+        let mut backend = NoopOverlayBackend::default();
+        let reply = backend.handle_message(OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::AnimateGesture,
+            state: None,
+            gesture: Some(AgentOverlayGestureEvent {
+                event_id: "evt-1".to_string(),
+                sequence: 1,
+                kind: AgentOverlayGestureKind::Tap,
+                coordinate_space: CoordinateSpace::DesktopLogical,
+                mapping_id: None,
+                points: vec![Point2 { x: 100.0, y: 200.0 }],
+                duration_ms: 250,
+                source_action: Some(ActionName::Click),
+            }),
+            reason: None,
+        });
+        assert!(reply.ok);
+        assert!(
+            reply
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "OverlayGestureNotSupported")
         );
     }
 
@@ -557,6 +667,7 @@ mod tests {
                     version: OVERLAY_HOST_PROTOCOL_VERSION,
                     kind: OverlayHostMessageKind::Capabilities,
                     state: None,
+                    gesture: None,
                     reason: None,
                 })
             }

@@ -1,0 +1,148 @@
+schema_version = 1
+
+[shared.colors]
+agent_pink_red_0_255 = 255
+agent_pink_green_0_255 = 96
+agent_pink_blue_0_255 = 172
+agent_pink_light_red_0_255 = 255
+agent_pink_light_green_0_255 = 150
+agent_pink_light_blue_0_255 = 205
+
+halo_inner_alpha_0_255 = 205
+halo_inner_red_0_255 = 255
+halo_inner_green_0_255 = 118
+halo_inner_blue_0_255 = 188
+
+halo_mid_alpha_0_255 = 90
+halo_mid_red_0_255 = 255
+halo_mid_green_0_255 = 118
+halo_mid_blue_0_255 = 188
+
+halo_outer_alpha_0_255 = 0
+halo_outer_red_0_255 = 255
+halo_outer_green_0_255 = 118
+halo_outer_blue_0_255 = 188
+
+[shared.timing]
+min_gesture_duration_ms = 120
+max_gesture_duration_ms = 60000
+breathe_period_ms = 1600
+wave_period_ms = 2600
+halo_breathe_period_ms = 2000
+click_feedback_ms = 380
+ripple_burst_ms = 380
+swipe_visual_min_ms = 950
+no_no_wiggle_ms = 760
+catcher_idle_ms = 900
+
+[shared.motion]
+cursor_max_speed_dp_per_s = 950.0
+cursor_accel_dp_per_s2 = 5200.0
+cursor_turn_rate_deg_per_s = 300.0
+cursor_arrive_radius_dp = 95.0
+cursor_homing_radius_dp = 240.0
+cursor_homing_turn_boost = 3.5
+cursor_max_step_s = 0.04
+cursor_settle_px = 1.5
+cursor_nose_deg = -135.0
+cursor_rotate_min_speed_dp_per_s = 80.0
+cursor_rotate_rate_deg_per_s = 520.0
+
+[shared.effects]
+glow_baseline_min_alpha_0_1 = 0.55
+glow_baseline_max_alpha_0_1 = 0.92
+glow_pulse_peak_alpha_0_1 = 1.0
+cursor_press_scale_fraction = 0.6
+press_in_fraction = 0.14
+bounce_damp = 1.7
+bounce_omega_pi_fraction = 1.5
+no_no_shakes_fraction = 1.5
+no_no_hold_fraction = 0.78
+max_gesture_points = 16
+capture_barrier_frames = 2
+cursor_source_viewbox_width = 23
+cursor_source_viewbox_height = 24
+cursor_hotspot_fraction_x = 0.43478260869565216
+cursor_hotspot_fraction_y = 0.4583333333333333
+
+[desktop.geometry]
+cursor_height_logical_px = 35.9375
+cursor_halo_radius_logical_px = 23.4375
+ripple_min_logical_px = 20.0
+ripple_max_logical_px = 64.0
+gesture_arrive_logical_px = 10.0
+catcher_logical_px = 64.0
+glow_base_stroke_logical_px = 22.0
+glow_base_blur_logical_px = 22.0
+glow_core_stroke_logical_px = 6.0
+glow_core_blur_logical_px = 9.0
+glow_edge_inset_logical_px = 2.0
+glow_corner_logical_px = 46.0
+wave_stroke_logical_px = 5.0
+wave_blur_logical_px = 9.0
+ripple_stroke_logical_px = 16.0
+ripple_blur_logical_px = 14.0
+trail_stroke_logical_px = 6.0
+
+[desktop.rendering]
+wave_count = 3
+wave_travel_fraction = 0.20
+wave_fade_in_fraction = 0.12
+wave_max_alpha_0_255 = 165
+max_base_alpha_0_255 = 200
+max_core_alpha_0_255 = 220
+max_ripple_alpha_0_255 = 215
+max_trail_alpha_0_255 = 190
+trail_max_points = 24
+shadow_dx_viewbox_fraction = 0.5
+shadow_dy_viewbox_fraction = 1.3
+shadow_blur_viewbox_fraction = 1.1
+shadow_alpha_0_1 = 0.58
+halo_scale_min_fraction = 0.85
+halo_scale_max_fraction = 1.10
+halo_alpha_min_fraction = 0.5
+halo_alpha_max_fraction = 1.0
+viewbox_height = 48
+
+[android.geometry]
+cursor_height_dp = 35.9375
+cursor_halo_radius_dp = 23.4375
+ripple_min_dp = 20.0
+ripple_max_dp = 64.0
+gesture_arrive_dp = 10.0
+catcher_dp = 64.0
+glow_base_stroke_dp = 22.0
+glow_base_blur_dp = 22.0
+glow_core_stroke_dp = 6.0
+glow_core_blur_dp = 9.0
+glow_edge_inset_dp = 2.0
+glow_corner_dp = 46.0
+wave_stroke_dp = 5.0
+wave_blur_dp = 9.0
+ripple_stroke_dp = 16.0
+ripple_blur_dp = 14.0
+trail_stroke_dp = 6.0
+
+[android.rendering]
+wave_count = 3
+wave_travel_fraction = 0.20
+wave_fade_in_fraction = 0.12
+wave_max_alpha_0_255 = 165
+max_base_alpha_0_255 = 200
+max_core_alpha_0_255 = 220
+max_ripple_alpha_0_255 = 215
+max_trail_alpha_0_255 = 190
+trail_max_points = 24
+shadow_dx_viewbox_fraction = 0.5
+shadow_dy_viewbox_fraction = 1.3
+shadow_blur_viewbox_fraction = 1.1
+shadow_alpha_0_1 = 0.58
+halo_scale_min_fraction = 0.85
+halo_scale_max_fraction = 1.10
+halo_alpha_min_fraction = 0.5
+halo_alpha_max_fraction = 1.0
+viewbox_height = 48
+
+[sound]
+enabled = false
+no_no_sound_asset = ""

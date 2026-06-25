@@ -143,7 +143,8 @@ impl X11OverlayBackend {
         match message.kind {
             OverlayHostMessageKind::Hello
             | OverlayHostMessageKind::Ping
-            | OverlayHostMessageKind::Capabilities => self.reply(true, Vec::new()),
+            | OverlayHostMessageKind::Capabilities
+            | OverlayHostMessageKind::AnimateGesture => self.reply(true, Vec::new()),
             OverlayHostMessageKind::Shutdown => {
                 let _ = self.hide_visible_cursor();
                 self.reply(true, Vec::new())
@@ -304,6 +305,7 @@ impl X11OverlayBackend {
             system_cursor_backend: self.system_cursor.backend(),
             needs_user_install: false,
             reason: Some(reason),
+            ..Default::default()
         }
     }
 }

@@ -29,9 +29,9 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Added a coordinator/parallel-worker execution model with ownership boundaries, merge gates, integration order, worker handoff contracts, and cross-worker verification requirements.
 - [x] 2026-06-25: Reworked the plan to resolve the open implementation risks directly: visual/action timing is now a contract, one-shot animations use `AnimateGesture` with a protocol version bump, host behavior is governed by a state machine, capture requires an applied-frame barrier, shader behavior must pass GPU conformance tests, renderer surfaces use host-owned RAII guards, multi-output coverage fails closed, legacy renderer retirement happens after WGPU proof, and X11/no-no input/sound are scoped as follow-on plans.
 - [x] Phase 0: Baseline, VM setup, and contract freeze.
-- [ ] Phase 1: Shared spec and generator.
+- [x] Phase 1: Shared spec and generator.
 - [ ] Phase 2: Platform protocol, lifecycle, action timing, and capture barriers.
-- [ ] Phase 3: Renderer extraction with static Wayland WGPU parity.
+- [x] Phase 3: Renderer extraction with static Wayland WGPU parity.
 - [ ] Phase 4: GPU effects, WGSL conformance, and deterministic rendering tests.
 - [ ] Phase 5: Wayland hardening, multi-output correctness, frame pacing, and failure recovery.
 - [ ] Phase 6: Android consumer migration and parity fixtures.
@@ -44,6 +44,9 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Phase 0 unit baseline passed in the VM: `cargo test -p sky-cua-platform`, `cargo test -p sky-cua-service overlay`, `cargo test -p sky-cua-overlay-host`, `uv run pytest scripts/test_agent_cursor_smokes.py scripts/test_overlay_pointer_animations.py`, `cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline`, `cargo test -p sky-cua-overlay-host protocol_messages_use_snake_case_kind_values`, and `cargo test -p sky-cua-service derives_cursor_state_from_explicit_click_coordinates`.
 - [x] 2026-06-25: Closed Phase 0 VM readiness gaps by adding `uv`, `python-pytest`, `jdk21-openjdk`, Android command-line tools, API 36, platform-tools, and build-tools 36.0.0 to the VM provisioning path; live VM was updated and the exact offline Android gate passed after one online cache warm-up.
 - [x] 2026-06-25: Frozen shared-contract decisions for Wave 1: spec keys/units, generated Rust/Kotlin module names, `AgentOverlayGestureEvent`, `AnimateGesture`, nested capabilities, action timing, host state machine, capture barrier, renderer/surface boundary, WGPU buffer ABI, fixture shapes, multi-output fail-closed policy, and VM artifact naming.
+- [x] 2026-06-25: Phase 1 shared spec/codegen accepted with `resources/overlay/agent_overlay_spec.toml`, strict `scripts/generate_overlay_spec.py`, generated `sky_cua_platform::overlay_spec`, generated Kotlin `OverlaySpec`, and VM-verified idempotent `--check`.
+- [x] 2026-06-25: Phase 2 C1 platform/protocol slice accepted: added `Point2`, `AgentOverlayGestureKind`, `AgentOverlayGestureEvent`, nested overlay capability fields, `OverlayHostMessageKind::AnimateGesture`, and overlay-host protocol version 2. Remaining Phase 2 timing, dedupe/stale handling, lifecycle states, and capture barriers stay in C2.
+- [x] 2026-06-25: Phase 3 static renderer extraction accepted: WGPU instance/device/queue/pipeline/cursor texture moved under `crates/sky-cua-overlay-host/src/renderer/`, Wayland host now owns raw-handle `SurfaceGuard`s, all active surfaces are validated before WGPU support is claimed, and static layer-shell WGPU parity passed in the testing VM.
 
 ## Surprises & Discoveries
 
@@ -94,6 +97,12 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 
 - Observation: Android's offline unit-test gate is only meaningful after the VM has the SDK and a warmed Gradle dependency cache.
   Evidence: after installing command-line tools 21.0, `platforms;android-36`, `build-tools;36.0.0`, and running one online `./gradlew :app:testDebugUnitTest`, the exact offline command passed.
+
+- Observation: Phase 1 generator strictness needed to cover missing nested tables as well as missing leaf keys.
+  Evidence: coordinator review found `_validate_node` rejected missing leaf keys but would allow omitted subsections such as `[shared.motion]`; the generator and `scripts/test_overlay_spec_codegen.py` now reject missing nested sections.
+
+- Observation: Keeping a WGPU surface alive without the instance registry triggered a live VM panic during Phase 3 smoke.
+  Evidence: the first `wayland-layer-shell-overlay` rerun panicked with `Surface[Id(0,1)] does not exist`; the coordinator changed `WgpuOverlayRenderer::new` to borrow `WgpuOverlayInstance` and kept `LayerShellApp.surface_guards` declared before `LayerShellApp.instance` so guards drop before the instance.
 
 ## External Research Snapshot
 
@@ -204,7 +213,39 @@ If any dependency version changes before implementation, repeat this research be
 
 ## Outcomes & Retrospective
 
-Phase 0 is complete. The testing VM baseline passed after VM readiness fixes for Python and Android tooling. No runtime overlay architecture changes have landed yet. The only code changes so far are VM provisioning/test readiness updates so future VM baselines can run the required `uv` and Android commands.
+Phase 0 is complete. The testing VM baseline passed after VM readiness fixes for Python and Android tooling. The VM provisioning path now installs Python/Android prerequisites required by later gates.
+
+Phase 1 is complete. The shared TOML spec is the source of truth, generated Rust and Kotlin constants are byte-identical on repeat runs, stale generated files are caught by `--check`, invalid specs are rejected, and the stricter nested-section validation is covered by tests. Coordinator VM verification passed:
+
+    python3 scripts/generate_overlay_spec.py --check
+    uv run pytest scripts/test_overlay_spec_codegen.py -q
+    uv run ruff format --check scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
+    uv run ruff check scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
+    uv run basedpyright scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
+    cargo test -p sky-cua-platform overlay_spec_tests
+
+The Phase 2 C1 platform/protocol slice is complete, but Phase 2 overall remains open for C2. Coordinator VM verification passed:
+
+    cargo test -p sky-cua-platform
+    cargo test -p sky-cua-service derives_cursor_state_from_explicit_click_coordinates
+
+Phase 3 is complete. The Wayland host still owns compositor objects, output/layer lifecycle, input regions, pointer tracking, frame callbacks, and the legacy SHM fallback; the new renderer modules own WGPU instance interaction, adapter/device/queue setup, surface policy, cursor texture upload, shader/pipeline setup, and per-surface draw submission. The coordinator corrected the raw-handle lifetime after a VM smoke panic and reran the decisive gates. Coordinator VM verification passed:
+
+    cargo test -p sky-cua-overlay-host
+    cargo test -p sky-cua-service overlay
+    python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=/home/bex/projects/sky-cua/artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay
+
+The Phase 3 live artifact is `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625035012797790-vis`, with `before.jpg` and `visible.jpg`. The smoke reported `renderer_backend: "wgpu"`, llvmpipe via Vulkan, `visible_overlay_captured: true`, and hotspot pixel deltas near the cursor.
+
+Wave 1 integration verification also passed in the VM:
+
+    python3 scripts/generate_overlay_spec.py --check
+    uv run pytest scripts/test_overlay_spec_codegen.py -q
+    cargo test -p sky-cua-platform
+    cargo test -p sky-cua-overlay-host protocol_messages_use_snake_case_kind_values
+    cargo test -p sky-cua-overlay-host
+    cargo test -p sky-cua-service overlay
+    cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
 
 ## Context and Orientation
 

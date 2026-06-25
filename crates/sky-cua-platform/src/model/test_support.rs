@@ -177,6 +177,7 @@ pub fn cursor_capabilities() -> AgentCursorCapabilities {
         system_cursor_backend: AgentCursorSystemCursorBackendKind::WaylandClientUnsupported,
         needs_user_install: false,
         reason: None,
+        ..Default::default()
     }
 }
 
