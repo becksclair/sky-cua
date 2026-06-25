@@ -184,6 +184,25 @@ pub enum AgentOverlayCoverageKind {
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentOverlayHostLifecycleState {
+    /// The overlay host process has not been spawned or has exited.
+    #[default]
+    ProcessUnavailable,
+    /// The host process is running and the IPC endpoint is reachable, but the
+    /// backend has not finished initialization yet.
+    SocketReady,
+    /// The backend is actively initializing (adapter/device setup, surface
+    /// validation, etc.).
+    BackendInitializing,
+    /// The backend finished initialization and is ready to render.
+    BackendReady,
+    /// The backend finished initialization but visible overlay is unsupported
+    /// in this session.
+    BackendUnsupported,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentOverlayEffectsCapabilities {
     pub glide: bool,
     pub rotation: bool,

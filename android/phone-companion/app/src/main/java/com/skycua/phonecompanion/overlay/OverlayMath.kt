@@ -14,56 +14,63 @@ object OverlayMath {
     /** A device-pixel point used by the overlay path sampling. */
     data class Point(val x: Float, val y: Float)
 
+    /**
+     * All tunable constants below are forwarded from the generated [OverlaySpec]
+     * so Android, desktop, and tests share one source of truth. Public names are
+     * preserved for existing callers and tests; new code may use [OverlaySpec]
+     * directly.
+     */
+
     /** Minimum animation duration so a near-zero hint still reads as motion. */
-    const val MIN_GESTURE_DURATION_MS: Long = 120L
+    const val MIN_GESTURE_DURATION_MS: Long = OverlaySpec.Shared.Timing.MIN_GESTURE_DURATION_MS
 
     /** Maximum animation duration so an absurd hint cannot pin the overlay on. */
-    const val MAX_GESTURE_DURATION_MS: Long = 60_000L
+    const val MAX_GESTURE_DURATION_MS: Long = OverlaySpec.Shared.Timing.MAX_GESTURE_DURATION_MS
 
     /** Breathing-glow cycle period for the persistent "agent in control" state. */
-    const val BREATHE_PERIOD_MS: Long = 1_600L
+    const val BREATHE_PERIOD_MS: Long = OverlaySpec.Shared.Timing.BREATHE_PERIOD_MS
 
     /** Resting glow intensity floor while breathing (stays strong, never dim). */
-    const val GLOW_BASELINE_MIN: Float = 0.55f
+    const val GLOW_BASELINE_MIN: Float = OverlaySpec.Shared.Effects.GLOW_BASELINE_MIN_ALPHA_0_1.toFloat()
 
     /** Glow intensity ceiling while breathing. */
-    const val GLOW_BASELINE_MAX: Float = 0.92f
+    const val GLOW_BASELINE_MAX: Float = OverlaySpec.Shared.Effects.GLOW_BASELINE_MAX_ALPHA_0_1.toFloat()
 
     /** Glow intensity while a gesture pulse is at its peak. */
-    const val GLOW_PULSE_PEAK: Float = 1.0f
+    const val GLOW_PULSE_PEAK: Float = OverlaySpec.Shared.Effects.GLOW_PULSE_PEAK_ALPHA_0_1.toFloat()
 
     /** How long an inward wave takes to travel from the edge toward the centre. */
-    const val WAVE_PERIOD_MS: Long = 2_600L
+    const val WAVE_PERIOD_MS: Long = OverlaySpec.Shared.Timing.WAVE_PERIOD_MS
 
     /** Cursor-halo breathing period (independent of the glow breathing). */
-    const val HALO_BREATHE_PERIOD_MS: Long = 2_000L
+    const val HALO_BREATHE_PERIOD_MS: Long = OverlaySpec.Shared.Timing.HALO_BREATHE_PERIOD_MS
 
     /** Cursor glide speed cap (dp/s). */
-    const val CURSOR_MAX_SPEED_DP_S: Float = 950f
+    const val CURSOR_MAX_SPEED_DP_S: Float = OverlaySpec.Shared.Motion.CURSOR_MAX_SPEED_DP_PER_S.toFloat()
 
     /** Cursor forward acceleration/deceleration (dp/s^2). */
-    const val CURSOR_ACCEL_DP_S2: Float = 5200f
+    const val CURSOR_ACCEL_DP_S2: Float = OverlaySpec.Shared.Motion.CURSOR_ACCEL_DP_PER_S2.toFloat()
 
     /**
      * Max heading turn rate (deg/s). The cursor steers its nose toward the target
      * at this rate and thrusts forward along it, so it cannot turn instantly — a
      * direction change carries momentum and curves the path. Lower = wider curves.
      */
-    const val CURSOR_TURN_RATE_DEG_S: Float = 300f
+    const val CURSOR_TURN_RATE_DEG_S: Float = OverlaySpec.Shared.Motion.CURSOR_TURN_RATE_DEG_PER_S.toFloat()
 
     /**
      * Distance (dp) within which the cursor decelerates to a clean stop at the
      * target — the speed ramps to zero on arrival, so it eases in and never
      * overshoots or springs back.
      */
-    const val CURSOR_ARRIVE_RADIUS_DP: Float = 95f
+    const val CURSOR_ARRIVE_RADIUS_DP: Float = OverlaySpec.Shared.Motion.CURSOR_ARRIVE_RADIUS_DP.toFloat()
 
     /**
      * Distance (dp) within which the cursor's turn rate ramps up so it curls
      * tightly into the target instead of orbiting it. Outside this radius the wide
      * cruise turn rate (and the whole launch/cruise curve) is untouched.
      */
-    const val CURSOR_HOMING_RADIUS_DP: Float = 240f
+    const val CURSOR_HOMING_RADIUS_DP: Float = OverlaySpec.Shared.Motion.CURSOR_HOMING_RADIUS_DP.toFloat()
 
     /**
      * Peak extra turn-rate multiplier at the target (the cursor can turn this much
@@ -72,29 +79,29 @@ object OverlayMath {
      * off-axis approach from any angle spirals in within a fraction of a turn
      * rather than circling the point.
      */
-    const val CURSOR_HOMING_TURN_BOOST: Float = 3.5f
+    const val CURSOR_HOMING_TURN_BOOST: Float = OverlaySpec.Shared.Motion.CURSOR_HOMING_TURN_BOOST.toFloat()
 
     /** Largest integration step honoured, so a long frame cannot fling the cursor. */
-    const val CURSOR_MAX_STEP_S: Float = 0.04f
+    const val CURSOR_MAX_STEP_S: Float = OverlaySpec.Shared.Motion.CURSOR_MAX_STEP_S.toFloat()
 
     /** Within this distance (px) the cursor settles exactly on the target and stops. */
-    const val CURSOR_SETTLE_PX: Float = 1.5f
+    const val CURSOR_SETTLE_PX: Float = OverlaySpec.Shared.Motion.CURSOR_SETTLE_PX.toFloat()
 
     /**
      * The screen heading (degrees) the cursor image's nose points at zero
      * rotation. The `cursor-chat` pointer's tip aims up-and-left, i.e. roughly
      * -135 degrees in screen coordinates (x right, y down). Calibrated visually.
      */
-    const val CURSOR_NOSE_DEG: Float = -135f
+    const val CURSOR_NOSE_DEG: Float = OverlaySpec.Shared.Motion.CURSOR_NOSE_DEG.toFloat()
 
     /** Above this speed (dp/s) the cursor noses into its heading; below it, resets. */
-    const val CURSOR_ROTATE_MIN_SPEED_DP_S: Float = 80f
+    const val CURSOR_ROTATE_MIN_SPEED_DP_S: Float = OverlaySpec.Shared.Motion.CURSOR_ROTATE_MIN_SPEED_DP_PER_S.toFloat()
 
     /** How fast the drawn cursor rotation eases toward its target (deg/s). */
-    const val CURSOR_ROTATE_RATE_DEG_S: Float = 520f
+    const val CURSOR_ROTATE_RATE_DEG_S: Float = OverlaySpec.Shared.Motion.CURSOR_ROTATE_RATE_DEG_PER_S.toFloat()
 
     /** Tap press-feedback duration (ms): squash + ripple + bounce for a tap. */
-    const val CLICK_FEEDBACK_MS: Long = 380L
+    const val CLICK_FEEDBACK_MS: Long = OverlaySpec.Shared.Timing.CLICK_FEEDBACK_MS
 
     /**
      * Glow-ripple burst duration (ms): the ripple expands and fades over this from
@@ -102,38 +109,38 @@ object OverlayMath {
      * of (and shorter than) the slide, so the ripple "happens when the gesture
      * begins" while the squash/bounce stretches across the whole slide.
      */
-    const val RIPPLE_BURST_MS: Long = 380L
+    const val RIPPLE_BURST_MS: Long = OverlaySpec.Shared.Timing.RIPPLE_BURST_MS
 
     /** Pointer scale at the bottom of the press squash. */
-    const val CURSOR_PRESS_SCALE: Float = 0.6f
+    const val CURSOR_PRESS_SCALE: Float = OverlaySpec.Shared.Effects.CURSOR_PRESS_SCALE_FRACTION.toFloat()
 
     /**
      * Minimum visual duration (ms) for a swipe slide. The real gesture is brief,
      * but the cursor sails the path slowly and deliberately so the motion reads;
      * the squash bounce-out stretches across this whole duration.
      */
-    const val SWIPE_VISUAL_MIN_MS: Long = 950L
+    const val SWIPE_VISUAL_MIN_MS: Long = OverlaySpec.Shared.Timing.SWIPE_VISUAL_MIN_MS
 
     /** Fraction of the feedback spent squashing down before the bounce-back. */
-    private const val PRESS_IN: Float = 0.14f
+    private const val PRESS_IN: Float = OverlaySpec.Shared.Effects.PRESS_IN_FRACTION.toFloat()
 
     /** Bounce damping; lower = bigger overshoot on the way back to 1.0. */
-    private const val BOUNCE_DAMP: Float = 1.7f
+    private const val BOUNCE_DAMP: Float = OverlaySpec.Shared.Effects.BOUNCE_DAMP.toFloat()
 
     /** Bounce frequency; PI*1.5 lands the bounce exactly at scale 1.0 at the end. */
-    private val BOUNCE_OMEGA: Float = (1.5 * Math.PI).toFloat()
+    private val BOUNCE_OMEGA: Float = (OverlaySpec.Shared.Effects.BOUNCE_OMEGA_PI_FRACTION * Math.PI).toFloat()
 
     /** "No-no" head-shake duration (ms) when the operator taps the pointer. */
-    const val NO_NO_WIGGLE_MS: Long = 760L
+    const val NO_NO_WIGGLE_MS: Long = OverlaySpec.Shared.Timing.NO_NO_WIGGLE_MS
 
     /** Peak left/right turn (degrees) of the "no-no" head shake. */
-    const val NO_NO_WIGGLE_DEG: Float = 20f
+    const val NO_NO_WIGGLE_DEG: Float = OverlaySpec.Shared.Effects.NO_NO_WIGGLE_DEG.toFloat()
 
     /** Number of full left-right turns; 1.5 = turn one way, the other, then back. */
-    private const val NO_NO_SHAKES: Float = 1.5f
+    private const val NO_NO_SHAKES: Float = OverlaySpec.Shared.Effects.NO_NO_SHAKES_FRACTION.toFloat()
 
     /** Fraction held at full amplitude before easing out to centre at the end. */
-    private const val NO_NO_HOLD: Float = 0.78f
+    private const val NO_NO_HOLD: Float = OverlaySpec.Shared.Effects.NO_NO_HOLD_FRACTION.toFloat()
 
     /**
      * "No-no" head-shake rotation (degrees) at normalized [progress]: a deliberate

@@ -1,0 +1,208 @@
+{
+	"schema_version": 1,
+	"description": "Canonical motion/animation math fixtures for Rust/Kotlin/WGSL parity. Generated values are rounded to 6 decimal places; consumers should compare with a small epsilon.",
+	"tolerance": {
+		"default": 1e-4,
+		"loose": 0.01
+	},
+	"fixtures": {
+		"breathing_intensity": [
+			{
+				"elapsed_ms": 0,
+				"expected": 0.55
+			},
+			{
+				"elapsed_ms": 400,
+				"expected": 0.735
+			},
+			{
+				"elapsed_ms": 800,
+				"expected": 0.92
+			},
+			{
+				"elapsed_ms": 1200,
+				"expected": 0.735
+			},
+			{
+				"elapsed_ms": 1600,
+				"expected": 0.55
+			}
+		],
+		"wave_phase": [
+			{
+				"elapsed_ms": 0,
+				"expected": 0.0
+			},
+			{
+				"elapsed_ms": 650,
+				"expected": 0.25
+			},
+			{
+				"elapsed_ms": 1300,
+				"expected": 0.5
+			},
+			{
+				"elapsed_ms": 1950,
+				"expected": 0.75
+			},
+			{
+				"elapsed_ms": 2600,
+				"expected": 0.0
+			}
+		],
+		"halo_breathing": [
+			{
+				"elapsed_ms": 0,
+				"expected": 0.0
+			},
+			{
+				"elapsed_ms": 500,
+				"expected": 0.5
+			},
+			{
+				"elapsed_ms": 1000,
+				"expected": 1.0
+			},
+			{
+				"elapsed_ms": 1500,
+				"expected": 0.5
+			},
+			{
+				"elapsed_ms": 2000,
+				"expected": 0.0
+			}
+		],
+		"pulse_intensity": [
+			{
+				"progress": 0.0,
+				"baseline": 0.55,
+				"expected": 1.0
+			},
+			{
+				"progress": 0.0,
+				"baseline": 0.92,
+				"expected": 1.0
+			},
+			{
+				"progress": 1.0,
+				"baseline": 0.92,
+				"expected": 0.92
+			},
+			{
+				"progress": 0.5,
+				"baseline": 0.55,
+				"expected": 0.775
+			}
+		],
+		"ripple_radius": [
+			{
+				"progress": 0.0,
+				"min_radius": 20.0,
+				"max_radius": 64.0,
+				"expected": 20.0
+			},
+			{
+				"progress": 0.5,
+				"min_radius": 20.0,
+				"max_radius": 64.0,
+				"expected": 42.0
+			},
+			{
+				"progress": 1.0,
+				"min_radius": 20.0,
+				"max_radius": 64.0,
+				"expected": 64.0
+			}
+		],
+		"ripple_alpha": [
+			{
+				"progress": 0.0,
+				"expected": 1.0
+			},
+			{
+				"progress": 0.25,
+				"expected": 0.75
+			},
+			{
+				"progress": 0.5,
+				"expected": 0.5
+			},
+			{
+				"progress": 0.75,
+				"expected": 0.25
+			},
+			{
+				"progress": 1.0,
+				"expected": 0.0
+			}
+		],
+		"click_scale": [
+			{
+				"progress": 0.0,
+				"expected": 1.0
+			},
+			{
+				"progress": 0.14,
+				"expected": 0.6
+			},
+			{
+				"progress": 1.0,
+				"expected": 1.0
+			}
+		],
+		"trail_alpha": [
+			{
+				"sample_index": 0,
+				"sample_count": 5,
+				"head_alpha": 1.0,
+				"expected": 0.0
+			},
+			{
+				"sample_index": 2,
+				"sample_count": 5,
+				"head_alpha": 1.0,
+				"expected": 0.5
+			},
+			{
+				"sample_index": 4,
+				"sample_count": 5,
+				"head_alpha": 1.0,
+				"expected": 1.0
+			},
+			{
+				"sample_index": 4,
+				"sample_count": 5,
+				"head_alpha": 0.5,
+				"expected": 0.5
+			}
+		],
+		"no_no_wiggle": [
+			{
+				"progress": 0.0,
+				"amplitude_deg": 20.0,
+				"expected": 0.0
+			},
+			{
+				"progress": 1.0,
+				"amplitude_deg": 20.0,
+				"expected": 0.0
+			}
+		],
+		"path_sampling": [
+			{
+				"points": [
+					{ "x": 0.0, "y": 0.0 },
+					{ "x": 10.0, "y": 0.0 },
+					{ "x": 40.0, "y": 0.0 }
+				],
+				"progress": 0.5,
+				"expected": { "x": 20.0, "y": 0.0 }
+			},
+			{
+				"points": [{ "x": 0.0, "y": 0.0 }, { "x": 3.0, "y": 4.0 }],
+				"progress": 1.0,
+				"expected": { "x": 3.0, "y": 4.0 }
+			}
+		]
+	}
+}

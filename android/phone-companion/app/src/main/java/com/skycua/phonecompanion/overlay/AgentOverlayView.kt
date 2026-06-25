@@ -420,65 +420,93 @@ class AgentOverlayView(context: Context) : View(context) {
     }
 
     companion object {
+        /**
+         * All visual constants below are forwarded from the generated [OverlaySpec]
+         * so Android, desktop, and tests share one source of truth. Public names
+         * are preserved for existing callers.
+         */
+
         // Pink agent palette — soft pastel character but a rich, saturated pink.
-        val PINK: Int = android.graphics.Color.rgb(255, 96, 172) // intense rose pink
-        val PINK_LIGHT: Int = android.graphics.Color.rgb(255, 150, 205) // lighter highlight
+        val PINK: Int = android.graphics.Color.rgb(
+            OverlaySpec.Shared.Colors.AGENT_PINK_RED_0_255,
+            OverlaySpec.Shared.Colors.AGENT_PINK_GREEN_0_255,
+            OverlaySpec.Shared.Colors.AGENT_PINK_BLUE_0_255,
+        )
+        val PINK_LIGHT: Int = android.graphics.Color.rgb(
+            OverlaySpec.Shared.Colors.AGENT_PINK_LIGHT_RED_0_255,
+            OverlaySpec.Shared.Colors.AGENT_PINK_LIGHT_GREEN_0_255,
+            OverlaySpec.Shared.Colors.AGENT_PINK_LIGHT_BLUE_0_255,
+        )
 
         // Cursor halo (radial-gradient stops, centre -> edge).
-        val HALO_INNER: Int = android.graphics.Color.argb(205, 255, 118, 188)
-        val HALO_MID: Int = android.graphics.Color.argb(90, 255, 118, 188)
-        val HALO_OUTER: Int = android.graphics.Color.argb(0, 255, 118, 188)
+        val HALO_INNER: Int = android.graphics.Color.argb(
+            OverlaySpec.Shared.Colors.HALO_INNER_ALPHA_0_255,
+            OverlaySpec.Shared.Colors.HALO_INNER_RED_0_255,
+            OverlaySpec.Shared.Colors.HALO_INNER_GREEN_0_255,
+            OverlaySpec.Shared.Colors.HALO_INNER_BLUE_0_255,
+        )
+        val HALO_MID: Int = android.graphics.Color.argb(
+            OverlaySpec.Shared.Colors.HALO_MID_ALPHA_0_255,
+            OverlaySpec.Shared.Colors.HALO_MID_RED_0_255,
+            OverlaySpec.Shared.Colors.HALO_MID_GREEN_0_255,
+            OverlaySpec.Shared.Colors.HALO_MID_BLUE_0_255,
+        )
+        val HALO_OUTER: Int = android.graphics.Color.argb(
+            OverlaySpec.Shared.Colors.HALO_OUTER_ALPHA_0_255,
+            OverlaySpec.Shared.Colors.HALO_OUTER_RED_0_255,
+            OverlaySpec.Shared.Colors.HALO_OUTER_GREEN_0_255,
+            OverlaySpec.Shared.Colors.HALO_OUTER_BLUE_0_255,
+        )
 
         // Edge glow geometry (dp). Wide soft blur, but a saturated, present pink.
-        const val GLOW_BASE_STROKE_DP: Float = 22f
-        const val GLOW_BASE_BLUR_DP: Float = 22f
-        const val GLOW_CORE_STROKE_DP: Float = 6f
-        const val GLOW_CORE_BLUR_DP: Float = 9f
-        const val GLOW_EDGE_INSET_DP: Float = 2f
-        const val GLOW_CORNER_DP: Float = 46f
-        const val MAX_BASE_ALPHA: Float = 200f
-        const val MAX_CORE_ALPHA: Float = 220f
+        const val GLOW_BASE_STROKE_DP: Float = OverlaySpec.Android.Geometry.GLOW_BASE_STROKE_DP.toFloat()
+        const val GLOW_BASE_BLUR_DP: Float = OverlaySpec.Android.Geometry.GLOW_BASE_BLUR_DP.toFloat()
+        const val GLOW_CORE_STROKE_DP: Float = OverlaySpec.Android.Geometry.GLOW_CORE_STROKE_DP.toFloat()
+        const val GLOW_CORE_BLUR_DP: Float = OverlaySpec.Android.Geometry.GLOW_CORE_BLUR_DP.toFloat()
+        const val GLOW_EDGE_INSET_DP: Float = OverlaySpec.Android.Geometry.GLOW_EDGE_INSET_DP.toFloat()
+        const val GLOW_CORNER_DP: Float = OverlaySpec.Android.Geometry.GLOW_CORNER_DP.toFloat()
+        const val MAX_BASE_ALPHA: Float = OverlaySpec.Android.Rendering.MAX_BASE_ALPHA_0_255.toFloat()
+        const val MAX_CORE_ALPHA: Float = OverlaySpec.Android.Rendering.MAX_CORE_ALPHA_0_255.toFloat()
 
         // Inward-wave geometry.
-        const val WAVE_COUNT: Int = 3
-        const val WAVE_STROKE_DP: Float = 5f
-        const val WAVE_BLUR_DP: Float = 9f
-        const val WAVE_TRAVEL_FRACTION: Float = 0.20f // of min(screen) travelled inward
-        const val WAVE_FADE_IN: Float = 0.12f // phase fraction spent fading in off the edge
-        const val WAVE_MAX_ALPHA: Float = 165f
+        const val WAVE_COUNT: Int = OverlaySpec.Android.Rendering.WAVE_COUNT
+        const val WAVE_STROKE_DP: Float = OverlaySpec.Android.Geometry.WAVE_STROKE_DP.toFloat()
+        const val WAVE_BLUR_DP: Float = OverlaySpec.Android.Geometry.WAVE_BLUR_DP.toFloat()
+        const val WAVE_TRAVEL_FRACTION: Float = OverlaySpec.Android.Rendering.WAVE_TRAVEL_FRACTION.toFloat()
+        const val WAVE_FADE_IN: Float = OverlaySpec.Android.Rendering.WAVE_FADE_IN_FRACTION.toFloat()
+        const val WAVE_MAX_ALPHA: Float = OverlaySpec.Android.Rendering.WAVE_MAX_ALPHA_0_255.toFloat()
 
-        // Cursor geometry (dp). The source pointer is 46x48 with its hotspot
-        // matching the desktop agent cursor (10/23, 11/24 of the rendered glyph).
-        // The rendered height and halo are sized as a unit so the pointer reads at
-        // a consistent proportion across phones.
-        const val CURSOR_HEIGHT_DP: Float = 35.9375f
-        const val CURSOR_HALO_RADIUS_DP: Float = 23.4375f
+        // Cursor geometry (dp). The hotspot fractions come from the shared spec
+        // (normalized against the 23x24 source viewbox) and the shadow viewbox
+        // height scales the drop-shadow offsets.
+        const val CURSOR_HEIGHT_DP: Float = OverlaySpec.Android.Geometry.CURSOR_HEIGHT_DP.toFloat()
+        const val CURSOR_HALO_RADIUS_DP: Float = OverlaySpec.Android.Geometry.CURSOR_HALO_RADIUS_DP.toFloat()
 
-        // Drop shadow matched to the desktop cursor (c1): offset and blur as
-        // fractions of the 48-unit glyph viewBox so the raised look scales with
-        // the rendered cursor size.
-        const val VIEWBOX_HEIGHT: Float = 48f
-        const val SHADOW_DX_VB: Float = 0.5f
-        const val SHADOW_DY_VB: Float = 1.3f
-        const val SHADOW_BLUR_VB: Float = 1.1f
-        const val SHADOW_ALPHA: Float = 0.58f
-        const val HOTSPOT_FRACTION_X: Float = 10f / 23f
-        const val HOTSPOT_FRACTION_Y: Float = 11f / 24f
+        // Drop shadow matched to the desktop cursor: offset and blur as
+        // fractions of the glyph viewBox so the raised look scales with the
+        // rendered cursor size.
+        const val VIEWBOX_HEIGHT: Float = OverlaySpec.Android.Rendering.VIEWBOX_HEIGHT.toFloat()
+        const val SHADOW_DX_VB: Float = OverlaySpec.Android.Rendering.SHADOW_DX_VIEWBOX_FRACTION.toFloat()
+        const val SHADOW_DY_VB: Float = OverlaySpec.Android.Rendering.SHADOW_DY_VIEWBOX_FRACTION.toFloat()
+        const val SHADOW_BLUR_VB: Float = OverlaySpec.Android.Rendering.SHADOW_BLUR_VIEWBOX_FRACTION.toFloat()
+        const val SHADOW_ALPHA: Float = OverlaySpec.Android.Rendering.SHADOW_ALPHA_0_1.toFloat()
+        const val HOTSPOT_FRACTION_X: Float = OverlaySpec.Shared.Effects.CURSOR_HOTSPOT_FRACTION_X.toFloat()
+        const val HOTSPOT_FRACTION_Y: Float = OverlaySpec.Shared.Effects.CURSOR_HOTSPOT_FRACTION_Y.toFloat()
 
         // Cursor-halo breathing band (scale + opacity at pulse 0 -> 1).
-        const val HALO_SCALE_MIN: Float = 0.85f
-        const val HALO_SCALE_MAX: Float = 1.10f
-        const val HALO_ALPHA_MIN: Float = 0.5f
-        const val HALO_ALPHA_MAX: Float = 1.0f
+        const val HALO_SCALE_MIN: Float = OverlaySpec.Android.Rendering.HALO_SCALE_MIN_FRACTION.toFloat()
+        const val HALO_SCALE_MAX: Float = OverlaySpec.Android.Rendering.HALO_SCALE_MAX_FRACTION.toFloat()
+        const val HALO_ALPHA_MIN: Float = OverlaySpec.Android.Rendering.HALO_ALPHA_MIN_FRACTION.toFloat()
+        const val HALO_ALPHA_MAX: Float = OverlaySpec.Android.Rendering.HALO_ALPHA_MAX_FRACTION.toFloat()
 
         // Ripple geometry (dp): a wide, soft glow band (not a thin line).
-        const val RIPPLE_STROKE_DP: Float = 16f
-        const val RIPPLE_BLUR_DP: Float = 14f
-        const val MAX_RIPPLE_ALPHA: Float = 215f
+        const val RIPPLE_STROKE_DP: Float = OverlaySpec.Android.Geometry.RIPPLE_STROKE_DP.toFloat()
+        const val RIPPLE_BLUR_DP: Float = OverlaySpec.Android.Geometry.RIPPLE_BLUR_DP.toFloat()
+        const val MAX_RIPPLE_ALPHA: Float = OverlaySpec.Android.Rendering.MAX_RIPPLE_ALPHA_0_255.toFloat()
 
         // Trail geometry (dp).
-        const val TRAIL_STROKE_DP: Float = 6f
-        const val MAX_TRAIL_ALPHA: Float = 190f
-        const val TRAIL_MAX_POINTS: Int = 24
+        const val TRAIL_STROKE_DP: Float = OverlaySpec.Android.Geometry.TRAIL_STROKE_DP.toFloat()
+        const val MAX_TRAIL_ALPHA: Float = OverlaySpec.Android.Rendering.MAX_TRAIL_ALPHA_0_255.toFloat()
+        const val TRAIL_MAX_POINTS: Int = OverlaySpec.Android.Rendering.TRAIL_MAX_POINTS
     }
 }

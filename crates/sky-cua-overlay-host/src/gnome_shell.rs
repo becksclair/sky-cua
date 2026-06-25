@@ -5,12 +5,12 @@ use serde::Deserialize;
 use sky_cua_platform::model::{
     AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPointerTrackingBackendKind,
     AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
-    DiagnosticEntry,
+    AgentOverlayHostLifecycleState, DiagnosticEntry,
 };
 
 use crate::{
-    OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
-    diagnostic,
+    GestureEventTracker, OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind,
+    OverlayHostReply, diagnostic,
 };
 
 const SERVICE_NAME: &str = "com.openai.Codex.WindowControl";
@@ -25,6 +25,7 @@ pub struct GnomeShellOverlayBackend {
     system_cursor_hidden: bool,
     last_status: Option<GnomeAgentCursorStatus>,
     reason: Option<String>,
+    gesture_tracker: GestureEventTracker,
 }
 
 impl GnomeShellOverlayBackend {
@@ -37,6 +38,7 @@ impl GnomeShellOverlayBackend {
             last_status: Some(status),
             state: None,
             reason: None,
+            gesture_tracker: GestureEventTracker::default(),
         })
     }
 
@@ -58,10 +60,22 @@ impl GnomeShellOverlayBackend {
         match message.kind {
             OverlayHostMessageKind::Hello
             | OverlayHostMessageKind::Ping
-            | OverlayHostMessageKind::Capabilities
-            | OverlayHostMessageKind::AnimateGesture => {
+            | OverlayHostMessageKind::Capabilities => {
                 self.refresh_status();
                 self.reply(true, Vec::new())
+            }
+            OverlayHostMessageKind::AnimateGesture => {
+                self.refresh_status();
+                let (ok, _gesture, mut diagnostics) =
+                    crate::validate_gesture_message(message.gesture, &mut self.gesture_tracker);
+                if ok {
+                    diagnostics.push(diagnostic(
+                        "OverlayGestureNotSupported",
+                        "GNOME Shell cursor actor gesture rendering is not active for shared overlay effects.",
+                        None,
+                    ));
+                }
+                self.reply(ok, diagnostics)
             }
             OverlayHostMessageKind::Shutdown => {
                 let diagnostics = self.show_or_diagnostic("shutdown");
@@ -89,7 +103,9 @@ impl GnomeShellOverlayBackend {
                         Some(reason),
                     ));
                 }
-                self.reply(ok, diagnostics)
+                let mut reply = self.reply(ok, diagnostics);
+                reply.applied_sequence = message.sequence;
+                reply
             }
             OverlayHostMessageKind::Show => {
                 self.state = message.state;
@@ -182,6 +198,8 @@ impl GnomeShellOverlayBackend {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok,
             capabilities: Some(self.capabilities()),
+            lifecycle_state: Some(AgentOverlayHostLifecycleState::BackendReady),
+            applied_sequence: None,
             state: self.state.clone(),
             diagnostics,
         }

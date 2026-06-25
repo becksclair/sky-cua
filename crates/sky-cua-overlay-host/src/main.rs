@@ -68,6 +68,7 @@ fn set_cursor_from_args(args: Vec<String>) -> Result<()> {
             updated_at_ms: 0,
         }),
         gesture: None,
+        sequence: None,
         reason: None,
     });
     print_reply(&reply)
@@ -453,6 +454,7 @@ mod tests {
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -470,6 +472,7 @@ mod tests {
                 kind: OverlayHostMessageKind::Capabilities,
                 state: None,
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -485,6 +488,7 @@ mod tests {
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -511,6 +515,7 @@ mod tests {
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -524,6 +529,7 @@ mod tests {
                 kind: OverlayHostMessageKind::Hide,
                 state: None,
                 gesture: None,
+                sequence: None,
                 reason: Some("capture".to_string()),
             },
         );
@@ -542,6 +548,7 @@ mod tests {
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -570,6 +577,7 @@ mod tests {
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -583,6 +591,7 @@ mod tests {
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -612,6 +621,7 @@ mod tests {
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -625,6 +635,7 @@ mod tests {
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -655,6 +666,7 @@ mod tests {
                 kind: OverlayHostMessageKind::SetCursor,
                 state: Some(cursor_state()),
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );
@@ -668,6 +680,7 @@ mod tests {
                 kind: OverlayHostMessageKind::Shutdown,
                 state: None,
                 gesture: None,
+                sequence: None,
                 reason: None,
             },
         );

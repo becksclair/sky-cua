@@ -1,8 +1,11 @@
+use std::collections::VecDeque;
+
 use serde::{Deserialize, Serialize};
 use sky_cua_platform::model::{
     AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPointerTrackingBackendKind,
     AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
-    AgentOverlayGestureEvent, DiagnosticEntry,
+    AgentOverlayGestureEvent, AgentOverlayGestureKind, AgentOverlayHostLifecycleState,
+    DiagnosticEntry,
 };
 
 #[cfg(target_os = "linux")]
@@ -63,6 +66,11 @@ pub struct OverlayHostMessage {
     pub state: Option<AgentCursorState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gesture: Option<AgentOverlayGestureEvent>,
+    /// Sequence number for stateful requests such as hide-for-capture barriers.
+    /// The host replies with `applied_sequence` once the request has taken
+    /// effect on all active surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -86,6 +94,15 @@ pub struct OverlayHostReply {
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<AgentCursorCapabilities>,
+    /// Current host lifecycle state. Clients must not infer state from prose
+    /// when this field is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle_state: Option<AgentOverlayHostLifecycleState>,
+    /// Sequence number applied by the host for requests that require a barrier
+    /// (for example, hide-for-capture). Present only when the host has
+    /// confirmed the request has taken effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_sequence: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<AgentCursorState>,
     #[serde(default)]
@@ -96,6 +113,7 @@ pub struct OverlayHostReply {
 pub struct NoopOverlayBackend {
     state: Option<AgentCursorState>,
     reason: Option<String>,
+    gesture_tracker: GestureEventTracker,
 }
 
 impl NoopOverlayBackend {
@@ -104,6 +122,7 @@ impl NoopOverlayBackend {
         Self {
             state: None,
             reason: Some(reason.into()),
+            gesture_tracker: GestureEventTracker::default(),
         }
     }
 
@@ -157,22 +176,27 @@ impl NoopOverlayBackend {
                 self.state = message.state;
                 self.reply(true, Vec::new())
             }
-            OverlayHostMessageKind::AnimateGesture => self.reply(
-                true,
-                vec![diagnostic(
-                    "OverlayGestureNotSupported",
-                    "Noop backend does not render gestures.",
-                    message.gesture.map(|gesture| {
-                        format!("event_id={} kind={:?}", gesture.event_id, gesture.kind)
-                    }),
-                )],
-            ),
+            OverlayHostMessageKind::AnimateGesture => {
+                let (ok, _gesture, mut diagnostics) =
+                    validate_gesture_message(message.gesture, &mut self.gesture_tracker);
+                if ok {
+                    diagnostics.push(diagnostic(
+                        "OverlayGestureNotSupported",
+                        "Noop backend does not render gestures.",
+                        None,
+                    ));
+                }
+                self.reply(ok, diagnostics)
+            }
             OverlayHostMessageKind::Hide => {
                 if let Some(state) = self.state.as_mut() {
                     state.visible = false;
                 }
-                self.reply(
+                let applied_sequence = message.sequence;
+                self.reply_with_lifecycle(
                     true,
+                    AgentOverlayHostLifecycleState::BackendUnsupported,
+                    applied_sequence,
                     message.reason.map_or_else(Vec::new, |reason| {
                         vec![diagnostic(
                             "OverlayCursorHidden",
@@ -193,14 +217,188 @@ impl NoopOverlayBackend {
     }
 
     fn reply(&self, ok: bool, diagnostics: Vec<DiagnosticEntry>) -> OverlayHostReply {
+        self.reply_with_lifecycle(
+            ok,
+            AgentOverlayHostLifecycleState::BackendUnsupported,
+            None,
+            diagnostics,
+        )
+    }
+
+    fn reply_with_lifecycle(
+        &self,
+        ok: bool,
+        lifecycle_state: AgentOverlayHostLifecycleState,
+        applied_sequence: Option<u64>,
+        diagnostics: Vec<DiagnosticEntry>,
+    ) -> OverlayHostReply {
         OverlayHostReply {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok,
             capabilities: Some(self.capabilities()),
+            lifecycle_state: Some(lifecycle_state),
+            applied_sequence,
             state: self.state.clone(),
             diagnostics,
         }
     }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct GestureEventTracker {
+    recent_event_ids: VecDeque<String>,
+    highest_sequence: u64,
+}
+
+impl GestureEventTracker {
+    const MAX_RECENT_EVENTS: usize = 128;
+
+    fn record_event_id(&mut self, event_id: String) {
+        if self.recent_event_ids.len() >= Self::MAX_RECENT_EVENTS {
+            let _ = self.recent_event_ids.pop_front();
+        }
+        self.recent_event_ids.push_back(event_id);
+    }
+
+    fn has_event_id(&self, event_id: &str) -> bool {
+        self.recent_event_ids
+            .iter()
+            .any(|recent| recent == event_id)
+    }
+}
+
+pub(crate) fn validate_gesture_message(
+    gesture: Option<AgentOverlayGestureEvent>,
+    tracker: &mut GestureEventTracker,
+) -> (bool, Option<AgentOverlayGestureEvent>, Vec<DiagnosticEntry>) {
+    let Some(mut gesture) = gesture else {
+        return (
+            false,
+            None,
+            vec![diagnostic(
+                "OverlayGestureMissing",
+                "AnimateGesture message did not include a gesture payload.",
+                None,
+            )],
+        );
+    };
+
+    if gesture.event_id.trim().is_empty() {
+        return (
+            false,
+            None,
+            vec![diagnostic(
+                "OverlayGestureInvalid",
+                "Gesture event_id must be non-empty.",
+                None,
+            )],
+        );
+    }
+
+    if tracker.has_event_id(&gesture.event_id) {
+        return (
+            true,
+            None,
+            vec![diagnostic(
+                "OverlayGestureDuplicate",
+                "Duplicate gesture event ignored.",
+                Some(gesture.event_id),
+            )],
+        );
+    }
+
+    if gesture.sequence <= tracker.highest_sequence {
+        return (
+            false,
+            None,
+            vec![diagnostic(
+                "OverlayGestureStaleSequence",
+                "Gesture sequence is stale.",
+                Some(format!(
+                    "event_id={} sequence={} highest_seen={}",
+                    gesture.event_id, gesture.sequence, tracker.highest_sequence
+                )),
+            )],
+        );
+    }
+
+    let required_points = match gesture.kind {
+        AgentOverlayGestureKind::Tap | AgentOverlayGestureKind::NoNo => 1,
+        AgentOverlayGestureKind::Drag | AgentOverlayGestureKind::Swipe => 2,
+    };
+    let point_count = gesture.points.len();
+    let valid_point_count = match gesture.kind {
+        AgentOverlayGestureKind::Tap | AgentOverlayGestureKind::NoNo => point_count == 1,
+        AgentOverlayGestureKind::Drag | AgentOverlayGestureKind::Swipe => point_count >= 2,
+    };
+    if !valid_point_count {
+        return (
+            false,
+            None,
+            vec![diagnostic(
+                "OverlayGestureInvalidPointCount",
+                "Gesture point count does not match the gesture kind.",
+                Some(format!(
+                    "event_id={} kind={:?} points={} required={}",
+                    gesture.event_id, gesture.kind, point_count, required_points
+                )),
+            )],
+        );
+    }
+
+    let max_points = sky_cua_platform::overlay_spec::shared::effects::MAX_GESTURE_POINTS as usize;
+    if point_count > max_points {
+        return (
+            false,
+            None,
+            vec![diagnostic(
+                "OverlayGestureTooManyPoints",
+                "Gesture contains too many points.",
+                Some(format!(
+                    "event_id={} points={} max={}",
+                    gesture.event_id, point_count, max_points
+                )),
+            )],
+        );
+    }
+
+    if gesture
+        .points
+        .iter()
+        .any(|point| !point.x.is_finite() || !point.y.is_finite())
+    {
+        return (
+            false,
+            None,
+            vec![diagnostic(
+                "OverlayGestureInvalidPoint",
+                "Gesture points must contain finite coordinates.",
+                Some(gesture.event_id),
+            )],
+        );
+    }
+
+    let original_duration_ms = gesture.duration_ms;
+    gesture.duration_ms = gesture.duration_ms.clamp(
+        sky_cua_platform::overlay_spec::shared::timing::MIN_GESTURE_DURATION_MS,
+        sky_cua_platform::overlay_spec::shared::timing::MAX_GESTURE_DURATION_MS,
+    );
+
+    tracker.highest_sequence = gesture.sequence;
+    tracker.record_event_id(gesture.event_id.clone());
+
+    let mut diagnostics = Vec::new();
+    if original_duration_ms != gesture.duration_ms {
+        diagnostics.push(diagnostic(
+            "OverlayGestureDurationClamped",
+            "Gesture duration was clamped to the shared overlay spec bounds.",
+            Some(format!(
+                "event_id={} requested_ms={} clamped_ms={}",
+                gesture.event_id, original_duration_ms, gesture.duration_ms
+            )),
+        ));
+    }
+    (true, Some(gesture), diagnostics)
 }
 
 #[derive(Debug)]
@@ -410,6 +608,7 @@ pub fn probe_environment_reply() -> OverlayHostReply {
         kind: OverlayHostMessageKind::Capabilities,
         state: None,
         gesture: None,
+        sequence: None,
         reason: None,
     })
 }
@@ -420,6 +619,8 @@ fn noop_probe_reply(capabilities: AgentCursorCapabilities) -> OverlayHostReply {
         version: OVERLAY_HOST_PROTOCOL_VERSION,
         ok: true,
         capabilities: Some(capabilities),
+        lifecycle_state: Some(AgentOverlayHostLifecycleState::BackendUnsupported),
+        applied_sequence: None,
         state: None,
         diagnostics: Vec::new(),
     }
@@ -430,6 +631,8 @@ fn error_reply(code: &str, message: &str, details: Option<String>) -> OverlayHos
         version: OVERLAY_HOST_PROTOCOL_VERSION,
         ok: false,
         capabilities: Some(NoopOverlayBackend::default_capabilities()),
+        lifecycle_state: None,
+        applied_sequence: None,
         state: None,
         diagnostics: vec![diagnostic(code, message, details)],
     }
@@ -462,6 +665,7 @@ mod tests {
             kind: OverlayHostMessageKind::SetCursor,
             state: Some(cursor_state()),
             gesture: None,
+            sequence: None,
             reason: None,
         };
 
@@ -483,6 +687,7 @@ mod tests {
             kind: OverlayHostMessageKind::SetCursor,
             state: Some(cursor_state()),
             gesture: None,
+            sequence: None,
             reason: None,
         });
         assert!(set.ok);
@@ -493,6 +698,7 @@ mod tests {
             kind: OverlayHostMessageKind::Hide,
             state: None,
             gesture: None,
+            sequence: None,
             reason: Some("capture".to_string()),
         });
         assert!(!hidden.state.as_ref().expect("state").visible);
@@ -508,6 +714,7 @@ mod tests {
             kind: OverlayHostMessageKind::Show,
             state: hidden.state.clone(),
             gesture: None,
+            sequence: None,
             reason: None,
         });
         assert!(shown.state.expect("state").visible);
@@ -517,6 +724,7 @@ mod tests {
             kind: OverlayHostMessageKind::Show,
             state: None,
             gesture: None,
+            sequence: None,
             reason: None,
         });
         assert!(cleared.state.is_none());
@@ -531,6 +739,7 @@ mod tests {
             kind: OverlayHostMessageKind::Capabilities,
             state: None,
             gesture: None,
+            sequence: None,
             reason: None,
         });
 
@@ -550,6 +759,7 @@ mod tests {
             kind: OverlayHostMessageKind::Capabilities,
             state: None,
             gesture: None,
+            sequence: None,
             reason: None,
         });
 
@@ -576,6 +786,7 @@ mod tests {
                 duration_ms: 250,
                 source_action: Some(ActionName::Click),
             }),
+            sequence: None,
             reason: None,
         };
         let rendered = serde_json::to_value(&message).expect("serialize animate gesture");
@@ -606,16 +817,8 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             kind: OverlayHostMessageKind::AnimateGesture,
             state: None,
-            gesture: Some(AgentOverlayGestureEvent {
-                event_id: "evt-1".to_string(),
-                sequence: 1,
-                kind: AgentOverlayGestureKind::Tap,
-                coordinate_space: CoordinateSpace::DesktopLogical,
-                mapping_id: None,
-                points: vec![Point2 { x: 100.0, y: 200.0 }],
-                duration_ms: 250,
-                source_action: Some(ActionName::Click),
-            }),
+            gesture: Some(tap_gesture("evt-1", 1)),
+            sequence: None,
             reason: None,
         });
         assert!(reply.ok);
@@ -625,6 +828,109 @@ mod tests {
                 .iter()
                 .any(|entry| entry.code == "OverlayGestureNotSupported")
         );
+    }
+
+    #[test]
+    fn noop_backend_deduplicates_gesture_event_ids() {
+        let mut backend = NoopOverlayBackend::default();
+        let first = backend.handle_message(OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::AnimateGesture,
+            state: None,
+            gesture: Some(tap_gesture("evt-dup", 1)),
+            sequence: None,
+            reason: None,
+        });
+        assert!(first.ok);
+
+        let duplicate = backend.handle_message(OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::AnimateGesture,
+            state: None,
+            gesture: Some(tap_gesture("evt-dup", 2)),
+            sequence: None,
+            reason: None,
+        });
+
+        assert!(duplicate.ok);
+        assert!(
+            duplicate
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "OverlayGestureDuplicate")
+        );
+    }
+
+    #[test]
+    fn noop_backend_rejects_stale_gesture_sequences() {
+        let mut backend = NoopOverlayBackend::default();
+        let first = backend.handle_message(OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::AnimateGesture,
+            state: None,
+            gesture: Some(tap_gesture("evt-new", 4)),
+            sequence: None,
+            reason: None,
+        });
+        assert!(first.ok);
+
+        let stale = backend.handle_message(OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::AnimateGesture,
+            state: None,
+            gesture: Some(tap_gesture("evt-old", 3)),
+            sequence: None,
+            reason: None,
+        });
+
+        assert!(!stale.ok);
+        assert!(
+            stale
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "OverlayGestureStaleSequence")
+        );
+    }
+
+    #[test]
+    fn noop_backend_rejects_invalid_gesture_shapes() {
+        let mut gesture = tap_gesture("evt-bad", 1);
+        gesture.points.push(Point2 { x: 2.0, y: 3.0 });
+        let mut backend = NoopOverlayBackend::default();
+
+        let reply = backend.handle_message(OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::AnimateGesture,
+            state: None,
+            gesture: Some(gesture),
+            sequence: None,
+            reason: None,
+        });
+
+        assert!(!reply.ok);
+        assert!(
+            reply
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "OverlayGestureInvalidPointCount")
+        );
+    }
+
+    #[test]
+    fn noop_backend_echoes_hide_capture_barrier_sequence() {
+        let mut backend = NoopOverlayBackend::default();
+
+        let reply = backend.handle_message(OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::Hide,
+            state: None,
+            gesture: None,
+            sequence: Some(42),
+            reason: Some("capture".to_string()),
+        });
+
+        assert!(reply.ok);
+        assert_eq!(reply.applied_sequence, Some(42));
     }
 
     #[test]
@@ -668,6 +974,7 @@ mod tests {
                     kind: OverlayHostMessageKind::Capabilities,
                     state: None,
                     gesture: None,
+                    sequence: None,
                     reason: None,
                 })
             }
@@ -716,6 +1023,19 @@ mod tests {
             snapshot_id: Some("snap".to_string()),
             source_action: Some(ActionName::Click),
             updated_at_ms: 42,
+        }
+    }
+
+    fn tap_gesture(event_id: &str, sequence: u64) -> AgentOverlayGestureEvent {
+        AgentOverlayGestureEvent {
+            event_id: event_id.to_string(),
+            sequence,
+            kind: AgentOverlayGestureKind::Tap,
+            coordinate_space: CoordinateSpace::DesktopLogical,
+            mapping_id: None,
+            points: vec![Point2 { x: 100.0, y: 200.0 }],
+            duration_ms: 250,
+            source_action: Some(ActionName::Click),
         }
     }
 }

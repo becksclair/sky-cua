@@ -5,7 +5,7 @@ package com.skycua.phonecompanion.overlay
  * Source: resources/overlay/agent_overlay_spec.toml
  * Schema version: 1
  * Generator: scripts/generate_overlay_spec.py
- * Generator hash: d1f81b14d71766fe
+ * Generator hash: ab5c0faea5b04be5
  * GENERATED FILE - DO NOT EDIT
  * Run `uv run python scripts/generate_overlay_spec.py` to regenerate.
  */
@@ -124,6 +124,8 @@ object OverlaySpec {
             const val NO_NO_SHAKES_FRACTION: Double = 1.5
             /** `no_no_hold_fraction` from `[shared.effects]`. */
             const val NO_NO_HOLD_FRACTION: Double = 0.78
+            /** `no_no_wiggle_deg` from `[shared.effects]`. */
+            const val NO_NO_WIGGLE_DEG: Double = 20.0
             /** `max_gesture_points` from `[shared.effects]`. */
             const val MAX_GESTURE_POINTS: Int = 16
             /** `capture_barrier_frames` from `[shared.effects]`. */

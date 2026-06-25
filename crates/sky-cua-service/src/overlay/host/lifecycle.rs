@@ -204,6 +204,7 @@ impl<E: OverlayHostEndpoint> Drop for ManagedOverlayHost<E> {
             kind: OverlayHostMessageKind::Shutdown,
             state: None,
             gesture: None,
+            sequence: None,
             reason: None,
         });
         let deadline = Instant::now() + HOST_STOP_TIMEOUT;

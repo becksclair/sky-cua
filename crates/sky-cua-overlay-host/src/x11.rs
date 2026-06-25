@@ -10,7 +10,7 @@ use image::imageops::FilterType;
 use sky_cua_platform::model::{
     AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPoint,
     AgentCursorPointerTrackingBackendKind, AgentCursorRendererBackendKind, AgentCursorState,
-    CoordinateSpace, DiagnosticEntry,
+    AgentOverlayHostLifecycleState, CoordinateSpace, DiagnosticEntry,
 };
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, NONE,
@@ -27,8 +27,8 @@ use x11rb::{
 };
 
 use crate::{
-    OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
-    cursor_asset, diagnostic,
+    GestureEventTracker, OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind,
+    OverlayHostReply, cursor_asset, diagnostic,
     system_cursor::{SystemCursorAdapter, SystemPointerPosition},
 };
 
@@ -44,6 +44,7 @@ pub struct X11OverlayBackend {
     visual: VisualFormat,
     system_cursor: SystemCursorAdapter,
     state: Option<AgentCursorState>,
+    gesture_tracker: GestureEventTracker,
 }
 
 impl fmt::Debug for X11OverlayBackend {
@@ -58,6 +59,7 @@ impl fmt::Debug for X11OverlayBackend {
             .field("visual", &self.visual)
             .field("system_cursor", &self.system_cursor)
             .field("state", &self.state)
+            .field("gesture_tracker", &self.gesture_tracker)
             .finish_non_exhaustive()
     }
 }
@@ -122,6 +124,7 @@ impl X11OverlayBackend {
             visual,
             system_cursor: SystemCursorAdapter::x11(conn.clone(), root),
             state: None,
+            gesture_tracker: GestureEventTracker::default(),
         })
     }
 
@@ -143,8 +146,19 @@ impl X11OverlayBackend {
         match message.kind {
             OverlayHostMessageKind::Hello
             | OverlayHostMessageKind::Ping
-            | OverlayHostMessageKind::Capabilities
-            | OverlayHostMessageKind::AnimateGesture => self.reply(true, Vec::new()),
+            | OverlayHostMessageKind::Capabilities => self.reply(true, Vec::new()),
+            OverlayHostMessageKind::AnimateGesture => {
+                let (ok, _gesture, mut diagnostics) =
+                    crate::validate_gesture_message(message.gesture, &mut self.gesture_tracker);
+                if ok {
+                    diagnostics.push(diagnostic(
+                        "OverlayGestureNotSupported",
+                        "X11 shaped-window gesture rendering is not active for shared overlay effects.",
+                        None,
+                    ));
+                }
+                self.reply(ok, diagnostics)
+            }
             OverlayHostMessageKind::Shutdown => {
                 let _ = self.hide_visible_cursor();
                 self.reply(true, Vec::new())
@@ -158,6 +172,7 @@ impl X11OverlayBackend {
                     state.visible = false;
                 }
                 let mut reply = self.render_reply();
+                reply.applied_sequence = message.sequence;
                 if let Some(reason) = message.reason.filter(|value| !value.trim().is_empty()) {
                     reply.diagnostics.push(diagnostic(
                         "OverlayCursorHidden",
@@ -280,6 +295,8 @@ impl X11OverlayBackend {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok,
             capabilities: Some(self.capabilities()),
+            lifecycle_state: Some(AgentOverlayHostLifecycleState::BackendReady),
+            applied_sequence: None,
             state: self.state.clone(),
             diagnostics,
         }

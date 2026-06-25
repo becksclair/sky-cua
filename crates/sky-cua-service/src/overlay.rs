@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::VecDeque, path::Path};
 
 use sky_cua_overlay_host::{
     OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
@@ -6,8 +6,9 @@ use sky_cua_overlay_host::{
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
     AgentCursorPoint, AgentCursorPointerTrackingBackendKind, AgentCursorRendererBackendKind,
-    AgentCursorState, AgentCursorSystemCursorBackendKind, AppStateSnapshot, CaptureBackendKind,
-    CaptureInfo, CoordinateSpace, DiagnosticEntry, ElementNode, PixelSize, RectF,
+    AgentCursorState, AgentCursorSystemCursorBackendKind, AgentOverlayGestureEvent,
+    AgentOverlayGestureKind, AgentOverlayHostLifecycleState, AppStateSnapshot, CaptureBackendKind,
+    CaptureInfo, CoordinateSpace, DiagnosticEntry, ElementNode, PixelSize, Point2, RectF,
 };
 
 const AGENT_CURSOR_ENV: &str = "SKY_CUA_AGENT_CURSOR";
@@ -37,6 +38,11 @@ pub struct OverlayController {
     screenshot_cursor_mode: CursorMode,
     host: OverlayHostConnection,
     host_capabilities: Option<AgentCursorCapabilities>,
+    host_lifecycle_state: AgentOverlayHostLifecycleState,
+    /// Bounded dedupe cache for one-shot gesture event IDs. The host also
+    /// deduplicates, but the service must not replay an event if the host
+    /// restarts mid-session.
+    recent_gesture_ids: VecDeque<String>,
 }
 
 impl Default for OverlayController {
@@ -57,6 +63,8 @@ impl OverlayController {
             screenshot_cursor_mode: mode_from_env(SCREENSHOT_CURSOR_ENV),
             host: OverlayHostConnection::from_service_socket(service_socket_path),
             host_capabilities: None,
+            host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
+            recent_gesture_ids: VecDeque::new(),
         }
     }
 
@@ -70,6 +78,8 @@ impl OverlayController {
             screenshot_cursor_mode: CursorMode::Auto,
             host: OverlayHostConnection::disabled_for_tests(),
             host_capabilities: None,
+            host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
+            recent_gesture_ids: VecDeque::new(),
         }
     }
 
@@ -83,6 +93,8 @@ impl OverlayController {
             screenshot_cursor_mode: CursorMode::Auto,
             host: OverlayHostConnection::failing_for_tests(code),
             host_capabilities: None,
+            host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
+            recent_gesture_ids: VecDeque::new(),
         }
     }
 
@@ -99,6 +111,8 @@ impl OverlayController {
             screenshot_cursor_mode: CursorMode::Auto,
             host: OverlayHostConnection::unix_socket_transport_for_tests(host_path, socket_path),
             host_capabilities: None,
+            host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
+            recent_gesture_ids: VecDeque::new(),
         }
     }
 
@@ -143,14 +157,20 @@ impl OverlayController {
 
         let state = self.normalize_state(state);
         self.state = Some(state);
-        self.send_host_message(OverlayHostMessageKind::SetCursor, self.state.clone(), None)
+        self.send_host_message(
+            OverlayHostMessageKind::SetCursor,
+            self.state.clone(),
+            None,
+            None,
+        )
     }
 
     pub fn hide(&mut self, reason: Option<String>) -> AgentCursorStatus {
         let previous_state = self.state.clone();
         self.set_local_visibility(false);
 
-        let mut status = self.send_host_message(OverlayHostMessageKind::Hide, None, reason.clone());
+        let mut status =
+            self.send_host_message(OverlayHostMessageKind::Hide, None, None, reason.clone());
         let host_request_failed = status
             .diagnostics
             .iter()
@@ -173,11 +193,11 @@ impl OverlayController {
 
     pub fn show(&mut self) -> AgentCursorStatus {
         self.set_local_visibility(true);
-        self.send_host_message(OverlayHostMessageKind::Show, self.state.clone(), None)
+        self.send_host_message(OverlayHostMessageKind::Show, self.state.clone(), None, None)
     }
 
     pub fn status(&mut self) -> AgentCursorStatus {
-        self.send_host_message(OverlayHostMessageKind::Capabilities, None, None)
+        self.send_host_message(OverlayHostMessageKind::Capabilities, None, None, None)
     }
 
     pub fn update_from_action(
@@ -185,7 +205,18 @@ impl OverlayController {
         request: &ActionRequest,
         outcome: &mut ActionOutcome,
     ) -> Vec<DiagnosticEntry> {
-        if !outcome.success || self.agent_cursor_mode == CursorMode::Never {
+        if self.agent_cursor_mode == CursorMode::Never {
+            return Vec::new();
+        }
+
+        if !outcome.success {
+            // Failed dispatch cancels any pending visual feedback for this action.
+            if cursor_moving_action(&request.action) {
+                self.set_local_visibility(false);
+                return self
+                    .send_host_message(OverlayHostMessageKind::Hide, None, None, None)
+                    .diagnostics;
+            }
             return Vec::new();
         }
 
@@ -199,14 +230,33 @@ impl OverlayController {
             if cursor_moving_action(&request.action) {
                 self.state = None;
                 return self
-                    .send_host_message(OverlayHostMessageKind::Hide, None, None)
+                    .send_host_message(OverlayHostMessageKind::Hide, None, None, None)
                     .diagnostics;
             }
             return Vec::new();
         };
         let status = self.set_state(state);
         outcome.agent_cursor = status.state;
-        status.diagnostics
+        let mut diagnostics = status.diagnostics;
+        if let Some(gesture) = gesture_from_action_request(request, self.allocate_sequence()) {
+            diagnostics.extend(self.send_gesture_event(gesture));
+        }
+        diagnostics
+    }
+
+    /// Begin the visual part of a pointer action before backend input dispatch.
+    /// This starts the cursor glide without delaying input dispatch.
+    pub fn prepare_action_visual(&mut self, request: &ActionRequest) -> Vec<DiagnosticEntry> {
+        if self.agent_cursor_mode == CursorMode::Never {
+            return Vec::new();
+        }
+        if !cursor_moving_action(&request.action) {
+            return Vec::new();
+        }
+        let Some(state) = pre_dispatch_state_from_action_request(request) else {
+            return Vec::new();
+        };
+        self.set_state(state).diagnostics
     }
 
     pub fn prepare_for_capture(&mut self) -> OverlayCaptureGuard {
@@ -214,10 +264,44 @@ impl OverlayController {
             return OverlayCaptureGuard::default();
         }
 
-        let status = self.send_host_message(OverlayHostMessageKind::Hide, None, None);
+        self.set_local_visibility(false);
+        let sequence = self.allocate_sequence();
+        let mut diagnostics = Vec::new();
+        let mut barrier_applied = false;
+        if self.agent_cursor_mode != CursorMode::Never {
+            let message = OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::Hide,
+                state: None,
+                gesture: None,
+                sequence: Some(sequence),
+                reason: None,
+            };
+            match self.host.send(message) {
+                Ok(reply) => {
+                    barrier_applied = reply.ok && reply.applied_sequence == Some(sequence);
+                    diagnostics.extend(self.apply_host_reply(reply));
+                }
+                Err(diagnostic) => {
+                    if diagnostic.code == "AgentCursorHostUnavailable" {
+                        self.host_capabilities = None;
+                        self.host_lifecycle_state =
+                            AgentOverlayHostLifecycleState::ProcessUnavailable;
+                    }
+                    diagnostics.push(diagnostic);
+                }
+            }
+        }
+        if !barrier_applied {
+            diagnostics.push(diagnostic(
+                "AgentCursorCaptureBarrierPending",
+                "Overlay host did not confirm the capture barrier; capture may include the cursor.",
+                Some(format!("sequence={sequence}")),
+            ));
+        }
         OverlayCaptureGuard {
             restore_visible_overlay: true,
-            diagnostics: status.diagnostics,
+            diagnostics,
         }
     }
 
@@ -225,7 +309,7 @@ impl OverlayController {
         if !guard.restore_visible_overlay {
             return Vec::new();
         }
-        self.send_host_message(OverlayHostMessageKind::Show, self.state.clone(), None)
+        self.send_host_message(OverlayHostMessageKind::Show, self.state.clone(), None, None)
             .diagnostics
     }
 
@@ -301,6 +385,7 @@ impl OverlayController {
         &mut self,
         kind: OverlayHostMessageKind,
         state: Option<AgentCursorState>,
+        sequence: Option<u64>,
         reason: Option<String>,
     ) -> AgentCursorStatus {
         let mut diagnostics = Vec::new();
@@ -310,6 +395,7 @@ impl OverlayController {
                 kind,
                 state,
                 gesture: None,
+                sequence,
                 reason,
             };
             match self.host.send(message) {
@@ -319,6 +405,8 @@ impl OverlayController {
                 Err(diagnostic) => {
                     if diagnostic.code == "AgentCursorHostUnavailable" {
                         self.host_capabilities = None;
+                        self.host_lifecycle_state =
+                            AgentOverlayHostLifecycleState::ProcessUnavailable;
                     }
                     diagnostics.push(diagnostic);
                 }
@@ -332,10 +420,50 @@ impl OverlayController {
         }
     }
 
+    fn send_gesture_event(&mut self, gesture: AgentOverlayGestureEvent) -> Vec<DiagnosticEntry> {
+        if self.agent_cursor_mode == CursorMode::Never {
+            return Vec::new();
+        }
+        if self
+            .recent_gesture_ids
+            .iter()
+            .any(|event_id| event_id == &gesture.event_id)
+        {
+            return vec![diagnostic(
+                "AgentCursorGestureDuplicate",
+                "Ignoring duplicate gesture event.",
+                Some(gesture.event_id),
+            )];
+        }
+        if self.recent_gesture_ids.len() >= 128 {
+            let _ = self.recent_gesture_ids.pop_front();
+        }
+        self.recent_gesture_ids.push_back(gesture.event_id.clone());
+        let message = OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::AnimateGesture,
+            state: None,
+            gesture: Some(gesture),
+            sequence: None,
+            reason: None,
+        };
+        match self.host.send(message) {
+            Ok(reply) => self.apply_host_reply(reply),
+            Err(diagnostic) => {
+                if diagnostic.code == "AgentCursorHostUnavailable" {
+                    self.host_capabilities = None;
+                    self.host_lifecycle_state = AgentOverlayHostLifecycleState::ProcessUnavailable;
+                }
+                vec![diagnostic]
+            }
+        }
+    }
+
     fn apply_host_reply(&mut self, reply: OverlayHostReply) -> Vec<DiagnosticEntry> {
         let mut diagnostics = reply.diagnostics;
         if reply.version != OVERLAY_HOST_PROTOCOL_VERSION {
             self.host_capabilities = None;
+            self.host_lifecycle_state = AgentOverlayHostLifecycleState::ProcessUnavailable;
             diagnostics.push(diagnostic(
                 "AgentCursorHostProtocolMismatch",
                 "Overlay host replied with an incompatible protocol version.",
@@ -345,6 +473,9 @@ impl OverlayController {
                 )),
             ));
             return diagnostics;
+        }
+        if let Some(lifecycle_state) = reply.lifecycle_state {
+            self.host_lifecycle_state = lifecycle_state;
         }
         if let Some(capabilities) = reply.capabilities {
             self.host_capabilities = Some(capabilities);
@@ -478,6 +609,126 @@ fn cursor_moving_action(action: &ActionName) -> bool {
         action,
         ActionName::Click | ActionName::PerformSecondaryAction | ActionName::Drag
     )
+}
+
+fn pre_dispatch_state_from_action_request(request: &ActionRequest) -> Option<AgentCursorState> {
+    if request.action != ActionName::Drag {
+        return state_from_action_request(request);
+    }
+    let model_point = model_drag_start_point(request);
+    let native_point = native_drag_start_point(request);
+    if model_point.is_none() && native_point.is_none() {
+        return None;
+    }
+    Some(AgentCursorState {
+        visible: true,
+        sequence: 0,
+        model_point,
+        native_point,
+        snapshot_id: request.snapshot_id.clone(),
+        source_action: Some(request.action.clone()),
+        updated_at_ms: 0,
+    })
+}
+
+fn gesture_from_action_request(
+    request: &ActionRequest,
+    sequence: u64,
+) -> Option<AgentOverlayGestureEvent> {
+    use sky_cua_platform::overlay_spec::shared::effects::MAX_GESTURE_POINTS;
+    use sky_cua_platform::overlay_spec::shared::timing::{
+        MAX_GESTURE_DURATION_MS, MIN_GESTURE_DURATION_MS,
+    };
+
+    let (kind, points) = match request.action {
+        ActionName::Click | ActionName::PerformSecondaryAction => {
+            let point = native_point_for_action(request)?;
+            (AgentOverlayGestureKind::Tap, vec![point_to_point2(point)])
+        }
+        ActionName::Drag => {
+            let start = native_drag_start_point(request)?;
+            let end = native_drag_target_point(request)?;
+            (
+                AgentOverlayGestureKind::Drag,
+                vec![point_to_point2(start), point_to_point2(end)],
+            )
+        }
+        _ => return None,
+    };
+
+    if points.len() > MAX_GESTURE_POINTS as usize {
+        return None;
+    }
+    if points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
+        return None;
+    }
+
+    let requested_duration_ms = request
+        .arguments
+        .get("duration_ms")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(match kind {
+            AgentOverlayGestureKind::Tap | AgentOverlayGestureKind::NoNo => {
+                sky_cua_platform::overlay_spec::shared::timing::CLICK_FEEDBACK_MS
+            }
+            AgentOverlayGestureKind::Drag | AgentOverlayGestureKind::Swipe => {
+                sky_cua_platform::overlay_spec::shared::timing::SWIPE_VISUAL_MIN_MS
+            }
+        });
+    let duration_ms = requested_duration_ms.clamp(MIN_GESTURE_DURATION_MS, MAX_GESTURE_DURATION_MS);
+    Some(AgentOverlayGestureEvent {
+        event_id: format!("{}-{}", action_name_str(&request.action), sequence),
+        sequence,
+        kind,
+        coordinate_space: CoordinateSpace::DesktopLogical,
+        mapping_id: None,
+        points,
+        duration_ms,
+        source_action: Some(request.action.clone()),
+    })
+}
+
+fn action_name_str(action: &ActionName) -> &'static str {
+    match action {
+        ActionName::FocusElement => "focus",
+        ActionName::ActivateElement => "activate",
+        ActionName::SelectElement => "select",
+        ActionName::ExpandElement => "expand",
+        ActionName::CollapseElement => "collapse",
+        ActionName::ToggleElement => "toggle",
+        ActionName::Click => "click",
+        ActionName::PerformAction => "perform",
+        ActionName::PerformSecondaryAction => "secondary",
+        ActionName::Scroll => "scroll",
+        ActionName::Drag => "drag",
+        ActionName::TypeText => "type",
+        ActionName::PressKey => "press",
+        ActionName::SetValue => "set_value",
+    }
+}
+
+fn point_to_point2(point: AgentCursorPoint) -> Point2 {
+    Point2 {
+        x: point.x,
+        y: point.y,
+    }
+}
+
+fn native_drag_start_point(request: &ActionRequest) -> Option<AgentCursorPoint> {
+    explicit_native_point(request, "from_x", "from_y")
+        .or_else(|| explicit_native_point(request, "x", "y"))
+        .or_else(|| element_native_point(request.resolved_element.as_ref(), request))
+}
+
+fn native_drag_target_point(request: &ActionRequest) -> Option<AgentCursorPoint> {
+    explicit_native_point(request, "to_x", "to_y")
+        .or_else(|| element_native_point(request.resolved_target_element.as_ref(), request))
+}
+
+fn model_drag_start_point(request: &ActionRequest) -> Option<AgentCursorPoint> {
+    explicit_model_point(request, "from_x", "from_y")
+        .or_else(|| explicit_model_point(request, "x", "y"))
+        .or_else(|| element_model_point(request.resolved_element.as_ref(), request))
 }
 
 fn model_point_for_action(request: &ActionRequest) -> Option<AgentCursorPoint> {
@@ -724,7 +975,10 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{OVERLAY_IDLE_CLEANUP_MS, OverlayController, now_ms, state_from_action_request};
+    use super::{
+        OVERLAY_IDLE_CLEANUP_MS, OverlayController, gesture_from_action_request, now_ms,
+        state_from_action_request,
+    };
     use image::{ImageBuffer, Rgba};
     use sky_cua_overlay_host::{OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostReply};
     use sky_cua_platform::model::{
@@ -859,6 +1113,8 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
+            lifecycle_state: None,
+            applied_sequence: None,
             state: None,
             diagnostics: Vec::new(),
         });
@@ -884,6 +1140,8 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
+            lifecycle_state: None,
+            applied_sequence: None,
             state: None,
             diagnostics: Vec::new(),
         });
@@ -908,6 +1166,8 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
+            lifecycle_state: None,
+            applied_sequence: None,
             state: None,
             diagnostics: Vec::new(),
         });
@@ -946,6 +1206,8 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
             ok: true,
             capabilities: None,
+            lifecycle_state: None,
+            applied_sequence: None,
             state: None,
             diagnostics: Vec::new(),
         });
@@ -981,6 +1243,8 @@ mod tests {
                 reason: Some("mismatched host".to_string()),
                 ..Default::default()
             }),
+            lifecycle_state: None,
+            applied_sequence: None,
             state: None,
             diagnostics: Vec::new(),
         });
@@ -1001,6 +1265,8 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
+            lifecycle_state: None,
+            applied_sequence: None,
             state: None,
             diagnostics: Vec::new(),
         });
@@ -1010,6 +1276,8 @@ mod tests {
             version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
             ok: true,
             capabilities: None,
+            lifecycle_state: None,
+            applied_sequence: None,
             state: None,
             diagnostics: Vec::new(),
         });
@@ -1188,9 +1456,75 @@ mod tests {
     }
 
     #[test]
+    fn drag_gesture_uses_distinct_start_and_target_points() {
+        let request = action_request(
+            ActionName::Drag,
+            serde_json::json!({
+                "from_x": 40.0,
+                "from_y": 50.0,
+                "to_x": 200.0,
+                "to_y": 150.0,
+                "duration_ms": 5,
+            }),
+        );
+
+        let gesture = gesture_from_action_request(&request, 7).expect("gesture");
+
+        assert_eq!(
+            gesture.kind,
+            sky_cua_platform::model::AgentOverlayGestureKind::Drag
+        );
+        assert_eq!(gesture.sequence, 7);
+        assert_eq!(gesture.points.len(), 2);
+        assert_eq!(gesture.points[0].x, 40.0);
+        assert_eq!(gesture.points[0].y, 50.0);
+        assert_eq!(gesture.points[1].x, 200.0);
+        assert_eq!(gesture.points[1].y, 150.0);
+        assert_eq!(
+            gesture.duration_ms,
+            sky_cua_platform::overlay_spec::shared::timing::MIN_GESTURE_DURATION_MS
+        );
+    }
+
+    #[test]
     fn non_pointer_action_does_not_move_cursor() {
         let request = action_request(ActionName::TypeText, serde_json::json!({"text": "hello"}));
         assert!(state_from_action_request(&request).is_none());
+    }
+
+    #[test]
+    fn prepare_action_visual_sets_state_before_dispatch_without_gesture() {
+        let mut controller = OverlayController::new_for_tests();
+        let request = action_request(ActionName::Click, serde_json::json!({"x": 12.0, "y": 34.0}));
+
+        let diagnostics = controller.prepare_action_visual(&request);
+
+        assert!(diagnostics.is_empty());
+        let state = controller.state().expect("pre-dispatch cursor state");
+        assert_eq!(state.sequence, 1);
+        assert_eq!(state.native_point.as_ref().expect("native").x, 12.0);
+        assert!(controller.recent_gesture_ids.is_empty());
+    }
+
+    #[test]
+    fn prepare_action_visual_for_drag_starts_at_drag_origin() {
+        let mut controller = OverlayController::new_for_tests();
+        let request = action_request(
+            ActionName::Drag,
+            serde_json::json!({
+                "from_x": 40.0,
+                "from_y": 50.0,
+                "to_x": 200.0,
+                "to_y": 150.0,
+            }),
+        );
+
+        let diagnostics = controller.prepare_action_visual(&request);
+
+        assert!(diagnostics.is_empty());
+        let state = controller.state().expect("pre-dispatch drag state");
+        assert_eq!(state.native_point.as_ref().expect("native").x, 40.0);
+        assert_eq!(state.native_point.as_ref().expect("native").y, 50.0);
     }
 
     #[test]
@@ -1210,6 +1544,27 @@ mod tests {
         let state = outcome.agent_cursor.expect("outcome should carry cursor");
         assert_eq!(state.sequence, 1);
         assert_eq!(controller.state().expect("controller state").sequence, 1);
+        assert_eq!(controller.recent_gesture_ids.len(), 1);
+    }
+
+    #[test]
+    fn failed_pointer_action_hides_pending_visual_feedback() {
+        let mut controller = OverlayController::new_for_tests();
+        controller.set_state(synthetic_state(10, 20));
+        let request = action_request(ActionName::Click, serde_json::json!({"x": 12.0, "y": 34.0}));
+        let mut outcome = ActionOutcome {
+            success: false,
+            message: "failed".to_string(),
+            code: "Failed".to_string(),
+            diagnostics: Vec::new(),
+            agent_cursor: None,
+        };
+
+        let diagnostics = controller.update_from_action(&request, &mut outcome);
+
+        assert!(diagnostics.is_empty());
+        assert!(!controller.state().expect("state").visible);
+        assert!(controller.recent_gesture_ids.is_empty());
     }
 
     #[test]
@@ -1231,6 +1586,32 @@ mod tests {
         assert!(diagnostics.is_empty());
         assert!(outcome.agent_cursor.is_none());
         assert!(controller.state().is_none());
+    }
+
+    #[test]
+    fn prepare_for_capture_requires_matching_applied_barrier() {
+        let mut controller = OverlayController::new_for_tests();
+        controller.apply_host_reply(OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            ok: true,
+            capabilities: Some(visible_overlay_capabilities("healthy host")),
+            lifecycle_state: None,
+            applied_sequence: None,
+            state: None,
+            diagnostics: Vec::new(),
+        });
+        controller.set_state(synthetic_state(10, 20));
+
+        let guard = controller.prepare_for_capture();
+
+        assert!(guard.restore_visible_overlay);
+        assert!(!controller.state().expect("hidden state").visible);
+        assert!(
+            guard
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorCaptureBarrierPending")
+        );
     }
 
     #[test]
@@ -1629,11 +2010,13 @@ while True:
         message = json.loads(data.decode("utf-8"))
         kind = message["kind"]
         diagnostics = []
+        applied_sequence = None
         if kind == "set_cursor":
             state = message.get("state")
         elif kind == "hide":
             if state is not None:
                 state["visible"] = False
+            applied_sequence = message.get("sequence")
             if message.get("reason"):
                 diagnostics.append({{
                     "code": "OverlayCursorHidden",
@@ -1647,6 +2030,8 @@ while True:
             "version": {version},
             "ok": True,
             "capabilities": capabilities,
+            "lifecycle_state": "backend_ready",
+            "applied_sequence": applied_sequence,
             "state": state,
             "diagnostics": diagnostics,
         }}

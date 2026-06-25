@@ -729,30 +729,35 @@ class AgentOverlayController(
     }
 
     companion object {
+        /**
+         * Number of trail samples used when building the swipe polyline. This is
+         * an Android-specific rendering sampling count, not a cross-platform
+         * visual constant, so it stays local rather than living in [OverlaySpec].
+         */
         private const val TRAIL_SAMPLES: Int = 12
 
         /** Glow-ripple radius range in dp: it emanates from near the cursor halo
          * (min) and expands outward (max). Density-scaled into px at runtime. */
-        private const val RIPPLE_MIN_DP: Float = 20f
-        private const val RIPPLE_MAX_DP: Float = 64f
+        private const val RIPPLE_MIN_DP: Float = OverlaySpec.Android.Geometry.RIPPLE_MIN_DP.toFloat()
+        private const val RIPPLE_MAX_DP: Float = OverlaySpec.Android.Geometry.RIPPLE_MAX_DP.toFloat()
 
         /** Cursor must be within this distance (dp) of the gesture start to count as
          * arrived, so the click feedback fires at the pointer's landing point. */
-        private const val GESTURE_ARRIVE_DP: Float = 10f
+        private const val GESTURE_ARRIVE_DP: Float = OverlaySpec.Android.Geometry.GESTURE_ARRIVE_DP.toFloat()
 
         /** Size (dp) of the touchable "no-no" tap-catcher that follows the cursor. */
-        private const val CATCHER_DP: Float = 64f
+        private const val CATCHER_DP: Float = OverlaySpec.Android.Geometry.CATCHER_DP.toFloat()
 
         /** The agent must be idle this long (ms) before the catcher becomes
          * touchable, so it can never intercept an agent action. */
-        private const val CATCHER_IDLE_MS: Long = 900L
+        private const val CATCHER_IDLE_MS: Long = OverlaySpec.Shared.Timing.CATCHER_IDLE_MS
 
         /**
          * Frames to wait after clearing the overlay before a capture is allowed to
          * sample the display. One vsync starts the cleared frame; the second
          * guarantees it has been composited.
          */
-        private const val CAPTURE_BARRIER_FRAMES: Int = 2
+        private const val CAPTURE_BARRIER_FRAMES: Int = OverlaySpec.Shared.Effects.CAPTURE_BARRIER_FRAMES
     }
 }
 

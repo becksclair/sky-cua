@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use sky_cua_platform::model::{
     AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPoint,
     AgentCursorPointerTrackingBackendKind, AgentCursorRendererBackendKind, AgentCursorState,
-    CoordinateSpace, DiagnosticEntry,
+    AgentOverlayHostLifecycleState, CoordinateSpace, DiagnosticEntry,
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -32,8 +32,8 @@ use wayland_client::{
 };
 
 use crate::{
-    OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
-    cursor_asset, diagnostic,
+    GestureEventTracker, OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind,
+    OverlayHostReply, cursor_asset, diagnostic,
     pointer_tracking::{PointerTracker, PointerTrackingBounds},
     renderer::{
         CursorImage, CursorPoint, SurfaceDrawRequest, SurfaceDrawSpec, SurfaceGuard,
@@ -90,6 +90,8 @@ impl LayerShellOverlayBackend {
                     width: 1,
                     height: 1,
                     buffer: None,
+                    pending_frame: false,
+                    capture_barrier_frames_remaining: 0,
                 }
             })
             .collect::<Vec<_>>();
@@ -125,6 +127,9 @@ impl LayerShellOverlayBackend {
             surface_guards,
             cursor,
             state: None,
+            lifecycle_state: AgentOverlayHostLifecycleState::BackendInitializing,
+            capture_barrier: None,
+            gesture_tracker: GestureEventTracker::default(),
         };
         let mut backend = Self {
             event_queue,
@@ -159,10 +164,15 @@ impl LayerShellOverlayBackend {
         match message.kind {
             OverlayHostMessageKind::Hello
             | OverlayHostMessageKind::Ping
-            | OverlayHostMessageKind::Capabilities
-            | OverlayHostMessageKind::AnimateGesture => {
+            | OverlayHostMessageKind::Capabilities => {
                 let _ = self.follow_tracked_pointer();
                 self.reply(true, Vec::new())
+            }
+            OverlayHostMessageKind::AnimateGesture => {
+                let _ = self.follow_tracked_pointer();
+                let (ok, _gesture, diagnostics) =
+                    crate::validate_gesture_message(message.gesture, &mut self.app.gesture_tracker);
+                self.reply(ok, diagnostics)
             }
             OverlayHostMessageKind::Shutdown => {
                 let _ = self.hide_visible_cursor();
@@ -176,7 +186,20 @@ impl LayerShellOverlayBackend {
                 if let Some(state) = self.app.state.as_mut() {
                     state.visible = false;
                 }
+                if let Some(sequence) = message.sequence {
+                    self.app.start_capture_barrier(sequence);
+                }
                 let mut reply = self.render_reply();
+                if message.sequence.is_some() {
+                    if let Err(error) = self.wait_for_capture_barrier() {
+                        reply.ok = false;
+                        reply.diagnostics.push(diagnostic(
+                            "OverlayCaptureBarrierTimeout",
+                            "Overlay host capture barrier timed out before the hidden frame was applied.",
+                            Some(error.to_string()),
+                        ));
+                    }
+                }
                 if let Some(reason) = message.reason.filter(|value| !value.trim().is_empty()) {
                     reply.diagnostics.push(diagnostic(
                         "OverlayCursorHidden",
@@ -191,6 +214,7 @@ impl LayerShellOverlayBackend {
                 if let Some(state) = self.app.state.as_mut() {
                     state.visible = true;
                 }
+                self.app.clear_capture_barrier();
                 self.render_reply()
             }
         }
@@ -254,6 +278,26 @@ impl LayerShellOverlayBackend {
         self.render_current()
     }
 
+    fn wait_for_capture_barrier(&mut self) -> Result<()> {
+        use std::time::{Duration, Instant};
+        const BARRIER_TIMEOUT: Duration = Duration::from_millis(1500);
+        let deadline = Instant::now() + BARRIER_TIMEOUT;
+        while Instant::now() < deadline {
+            if self.app.capture_barrier.is_none() {
+                return Ok(());
+            }
+            self.event_queue
+                .roundtrip(&mut self.app)
+                .context("Wayland roundtrip failed while waiting for capture barrier")?;
+            if self.app.capture_barrier.is_none() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        self.app.clear_capture_barrier();
+        bail!("capture barrier timed out waiting for compositor frame acknowledgement")
+    }
+
     fn follow_tracked_pointer(&mut self) -> Result<()> {
         if !self.app.state.as_ref().is_some_and(|state| state.visible) {
             return Ok(());
@@ -276,6 +320,8 @@ impl LayerShellOverlayBackend {
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok,
             capabilities: Some(self.capabilities()),
+            lifecycle_state: Some(self.app.lifecycle_state()),
+            applied_sequence: self.app.applied_sequence(),
             state: self.app.state.clone(),
             diagnostics,
         }
@@ -354,6 +400,14 @@ struct LayerShellApp {
     instance: Option<WgpuOverlayInstance>,
     cursor: CursorImage,
     state: Option<AgentCursorState>,
+    lifecycle_state: AgentOverlayHostLifecycleState,
+    capture_barrier: Option<CaptureBarrierState>,
+    gesture_tracker: GestureEventTracker,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CaptureBarrierState {
+    sequence: u64,
 }
 
 #[derive(Debug)]
@@ -365,6 +419,8 @@ struct LayerSurfaceEntry {
     width: u32,
     height: u32,
     buffer: Option<Buffer>,
+    pending_frame: bool,
+    capture_barrier_frames_remaining: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -441,6 +497,7 @@ impl LayerShellApp {
                 self.renderer = LayerShellRenderer::Shm {
                     reason: Some(format!("{RENDERER_ENV}=shm")),
                 };
+                self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
                 Ok(())
             }
             RequestedLayerShellRenderer::Wgpu => {
@@ -454,6 +511,7 @@ impl LayerShellApp {
                     renderer.info().backend
                 );
                 self.renderer = LayerShellRenderer::Wgpu(renderer, reason);
+                self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
                 Ok(())
             }
             RequestedLayerShellRenderer::Auto => {
@@ -463,6 +521,7 @@ impl LayerShellApp {
                             "{DEBUG_FILL_ENV} is set, using shm renderer for debug fill support"
                         )),
                     };
+                    self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
                     return Ok(());
                 }
                 let instance = self.instance.as_ref().context("wgpu instance is missing")?;
@@ -474,11 +533,13 @@ impl LayerShellApp {
                             renderer.info().backend
                         );
                         self.renderer = LayerShellRenderer::Wgpu(renderer, reason);
+                        self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
                     }
                     Err(error) => {
                         self.renderer = LayerShellRenderer::Shm {
                             reason: Some(format!("wgpu unavailable, using shm fallback: {error}")),
                         };
+                        self.lifecycle_state = AgentOverlayHostLifecycleState::BackendUnsupported;
                     }
                 }
                 Ok(())
@@ -560,6 +621,7 @@ impl LayerShellApp {
                 .layer
                 .wl_surface()
                 .frame(qh, entry.layer.wl_surface().clone());
+            entry.pending_frame = true;
 
             let cursor = visible_target
                 .as_ref()
@@ -643,6 +705,7 @@ impl LayerShellApp {
                 .layer
                 .wl_surface()
                 .frame(qh, entry.layer.wl_surface().clone());
+            entry.pending_frame = true;
             buffer
                 .attach_to(entry.layer.wl_surface())
                 .context("failed to attach layer-shell cursor buffer")?;
@@ -703,6 +766,42 @@ impl LayerShellApp {
         self.layers
             .iter()
             .any(|entry| !entry.closed && entry.configured)
+    }
+
+    fn lifecycle_state(&self) -> AgentOverlayHostLifecycleState {
+        self.lifecycle_state
+    }
+
+    fn applied_sequence(&self) -> Option<u64> {
+        self.capture_barrier.map(|barrier| barrier.sequence)
+    }
+
+    fn start_capture_barrier(&mut self, sequence: u64) {
+        let frames = sky_cua_platform::overlay_spec::shared::effects::CAPTURE_BARRIER_FRAMES;
+        let mut active_surfaces = 0;
+        for entry in &mut self.layers {
+            if !entry.closed && entry.configured {
+                entry.capture_barrier_frames_remaining = frames;
+                active_surfaces += 1;
+            } else {
+                entry.capture_barrier_frames_remaining = 0;
+            }
+        }
+        self.capture_barrier = (active_surfaces > 0).then_some(CaptureBarrierState { sequence });
+    }
+
+    fn capture_barrier_complete(&self) -> bool {
+        self.layers
+            .iter()
+            .filter(|entry| !entry.closed && entry.configured)
+            .all(|entry| entry.capture_barrier_frames_remaining == 0)
+    }
+
+    fn clear_capture_barrier(&mut self) {
+        self.capture_barrier = None;
+        for entry in &mut self.layers {
+            entry.capture_barrier_frames_remaining = 0;
+        }
     }
 }
 
@@ -908,10 +1007,29 @@ impl CompositorHandler for LayerShellApp {
     fn frame(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
+        if let Some(entry) = self
+            .layers
+            .iter_mut()
+            .find(|entry| entry.layer.wl_surface().id() == surface.id())
+        {
+            entry.pending_frame = false;
+            if entry.capture_barrier_frames_remaining > 0 {
+                entry.capture_barrier_frames_remaining =
+                    entry.capture_barrier_frames_remaining.saturating_sub(1);
+                if entry.capture_barrier_frames_remaining > 0 {
+                    surface.frame(qh, surface.clone());
+                    surface.commit();
+                    entry.pending_frame = true;
+                }
+            }
+        }
+        if self.capture_barrier.is_some() && self.capture_barrier_complete() {
+            self.capture_barrier = None;
+        }
     }
 
     fn surface_enter(

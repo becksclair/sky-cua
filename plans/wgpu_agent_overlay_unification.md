@@ -30,7 +30,7 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Reworked the plan to resolve the open implementation risks directly: visual/action timing is now a contract, one-shot animations use `AnimateGesture` with a protocol version bump, host behavior is governed by a state machine, capture requires an applied-frame barrier, shader behavior must pass GPU conformance tests, renderer surfaces use host-owned RAII guards, multi-output coverage fails closed, legacy renderer retirement happens after WGPU proof, and X11/no-no input/sound are scoped as follow-on plans.
 - [x] Phase 0: Baseline, VM setup, and contract freeze.
 - [x] Phase 1: Shared spec and generator.
-- [ ] Phase 2: Platform protocol, lifecycle, action timing, and capture barriers.
+- [x] Phase 2: Platform protocol, lifecycle, action timing, and capture barriers.
 - [x] Phase 3: Renderer extraction with static Wayland WGPU parity.
 - [ ] Phase 4: GPU effects, WGSL conformance, and deterministic rendering tests.
 - [ ] Phase 5: Wayland hardening, multi-output correctness, frame pacing, and failure recovery.
@@ -47,6 +47,8 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Phase 1 shared spec/codegen accepted with `resources/overlay/agent_overlay_spec.toml`, strict `scripts/generate_overlay_spec.py`, generated `sky_cua_platform::overlay_spec`, generated Kotlin `OverlaySpec`, and VM-verified idempotent `--check`.
 - [x] 2026-06-25: Phase 2 C1 platform/protocol slice accepted: added `Point2`, `AgentOverlayGestureKind`, `AgentOverlayGestureEvent`, nested overlay capability fields, `OverlayHostMessageKind::AnimateGesture`, and overlay-host protocol version 2. Remaining Phase 2 timing, dedupe/stale handling, lifecycle states, and capture barriers stay in C2.
 - [x] 2026-06-25: Phase 3 static renderer extraction accepted: WGPU instance/device/queue/pipeline/cursor texture moved under `crates/sky-cua-overlay-host/src/renderer/`, Wayland host now owns raw-handle `SurfaceGuard`s, all active surfaces are validated before WGPU support is claimed, and static layer-shell WGPU parity passed in the testing VM.
+- [x] 2026-06-25: Phase 2 C2 accepted after coordinator takeover from a partial worker handoff: service pre-dispatch visual feedback now starts before backend input dispatch without delaying it, successful pointer actions send one-shot `AnimateGesture` events, failed pointer actions cancel pending visual feedback, hide-for-capture sends a sequence and requires a matching `applied_sequence`, and overlay-host backends validate gesture shape, dedupe `event_id`, reject stale sequences, clamp duration, and report lifecycle/barrier fields.
+- [x] 2026-06-25: Phase 6 Android constants/JVM slice accepted: Android overlay math/view/controller constants now forward to generated `OverlaySpec`, `NO_NO_WIGGLE_DEG` was added to `[shared.effects]`, and shared motion fixtures are consumed by Android JVM tests. Phase 6 visual artifacts remain open because `adb devices` in the VM listed no attached device/emulator.
 
 ## Surprises & Discoveries
 
@@ -103,6 +105,12 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 
 - Observation: Keeping a WGPU surface alive without the instance registry triggered a live VM panic during Phase 3 smoke.
   Evidence: the first `wayland-layer-shell-overlay` rerun panicked with `Surface[Id(0,1)] does not exist`; the coordinator changed `WgpuOverlayRenderer::new` to borrow `WgpuOverlayInstance` and kept `LayerShellApp.surface_guards` declared before `LayerShellApp.instance` so guards drop before the instance.
+
+- Observation: Phase 6 exposed one Android constant that was still duplicated outside the generated spec.
+  Evidence: `OverlayMath.NO_NO_WIGGLE_DEG` was a hard-coded `20f`; `[shared.effects].no_no_wiggle_deg = 20.0` was added to `resources/overlay/agent_overlay_spec.toml` and regenerated into Rust/Kotlin constants.
+
+- Observation: The testing VM can run Android JVM parity tests but cannot currently produce Android visual harness artifacts.
+  Evidence: the Phase 6 worker ran `adb devices` inside the VM and received an empty device list; `./gradlew :app:testDebugUnitTest --offline` passed, including the shared fixture test.
 
 ## External Research Snapshot
 
@@ -211,6 +219,14 @@ If any dependency version changes before implementation, repeat this research be
   Rationale: Rust, Kotlin, WGSL, and live-smoke proof need shared sample names and a stable evidence trail.
   Date/Author: 2026-06-25 / Codex
 
+- Decision: Keep the service-side action timing split explicit with `prepare_action_visual` before backend dispatch and `update_from_action` after backend dispatch.
+  Rationale: The visible cursor can start moving when the service accepts a coordinate action, but success effects remain post-dispatch and failed actions cancel pending visual feedback. This preserves existing automation latency while giving the renderer enough intent for visual feedback.
+  Date/Author: 2026-06-25 / Codex
+
+- Decision: Add `shared.effects.no_no_wiggle_deg` instead of leaving the Android no-no amplitude as a local constant.
+  Rationale: Phase 6 parity needs the no-no render effect to share the same generated source of truth that Phase 4 WGSL effects will consume.
+  Date/Author: 2026-06-25 / Codex
+
 ## Outcomes & Retrospective
 
 Phase 0 is complete. The testing VM baseline passed after VM readiness fixes for Python and Android tooling. The VM provisioning path now installs Python/Android prerequisites required by later gates.
@@ -224,9 +240,11 @@ Phase 1 is complete. The shared TOML spec is the source of truth, generated Rust
     uv run basedpyright scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
     cargo test -p sky-cua-platform overlay_spec_tests
 
-The Phase 2 C1 platform/protocol slice is complete, but Phase 2 overall remains open for C2. Coordinator VM verification passed:
+Phase 2 is complete. The C1 slice added the platform-neutral event model, `AnimateGesture`, protocol version 2, and nested capability fields. The C2 slice added service timing and capture semantics plus host-side lifecycle/barrier fields and gesture validation. C2 was completed by coordinator cleanup after the worker handed off a partial diff with local overlay-host tests passing and service tests still incomplete. Coordinator VM verification passed:
 
     cargo test -p sky-cua-platform
+    cargo test -p sky-cua-overlay-host
+    cargo test -p sky-cua-service overlay
     cargo test -p sky-cua-service derives_cursor_state_from_explicit_click_coordinates
 
 Phase 3 is complete. The Wayland host still owns compositor objects, output/layer lifecycle, input regions, pointer tracking, frame callbacks, and the legacy SHM fallback; the new renderer modules own WGPU instance interaction, adapter/device/queue setup, surface policy, cursor texture upload, shader/pipeline setup, and per-surface draw submission. The coordinator corrected the raw-handle lifetime after a VM smoke panic and reran the decisive gates. Coordinator VM verification passed:
@@ -246,6 +264,34 @@ Wave 1 integration verification also passed in the VM:
     cargo test -p sky-cua-overlay-host
     cargo test -p sky-cua-service overlay
     cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
+
+Phase 6 is complete for generated constants and JVM fixture parity, but remains open for Android visual artifacts. Android remains Canvas-native. The VM accepted:
+
+    python3 scripts/generate_overlay_spec.py --check
+    uv run pytest scripts/test_overlay_spec_codegen.py -q
+    uv run ruff format --check scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
+    uv run ruff check scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
+    uv run basedpyright scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
+    cargo test -p sky-cua-platform
+    cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
+
+The Android visual harness artifact gate did not run because the VM has no attached Android device or emulator; the closest passing gate is `OverlaySpecFixtureTest` consuming the shared motion fixtures from JVM resources.
+
+Wave 2 integration verification passed in the VM:
+
+    cargo fmt --check
+    python3 scripts/generate_overlay_spec.py --check
+    uv run pytest scripts/test_overlay_spec_codegen.py -q
+    uv run ruff format --check scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
+    uv run ruff check scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
+    uv run basedpyright scripts/generate_overlay_spec.py scripts/test_overlay_spec_codegen.py
+    cargo test -p sky-cua-platform
+    cargo test -p sky-cua-overlay-host
+    cargo test -p sky-cua-service overlay
+    cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
+    python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=/home/bex/projects/sky-cua/artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay
+
+The Wave 2 live artifact is `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625043426158731-vis`, with `before.jpg` and `visible.jpg`. The smoke reported `renderer_backend: "wgpu"`, llvmpipe via Vulkan, `visible_overlay_captured: true`, and no synthetic cursor fallback.
 
 ## Context and Orientation
 

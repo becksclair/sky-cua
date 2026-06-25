@@ -114,6 +114,8 @@ impl OverlayHostConnection {
                         version: OVERLAY_HOST_PROTOCOL_VERSION,
                         ok: true,
                         capabilities: None,
+                        lifecycle_state: None,
+                        applied_sequence: None,
                         state: None,
                         diagnostics: Vec::new(),
                     })
@@ -320,6 +322,7 @@ mod tests {
             kind: OverlayHostMessageKind::Capabilities,
             state: None,
             gesture: None,
+            sequence: None,
             reason: None,
         }
     }

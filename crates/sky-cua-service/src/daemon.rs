@@ -999,7 +999,15 @@ impl ServiceDaemon {
                     Ok(request) => request,
                     Err((code, message)) => return error_response(code, message),
                 };
+                // Visual feedback (cursor glide) begins when the action is
+                // accepted, but input dispatch follows the existing backend
+                // contract and is not delayed waiting for the visual cursor.
+                let pre_dispatch_diagnostics = {
+                    let mut overlay = self.overlay.lock().await;
+                    overlay.prepare_action_visual(&request)
+                };
                 let mut outcome = route_action(self.backend.as_ref(), request.clone()).await;
+                outcome.diagnostics.extend(pre_dispatch_diagnostics);
                 let cursor_diagnostics = self
                     .overlay
                     .lock()

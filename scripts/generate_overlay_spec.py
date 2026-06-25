@@ -99,6 +99,7 @@ SCHEMA: dict[str, Any] = {
             "bounce_omega_pi_fraction": ("f64", 0.0, None, False),
             "no_no_shakes_fraction": ("f64", 0.0, None, False),
             "no_no_hold_fraction": ("f64", 0.0, 1.0, False),
+            "no_no_wiggle_deg": ("f64", 0.0, None, False),
             "max_gesture_points": ("u32", 1, 1024, False),
             "capture_barrier_frames": ("u32", 1, None, False),
             "cursor_source_viewbox_width": ("u32", 1, None, False),

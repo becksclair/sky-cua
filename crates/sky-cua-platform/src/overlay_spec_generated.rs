@@ -2,7 +2,7 @@
 // Source: resources/overlay/agent_overlay_spec.toml
 // Schema version: 1
 // Generator: scripts/generate_overlay_spec.py
-// Generator hash: d1f81b14d71766fe
+// Generator hash: ab5c0faea5b04be5
 
 #![allow(missing_docs)]
 
@@ -120,6 +120,8 @@ pub mod overlay_spec {
             pub const NO_NO_SHAKES_FRACTION: f64 = 1.5;
             /// `no_no_hold_fraction` from `[shared.effects]`.
             pub const NO_NO_HOLD_FRACTION: f64 = 0.78;
+            /// `no_no_wiggle_deg` from `[shared.effects]`.
+            pub const NO_NO_WIGGLE_DEG: f64 = 20.0;
             /// `max_gesture_points` from `[shared.effects]`.
             pub const MAX_GESTURE_POINTS: u32 = 16;
             /// `capture_barrier_frames` from `[shared.effects]`.
