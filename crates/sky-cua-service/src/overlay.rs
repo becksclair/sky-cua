@@ -43,6 +43,7 @@ pub struct OverlayController {
     /// deduplicates, but the service must not replay an event if the host
     /// restarts mid-session.
     recent_gesture_ids: VecDeque<String>,
+    prepared_action_sequence: Option<u64>,
 }
 
 impl Default for OverlayController {
@@ -65,6 +66,7 @@ impl OverlayController {
             host_capabilities: None,
             host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
             recent_gesture_ids: VecDeque::new(),
+            prepared_action_sequence: None,
         }
     }
 
@@ -80,6 +82,7 @@ impl OverlayController {
             host_capabilities: None,
             host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
             recent_gesture_ids: VecDeque::new(),
+            prepared_action_sequence: None,
         }
     }
 
@@ -95,6 +98,7 @@ impl OverlayController {
             host_capabilities: None,
             host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
             recent_gesture_ids: VecDeque::new(),
+            prepared_action_sequence: None,
         }
     }
 
@@ -113,6 +117,7 @@ impl OverlayController {
             host_capabilities: None,
             host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
             recent_gesture_ids: VecDeque::new(),
+            prepared_action_sequence: None,
         }
     }
 
@@ -146,6 +151,7 @@ impl OverlayController {
     }
 
     pub fn set_state(&mut self, state: AgentCursorState) -> AgentCursorStatus {
+        self.prepared_action_sequence = None;
         if self.agent_cursor_mode == CursorMode::Never {
             self.state = None;
             return self.status_with_diagnostic(diagnostic(
@@ -205,6 +211,7 @@ impl OverlayController {
         request: &ActionRequest,
         outcome: &mut ActionOutcome,
     ) -> Vec<DiagnosticEntry> {
+        let prepared_action_sequence = self.prepared_action_sequence.take();
         if self.agent_cursor_mode == CursorMode::Never {
             return Vec::new();
         }
@@ -235,9 +242,15 @@ impl OverlayController {
             }
             return Vec::new();
         };
-        let status = self.set_state(state);
-        outcome.agent_cursor = status.state;
-        let mut diagnostics = status.diagnostics;
+        let (mut diagnostics, state) = if let Some(prepared_state) =
+            self.prepared_state_for_success(&state, prepared_action_sequence)
+        {
+            (Vec::new(), Some(prepared_state))
+        } else {
+            let status = self.set_state(state);
+            (status.diagnostics, status.state)
+        };
+        outcome.agent_cursor = state;
         if let Some(gesture) = gesture_from_action_request(request, self.allocate_sequence()) {
             diagnostics.extend(self.send_gesture_event(gesture));
         }
@@ -256,7 +269,12 @@ impl OverlayController {
         let Some(state) = pre_dispatch_state_from_action_request(request) else {
             return Vec::new();
         };
-        self.set_state(state).diagnostics
+        let status = self.set_state(state);
+        self.prepared_action_sequence = status
+            .host_delivered
+            .then(|| status.state.as_ref().map(|state| state.sequence))
+            .flatten();
+        status.diagnostics
     }
 
     pub fn prepare_for_capture(&mut self) -> OverlayCaptureGuard {
@@ -400,7 +418,14 @@ impl OverlayController {
             };
             match self.host.send(message) {
                 Ok(reply) => {
+                    let host_delivered = reply.version == OVERLAY_HOST_PROTOCOL_VERSION && reply.ok;
                     diagnostics.extend(self.apply_host_reply(reply));
+                    return AgentCursorStatus {
+                        capabilities: self.combined_capabilities(),
+                        state: self.state(),
+                        diagnostics,
+                        host_delivered,
+                    };
                 }
                 Err(diagnostic) => {
                     if diagnostic.code == "AgentCursorHostUnavailable" {
@@ -417,6 +442,7 @@ impl OverlayController {
             capabilities: self.combined_capabilities(),
             state: self.state(),
             diagnostics,
+            host_delivered: self.agent_cursor_mode == CursorMode::Never,
         }
     }
 
@@ -532,6 +558,26 @@ impl OverlayController {
         state
     }
 
+    fn prepared_state_for_success(
+        &self,
+        requested: &AgentCursorState,
+        prepared_action_sequence: Option<u64>,
+    ) -> Option<AgentCursorState> {
+        let current = self.state.as_ref()?;
+        if Some(current.sequence) != prepared_action_sequence {
+            return None;
+        }
+        if current.visible
+            && current.model_point == requested.model_point
+            && current.native_point == requested.native_point
+            && current.snapshot_id == requested.snapshot_id
+            && current.source_action == requested.source_action
+        {
+            return self.state.clone();
+        }
+        None
+    }
+
     fn set_local_visibility(&mut self, visible: bool) {
         if let Some(mut state) = self.state.clone() {
             state.visible = visible;
@@ -552,6 +598,7 @@ impl OverlayController {
             capabilities: self.capabilities(),
             state: self.state(),
             diagnostics: vec![diagnostic],
+            host_delivered: false,
         }
     }
 }
@@ -561,6 +608,7 @@ pub struct AgentCursorStatus {
     pub capabilities: AgentCursorCapabilities,
     pub state: Option<AgentCursorState>,
     pub diagnostics: Vec<DiagnosticEntry>,
+    host_delivered: bool,
 }
 
 #[derive(Debug, Default)]
@@ -1545,6 +1593,68 @@ mod tests {
         assert_eq!(state.sequence, 1);
         assert_eq!(controller.state().expect("controller state").sequence, 1);
         assert_eq!(controller.recent_gesture_ids.len(), 1);
+    }
+
+    #[test]
+    fn update_from_action_reuses_prepared_cursor_state_for_success_effect() {
+        let mut controller = OverlayController::new_for_tests();
+        let request = action_request(ActionName::Click, serde_json::json!({"x": 12.0, "y": 34.0}));
+        let mut outcome = ActionOutcome {
+            success: true,
+            message: "ok".to_string(),
+            code: "Ok".to_string(),
+            diagnostics: Vec::new(),
+            agent_cursor: None,
+        };
+
+        controller.prepare_action_visual(&request);
+        controller.update_from_action(&request, &mut outcome);
+
+        let state = outcome.agent_cursor.expect("outcome should carry cursor");
+        assert_eq!(state.sequence, 1);
+        assert_eq!(controller.state().expect("controller state").sequence, 1);
+        assert_eq!(
+            controller.recent_gesture_ids.front().map(String::as_str),
+            Some("click-2")
+        );
+    }
+
+    #[test]
+    fn update_from_action_retries_cursor_state_after_failed_prepare() {
+        let mut controller =
+            OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
+        let request = action_request(ActionName::Click, serde_json::json!({"x": 12.0, "y": 34.0}));
+        let mut outcome = ActionOutcome {
+            success: true,
+            message: "ok".to_string(),
+            code: "Ok".to_string(),
+            diagnostics: Vec::new(),
+            agent_cursor: None,
+        };
+
+        let prepare_diagnostics = controller.prepare_action_visual(&request);
+        assert!(
+            prepare_diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorHostRequestFailed")
+        );
+
+        let diagnostics = controller.update_from_action(&request, &mut outcome);
+
+        let state = outcome.agent_cursor.expect("outcome should carry cursor");
+        assert_eq!(state.sequence, 2);
+        assert_eq!(controller.state().expect("controller state").sequence, 2);
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|entry| entry.code == "AgentCursorHostRequestFailed")
+                .count(),
+            2
+        );
+        assert_eq!(
+            controller.recent_gesture_ids.front().map(String::as_str),
+            Some("click-3")
+        );
     }
 
     #[test]
