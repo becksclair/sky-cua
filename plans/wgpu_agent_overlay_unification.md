@@ -53,6 +53,12 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Phase 5 package W accepted in the testing VM and integrated after Phase 4: Wayland auto now fails closed for incomplete WGPU output coverage, layer-shell capabilities expose full/none coverage, active/rendered output counts, adapter name, protocol/schema versions, coordinate spaces, max gesture points, WGPU effect booleans, and frame CPU submission timing, surface acquisition loss/timeout becomes a structured render failure instead of a silent skip, output hotplug/removal invalidates coverage, and VM smokes passed for visible overlay, hide-for-capture/no-leak, and click-through on Plasma/KWin `wayland-0`.
 - [x] 2026-06-25: Coordinator F/W integration verified on commit `ea6a3ba`: `cargo fmt --check`, `cargo test -p sky-cua-overlay-host`, `cargo test -p sky-cua-service overlay`, targeted script ruff/basedpyright/pytest, and the VM Wayland layer-shell overlay smoke passed after rerunning the known pointer-fixture readiness timeout with `SKY_CUA_POINTER_FIXTURE_READY_TIMEOUT_SECONDS=60`. Integrated artifact: `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625051526587819-vis`, reporting `renderer_backend: "wgpu"`, `coverage: "full"`, `visible_overlay_captured: true`, and WGPU effect capabilities true.
 - [x] 2026-06-25: Phase 7 package E accepted: production backend selection no longer includes Wayland SHM, GNOME Shell actor, or X11 shaped-window visible renderers; explicit `SKY_CUA_OVERLAY_BACKEND=gnome_shell_extension` and `SKY_CUA_OVERLAY_BACKEND=x11` return Noop capabilities with structured unsupported reasons; the GNOME extension keeps `ListWindows` and `ActivateWindow` while cursor drawing methods report retired; screenshot-synthetic cursor behavior remains covered. VM gates passed: Plasma/KWin `wayland-0` WGPU layer-shell profile, KDE targeted screenshot profile, i3/Xorg unsupported-contract profile, and VM packaging with a temporary `/workspace/.git` index for bundle source discovery.
+- [ ] 2026-06-25: Phase 8 package J closeout attempted on host commit `e2f97f52618f` with docs/ROADMAP edits and Plasma/KWin `wayland-0` in the Arch `testing-vm`; Phase 8 remains open because the VM `all` profile is blocked by external agent auth/billing lanes, not by overlay/runtime gates.
+- [x] 2026-06-25: Package J docs slice updated `docs/features/agent-cursor-overlay.md` and `ROADMAP.md` without runtime changes: the feature doc now states persistent-vs-one-shot overlay semantics, action timing, capture barrier, host lifecycle, WGPU-only production rendering, retired fallback boundaries, exact VM command forms, and Phase 9 operator-desktop separation; ROADMAP now carries the no-no input/sound follow-on beside the X11 WGPU host follow-on.
+- [x] 2026-06-25: Coordinator follow-up fixed the Package J runtime/script blockers exposed by the first full VM suite attempt: `OverlayController::update_from_action` now reuses a matching pre-dispatch persistent cursor state and only allocates a new sequence for the success `AnimateGesture`, and `scripts/run_gui_testing_vm_smoke.py` now builds `sky-cua-chrome-host` before syncing agent-harness profiles. VM targeted proof passed for `cargo fmt --check`, `cargo test -p sky-cua-service daemon::tests::execute_action_updates_cursor_state_for_explicit_click -- --nocapture`, and `cargo test -p sky-cua-service update_from_action_reuses_prepared_cursor_state_for_success_effect -- --nocapture`.
+- [x] 2026-06-25: Coordinator fixed no-git VM packaging closeout: `scripts/build_plugin.py` now falls back from `git ls-files` to a deterministic worktree walk for requested bundle source roots, with regression coverage in `scripts/test_plugin_bundle.py`; the no-`.git` VM workspace produced `/home/skycua/workspace-coord/dist/plugin/sky-cua`.
+- [x] 2026-06-25: Dedicated `ultra-review` lane over the final closeout diff found one `prepared-state-reuse` edge case: a failed pre-dispatch `SetCursor` could leave only local prepared state and skip the persistent retry on success. Coordinator fixed it by tracking the delivered preparatory sequence, clearing stale prepared markers, and retrying `SetCursor` after failed prepare; VM proof passed with `cargo fmt --check`, `cargo test -p sky-cua-service update_from_action_ -- --nocapture`, and full `cargo test`.
+- [ ] 2026-06-25: Package J VM `all` profile external blockers: with `OPENAI_API_KEY` explicitly removed, no Codex settings sync, Plasma/KWin `wayland-0`, and command `env -u OPENAI_API_KEY python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile all --desktop-env KDE --wayland-display wayland-0`, the fresh profile passed Wayland pointer, targeted screenshot, display screenshot, session-env, text-readback, and Codex Desktop at `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T064230Z`, `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T064308Z`, `/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T064311Z`, `/workspace/artifacts/session-env-smoke/20260625T064314Z`, `/workspace/artifacts/text-readback-smoke/20260625T064317Z`, and `/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T064319Z`, then stopped at `opencode-mcp` under default `opencode-go/kimi-k2.7-code` with artifact `/workspace/artifacts/opencode-zenity-smoke/20260625T064323Z`. Direct VM reruns with `opencode-go/qwen3.7-max` and `opencode-go/minimax-m3` also failed; the raw preserved `qwen3.7-max` artifact `/workspace/artifacts/opencode-zenity-smoke/20260625T061854Z` reports `APIError` / `CreditsError`: "Insufficient balance" from `https://opencode.ai/zen/go/v1/messages`. Isolated `pi-mcp` timed out with return code `-9` at `/workspace/artifacts/pi-zenity-smoke/20260625T061230Z`.
 
 ## Surprises & Discoveries
 
@@ -359,6 +365,63 @@ Phase 7 is complete. Production visible overlay selection no longer contains the
     ssh -p 22222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/home/bex/projects/sky-cua/artifacts/testing-vm/known_hosts skycua@127.0.0.1 'cd /workspace && rm -rf .git && git init -q && for p in .claude-plugin .codex-plugin .app.json assets hooks resources skills docs README.md; do [ -e "$p" ] && git add "$p"; done && python3 scripts/build_plugin.py'
 
 The Phase 7 live artifacts are `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625053947174748-vis`, `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T053958Z`, and `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260625T054024051391Z`. The first unmodified VM `build_plugin.py` run compiled release artifacts but failed because the runner-synced `/workspace` intentionally has no `.git`; the accepted VM packaging proof initialized a temporary `/workspace/.git` index for bundle source discovery and produced `/workspace/dist/plugin/sky-cua`.
+
+Phase 8 package J is not accepted yet. The docs and ROADMAP updates landed with
+two coordinator fixes for blockers exposed by the required full VM gates:
+
+    cargo test
+    cargo test -p sky-cua-service daemon::tests::execute_action_updates_cursor_state_for_explicit_click -- --nocapture
+    cargo test -p sky-cua-service update_from_action_reuses_prepared_cursor_state_for_success_effect -- --nocapture
+    uv run ruff format --check scripts
+    uv run ruff check scripts
+    uv run basedpyright
+    uv run pytest scripts/test_agent_cursor_smokes.py scripts/test_overlay_pointer_animations.py scripts/test_overlay_spec_codegen.py
+    cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
+    python3 scripts/build_plugin.py
+    ssh -p 22222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=artifacts/testing-vm/known_hosts skycua@127.0.0.1 'cd /home/skycua/workspace-coord && rm -rf .git && python3 scripts/build_plugin.py && test -d dist/plugin/sky-cua'
+    env -u OPENAI_API_KEY python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile all --desktop-env KDE --wayland-display wayland-0
+
+`cargo fmt --check`, Python lint/type/test gates, Android JVM tests, and the
+no-git packaging proof passed. The broad Rust suite initially failed
+deterministically in `daemon::tests::execute_action_updates_cursor_state_for_explicit_click`
+because the test observed two cursor updates where it expected one; coordinator
+follow-up fixed the runtime so a successful action reuses a matching
+pre-dispatch persistent cursor state and only the success `AnimateGesture`
+allocates a new sequence. Targeted VM proof passed for that failing test and
+the new regression test
+`overlay::tests::update_from_action_reuses_prepared_cursor_state_for_success_effect`.
+The final `ultra-review` lane then found a related failure path: if the
+pre-dispatch `SetCursor` failed, the service could mistake its local prepared
+state for host-delivered state and skip the retry. Coordinator follow-up now
+records the delivered preparatory sequence and only reuses that sequence; VM
+proof passed with `cargo test -p sky-cua-service update_from_action_ -- --nocapture`
+and full `cargo test`.
+The unmodified VM packaging command also failed in the runner-synced workspace
+because that workspace has no `.git`; coordinator follow-up made bundle source
+discovery fall back from `git ls-files` to a deterministic worktree walk, and
+`/home/skycua/workspace-coord/dist/plugin/sky-cua` now builds without a git
+index. The first agent-harness attempt failed because `sky-cua-chrome-host` was
+missing from the runner's release build set; coordinator follow-up added that
+package to `scripts/run_gui_testing_vm_smoke.py`. The fresh VM `all` profile on
+Plasma/KWin `wayland-0` passed Wayland pointer, targeted screenshot, display
+screenshot, session-env, text-readback, and Codex Desktop, then failed at
+`opencode-mcp`. The remaining `all` blocker is external agent auth/billing:
+isolated `opencode-mcp` with `opencode-go/qwen3.7-max` preserved raw output
+showing `APIError` / `CreditsError` with "Insufficient balance" from
+`https://opencode.ai/zen/go/v1/messages`, `opencode-go/minimax-m3` failed the
+same lane, and isolated `pi-mcp` timed out. The relevant artifacts are
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T064230Z`,
+`/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T064308Z`,
+`/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T064311Z`,
+`/workspace/artifacts/session-env-smoke/20260625T064314Z`,
+`/workspace/artifacts/text-readback-smoke/20260625T064317Z`,
+`/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T064319Z`,
+`/workspace/artifacts/opencode-zenity-smoke/20260625T064323Z`,
+`/workspace/artifacts/opencode-zenity-smoke/20260625T061216Z`,
+`/workspace/artifacts/opencode-zenity-smoke/20260625T061824Z`,
+`/workspace/artifacts/opencode-zenity-smoke/20260625T061839Z`,
+`/workspace/artifacts/opencode-zenity-smoke/20260625T061854Z`, and
+`/workspace/artifacts/pi-zenity-smoke/20260625T061230Z`.
 
 ## Context and Orientation
 

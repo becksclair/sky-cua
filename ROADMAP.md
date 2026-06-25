@@ -27,6 +27,7 @@ Open boxes link to the active ExecPlan that owns the work.
 - [x] Native agent cursor overlay — [`docs/features/agent-cursor-overlay.md`](docs/features/agent-cursor-overlay.md)
   - [x] WGPU-only Wayland layer-shell visible renderer with evented pointer tracking; legacy SHM, GNOME actor, and X11 shaped-window renderers retired to honest unsupported/Noop reporting
   - [ ] Follow-on X11 WGPU visible overlay host
+  - [ ] Follow-on no-no input interception and optional sound feedback
 - [x] Compositor cursor hiding (KWin / Hyprland / COSMIC adapters; X11/GNOME values retained only for compatibility) — [`docs/features/compositor-cursor-hiding.md`](docs/features/compositor-cursor-hiding.md)
   - [x] Local KWin cursor shim deploy/update tooling (`install_kwin_effect.py`, `--kwin-effect` deploy flags, rotating generated ids, BuildId convergence — tooling never restarts KWin)
   - [x] Unpatched COSMIC transparent-Xcursor mode (VM-only fallback)

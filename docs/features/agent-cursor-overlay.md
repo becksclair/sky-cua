@@ -5,7 +5,7 @@
 Shipped on Linux with WGPU-only production visible rendering on Wayland.
 Windows native overlay deferred until a Windows machine is available for live
 proof. Last verified: 2026-06-25 in the Arch `testing-vm` for the WGPU
-layer-shell path and retired X11/GNOME/SHM contracts.
+layer-shell path, retired X11/GNOME/SHM contracts, and package build.
 
 ## Summary
 
@@ -46,6 +46,12 @@ Overlay-host JSON-lines protocol on
 `hello`, `capabilities`, `set_cursor`, `animate_gesture`, `hide`, `show`,
 `ping`, `shutdown`. `animate_gesture` carries `AgentOverlayGestureEvent`
 for one-shot tap, drag, swipe, and no-no render effects.
+
+`set_cursor` is persistent state. `animate_gesture` is one-shot event intent
+with `event_id`, `sequence`, gesture kind, coordinate space, optional mapping
+id, bounded points, duration, and source action metadata. The host deduplicates
+recent event ids, rejects stale sequences, clamps durations from the generated
+spec, and never replays one-shot events after restart.
 
 Environment variables (allowlisted in `resources/chrome_preflight.py`):
 
@@ -139,7 +145,22 @@ Action-driven cursor placement:
 
 Capture guard: when `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=on`, the overlay
 controller hides the visible overlay just before capture and restores it
-afterward. The synthetic screenshot cursor is composited regardless.
+afterward. The service sends a hide sequence, the host presents transparent
+frames on every active surface, and capture waits for the matching applied
+barrier before reading the desktop. The synthetic screenshot cursor is
+composited regardless.
+
+The visible overlay is explanatory feedback, not an input-dispatch clock.
+Coordinate pointer actions may start a glide when accepted, but backend input
+dispatch follows the existing action contract and is not delayed waiting for
+animation completion. Success effects such as tap ripples are emitted only
+after successful dispatch; failed dispatch cancels pending visual feedback.
+
+The host lifecycle states are `Hidden`, `VisibleIdle`, `AgentAnimating`,
+`CaptureHidden`, `NoNoFeedbackRenderOnly`, and `FailedOrUnsupported`.
+`CaptureHidden` takes precedence over animation, shutdown restores compositor
+cursor state and releases surfaces, and unsupported or failed WGPU coverage is
+reported through structured capabilities instead of prose fallback inference.
 
 ### WGPU desktop effects
 
@@ -190,10 +211,14 @@ other.
 Unit and crate-level tests:
 
 ```bash
-cargo test -p sky-cua-platform
-cargo test -p sky-cua-service overlay
-cargo test -p sky-cua-overlay-host
-cargo test -p sky-cua-cosmic-helper
+cargo fmt --check
+cargo test
+uv run ruff format --check scripts
+uv run ruff check scripts
+uv run basedpyright
+uv run pytest scripts/test_agent_cursor_smokes.py scripts/test_overlay_pointer_animations.py scripts/test_overlay_spec_codegen.py
+cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
+python3 scripts/build_plugin.py
 ```
 
 The overlay-host crate includes WGPU shader validation, compute conformance
@@ -203,13 +228,25 @@ invariants for hidden transparency and deterministic visible frames.
 VM acceptance via `scripts/run_gui_testing_vm_smoke.py`:
 
 ```bash
-python3 scripts/run_gui_testing_vm_smoke.py --profile kde-kwin-effect-system-install --vm-name testing-vm --libvirt-uri qemu:///session
-python3 scripts/run_gui_testing_vm_smoke.py --profile wayland-layer-shell-overlay --desktop-env Hyprland --wayland-display wayland-1
-python3 scripts/run_gui_testing_vm_smoke.py --profile i3
+python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile all --desktop-env KDE --wayland-display wayland-0
+python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile kde-kwin-effect-system-install --vm-name testing-vm --libvirt-uri qemu:///session --desktop-env KDE --wayland-display wayland-0
+python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay --desktop-env Hyprland --wayland-display wayland-1
+python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile i3 --desktop-env i3
 ```
 
 Latest accepted artifacts:
 
+- Phase 8 no-git package staging proof:
+  `/home/skycua/workspace-coord/dist/plugin/sky-cua`
+- Latest VM all-profile overlay/desktop lanes:
+  `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T064230Z`,
+  `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T064308Z`,
+  `/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T064311Z`,
+  `/workspace/artifacts/session-env-smoke/20260625T064314Z`,
+  `/workspace/artifacts/text-readback-smoke/20260625T064317Z`, and
+  `/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T064319Z`;
+  the remaining all-profile blocker is external OpenCode/Pi agent auth/billing,
+  with OpenCode artifact `/workspace/artifacts/opencode-zenity-smoke/20260625T064323Z`.
 - KDE/KWin WGPU layer-shell Package E proof:
   `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625053947174748-vis`
 - Screenshot-synthetic preservation:
@@ -297,6 +334,9 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
 - **No-no input interception and sound are follow-on work.** The WGPU renderer
   can draw the no-no render effect, but click interception and audio feedback
   are not part of this shipped contract.
+- **Final operator-desktop acceptance remains separate.** The VM closeout
+  proves source, package, and VM behavior. The operator desktop is reserved for
+  one controlled Phase 9 acceptance pass using the already-proven package.
 
 ## Related
 
@@ -304,4 +344,5 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
 - Research: [`docs/research/2026-05-x11-shaped-window-vs-layer-shell.md`](../research/2026-05-x11-shaped-window-vs-layer-shell.md)
 - Companion feature: [`docs/features/compositor-cursor-hiding.md`](compositor-cursor-hiding.md)
 - ROADMAP entry: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop parity"
-- Originating ExecPlan (retired into this feature doc; see git history for `plans/native_agent_cursor_overlay.md`).
+- Active closeout ExecPlan:
+  [`plans/wgpu_agent_overlay_unification.md`](../../plans/wgpu_agent_overlay_unification.md)
