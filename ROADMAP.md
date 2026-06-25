@@ -25,8 +25,9 @@ Open boxes link to the active ExecPlan that owns the work.
 - [x] Linux virtual input (`LinuxVirtualInput` backend) — [`docs/features/linux-virtual-input.md`](docs/features/linux-virtual-input.md)
   - [ ] Privileged helper fast path for Wayland input — [`plans/privileged_linux_uinput_helper.md`](plans/privileged_linux_uinput_helper.md)
 - [x] Native agent cursor overlay — [`docs/features/agent-cursor-overlay.md`](docs/features/agent-cursor-overlay.md)
-  - [x] GPU-backed Wayland layer-shell renderer (`wgpu`) with shm fallback and evented pointer tracking
-- [x] Compositor cursor hiding (KWin / X11 / GNOME / Hyprland / patched COSMIC) — [`docs/features/compositor-cursor-hiding.md`](docs/features/compositor-cursor-hiding.md)
+  - [x] WGPU-only Wayland layer-shell visible renderer with evented pointer tracking; legacy SHM, GNOME actor, and X11 shaped-window renderers retired to honest unsupported/Noop reporting
+  - [ ] Follow-on X11 WGPU visible overlay host
+- [x] Compositor cursor hiding (KWin / Hyprland / COSMIC adapters; X11/GNOME values retained only for compatibility) — [`docs/features/compositor-cursor-hiding.md`](docs/features/compositor-cursor-hiding.md)
   - [x] Local KWin cursor shim deploy/update tooling (`install_kwin_effect.py`, `--kwin-effect` deploy flags, rotating generated ids, BuildId convergence — tooling never restarts KWin)
   - [x] Unpatched COSMIC transparent-Xcursor mode (VM-only fallback)
   - [ ] Long-term unpatched COSMIC path or accepted upstream integration

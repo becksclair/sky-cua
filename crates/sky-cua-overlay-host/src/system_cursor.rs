@@ -16,8 +16,6 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
-#[cfg(target_os = "linux")]
-use x11rb::connection::Connection as X11Connection;
 
 use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
 
@@ -38,8 +36,6 @@ pub enum SystemCursorAdapter {
     Cosmic(CosmicCompBridgeAdapter),
     #[cfg(target_os = "linux")]
     Hyprland(HyprlandSystemCursorAdapter),
-    #[cfg(target_os = "linux")]
-    X11(X11SystemCursorAdapter),
 }
 
 impl SystemCursorAdapter {
@@ -87,15 +83,6 @@ impl SystemCursorAdapter {
         Self::Unsupported(UnsupportedSystemCursorAdapter::new(backend, reason))
     }
 
-    #[cfg(target_os = "linux")]
-    #[must_use]
-    pub fn x11(
-        conn: std::rc::Rc<x11rb::rust_connection::RustConnection>,
-        root: x11rb::protocol::xproto::Window,
-    ) -> Self {
-        Self::X11(X11SystemCursorAdapter::new(conn, root))
-    }
-
     #[must_use]
     pub fn backend(&self) -> AgentCursorSystemCursorBackendKind {
         match self {
@@ -108,8 +95,6 @@ impl SystemCursorAdapter {
             Self::Cosmic(adapter) => adapter.backend(),
             #[cfg(target_os = "linux")]
             Self::Hyprland(adapter) => adapter.backend(),
-            #[cfg(target_os = "linux")]
-            Self::X11(adapter) => adapter.backend(),
         }
     }
 
@@ -125,8 +110,6 @@ impl SystemCursorAdapter {
             Self::Cosmic(adapter) => adapter.supported(),
             #[cfg(target_os = "linux")]
             Self::Hyprland(adapter) => adapter.supported(),
-            #[cfg(target_os = "linux")]
-            Self::X11(adapter) => adapter.supported(),
         }
     }
 
@@ -142,8 +125,6 @@ impl SystemCursorAdapter {
             Self::Cosmic(adapter) => adapter.hidden(),
             #[cfg(target_os = "linux")]
             Self::Hyprland(adapter) => adapter.hidden(),
-            #[cfg(target_os = "linux")]
-            Self::X11(adapter) => adapter.hidden(),
         }
     }
 
@@ -159,8 +140,6 @@ impl SystemCursorAdapter {
             Self::Cosmic(adapter) => adapter.reason(),
             #[cfg(target_os = "linux")]
             Self::Hyprland(adapter) => adapter.reason(),
-            #[cfg(target_os = "linux")]
-            Self::X11(adapter) => adapter.reason(),
         }
     }
 
@@ -175,8 +154,6 @@ impl SystemCursorAdapter {
             Self::Cosmic(adapter) => adapter.set_hidden(hidden),
             #[cfg(target_os = "linux")]
             Self::Hyprland(adapter) => adapter.set_hidden(hidden),
-            #[cfg(target_os = "linux")]
-            Self::X11(adapter) => adapter.set_hidden(hidden),
         }
     }
 
@@ -191,8 +168,6 @@ impl SystemCursorAdapter {
             Self::Cosmic(adapter) => adapter.pointer_position(),
             #[cfg(target_os = "linux")]
             Self::Hyprland(adapter) => adapter.pointer_position(),
-            #[cfg(target_os = "linux")]
-            Self::X11(adapter) => adapter.pointer_position(),
         }
     }
 
@@ -910,80 +885,6 @@ fn command_detail(stdout: &[u8], stderr: &[u8]) -> String {
         "no output".to_string()
     } else {
         stdout
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-pub struct X11SystemCursorAdapter {
-    conn: std::rc::Rc<x11rb::rust_connection::RustConnection>,
-    root: x11rb::protocol::xproto::Window,
-    supported: bool,
-    hidden: bool,
-    reason: Option<String>,
-}
-
-#[cfg(target_os = "linux")]
-impl X11SystemCursorAdapter {
-    #[must_use]
-    pub fn new(
-        conn: std::rc::Rc<x11rb::rust_connection::RustConnection>,
-        root: x11rb::protocol::xproto::Window,
-    ) -> Self {
-        let supported = x11rb::protocol::xfixes::query_version(conn.as_ref(), 4, 0)
-            .is_ok_and(|cookie| cookie.reply().is_ok());
-        Self {
-            conn,
-            root,
-            supported,
-            hidden: false,
-            reason: (!supported).then(|| "XFixes HideCursor is unavailable".to_string()),
-        }
-    }
-
-    #[must_use]
-    pub fn backend(&self) -> AgentCursorSystemCursorBackendKind {
-        AgentCursorSystemCursorBackendKind::X11Xfixes
-    }
-
-    #[must_use]
-    pub fn supported(&self) -> bool {
-        self.supported
-    }
-
-    #[must_use]
-    pub fn hidden(&self) -> bool {
-        self.hidden
-    }
-
-    #[must_use]
-    pub fn reason(&self) -> Option<&str> {
-        self.reason.as_deref()
-    }
-
-    pub fn set_hidden(&mut self, hidden: bool) -> Result<()> {
-        if !self.supported || self.hidden == hidden {
-            return Ok(());
-        }
-
-        if hidden {
-            x11rb::protocol::xfixes::hide_cursor(self.conn.as_ref(), self.root)?;
-        } else {
-            x11rb::protocol::xfixes::show_cursor(self.conn.as_ref(), self.root)?;
-        }
-        self.conn.flush()?;
-        self.hidden = hidden;
-        Ok(())
-    }
-
-    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
-        let reply = x11rb::protocol::xproto::query_pointer(self.conn.as_ref(), self.root)?
-            .reply()
-            .context("failed to query X11 pointer position")?;
-        Ok(Some(SystemPointerPosition {
-            x: f64::from(reply.root_x),
-            y: f64::from(reply.root_y),
-        }))
     }
 }
 

@@ -18,5 +18,4 @@ pollster.workspace = true
 smithay-client-toolkit.workspace = true
 wayland-client.workspace = true
 wgpu.workspace = true
-x11rb.workspace = true
 zbus.workspace = true

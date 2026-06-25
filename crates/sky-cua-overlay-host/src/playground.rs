@@ -42,12 +42,12 @@ use wayland_client::{
 
 use crate::{
     cursor_asset,
-    layer_shell::{ensure_layer_pool_capacity, layer_buffer_pool_size},
     renderer::{CursorImage, draw_cursor_asset},
 };
 
 const INITIAL_ROUNDTRIPS: usize = 4;
 const GRID_CELL_PX: u32 = 48;
+const BUFFER_SLOTS_PER_SURFACE: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Backdrop {
@@ -332,6 +332,32 @@ fn fill_solid(canvas: &mut [u8], bytes: [u8; 4]) {
     for pixel in canvas.chunks_exact_mut(4) {
         pixel.copy_from_slice(&bytes);
     }
+}
+
+fn ensure_layer_pool_capacity(
+    pool: &mut SlotPool,
+    width: u32,
+    height: u32,
+    surface_count: usize,
+) -> Result<()> {
+    let required = layer_buffer_pool_size(width, height, surface_count)?;
+    if pool.len() < required {
+        pool.resize(required)?;
+    }
+    Ok(())
+}
+
+fn layer_buffer_pool_size(width: u32, height: u32, surface_count: usize) -> Result<usize> {
+    let surface_count = surface_count.max(1);
+    let bytes_per_buffer = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .context("playground buffer dimensions overflowed usize")?;
+    bytes_per_buffer
+        .checked_mul(surface_count)
+        .and_then(|bytes| bytes.checked_mul(BUFFER_SLOTS_PER_SURFACE))
+        .map(|bytes| bytes.max(4096))
+        .context("playground buffer pool size overflowed usize")
 }
 
 impl SeatHandler for PlaygroundApp {

@@ -33,29 +33,6 @@ def test_kwin_effect_static_mode_requires_explicit_install_flag(
     assert "--allow-kwin-effect-install" in message
 
 
-def test_agent_cursor_smoke_x11_mode_forces_x11_backend(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    captured: dict[str, object] = {}
-
-    class FakePopen:
-        def __init__(self, args: list[str], **kwargs: object) -> None:
-            captured["args"] = args
-            captured.update(kwargs)
-
-    monkeypatch.setattr(live_agent_cursor_kde_smoke.subprocess, "Popen", FakePopen)
-
-    process = live_agent_cursor_kde_smoke.start_service(
-        tmp_path / "svc.sock", tmp_path, mode="x11-debug-visible"
-    )
-
-    assert isinstance(process, FakePopen)
-    env = cast(dict[str, str], captured["env"])
-    assert env["SKY_CUA_OVERLAY_BACKEND"] == "x11"
-    assert env["SKY_CUA_SCREENSHOT_CURSOR"] == "never"
-    assert env["SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE"] == "never"
-
-
 def test_agent_cursor_smoke_layer_shell_click_through_mode_forces_visible_overlay_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -79,25 +56,11 @@ def test_agent_cursor_smoke_layer_shell_click_through_mode_forces_visible_overla
     assert env["SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE"] == "never"
 
 
-def test_x11_overlay_smoke_forces_true_x11_backend_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
-
-    env = live_agent_cursor_x11_overlay_smoke.x11_overlay_env(":42", tmp_path)
-
-    assert env["DISPLAY"] == ":42"
-    assert env["XDG_SESSION_TYPE"] == "x11"
-    assert env["XDG_RUNTIME_DIR"] == str(tmp_path)
-    assert env["SKY_CUA_OVERLAY_BACKEND"] == "x11"
-    assert "WAYLAND_DISPLAY" not in env
-
-
-def test_x11_overlay_smoke_cursor_message_uses_stream_pixels() -> None:
+def test_x11_unsupported_smoke_cursor_message_uses_stream_pixels() -> None:
     message = live_agent_cursor_x11_overlay_smoke.cursor_message((330.0, 240.0), sequence=7)
 
     assert message == {
-        "version": 1,
+        "version": 2,
         "kind": "set_cursor",
         "state": {
             "visible": True,
@@ -113,43 +76,31 @@ def test_x11_overlay_smoke_cursor_message_uses_stream_pixels() -> None:
     }
 
 
-def test_x11_overlay_smoke_show_message_reuses_state_and_forces_visible() -> None:
-    hidden_reply = {
-        "ok": True,
-        "state": {
-            "visible": False,
-            "sequence": 7,
-            "model_point": {
-                "x": 330.0,
-                "y": 240.0,
-                "coordinate_space": "stream_pixels",
+def test_x11_unsupported_smoke_accepts_noop_capabilities() -> None:
+    live_agent_cursor_x11_overlay_smoke.require_x11_unsupported_reply(
+        {
+            "ok": True,
+            "capabilities": {
+                "backend": "none",
+                "renderer_backend": "none",
+                "visible_overlay": False,
+                "click_through": False,
+                "system_cursor_hide_supported": False,
+                "system_cursor_hidden": False,
+                "reason": (
+                    "X11 visible overlay requires a WGPU X11 host, tracked as a follow-on plan"
+                ),
             },
-            "source_action": "click",
-            "updated_at_ms": 0,
-        },
-    }
+        }
+    )
 
-    message = live_agent_cursor_x11_overlay_smoke.show_cursor_message(hidden_reply)
-
-    assert message["version"] == 1
-    assert message["kind"] == "show"
-    assert message["state"]["visible"] is True
-    assert message["state"]["sequence"] == 7
-    assert hidden_reply["state"]["visible"] is False
-
-
-def test_x11_overlay_smoke_show_message_requires_state() -> None:
-    with pytest.raises(RuntimeError, match="did not include cursor state"):
-        live_agent_cursor_x11_overlay_smoke.show_cursor_message({"ok": True})
-
-
-def test_x11_overlay_smoke_rejects_non_x11_overlay_reply() -> None:
-    with pytest.raises(RuntimeError, match="x11_shaped_window"):
-        live_agent_cursor_x11_overlay_smoke.require_x11_overlay_reply(
+    with pytest.raises(RuntimeError, match="retired X11 WGPU-host reason"):
+        live_agent_cursor_x11_overlay_smoke.require_x11_unsupported_reply(
             {
                 "ok": True,
                 "capabilities": {
                     "backend": "none",
+                    "renderer_backend": "none",
                     "visible_overlay": False,
                     "click_through": False,
                     "system_cursor_hide_supported": False,
@@ -158,42 +109,181 @@ def test_x11_overlay_smoke_rejects_non_x11_overlay_reply() -> None:
             }
         )
 
-
-def test_x11_overlay_smoke_visible_cursor_reply_requires_visible_state() -> None:
-    with pytest.raises(RuntimeError, match="visible cursor"):
-        live_agent_cursor_x11_overlay_smoke.require_visible_cursor_reply(
-            {"ok": True, "state": {"visible": False}},
-            context="show",
+    with pytest.raises(RuntimeError, match="visible_overlay"):
+        live_agent_cursor_x11_overlay_smoke.require_x11_unsupported_reply(
+            {
+                "ok": True,
+                "capabilities": {
+                    "backend": "none",
+                    "renderer_backend": "none",
+                    "visible_overlay": True,
+                    "click_through": False,
+                    "system_cursor_hide_supported": False,
+                    "system_cursor_hidden": False,
+                    "reason": "X11 visible overlay requires a WGPU X11 host",
+                },
+            }
         )
 
-    live_agent_cursor_x11_overlay_smoke.require_visible_cursor_reply(
-        {"ok": True, "state": {"visible": True}},
-        context="show",
+
+def test_x11_unsupported_smoke_capability_bool_reads_capabilities() -> None:
+    assert (
+        live_agent_cursor_x11_overlay_smoke.capability_bool(
+            {
+                "capabilities": {
+                    "system_cursor_hidden": True,
+                }
+            },
+            "system_cursor_hidden",
+        )
+        is True
+    )
+    assert (
+        live_agent_cursor_x11_overlay_smoke.backend_from_reply(
+            {"capabilities": {"backend": "none"}}
+        )
+        == "none"
+    )
+    assert (
+        live_agent_cursor_x11_overlay_smoke.renderer_from_reply(
+            {"capabilities": {"renderer_backend": "none"}}
+        )
+        == "none"
     )
 
 
-def test_x11_overlay_smoke_system_cursor_reply_tracks_hide_state() -> None:
-    live_agent_cursor_x11_overlay_smoke.require_system_cursor_reply(
-        {
-            "ok": True,
-            "capabilities": {
-                "system_cursor_hide_supported": True,
-                "system_cursor_hidden": True,
-            },
-        },
-        hidden=True,
-        context="set",
+def test_x11_unsupported_smoke_requires_usable_capabilities() -> None:
+    with pytest.raises(RuntimeError, match="usable capabilities"):
+        live_agent_cursor_x11_overlay_smoke.require_x11_unsupported_reply(
+            {"ok": False, "capabilities": None}
+        )
+
+
+def test_x11_unsupported_smoke_env_forces_x11_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+
+    env = live_agent_cursor_x11_overlay_smoke.x11_overlay_env(":42", tmp_path)
+
+    assert env["DISPLAY"] == ":42"
+    assert env["XDG_SESSION_TYPE"] == "x11"
+    assert env["XDG_RUNTIME_DIR"] == str(tmp_path)
+    assert env["SKY_CUA_OVERLAY_BACKEND"] == "x11"
+    assert "WAYLAND_DISPLAY" not in env
+
+
+def test_x11_unsupported_smoke_capability_bool_returns_none_without_bool() -> None:
+    assert (
+        live_agent_cursor_x11_overlay_smoke.capability_bool(
+            {"capabilities": {"system_cursor_hidden": "false"}},
+            "system_cursor_hidden",
+        )
+        is None
     )
-    live_agent_cursor_x11_overlay_smoke.require_system_cursor_reply(
-        {
-            "ok": True,
-            "capabilities": {
-                "system_cursor_hide_supported": True,
-                "system_cursor_hidden": False,
+
+
+def test_x11_unsupported_smoke_rejects_visible_overlay_shape_reply() -> None:
+    with pytest.raises(RuntimeError, match="backend"):
+        live_agent_cursor_x11_overlay_smoke.require_x11_unsupported_reply(
+            {
+                "ok": True,
+                "capabilities": {
+                    "backend": "x11_shaped_window",
+                    "renderer_backend": "none",
+                    "visible_overlay": True,
+                    "click_through": True,
+                    "system_cursor_hide_supported": True,
+                    "system_cursor_hidden": True,
+                    "reason": "X Shape visible overlay active",
+                },
+            }
+        )
+
+
+def test_x11_unsupported_smoke_system_cursor_is_not_claimed() -> None:
+    with pytest.raises(RuntimeError, match="system_cursor_hide_supported"):
+        live_agent_cursor_x11_overlay_smoke.require_x11_unsupported_reply(
+            {
+                "ok": True,
+                "capabilities": {
+                    "backend": "none",
+                    "renderer_backend": "none",
+                    "visible_overlay": False,
+                    "click_through": False,
+                    "system_cursor_hide_supported": True,
+                    "system_cursor_hidden": False,
+                    "reason": "X11 visible overlay requires a WGPU X11 host",
+                },
+            }
+        )
+
+
+def test_x11_unsupported_smoke_renderer_is_not_shape_renderer() -> None:
+    with pytest.raises(RuntimeError, match="renderer_backend"):
+        live_agent_cursor_x11_overlay_smoke.require_x11_unsupported_reply(
+            {
+                "ok": True,
+                "capabilities": {
+                    "backend": "none",
+                    "renderer_backend": "x11_rectangles",
+                    "visible_overlay": False,
+                    "click_through": False,
+                    "system_cursor_hide_supported": False,
+                    "system_cursor_hidden": False,
+                    "reason": "X11 visible overlay requires a WGPU X11 host",
+                },
+            }
+        )
+
+
+def test_x11_unsupported_smoke_click_through_is_not_claimed() -> None:
+    with pytest.raises(RuntimeError, match="click_through"):
+        live_agent_cursor_x11_overlay_smoke.require_x11_unsupported_reply(
+            {
+                "ok": True,
+                "capabilities": {
+                    "backend": "none",
+                    "renderer_backend": "none",
+                    "visible_overlay": False,
+                    "click_through": True,
+                    "system_cursor_hide_supported": False,
+                    "system_cursor_hidden": False,
+                    "reason": "X11 visible overlay requires a WGPU X11 host",
+                },
+            }
+        )
+
+
+def test_x11_unsupported_smoke_reason_required() -> None:
+    with pytest.raises(RuntimeError, match="retired X11 WGPU-host reason"):
+        live_agent_cursor_x11_overlay_smoke.require_x11_unsupported_reply(
+            {
+                "ok": True,
+                "capabilities": {
+                    "backend": "none",
+                    "renderer_backend": "none",
+                    "visible_overlay": False,
+                    "click_through": False,
+                    "system_cursor_hide_supported": False,
+                    "system_cursor_hidden": False,
+                    "reason": "unsupported",
+                },
+            }
+        )
+
+
+def test_x11_unsupported_smoke_capability_bool_tracks_hide_state() -> None:
+    assert (
+        live_agent_cursor_x11_overlay_smoke.capability_bool(
+            {
+                "capabilities": {
+                    "system_cursor_hidden": False,
+                },
             },
-        },
-        hidden=False,
-        context="hide",
+            "system_cursor_hidden",
+        )
+        is False
     )
     assert (
         live_agent_cursor_x11_overlay_smoke.capability_bool(
@@ -247,10 +337,6 @@ def test_kde_smoke_names_expected_visible_overlay_backend_by_mode() -> None:
     assert (
         live_agent_cursor_kde_smoke.expected_overlay_backend("layer-shell-click-through")
         == "wayland_layer_shell"
-    )
-    assert (
-        live_agent_cursor_kde_smoke.expected_overlay_backend("x11-debug-visible")
-        == "x11_shaped_window"
     )
     assert live_agent_cursor_kde_smoke.expected_overlay_backend("synthetic") is None
 

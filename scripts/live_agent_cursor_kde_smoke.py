@@ -53,7 +53,6 @@ MODE_ARTIFACT_SLUGS = {
     "layer-shell-display-target": "target",
     "layer-shell-click-through": "click",
     "layer-shell-ydotool-click-through": "ydotool-click",
-    "x11-debug-visible": "x11",
     "kwin-effect-static": "kwin",
     "kwin-effect-nested": "kwin-nested",
     "kwin-effect-nested-user-install": "kwin-user",
@@ -99,7 +98,6 @@ def main() -> int:
             "layer-shell-display-target",
             "layer-shell-click-through",
             "layer-shell-ydotool-click-through",
-            "x11-debug-visible",
             "kwin-effect-static",
             "kwin-effect-nested",
             "kwin-effect-nested-user-install",
@@ -200,7 +198,6 @@ def main() -> int:
             if args.mode in {
                 "layer-shell-debug-visible",
                 "layer-shell-hide-for-capture",
-                "x11-debug-visible",
             }:
                 # The overlay host has committed by now, but KWin/portal capture can still
                 # race the next compositor presentation frame without a small settle.
@@ -209,7 +206,7 @@ def main() -> int:
                 cursor_client,
                 request_timeout=args.request_timeout,
             )
-        if args.mode in {"layer-shell-debug-visible", "x11-debug-visible"} or (
+        if args.mode == "layer-shell-debug-visible" or (
             args.mode == "layer-shell-hide-for-capture" and ".agent-cursor." not in after_path.name
         ):
             before_path = first_path
@@ -229,10 +226,10 @@ def main() -> int:
             "mode": args.mode,
             "ok": ok,
             "synthetic_cursor_found": probe.found
-            if args.mode not in {"layer-shell-debug-visible", "x11-debug-visible"}
+            if args.mode != "layer-shell-debug-visible"
             else False,
             "visible_overlay_captured": probe.found
-            if args.mode in {"layer-shell-debug-visible", "x11-debug-visible"}
+            if args.mode == "layer-shell-debug-visible"
             else False,
             "native_overlay_hidden_for_capture": None
             if leak_probe is None
@@ -324,8 +321,6 @@ def start_service(socket_path: Path, artifact_dir: Path, *, mode: str) -> subpro
         "layer-shell-ydotool-click-through",
     }:
         env["SKY_CUA_OVERLAY_BACKEND"] = "wayland-layer-shell"
-    elif mode == "x11-debug-visible":
-        env["SKY_CUA_OVERLAY_BACKEND"] = "x11"
     else:
         env.setdefault("SKY_CUA_OVERLAY_BACKEND", "auto")
     env.setdefault("SKY_CUA_OVERLAY_HOST_PATH", str(OVERLAY_HOST_BIN))
@@ -334,7 +329,6 @@ def start_service(socket_path: Path, artifact_dir: Path, *, mode: str) -> subpro
         "layer-shell-display-target",
         "layer-shell-click-through",
         "layer-shell-ydotool-click-through",
-        "x11-debug-visible",
     }:
         env["SKY_CUA_SCREENSHOT_CURSOR"] = "never"
         env["SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE"] = "never"
@@ -1844,8 +1838,6 @@ def expected_overlay_backend(mode: str) -> str | None:
         "layer-shell-ydotool-click-through",
     }:
         return "wayland_layer_shell"
-    if mode == "x11-debug-visible":
-        return "x11_shaped_window"
     return None
 
 

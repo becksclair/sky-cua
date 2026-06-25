@@ -4,12 +4,10 @@ use serde::{Deserialize, Serialize};
 use sky_cua_platform::model::{
     AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPointerTrackingBackendKind,
     AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
-    AgentOverlayGestureEvent, AgentOverlayGestureKind, AgentOverlayHostLifecycleState,
-    DiagnosticEntry,
+    AgentOverlayEffectsCapabilities, AgentOverlayGestureEvent, AgentOverlayGestureKind,
+    AgentOverlayHostLifecycleState, DiagnosticEntry,
 };
 
-#[cfg(target_os = "linux")]
-mod gnome_shell;
 #[cfg(target_os = "linux")]
 mod layer_shell;
 #[cfg(target_os = "linux")]
@@ -19,8 +17,6 @@ mod pointer_tracking;
 #[cfg(target_os = "linux")]
 mod renderer;
 mod system_cursor;
-#[cfg(target_os = "linux")]
-mod x11;
 
 pub const OVERLAY_HOST_PROTOCOL_VERSION: u32 = 2;
 
@@ -142,6 +138,17 @@ impl NoopOverlayBackend {
             system_cursor_backend: AgentCursorSystemCursorBackendKind::None,
             needs_user_install: false,
             reason: Some("no visible overlay backend selected".to_string()),
+            effects: Some(AgentOverlayEffectsCapabilities::default()),
+            coverage: Some(sky_cua_platform::model::AgentOverlayCoverageKind::None),
+            supported_coordinate_spaces: Vec::new(),
+            max_gesture_points: Some(
+                sky_cua_platform::overlay_spec::shared::effects::MAX_GESTURE_POINTS,
+            ),
+            protocol_version: Some(OVERLAY_HOST_PROTOCOL_VERSION),
+            effect_schema_version: Some(sky_cua_platform::overlay_spec::SCHEMA_VERSION),
+            active_output_count: Some(0),
+            rendered_output_count: Some(0),
+            adapter_name: None,
             ..Default::default()
         }
     }
@@ -405,11 +412,7 @@ pub(crate) fn validate_gesture_message(
 pub enum OverlayHostBackend {
     Noop(NoopOverlayBackend),
     #[cfg(target_os = "linux")]
-    GnomeShell(gnome_shell::GnomeShellOverlayBackend),
-    #[cfg(target_os = "linux")]
     LayerShell(Box<layer_shell::LayerShellOverlayBackend>),
-    #[cfg(target_os = "linux")]
-    X11(Box<x11::X11OverlayBackend>),
 }
 
 impl OverlayHostBackend {
@@ -453,12 +456,9 @@ impl OverlayHostBackend {
                     | "gnome-shell-extension"
                     | "gnome_shell_extension"
             ) {
-                return match gnome_shell::GnomeShellOverlayBackend::connect() {
-                    Ok(backend) => Self::GnomeShell(backend),
-                    Err(error) => Self::Noop(NoopOverlayBackend::with_reason(format!(
-                        "GNOME Shell extension overlay unavailable: {error}"
-                    ))),
-                };
+                return Self::Noop(NoopOverlayBackend::with_reason(
+                    "GNOME Shell visual rendering was retired; no WGPU GNOME overlay host is available",
+                ));
             }
             if matches!(
                 mode,
@@ -475,12 +475,9 @@ impl OverlayHostBackend {
                 mode,
                 "x11" | "x11-shaped" | "x11_shaped" | "x11-shaped-window" | "x11_shaped_window"
             ) {
-                return match x11::X11OverlayBackend::connect() {
-                    Ok(backend) => Self::X11(Box::new(backend)),
-                    Err(error) => Self::Noop(NoopOverlayBackend::with_reason(format!(
-                        "X11 shaped-window overlay unavailable: {error}"
-                    ))),
-                };
+                return Self::Noop(NoopOverlayBackend::with_reason(
+                    "X11 visible overlay requires a WGPU X11 host, tracked as a follow-on plan",
+                ));
             }
             if matches!(mode, "auto" | "") {
                 let mut reasons = Vec::new();
@@ -492,32 +489,8 @@ impl OverlayHostBackend {
                         }
                     }
                 }
-                if is_gnome_session() {
-                    match gnome_shell::GnomeShellOverlayBackend::connect() {
-                        Ok(backend) => return Self::GnomeShell(backend),
-                        Err(error) => {
-                            reasons.push(format!(
-                                "GNOME Shell extension overlay unavailable: {error}"
-                            ));
-                        }
-                    }
-                }
-                if should_try_x11_auto(
-                    linux_env_value("XDG_SESSION_TYPE").as_deref(),
-                    linux_env_value("WAYLAND_DISPLAY").as_deref(),
-                    linux_env_value("DISPLAY").as_deref(),
-                ) {
-                    match x11::X11OverlayBackend::connect() {
-                        Ok(backend) => return Self::X11(Box::new(backend)),
-                        Err(error) => {
-                            reasons.push(format!("X11 shaped-window overlay unavailable: {error}"));
-                        }
-                    }
-                }
                 if reasons.is_empty() {
-                    reasons.push(
-                        "no auto-selected visible overlay backend for this session".to_string(),
-                    );
+                    reasons.push("auto visible overlay requires a WGPU-capable Wayland layer-shell session; GNOME actor and X11 rectangle renderers are retired".to_string());
                 }
                 return Self::Noop(NoopOverlayBackend::with_reason(reasons.join("; ")));
             }
@@ -532,11 +505,7 @@ impl OverlayHostBackend {
         match self {
             Self::Noop(backend) => backend.handle_message(message),
             #[cfg(target_os = "linux")]
-            Self::GnomeShell(backend) => backend.handle_message(message),
-            #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.handle_message(message),
-            #[cfg(target_os = "linux")]
-            Self::X11(backend) => backend.handle_message(message),
         }
     }
 
@@ -544,11 +513,7 @@ impl OverlayHostBackend {
         match self {
             Self::Noop(_backend) => {}
             #[cfg(target_os = "linux")]
-            Self::GnomeShell(_backend) => {}
-            #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.tick(),
-            #[cfg(target_os = "linux")]
-            Self::X11(backend) => backend.tick(),
         }
     }
 }
@@ -558,42 +523,6 @@ fn linux_env_value(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())
-}
-
-#[cfg(target_os = "linux")]
-fn is_gnome_session() -> bool {
-    [
-        "XDG_CURRENT_DESKTOP",
-        "XDG_SESSION_DESKTOP",
-        "DESKTOP_SESSION",
-    ]
-    .into_iter()
-    .filter_map(linux_env_value)
-    .flat_map(|value| {
-        value
-            .split([':', ';'])
-            .map(|part| part.trim().to_ascii_lowercase())
-            .collect::<Vec<_>>()
-    })
-    .any(|part| part == "gnome")
-}
-
-#[cfg(target_os = "linux")]
-fn should_try_x11_auto(
-    session_type: Option<&str>,
-    wayland_display: Option<&str>,
-    display: Option<&str>,
-) -> bool {
-    let Some(display) = display else {
-        return false;
-    };
-    if display.trim().is_empty() {
-        return false;
-    }
-    if session_type.is_some_and(|value| value.trim().eq_ignore_ascii_case("x11")) {
-        return true;
-    }
-    wayland_display.is_none_or(|value| value.trim().is_empty())
 }
 
 #[must_use]
@@ -992,21 +921,41 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn auto_backend_uses_x11_only_for_x11_sessions() {
-        assert!(super::should_try_x11_auto(
-            Some("x11"),
-            Some("wayland-0"),
-            Some(":0")
-        ));
-        assert!(super::should_try_x11_auto(None, None, Some(":0")));
-        assert!(!super::should_try_x11_auto(
-            Some("wayland"),
-            Some("wayland-0"),
-            Some(":0")
-        ));
-        assert!(!super::should_try_x11_auto(Some("x11"), None, None));
+    fn legacy_gnome_and_x11_modes_report_noop_capabilities() {
+        for (mode, reason) in [
+            (
+                "gnome_shell_extension",
+                "GNOME Shell visual rendering was retired",
+            ),
+            ("x11", "X11 visible overlay requires a WGPU X11 host"),
+        ] {
+            let reply = match super::OverlayHostBackend::from_mode(mode) {
+                super::OverlayHostBackend::Noop(mut backend) => {
+                    backend.handle_message(OverlayHostMessage {
+                        version: OVERLAY_HOST_PROTOCOL_VERSION,
+                        kind: OverlayHostMessageKind::Capabilities,
+                        state: None,
+                        gesture: None,
+                        sequence: None,
+                        reason: None,
+                    })
+                }
+                #[cfg(target_os = "linux")]
+                other => panic!("expected noop backend, got {other:?}"),
+            };
+
+            let capabilities = reply.capabilities.expect("capabilities");
+            assert_eq!(capabilities.backend, AgentCursorBackendKind::None);
+            assert_eq!(
+                capabilities.renderer_backend,
+                sky_cua_platform::model::AgentCursorRendererBackendKind::None
+            );
+            assert!(!capabilities.visible_overlay);
+            assert_eq!(capabilities.active_output_count, Some(0));
+            assert_eq!(capabilities.rendered_output_count, Some(0));
+            assert!(capabilities.reason.expect("reason").contains(reason));
+        }
     }
 
     fn cursor_state() -> AgentCursorState {

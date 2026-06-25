@@ -35,7 +35,7 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] Phase 4: GPU effects, WGSL conformance, and deterministic rendering tests.
 - [x] Phase 5: Wayland hardening, multi-output correctness, frame pacing, and failure recovery.
 - [ ] Phase 6: Android consumer migration and parity fixtures.
-- [ ] Phase 7: Legacy renderer retirement and unsupported backend reporting.
+- [x] Phase 7: Legacy renderer retirement and unsupported backend reporting.
 - [ ] Phase 8: Documentation, packaging, and full testing-VM closeout.
 - [ ] Phase 9: Final operator-desktop acceptance and plan retirement.
 
@@ -52,6 +52,7 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Phase 4 accepted in worker package F on host commit `2d41fdb`: layer-shell now retains sanitized `AnimateGesture` events, maps them into renderer-owned per-surface `EffectScene` data, and the WGPU renderer draws edge glow, inward waves, halo, ripple, trail, cursor glide/rotation, and no-no render effects in WGSL from uniform/storage buffers. VM gates passed: `cargo fmt --check`, `cargo test -p sky-cua-overlay-host`, and `uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay --desktop-env KDE --wayland-display wayland-0`.
 - [x] 2026-06-25: Phase 5 package W accepted in the testing VM and integrated after Phase 4: Wayland auto now fails closed for incomplete WGPU output coverage, layer-shell capabilities expose full/none coverage, active/rendered output counts, adapter name, protocol/schema versions, coordinate spaces, max gesture points, WGPU effect booleans, and frame CPU submission timing, surface acquisition loss/timeout becomes a structured render failure instead of a silent skip, output hotplug/removal invalidates coverage, and VM smokes passed for visible overlay, hide-for-capture/no-leak, and click-through on Plasma/KWin `wayland-0`.
 - [x] 2026-06-25: Coordinator F/W integration verified on commit `ea6a3ba`: `cargo fmt --check`, `cargo test -p sky-cua-overlay-host`, `cargo test -p sky-cua-service overlay`, targeted script ruff/basedpyright/pytest, and the VM Wayland layer-shell overlay smoke passed after rerunning the known pointer-fixture readiness timeout with `SKY_CUA_POINTER_FIXTURE_READY_TIMEOUT_SECONDS=60`. Integrated artifact: `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625051526587819-vis`, reporting `renderer_backend: "wgpu"`, `coverage: "full"`, `visible_overlay_captured: true`, and WGPU effect capabilities true.
+- [x] 2026-06-25: Phase 7 package E accepted: production backend selection no longer includes Wayland SHM, GNOME Shell actor, or X11 shaped-window visible renderers; explicit `SKY_CUA_OVERLAY_BACKEND=gnome_shell_extension` and `SKY_CUA_OVERLAY_BACKEND=x11` return Noop capabilities with structured unsupported reasons; the GNOME extension keeps `ListWindows` and `ActivateWindow` while cursor drawing methods report retired; screenshot-synthetic cursor behavior remains covered. VM gates passed: Plasma/KWin `wayland-0` WGPU layer-shell profile, KDE targeted screenshot profile, i3/Xorg unsupported-contract profile, and VM packaging with a temporary `/workspace/.git` index for bundle source discovery.
 
 ## Surprises & Discoveries
 
@@ -344,13 +345,28 @@ The Phase 5 VM artifacts are `/workspace/artifacts/codex-e2e/agent-cursor-kde/06
 
 Phase 5 VM-unavailable items: the current `testing-vm` exposes a single KWin output, so negative origins, mixed output positions/scales, fractional mixed scaling, portrait/transformed outputs, mirrored outputs, different refresh rates, true output hotplug, and adapter/surface mismatch were not live-proven. Vulkan was live-proven through llvmpipe; GLES was not exposed in this VM run. Phase 4 remains the blocker for effect-aware animation pacing and recovery tests.
 
+Phase 7 is complete. Production visible overlay selection no longer contains the Wayland SHM renderer, GNOME Shell cursor actor renderer, or X11 shaped-window renderer. Explicit `x11` and `gnome_shell_extension` modes return honest Noop capabilities; the GNOME extension remains packaged for window-control APIs and returns retired cursor-renderer messages for its old cursor methods. Screenshot-synthetic cursor support was preserved. VM verification passed on Arch `testing-vm`:
+
+    cargo fmt --check
+    cargo test -p sky-cua-overlay-host
+    cargo test -p sky-cua-service overlay
+    uv run ruff format --check scripts/live_agent_cursor_kde_smoke.py scripts/live_agent_cursor_x11_overlay_smoke.py scripts/test_agent_cursor_smokes.py
+    uv run ruff check scripts/live_agent_cursor_kde_smoke.py scripts/live_agent_cursor_x11_overlay_smoke.py scripts/test_agent_cursor_smokes.py
+    uv run pytest scripts/test_agent_cursor_smokes.py
+    uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay --desktop-env KDE --wayland-display wayland-0
+    uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile targeted-screenshot --desktop-env KDE --wayland-display wayland-0
+    uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile i3 --desktop-env i3
+    ssh -p 22222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/home/bex/projects/sky-cua/artifacts/testing-vm/known_hosts skycua@127.0.0.1 'cd /workspace && rm -rf .git && git init -q && for p in .claude-plugin .codex-plugin .app.json assets hooks resources skills docs README.md; do [ -e "$p" ] && git add "$p"; done && python3 scripts/build_plugin.py'
+
+The Phase 7 live artifacts are `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625053947174748-vis`, `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T053958Z`, and `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260625T054024051391Z`. The first unmodified VM `build_plugin.py` run compiled release artifacts but failed because the runner-synced `/workspace` intentionally has no `.git`; the accepted VM packaging proof initialized a temporary `/workspace/.git` index for bundle source discovery and produced `/workspace/dist/plugin/sky-cua`.
+
 ## Context and Orientation
 
 The sky-cua desktop overlay has three layers. The platform model in `crates/sky-cua-platform/src/model.rs` defines serializable state and capabilities shared by service, client, tests, and overlay host. The service controller in `crates/sky-cua-service/src/overlay.rs` owns current cursor state, creates screenshot-synthetic cursor markers, hides visible overlays around captures, and communicates with the overlay-host process. The overlay host in `crates/sky-cua-overlay-host/` owns the native visible overlay process and currently chooses a backend from environment/session variables.
 
-The overlay-host backend selection lives in `crates/sky-cua-overlay-host/src/lib.rs`. `OverlayHostBackend::from_env` reads `SKY_CUA_OVERLAY_BACKEND`. In `auto`, it currently tries Wayland layer-shell when `WAYLAND_DISPLAY` exists, tries the GNOME Shell extension in a GNOME session, and tries X11 when the environment is an X11 session or has `DISPLAY` without Wayland. The backend enum currently includes `Noop`, `GnomeShell`, `LayerShell`, and `X11`.
+The overlay-host backend selection lives in `crates/sky-cua-overlay-host/src/lib.rs`. `OverlayHostBackend::from_env` reads `SKY_CUA_OVERLAY_BACKEND`. In `auto`, it tries Wayland layer-shell WGPU when `WAYLAND_DISPLAY` exists and otherwise reports Noop capabilities. Explicit legacy GNOME and X11 modes are compatibility probes that return Noop capabilities with structured unsupported reasons. The backend enum includes `Noop` and `LayerShell`; GNOME Shell actor drawing and X11 shaped-window drawing are retired.
 
-Wayland layer-shell is the core target host. The current implementation in `crates/sky-cua-overlay-host/src/layer_shell.rs` creates one layer surface per output, sets each layer to cover the output, sets an empty input region to make the overlay click-through, hides/restores the system cursor through `src/system_cursor.rs`, and uses pointer tracking from `src/pointer_tracking.rs`. Its default renderer is WGPU, but it still has a Wayland SHM fallback that draws pixels on the CPU. After this plan, production visible overlay means WGPU or unsupported.
+Wayland layer-shell is the core target host. The current implementation in `crates/sky-cua-overlay-host/src/layer_shell.rs` creates one layer surface per output, sets each layer to cover the output, sets an empty input region to make the overlay click-through, hides/restores the system cursor through `src/system_cursor.rs`, and uses pointer tracking from `src/pointer_tracking.rs`. Its production visible renderer is WGPU. Explicit legacy SHM selection is rejected as unsupported instead of drawing CPU pixels.
 
 The WGPU code in `layer_shell.rs` currently owns both host concerns and renderer concerns. Host concerns include Wayland connection, output/layer creation, configure events, raw Wayland display/window handles, and layer commit/frame callbacks. Renderer concerns include instance/device/queue creation, cursor texture upload, shader/pipeline setup, surface configuration, vertex generation, and frame presentation. Phase 3 splits those without changing current static Wayland WGPU behavior.
 
@@ -1020,8 +1036,6 @@ Current source anchors:
     crates/sky-cua-overlay-host/src/lib.rs
     crates/sky-cua-overlay-host/src/main.rs
     crates/sky-cua-overlay-host/src/layer_shell.rs
-    crates/sky-cua-overlay-host/src/x11.rs
-    crates/sky-cua-overlay-host/src/gnome_shell.rs
     crates/sky-cua-overlay-host/src/playground.rs
     resources/gnome-shell-extension/codex-window-control@openai.com/extension.js
     resources/kwin/effects/sky-cua-agent-cursor/

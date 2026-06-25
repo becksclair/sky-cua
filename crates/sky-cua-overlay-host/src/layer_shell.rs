@@ -12,7 +12,7 @@ use sky_cua_platform::model::{
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output, delegate_shm,
+    delegate_compositor, delegate_layer, delegate_output,
     output::{OutputHandler, OutputState},
     shell::{
         WaylandSurface,
@@ -21,15 +21,11 @@ use smithay_client_toolkit::{
             LayerSurfaceConfigure,
         },
     },
-    shm::{
-        Shm, ShmHandler,
-        slot::{Buffer, SlotPool},
-    },
 };
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
     globals::{GlobalListContents, registry_queue_init},
-    protocol::{wl_output, wl_region, wl_registry, wl_shm, wl_surface},
+    protocol::{wl_output, wl_region, wl_registry, wl_surface},
 };
 
 use crate::{
@@ -38,16 +34,14 @@ use crate::{
     pointer_tracking::{PointerTracker, PointerTrackingBounds},
     renderer::{
         CursorImage, CursorPoint, EffectScene, SurfaceDrawRequest, SurfaceDrawSpec, SurfaceGuard,
-        WgpuOverlayInstance, WgpuOverlayRenderer, draw_cursor_asset,
+        WgpuOverlayInstance, WgpuOverlayRenderer,
     },
     system_cursor::{SystemCursorAdapter, SystemPointerPosition},
 };
 
 const INITIAL_ROUNDTRIPS: usize = 4;
-const DEBUG_FILL_ENV: &str = "SKY_CUA_LAYER_SHELL_DEBUG_FILL";
 const LAYER_ENV: &str = "SKY_CUA_LAYER_SHELL_LAYER";
 const RENDERER_ENV: &str = "SKY_CUA_LAYER_SHELL_RENDERER";
-const BUFFER_SLOTS_PER_LAYER: usize = 2;
 
 #[derive(Debug)]
 pub struct LayerShellOverlayBackend {
@@ -68,7 +62,6 @@ impl LayerShellOverlayBackend {
             CompositorState::bind(&globals, &qh).context("wl_compositor is unavailable")?;
         let layer_shell =
             LayerShell::bind(&globals, &qh).context("zwlr_layer_shell_v1 is unavailable")?;
-        let shm = Shm::bind(&globals, &qh).context("wl_shm is unavailable")?;
         let output_state = OutputState::new(&globals, &qh);
         let cursor = CursorImage::load()?;
         let outputs: Vec<Option<wl_output::WlOutput>> = {
@@ -90,7 +83,6 @@ impl LayerShellOverlayBackend {
                     closed: false,
                     width: 1,
                     height: 1,
-                    buffer: None,
                     pending_frame: false,
                     capture_barrier_frames_remaining: 0,
                 }
@@ -112,17 +104,11 @@ impl LayerShellOverlayBackend {
             }
         }
 
-        let pool_size = layer_buffer_pool_size(cursor.width, cursor.height, layers.len())
-            .context("failed to size initial layer-shell shared-memory pool")?;
-        let pool = SlotPool::new(pool_size, &shm)
-            .context("failed to create Wayland shared-memory pool")?;
         let app = LayerShellApp {
             renderer: LayerShellRenderer::Unsupported {
                 reason: Some("layer-shell renderer has not been selected yet".to_string()),
             },
-            shm,
             output_state,
-            pool,
             layers,
             instance: Some(instance),
             surface_guards,
@@ -415,8 +401,8 @@ fn layer_shell_capabilities(
         ));
     }
     let visible_overlay = has_open_layer
-        && (coverage == AgentOverlayCoverageKind::Full
-            || renderer_backend == AgentCursorRendererBackendKind::WaylandShm);
+        && coverage == AgentOverlayCoverageKind::Full
+        && renderer_backend == AgentCursorRendererBackendKind::Wgpu;
     AgentCursorCapabilities {
         backend: AgentCursorBackendKind::WaylandLayerShell,
         renderer_backend,
@@ -464,9 +450,7 @@ fn layer_shell_capabilities(
 #[derive(Debug)]
 struct LayerShellApp {
     renderer: LayerShellRenderer,
-    shm: Shm,
     output_state: OutputState,
-    pool: SlotPool,
     layers: Vec<LayerSurfaceEntry>,
     surface_guards: Vec<Option<SurfaceGuard>>,
     instance: Option<WgpuOverlayInstance>,
@@ -499,7 +483,6 @@ struct LayerSurfaceEntry {
     closed: bool,
     width: u32,
     height: u32,
-    buffer: Option<Buffer>,
     pending_frame: bool,
     capture_barrier_frames_remaining: u32,
 }
@@ -508,7 +491,7 @@ struct LayerSurfaceEntry {
 enum RequestedLayerShellRenderer {
     Auto,
     Wgpu,
-    Shm,
+    UnsupportedLegacy(&'static str),
 }
 
 fn requested_renderer() -> RequestedLayerShellRenderer {
@@ -518,7 +501,9 @@ fn requested_renderer() -> RequestedLayerShellRenderer {
         .to_ascii_lowercase()
         .as_str()
     {
-        "shm" | "wayland_shm" | "wayland-shm" => RequestedLayerShellRenderer::Shm,
+        "shm" | "wayland_shm" | "wayland-shm" => RequestedLayerShellRenderer::UnsupportedLegacy(
+            "Wayland SHM visible rendering was retired; WGPU is required",
+        ),
         "wgpu" | "gpu" => RequestedLayerShellRenderer::Wgpu,
         "auto" | "" => RequestedLayerShellRenderer::Auto,
         _ => RequestedLayerShellRenderer::Auto,
@@ -527,7 +512,6 @@ fn requested_renderer() -> RequestedLayerShellRenderer {
 
 #[derive(Debug)]
 enum LayerShellRenderer {
-    Shm { reason: Option<String> },
     Wgpu(WgpuOverlayRenderer, String),
     Unsupported { reason: Option<String> },
 }
@@ -535,7 +519,6 @@ enum LayerShellRenderer {
 impl LayerShellRenderer {
     fn kind(&self) -> AgentCursorRendererBackendKind {
         match self {
-            Self::Shm { .. } => AgentCursorRendererBackendKind::WaylandShm,
             Self::Wgpu(_, _) => AgentCursorRendererBackendKind::Wgpu,
             Self::Unsupported { .. } => AgentCursorRendererBackendKind::None,
         }
@@ -543,7 +526,6 @@ impl LayerShellRenderer {
 
     fn reason(&self) -> Option<&str> {
         match self {
-            Self::Shm { reason } => reason.as_deref(),
             Self::Wgpu(_, reason) => Some(reason.as_str()),
             Self::Unsupported { reason } => reason.as_deref(),
         }
@@ -552,12 +534,12 @@ impl LayerShellRenderer {
     fn adapter_name(&self) -> Option<&str> {
         match self {
             Self::Wgpu(renderer, _) => Some(renderer.info().adapter_name.as_str()),
-            Self::Shm { .. } | Self::Unsupported { .. } => None,
+            Self::Unsupported { .. } => None,
         }
     }
 
     fn supports_visible_overlay(&self) -> bool {
-        matches!(self, Self::Wgpu(..) | Self::Shm { .. })
+        matches!(self, Self::Wgpu(..))
     }
 }
 
@@ -588,11 +570,11 @@ fn wayland_window_handle(surface: &wl_surface::WlSurface) -> Result<wgpu::rwh::R
 impl LayerShellApp {
     fn select_renderer(&mut self, _conn: &Connection) -> Result<()> {
         match requested_renderer() {
-            RequestedLayerShellRenderer::Shm => {
-                self.renderer = LayerShellRenderer::Shm {
-                    reason: Some(format!("{RENDERER_ENV}=shm")),
+            RequestedLayerShellRenderer::UnsupportedLegacy(reason) => {
+                self.renderer = LayerShellRenderer::Unsupported {
+                    reason: Some(format!("{RENDERER_ENV}: {reason}")),
                 };
-                self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
+                self.lifecycle_state = AgentOverlayHostLifecycleState::BackendUnsupported;
                 Ok(())
             }
             RequestedLayerShellRenderer::Wgpu => {
@@ -613,15 +595,6 @@ impl LayerShellApp {
                 Ok(())
             }
             RequestedLayerShellRenderer::Auto => {
-                if debug_fill_enabled() {
-                    self.renderer = LayerShellRenderer::Shm {
-                        reason: Some(format!(
-                            "{DEBUG_FILL_ENV} is set, using shm renderer for debug fill support"
-                        )),
-                    };
-                    self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
-                    return Ok(());
-                }
                 let wgpu_result = self.ensure_wgpu_output_coverage().and_then(|()| {
                     let instance = self.instance.as_ref().context("wgpu instance is missing")?;
                     WgpuOverlayRenderer::new(instance, &mut self.surface_guards, &self.cursor)
@@ -663,9 +636,8 @@ impl LayerShellApp {
     }
 
     fn visible_overlay_supported(&self) -> bool {
-        (self.renderer.supports_visible_overlay()
-            && self.coverage_kind() == AgentOverlayCoverageKind::Full)
-            || self.renderer_kind() == AgentCursorRendererBackendKind::WaylandShm
+        self.renderer.supports_visible_overlay()
+            && self.coverage_kind() == AgentOverlayCoverageKind::Full
     }
 
     fn active_output_count(&self) -> usize {
@@ -689,11 +661,6 @@ impl LayerShellApp {
                             .get(*index)
                             .is_some_and(|guard| guard.is_some())
                 })
-                .count(),
-            LayerShellRenderer::Shm { .. } => self
-                .layers
-                .iter()
-                .filter(|entry| !entry.closed && entry.configured)
                 .count(),
             LayerShellRenderer::Unsupported { .. } => 0,
         }
@@ -833,9 +800,6 @@ impl LayerShellApp {
             LayerShellRenderer::Wgpu(renderer, _) => {
                 renderer.draw(&mut self.surface_guards, &requests)?;
             }
-            LayerShellRenderer::Shm { .. } => {
-                self.draw_shm(qh, visible_target)?;
-            }
             LayerShellRenderer::Unsupported { reason } => {
                 bail!(
                     "{}",
@@ -853,66 +817,6 @@ impl LayerShellApp {
                 continue;
             }
             entry.layer.commit();
-        }
-        Ok(())
-    }
-
-    fn draw_shm(
-        &mut self,
-        qh: &QueueHandle<Self>,
-        visible_target: Option<LayerCursorTarget>,
-    ) -> Result<()> {
-        let layer_count = self.layers.len();
-
-        for (index, entry) in self.layers.iter_mut().enumerate() {
-            if entry.closed || !entry.configured {
-                continue;
-            }
-            let visible_point = visible_target
-                .as_ref()
-                .filter(|target| target.layer_index == index)
-                .map(|target| (target.x, target.y));
-            let width = entry.width.max(1);
-            let height = entry.height.max(1);
-            entry.layer.set_size(width, height);
-            entry.layer.set_margin(0, 0, 0, 0);
-
-            let stride = width as i32 * 4;
-            ensure_layer_pool_capacity(&mut self.pool, width, height, layer_count)
-                .context("failed to resize layer-shell cursor shared-memory pool")?;
-            let (buffer, canvas) = self
-                .pool
-                .create_buffer(
-                    width as i32,
-                    height as i32,
-                    stride,
-                    wl_shm::Format::Argb8888,
-                )
-                .context("failed to create layer-shell cursor buffer")?;
-            canvas.fill(0);
-            if debug_fill_enabled() {
-                draw_debug_fill(canvas, width, height, visible_point);
-            }
-            if let Some((x, y)) = visible_point {
-                let left = x.round() as i32 - cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X;
-                let top = y.round() as i32 - cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y;
-                draw_cursor_asset(canvas, width, height, &self.cursor, left, top);
-            }
-
-            entry
-                .layer
-                .wl_surface()
-                .damage_buffer(0, 0, width as i32, height as i32);
-            entry
-                .layer
-                .wl_surface()
-                .frame(qh, entry.layer.wl_surface().clone());
-            entry.pending_frame = true;
-            buffer
-                .attach_to(entry.layer.wl_surface())
-                .context("failed to attach layer-shell cursor buffer")?;
-            entry.layer.commit();
-            entry.buffer = Some(buffer);
         }
         Ok(())
     }
@@ -1231,64 +1135,6 @@ fn output_local_point(
     (x >= 0.0 && y >= 0.0 && x < f64::from(size.0) && y < f64::from(size.1)).then_some((x, y))
 }
 
-pub(crate) fn ensure_layer_pool_capacity(
-    pool: &mut SlotPool,
-    width: u32,
-    height: u32,
-    layer_count: usize,
-) -> Result<()> {
-    let required = layer_buffer_pool_size(width, height, layer_count)?;
-    if pool.len() < required {
-        pool.resize(required)?;
-    }
-    Ok(())
-}
-
-pub(crate) fn layer_buffer_pool_size(width: u32, height: u32, layer_count: usize) -> Result<usize> {
-    let layer_count = layer_count.max(1);
-    let bytes_per_buffer = (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
-        .context("layer-shell cursor buffer dimensions overflowed usize")?;
-    bytes_per_buffer
-        .checked_mul(layer_count)
-        .and_then(|bytes| bytes.checked_mul(BUFFER_SLOTS_PER_LAYER))
-        .map(|bytes| bytes.max(4096))
-        .context("layer-shell cursor buffer pool size overflowed usize")
-}
-
-fn debug_fill_enabled() -> bool {
-    std::env::var(DEBUG_FILL_ENV)
-        .is_ok_and(|value| matches!(value.trim(), "1" | "true" | "full" | "rect"))
-}
-
-fn draw_debug_fill(canvas: &mut [u8], width: u32, height: u32, visible_point: Option<(f64, f64)>) {
-    let fill_full_surface =
-        std::env::var(DEBUG_FILL_ENV).is_ok_and(|value| value.trim().eq_ignore_ascii_case("full"));
-    let (left, top, right, bottom) = if fill_full_surface {
-        (0, 0, width as i32, height as i32)
-    } else if let Some((x, y)) = visible_point {
-        let left = x.round() as i32 - 48;
-        let top = y.round() as i32 - 48;
-        (left, top, left + 96, top + 96)
-    } else {
-        (0, 0, 96, 96)
-    };
-    let color = ((u32::from(224_u8)) << 24)
-        | ((u32::from(224_u8)) << 16)
-        | ((u32::from(24_u8)) << 8)
-        | u32::from(128_u8);
-    let bytes = color.to_le_bytes();
-    for y in top.max(0)..bottom.min(height as i32) {
-        for x in left.max(0)..right.min(width as i32) {
-            let x = u32::try_from(x).expect("nonnegative x");
-            let y = u32::try_from(y).expect("nonnegative y");
-            let offset = ((y * width + x) * 4) as usize;
-            canvas[offset..offset + 4].copy_from_slice(&bytes);
-        }
-    }
-}
-
 impl CompositorHandler for LayerShellApp {
     fn scale_factor_changed(
         &mut self,
@@ -1386,12 +1232,6 @@ impl LayerShellHandler for LayerShellApp {
     }
 }
 
-impl ShmHandler for LayerShellApp {
-    fn shm_state(&mut self) -> &mut Shm {
-        &mut self.shm
-    }
-}
-
 impl OutputHandler for LayerShellApp {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
@@ -1464,14 +1304,12 @@ impl Dispatch<wl_region::WlRegion, ()> for LayerShellApp {
 delegate_compositor!(LayerShellApp);
 delegate_layer!(LayerShellApp);
 delegate_output!(LayerShellApp);
-delegate_shm!(LayerShellApp);
 
 #[cfg(test)]
 mod tests {
     use super::{
-        BUFFER_SLOTS_PER_LAYER, OVERLAY_HOST_PROTOCOL_VERSION, RequestedLayerShellRenderer,
-        apply_system_pointer_position, cursor_point, layer_buffer_pool_size,
-        layer_shell_capabilities, output_local_point, requested_renderer,
+        OVERLAY_HOST_PROTOCOL_VERSION, RequestedLayerShellRenderer, apply_system_pointer_position,
+        cursor_point, layer_shell_capabilities, output_local_point, requested_renderer,
         state_needs_system_pointer_update,
     };
     use crate::{
@@ -1568,14 +1406,6 @@ mod tests {
         assert_eq!(
             output_local_point((3200.0, 90.0), (1920, 0), (1280, 720)),
             None
-        );
-    }
-
-    #[test]
-    fn layer_pool_size_tracks_full_surface_buffers() {
-        assert_eq!(
-            layer_buffer_pool_size(1920, 1080, 2).expect("pool size"),
-            1920 * 1080 * 4 * 2 * BUFFER_SLOTS_PER_LAYER
         );
     }
 
@@ -1678,11 +1508,15 @@ mod tests {
     }
 
     #[test]
-    fn layer_shell_renderer_env_selects_wgpu_and_shm() {
+    fn layer_shell_renderer_env_selects_wgpu_and_rejects_legacy_shm() {
         unsafe { std::env::set_var(super::RENDERER_ENV, "wgpu") };
         assert_eq!(requested_renderer(), RequestedLayerShellRenderer::Wgpu);
         unsafe { std::env::set_var(super::RENDERER_ENV, "shm") };
-        assert_eq!(requested_renderer(), RequestedLayerShellRenderer::Shm);
+        assert!(matches!(
+            requested_renderer(),
+            RequestedLayerShellRenderer::UnsupportedLegacy(reason)
+                if reason.contains("SHM visible rendering was retired")
+        ));
         unsafe { std::env::set_var(super::RENDERER_ENV, "auto") };
         assert_eq!(requested_renderer(), RequestedLayerShellRenderer::Auto);
         unsafe { std::env::remove_var(super::RENDERER_ENV) };

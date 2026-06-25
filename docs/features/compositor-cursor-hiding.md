@@ -2,10 +2,11 @@
 
 ## Status
 
-Shipped on Linux for KWin, X11/i3, GNOME Shell, Hyprland, and patched
-COSMIC, with a separate VM-only transparent-Xcursor mode for unpatched
-COSMIC. Last verified: 2026-05-16 across the Arch `testing-vm` desktop
-matrix. Long-term unpatched COSMIC support remains a backlog item.
+Shipped on Linux for the WGPU Wayland layer-shell overlay, with KWin,
+Hyprland, and COSMIC-specific cursor-hide adapters where available. The old
+X11 shaped-window and GNOME Shell actor visible renderers are retired; their
+cursor-hide paths are no longer selected by the production overlay host. Last
+verified: 2026-06-25 in the Arch `testing-vm`.
 
 ## Summary
 
@@ -31,15 +32,15 @@ Public model in `crates/sky-cua-platform/src/model.rs`:
 - `AgentCursorCapabilities.reason: Option<String>` — explanation when
   `system_cursor_hide_supported=false`.
 
-`AgentCursorSystemCursorBackend` variants currently shipped:
+`AgentCursorSystemCursorBackend` values:
 
 - `none`, `unsupported`, `wayland_client_unsupported`
-- `x11_xfixes`
 - `kwin_effect`
-- `gnome_shell_extension`
 - `hyprland_config`
 - `cosmic_comp_bridge`
 - `cosmic_transparent_xcursor`
+- `x11_xfixes`, `gnome_shell_extension` — historical compatibility values
+  for retired visible overlay paths
 - `windows_win32`, `macos_native` — placeholders for future native adapters
 
 ## Behavior
@@ -48,20 +49,18 @@ Per-backend hide path:
 
 | Compositor          | Backend                       | Hide mechanism                                                                  | Restore on overlay hide |
 | ------------------- | ----------------------------- | ------------------------------------------------------------------------------- | ----------------------- |
-| X11 (Xorg, i3)      | `x11_xfixes`                  | `XFixesHideCursor` / `XFixesShowCursor` from the overlay host                   | Yes                     |
 | KDE Plasma / KWin   | `kwin_effect`                 | C++ shim calls compositor `hideCursor()` / `showCursor()` and emits `PointerMoved(x, y, sequence)` while visible; layer-shell draws the agent cursor | Yes |
-| GNOME Shell         | `gnome_shell_extension`       | Extension uses `inhibit_cursor_visibility()` (Shell 49+) or `set_pointer_visible(false)` (older) with a guarded fallback | Yes |
 | Hyprland            | `hyprland_config`             | Snapshots the previous `cursor:invisible` value, sets it through `hyprctl`, restores afterward | Yes (previous value) |
 | COSMIC (patched)    | `cosmic_comp_bridge`          | Patched `cosmic-comp` exposes a Unix socket sentinel; bridge daemon toggles `CursorImageStatus::Hidden` in compositor seat state | Yes |
 | COSMIC (no-patch)   | `cosmic_transparent_xcursor`  | COSMIC session is launched with `XCURSOR_THEME=sky-cua-blank`; the agent overlay covers what would be a transparent native cursor | No (no normal cursor when overlay hides) |
+| X11 / GNOME legacy  | `none`                        | Retired visible renderers are not selected; explicit backends report unsupported Noop capabilities | N/A |
 
 Adapter selection ordering inside the overlay host's
 `SystemCursorAdapter`:
 
-1. GNOME extension adapter when the Shell DBus service is reachable.
-2. Hyprland adapter when running under Hyprland.
-3. COSMIC bridge adapter when the bridge is reachable.
-4. `WaylandClientUnsupported` for generic Wayland (with a Wayland-focus
+1. Hyprland adapter when running under Hyprland.
+2. COSMIC bridge adapter when the bridge is reachable.
+3. `WaylandClientUnsupported` for generic Wayland (with a Wayland-focus
    reason).
 
 KWin's effect is separate because a generic click-through layer-shell client
@@ -71,8 +70,6 @@ does not draw the agent cursor; when it is loaded beside the layer-shell backend
 `system_cursor_hide_supported=true`. On updated shims, KDE also reports
 `pointer_tracking_backend=kwin_effect_signal` and
 `pointer_tracking_exact=true`.
-
-X11 is selected when the overlay host's X11 backend is active.
 
 Capability honesty rules:
 
@@ -90,16 +87,12 @@ Capability honesty rules:
 - `crates/sky-cua-overlay-host/src/system_cursor.rs` — adapter trait and
   selection plus the Hyprland-config, COSMIC bridge, and transparent-
   Xcursor adapter implementations
-- `crates/sky-cua-overlay-host/src/x11.rs` — XFixes adapter wiring
 - `crates/sky-cua-overlay-host/src/layer_shell.rs` — Wayland visual overlay
   and system-cursor adapter selection
-- `crates/sky-cua-overlay-host/src/gnome_shell.rs` — GNOME extension
-  adapter client
 - `resources/kwin/effects/sky-cua-agent-cursor/` — KWin cursor-hide and
   pointer-position shim
 - `resources/gnome-shell-extension/codex-window-control@openai.com/extension.js`
-  — GNOME extension cursor service (extends existing window-control
-  service; same UUID and DBus path)
+  — GNOME window-control service; cursor calls report retired/unsupported
 - `resources/cosmic/cosmic-comp-sky-cua-cursor-bridge.patch` — COSMIC
   compositor patch (development prototype)
 - `crates/sky-cua-cosmic-helper/` — packaged COSMIC bridge daemon
@@ -129,10 +122,13 @@ python3 scripts/run_gui_testing_vm_smoke.py --profile cosmic-transparent-xcursor
 
 Latest accepted artifacts:
 
+- KDE/KWin WGPU layer-shell Package E proof:
+  `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625053947174748-vis`
 - KDE/KWin: `artifacts/kde-framebuffer-cursor-proof/kwin-system-install/20260515T132649888064Z/host-summary.json`
 - Hyprland: `/workspace/artifacts/codex-e2e/agent-cursor-wayland-layer-shell/20260515T142710878162Z/`
-- X11/i3: `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260515T142731049499Z/`
-- GNOME (real GDM Wayland session): `artifacts/gnome-framebuffer-cursor-proof/20260515T140437893805720Z/host-summary.json`
+- X11/i3 unsupported contract:
+  `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260625T054024051391Z`
+- GNOME actor cursor renderer: retired; window-control service remains packaged
 - COSMIC patched compositor (built from Arch's `cosmic-comp` source commit `b5a1a6d3179810627fa0bffac7bd5d78c7df4fa0` plus the bridge patch): `artifacts/cosmic-framebuffer-cursor-proof/20260515T142538562074Z/host-summary.json`
 - COSMIC transparent Xcursor (no-patch fallback): `artifacts/cosmic-transparent-xcursor-cursor-proof/20260516T073232164704Z/host-summary.json`
 
@@ -199,10 +195,10 @@ against the installed KWin headers and a stale binary can fail to load.
   cursor when the overlay hides.** It preserves the one-visible-cursor
   invariant only while the agent overlay is visible. It is intended for
   controlled VMs.
-- **GNOME Shell 49+ uses cursor visibility inhibition rather than
-  `set_pointer_visible()`.** The extension prefers the new API and falls
-  back guarded for older Shell versions; very old Shell versions may
-  exhibit visible-cursor flicker during inhibit/uninhibit cycles.
+- **GNOME Shell cursor hiding is not currently selected by the overlay host.**
+  The GNOME extension keeps window-control DBus APIs, but the old actor
+  renderer and cursor-hide bridge report unsupported until a WGPU GNOME host
+  exists.
 
 ## Related
 
