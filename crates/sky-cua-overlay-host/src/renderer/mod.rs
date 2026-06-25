@@ -23,7 +23,7 @@ pub mod surface;
 pub mod wgpu;
 
 #[cfg(target_os = "linux")]
-pub use scene::{CursorPoint, SurfaceDrawRequest, SurfaceDrawSpec};
+pub use scene::{CursorPoint, EffectScene, SurfaceDrawRequest, SurfaceDrawSpec};
 #[cfg(target_os = "linux")]
 pub use surface::SurfaceGuard;
 #[cfg(target_os = "linux")]

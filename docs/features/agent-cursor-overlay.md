@@ -38,7 +38,9 @@ MCP tools.
 
 Overlay-host JSON-lines protocol on
 `$XDG_RUNTIME_DIR/sky-cua/agent-cursor.sock` with versioned messages
-`hello`, `capabilities`, `set_cursor`, `hide`, `show`, `ping`, `shutdown`.
+`hello`, `capabilities`, `set_cursor`, `animate_gesture`, `hide`, `show`,
+`ping`, `shutdown`. `animate_gesture` carries `AgentOverlayGestureEvent`
+for one-shot tap, drag, swipe, and no-no render effects.
 
 Environment variables (allowlisted in `resources/chrome_preflight.py`):
 
@@ -48,6 +50,15 @@ Environment variables (allowlisted in `resources/chrome_preflight.py`):
 - `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE` — `auto`, `on`, `off`
 - `SKY_CUA_OVERLAY_HOST_PATH` — explicit path; defaults to bundled binary
 - `SKY_CUA_SCREENSHOT_CURSOR` — `auto`, `on`, `off`
+
+Shared visual constants and deterministic fixtures:
+
+- `resources/overlay/agent_overlay_spec.toml` — source of truth for colors,
+  timing, geometry, motion, and desktop/Android rendering constants.
+- `resources/overlay/agent_overlay_motion_fixtures.json` — cross-language
+  motion/effect math samples.
+- `resources/overlay/wgsl_animation_fixtures.json` — WGPU shader conformance
+  samples for deterministic desktop frames.
 
 ## Behavior
 
@@ -124,6 +135,23 @@ Capture guard: when `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=on`, the overlay
 controller hides the visible overlay just before capture and restores it
 afterward. The synthetic screenshot cursor is composited regardless.
 
+### WGPU desktop effects
+
+On Wayland layer-shell with `renderer_backend=wgpu`, visible desktop effects
+are rendered by `crates/sky-cua-overlay-host/src/renderer/shaders.rs` in WGSL.
+The CPU host validates events, maps coordinates into output-local scene data,
+updates bounded uniform/storage buffers, and advances a monotonic clock. It
+does not rasterize or precompose edge glow, inward waves, halo, ripple, trail,
+cursor glide/rotation, no-no frames, or cursor pixels for the normal WGPU
+runtime path.
+
+The WGPU pass draws a full-screen analytic shader into a premultiplied-alpha
+surface. TOML color channels are authored as sRGB 0..255 values and normalized
+before upload. The surface policy prefers sRGB swapchain formats
+(`Bgra8UnormSrgb`, then `Rgba8UnormSrgb`, then any sRGB format), and the shader
+returns premultiplied color so transparent composition remains correct with
+`CompositeAlphaMode::PreMultiplied` when available.
+
 System cursor hiding (hiding the compositor's real pointer while the agent
 overlay is visible) is a separate capability described in
 `docs/features/compositor-cursor-hiding.md`. Visible-overlay state and
@@ -137,6 +165,8 @@ other.
   ownership, and synthetic screenshot compositing
 - `crates/sky-cua-overlay-host/` — overlay host crate
   - `src/layer_shell.rs` — generic Wayland layer-shell backend (KWin, Hyprland)
+  - `src/renderer/` — WGPU renderer, effect scene, uniform/storage buffer ABI,
+    WGSL shader source, and offscreen/conformance tests
   - `src/x11.rs` — X11 shaped-window backend
   - `src/gnome_shell.rs` — GNOME Shell extension client
   - `src/cosmic_bridge.rs` — COSMIC compositor bridge client
@@ -164,6 +194,10 @@ cargo test -p sky-cua-service overlay
 cargo test -p sky-cua-overlay-host
 cargo test -p sky-cua-cosmic-helper
 ```
+
+The overlay-host crate includes WGPU shader validation, compute conformance
+against `resources/overlay/wgsl_animation_fixtures.json`, and offscreen render
+invariants for hidden transparency and deterministic visible frames.
 
 VM acceptance via `scripts/run_gui_testing_vm_smoke.py`:
 

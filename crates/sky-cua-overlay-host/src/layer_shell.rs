@@ -7,7 +7,8 @@ use anyhow::{Context, Result, bail};
 use sky_cua_platform::model::{
     AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPoint,
     AgentCursorPointerTrackingBackendKind, AgentCursorRendererBackendKind, AgentCursorState,
-    AgentOverlayHostLifecycleState, CoordinateSpace, DiagnosticEntry,
+    AgentOverlayCoverageKind, AgentOverlayEffectsCapabilities, AgentOverlayGestureEvent,
+    AgentOverlayHostLifecycleState, CoordinateSpace, DiagnosticEntry, Point2,
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -36,7 +37,7 @@ use crate::{
     OverlayHostReply, cursor_asset, diagnostic,
     pointer_tracking::{PointerTracker, PointerTrackingBounds},
     renderer::{
-        CursorImage, CursorPoint, SurfaceDrawRequest, SurfaceDrawSpec, SurfaceGuard,
+        CursorImage, CursorPoint, EffectScene, SurfaceDrawRequest, SurfaceDrawSpec, SurfaceGuard,
         WgpuOverlayInstance, WgpuOverlayRenderer, draw_cursor_asset,
     },
     system_cursor::{SystemCursorAdapter, SystemPointerPosition},
@@ -130,6 +131,7 @@ impl LayerShellOverlayBackend {
             lifecycle_state: AgentOverlayHostLifecycleState::BackendInitializing,
             capture_barrier: None,
             gesture_tracker: GestureEventTracker::default(),
+            active_effect: None,
         };
         let mut backend = Self {
             event_queue,
@@ -170,8 +172,12 @@ impl LayerShellOverlayBackend {
             }
             OverlayHostMessageKind::AnimateGesture => {
                 let _ = self.follow_tracked_pointer();
-                let (ok, _gesture, diagnostics) =
+                let (ok, gesture, diagnostics) =
                     crate::validate_gesture_message(message.gesture, &mut self.app.gesture_tracker);
+                if ok && let Some(gesture) = gesture {
+                    self.app.start_effect(gesture);
+                    return self.render_reply_with_diagnostics(diagnostics);
+                }
                 self.reply(ok, diagnostics)
             }
             OverlayHostMessageKind::Shutdown => {
@@ -222,6 +228,9 @@ impl LayerShellOverlayBackend {
 
     pub fn tick(&mut self) {
         let _ = self.follow_tracked_pointer();
+        if self.app.has_active_effect(current_epoch_ms()) {
+            let _ = self.render_current();
+        }
     }
 
     fn prime(&mut self) -> Result<()> {
@@ -243,16 +252,23 @@ impl LayerShellOverlayBackend {
     }
 
     fn render_reply(&mut self) -> OverlayHostReply {
+        self.render_reply_with_diagnostics(Vec::new())
+    }
+
+    fn render_reply_with_diagnostics(
+        &mut self,
+        mut diagnostics: Vec<DiagnosticEntry>,
+    ) -> OverlayHostReply {
         match self.render_current() {
-            Ok(()) => self.reply(true, Vec::new()),
-            Err(error) => self.reply(
-                false,
-                vec![diagnostic(
+            Ok(()) => self.reply(true, diagnostics),
+            Err(error) => self.reply(false, {
+                diagnostics.push(diagnostic(
                     "OverlayRenderFailed",
                     "Layer-shell overlay failed to render the agent cursor.",
                     Some(error.to_string()),
-                )],
-            ),
+                ));
+                diagnostics
+            }),
         }
     }
 
@@ -385,6 +401,39 @@ fn layer_shell_capabilities(
         system_cursor_backend: system_cursor.backend(),
         needs_user_install: false,
         reason: Some(reason),
+        effects: Some(AgentOverlayEffectsCapabilities {
+            glide: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
+            rotation: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
+            halo: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
+            ripple: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
+            trail: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
+            edge_glow: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
+            inward_wave: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
+            no_no_render: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
+            hit_test: false,
+            sound: sky_cua_platform::overlay_spec::sound::ENABLED,
+        }),
+        coverage: Some(if has_open_layer {
+            AgentOverlayCoverageKind::Full
+        } else {
+            AgentOverlayCoverageKind::None
+        }),
+        supported_coordinate_spaces: vec![
+            CoordinateSpace::DesktopLogical,
+            CoordinateSpace::StreamLogical,
+            CoordinateSpace::StreamPixels,
+        ],
+        max_gesture_points: Some(
+            sky_cua_platform::overlay_spec::shared::effects::MAX_GESTURE_POINTS,
+        ),
+        protocol_version: Some(OVERLAY_HOST_PROTOCOL_VERSION),
+        effect_schema_version: Some(sky_cua_platform::overlay_spec::SCHEMA_VERSION),
+        active_output_count: Some(open_layer_count as u32),
+        rendered_output_count: Some(if has_open_layer {
+            open_layer_count as u32
+        } else {
+            0
+        }),
         ..Default::default()
     }
 }
@@ -403,11 +452,18 @@ struct LayerShellApp {
     lifecycle_state: AgentOverlayHostLifecycleState,
     capture_barrier: Option<CaptureBarrierState>,
     gesture_tracker: GestureEventTracker,
+    active_effect: Option<LayerEffectEvent>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct CaptureBarrierState {
     sequence: u64,
+}
+
+#[derive(Debug, Clone)]
+struct LayerEffectEvent {
+    gesture: AgentOverlayGestureEvent,
+    started_at_ms: u64,
 }
 
 #[derive(Debug)]
@@ -597,11 +653,16 @@ impl LayerShellApp {
     }
 
     fn draw(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        let now_ms = current_epoch_ms();
+        self.clear_expired_effect(now_ms);
         let visible_target = self
             .state
             .as_ref()
             .filter(|state| state.visible)
             .and_then(|state| self.cursor_target(state));
+        let effects = (0..self.layers.len())
+            .map(|index| self.effect_scene_for_layer(index, now_ms))
+            .collect::<Vec<_>>();
 
         let mut requests: Vec<SurfaceDrawRequest> = Vec::with_capacity(self.layers.len());
         for (index, entry) in self.layers.iter_mut().enumerate() {
@@ -630,10 +691,12 @@ impl LayerShellApp {
                     x: target.x,
                     y: target.y,
                 });
+            let effect = effects[index].clone();
             requests.push(Some(SurfaceDrawSpec {
                 width,
                 height,
                 cursor,
+                effect,
             }));
         }
 
@@ -727,6 +790,94 @@ impl LayerShellApp {
             .map(|layer_index| LayerCursorTarget { layer_index, x, y })
     }
 
+    fn start_effect(&mut self, gesture: AgentOverlayGestureEvent) {
+        self.active_effect = Some(LayerEffectEvent {
+            gesture,
+            started_at_ms: current_epoch_ms(),
+        });
+    }
+
+    fn has_active_effect(&self, now_ms: u64) -> bool {
+        self.active_effect.as_ref().is_some_and(|effect| {
+            now_ms.saturating_sub(effect.started_at_ms) <= effect.gesture.duration_ms
+        })
+    }
+
+    fn clear_expired_effect(&mut self, now_ms: u64) {
+        if !self.has_active_effect(now_ms) {
+            self.active_effect = None;
+        }
+    }
+
+    fn effect_scene_for_layer(&self, layer_index: usize, now_ms: u64) -> Option<EffectScene> {
+        let active = self.active_effect.as_ref()?;
+        if now_ms.saturating_sub(active.started_at_ms) > active.gesture.duration_ms {
+            return None;
+        }
+        let first_point = active.gesture.points.first()?;
+        let coordinate_space = active.gesture.coordinate_space.clone();
+        let target = self.gesture_point_target(coordinate_space.clone(), first_point)?;
+        if target.layer_index != layer_index {
+            return None;
+        }
+        let points = active
+            .gesture
+            .points
+            .iter()
+            .filter_map(|point| {
+                self.gesture_point_for_layer(layer_index, coordinate_space.clone(), point)
+            })
+            .collect::<Vec<_>>();
+        if points.is_empty() {
+            return None;
+        }
+        Some(EffectScene {
+            kind: active.gesture.kind,
+            started_at_ms: active.started_at_ms,
+            duration_ms: active.gesture.duration_ms,
+            points,
+        })
+    }
+
+    fn gesture_point_target(
+        &self,
+        coordinate_space: CoordinateSpace,
+        point: &Point2,
+    ) -> Option<LayerCursorTarget> {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            return None;
+        }
+        if coordinate_space == CoordinateSpace::DesktopLogical
+            && let Some(target) = self.desktop_logical_target(point.x, point.y)
+        {
+            return Some(target);
+        }
+        self.first_open_layer_index()
+            .map(|layer_index| LayerCursorTarget {
+                layer_index,
+                x: point.x,
+                y: point.y,
+            })
+    }
+
+    fn gesture_point_for_layer(
+        &self,
+        layer_index: usize,
+        coordinate_space: CoordinateSpace,
+        point: &Point2,
+    ) -> Option<CursorPoint> {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            return None;
+        }
+        if coordinate_space == CoordinateSpace::DesktopLogical {
+            return self.desktop_logical_point_for_layer(layer_index, point.x, point.y);
+        }
+        Some(CursorPoint {
+            x: point.x,
+            y: point.y,
+        })
+    }
+
     fn desktop_logical_target(&self, x: f64, y: f64) -> Option<LayerCursorTarget> {
         self.layers
             .iter()
@@ -745,6 +896,20 @@ impl LayerShellApp {
                 })
             })
             .next()
+    }
+
+    fn desktop_logical_point_for_layer(
+        &self,
+        layer_index: usize,
+        x: f64,
+        y: f64,
+    ) -> Option<CursorPoint> {
+        let entry = self.layers.get(layer_index)?;
+        let output = entry.output.as_ref()?;
+        let info = self.output_state.info(output)?;
+        let position = info.logical_position.unwrap_or(info.location);
+        let size = info.logical_size?;
+        output_local_point((x, y), position, size).map(|(x, y)| CursorPoint { x, y })
     }
 
     fn first_open_layer_index(&self) -> Option<usize> {

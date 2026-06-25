@@ -1,10 +1,14 @@
-//! WGPU renderer implementation for the static agent cursor.
+//! WGPU renderer implementation for the GPU-driven agent cursor/effect scene.
 
 use crate::renderer::{
     CursorImage,
-    buffers::{cursor_quad_vertices, f32_slice_as_bytes},
+    animation::{AnimationClock, SystemClock},
+    buffers::{
+        AgentEffectPoint, AgentEffectUniform, MAX_EFFECT_POINTS, build_effect_uniform,
+        effect_points_as_bytes, effect_uniform_as_bytes,
+    },
     scene::SurfaceDrawRequest,
-    shaders::create_cursor_pipeline,
+    shaders::{create_effect_bind_group_layout, create_effect_pipeline},
     surface::SurfaceGuard,
 };
 use anyhow::{Context, Result, bail};
@@ -56,7 +60,9 @@ pub struct WgpuOverlayRenderer {
     pipeline_format: Option<::wgpu::TextureFormat>,
     bind_group_layout: ::wgpu::BindGroupLayout,
     bind_group: ::wgpu::BindGroup,
-    vertex_buffer: ::wgpu::Buffer,
+    uniform_buffer: ::wgpu::Buffer,
+    point_buffer: ::wgpu::Buffer,
+    clock: Box<dyn AnimationClock>,
     info: RendererInfo,
 }
 
@@ -78,6 +84,15 @@ impl WgpuOverlayRenderer {
         instance: &WgpuOverlayInstance,
         surfaces: &mut [Option<SurfaceGuard>],
         cursor: &CursorImage,
+    ) -> Result<Self> {
+        Self::new_with_clock(instance, surfaces, cursor, Box::new(SystemClock))
+    }
+
+    pub fn new_with_clock(
+        instance: &WgpuOverlayInstance,
+        surfaces: &mut [Option<SurfaceGuard>],
+        cursor: &CursorImage,
+        clock: Box<dyn AnimationClock>,
     ) -> Result<Self> {
         let active_surfaces: Vec<&mut SurfaceGuard> = surfaces
             .iter_mut()
@@ -119,14 +134,28 @@ impl WgpuOverlayRenderer {
             }))
             .context("failed to request wgpu device for overlay renderer")?;
 
-        let (bind_group, bind_group_layout) = create_cursor_texture(&device, &queue, cursor);
-        let vertex_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
-            label: Some("sky-cua cursor quad vertices"),
-            size: (6 * std::mem::size_of::<super::buffers::CursorVertex>())
-                as ::wgpu::BufferAddress,
-            usage: ::wgpu::BufferUsages::VERTEX | ::wgpu::BufferUsages::COPY_DST,
+        let bind_group_layout = create_effect_bind_group_layout(&device);
+        let uniform_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
+            label: Some("sky-cua overlay effect uniform"),
+            size: std::mem::size_of::<AgentEffectUniform>() as ::wgpu::BufferAddress,
+            usage: ::wgpu::BufferUsages::UNIFORM | ::wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let point_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
+            label: Some("sky-cua overlay effect points"),
+            size: (std::mem::size_of::<AgentEffectPoint>() * MAX_EFFECT_POINTS)
+                as ::wgpu::BufferAddress,
+            usage: ::wgpu::BufferUsages::STORAGE | ::wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = create_effect_bind_group(
+            &device,
+            &queue,
+            &bind_group_layout,
+            &uniform_buffer,
+            &point_buffer,
+            cursor,
+        );
 
         let adapter_info = adapter.get_info();
         let info = RendererInfo {
@@ -144,7 +173,9 @@ impl WgpuOverlayRenderer {
             pipeline_format: None,
             bind_group_layout,
             bind_group,
-            vertex_buffer,
+            uniform_buffer,
+            point_buffer,
+            clock,
             info,
         })
     }
@@ -204,7 +235,7 @@ impl WgpuOverlayRenderer {
                     });
             {
                 let mut pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
-                    label: Some("sky-cua overlay cursor pass"),
+                    label: Some("sky-cua overlay effect pass"),
                     color_attachments: &[Some(::wgpu::RenderPassColorAttachment {
                         view: &view,
                         resolve_target: None,
@@ -225,16 +256,21 @@ impl WgpuOverlayRenderer {
                     multiview_mask: None,
                 });
 
-                if let Some(point) = spec.cursor {
-                    self.ensure_pipeline(config.format);
-                    let vertices = cursor_quad_vertices(point.x, point.y, width, height);
-                    self.queue
-                        .write_buffer(&self.vertex_buffer, 0, f32_slice_as_bytes(&vertices));
-                    pass.set_pipeline(self.pipeline.as_ref().expect("pipeline initialized"));
-                    pass.set_bind_group(0, &self.bind_group, &[]);
-                    pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                    pass.draw(0..6, 0..1);
-                }
+                self.ensure_pipeline(config.format);
+                let (uniform, points) = build_effect_uniform(super::buffers::EffectUniformInput {
+                    width,
+                    height,
+                    now_ms: self.clock.now_ms(),
+                    cursor: spec.cursor,
+                    effect: spec.effect.as_ref(),
+                });
+                self.queue
+                    .write_buffer(&self.uniform_buffer, 0, effect_uniform_as_bytes(&uniform));
+                self.queue
+                    .write_buffer(&self.point_buffer, 0, effect_points_as_bytes(&points));
+                pass.set_pipeline(self.pipeline.as_ref().expect("pipeline initialized"));
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.draw(0..3, 0..1);
             }
             self.queue.submit(Some(encoder.finish()));
             frame.present();
@@ -247,7 +283,7 @@ impl WgpuOverlayRenderer {
         if self.pipeline_format == Some(format) {
             return;
         }
-        self.pipeline = Some(create_cursor_pipeline(
+        self.pipeline = Some(create_effect_pipeline(
             &self.device,
             &self.bind_group_layout,
             format,
@@ -256,11 +292,14 @@ impl WgpuOverlayRenderer {
     }
 }
 
-fn create_cursor_texture(
+fn create_effect_bind_group(
     device: &::wgpu::Device,
     queue: &::wgpu::Queue,
+    bind_group_layout: &::wgpu::BindGroupLayout,
+    uniform_buffer: &::wgpu::Buffer,
+    point_buffer: &::wgpu::Buffer,
     cursor: &CursorImage,
-) -> (::wgpu::BindGroup, ::wgpu::BindGroupLayout) {
+) -> ::wgpu::BindGroup {
     let texture = device.create_texture(&::wgpu::TextureDescriptor {
         label: Some("sky-cua agent cursor texture"),
         size: ::wgpu::Extent3d {
@@ -305,40 +344,27 @@ fn create_cursor_texture(
         mipmap_filter: ::wgpu::MipmapFilterMode::Nearest,
         ..Default::default()
     });
-    let bind_group_layout = device.create_bind_group_layout(&::wgpu::BindGroupLayoutDescriptor {
-        label: Some("sky-cua cursor bind group layout"),
-        entries: &[
-            ::wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ::wgpu::ShaderStages::FRAGMENT,
-                ty: ::wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: ::wgpu::TextureViewDimension::D2,
-                    sample_type: ::wgpu::TextureSampleType::Float { filterable: true },
-                },
-                count: None,
-            },
-            ::wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ::wgpu::ShaderStages::FRAGMENT,
-                ty: ::wgpu::BindingType::Sampler(::wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    });
     let bind_group = device.create_bind_group(&::wgpu::BindGroupDescriptor {
-        label: Some("sky-cua cursor bind group"),
-        layout: &bind_group_layout,
+        label: Some("sky-cua overlay effect bind group"),
+        layout: bind_group_layout,
         entries: &[
             ::wgpu::BindGroupEntry {
                 binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+            ::wgpu::BindGroupEntry {
+                binding: 1,
+                resource: point_buffer.as_entire_binding(),
+            },
+            ::wgpu::BindGroupEntry {
+                binding: 2,
                 resource: ::wgpu::BindingResource::TextureView(&texture_view),
             },
             ::wgpu::BindGroupEntry {
-                binding: 1,
+                binding: 3,
                 resource: ::wgpu::BindingResource::Sampler(&sampler),
             },
         ],
     });
-    (bind_group, bind_group_layout)
+    bind_group
 }

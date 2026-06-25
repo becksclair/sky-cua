@@ -32,7 +32,7 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] Phase 1: Shared spec and generator.
 - [x] Phase 2: Platform protocol, lifecycle, action timing, and capture barriers.
 - [x] Phase 3: Renderer extraction with static Wayland WGPU parity.
-- [ ] Phase 4: GPU effects, WGSL conformance, and deterministic rendering tests.
+- [x] Phase 4: GPU effects, WGSL conformance, and deterministic rendering tests.
 - [ ] Phase 5: Wayland hardening, multi-output correctness, frame pacing, and failure recovery.
 - [ ] Phase 6: Android consumer migration and parity fixtures.
 - [ ] Phase 7: Legacy renderer retirement and unsupported backend reporting.
@@ -49,6 +49,7 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Phase 3 static renderer extraction accepted: WGPU instance/device/queue/pipeline/cursor texture moved under `crates/sky-cua-overlay-host/src/renderer/`, Wayland host now owns raw-handle `SurfaceGuard`s, all active surfaces are validated before WGPU support is claimed, and static layer-shell WGPU parity passed in the testing VM.
 - [x] 2026-06-25: Phase 2 C2 accepted after coordinator takeover from a partial worker handoff: service pre-dispatch visual feedback now starts before backend input dispatch without delaying it, successful pointer actions send one-shot `AnimateGesture` events, failed pointer actions cancel pending visual feedback, hide-for-capture sends a sequence and requires a matching `applied_sequence`, and overlay-host backends validate gesture shape, dedupe `event_id`, reject stale sequences, clamp duration, and report lifecycle/barrier fields.
 - [x] 2026-06-25: Phase 6 Android constants/JVM slice accepted: Android overlay math/view/controller constants now forward to generated `OverlaySpec`, `NO_NO_WIGGLE_DEG` was added to `[shared.effects]`, and shared motion fixtures are consumed by Android JVM tests. Phase 6 visual artifacts remain open because `adb devices` in the VM listed no attached device/emulator.
+- [x] 2026-06-25: Phase 4 accepted in worker package F on host commit `2d41fdb`: layer-shell now retains sanitized `AnimateGesture` events, maps them into renderer-owned per-surface `EffectScene` data, and the WGPU renderer draws edge glow, inward waves, halo, ripple, trail, cursor glide/rotation, and no-no render effects in WGSL from uniform/storage buffers. VM gates passed: `cargo fmt --check`, `cargo test -p sky-cua-overlay-host`, and `uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay --desktop-env KDE --wayland-display wayland-0`.
 
 ## Surprises & Discoveries
 
@@ -111,6 +112,9 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 
 - Observation: The testing VM can run Android JVM parity tests but cannot currently produce Android visual harness artifacts.
   Evidence: the Phase 6 worker ran `adb devices` inside the VM and received an empty device list; `./gradlew :app:testDebugUnitTest --offline` passed, including the shared fixture test.
+
+- Observation: WGPU validates compute entry points against stage-legal operations even when the render entry point is the production path.
+  Evidence: the first Phase 4 VM `cargo test -p sky-cua-overlay-host` run failed because `cs_main` called `render_pixel`, which reaches `textureSample`; the conformance entry now samples only analytic animation/effect functions and the offscreen render test covers the texture/render path.
 
 ## External Research Snapshot
 
@@ -227,6 +231,14 @@ If any dependency version changes before implementation, repeat this research be
   Rationale: Phase 6 parity needs the no-no render effect to share the same generated source of truth that Phase 4 WGSL effects will consume.
   Date/Author: 2026-06-25 / Codex
 
+- Decision: Keep Phase 4 desktop effects inside one full-screen WGPU render pass with bounded uniform and storage buffers.
+  Rationale: A single analytic pass keeps glow, inward waves, halo, ripple, trail, cursor transform, no-no render marks, and cursor texture composition on the GPU while leaving CPU work limited to validation, coordinate mapping, scene uploads, and deterministic test fixtures.
+  Date/Author: 2026-06-25 / Codex
+
+- Decision: Use compute conformance for analytic WGSL functions and offscreen render invariants for texture/composition behavior.
+  Rationale: WGSL compute cannot call fragment-only texture sampling, so compute validates progress, ripple, cursor position, rotation, trail, and glow samples while offscreen render tests validate hidden transparency and deterministic visible pixels through the actual render pipeline.
+  Date/Author: 2026-06-25 / Codex
+
 ## Outcomes & Retrospective
 
 Phase 0 is complete. The testing VM baseline passed after VM readiness fixes for Python and Android tooling. The VM provisioning path now installs Python/Android prerequisites required by later gates.
@@ -258,6 +270,14 @@ The Phase 3 live artifact is `/workspace/artifacts/codex-e2e/agent-cursor-kde/06
 Wave 1 integration verification also passed in the VM:
 
     python3 scripts/generate_overlay_spec.py --check
+
+Phase 4 is complete. Package F added renderer-owned effect scene data, generated-spec uniform uploads, bounded gesture point storage, WGSL full-screen analytic effects, compute conformance samples from `resources/overlay/wgsl_animation_fixtures.json`, offscreen deterministic render invariants, layer-shell `AnimateGesture` retention, structured WGPU effect capability readback, and color/premultiplied-alpha docs. Production visible effects are WGSL/WGPU-rendered; the CPU path only validates events, maps coordinates, updates scene buffers, and keeps legacy renderers unchanged. Worker VM verification passed:
+
+    cargo fmt --check
+    cargo test -p sky-cua-overlay-host
+    uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay --desktop-env KDE --wayland-display wayland-0
+
+The Phase 4 live artifact is `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625050518728685-vis`, with `before.jpg` and `visible.jpg`. The smoke reported `renderer_backend: "wgpu"`, llvmpipe via Vulkan, `visible_overlay_captured: true`, structured effect support for edge glow/glide/halo/inward wave/no-no/ripple/rotation/trail, and hotspot pixel deltas near the cursor.
     uv run pytest scripts/test_overlay_spec_codegen.py -q
     cargo test -p sky-cua-platform
     cargo test -p sky-cua-overlay-host protocol_messages_use_snake_case_kind_values

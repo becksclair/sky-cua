@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "description": "Deterministic desktop WGPU shader samples for Phase 4 conformance tests. Values are generated from the shared overlay spec constants and the same representative tap/no-no frame inputs used by the Rust WGPU tests.",
+  "tolerance": {
+    "default": 0.01,
+    "alpha": 0.02
+  },
+  "fixtures": {
+    "tap_midpoint": {
+      "surface": { "width": 96, "height": 96 },
+      "elapsed_ms": 190,
+      "duration_ms": 380,
+      "points": [{ "x": 50.0, "y": 60.0 }],
+      "expected": {
+        "progress": 0.5,
+        "ripple_radius": 42.0,
+        "ripple_alpha": 0.5,
+        "cursor": { "x": 50.0, "y": 60.0 },
+        "outside_alpha": 0.0
+      }
+    },
+    "hidden": {
+      "surface": { "width": 96, "height": 96 },
+      "expected": {
+        "all_alpha": 0.0
+      }
+    },
+    "no_no_endpoints": [
+      {
+        "progress": 0.0,
+        "expected_rotation_offset_deg": 0.0
+      },
+      {
+        "progress": 1.0,
+        "expected_rotation_offset_deg": 0.0
+      }
+    ]
+  }
+}
