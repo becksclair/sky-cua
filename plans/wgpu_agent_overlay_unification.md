@@ -28,7 +28,7 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Reviewed the initial plan against current source and current library docs. Tightened hidden-risk coverage around raw-window-handle lifetime, WGPU surface capability checks, alpha compositing, protocol compatibility, action timing, unit conversion, X11 full-screen overlay requirements, GNOME retirement boundaries, no-no input handling, generated spec integration, and GPU-rendered effects.
 - [x] 2026-06-25: Added a coordinator/parallel-worker execution model with ownership boundaries, merge gates, integration order, worker handoff contracts, and cross-worker verification requirements.
 - [x] 2026-06-25: Reworked the plan to resolve the open implementation risks directly: visual/action timing is now a contract, one-shot animations use `AnimateGesture` with a protocol version bump, host behavior is governed by a state machine, capture requires an applied-frame barrier, shader behavior must pass GPU conformance tests, renderer surfaces use host-owned RAII guards, multi-output coverage fails closed, legacy renderer retirement happens after WGPU proof, and X11/no-no input/sound are scoped as follow-on plans.
-- [ ] Phase 0: Baseline, VM setup, and contract freeze.
+- [x] Phase 0: Baseline, VM setup, and contract freeze.
 - [ ] Phase 1: Shared spec and generator.
 - [ ] Phase 2: Platform protocol, lifecycle, action timing, and capture barriers.
 - [ ] Phase 3: Renderer extraction with static Wayland WGPU parity.
@@ -38,6 +38,12 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [ ] Phase 7: Legacy renderer retirement and unsupported backend reporting.
 - [ ] Phase 8: Documentation, packaging, and full testing-VM closeout.
 - [ ] Phase 9: Final operator-desktop acceptance and plan retirement.
+
+- [x] 2026-06-25: Phase 0 VM baseline accepted on host commit `7585f2d5afbb402facb408614a1149209a7a6d7a`, Arch `testing-vm`, KVM/QEMU, Virtio GPU, KDE/KWin Wayland on `wayland-0`.
+- [x] 2026-06-25: VM `all` smoke passed with artifacts under `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T024935Z`, `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T025012Z`, `/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T025015Z`, `/workspace/artifacts/session-env-smoke/20260625T025018Z`, `/workspace/artifacts/text-readback-smoke/20260625T025020Z`, `/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T025022Z`, `/workspace/artifacts/opencode-zenity-smoke/20260625T025026Z`, `/workspace/artifacts/opencode-kdialog-smoke/20260625T025102Z`, `/workspace/artifacts/pi-zenity-smoke/20260625T025132Z`, `/workspace/artifacts/pi-kdialog-smoke/20260625T025210Z`, and KWin effect artifacts `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625025251566881-kwin-nested` plus `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625025257267646-kwin-user`.
+- [x] 2026-06-25: Phase 0 unit baseline passed in the VM: `cargo test -p sky-cua-platform`, `cargo test -p sky-cua-service overlay`, `cargo test -p sky-cua-overlay-host`, `uv run pytest scripts/test_agent_cursor_smokes.py scripts/test_overlay_pointer_animations.py`, `cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline`, `cargo test -p sky-cua-overlay-host protocol_messages_use_snake_case_kind_values`, and `cargo test -p sky-cua-service derives_cursor_state_from_explicit_click_coordinates`.
+- [x] 2026-06-25: Closed Phase 0 VM readiness gaps by adding `uv`, `python-pytest`, `jdk21-openjdk`, Android command-line tools, API 36, platform-tools, and build-tools 36.0.0 to the VM provisioning path; live VM was updated and the exact offline Android gate passed after one online cache warm-up.
+- [x] 2026-06-25: Frozen shared-contract decisions for Wave 1: spec keys/units, generated Rust/Kotlin module names, `AgentOverlayGestureEvent`, `AnimateGesture`, nested capabilities, action timing, host state machine, capture barrier, renderer/surface boundary, WGPU buffer ABI, fixture shapes, multi-output fail-closed policy, and VM artifact naming.
 
 ## Surprises & Discoveries
 
@@ -79,6 +85,15 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 
 - Observation: Shared Rust/Kotlin fixtures alone do not prove the GPU path. A WGSL shader can drift while Rust and Kotlin tests still pass. The plan therefore requires WGSL compute conformance or offscreen render invariants that exercise the actual shader code.
   Evidence: the renderer target is WGPU/WGSL; CPU reference math is only an oracle.
+
+- Observation: The live testing VM initially lacked `uv`, `pytest`, JDK 21, and `$HOME/Android/Sdk`, so the Phase 0 Python and Android commands could not run as written even though the smoke runner itself was healthy.
+  Evidence: `uv run pytest ...` failed with `uv: command not found`; `./gradlew :app:testDebugUnitTest --offline` first failed because `/usr/lib/jvm/java-21-openjdk` was absent, then because the Android SDK and Gradle dependency cache were absent.
+
+- Observation: The VM pacman database can drift behind mirrors during long-lived sessions.
+  Evidence: installing `uv-0.11.21-1` first failed with mirror 404s; `sudo pacman -Syy --noconfirm` refreshed the DB and installed `uv-0.11.24-1`, `python-pytest`, and `jdk21-openjdk`.
+
+- Observation: Android's offline unit-test gate is only meaningful after the VM has the SDK and a warmed Gradle dependency cache.
+  Evidence: after installing command-line tools 21.0, `platforms;android-36`, `build-tools;36.0.0`, and running one online `./gradlew :app:testDebugUnitTest`, the exact offline command passed.
 
 ## External Research Snapshot
 
@@ -159,9 +174,37 @@ If any dependency version changes before implementation, repeat this research be
   Rationale: Overlay rendering, system-cursor hiding, input regions, deployment, compositor integration, capture synchronization, sound, and crash recovery can disturb the operator's desktop. Workers and the coordinator must prove changes in the isolated testing VM first. The final desktop run is a narrow acceptance gate, not a place for iterative debugging.
   Date/Author: 2026-06-25 / ChatGPT
 
+- Decision: Freeze the Phase 1 shared spec as `resources/overlay/agent_overlay_spec.toml`, `schema_version = 1`, with sections `[shared.colors]`, `[shared.timing]`, `[shared.motion]`, `[shared.effects]`, `[desktop.geometry]`, `[desktop.rendering]`, `[android.geometry]`, `[android.rendering]`, and `[sound]`; field names carry units such as `_ms`, `_dp`, `_logical_px`, `_dp_per_s`, `_dp_per_s2`, `_deg`, `_alpha_0_1`, `_alpha_0_255`, and `_fraction`.
+  Rationale: Workers need one canonical schema and unit policy before generated Rust/Kotlin constants, fixtures, shaders, and Android consumers can safely converge.
+  Date/Author: 2026-06-25 / Codex
+
+- Decision: Freeze generated names as `sky_cua_platform::overlay_spec` backed by `crates/sky-cua-platform/src/overlay_spec_generated.rs` and Kotlin `object OverlaySpec` in `android/phone-companion/app/src/main/java/com/skycua/phonecompanion/overlay/OverlaySpec.kt`.
+  Rationale: Cross-worker work must not create competing constant modules or generated-file formats.
+  Date/Author: 2026-06-25 / Codex
+
+- Decision: Freeze the desktop one-shot event contract around `AgentOverlayGestureEvent { event_id, sequence, kind, coordinate_space, mapping_id, points, duration_ms, source_action }`, `AgentOverlayGestureKind::{Tap, Drag, Swipe, NoNo}`, `Point2`, and `OverlayHostMessageKind::AnimateGesture` with a protocol version bump.
+  Rationale: `SetCursor` stays persistent state, while gestures, ripples, trails, and no-no feedback are one-shot events that must dedupe and must not replay after host restart.
+  Date/Author: 2026-06-25 / Codex
+
+- Decision: Freeze nested capabilities as explicit effect support, coverage, coordinate spaces, renderer backend, adapter/backend names, protocol version, effect schema version, active/rendered output counts, maximum gesture points, and structured reasons; the core Wayland policy remains fail-closed unless all active outputs have WGPU coverage.
+  Rationale: Unsupported or partial sessions need machine-readable truth instead of prose fallback inference.
+  Date/Author: 2026-06-25 / Codex
+
+- Decision: Freeze runtime timing, lifecycle, and capture semantics to the tables already in this plan: visual feedback does not delay backend input dispatch, host states are `Hidden`, `VisibleIdle`, `AgentAnimating`, `CaptureHidden`, `NoNoFeedbackRenderOnly`, and `FailedOrUnsupported`, and hide-for-capture waits for an applied-frame sequence before service capture.
+  Rationale: These contracts let service, host, renderer, and tests move in parallel without changing automation latency or reintroducing capture races.
+  Date/Author: 2026-06-25 / Codex
+
+- Decision: Freeze the renderer boundary as one WGPU renderer plus host-owned RAII surface guards; renderer modules must not import Wayland, X11, GNOME, DBus, or service modules, and WGPU buffer ABI structs must be explicit `repr(C)` or otherwise documented with size/alignment tests against WGSL layout.
+  Rationale: This keeps unsafe raw-handle lifetime and platform surfaces outside the renderer while preventing duplicate shader/buffer ABI paths.
+  Date/Author: 2026-06-25 / Codex
+
+- Decision: Freeze fixture names and artifact policy as `resources/overlay/agent_overlay_motion_fixtures.json`, `resources/overlay/wgsl_animation_fixtures.json`, VM artifacts under `/workspace/artifacts/...`, and final operator acceptance under `artifacts/final-desktop-overlay-acceptance/`.
+  Rationale: Rust, Kotlin, WGSL, and live-smoke proof need shared sample names and a stable evidence trail.
+  Date/Author: 2026-06-25 / Codex
+
 ## Outcomes & Retrospective
 
-No implementation work has landed yet. Update this section after each major milestone with what was proven, what remains, and any change to scope or sequencing.
+Phase 0 is complete. The testing VM baseline passed after VM readiness fixes for Python and Android tooling. No runtime overlay architecture changes have landed yet. The only code changes so far are VM provisioning/test readiness updates so future VM baselines can run the required `uv` and Android commands.
 
 ## Context and Orientation
 

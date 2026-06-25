@@ -12,6 +12,9 @@ autologin_session="${SKY_CUA_TESTING_VM_SESSION:-cosmic}"
 # Default to the latest OpenCode harness; override OPENCODE_NPM_SPEC when a
 # reproduction needs a pinned version.
 opencode_npm_spec="${OPENCODE_NPM_SPEC:-opencode-ai@latest}"
+android_cmdline_tools_url="${ANDROID_CMDLINE_TOOLS_URL:-https://dl.google.com/android/repository/commandlinetools-linux-15641748_latest.zip}"
+android_platform="${ANDROID_PLATFORM:-android-36}"
+android_build_tools_version="${ANDROID_BUILD_TOOLS_VERSION:-36.0.0}"
 
 pacman-key --init
 pacman-key --populate archlinux
@@ -49,6 +52,7 @@ pacman -S --noconfirm --needed \
 	hyprland \
 	i3-wm \
 	imagemagick \
+	jdk21-openjdk \
 	jq \
 	kconfig \
 	kcoreaddons \
@@ -88,6 +92,7 @@ pacman -S --noconfirm --needed \
 	python-dbus \
 	python-gobject \
 	python-pillow \
+	python-pytest \
 	qt6-base \
 	qt6-declarative \
 	qt6-multimedia-ffmpeg \
@@ -100,6 +105,7 @@ pacman -S --noconfirm --needed \
 	strace \
 	sudo \
 	tk \
+	uv \
 	vulkan-swrast \
 	vulkan-virtio \
 	wayland \
@@ -205,6 +211,39 @@ if [[ ! -x /opt/google/chrome/google-chrome ]]; then
 	ln -sf /usr/bin/google-chrome-stable /usr/bin/google-chrome
 	rm -rf "${chrome_tmp}" "${chrome_deb}"
 fi
+
+android_sdk_root="/home/${vm_user}/Android/Sdk"
+android_tools_tmp="$(mktemp -d)"
+android_tools_zip="${android_tools_tmp}/cmdline-tools.zip"
+install -d -m 0755 -o "${vm_user}" -g "${vm_user}" "${android_sdk_root}/cmdline-tools"
+python -c "from urllib.request import urlretrieve; urlretrieve('${android_cmdline_tools_url}', '${android_tools_zip}')"
+bsdtar -xf "${android_tools_zip}" -C "${android_tools_tmp}"
+rm -rf "${android_sdk_root}/cmdline-tools/latest"
+if [[ -d "${android_tools_tmp}/cmdline-tools" ]]; then
+	mv "${android_tools_tmp}/cmdline-tools" "${android_sdk_root}/cmdline-tools/latest"
+else
+	install -d -m 0755 "${android_sdk_root}/cmdline-tools/latest"
+	cp -a "${android_tools_tmp}/tools/." "${android_sdk_root}/cmdline-tools/latest/"
+fi
+chown -R "${vm_user}:${vm_user}" "/home/${vm_user}/Android"
+rm -rf "${android_tools_tmp}"
+
+runuser -u "${vm_user}" -- bash -lc '
+set -euo pipefail
+sdk_root="$HOME/Android/Sdk"
+sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+set +o pipefail
+yes | "$sdkmanager" --sdk_root="$sdk_root" --licenses >/tmp/sky-cua-android-sdk-licenses.log
+license_rc="${PIPESTATUS[1]}"
+set -o pipefail
+if [[ "${license_rc}" -ne 0 ]]; then
+	exit "${license_rc}"
+fi
+"$sdkmanager" --sdk_root="$sdk_root" \
+	"platform-tools" \
+	"platforms;'"${android_platform}"'" \
+	"build-tools;'"${android_build_tools_version}"'"
+'
 
 npm install -g "${opencode_npm_spec}"
 
