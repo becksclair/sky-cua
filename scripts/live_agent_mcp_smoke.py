@@ -58,6 +58,14 @@ FIXTURES = {
         "prompt_suffix": "dismiss it by confirming OK",
     },
 }
+PI_MCP_WRAPPER_GUIDANCE = (
+    "When using Pi's generic mcp tool, pass an object with tool set to the sky-cua "
+    "tool name and args set to a JSON object, not a JSON string. Prefer "
+    'sky_cua_observe with args {"surface":"desktop","element_query":"<title>"}, '
+    'then sky_cua_desktop_keyboard with args {"operation":"press_key","key":"Enter"}. '
+    "Do not call desktop list_resources with title_contains; desktop windows do not support "
+    "that filter."
+)
 SKY_CUA_ACTION_TOOL_NAMES = {
     "activate_window",
     "browser_claim_tab",
@@ -85,6 +93,24 @@ SKY_CUA_ACTION_TOOL_NAMES = {
     "phone_pointer",
     "phone_setup",
 }
+
+
+def build_agent_prompt(*, agent: str, fixture_title: str, prompt_suffix: str) -> str:
+    prompt = (
+        f"Use the sky-cua MCP tools (server name sky_cua, sky-cua, or computer-use). "
+        f"Find the dialog titled '{fixture_title}' and {prompt_suffix}. "
+        f"Keep the interaction simple and direct; use window/state/click/keyboard tools only as needed. "
+        f"For a focused confirmation dialog, desktop_keyboard Enter is acceptable. "
+        f"Do not use shell commands, process inspection, OCR, window-manager commands, "
+        f"global keyboard shortcuts, or non-sky-cua desktop shortcuts as substitutes for sky-cua MCP tools. "
+    )
+    if agent == "pi":
+        prompt += PI_MCP_WRAPPER_GUIDANCE + " "
+    prompt += (
+        "After a successful sky-cua action, return immediately without extra verification loops. "
+        "Return a JSON object with keys: dialog_text (string or null), dismissed (boolean)."
+    )
+    return prompt
 
 
 def _parse_dismissed_from_stdout(stdout_path: Path) -> bool | None:
@@ -508,14 +534,10 @@ def run_fixture_smoke(
     dialog = subprocess.Popen(fixture["argv"])
 
     try:
-        prompt = (
-            f"Use the sky-cua MCP tools (server name sky_cua, sky-cua, or computer-use). "
-            f"Find the dialog titled '{fixture['title']}' and {fixture['prompt_suffix']}. "
-            f"Keep the interaction simple and direct; use window/state/click/keyboard tools only as needed. "
-            f"For a focused confirmation dialog, desktop_keyboard Enter is acceptable. "
-            f"Do not use shell commands, process inspection, OCR, window-manager commands, "
-            f"global keyboard shortcuts, or non-sky-cua desktop shortcuts as substitutes for sky-cua MCP tools. "
-            f"Return a JSON object with keys: dialog_text (string or null), dismissed (boolean)."
+        prompt = build_agent_prompt(
+            agent=agent,
+            fixture_title=fixture["title"],
+            prompt_suffix=fixture["prompt_suffix"],
         )
 
         proc = run_agent(agent, prompt, artifact_dir, model=effective_model)

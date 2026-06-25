@@ -37,6 +37,29 @@ def test_agent_smoke_fixtures_are_dialog_dismissal_flows() -> None:
     assert set(live_agent_mcp_smoke.FIXTURES) == {"kdialog", "zenity"}
 
 
+def test_agent_smoke_prompt_tells_agents_to_return_after_action() -> None:
+    prompt = live_agent_mcp_smoke.build_agent_prompt(
+        agent="opencode",
+        fixture_title="sky-cua agent smoke",
+        prompt_suffix="dismiss it by confirming OK",
+    )
+
+    assert "After a successful sky-cua action, return immediately" in prompt
+
+
+def test_agent_smoke_pi_prompt_documents_generic_mcp_wrapper() -> None:
+    prompt = live_agent_mcp_smoke.build_agent_prompt(
+        agent="pi",
+        fixture_title="sky-cua agent smoke",
+        prompt_suffix="dismiss it by confirming OK",
+    )
+
+    assert "Pi's generic mcp tool" in prompt
+    assert '"args":"{' not in prompt
+    assert "args set to a JSON object, not a JSON string" in prompt
+    assert "Do not call desktop list_resources with title_contains" in prompt
+
+
 def test_pointer_fixture_adjusts_origin_when_fullscreen_allocation_is_clipped() -> None:
     assert adjusted_origin_for_visible_monitor(
         origin_x=0,

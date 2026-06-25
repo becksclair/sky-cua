@@ -34,9 +34,9 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] Phase 3: Renderer extraction with static Wayland WGPU parity.
 - [x] Phase 4: GPU effects, WGSL conformance, and deterministic rendering tests.
 - [x] Phase 5: Wayland hardening, multi-output correctness, frame pacing, and failure recovery.
-- [ ] Phase 6: Android consumer migration and parity fixtures.
+- [x] Phase 6: Android consumer migration and parity fixtures.
 - [x] Phase 7: Legacy renderer retirement and unsupported backend reporting.
-- [ ] Phase 8: Documentation, packaging, and full testing-VM closeout.
+- [x] Phase 8: Documentation, packaging, and full testing-VM closeout.
 - [ ] Phase 9: Final operator-desktop acceptance and plan retirement.
 
 - [x] 2026-06-25: Phase 0 VM baseline accepted on host commit `7585f2d5afbb402facb408614a1149209a7a6d7a`, Arch `testing-vm`, KVM/QEMU, Virtio GPU, KDE/KWin Wayland on `wayland-0`.
@@ -48,17 +48,20 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Phase 2 C1 platform/protocol slice accepted: added `Point2`, `AgentOverlayGestureKind`, `AgentOverlayGestureEvent`, nested overlay capability fields, `OverlayHostMessageKind::AnimateGesture`, and overlay-host protocol version 2. Remaining Phase 2 timing, dedupe/stale handling, lifecycle states, and capture barriers stay in C2.
 - [x] 2026-06-25: Phase 3 static renderer extraction accepted: WGPU instance/device/queue/pipeline/cursor texture moved under `crates/sky-cua-overlay-host/src/renderer/`, Wayland host now owns raw-handle `SurfaceGuard`s, all active surfaces are validated before WGPU support is claimed, and static layer-shell WGPU parity passed in the testing VM.
 - [x] 2026-06-25: Phase 2 C2 accepted after coordinator takeover from a partial worker handoff: service pre-dispatch visual feedback now starts before backend input dispatch without delaying it, successful pointer actions send one-shot `AnimateGesture` events, failed pointer actions cancel pending visual feedback, hide-for-capture sends a sequence and requires a matching `applied_sequence`, and overlay-host backends validate gesture shape, dedupe `event_id`, reject stale sequences, clamp duration, and report lifecycle/barrier fields.
-- [x] 2026-06-25: Phase 6 Android constants/JVM slice accepted: Android overlay math/view/controller constants now forward to generated `OverlaySpec`, `NO_NO_WIGGLE_DEG` was added to `[shared.effects]`, and shared motion fixtures are consumed by Android JVM tests. Phase 6 visual artifacts remain open because `adb devices` in the VM listed no attached device/emulator.
+- [x] 2026-06-25: Phase 6 Android constants/JVM slice accepted: Android overlay math/view/controller constants now forward to generated `OverlaySpec`, `NO_NO_WIGGLE_DEG` was added to `[shared.effects]`, and shared motion fixtures are consumed by Android JVM tests.
 - [x] 2026-06-25: Phase 4 accepted in worker package F on host commit `2d41fdb`: layer-shell now retains sanitized `AnimateGesture` events, maps them into renderer-owned per-surface `EffectScene` data, and the WGPU renderer draws edge glow, inward waves, halo, ripple, trail, cursor glide/rotation, and no-no render effects in WGSL from uniform/storage buffers. VM gates passed: `cargo fmt --check`, `cargo test -p sky-cua-overlay-host`, and `uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay --desktop-env KDE --wayland-display wayland-0`.
 - [x] 2026-06-25: Phase 5 package W accepted in the testing VM and integrated after Phase 4: Wayland auto now fails closed for incomplete WGPU output coverage, layer-shell capabilities expose full/none coverage, active/rendered output counts, adapter name, protocol/schema versions, coordinate spaces, max gesture points, WGPU effect booleans, and frame CPU submission timing, surface acquisition loss/timeout becomes a structured render failure instead of a silent skip, output hotplug/removal invalidates coverage, and VM smokes passed for visible overlay, hide-for-capture/no-leak, and click-through on Plasma/KWin `wayland-0`.
 - [x] 2026-06-25: Coordinator F/W integration verified on commit `ea6a3ba`: `cargo fmt --check`, `cargo test -p sky-cua-overlay-host`, `cargo test -p sky-cua-service overlay`, targeted script ruff/basedpyright/pytest, and the VM Wayland layer-shell overlay smoke passed after rerunning the known pointer-fixture readiness timeout with `SKY_CUA_POINTER_FIXTURE_READY_TIMEOUT_SECONDS=60`. Integrated artifact: `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625051526587819-vis`, reporting `renderer_backend: "wgpu"`, `coverage: "full"`, `visible_overlay_captured: true`, and WGPU effect capabilities true.
 - [x] 2026-06-25: Phase 7 package E accepted: production backend selection no longer includes Wayland SHM, GNOME Shell actor, or X11 shaped-window visible renderers; explicit `SKY_CUA_OVERLAY_BACKEND=gnome_shell_extension` and `SKY_CUA_OVERLAY_BACKEND=x11` return Noop capabilities with structured unsupported reasons; the GNOME extension keeps `ListWindows` and `ActivateWindow` while cursor drawing methods report retired; screenshot-synthetic cursor behavior remains covered. VM gates passed: Plasma/KWin `wayland-0` WGPU layer-shell profile, KDE targeted screenshot profile, i3/Xorg unsupported-contract profile, and VM packaging with a temporary `/workspace/.git` index for bundle source discovery.
-- [ ] 2026-06-25: Phase 8 package J closeout attempted on host commit `e2f97f52618f` with docs/ROADMAP edits and Plasma/KWin `wayland-0` in the Arch `testing-vm`; Phase 8 remains open because the VM `all` profile is blocked by external agent auth/billing lanes, not by overlay/runtime gates.
+- [x] 2026-06-25: Phase 8 package J closeout accepted on branch `bex/wgpu-agent-overlay-unification` in the Arch `testing-vm`, Plasma/KWin `wayland-0`, Virtio GPU/llvmpipe Vulkan. Docs/ROADMAP/package closeout is current and the VM full suite plus `all` profile passed.
 - [x] 2026-06-25: Package J docs slice updated `docs/features/agent-cursor-overlay.md` and `ROADMAP.md` without runtime changes: the feature doc now states persistent-vs-one-shot overlay semantics, action timing, capture barrier, host lifecycle, WGPU-only production rendering, retired fallback boundaries, exact VM command forms, and Phase 9 operator-desktop separation; ROADMAP now carries the no-no input/sound follow-on beside the X11 WGPU host follow-on.
 - [x] 2026-06-25: Coordinator follow-up fixed the Package J runtime/script blockers exposed by the first full VM suite attempt: `OverlayController::update_from_action` now reuses a matching pre-dispatch persistent cursor state and only allocates a new sequence for the success `AnimateGesture`, and `scripts/run_gui_testing_vm_smoke.py` now builds `sky-cua-chrome-host` before syncing agent-harness profiles. VM targeted proof passed for `cargo fmt --check`, `cargo test -p sky-cua-service daemon::tests::execute_action_updates_cursor_state_for_explicit_click -- --nocapture`, and `cargo test -p sky-cua-service update_from_action_reuses_prepared_cursor_state_for_success_effect -- --nocapture`.
 - [x] 2026-06-25: Coordinator fixed no-git VM packaging closeout: `scripts/build_plugin.py` now falls back from `git ls-files` to a deterministic worktree walk for requested bundle source roots, with regression coverage in `scripts/test_plugin_bundle.py`; the no-`.git` VM workspace produced `/home/skycua/workspace-coord/dist/plugin/sky-cua`.
 - [x] 2026-06-25: Dedicated `ultra-review` lane over the final closeout diff found one `prepared-state-reuse` edge case: a failed pre-dispatch `SetCursor` could leave only local prepared state and skip the persistent retry on success. Coordinator fixed it by tracking the delivered preparatory sequence, clearing stale prepared markers, and retrying `SetCursor` after failed prepare; VM proof passed with `cargo fmt --check`, `cargo test -p sky-cua-service update_from_action_ -- --nocapture`, and full `cargo test`.
-- [ ] 2026-06-25: Package J VM `all` profile external blockers: with `OPENAI_API_KEY` explicitly removed, no Codex settings sync, Plasma/KWin `wayland-0`, and command `env -u OPENAI_API_KEY python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile all --desktop-env KDE --wayland-display wayland-0`, the fresh profile passed Wayland pointer, targeted screenshot, display screenshot, session-env, text-readback, and Codex Desktop at `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T064230Z`, `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T064308Z`, `/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T064311Z`, `/workspace/artifacts/session-env-smoke/20260625T064314Z`, `/workspace/artifacts/text-readback-smoke/20260625T064317Z`, and `/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T064319Z`, then stopped at `opencode-mcp` under default `opencode-go/kimi-k2.7-code` with artifact `/workspace/artifacts/opencode-zenity-smoke/20260625T064323Z`. Direct VM reruns with `opencode-go/qwen3.7-max` and `opencode-go/minimax-m3` also failed; the raw preserved `qwen3.7-max` artifact `/workspace/artifacts/opencode-zenity-smoke/20260625T061854Z` reports `APIError` / `CreditsError`: "Insufficient balance" from `https://opencode.ai/zen/go/v1/messages`. Isolated `pi-mcp` timed out with return code `-9` at `/workspace/artifacts/pi-zenity-smoke/20260625T061230Z`.
+- [x] 2026-06-25: Phase 6 Android visual harness accepted after provisioning the VM with Android emulator and `system-images;android-36;google_apis;x86_64`; headless AVD `sky_cua_api36` booted as `emulator-5554`, and `uv run python scripts/overlay_pointer_animations.py --serial emulator-5554 --scenario corners --scenario redirect --scenario swipes --scenario fan --build-daemon` produced `/home/skycua/workspace-coord/artifacts/overlay-pointer-animations/overlay-pointer-animations.mp4` plus contact sheets `contact-corners-redirect-swipes-fan-0.png` through `-7.png`, mirrored locally under `artifacts/overlay-pointer-animations/vm-20260625T073343/`. Visual review confirmed edge glow/inward wash, cursor glide and heading rotation, ripple, trail, redirect, swipe, and fan coverage.
+- [x] 2026-06-25: Agent VM blocker resolved without OpenAI keys by using OpenCode Zen free model `opencode/nemotron-3-ultra-free` for both OpenCode and Pi smokes. Direct `opencode-mcp` passed at `/workspace/artifacts/opencode-zenity-smoke/20260625T072020Z` and `/workspace/artifacts/opencode-kdialog-smoke/20260625T072315Z`; direct `pi-mcp` passed at `/workspace/artifacts/pi-zenity-smoke/20260625T073343Z` and `/workspace/artifacts/pi-kdialog-smoke/20260625T073500Z`.
+- [x] 2026-06-25: Phase 8 full VM suite passed after the agent-harness prompt fix and model override: `cargo fmt --check`, `cargo test`, `uv run ruff format --check scripts`, `uv run ruff check scripts`, `uv run basedpyright`, `uv run pytest scripts/test_agent_cursor_smokes.py scripts/test_overlay_pointer_animations.py scripts/test_overlay_spec_codegen.py`, `cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline`, and `python3 scripts/build_plugin.py` all passed in `/home/skycua/workspace-coord`.
+- [x] 2026-06-25: VM `all` profile passed with `SKY_CUA_SMOKE_OPENCODE_MODEL=opencode/nemotron-3-ultra-free` and `SKY_CUA_SMOKE_PI_MODEL=opencode/nemotron-3-ultra-free`: `uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile all --sync-opencode-settings --sync-pi-settings`. Artifacts: `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T073640Z`, `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T073717Z`, `/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T073720Z`, `/workspace/artifacts/session-env-smoke/20260625T073722Z`, `/workspace/artifacts/text-readback-smoke/20260625T073725Z`, `/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T073727Z`, `/workspace/artifacts/opencode-zenity-smoke/20260625T073730Z`, `/workspace/artifacts/opencode-kdialog-smoke/20260625T073916Z`, `/workspace/artifacts/pi-zenity-smoke/20260625T074020Z`, `/workspace/artifacts/pi-kdialog-smoke/20260625T074116Z`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625074219093887-kwin-nested`, and `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625074225562927-kwin-user`.
 
 ## Surprises & Discoveries
 
@@ -125,8 +128,14 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - Observation: Phase 6 exposed one Android constant that was still duplicated outside the generated spec.
   Evidence: `OverlayMath.NO_NO_WIGGLE_DEG` was a hard-coded `20f`; `[shared.effects].no_no_wiggle_deg = 20.0` was added to `resources/overlay/agent_overlay_spec.toml` and regenerated into Rust/Kotlin constants.
 
-- Observation: The testing VM can run Android JVM parity tests but cannot currently produce Android visual harness artifacts.
-  Evidence: the Phase 6 worker ran `adb devices` inside the VM and received an empty device list; `./gradlew :app:testDebugUnitTest --offline` passed, including the shared fixture test.
+- Observation: The testing VM initially lacked an Android emulator/device, but could be provisioned for Android visual artifacts.
+  Evidence: after installing Android Emulator and `system-images;android-36;google_apis;x86_64`, headless AVD `sky_cua_api36` booted as `emulator-5554` with writable `/dev/kvm`; the overlay visual harness produced MP4/contact-sheet artifacts for corners, redirect, swipes, and fan scenarios.
+
+- Observation: OpenCode Zen model aliases do not all behave the same even when listed by `opencode models`.
+  Evidence: `opencode/deepseek-v4-flash-free` failed in the VM with `ModelError: No provider available`, paid `opencode-go/*` candidates failed with `CreditsError`, while `opencode/nemotron-3-ultra-free` passed both OpenCode and Pi MCP fixtures.
+
+- Observation: Pi's generic `mcp` wrapper needs explicit schema guidance for the small free model.
+  Evidence: before the prompt fix, Pi using `opencode/nemotron-3-ultra-free` dismissed the dialog with sky-cua action evidence but timed out after a bad `list_resources` call with `title_contains` and JSON-string `args`; the patched prompt says `args` is a JSON object, avoids desktop `title_contains`, and returns immediately after action, making both fixtures pass.
 
 - Observation: WGPU validates compute entry points against stage-legal operations even when the render entry point is the production path.
   Evidence: the first Phase 4 VM `cargo test -p sky-cua-overlay-host` run failed because `cs_main` called `render_pixel`, which reaches `textureSample`; the conformance entry now samples only analytic animation/effect functions and the offscreen render test covers the texture/render path.
@@ -213,6 +222,14 @@ If any dependency version changes before implementation, repeat this research be
 - Decision: Use the testing VM for all implementation and verification testing; reserve the actual desktop for final acceptance only.
   Rationale: Overlay rendering, system-cursor hiding, input regions, deployment, compositor integration, capture synchronization, sound, and crash recovery can disturb the operator's desktop. Workers and the coordinator must prove changes in the isolated testing VM first. The final desktop run is a narrow acceptance gate, not a place for iterative debugging.
   Date/Author: 2026-06-25 / ChatGPT
+
+- Decision: Use `opencode/nemotron-3-ultra-free` from OpenCode Zen for VM agent MCP smokes when the paid/default OpenCode Go lanes are unavailable.
+  Rationale: The VM agent proof must avoid OpenAI keys and must not depend on paid OpenCode Go balance. `opencode/nemotron-3-ultra-free` passed both OpenCode and Pi fixtures with sky-cua action tool evidence; `opencode/deepseek-v4-flash-free` was listed but unavailable at runtime.
+  Date/Author: 2026-06-25 / Codex
+
+- Decision: Keep Pi smoke prompts explicit about the generic `mcp` wrapper schema.
+  Rationale: Pi does not expose the same direct tool-call surface as OpenCode. Small free models can call `mcp` with JSON-string `args` or unsupported desktop filters unless the harness states that `args` is a JSON object and desktop `list_resources` has no `title_contains` filter.
+  Date/Author: 2026-06-25 / Codex
 
 - Decision: Freeze the Phase 1 shared spec as `resources/overlay/agent_overlay_spec.toml`, `schema_version = 1`, with sections `[shared.colors]`, `[shared.timing]`, `[shared.motion]`, `[shared.effects]`, `[desktop.geometry]`, `[desktop.rendering]`, `[android.geometry]`, `[android.rendering]`, and `[sound]`; field names carry units such as `_ms`, `_dp`, `_logical_px`, `_dp_per_s`, `_dp_per_s2`, `_deg`, `_alpha_0_1`, `_alpha_0_255`, and `_fraction`.
   Rationale: Workers need one canonical schema and unit policy before generated Rust/Kotlin constants, fixtures, shaders, and Android consumers can safely converge.
@@ -304,7 +321,7 @@ The Phase 4 live artifact is `/workspace/artifacts/codex-e2e/agent-cursor-kde/06
     cargo test -p sky-cua-service overlay
     cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
 
-Phase 6 is complete for generated constants and JVM fixture parity, but remains open for Android visual artifacts. Android remains Canvas-native. The VM accepted:
+Phase 6 is complete. Android remains Canvas-native, but its overlay math/view/controller now use generated `OverlaySpec` constants and consume shared motion fixtures through JVM resources. The VM accepted:
 
     python3 scripts/generate_overlay_spec.py --check
     uv run pytest scripts/test_overlay_spec_codegen.py -q
@@ -314,7 +331,11 @@ Phase 6 is complete for generated constants and JVM fixture parity, but remains 
     cargo test -p sky-cua-platform
     cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
 
-The Android visual harness artifact gate did not run because the VM has no attached Android device or emulator; the closest passing gate is `OverlaySpecFixtureTest` consuming the shared motion fixtures from JVM resources.
+The Android visual harness also passed in the VM after provisioning Android Emulator and `system-images;android-36;google_apis;x86_64`. Headless AVD `sky_cua_api36` booted as `emulator-5554`, and:
+
+    uv run python scripts/overlay_pointer_animations.py --serial emulator-5554 --scenario corners --scenario redirect --scenario swipes --scenario fan --build-daemon
+
+produced `/home/skycua/workspace-coord/artifacts/overlay-pointer-animations/overlay-pointer-animations.mp4` and contact sheets `contact-corners-redirect-swipes-fan-0.png` through `contact-corners-redirect-swipes-fan-7.png`, mirrored locally under `artifacts/overlay-pointer-animations/vm-20260625T073343/`. Visual review confirmed the edge glow/inward wash, cursor glide and heading rotation, ripple, trail, redirects, swipes, and fan headings.
 
 Wave 2 integration verification passed in the VM:
 
@@ -366,8 +387,8 @@ Phase 7 is complete. Production visible overlay selection no longer contains the
 
 The Phase 7 live artifacts are `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625053947174748-vis`, `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T053958Z`, and `/workspace/artifacts/codex-e2e/agent-cursor-x11-overlay/20260625T054024051391Z`. The first unmodified VM `build_plugin.py` run compiled release artifacts but failed because the runner-synced `/workspace` intentionally has no `.git`; the accepted VM packaging proof initialized a temporary `/workspace/.git` index for bundle source discovery and produced `/workspace/dist/plugin/sky-cua`.
 
-Phase 8 package J is not accepted yet. The docs and ROADMAP updates landed with
-two coordinator fixes for blockers exposed by the required full VM gates:
+Phase 8 package J is complete. The docs and ROADMAP updates landed with
+coordinator fixes for blockers exposed by the required full VM gates:
 
     cargo test
     cargo test -p sky-cua-service daemon::tests::execute_action_updates_cursor_state_for_explicit_click -- --nocapture
@@ -379,10 +400,10 @@ two coordinator fixes for blockers exposed by the required full VM gates:
     cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
     python3 scripts/build_plugin.py
     ssh -p 22222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=artifacts/testing-vm/known_hosts skycua@127.0.0.1 'cd /home/skycua/workspace-coord && rm -rf .git && python3 scripts/build_plugin.py && test -d dist/plugin/sky-cua'
-    env -u OPENAI_API_KEY python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile all --desktop-env KDE --wayland-display wayland-0
+    SKY_CUA_SMOKE_OPENCODE_MODEL=opencode/nemotron-3-ultra-free SKY_CUA_SMOKE_PI_MODEL=opencode/nemotron-3-ultra-free uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile all --sync-opencode-settings --sync-pi-settings
 
-`cargo fmt --check`, Python lint/type/test gates, Android JVM tests, and the
-no-git packaging proof passed. The broad Rust suite initially failed
+`cargo fmt --check`, `cargo test`, Python lint/type/test gates, Android JVM tests, and
+plugin packaging passed in `/home/skycua/workspace-coord`. The broad Rust suite initially failed
 deterministically in `daemon::tests::execute_action_updates_cursor_state_for_explicit_click`
 because the test observed two cursor updates where it expected one; coordinator
 follow-up fixed the runtime so a successful action reuses a matching
@@ -402,26 +423,31 @@ discovery fall back from `git ls-files` to a deterministic worktree walk, and
 `/home/skycua/workspace-coord/dist/plugin/sky-cua` now builds without a git
 index. The first agent-harness attempt failed because `sky-cua-chrome-host` was
 missing from the runner's release build set; coordinator follow-up added that
-package to `scripts/run_gui_testing_vm_smoke.py`. The fresh VM `all` profile on
-Plasma/KWin `wayland-0` passed Wayland pointer, targeted screenshot, display
-screenshot, session-env, text-readback, and Codex Desktop, then failed at
-`opencode-mcp`. The remaining `all` blocker is external agent auth/billing:
-isolated `opencode-mcp` with `opencode-go/qwen3.7-max` preserved raw output
-showing `APIError` / `CreditsError` with "Insufficient balance" from
-`https://opencode.ai/zen/go/v1/messages`, `opencode-go/minimax-m3` failed the
-same lane, and isolated `pi-mcp` timed out. The relevant artifacts are
-`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T064230Z`,
-`/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T064308Z`,
-`/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T064311Z`,
-`/workspace/artifacts/session-env-smoke/20260625T064314Z`,
-`/workspace/artifacts/text-readback-smoke/20260625T064317Z`,
-`/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T064319Z`,
-`/workspace/artifacts/opencode-zenity-smoke/20260625T064323Z`,
-`/workspace/artifacts/opencode-zenity-smoke/20260625T061216Z`,
-`/workspace/artifacts/opencode-zenity-smoke/20260625T061824Z`,
-`/workspace/artifacts/opencode-zenity-smoke/20260625T061839Z`,
-`/workspace/artifacts/opencode-zenity-smoke/20260625T061854Z`, and
-`/workspace/artifacts/pi-zenity-smoke/20260625T061230Z`.
+package to `scripts/run_gui_testing_vm_smoke.py`. Paid/default OpenCode Go
+agent lanes then failed with external balance/auth errors, and
+`opencode/deepseek-v4-flash-free` returned `ModelError: No provider available`.
+The accepted `all` proof used OpenCode Zen free model
+`opencode/nemotron-3-ultra-free` for both OpenCode and Pi, with no OpenAI key.
+Pi also needed an explicit generic-`mcp` prompt telling it that `args` is a JSON
+object and desktop `list_resources` does not support `title_contains`. Direct
+agent fixtures passed at `/workspace/artifacts/opencode-zenity-smoke/20260625T072020Z`,
+`/workspace/artifacts/opencode-kdialog-smoke/20260625T072315Z`,
+`/workspace/artifacts/pi-zenity-smoke/20260625T073343Z`, and
+`/workspace/artifacts/pi-kdialog-smoke/20260625T073500Z`.
+
+The final VM `all` artifacts are
+`/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T073640Z`,
+`/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T073717Z`,
+`/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T073720Z`,
+`/workspace/artifacts/session-env-smoke/20260625T073722Z`,
+`/workspace/artifacts/text-readback-smoke/20260625T073725Z`,
+`/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T073727Z`,
+`/workspace/artifacts/opencode-zenity-smoke/20260625T073730Z`,
+`/workspace/artifacts/opencode-kdialog-smoke/20260625T073916Z`,
+`/workspace/artifacts/pi-zenity-smoke/20260625T074020Z`,
+`/workspace/artifacts/pi-kdialog-smoke/20260625T074116Z`,
+`/workspace/artifacts/codex-e2e/agent-cursor-kde/0625074219093887-kwin-nested`,
+and `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625074225562927-kwin-user`.
 
 ## Context and Orientation
 

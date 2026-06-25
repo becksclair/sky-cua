@@ -263,6 +263,7 @@ def test_testing_vm_runner_forwards_auth_only_to_agent_profiles(
     monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
     monkeypatch.setenv("OPENCODE_API_KEY", "opencode-secret")
     monkeypatch.setenv("CONTEXT7_API_KEY", "context-secret")
+    monkeypatch.setenv("SKY_CUA_SMOKE_OPENCODE_MODEL", "opencode/nemotron-3-ultra-free")
     monkeypatch.setenv("SKY_CUA_MCP_TOOL_PROFILE", "compact")
     monkeypatch.setenv("SKY_CUA_BROWSER_EVAL", "on")
     monkeypatch.setenv("SKY_CUA_MODEL_SUPPORTS_IMAGES", "false")
@@ -281,6 +282,7 @@ def test_testing_vm_runner_forwards_auth_only_to_agent_profiles(
     command_text = " ".join(commands[0])
     assert "OPENCODE_API_KEY=opencode-secret" in command_text
     assert "CONTEXT7_API_KEY=context-secret" in command_text
+    assert "SKY_CUA_SMOKE_OPENCODE_MODEL=opencode/nemotron-3-ultra-free" in command_text
     assert "SKY_CUA_MCP_TOOL_PROFILE" not in command_text
     assert "SKY_CUA_BROWSER_EVAL=on" in command_text
     assert "SKY_CUA_MODEL_SUPPORTS_IMAGES=false" in command_text
@@ -305,6 +307,7 @@ def test_testing_vm_runner_forwards_auth_to_all_profile(
     monkeypatch.setattr(run_gui_testing_vm_smoke.subprocess, "run", fake_run)
     monkeypatch.setenv("OPENCODE_API_KEY", "opencode-secret")
     monkeypatch.setenv("CONTEXT7_API_KEY", "context-secret")
+    monkeypatch.setenv("SKY_CUA_SMOKE_OPENCODE_MODEL", "opencode/nemotron-3-ultra-free")
 
     assert (
         run_gui_testing_vm_smoke.run_remote_profile(
@@ -320,6 +323,7 @@ def test_testing_vm_runner_forwards_auth_to_all_profile(
     command_text = " ".join(commands[0])
     assert "OPENCODE_API_KEY=opencode-secret" in command_text
     assert "CONTEXT7_API_KEY=context-secret" in command_text
+    assert "SKY_CUA_SMOKE_OPENCODE_MODEL=opencode/nemotron-3-ultra-free" in command_text
 
 
 def test_testing_vm_runner_remote_profile_opts_into_codex_settings(
