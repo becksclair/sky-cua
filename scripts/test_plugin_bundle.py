@@ -261,6 +261,29 @@ def test_build_bundle_inputs_are_selected_from_git_index(
     ]
 
 
+def test_build_bundle_inputs_fall_back_to_worktree_without_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "README.md").write_text("readme\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("doc\n", encoding="utf-8")
+    (tmp_path / "docs" / "nested").mkdir()
+    (tmp_path / "docs" / "nested" / "feature.md").write_text("feature\n", encoding="utf-8")
+
+    def fail_git(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise subprocess.CalledProcessError(128, ["git", "ls-files"])
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(build_plugin.subprocess, "run", fail_git)
+
+    assert build_plugin.tracked_bundle_files([Path("README.md"), Path("docs")]) == [
+        Path("README.md"),
+        Path("docs/guide.md"),
+        Path("docs/nested/feature.md"),
+    ]
+
+
 def test_bundle_source_paths_include_standard_optional_plugin_roots() -> None:
     assert Path(".claude-plugin") in build_plugin.BUNDLE_SOURCE_PATHS
     assert Path(".codex-plugin") in build_plugin.BUNDLE_SOURCE_PATHS

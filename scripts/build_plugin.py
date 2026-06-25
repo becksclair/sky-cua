@@ -177,15 +177,33 @@ def copy_build_stamp_sidecar(source: Path, destination: Path) -> None:
 
 def tracked_bundle_files(source_paths: list[Path] | None = None) -> list[Path]:
     paths = source_paths if source_paths is not None else BUNDLE_SOURCE_PATHS
-    result = subprocess.run(
-        ["git", "ls-files", "-z", "--", *[str(path) for path in paths]],
-        cwd=REPO_ROOT,
-        check=True,
-        stdout=subprocess.PIPE,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z", "--", *[str(path) for path in paths]],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return worktree_bundle_files(paths)
     return [
         Path(part.decode("utf-8", errors="replace")) for part in result.stdout.split(b"\0") if part
     ]
+
+
+def worktree_bundle_files(source_paths: list[Path]) -> list[Path]:
+    files: list[Path] = []
+    for relative_path in source_paths:
+        source = REPO_ROOT / relative_path
+        if source.is_file():
+            files.append(relative_path)
+            continue
+        if not source.is_dir():
+            continue
+        for child in source.rglob("*"):
+            if child.is_file():
+                files.append(child.relative_to(REPO_ROOT))
+    return sorted(files)
 
 
 def copy_tracked_bundle_sources(temp_root: Path) -> None:

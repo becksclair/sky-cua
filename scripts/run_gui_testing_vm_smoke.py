@@ -25,6 +25,7 @@ COSMIC_HOST_AGENT_POINT = (360.0, 260.0)
 COSMIC_HOST_OBSERVED_AGENT_MARKER_POINT = (360.0, 295.0)
 COSMIC_HOST_RESTORED_CURSOR_POINT = (160.0, 171.0)
 RUNTIME_PACKAGES = (
+    "sky-cua-chrome-host",
     "sky-cua-client",
     "sky-cua-service",
     "sky-cua-cosmic-helper",

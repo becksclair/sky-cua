@@ -177,6 +177,7 @@ def test_gui_test_profiles_use_host_built_rust_artifacts() -> None:
     run_profile = (profile_root / "run-profile.sh").read_text(encoding="utf-8")
 
     assert "cargo build" not in wayland_pointer
+    assert "sky-cua-chrome-host" in run_gui_testing_vm_smoke.RUNTIME_PACKAGES
     assert "live_wayland_pointer_smoke.py" in wayland_pointer
     assert "cargo build" not in cosmic_helper
     assert "/workspace/target/release/sky-cua-cosmic-helper" in cosmic_helper
@@ -1215,6 +1216,8 @@ def test_testing_vm_runner_builds_runtimes_on_host(
             "cargo",
             "build",
             "--release",
+            "-p",
+            "sky-cua-chrome-host",
             "-p",
             "sky-cua-client",
             "-p",
