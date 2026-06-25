@@ -4,8 +4,9 @@
 
 Shipped on Linux with WGPU-only production visible rendering on Wayland.
 Windows native overlay deferred until a Windows machine is available for live
-proof. Last verified: 2026-06-25 in the Arch `testing-vm` for the WGPU
-layer-shell path, retired X11/GNOME/SHM contracts, and package build.
+proof. Last verified: 2026-06-25 at commit
+`00a4eb657237924c0bb3b15ae1ce72ae4e593e2b` in the Arch `testing-vm` and on
+the operator KDE Wayland desktop.
 
 ## Summary
 
@@ -228,7 +229,7 @@ invariants for hidden transparency and deterministic visible frames.
 VM acceptance via `scripts/run_gui_testing_vm_smoke.py`:
 
 ```bash
-python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile all --desktop-env KDE --wayland-display wayland-0
+SKY_CUA_SMOKE_OPENCODE_MODEL=opencode/nemotron-3-ultra-free SKY_CUA_SMOKE_PI_MODEL=opencode/nemotron-3-ultra-free python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile all --sync-opencode-settings --sync-pi-settings
 python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile kde-kwin-effect-system-install --vm-name testing-vm --libvirt-uri qemu:///session --desktop-env KDE --wayland-display wayland-0
 python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay --desktop-env Hyprland --wayland-display wayland-1
 python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile i3 --desktop-env i3
@@ -236,17 +237,25 @@ python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user
 
 Latest accepted artifacts:
 
-- Phase 8 no-git package staging proof:
-  `/home/skycua/workspace-coord/dist/plugin/sky-cua`
+- Package staging proof:
+  `/home/bex/projects/sky-cua/dist/plugin/sky-cua`
 - Latest VM all-profile overlay/desktop lanes:
-  `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T064230Z`,
-  `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T064308Z`,
-  `/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T064311Z`,
-  `/workspace/artifacts/session-env-smoke/20260625T064314Z`,
-  `/workspace/artifacts/text-readback-smoke/20260625T064317Z`, and
-  `/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T064319Z`;
-  the remaining all-profile blocker is external OpenCode/Pi agent auth/billing,
-  with OpenCode artifact `/workspace/artifacts/opencode-zenity-smoke/20260625T064323Z`.
+  `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260625T083156Z`,
+  `/workspace/artifacts/gui-desktop-smoke/targeted-screenshot/20260625T083319Z`,
+  `/workspace/artifacts/gui-desktop-smoke/display-screenshot/20260625T083321Z`,
+  `/workspace/artifacts/session-env-smoke/20260625T083324Z`,
+  `/workspace/artifacts/text-readback-smoke/20260625T083327Z`,
+  `/workspace/artifacts/gui-desktop-smoke/codex-desktop/20260625T083328Z`,
+  `/workspace/artifacts/opencode-zenity-smoke/20260625T083332Z`,
+  `/workspace/artifacts/opencode-kdialog-smoke/20260625T083402Z`,
+  `/workspace/artifacts/pi-zenity-smoke/20260625T083546Z`,
+  `/workspace/artifacts/pi-kdialog-smoke/20260625T083750Z`,
+  `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625083829345047-kwin-nested`, and
+  `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625083835737905-kwin-user`.
+- Final operator desktop acceptance:
+  `artifacts/final-desktop-overlay-acceptance/0625082705147305-vis`,
+  `artifacts/final-desktop-overlay-acceptance/0625083856230087-hide`, and
+  `artifacts/final-desktop-overlay-acceptance/0625083911586546-click`.
 - KDE/KWin WGPU layer-shell Package E proof:
   `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625053947174748-vis`
 - Screenshot-synthetic preservation:
@@ -334,9 +343,6 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
 - **No-no input interception and sound are follow-on work.** The WGPU renderer
   can draw the no-no render effect, but click interception and audio feedback
   are not part of this shipped contract.
-- **Final operator-desktop acceptance remains separate.** The VM closeout
-  proves source, package, and VM behavior. The operator desktop is reserved for
-  one controlled Phase 9 acceptance pass using the already-proven package.
 
 ## Related
 
@@ -344,5 +350,3 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
 - Research: [`docs/research/2026-05-x11-shaped-window-vs-layer-shell.md`](../research/2026-05-x11-shaped-window-vs-layer-shell.md)
 - Companion feature: [`docs/features/compositor-cursor-hiding.md`](compositor-cursor-hiding.md)
 - ROADMAP entry: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop parity"
-- Active closeout ExecPlan:
-  [`plans/wgpu_agent_overlay_unification.md`](../../plans/wgpu_agent_overlay_unification.md)
