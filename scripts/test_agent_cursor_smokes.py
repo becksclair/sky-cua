@@ -279,6 +279,10 @@ def test_kde_smoke_accepts_expected_visible_overlay_capabilities() -> None:
                 "click_through": True,
                 "pointer_tracking_backend": "kwin_effect_signal",
                 "pointer_tracking_exact": True,
+                "coverage": "full",
+                "active_output_count": 2,
+                "rendered_output_count": 2,
+                "adapter_name": "llvmpipe",
             }
         },
         expected_backend="wayland_layer_shell",
@@ -286,6 +290,39 @@ def test_kde_smoke_accepts_expected_visible_overlay_capabilities() -> None:
         expected_pointer_tracking="kwin_effect_signal",
         expected_pointer_tracking_exact=True,
     )
+
+    with pytest.raises(RuntimeError, match="output coverage"):
+        live_agent_cursor_kde_smoke.require_cursor_backend_capabilities(
+            {
+                "capabilities": {
+                    "backend": "wayland_layer_shell",
+                    "renderer_backend": "wgpu",
+                    "visible_overlay": True,
+                    "click_through": True,
+                    "coverage": "full",
+                    "active_output_count": 2,
+                    "rendered_output_count": 1,
+                    "adapter_name": "llvmpipe",
+                }
+            },
+            expected_backend="wayland_layer_shell",
+        )
+
+    with pytest.raises(RuntimeError, match="adapter_name"):
+        live_agent_cursor_kde_smoke.require_cursor_backend_capabilities(
+            {
+                "capabilities": {
+                    "backend": "wayland_layer_shell",
+                    "renderer_backend": "wgpu",
+                    "visible_overlay": True,
+                    "click_through": True,
+                    "coverage": "full",
+                    "active_output_count": 1,
+                    "rendered_output_count": 1,
+                }
+            },
+            expected_backend="wayland_layer_shell",
+        )
 
 
 def test_kde_smoke_accepts_kwin_system_cursor_split_capabilities() -> None:

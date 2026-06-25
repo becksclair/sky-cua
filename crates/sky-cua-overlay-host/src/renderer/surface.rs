@@ -106,10 +106,10 @@ impl SurfaceGuard {
                 if let Some(config) = self.config.as_ref() {
                     self.surface.configure(device, config);
                 }
-                SurfaceAcquisitionResult::Retry
+                SurfaceAcquisitionResult::Retry("surface lost or outdated")
             }
             ::wgpu::CurrentSurfaceTexture::Timeout | ::wgpu::CurrentSurfaceTexture::Occluded => {
-                SurfaceAcquisitionResult::Retry
+                SurfaceAcquisitionResult::Retry("surface timed out or is occluded")
             }
             ::wgpu::CurrentSurfaceTexture::Validation => SurfaceAcquisitionResult::Validation,
         }
@@ -130,7 +130,7 @@ impl SurfaceGuard {
 #[derive(Debug)]
 pub enum SurfaceAcquisitionResult {
     Success(::wgpu::SurfaceTexture),
-    Retry,
+    Retry(&'static str),
     Validation,
 }
 
@@ -211,6 +211,17 @@ mod tests {
                 ::wgpu::CompositeAlphaMode::PreMultiplied,
             ]),
             ::wgpu::CompositeAlphaMode::PreMultiplied
+        );
+    }
+
+    #[test]
+    fn alpha_mode_does_not_choose_opaque_when_transparent_modes_exist() {
+        assert_ne!(
+            choose_alpha_mode(&[
+                ::wgpu::CompositeAlphaMode::Auto,
+                ::wgpu::CompositeAlphaMode::Opaque,
+            ]),
+            ::wgpu::CompositeAlphaMode::Opaque
         );
     }
 }

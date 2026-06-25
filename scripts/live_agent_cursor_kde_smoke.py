@@ -209,18 +209,25 @@ def main() -> int:
                 cursor_client,
                 request_timeout=args.request_timeout,
             )
-        if args.mode in {"layer-shell-debug-visible", "x11-debug-visible"}:
+        if args.mode in {"layer-shell-debug-visible", "x11-debug-visible"} or (
+            args.mode == "layer-shell-hide-for-capture" and ".agent-cursor." not in after_path.name
+        ):
             before_path = first_path
         else:
             before_path = agent_cursor_source_path(after_path)
         probe = probe_marker(before_path, after_path, point)
         leak_probe = None
         if args.mode == "layer-shell-hide-for-capture":
-            leak_probe = probe_marker(first_path, before_path, point)
+            leak_probe = probe_marker(
+                first_path, before_path if before_path != first_path else after_path, point
+            )
+        ok = probe.found and (leak_probe is None or not leak_probe.found)
+        if args.mode == "layer-shell-hide-for-capture":
+            ok = leak_probe is not None and not leak_probe.found
 
         summary = {
             "mode": args.mode,
-            "ok": probe.found and (leak_probe is None or not leak_probe.found),
+            "ok": ok,
             "synthetic_cursor_found": probe.found
             if args.mode not in {"layer-shell-debug-visible", "x11-debug-visible"}
             else False,
@@ -1876,11 +1883,31 @@ def require_cursor_backend_capabilities(
             expected["pointer_tracking_backend"] = expected_pointer_tracking
         if expected_pointer_tracking_exact is not None:
             expected["pointer_tracking_exact"] = expected_pointer_tracking_exact
+        if expected_backend == "wayland_layer_shell":
+            expected["renderer_backend"] = expected_renderer or "wgpu"
+            expected["coverage"] = "full"
         for key, value in expected.items():
             if capabilities.get(key) != value:
                 raise RuntimeError(
                     f"agent cursor capability {key!r} was {capabilities.get(key)!r}, "
                     f"expected {value!r} for mode backend {expected_backend!r}.\n"
+                    f"response={json.dumps(response, indent=2, sort_keys=True)}"
+                )
+        if expected_backend == "wayland_layer_shell":
+            active_outputs = capabilities.get("active_output_count")
+            rendered_outputs = capabilities.get("rendered_output_count")
+            if (
+                not isinstance(active_outputs, int)
+                or active_outputs <= 0
+                or rendered_outputs != active_outputs
+            ):
+                raise RuntimeError(
+                    "agent cursor output coverage was not full for Wayland layer-shell.\n"
+                    f"response={json.dumps(response, indent=2, sort_keys=True)}"
+                )
+            if not isinstance(capabilities.get("adapter_name"), str):
+                raise RuntimeError(
+                    "agent cursor Wayland layer-shell capabilities did not include adapter_name.\n"
                     f"response={json.dumps(response, indent=2, sort_keys=True)}"
                 )
 

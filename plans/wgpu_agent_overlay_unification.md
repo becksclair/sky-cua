@@ -33,7 +33,7 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] Phase 2: Platform protocol, lifecycle, action timing, and capture barriers.
 - [x] Phase 3: Renderer extraction with static Wayland WGPU parity.
 - [x] Phase 4: GPU effects, WGSL conformance, and deterministic rendering tests.
-- [ ] Phase 5: Wayland hardening, multi-output correctness, frame pacing, and failure recovery.
+- [x] Phase 5: Wayland hardening, multi-output correctness, frame pacing, and failure recovery.
 - [ ] Phase 6: Android consumer migration and parity fixtures.
 - [ ] Phase 7: Legacy renderer retirement and unsupported backend reporting.
 - [ ] Phase 8: Documentation, packaging, and full testing-VM closeout.
@@ -50,6 +50,8 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 - [x] 2026-06-25: Phase 2 C2 accepted after coordinator takeover from a partial worker handoff: service pre-dispatch visual feedback now starts before backend input dispatch without delaying it, successful pointer actions send one-shot `AnimateGesture` events, failed pointer actions cancel pending visual feedback, hide-for-capture sends a sequence and requires a matching `applied_sequence`, and overlay-host backends validate gesture shape, dedupe `event_id`, reject stale sequences, clamp duration, and report lifecycle/barrier fields.
 - [x] 2026-06-25: Phase 6 Android constants/JVM slice accepted: Android overlay math/view/controller constants now forward to generated `OverlaySpec`, `NO_NO_WIGGLE_DEG` was added to `[shared.effects]`, and shared motion fixtures are consumed by Android JVM tests. Phase 6 visual artifacts remain open because `adb devices` in the VM listed no attached device/emulator.
 - [x] 2026-06-25: Phase 4 accepted in worker package F on host commit `2d41fdb`: layer-shell now retains sanitized `AnimateGesture` events, maps them into renderer-owned per-surface `EffectScene` data, and the WGPU renderer draws edge glow, inward waves, halo, ripple, trail, cursor glide/rotation, and no-no render effects in WGSL from uniform/storage buffers. VM gates passed: `cargo fmt --check`, `cargo test -p sky-cua-overlay-host`, and `uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay --desktop-env KDE --wayland-display wayland-0`.
+- [x] 2026-06-25: Phase 5 package W accepted in the testing VM and integrated after Phase 4: Wayland auto now fails closed for incomplete WGPU output coverage, layer-shell capabilities expose full/none coverage, active/rendered output counts, adapter name, protocol/schema versions, coordinate spaces, max gesture points, WGPU effect booleans, and frame CPU submission timing, surface acquisition loss/timeout becomes a structured render failure instead of a silent skip, output hotplug/removal invalidates coverage, and VM smokes passed for visible overlay, hide-for-capture/no-leak, and click-through on Plasma/KWin `wayland-0`.
+- [x] 2026-06-25: Coordinator F/W integration verified on commit `ea6a3ba`: `cargo fmt --check`, `cargo test -p sky-cua-overlay-host`, `cargo test -p sky-cua-service overlay`, targeted script ruff/basedpyright/pytest, and the VM Wayland layer-shell overlay smoke passed after rerunning the known pointer-fixture readiness timeout with `SKY_CUA_POINTER_FIXTURE_READY_TIMEOUT_SECONDS=60`. Integrated artifact: `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625051526587819-vis`, reporting `renderer_backend: "wgpu"`, `coverage: "full"`, `visible_overlay_captured: true`, and WGPU effect capabilities true.
 
 ## Surprises & Discoveries
 
@@ -58,6 +60,12 @@ Success is observable from source and runtime. Rust tests prove contracts, proto
 
 - Observation: Wayland layer-shell still has a normal SHM fallback. In auto mode, if WGPU initialization fails, it reports `renderer_backend: wayland_shm` and draws CPU pixels. That fallback conflicts with the WGPU-only production invariant.
   Evidence: `RequestedLayerShellRenderer::Shm`, `LayerShellRenderer::Shm`, `draw_shm`, and the `wgpu unavailable, using shm fallback` branch in `crates/sky-cua-overlay-host/src/layer_shell.rs`.
+
+- Observation: Phase 5 was developed against the static WGPU renderer and then integrated after Phase 4, so the final coordinator branch must preserve fail-closed coverage while reporting WGPU effect capability truthfully.
+  Evidence: `crates/sky-cua-overlay-host/src/layer_shell.rs` validates WGPU coverage before drawing and reports WGPU effect booleans from `AgentOverlayEffectsCapabilities`.
+
+- Observation: The existing hide-for-capture smoke assumed a `.agent-cursor.` synthetic screenshot output. The current service returns a normal hidden native-overlay capture after the barrier. The Phase 5 smoke now treats zero changed hotspot pixels as the no-leak acceptance condition.
+  Evidence: `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625050051479360-hide/summary.json` reports `native_overlay_hidden_for_capture: true`, `changed_pixels_near_hotspot: 0`, and `synthetic_cursor_found: false`.
 
 - Observation: X11 currently draws the cursor by converting cursor pixels into X11 rectangles and filling them into a shaped cursor-sized window. It reports `backend: x11_shaped_window`, `renderer_backend: none`, and `visible_overlay: true`. This is a separate renderer and must be removed from production selection.
   Evidence: `crates/sky-cua-overlay-host/src/x11.rs` owns `CursorImage`, `pixel_rectangles`, `draw_cursor`, `poly_fill_rectangle`, and `capabilities` reporting.
@@ -170,6 +178,10 @@ If any dependency version changes before implementation, repeat this research be
 - Decision: Fail closed on incomplete output coverage in the core Wayland implementation.
   Rationale: A global cursor overlay that silently disappears on one monitor is worse than an unsupported state. Partial coverage may be implemented later only with structured coverage reporting and explicit tests.
   Date/Author: 2026-06-25 / ChatGPT
+
+- Decision: Keep explicit SHM selection as legacy/debug behavior in Phase 5, but make Wayland auto WGPU failures report unsupported instead of silently falling back to SHM.
+  Rationale: Phase 5 must not retire legacy renderers, but production auto-selection must not claim a visible overlay when WGPU output coverage is incomplete or frame acquisition fails.
+  Date/Author: 2026-06-25 / Codex
 
 - Decision: Remove SHM from production visible rendering rather than preserving it as debug fallback.
   Rationale: Keeping a second production-like visual path weakens the WGPU-only invariant. Debug backdrops should live in the WGPU playground; `WaylandShm` can remain only as a legacy deserialization enum value.
@@ -312,6 +324,25 @@ Wave 2 integration verification passed in the VM:
     python3 scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=/home/bex/projects/sky-cua/artifacts/testing-vm/known_hosts --profile wayland-layer-shell-overlay
 
 The Wave 2 live artifact is `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625043426158731-vis`, with `before.jpg` and `visible.jpg`. The smoke reported `renderer_backend: "wgpu"`, llvmpipe via Vulkan, `visible_overlay_captured: true`, and no synthetic cursor fallback.
+
+Phase 5 package W is complete for the current static Wayland WGPU renderer. It hardens layer-shell output coverage, render failure handling, frame-pacing reporting, and VM smoke assertions without editing Phase 4 shader/effect code. VM verification passed on Arch `testing-vm`, Plasma/KWin Wayland `wayland-0`, Virtio GPU through llvmpipe Vulkan:
+
+    cargo fmt --check
+    cargo test -p sky-cua-overlay-host
+    cargo test -p sky-cua-service overlay
+    uv run ruff format --check scripts/live_agent_cursor_kde_smoke.py scripts/test_agent_cursor_smokes.py
+    uv run ruff check scripts/live_agent_cursor_kde_smoke.py scripts/test_agent_cursor_smokes.py
+    uv run basedpyright scripts/live_agent_cursor_kde_smoke.py scripts/test_agent_cursor_smokes.py
+    uv run pytest scripts/test_agent_cursor_smokes.py -q
+    cargo build --release -p sky-cua-service -p sky-cua-overlay-host
+    rsync -avR -e 'ssh -p 22222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=artifacts/testing-vm/known_hosts' target/release/sky-cua-service target/release/sky-cua-overlay-host scripts/live_agent_cursor_kde_smoke.py scripts/test_agent_cursor_smokes.py crates/sky-cua-overlay-host/src/layer_shell.rs crates/sky-cua-overlay-host/src/renderer/surface.rs crates/sky-cua-overlay-host/src/renderer/wgpu.rs plans/wgpu_agent_overlay_unification.md skycua@127.0.0.1:/workspace/
+    ssh -p 22222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=artifacts/testing-vm/known_hosts skycua@127.0.0.1 'cd /workspace && export XDG_RUNTIME_DIR=/run/user/1000 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE DESKTOP_SESSION=KDE WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus PATH=/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin SKY_CUA_USE_PREBUILT_RUNTIMES=1 SKY_CUA_OVERLAY_HOST_PATH=/workspace/target/release/sky-cua-overlay-host SKY_CUA_OVERLAY_HOST_BIN=/workspace/target/release/sky-cua-overlay-host SKY_CUA_SERVICE_BIN=/workspace/target/release/sky-cua-service SKY_CUA_SKIP_LOCAL_BUILD=1 SKY_CUA_POINTER_FIXTURE_READY_TIMEOUT_SECONDS=60; python scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-debug-visible --allow-non-kde --request-timeout 120'
+    ssh -p 22222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=artifacts/testing-vm/known_hosts skycua@127.0.0.1 'cd /workspace && export XDG_RUNTIME_DIR=/run/user/1000 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE DESKTOP_SESSION=KDE WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus PATH=/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin SKY_CUA_USE_PREBUILT_RUNTIMES=1 SKY_CUA_OVERLAY_HOST_PATH=/workspace/target/release/sky-cua-overlay-host SKY_CUA_OVERLAY_HOST_BIN=/workspace/target/release/sky-cua-overlay-host SKY_CUA_SERVICE_BIN=/workspace/target/release/sky-cua-service SKY_CUA_SKIP_LOCAL_BUILD=1 SKY_CUA_POINTER_FIXTURE_READY_TIMEOUT_SECONDS=60; python scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-hide-for-capture --allow-non-kde --request-timeout 120'
+    ssh -p 22222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=artifacts/testing-vm/known_hosts skycua@127.0.0.1 'cd /workspace && export XDG_RUNTIME_DIR=/run/user/1000 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE DESKTOP_SESSION=KDE WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus PATH=/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin SKY_CUA_USE_PREBUILT_RUNTIMES=1 SKY_CUA_OVERLAY_HOST_PATH=/workspace/target/release/sky-cua-overlay-host SKY_CUA_OVERLAY_HOST_BIN=/workspace/target/release/sky-cua-overlay-host SKY_CUA_SERVICE_BIN=/workspace/target/release/sky-cua-service SKY_CUA_SKIP_LOCAL_BUILD=1 SKY_CUA_POINTER_FIXTURE_READY_TIMEOUT_SECONDS=60; python scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-click-through --allow-non-kde --request-timeout 120'
+
+The Phase 5 VM artifacts are `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625050638636525-vis`, `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625050649583635-hide`, and `/workspace/artifacts/codex-e2e/agent-cursor-kde/0625050651865350-click`. The visible and click-through smokes reported `coverage: "full"`, `active_output_count: 1`, `rendered_output_count: 1`, `renderer_backend: "wgpu"`, adapter `llvmpipe (LLVM 22.1.6, 256 bits)`, and frame CPU submission timing in the capabilities reason. The hide-for-capture artifact reported `native_overlay_hidden_for_capture: true` with `changed_pixels_near_hotspot: 0`.
+
+Phase 5 VM-unavailable items: the current `testing-vm` exposes a single KWin output, so negative origins, mixed output positions/scales, fractional mixed scaling, portrait/transformed outputs, mirrored outputs, different refresh rates, true output hotplug, and adapter/surface mismatch were not live-proven. Vulkan was live-proven through llvmpipe; GLES was not exposed in this VM run. Phase 4 remains the blocker for effect-aware animation pacing and recovery tests.
 
 ## Context and Orientation
 

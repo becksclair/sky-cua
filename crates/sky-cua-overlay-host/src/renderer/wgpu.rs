@@ -217,7 +217,9 @@ impl WgpuOverlayRenderer {
 
             let frame = match guard.acquire_frame(&self.device) {
                 super::surface::SurfaceAcquisitionResult::Success(frame) => frame,
-                super::surface::SurfaceAcquisitionResult::Retry => continue,
+                super::surface::SurfaceAcquisitionResult::Retry(reason) => {
+                    bail!("wgpu surface {index} frame unavailable: {reason}");
+                }
                 super::surface::SurfaceAcquisitionResult::Validation => {
                     bail!(
                         "wgpu validation error while acquiring overlay frame for surface {index}"

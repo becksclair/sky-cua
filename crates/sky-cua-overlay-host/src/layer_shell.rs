@@ -1,6 +1,6 @@
 use std::{
     ptr::NonNull,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -117,7 +117,7 @@ impl LayerShellOverlayBackend {
         let pool = SlotPool::new(pool_size, &shm)
             .context("failed to create Wayland shared-memory pool")?;
         let app = LayerShellApp {
-            renderer: LayerShellRenderer::Shm {
+            renderer: LayerShellRenderer::Unsupported {
                 reason: Some("layer-shell renderer has not been selected yet".to_string()),
             },
             shm,
@@ -132,6 +132,8 @@ impl LayerShellOverlayBackend {
             capture_barrier: None,
             gesture_tracker: GestureEventTracker::default(),
             active_effect: None,
+            frames_submitted: 0,
+            last_frame_submission_us: None,
         };
         let mut backend = Self {
             event_queue,
@@ -261,14 +263,20 @@ impl LayerShellOverlayBackend {
     ) -> OverlayHostReply {
         match self.render_current() {
             Ok(()) => self.reply(true, diagnostics),
-            Err(error) => self.reply(false, {
+            Err(error) => {
+                let detail = error.to_string();
+                self.app.lifecycle_state = AgentOverlayHostLifecycleState::BackendUnsupported;
+                self.app.renderer = LayerShellRenderer::Unsupported {
+                    reason: Some(format!("layer-shell render failed closed: {detail}")),
+                };
+                let _ = self.system_cursor.set_hidden(false);
                 diagnostics.push(diagnostic(
                     "OverlayRenderFailed",
                     "Layer-shell overlay failed to render the agent cursor.",
-                    Some(error.to_string()),
+                    Some(detail),
                 ));
-                diagnostics
-            }),
+                self.reply(false, diagnostics)
+            }
         }
     }
 
@@ -276,8 +284,10 @@ impl LayerShellOverlayBackend {
         if !self.app.has_open_layer() {
             bail!("layer-shell overlay surfaces are closed");
         }
+        let should_hide_system_cursor = self.app.visible_overlay_supported()
+            && self.app.state.as_ref().is_some_and(|state| state.visible);
         self.system_cursor
-            .set_hidden(self.app.state.as_ref().is_some_and(|state| state.visible))
+            .set_hidden(should_hide_system_cursor)
             .context("failed to update layer-shell system cursor adapter")?;
         let qh = self.event_queue.handle();
         self.app.draw(&qh)?;
@@ -349,6 +359,12 @@ impl LayerShellOverlayBackend {
             self.app.has_open_layer(),
             self.app.renderer_kind(),
             self.app.renderer_reason(),
+            self.app.coverage_kind(),
+            self.app.active_output_count(),
+            self.app.rendered_output_count(),
+            self.app.adapter_name(),
+            self.app.last_frame_submission_us,
+            self.app.frames_submitted,
             self.pointer_tracker.backend(),
             self.pointer_tracker.exact(),
             self.pointer_tracker.reason(),
@@ -362,6 +378,12 @@ fn layer_shell_capabilities(
     has_open_layer: bool,
     renderer_backend: AgentCursorRendererBackendKind,
     renderer_reason: Option<&str>,
+    coverage: AgentOverlayCoverageKind,
+    active_output_count: usize,
+    rendered_output_count: usize,
+    adapter_name: Option<&str>,
+    last_frame_submission_us: Option<u128>,
+    frames_submitted: u64,
     pointer_tracking_backend: AgentCursorPointerTrackingBackendKind,
     pointer_tracking_exact: bool,
     pointer_tracking_reason: Option<&str>,
@@ -387,10 +409,18 @@ fn layer_shell_capabilities(
         reason.push_str("; pointer tracking: ");
         reason.push_str(pointer_tracking_reason);
     }
+    if let Some(last_frame_submission_us) = last_frame_submission_us {
+        reason.push_str(&format!(
+            "; frame pacing: last_cpu_submit_us={last_frame_submission_us} frames_submitted={frames_submitted}"
+        ));
+    }
+    let visible_overlay = has_open_layer
+        && (coverage == AgentOverlayCoverageKind::Full
+            || renderer_backend == AgentCursorRendererBackendKind::WaylandShm);
     AgentCursorCapabilities {
         backend: AgentCursorBackendKind::WaylandLayerShell,
         renderer_backend,
-        visible_overlay: has_open_layer,
+        visible_overlay,
         screenshot_synthetic_cursor: false,
         click_through: true,
         capture_exclusion: false,
@@ -413,11 +443,7 @@ fn layer_shell_capabilities(
             hit_test: false,
             sound: sky_cua_platform::overlay_spec::sound::ENABLED,
         }),
-        coverage: Some(if has_open_layer {
-            AgentOverlayCoverageKind::Full
-        } else {
-            AgentOverlayCoverageKind::None
-        }),
+        coverage: Some(coverage),
         supported_coordinate_spaces: vec![
             CoordinateSpace::DesktopLogical,
             CoordinateSpace::StreamLogical,
@@ -428,12 +454,9 @@ fn layer_shell_capabilities(
         ),
         protocol_version: Some(OVERLAY_HOST_PROTOCOL_VERSION),
         effect_schema_version: Some(sky_cua_platform::overlay_spec::SCHEMA_VERSION),
-        active_output_count: Some(open_layer_count as u32),
-        rendered_output_count: Some(if has_open_layer {
-            open_layer_count as u32
-        } else {
-            0
-        }),
+        active_output_count: Some(active_output_count.min(u32::MAX as usize) as u32),
+        rendered_output_count: Some(rendered_output_count.min(u32::MAX as usize) as u32),
+        adapter_name: adapter_name.map(str::to_string),
         ..Default::default()
     }
 }
@@ -453,6 +476,8 @@ struct LayerShellApp {
     capture_barrier: Option<CaptureBarrierState>,
     gesture_tracker: GestureEventTracker,
     active_effect: Option<LayerEffectEvent>,
+    frames_submitted: u64,
+    last_frame_submission_us: Option<u128>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -504,6 +529,7 @@ fn requested_renderer() -> RequestedLayerShellRenderer {
 enum LayerShellRenderer {
     Shm { reason: Option<String> },
     Wgpu(WgpuOverlayRenderer, String),
+    Unsupported { reason: Option<String> },
 }
 
 impl LayerShellRenderer {
@@ -511,6 +537,7 @@ impl LayerShellRenderer {
         match self {
             Self::Shm { .. } => AgentCursorRendererBackendKind::WaylandShm,
             Self::Wgpu(_, _) => AgentCursorRendererBackendKind::Wgpu,
+            Self::Unsupported { .. } => AgentCursorRendererBackendKind::None,
         }
     }
 
@@ -518,7 +545,19 @@ impl LayerShellRenderer {
         match self {
             Self::Shm { reason } => reason.as_deref(),
             Self::Wgpu(_, reason) => Some(reason.as_str()),
+            Self::Unsupported { reason } => reason.as_deref(),
         }
+    }
+
+    fn adapter_name(&self) -> Option<&str> {
+        match self {
+            Self::Wgpu(renderer, _) => Some(renderer.info().adapter_name.as_str()),
+            Self::Shm { .. } | Self::Unsupported { .. } => None,
+        }
+    }
+
+    fn supports_visible_overlay(&self) -> bool {
+        matches!(self, Self::Wgpu(..) | Self::Shm { .. })
     }
 }
 
@@ -557,6 +596,9 @@ impl LayerShellApp {
                 Ok(())
             }
             RequestedLayerShellRenderer::Wgpu => {
+                self.ensure_wgpu_output_coverage().context(
+                    "explicit wgpu layer-shell renderer failed output coverage validation",
+                )?;
                 let instance = self.instance.as_ref().context("wgpu instance is missing")?;
                 let renderer =
                     WgpuOverlayRenderer::new(instance, &mut self.surface_guards, &self.cursor)
@@ -580,8 +622,11 @@ impl LayerShellApp {
                     self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
                     return Ok(());
                 }
-                let instance = self.instance.as_ref().context("wgpu instance is missing")?;
-                match WgpuOverlayRenderer::new(instance, &mut self.surface_guards, &self.cursor) {
+                let wgpu_result = self.ensure_wgpu_output_coverage().and_then(|()| {
+                    let instance = self.instance.as_ref().context("wgpu instance is missing")?;
+                    WgpuOverlayRenderer::new(instance, &mut self.surface_guards, &self.cursor)
+                });
+                match wgpu_result {
                     Ok(renderer) => {
                         let reason = format!(
                             "wgpu renderer active on {} via {}",
@@ -592,8 +637,10 @@ impl LayerShellApp {
                         self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
                     }
                     Err(error) => {
-                        self.renderer = LayerShellRenderer::Shm {
-                            reason: Some(format!("wgpu unavailable, using shm fallback: {error}")),
+                        self.renderer = LayerShellRenderer::Unsupported {
+                            reason: Some(format!(
+                                "wgpu unavailable; visible overlay failed closed: {error}"
+                            )),
                         };
                         self.lifecycle_state = AgentOverlayHostLifecycleState::BackendUnsupported;
                     }
@@ -609,6 +656,83 @@ impl LayerShellApp {
 
     fn renderer_reason(&self) -> Option<&str> {
         self.renderer.reason()
+    }
+
+    fn adapter_name(&self) -> Option<&str> {
+        self.renderer.adapter_name()
+    }
+
+    fn visible_overlay_supported(&self) -> bool {
+        (self.renderer.supports_visible_overlay()
+            && self.coverage_kind() == AgentOverlayCoverageKind::Full)
+            || self.renderer_kind() == AgentCursorRendererBackendKind::WaylandShm
+    }
+
+    fn active_output_count(&self) -> usize {
+        self.output_state
+            .outputs()
+            .count()
+            .max(self.layers.iter().filter(|entry| !entry.closed).count())
+    }
+
+    fn rendered_output_count(&self) -> usize {
+        match self.renderer {
+            LayerShellRenderer::Wgpu(..) => self
+                .layers
+                .iter()
+                .enumerate()
+                .filter(|(index, entry)| {
+                    !entry.closed
+                        && entry.configured
+                        && self
+                            .surface_guards
+                            .get(*index)
+                            .is_some_and(|guard| guard.is_some())
+                })
+                .count(),
+            LayerShellRenderer::Shm { .. } => self
+                .layers
+                .iter()
+                .filter(|entry| !entry.closed && entry.configured)
+                .count(),
+            LayerShellRenderer::Unsupported { .. } => 0,
+        }
+    }
+
+    fn coverage_kind(&self) -> AgentOverlayCoverageKind {
+        let active_outputs = self.active_output_count();
+        let rendered_outputs = self.rendered_output_count();
+        if active_outputs > 0 && active_outputs == rendered_outputs {
+            AgentOverlayCoverageKind::Full
+        } else {
+            AgentOverlayCoverageKind::None
+        }
+    }
+
+    fn ensure_wgpu_output_coverage(&self) -> Result<()> {
+        let active_outputs = self.active_output_count();
+        let rendered_outputs = self
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(index, entry)| {
+                !entry.closed
+                    && entry.configured
+                    && self
+                        .surface_guards
+                        .get(*index)
+                        .is_some_and(|guard| guard.is_some())
+            })
+            .count();
+        if active_outputs == 0 {
+            bail!("no active Wayland outputs are available");
+        }
+        if active_outputs != rendered_outputs {
+            bail!(
+                "incomplete wgpu output coverage: active_outputs={active_outputs} rendered_outputs={rendered_outputs}"
+            );
+        }
+        Ok(())
     }
 
     fn pointer_tracking_bounds(&self) -> Option<PointerTrackingBounds> {
@@ -655,6 +779,10 @@ impl LayerShellApp {
     fn draw(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
         let now_ms = current_epoch_ms();
         self.clear_expired_effect(now_ms);
+        if matches!(self.renderer, LayerShellRenderer::Wgpu(..)) {
+            self.ensure_wgpu_output_coverage()
+                .context("wgpu output coverage changed before rendering")?;
+        }
         let visible_target = self
             .state
             .as_ref()
@@ -700,6 +828,7 @@ impl LayerShellApp {
             }));
         }
 
+        let frame_started = Instant::now();
         match &mut self.renderer {
             LayerShellRenderer::Wgpu(renderer, _) => {
                 renderer.draw(&mut self.surface_guards, &requests)?;
@@ -707,7 +836,17 @@ impl LayerShellApp {
             LayerShellRenderer::Shm { .. } => {
                 self.draw_shm(qh, visible_target)?;
             }
+            LayerShellRenderer::Unsupported { reason } => {
+                bail!(
+                    "{}",
+                    reason
+                        .as_deref()
+                        .unwrap_or("layer-shell renderer is unsupported")
+                );
+            }
         }
+        self.last_frame_submission_us = Some(frame_started.elapsed().as_micros());
+        self.frames_submitted = self.frames_submitted.saturating_add(1);
 
         for entry in self.layers.iter_mut() {
             if entry.closed || !entry.configured {
@@ -1264,6 +1403,7 @@ impl OutputHandler for LayerShellApp {
         _qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
+        self.lifecycle_state = AgentOverlayHostLifecycleState::BackendUnsupported;
     }
 
     fn update_output(
@@ -1278,8 +1418,22 @@ impl OutputHandler for LayerShellApp {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        output: wl_output::WlOutput,
     ) {
+        for entry in &mut self.layers {
+            if entry
+                .output
+                .as_ref()
+                .is_some_and(|entry_output| entry_output.id() == output.id())
+            {
+                entry.closed = true;
+                entry.pending_frame = false;
+                entry.capture_barrier_frames_remaining = 0;
+            }
+        }
+        if self.capture_barrier.is_some() && self.capture_barrier_complete() {
+            self.capture_barrier = None;
+        }
     }
 }
 
@@ -1315,9 +1469,10 @@ delegate_shm!(LayerShellApp);
 #[cfg(test)]
 mod tests {
     use super::{
-        BUFFER_SLOTS_PER_LAYER, RequestedLayerShellRenderer, apply_system_pointer_position,
-        cursor_point, layer_buffer_pool_size, layer_shell_capabilities, output_local_point,
-        requested_renderer, state_needs_system_pointer_update,
+        BUFFER_SLOTS_PER_LAYER, OVERLAY_HOST_PROTOCOL_VERSION, RequestedLayerShellRenderer,
+        apply_system_pointer_position, cursor_point, layer_buffer_pool_size,
+        layer_shell_capabilities, output_local_point, requested_renderer,
+        state_needs_system_pointer_update,
     };
     use crate::{
         cursor_asset,
@@ -1327,7 +1482,7 @@ mod tests {
     use sky_cua_platform::model::{
         AgentCursorBackendKind, AgentCursorPoint, AgentCursorPointerTrackingBackendKind,
         AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
-        CoordinateSpace,
+        AgentOverlayCoverageKind, CoordinateSpace,
     };
 
     #[test]
@@ -1447,6 +1602,12 @@ mod tests {
             true,
             AgentCursorRendererBackendKind::Wgpu,
             Some("wgpu renderer active"),
+            AgentOverlayCoverageKind::Full,
+            2,
+            2,
+            Some("llvmpipe"),
+            Some(120),
+            3,
             AgentCursorPointerTrackingBackendKind::KwinEffectSignal,
             true,
             Some("KWin signal tracker active"),
@@ -1474,6 +1635,46 @@ mod tests {
             capabilities.system_cursor_backend,
             AgentCursorSystemCursorBackendKind::KwinEffect
         );
+        assert_eq!(capabilities.coverage, Some(AgentOverlayCoverageKind::Full));
+        assert_eq!(capabilities.active_output_count, Some(2));
+        assert_eq!(capabilities.rendered_output_count, Some(2));
+        assert_eq!(capabilities.adapter_name.as_deref(), Some("llvmpipe"));
+        assert_eq!(
+            capabilities.protocol_version,
+            Some(OVERLAY_HOST_PROTOCOL_VERSION)
+        );
+        assert!(
+            capabilities
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("last_cpu_submit_us=120")
+        );
+    }
+
+    #[test]
+    fn layer_shell_capabilities_fail_closed_for_incomplete_output_coverage() {
+        let capabilities = layer_shell_capabilities(
+            2,
+            true,
+            AgentCursorRendererBackendKind::Wgpu,
+            Some("wgpu renderer active"),
+            AgentOverlayCoverageKind::None,
+            2,
+            1,
+            Some("llvmpipe"),
+            None,
+            0,
+            AgentCursorPointerTrackingBackendKind::None,
+            false,
+            None,
+            &SystemCursorAdapter::test_kwin_effect(false),
+        );
+
+        assert_eq!(capabilities.coverage, Some(AgentOverlayCoverageKind::None));
+        assert_eq!(capabilities.active_output_count, Some(2));
+        assert_eq!(capabilities.rendered_output_count, Some(1));
+        assert!(!capabilities.visible_overlay);
     }
 
     #[test]
