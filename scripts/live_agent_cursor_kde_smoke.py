@@ -1667,7 +1667,13 @@ class ServiceClient:
             self._client.close()
             self._client = None
 
-    def call(self, request: Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+    def call(
+        self,
+        request: Mapping[str, Any],
+        *,
+        timeout: float | None = None,
+        raise_errors: bool = True,
+    ) -> dict[str, Any]:
         client = self._client
         if client is None:
             raise RuntimeError("service client is not connected")
@@ -1684,7 +1690,7 @@ class ServiceClient:
         if not raw:
             raise RuntimeError(f"empty response for request {request!r}")
         response = json.loads(raw.decode("utf-8"))
-        if response.get("type") == "error":
+        if raise_errors and response.get("type") == "error":
             raise RuntimeError(json.dumps(response, indent=2, sort_keys=True))
         return response
 
@@ -1740,7 +1746,16 @@ def screenshot_capture(
     request: dict[str, Any] = {"type": "screenshot"}
     if display_target is not None:
         request["display_target"] = dict(display_target)
-    response = client.call(request, timeout=request_timeout)
+    response = client.call(request, timeout=request_timeout, raise_errors=False)
+    if is_capture_source_geometry_missing_response(response):
+        _refresh = get_state_snapshot_without_capture(client, request_timeout=request_timeout)
+        response = client.call(request, timeout=request_timeout, raise_errors=False)
+        if is_capture_source_geometry_missing_response(response):
+            response = client.call(
+                {"type": "screenshot", "capture_all_displays": True},
+                raise_errors=False,
+                timeout=request_timeout,
+            )
     snapshot = response.get("snapshot")
     if not isinstance(snapshot, Mapping):
         raise RuntimeError(
@@ -1749,6 +1764,12 @@ def screenshot_capture(
         )
     capture = require_capture(snapshot)
     return response, snapshot, capture, capture_image_path(capture)
+
+
+def is_capture_source_geometry_missing_response(response: Mapping[str, Any]) -> bool:
+    return (
+        response.get("type") == "error" and response.get("code") == "CaptureSourceGeometryMissing"
+    )
 
 
 def display_target_for_logical_point(

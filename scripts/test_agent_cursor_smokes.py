@@ -488,6 +488,117 @@ def test_kde_smoke_native_point_for_stream_local_portal_capture_stays_stream_log
     }
 
 
+def test_kde_smoke_targeted_capture_refreshes_and_falls_back_on_missing_source_geometry(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "fallback.png"
+    image_path.write_bytes(b"not inspected by this helper")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, object]] = []
+
+        def call(
+            self,
+            request: dict[str, object],
+            *,
+            timeout: float,
+            raise_errors: bool = True,
+        ) -> dict[str, object]:
+            del raise_errors
+            self.requests.append(request)
+            if len(self.requests) in {1, 3}:
+                return {
+                    "type": "error",
+                    "code": "CaptureSourceGeometryMissing",
+                    "message": "targeted screenshot requires capture source geometry",
+                }
+            if len(self.requests) == 2:
+                return {"snapshot": {"environment": {"displays": []}}}
+            return {
+                "snapshot": {
+                    "snapshot_id": "fallback-snapshot",
+                    "capture": {
+                        "inspection_image_path": str(image_path),
+                        "pixel_size": {"width": 20, "height": 10},
+                    },
+                }
+            }
+
+    client = FakeClient()
+
+    response, snapshot, capture, returned_path = live_agent_cursor_kde_smoke.screenshot_capture(
+        client,
+        display_target={"display_id": "kwin:DP-1"},
+        request_timeout=1.0,
+    )
+
+    assert response["snapshot"] == snapshot
+    assert snapshot["snapshot_id"] == "fallback-snapshot"
+    assert capture["inspection_image_path"] == str(image_path)
+    assert returned_path == image_path
+    assert client.requests == [
+        {"type": "screenshot", "display_target": {"display_id": "kwin:DP-1"}},
+        {"type": "get_app_state", "capture_screen": "never"},
+        {"type": "screenshot", "display_target": {"display_id": "kwin:DP-1"}},
+        {"type": "screenshot", "capture_all_displays": True},
+    ]
+
+
+def test_kde_smoke_untargeted_capture_refreshes_and_falls_back_on_missing_source_geometry(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "fallback.png"
+    image_path.write_bytes(b"not inspected by this helper")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, object]] = []
+
+        def call(
+            self,
+            request: dict[str, object],
+            *,
+            timeout: float,
+            raise_errors: bool = True,
+        ) -> dict[str, object]:
+            del raise_errors
+            self.requests.append(request)
+            if len(self.requests) in {1, 3}:
+                return {
+                    "type": "error",
+                    "code": "CaptureSourceGeometryMissing",
+                    "message": "targeted screenshot requires capture source geometry",
+                }
+            if len(self.requests) == 2:
+                return {"snapshot": {"environment": {"displays": []}}}
+            return {
+                "snapshot": {
+                    "snapshot_id": "all-displays-snapshot",
+                    "capture": {
+                        "inspection_image_path": str(image_path),
+                        "pixel_size": {"width": 20, "height": 10},
+                    },
+                }
+            }
+
+    client = FakeClient()
+
+    _response, snapshot, _capture, returned_path = live_agent_cursor_kde_smoke.screenshot_capture(
+        client,
+        request_timeout=1.0,
+    )
+
+    assert snapshot["snapshot_id"] == "all-displays-snapshot"
+    assert returned_path == image_path
+    assert client.requests == [
+        {"type": "screenshot"},
+        {"type": "get_app_state", "capture_screen": "never"},
+        {"type": "screenshot"},
+        {"type": "screenshot", "capture_all_displays": True},
+    ]
+
+
 def test_kde_smoke_selects_display_for_logical_point() -> None:
     snapshot = {
         "environment": {
