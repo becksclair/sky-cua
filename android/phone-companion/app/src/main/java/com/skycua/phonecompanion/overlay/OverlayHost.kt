@@ -16,8 +16,8 @@ import android.widget.FrameLayout
  * windowing and finger-tap plumbing differ:
  *
  *  - [WindowOverlayHost] (production) attaches a pass-through `WindowManager`
- *    overlay window from the AccessibilityService. It never attaches a touchable
- *    catcher window, so the phone-native agent cursor cannot intercept taps.
+ *    overlay window from the AccessibilityService plus a tiny catcher window that
+ *    follows the idle cursor for the "no-no" tap feedback.
  *  - [ViewOverlayHost] (the in-app pointer playground) attaches the overlay into
  *    an Activity's view tree and catches finger taps itself, so it needs no
  *    catcher window.
@@ -71,9 +71,9 @@ interface OverlayHost {
     /**
      * Attaches the touchable catcher [view] (side [size] px) centred at
      * ([centerX], [centerY]) so a finger tap on the pointer can be detected.
-     * Returns null when the host does not support catchers. Production returns
-     * null to preserve the non-touchable overlay invariant; the playground catches
-     * finger taps through its own Activity container.
+     * Returns null when the host does not support catchers. The catcher can still
+     * be flipped pass-through through [CatcherHandle.setTouchable] while the
+     * overlay itself remains non-touchable.
      */
     fun attachCatcher(view: View, size: Int, centerX: Int, centerY: Int): CatcherHandle?
 }
@@ -178,7 +178,66 @@ class WindowOverlayHost(
     override fun isPassThrough(): Boolean =
         overlayParams?.let { OverlayFlags.isPassThrough(it.flags) } ?: true
 
-    override fun attachCatcher(view: View, size: Int, centerX: Int, centerY: Int): CatcherHandle? = null
+    override fun attachCatcher(view: View, size: Int, centerX: Int, centerY: Int): CatcherHandle? {
+        val lp =
+            WindowManager.LayoutParams(
+                size,
+                size,
+                windowType,
+                OverlayFlags.passThroughFlags,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = centerX - size / 2
+                y = centerY - size / 2
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        windowManager.addView(view, lp)
+        return WindowCatcherHandle(windowManager, view, lp)
+    }
+
+    private class WindowCatcherHandle(
+        private val windowManager: WindowManager,
+        private val view: View,
+        private val lp: WindowManager.LayoutParams,
+    ) : CatcherHandle {
+        private var attached = true
+
+        override fun setTouchable(on: Boolean) {
+            if (!attached) return
+            val flags = if (on) OverlayFlags.touchableFlags else OverlayFlags.passThroughFlags
+            if (lp.flags == flags) return
+            lp.flags = flags
+            update()
+        }
+
+        override fun moveTo(x: Int, y: Int) {
+            if (!attached) return
+            if (lp.x == x && lp.y == y) return
+            lp.x = x
+            lp.y = y
+            update()
+        }
+
+        override fun detach() {
+            if (!attached) return
+            attached = false
+            try {
+                windowManager.removeView(view)
+            } catch (_: IllegalArgumentException) {
+                // Already detached.
+            }
+        }
+
+        private fun update() {
+            try {
+                windowManager.updateViewLayout(view, lp)
+            } catch (_: IllegalArgumentException) {
+                attached = false
+            }
+        }
+    }
 }
 
 /**

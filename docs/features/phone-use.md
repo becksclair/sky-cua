@@ -165,6 +165,12 @@ cutout, via `currentWindowMetrics` and `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`)
 so the glow reaches the true screen edges. It drives every overlay element from
 that one view:
 
+Production also attaches a separate tiny input-only catcher window over the
+idle cursor. It is pass-through while the agent is moving or animating, then
+becomes touchable only after the idle guard so tapping the cursor can trigger
+the "no-no" shake and blip without making the full-screen overlay intercept
+normal app taps.
+
 - A pronounced pink screen-edge glow signals that the agent is in control while a
   phone session is held: a gently breathing border with a bright wave of light
   travelling around the perimeter (a rotating sweep gradient). The host turns it

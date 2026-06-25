@@ -25,6 +25,23 @@ class OverlayFlagsTest {
     }
 
     @Test
+    fun touchableFlagsLetCatcherReceiveTapsWithoutFocus() {
+        val flags = OverlayFlags.touchableFlags
+        assertTrue(
+            "catcher must be non-focusable",
+            (flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) != 0,
+        )
+        assertTrue(
+            "catcher must allow outside touches through",
+            (flags and WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL) != 0,
+        )
+        assertFalse(
+            "catcher must be touchable",
+            (flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) != 0,
+        )
+    }
+
+    @Test
     fun isPassThroughRequiresBothFlags() {
         assertTrue(OverlayFlags.isPassThrough(OverlayFlags.passThroughFlags))
         assertFalse(

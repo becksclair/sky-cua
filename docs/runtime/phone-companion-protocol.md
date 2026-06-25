@@ -324,13 +324,17 @@ Show, move, or hide the phone-native cursor overlay.
 - Params: `{ "visible": true, "x": 100, "y": 200 }` (device pixels)
 - Result: `{ "shown": true, "pass_through": true }`
 
-The overlay must be non-focusable and non-touchable; `pass_through` reports
-whether taps pass through it to the underlying app.
+The full-screen overlay view must be non-focusable and non-touchable;
+`pass_through` reports whether that view passes taps through to the underlying
+app. Production builds may also attach a separate tiny cursor-following
+tap-catcher for the idle "no-no" feedback; it stays pass-through during agent
+activity and becomes touchable only over the cursor after the idle guard.
 
 `cursor_overlay` sets a single static cursor position. The animated agent
 overlay — the persistent "agent in control" glow and per-action cursor
 animations — is driven by `overlay_active` and `overlay_gesture` below. All three
-are backed by the same single full-screen `TYPE_ACCESSIBILITY_OVERLAY` view.
+share the same full-screen `TYPE_ACCESSIBILITY_OVERLAY` view for pixels; the
+optional tap-catcher is input-only and draws nothing.
 
 ### `overlay_active`
 
