@@ -30,8 +30,7 @@ pub use surface::SurfaceGuard;
 pub use wgpu::{WgpuOverlayInstance, WgpuOverlayRenderer};
 
 use crate::cursor_asset;
-use anyhow::{Context, Result, bail};
-use image::imageops::FilterType;
+use anyhow::Result;
 
 /// Decoded RGBA cursor image used by both the WGPU renderer and the CPU
 /// fallbacks in `layer_shell`/`playground`.
@@ -44,34 +43,237 @@ pub struct CursorImage {
 
 impl CursorImage {
     pub fn load() -> Result<Self> {
-        let image = image::load_from_memory(cursor_asset::AGENT_CURSOR_PNG)
-            .context("failed to decode bundled agent cursor image")?
-            .to_rgba8();
-        let (width, height) = image.dimensions();
-        if width != cursor_asset::AGENT_CURSOR_SOURCE_WIDTH
-            || height != cursor_asset::AGENT_CURSOR_SOURCE_HEIGHT
-        {
-            bail!(
-                "bundled agent cursor image changed size: expected {}x{} got {}x{}",
-                cursor_asset::AGENT_CURSOR_SOURCE_WIDTH,
-                cursor_asset::AGENT_CURSOR_SOURCE_HEIGHT,
-                width,
-                height
-            );
-        }
-        let image = image::imageops::resize(
-            &image,
+        let image = render_vector_cursor(
             cursor_asset::AGENT_CURSOR_DESKTOP_WIDTH,
             cursor_asset::AGENT_CURSOR_DESKTOP_HEIGHT,
-            FilterType::Lanczos3,
         );
-        let (width, height) = image.dimensions();
         Ok(Self {
-            width,
-            height,
-            rgba: image.into_raw(),
+            width: cursor_asset::AGENT_CURSOR_DESKTOP_WIDTH,
+            height: cursor_asset::AGENT_CURSOR_DESKTOP_HEIGHT,
+            rgba: image,
         })
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Point {
+    x: f32,
+    y: f32,
+}
+
+const VECTOR_STROKE_WIDTH: f32 = 3.3;
+const SUPERSAMPLE: u32 = 4;
+
+// Same pathData as android/phone-companion/.../res/drawable/agent_cursor.xml.
+const CURSOR_PATH: &[PathCommand] = &[
+    PathCommand::Move(Point { x: 10.0, y: 11.0 }),
+    PathCommand::Quad(Point { x: 10.5, y: 9.5 }, Point { x: 11.99, y: 10.03 }),
+    PathCommand::Line(Point { x: 37.01, y: 18.97 }),
+    PathCommand::Quad(Point { x: 38.5, y: 19.5 }, Point { x: 38.0, y: 21.0 }),
+    PathCommand::Line(Point { x: 38.0, y: 21.0 }),
+    PathCommand::Quad(Point { x: 37.5, y: 22.5 }, Point { x: 36.0, y: 23.0 }),
+    PathCommand::Line(Point { x: 29.77, y: 25.08 }),
+    PathCommand::Quad(Point { x: 25.5, y: 26.5 }, Point { x: 24.08, y: 30.77 }),
+    PathCommand::Line(Point { x: 22.29, y: 36.13 }),
+    PathCommand::Quad(Point { x: 21.5, y: 38.5 }, Point { x: 19.5, y: 37.0 }),
+    PathCommand::Line(Point { x: 19.5, y: 37.0 }),
+    PathCommand::Quad(Point { x: 17.5, y: 35.5 }, Point { x: 16.68, y: 33.14 }),
+    PathCommand::Line(Point { x: 10.02, y: 13.99 }),
+    PathCommand::Quad(Point { x: 9.5, y: 12.5 }, Point { x: 10.0, y: 11.0 }),
+];
+
+#[derive(Debug, Clone, Copy)]
+enum PathCommand {
+    Move(Point),
+    Line(Point),
+    Quad(Point, Point),
+}
+
+fn render_vector_cursor(width: u32, height: u32) -> Vec<u8> {
+    let scale_x = width as f32 / cursor_asset::AGENT_CURSOR_SOURCE_WIDTH as f32;
+    let scale_y = height as f32 / cursor_asset::AGENT_CURSOR_SOURCE_HEIGHT as f32;
+    let path = flattened_cursor_path(scale_x, scale_y);
+    let stroke_radius = VECTOR_STROKE_WIDTH * scale_x.min(scale_y) * 0.5;
+    let mut glyph_alpha = vec![0.0_f32; (width * height) as usize];
+    let sample_count = (SUPERSAMPLE * SUPERSAMPLE) as f32;
+    for y in 0..height {
+        for x in 0..width {
+            let mut alpha = 0.0_f32;
+            for sy in 0..SUPERSAMPLE {
+                for sx in 0..SUPERSAMPLE {
+                    let px = x as f32 + (sx as f32 + 0.5) / SUPERSAMPLE as f32;
+                    let py = y as f32 + (sy as f32 + 0.5) / SUPERSAMPLE as f32;
+                    let point = Point { x: px, y: py };
+                    if point_in_polygon(point, &path)
+                        || distance_to_path(point, &path) <= stroke_radius
+                    {
+                        alpha += 1.0;
+                    }
+                }
+            }
+            glyph_alpha[(y * width + x) as usize] = alpha / sample_count;
+        }
+    }
+
+    let shadow = blurred_shadow(&glyph_alpha, width, height);
+    let mut rgba = vec![0_u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let index = (y * width + x) as usize;
+            let offset = index * 4;
+            let shadow_alpha = shadow[index] * overlay_spec_shadow_alpha();
+            let glyph = glyph_alpha[index];
+            let stroke = distance_to_path(
+                Point {
+                    x: x as f32 + 0.5,
+                    y: y as f32 + 0.5,
+                },
+                &path,
+            ) <= stroke_radius;
+            let glyph_r = if stroke { 255.0 } else { 0.0 };
+            let glyph_g = glyph_r;
+            let glyph_b = glyph_r;
+            let out_alpha = glyph + shadow_alpha * (1.0 - glyph);
+            if out_alpha <= 0.0 {
+                continue;
+            }
+            let out_r = glyph_r * glyph / out_alpha;
+            let out_g = glyph_g * glyph / out_alpha;
+            let out_b = glyph_b * glyph / out_alpha;
+            rgba[offset] = float_to_u8(out_r);
+            rgba[offset + 1] = float_to_u8(out_g);
+            rgba[offset + 2] = float_to_u8(out_b);
+            rgba[offset + 3] = float_to_u8(out_alpha * 255.0);
+        }
+    }
+    rgba
+}
+
+fn flattened_cursor_path(scale_x: f32, scale_y: f32) -> Vec<Point> {
+    let mut points = Vec::new();
+    let mut current = Point { x: 0.0, y: 0.0 };
+    for command in CURSOR_PATH {
+        match *command {
+            PathCommand::Move(point) => {
+                current = scale_point(point, scale_x, scale_y);
+                points.push(current);
+            }
+            PathCommand::Line(point) => {
+                current = scale_point(point, scale_x, scale_y);
+                points.push(current);
+            }
+            PathCommand::Quad(control, end) => {
+                let start = current;
+                let control = scale_point(control, scale_x, scale_y);
+                let end = scale_point(end, scale_x, scale_y);
+                for step in 1..=12 {
+                    let t = step as f32 / 12.0;
+                    points.push(quadratic_point(start, control, end, t));
+                }
+                current = end;
+            }
+        }
+    }
+    points
+}
+
+fn scale_point(point: Point, scale_x: f32, scale_y: f32) -> Point {
+    Point {
+        x: point.x * scale_x,
+        y: point.y * scale_y,
+    }
+}
+
+fn quadratic_point(start: Point, control: Point, end: Point, t: f32) -> Point {
+    let mt = 1.0 - t;
+    Point {
+        x: mt * mt * start.x + 2.0 * mt * t * control.x + t * t * end.x,
+        y: mt * mt * start.y + 2.0 * mt * t * control.y + t * t * end.y,
+    }
+}
+
+fn point_in_polygon(point: Point, polygon: &[Point]) -> bool {
+    let mut inside = false;
+    for index in 0..polygon.len() {
+        let a = polygon[index];
+        let b = polygon[(index + 1) % polygon.len()];
+        if (a.y > point.y) != (b.y > point.y)
+            && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x
+        {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+fn distance_to_path(point: Point, path: &[Point]) -> f32 {
+    let mut best = f32::MAX;
+    for index in 0..path.len() {
+        best = best.min(distance_to_segment(
+            point,
+            path[index],
+            path[(index + 1) % path.len()],
+        ));
+    }
+    best
+}
+
+fn distance_to_segment(point: Point, a: Point, b: Point) -> f32 {
+    let ab_x = b.x - a.x;
+    let ab_y = b.y - a.y;
+    let denom = (ab_x * ab_x + ab_y * ab_y).max(0.0001);
+    let t = (((point.x - a.x) * ab_x + (point.y - a.y) * ab_y) / denom).clamp(0.0, 1.0);
+    let x = a.x + ab_x * t;
+    let y = a.y + ab_y * t;
+    ((point.x - x).powi(2) + (point.y - y).powi(2)).sqrt()
+}
+
+fn blurred_shadow(alpha: &[f32], width: u32, height: u32) -> Vec<f32> {
+    let dx = sky_cua_platform::overlay_spec::desktop::rendering::SHADOW_DX_VIEWBOX_FRACTION as f32
+        * height as f32
+        / sky_cua_platform::overlay_spec::desktop::rendering::VIEWBOX_HEIGHT as f32;
+    let dy = sky_cua_platform::overlay_spec::desktop::rendering::SHADOW_DY_VIEWBOX_FRACTION as f32
+        * height as f32
+        / sky_cua_platform::overlay_spec::desktop::rendering::VIEWBOX_HEIGHT as f32;
+    let radius = (sky_cua_platform::overlay_spec::desktop::rendering::SHADOW_BLUR_VIEWBOX_FRACTION
+        as f32
+        * height as f32
+        / sky_cua_platform::overlay_spec::desktop::rendering::VIEWBOX_HEIGHT as f32)
+        .ceil() as i32;
+    let mut shadow = vec![0.0_f32; alpha.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let src_x = x as f32 - dx;
+            let src_y = y as f32 - dy;
+            let mut total = 0.0;
+            let mut weight = 0.0;
+            for oy in -radius..=radius {
+                for ox in -radius..=radius {
+                    let sx = src_x.round() as i32 + ox;
+                    let sy = src_y.round() as i32 + oy;
+                    if sx < 0 || sy < 0 || sx >= width as i32 || sy >= height as i32 {
+                        continue;
+                    }
+                    let dist2 = (ox * ox + oy * oy) as f32;
+                    let w = 1.0 / (1.0 + dist2);
+                    total += alpha[(sy as u32 * width + sx as u32) as usize] * w;
+                    weight += w;
+                }
+            }
+            if weight > 0.0 {
+                shadow[(y * width + x) as usize] = total / weight;
+            }
+        }
+    }
+    shadow
+}
+
+fn overlay_spec_shadow_alpha() -> f32 {
+    sky_cua_platform::overlay_spec::desktop::rendering::SHADOW_ALPHA_0_1 as f32
+}
+
+fn float_to_u8(value: f32) -> u8 {
+    value.round().clamp(0.0, 255.0) as u8
 }
 
 /// CPU blit of the cursor asset into an ARGB8888 canvas.
@@ -133,5 +335,18 @@ mod tests {
         assert_eq!(cursor.width, cursor_asset::AGENT_CURSOR_DESKTOP_WIDTH);
         assert_eq!(cursor.height, cursor_asset::AGENT_CURSOR_DESKTOP_HEIGHT);
         assert!(!cursor.rgba.is_empty());
+    }
+
+    #[test]
+    fn cursor_image_is_vector_rendered_with_transparent_corners() {
+        let cursor = CursorImage::load().expect("load cursor");
+        assert_eq!(cursor.rgba[3], 0);
+        let hotspot = ((cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y as u32 * cursor.width
+            + cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X as u32)
+            * 4) as usize;
+        assert!(
+            cursor.rgba[hotspot + 3] > 0,
+            "vector cursor should cover the hotspot"
+        );
     }
 }
