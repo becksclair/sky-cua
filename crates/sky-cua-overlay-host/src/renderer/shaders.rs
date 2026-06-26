@@ -119,11 +119,11 @@ fn no_no_rotation_offset(progress: f32) -> f32 {
 
 fn cursor_rotation_deg() -> f32 {
     let kind = frame.flags.y;
-    var rotation = frame.trail.z;
+    var rotation = 0.0;
     if (kind == KIND_DRAG || kind == KIND_SWIPE) && active_point_count() >= 2u {
         let direction = last_effect_point_or_cursor() - first_effect_point_or_cursor();
         if length(direction) > 0.001 {
-            rotation = degrees(atan2(direction.y, direction.x)) + frame.trail.z;
+            rotation = degrees(atan2(direction.y, direction.x)) - frame.trail.z;
         }
     }
     if kind == KIND_NO_NO {
@@ -160,7 +160,7 @@ fn edge_distance(pixel: vec2<f32>) -> f32 {
 }
 
 fn edge_glow(pixel: vec2<f32>) -> vec4<f32> {
-    if frame.flags.x == 0u {
+    if frame.flags.w == 0u {
         return vec4<f32>(0.0);
     }
     let distance = edge_distance(pixel);
@@ -172,7 +172,7 @@ fn edge_glow(pixel: vec2<f32>) -> vec4<f32> {
 }
 
 fn inward_waves(pixel: vec2<f32>) -> vec4<f32> {
-    if frame.flags.x == 0u {
+    if frame.flags.w == 0u {
         return vec4<f32>(0.0);
     }
     let distance = edge_distance(pixel);
@@ -525,7 +525,15 @@ mod tests {
         assert!((values[2] - expected["ripple_alpha"].as_f64().unwrap() as f32).abs() < 0.01);
         assert_eq!(values[4], expected["cursor"]["x"].as_f64().unwrap() as f32);
         assert_eq!(values[5], expected["cursor"]["y"].as_f64().unwrap() as f32);
-        assert!(values[12 + 3] > 0.0, "edge glow alpha should be visible");
+        assert_eq!(
+            values[6], 0.0,
+            "tap/rest cursor rotation should match Android"
+        );
+        assert_eq!(
+            values[12 + 3],
+            0.0,
+            "ambient edge glow should stay disabled unless explicitly requested"
+        );
         assert!(
             (values[20 + 3] - expected["outside_alpha"].as_f64().unwrap() as f32).abs() < 0.001,
             "outside sample stays transparent"
