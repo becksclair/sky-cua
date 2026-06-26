@@ -216,7 +216,7 @@ impl LayerShellOverlayBackend {
 
     pub fn tick(&mut self) {
         let _ = self.follow_tracked_pointer();
-        if self.app.has_active_effect(current_epoch_ms()) {
+        if self.app.should_animate(current_epoch_ms()) {
             let _ = self.render_current();
         }
     }
@@ -844,6 +844,14 @@ impl LayerShellApp {
         self.active_effect.as_ref().is_some_and(|effect| {
             now_ms.saturating_sub(effect.started_at_ms) <= effect.gesture.duration_ms
         })
+    }
+
+    fn should_animate(&self, now_ms: u64) -> bool {
+        self.has_active_effect(now_ms)
+            || self
+                .state
+                .as_ref()
+                .is_some_and(|state| state.visible && self.visible_overlay_supported())
     }
 
     fn clear_expired_effect(&mut self, now_ms: u64) {

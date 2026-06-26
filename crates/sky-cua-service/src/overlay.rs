@@ -327,6 +327,7 @@ impl OverlayController {
         if !guard.restore_visible_overlay {
             return Vec::new();
         }
+        self.set_local_visibility(true);
         self.send_host_message(OverlayHostMessageKind::Show, self.state.clone(), None, None)
             .diagnostics
     }
@@ -1722,6 +1723,35 @@ mod tests {
                 .iter()
                 .any(|entry| entry.code == "AgentCursorCaptureBarrierPending")
         );
+    }
+
+    #[test]
+    fn restore_after_capture_restores_local_visibility_when_host_request_fails() {
+        let mut controller =
+            OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
+        controller.apply_host_reply(OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            ok: true,
+            capabilities: Some(visible_overlay_capabilities("healthy host")),
+            lifecycle_state: None,
+            applied_sequence: None,
+            state: None,
+            diagnostics: Vec::new(),
+        });
+        controller.set_state(synthetic_state(10, 20));
+
+        let guard = controller.prepare_for_capture();
+        assert!(guard.restore_visible_overlay);
+        assert!(!controller.state().expect("hidden state").visible);
+
+        let diagnostics = controller.restore_after_capture(guard);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|entry| entry.code == "AgentCursorHostRequestFailed")
+        );
+        assert!(controller.state().expect("restored state").visible);
     }
 
     #[test]
