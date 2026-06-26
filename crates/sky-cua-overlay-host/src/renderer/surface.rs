@@ -171,6 +171,12 @@ fn choose_alpha_mode(alpha_modes: &[::wgpu::CompositeAlphaMode]) -> ::wgpu::Comp
     }
 }
 
+pub(crate) fn supports_transparent_alpha_mode(alpha_modes: &[::wgpu::CompositeAlphaMode]) -> bool {
+    alpha_modes
+        .iter()
+        .any(|mode| *mode != ::wgpu::CompositeAlphaMode::Opaque)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +229,16 @@ mod tests {
             ]),
             ::wgpu::CompositeAlphaMode::Opaque
         );
+    }
+
+    #[test]
+    fn transparent_alpha_support_rejects_opaque_only_surfaces() {
+        assert!(!supports_transparent_alpha_mode(&[
+            ::wgpu::CompositeAlphaMode::Opaque
+        ]));
+        assert!(supports_transparent_alpha_mode(&[
+            ::wgpu::CompositeAlphaMode::Opaque,
+            ::wgpu::CompositeAlphaMode::PreMultiplied,
+        ]));
     }
 }

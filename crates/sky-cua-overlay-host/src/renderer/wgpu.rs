@@ -9,7 +9,7 @@ use crate::renderer::{
     },
     scene::SurfaceDrawRequest,
     shaders::{create_effect_bind_group_layout, create_effect_pipeline},
-    surface::SurfaceGuard,
+    surface::{SurfaceGuard, supports_transparent_alpha_mode},
 };
 use anyhow::{Context, Result, bail};
 
@@ -120,6 +120,9 @@ impl WgpuOverlayRenderer {
             }
             if capabilities.present_modes.is_empty() {
                 bail!("wgpu surface {index} has no compatible present modes");
+            }
+            if !supports_transparent_alpha_mode(&capabilities.alpha_modes) {
+                bail!("wgpu surface {index} has no transparent alpha compositing mode");
             }
         }
 
