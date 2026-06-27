@@ -2912,6 +2912,10 @@ mod tests {
             "desktop_pointer drag must accept an optional duration_ms that paces the gesture"
         );
         assert!(
+            schema_accepts(schema, &json!({"operation": "click", "x": 1, "y": 2})),
+            "desktop_pointer click must accept a bare coordinate pair"
+        );
+        assert!(
             !schema_accepts(
                 schema,
                 &json!({"operation": "click", "x": 1, "y": 2, "duration_ms": 500})
