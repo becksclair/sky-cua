@@ -5,6 +5,12 @@ set -euo pipefail
 # browser-use surface in one codex exec run, then writes a deterministic
 # coverage summary the host judge consumes. Chrome + the sky-cua extension +
 # the native-messaging host are brought up by the Python smoke itself.
+#
+# Auth: codex exec authenticates from the VM's own ~/.codex/auth.json (copied
+# from the host via SKY_CUA_COPY_CODEX_SETTINGS). This profile is intentionally
+# absent from AGENT_AUTH_PROFILES in run_gui_testing_vm_smoke.py, so no host
+# AGENT_AUTH_ENV_KEYS are forwarded for it (it needs none). Re-scp ~/.codex to
+# the VM when that auth is stale; see the testing-vm codex auth runbook.
 
 export PATH="/opt/codex-desktop/resources:${HOME}/.local/bin:${PATH}"
 

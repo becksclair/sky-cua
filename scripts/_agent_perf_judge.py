@@ -218,7 +218,12 @@ def judge_transcript(
     verdict = read_last_message(result.last_message_path)
     score = verdict.get("score")
     score_int = score if isinstance(score, int) else 0
-    # The harness owns the authoritative pass/fail decision, not the model's arithmetic.
+    # The harness owns the authoritative pass/fail decision, not the model's
+    # arithmetic. The model's raw output was already validated against
+    # AGENT_PERF_JUDGE_VERDICT_SCHEMA before these fields are overwritten/added, so
+    # the returned dict is intentionally a superset of that generation schema (it
+    # also carries `threshold`); do not re-validate the persisted verdict against
+    # the generation schema.
     verdict["score"] = score_int
     verdict["pass"] = score_int >= threshold
     verdict["threshold"] = threshold

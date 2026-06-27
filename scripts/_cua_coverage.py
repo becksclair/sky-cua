@@ -218,6 +218,14 @@ class CoverageReport:
         is the recovery behavior the smoke wants to exercise, not a failure;
         every consequential failure still surfaces as a missing tool, operation,
         or surface, or as an unrecovered error here.
+
+        Granularity ceiling: recovery is keyed on ``(tool, operation/surface)``,
+        not on call arguments. For argument-distinguished calls of the same tool
+        and operation (e.g. two ``browser_navigate`` calls to different URLs, or
+        two ``desktop_pointer`` drags), a permanent failure of one is treated as
+        recovered if any later call with the same key succeeds. This gate proves
+        tool/operation *coverage*; per-action correctness is the ground-truth
+        check's job, so the two together still catch a genuinely failing run.
         """
         return [entry for entry in self.errors if not entry.get("recovered")]
 
