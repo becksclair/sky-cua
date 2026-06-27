@@ -10,6 +10,8 @@ from typing import Any, cast
 import pytest
 
 import _agent_mcp_smoke
+import _agent_perf_judge
+import _cua_coverage
 import live_agent_mcp_smoke
 import live_agentic_loop_smoke
 import live_desktop_smoke
@@ -350,8 +352,9 @@ def test_opencode_neutral_cwd_gets_installed_project_config(
     )
 
 
-def test_pi_smoke_default_model_uses_opencode_go_auth() -> None:
-    assert _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL == "opencode-go/kimi-k2.7-code"
+def test_pi_smoke_default_model_is_free_opencode_model() -> None:
+    assert _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL == "opencode/deepseek-v4-flash-free"
+    assert _agent_mcp_smoke.DEFAULT_OPENCODE_SMOKE_MODEL == "opencode/deepseek-v4-flash-free"
     assert "OPENAI_API_KEY" not in _agent_mcp_smoke.model_auth_environment_keys(
         "pi", _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
     )
@@ -1021,7 +1024,7 @@ def test_opencode_agent_runner_defaults_to_opencode_go_kimi_model(
     proc = _agent_mcp_smoke.run_agent("opencode", "use sky cua", tmp_path, gate_deploy=False)
 
     assert proc.returncode == 0
-    assert "--model opencode-go/kimi-k2.7-code" in captured["argv"][4]
+    assert "--model opencode/deepseek-v4-flash-free" in captured["argv"][4]
     env = cast(dict[str, str], captured["env"])
     assert env["OPENCODE_API_KEY"] == "opencode-secret"
 
@@ -1230,3 +1233,189 @@ def test_openclaw_smoke_codex_home_stage_validates_pins(tmp_path: Path) -> None:
     failures, checked = live_openclaw_mcp_smoke.check_codex_home_pins(tmp_path / "empty")
     assert failures == []
     assert checked == 0
+
+
+def _cua_call(call_id: str, tool: str, **arguments: Any) -> dict[str, Any]:
+    return {
+        "type": "mcp_tool_call",
+        "id": call_id,
+        "server": "computer-use",
+        "tool": tool,
+        "arguments": arguments,
+        "status": "completed",
+    }
+
+
+def _full_coverage_calls() -> list[dict[str, Any]]:
+    calls = [
+        _cua_call("a1", "mcp__computer_use__observe", surface="desktop"),
+        _cua_call("a2", "observe", surface="browser", tab_id="t1"),
+        _cua_call("a3", "capture_desktop"),
+        _cua_call("a4", "capture_screen", surface="browser", tab_id="t1"),
+        _cua_call("a5", "activate_window", window_id="w1"),
+        _cua_call("a6", "desktop_pointer", operation="click"),
+        _cua_call("a7", "desktop_pointer", operation="secondary_click"),
+        _cua_call("a8", "desktop_pointer", operation="drag"),
+        _cua_call("a9", "desktop_keyboard", operation="type_text"),
+        _cua_call("a10", "desktop_keyboard", operation="press_key"),
+        _cua_call("a11", "desktop_semantic", operation="select"),
+        _cua_call("a12", "desktop_action", operation="activate"),
+        _cua_call("a13", "desktop_set_value", value="x"),
+        _cua_call("a14", "desktop_scroll", direction="down"),
+        _cua_call("a15", "browser_open"),
+        _cua_call("a16", "browser_navigate", url="http://x"),
+        _cua_call("a17", "browser_claim_tab", tab_id="t1"),
+        _cua_call("a18", "browser_move_mouse", tab_id="t1"),
+        _cua_call("a19", "browser_scroll", tab_id="t1"),
+        _cua_call("a20", "browser_input", operation="click"),
+        _cua_call("a21", "browser_input", operation="type_text"),
+        _cua_call("a22", "browser_input", operation="press_key"),
+    ]
+    return calls
+
+
+def test_cua_bare_tool_name_strips_namespaces() -> None:
+    assert _cua_coverage.bare_tool_name("mcp__computer_use__observe") == "observe"
+    assert _cua_coverage.bare_tool_name("sky_cua_desktop_pointer") == "desktop_pointer"
+    assert _cua_coverage.bare_tool_name("browser_open") == "browser_open"
+
+
+def test_cua_coverage_full_pass() -> None:
+    report = _cua_coverage.analyze_coverage(_full_coverage_calls())
+    assert report.missing_tools == []
+    assert report.missing_operations == []
+    assert report.missing_surfaces == []
+    assert report.errors == []
+    assert report.ok is True
+    # observe was exercised on both surfaces.
+    assert report.surfaces_seen["observe"] == ["browser", "desktop"]
+
+
+def test_cua_coverage_reports_missing_and_errors() -> None:
+    calls = [
+        _cua_call("b1", "observe", surface="desktop"),
+        _cua_call("b2", "desktop_pointer", operation="click"),
+        {
+            "type": "mcp_tool_call",
+            "id": "b3",
+            "server": "computer-use",
+            "tool": "browser_open",
+            "arguments": {},
+            "status": "failed",
+            "error": "BrowserBridgeDisconnected",
+        },
+    ]
+    report = _cua_coverage.analyze_coverage(calls)
+    assert report.ok is False
+    # missing the bulk of required tools, the other pointer operations, browser surfaces.
+    assert "capture_desktop" in report.missing_tools
+    assert "desktop_pointer:drag" in report.missing_operations
+    assert "capture_screen:browser" in report.missing_surfaces
+    # browser_open never succeeds again, so the error is unrecovered and fatal.
+    assert report.errors == [
+        {"tool": "browser_open", "excerpt": "BrowserBridgeDisconnected", "recovered": False}
+    ]
+    assert report.unrecovered_errors == report.errors
+
+
+def test_cua_coverage_recovered_error_does_not_fail_gate() -> None:
+    # A transient error followed by a successful retry of the same operation is
+    # recovery, not failure: it stays reported but does not flip ``ok``.
+    calls = [
+        *_full_coverage_calls(),
+        {
+            "type": "mcp_tool_call",
+            "id": "drag-fail",
+            "server": "computer-use",
+            "tool": "desktop_pointer",
+            "arguments": {"operation": "drag", "duration_ms": 500},
+            "status": "failed",
+            "error": "Invalid desktop_pointer request: duration_ms not in schema",
+        },
+        _cua_call("drag-retry", "desktop_pointer", operation="drag"),
+    ]
+    report = _cua_coverage.analyze_coverage(calls)
+    assert report.errors == [
+        {
+            "tool": "desktop_pointer",
+            "excerpt": "Invalid desktop_pointer request: duration_ms not in schema",
+            "recovered": True,
+        }
+    ]
+    assert report.unrecovered_errors == []
+    assert report.ok is True
+    assert "unrecovered" not in " ".join(report.problems())
+
+
+def test_cua_coverage_merges_started_and_completed_items() -> None:
+    # The started item carries the arguments (operation), the completed item the
+    # status; coverage must union them rather than letting completed clobber args.
+    started = {
+        "type": "mcp_tool_call",
+        "id": "c1",
+        "server": "computer-use",
+        "tool": "desktop_pointer",
+        "arguments": {"operation": "drag"},
+    }
+    completed = {
+        "type": "mcp_tool_call",
+        "id": "c1",
+        "server": "computer-use",
+        "tool": "desktop_pointer",
+        "status": "completed",
+    }
+    report = _cua_coverage.analyze_coverage([started, completed])
+    assert report.operations_seen["desktop_pointer"] == ["drag"]
+    assert report.tools_seen["desktop_pointer"] == 1
+
+
+def test_condense_transcript_strips_images_and_records_errors(tmp_path: Path) -> None:
+    image_blob = "B" * 5000
+    events = [
+        {
+            "type": "item.started",
+            "item": {
+                "type": "mcp_tool_call",
+                "id": "1",
+                "server": "computer-use",
+                "tool": "mcp__computer_use__capture_desktop",
+                "arguments": {"surface": "desktop"},
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "mcp_tool_call",
+                "id": "1",
+                "server": "computer-use",
+                "tool": "mcp__computer_use__capture_desktop",
+                "status": "completed",
+                "result": {"content": [{"type": "image", "data": image_blob}]},
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "mcp_tool_call",
+                "id": "2",
+                "server": "computer-use",
+                "tool": "browser_open",
+                "arguments": {},
+                "status": "failed",
+                "error": "BrowserBridgeDisconnected",
+            },
+        },
+    ]
+    transcript = tmp_path / "codex-output.jsonl"
+    transcript.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+    condensed = _agent_perf_judge.condense_transcript(transcript)
+
+    serialized = json.dumps(condensed)
+    assert image_blob not in serialized  # the dominant token sink is stripped
+    by_tool = {entry["tool"]: entry for entry in condensed}
+    assert by_tool["capture_desktop"]["status"] == "ok"
+    assert by_tool["capture_desktop"]["arguments"]  # merged from the started item
+    assert by_tool["browser_open"]["status"] == "error"
+    assert by_tool["browser_open"]["error"] == "BrowserBridgeDisconnected"
+    assert all("seq" in entry for entry in condensed)

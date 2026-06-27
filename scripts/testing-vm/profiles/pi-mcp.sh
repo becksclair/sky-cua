@@ -7,16 +7,6 @@ if ! command -v pi >/dev/null; then
 	printf 'pi is not installed in the testing VM\n' >&2
 	exit 66
 fi
-missing_fixtures=()
-for fixture in zenity kdialog; do
-	if ! command -v "${fixture}" >/dev/null 2>&1; then
-		missing_fixtures+=("${fixture}")
-	fi
-done
-if (( ${#missing_fixtures[@]} > 0 )); then
-	printf 'Required dialog fixture(s) missing in testing VM: %s\n' "${missing_fixtures[*]}" >&2
-	exit 67
-fi
 
 remote_root="/workspace"
 target_dir="${HOME}/.local/share/sky-cua"
@@ -67,7 +57,6 @@ for skill in computer-use browser-use; do
 	cp -r "${remote_root}/skills/${skill}" "${HOME}/.pi/agent/skills/"
 done
 
-# Run smoke tests across available fixtures
-for fixture in zenity kdialog; do
-	python3 "${remote_root}/scripts/live_agent_mcp_smoke.py" --agent pi --fixture "${fixture}" || exit 1
-done
+# Minimal wiring check: prove Pi sees the sky-cua schema and one read-only tool
+# call succeeds (free model). Substantive tool-use coverage is the codex-cua profile.
+python3 "${remote_root}/scripts/live_agent_mcp_smoke.py" --agent pi --mode wiring || exit 1

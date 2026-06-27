@@ -8,7 +8,7 @@ use tokio::net::UnixListener;
 use tokio::time::Instant as TokioInstant;
 
 use crate::browser::bridge::{
-    BROWSER_OPEN_TIMEOUT, browser_bridge_diagnostics, list_tabs, open_tab,
+    browser_bridge_diagnostics, browser_open_timeout, list_tabs, open_tab,
 };
 use crate::browser::sockets::{
     BrowserFamily, BrowserSocketSelection, CODEX_SOCKET_DIR_ENV, MAX_BRIDGE_SOCKET_CANDIDATES,
@@ -174,7 +174,7 @@ async fn open_tab_stops_at_aggregate_deadline_across_responsive_bad_sockets() {
     unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
     let started = TokioInstant::now();
     let response = tokio::time::timeout(
-        BROWSER_OPEN_TIMEOUT + bridge_request_timeout() + bridge_request_timeout(),
+        browser_open_timeout() + bridge_request_timeout() + bridge_request_timeout(),
         open_tab(Some(BrowserTargetKind::UserChrome), None),
     )
     .await
@@ -188,7 +188,7 @@ async fn open_tab_stops_at_aggregate_deadline_across_responsive_bad_sockets() {
     assert!(response.tab.is_none());
     assert_eq!(response.diagnostics.len(), 1);
     assert_eq!(response.diagnostics[0].code, "BrowserBridgeRequestTimedOut");
-    assert!(started.elapsed() < BROWSER_OPEN_TIMEOUT + bridge_request_timeout());
+    assert!(started.elapsed() < browser_open_timeout() + bridge_request_timeout());
 }
 
 #[tokio::test]

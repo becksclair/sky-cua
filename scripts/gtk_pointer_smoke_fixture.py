@@ -46,6 +46,8 @@ class PointerSmokeWindow(Gtk.Window):
             "entry_text": "",
             "entry_focused": False,
             "submitted_text": "",
+            "checkbox_toggled": False,
+            "expander_expanded": False,
             "button_press_seen": False,
             "button_release_seen": False,
             "last_pointer_event": {},
@@ -136,6 +138,16 @@ class PointerSmokeWindow(Gtk.Window):
         self.scroll_box.add(self.scroll_box_frame)
         self.scroll_box.get_vadjustment().connect("value-changed", self.on_scroll_adjustment)
 
+        # Semantic-action targets discovered through the accessibility tree (not by
+        # coordinate): a check button (CHECKABLE state -> desktop_toggle) and an
+        # expander (EXPANDABLE state -> desktop_semantic expand/collapse). Their
+        # state is ground truth for the smoke.
+        self.semantic_checkbox = Gtk.CheckButton(label="Enable smoke option")
+        self.semantic_checkbox.connect("toggled", self.on_semantic_checkbox_toggled)
+        self.semantic_expander = Gtk.Expander(label="Smoke details (expander)")
+        self.semantic_expander.add(Gtk.Label(label="Expanded smoke detail content."))
+        self.semantic_expander.connect("notify::expanded", self.on_semantic_expander_expanded)
+
         for widget in (
             self.header,
             self.instructions,
@@ -145,6 +157,8 @@ class PointerSmokeWindow(Gtk.Window):
             self.secondary_box,
             self.drag_box,
             self.scroll_box,
+            self.semantic_checkbox,
+            self.semantic_expander,
         ):
             self.fixed.put(widget, 0, 0)
 
@@ -211,6 +225,16 @@ class PointerSmokeWindow(Gtk.Window):
     def on_destroy(self, *_args: object) -> None:
         self.write_state()
         Gtk.main_quit()
+
+    def on_semantic_checkbox_toggled(self, button: Gtk.CheckButton) -> None:
+        self.state["checkbox_toggled"] = bool(button.get_active())
+        self.state["last_event"] = "checkbox-toggled"
+        self.write_state()
+
+    def on_semantic_expander_expanded(self, expander: Gtk.Expander, _param: object) -> None:
+        self.state["expander_expanded"] = bool(expander.get_expanded())
+        self.state["last_event"] = "expander-toggled"
+        self.write_state()
 
     def on_size_allocate(self, _widget: Gtk.Widget, allocation: Gdk.Rectangle) -> None:
         width = allocation.width
@@ -291,6 +315,12 @@ class PointerSmokeWindow(Gtk.Window):
         scroll_y = region_top + region_height + section_gap
         self.fixed.move(self.scroll_box, scroll_x, scroll_y)
         self.scroll_box.set_size_request(region_width, region_height)
+
+        semantic_x = margin_x + region_width + section_gap
+        self.fixed.move(self.semantic_checkbox, semantic_x, scroll_y)
+        self.semantic_checkbox.set_size_request(region_width, 36)
+        self.fixed.move(self.semantic_expander, semantic_x, scroll_y + 52)
+        self.semantic_expander.set_size_request(region_width, 80)
 
         status_y = scroll_y + region_height + (20 if compact else 48)
         self.fixed.move(self.status, margin_x, status_y)

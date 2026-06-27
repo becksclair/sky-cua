@@ -3,11 +3,17 @@ use std::path::Path;
 use serde_json::Value;
 use sky_cua_platform::model::{DiagnosticEntry, normalize_browser_open_url};
 
+// Reflects the actual overall browser deadline (default 12s, raised by
+// `SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS`) so the timeout message reports the real
+// budget. Keep the default in sync with `browser_open_timeout()` in `bridge.rs`.
 #[cfg(not(test))]
-const BROWSER_OPEN_TIMEOUT_MS: u128 = 12_000;
-// Keep in sync with the cfg(test) `BROWSER_OPEN_TIMEOUT` in `bridge.rs`.
+fn browser_open_timeout_ms() -> u128 {
+    u128::from(super::transport::browser_request_timeout_override_ms().unwrap_or(12_000))
+}
 #[cfg(test)]
-const BROWSER_OPEN_TIMEOUT_MS: u128 = 2_000;
+fn browser_open_timeout_ms() -> u128 {
+    2_000
+}
 
 pub(super) fn validate_action_tab_id(normalized_tab_id: &str) -> Vec<DiagnosticEntry> {
     let mut diagnostics = Vec::new();
@@ -94,10 +100,11 @@ pub(super) fn bridge_timeout_diagnostic(action: &str, socket: &Path) -> Diagnost
 }
 
 pub(super) fn browser_open_timeout_diagnostic() -> DiagnosticEntry {
+    let timeout_ms = browser_open_timeout_ms();
     DiagnosticEntry {
         code: "BrowserBridgeRequestTimedOut".to_string(),
         message: format!(
-            "Timed out trying to open a browser tab through the Chrome extension/native-host bridge after {BROWSER_OPEN_TIMEOUT_MS} ms."
+            "Timed out trying to open a browser tab through the Chrome extension/native-host bridge after {timeout_ms} ms."
         ),
         details: None,
     }

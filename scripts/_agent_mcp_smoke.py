@@ -17,8 +17,8 @@ from _smoke_config import env_flag
 from deploy_freshness import assert_runtime_fresh, deployed_client_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OPENCODE_SMOKE_MODEL = "opencode-go/kimi-k2.7-code"
-DEFAULT_PI_SMOKE_MODEL = "opencode-go/kimi-k2.7-code"
+DEFAULT_OPENCODE_SMOKE_MODEL = "opencode/deepseek-v4-flash-free"
+DEFAULT_PI_SMOKE_MODEL = "opencode/deepseek-v4-flash-free"
 TOOL_FAILURE_STATUSES = {"canceled", "cancelled", "error", "failed", "failure", "timeout"}
 RESULT_PAYLOAD_KEYS = (
     "result",
@@ -65,6 +65,7 @@ SKY_CUA_RUNTIME_ENV_ALLOWLIST = {
     "SKY_CUA_AGENT_CURSOR",
     "SKY_CUA_BROWSER",
     "SKY_CUA_BROWSER_EVAL",
+    "SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS",
     "SKY_CUA_COSMIC_HELPER",
     "SKY_CUA_INPUT_BACKEND",
     "SKY_CUA_INPUT_HELPER_SOCKET",

@@ -11,6 +11,10 @@ profile_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 "$profile_dir/codex-desktop.sh"
 "$profile_dir/opencode-mcp.sh"
 "$profile_dir/pi-mcp.sh"
+# Heavy single-run codex tool-use coverage (deterministic gate only here; the
+# host-side performance judge runs via `run_gui_testing_vm_smoke.py --profile
+# codex-cua`, which has the host gpt-5.5 auth the VM lacks).
+"$profile_dir/codex-cua.sh"
 "$profile_dir/kde-kwin-effect.sh"
 
 if [[ -n "${HOST_WAYLAND_DISPLAY:-}" ]]; then

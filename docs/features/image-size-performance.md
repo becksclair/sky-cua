@@ -2,9 +2,13 @@
 
 ## Decision
 
-The default model-facing screenshot cap is `1440x900`, encoded as JPEG quality `85`.
+The default model-facing screenshot cap is `1440x900`, encoded as lossy WebP quality `85`. Captures are only ever downscaled to fit the cap: a capture already within `1440x900` is passed through at its native size rather than upscaled to fill the box.
 
-On a `2560x1440` desktop this produces an aspect-preserved `1440x810` JPEG for model inspection while keeping the raw `2560x1440` PNG beside it. Action coordinates remain in the model-facing screenshot coordinate space and are mapped back to the underlying desktop or stream coordinates by the backend.
+On a `2560x1440` desktop this produces an aspect-preserved `1440x810` WebP for model inspection while keeping the raw `2560x1440` PNG beside it. Action coordinates remain in the model-facing screenshot coordinate space and are mapped back to the underlying desktop or stream coordinates by the backend.
+
+This preparation is shared by the Linux portal backend and the Windows GDI backend through the `sky-cua-capture` crate, so the bounded model image — cap, no-upscale rule, default format, and the `logical_to_pixel_scale` coordinate derivation — is identical regardless of platform.
+
+This document covers desktop captures only. Browser (CDP) screenshots are prepared by a separate path in `sky-cua-service` (`browser/model_image.rs`); it reads the same `SKY_CUA_MODEL_SCREENSHOT_FORMAT`/quality variables and shares the WebP default, but unlike the desktop path it intentionally upscales to preserve the CSS-pixel pointer coordinate space.
 
 The raw capture contract is unchanged:
 
@@ -49,29 +53,27 @@ python3 scripts/live_agentic_loop_smoke.py
 
 The installed plugin receives these variables because `.mcp.json` includes them in `env_vars`. Invalid values and values outside the safe range fall back to the compiled default.
 
-JPEG remains the default because it is the safest cross-host screenshot format
-and produced the proven TIDAL win above. WebP is available for direct capture
-profiling and future workflow-level A/B runners. Export these variables before
-running a direct capture/profile command that asserts returned screenshot
-metadata:
+WebP is the default: at equal quality it encodes meaningfully smaller than JPEG,
+which trims transport size and upload latency without changing the bounded pixel
+dimensions the model sees. Both Claude and GPT vision accept WebP. The WebP path
+uses lossy WebP encoding, so the quality setting is meaningful:
 
 ```bash
-export SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp
 export SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY=85
 ```
 
-JPEG quality can also be varied:
+JPEG remains available as the most universally decodable format and can be
+selected per host, with its own quality knob:
 
 ```bash
 SKY_CUA_MODEL_SCREENSHOT_FORMAT=jpeg \
-SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY=75 \
+SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY=85 \
 python3 scripts/live_agentic_loop_smoke.py
 ```
 
-The WebP path uses lossy WebP encoding, so quality settings remain meaningful
-for future workflow-level A/B runners. The model still receives a real image
-input once the screenshot path is inspected; the file format only changes local
-encoding, transport size, and decode/ingest behavior.
+The model still receives a real image input once the screenshot path is
+inspected; the file format only changes local encoding, transport size, and
+decode/ingest behavior.
 
 The former TIDAL A/B runner has been removed. For future multi-run comparisons,
 add a new active workflow-specific runner with isolated state and the same
@@ -82,7 +84,7 @@ timing-summary fields below.
 Relevant checks:
 
 ```bash
-cargo test -p sky-cua-linux portal::screenshot
+cargo nextest run -p sky-cua-linux portal::screenshot
 python3 scripts/build_plugin.py
 ```
 

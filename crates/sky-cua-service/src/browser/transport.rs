@@ -14,6 +14,24 @@ pub(super) fn bridge_request_timeout() -> Duration {
     Duration::from_secs(3)
 }
 
+/// Operator override (milliseconds) for the overall browser request budget and
+/// the per-CDP-command cap. Slow or remote desktops where the extension /
+/// native-host CDP relay is sluggish can raise this without changing the default
+/// for everyone else. Returns `None` when unset or invalid so callers keep their
+/// own default. Ignored under test so deadline math stays deterministic.
+#[cfg(not(test))]
+pub(super) fn browser_request_timeout_override_ms() -> Option<u64> {
+    std::env::var("SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+}
+
+#[cfg(test)]
+pub(super) fn browser_request_timeout_override_ms() -> Option<u64> {
+    None
+}
+
 /// Per-bridge-IO deadline. Generous under test so happy-path operations do not
 /// trip it when `cargo test --workspace` starves the in-process fake servers and
 /// a reply that normally takes microseconds takes seconds. Tests that need to
@@ -151,13 +169,17 @@ pub(super) async fn execute_cdp_until(
 fn cdp_command_timeout_ms(deadline: TokioInstant, now: TokioInstant) -> u64 {
     const RESPONSE_MARGIN_MS: u64 = 750;
     const MIN_COMMAND_TIMEOUT_MS: u64 = 250;
-    const MAX_COMMAND_TIMEOUT_MS: u64 = 10_000;
+    const DEFAULT_MAX_COMMAND_TIMEOUT_MS: u64 = 10_000;
     const READ_DEADLINE_HEADROOM_MS: u64 = 100;
+    // The per-command cap scales with the operator override so a raised overall
+    // deadline actually reaches individual CDP commands on slow relays.
+    let max_command_timeout_ms =
+        browser_request_timeout_override_ms().unwrap_or(DEFAULT_MAX_COMMAND_TIMEOUT_MS);
     let remaining = deadline.checked_duration_since(now).unwrap_or_default();
     let remaining_ms = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX);
     let budget = remaining_ms
         .saturating_sub(RESPONSE_MARGIN_MS)
-        .clamp(MIN_COMMAND_TIMEOUT_MS, MAX_COMMAND_TIMEOUT_MS);
+        .clamp(MIN_COMMAND_TIMEOUT_MS, max_command_timeout_ms);
     budget.min(
         remaining_ms
             .saturating_sub(READ_DEADLINE_HEADROOM_MS)

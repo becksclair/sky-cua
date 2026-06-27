@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": { "type": "string", "enum": ["completed", "blocked", "failed"] },
+    "desktop_entry_text": { "type": "string" },
+    "browser_input_text": { "type": "string" },
+    "browser_marker_text": { "type": "string" },
+    "vision_token": { "type": "string" },
+    "notes": { "type": "string" }
+  },
+  "required": [
+    "status",
+    "desktop_entry_text",
+    "browser_input_text",
+    "browser_marker_text",
+    "vision_token",
+    "notes"
+  ]
+}

@@ -154,6 +154,16 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
         VmProfileDescriptor("hyprland"),
         VmProfileDescriptor("opencode-mcp", preauthorize_screenshot_portal=True),
         VmProfileDescriptor("pi-mcp", preauthorize_screenshot_portal=True),
+        # Heavy single-run codex tool-use profile. The deterministic coverage gate
+        # runs in the VM; the host-side judge runs after the remote run (host gpt-5.5
+        # auth is not available in the VM), hence the dedicated dispatch.
+        VmProfileDescriptor(
+            "codex-cua",
+            dispatch="codex-cua-judge",
+            preauthorize_screenshot_portal=True,
+            preauthorize_kde_remote_desktop=True,
+            preauthorize_gnome_remote_desktop=True,
+        ),
         VmProfileDescriptor("curated", dispatch="curated"),
         VmProfileDescriptor(
             "all",
@@ -184,6 +194,18 @@ MCP_LAUNCH_POLICY_ENV_KEYS = (
     "SKY_CUA_BROWSER_EVAL",
     "SKY_CUA_MODEL_SUPPORTS_IMAGES",
 )
+# Host dir whose `plugins/openai-bundled` holds the OpenAI bundled marketplace
+# (the production compat surface). Matches build_plugin.py's default parent. When
+# present, codex-cua runs against `computer-use@openai-bundled` instead of the
+# `sky-cua@local` dev fallback; the tool surface is identical (same sky-cua-client
+# server + skills), so only the plugin identity and resolution path change.
+DEFAULT_OPENAI_BUNDLED_RESOURCE_ROOT = (
+    REPO_ROOT.parent / "codex-desktop-linux" / "codex-app" / "resources"
+)
+# Fixed VM-relative location the compat resources are staged to; codex-cua.sh
+# points SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT here.
+OPENAI_BUNDLED_REMOTE_REL = ".cache/sky-cua/openai-bundled/plugins/openai-bundled"
+OPENAI_BUNDLED_PROFILES = {"codex-cua", "all"}
 
 
 @dataclass(frozen=True)
@@ -388,6 +410,21 @@ def main() -> int:
         help="Run the remote profile without syncing the checkout first.",
     )
     parser.add_argument(
+        "--openai-bundled-resource-root",
+        type=Path,
+        default=DEFAULT_OPENAI_BUNDLED_RESOURCE_ROOT,
+        help=(
+            "Host dir whose plugins/openai-bundled holds the compat marketplace; "
+            "synced to the VM so codex-cua tests the computer-use@openai-bundled surface "
+            f"(default: {DEFAULT_OPENAI_BUNDLED_RESOURCE_ROOT})."
+        ),
+    )
+    parser.add_argument(
+        "--skip-openai-bundled-sync",
+        action="store_true",
+        help="Do not stage the openai-bundled compat resources for codex-cua/all.",
+    )
+    parser.add_argument(
         "--skip-codex-settings",
         action="store_true",
         help="Deprecated compatibility flag; Codex settings are copied only when --sync-codex-settings is set and this flag is absent.",
@@ -478,6 +515,10 @@ def main() -> int:
         sync_opencode_settings(ssh_target, args.port, args.ssh_option)
     if args.sync_pi_settings:
         sync_pi_settings(ssh_target, args.port, args.ssh_option)
+    if args.profile in OPENAI_BUNDLED_PROFILES and not args.skip_openai_bundled_sync:
+        sync_openai_bundled_resources(
+            ssh_target, args.port, args.ssh_option, args.openai_bundled_resource_root
+        )
     reset_guest_sky_cua_processes(ssh_target, args.port, args.ssh_option)
     wake_guest_display(ssh_target, args.port, args.ssh_option)
     if args.desktop_env:
@@ -595,6 +636,17 @@ def execute_profile(
     vm_name: str,
     libvirt_uri: str,
 ) -> int:
+    if profile.dispatch == CODEX_CUA_JUDGE_DISPATCH:
+        return run_codex_cua_judge_profile(
+            ssh_target,
+            port,
+            ssh_options,
+            remote_root,
+            headed=headed,
+            wayland_display=wayland_display,
+            desktop_env=desktop_env,
+            sync_codex_settings=sync_codex_settings,
+        )
     if profile.host_framebuffer_proof:
         return run_host_framebuffer_proof_profile(
             profile,
@@ -799,6 +851,147 @@ def run_host_framebuffer_proof_profile(
     )
 
 
+CODEX_CUA_JUDGE_DISPATCH = "codex-cua-judge"
+
+
+def pull_remote_file(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_path: Path,
+    local_path: Path,
+) -> bool:
+    """Copy a single remote file to a local path via ssh cat. Returns success."""
+    completed = subprocess.run(
+        [*ssh_base_command(port, ssh_options), ssh_target, "cat", str(remote_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return False
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_bytes(completed.stdout)
+    return True
+
+
+def run_codex_cua_judge_profile(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    remote_root: Path,
+    *,
+    headed: bool,
+    wayland_display: str,
+    desktop_env: str,
+    sync_codex_settings: bool,
+) -> int:
+    """Run the codex CUA smoke in the VM, then judge its tool use on the host.
+
+    The VM produces the transcript + deterministic coverage summary; the host
+    pulls them back and runs the gpt-5.5 judge (host-only auth). Overall success
+    requires both the deterministic VM gate and the judge to pass, but the judge
+    runs even when the VM gate failed so a triage list is always produced.
+    """
+    remote_exit = run_remote_profile(
+        ssh_target,
+        port,
+        ssh_options,
+        remote_root,
+        "codex-cua",
+        headed=headed,
+        wayland_display=wayland_display,
+        desktop_env=desktop_env,
+        sync_codex_settings=sync_codex_settings,
+    )
+
+    local_dir = REPO_ROOT / "artifacts" / "codex-cua-judge" / timestamp_utc()
+    local_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = local_dir / "host-summary.json"
+
+    latest_marker = remote_root / "artifacts" / "codex-e2e" / "codex-cua" / "latest.json"
+    latest = read_remote_json(ssh_target, port, ssh_options, latest_marker)
+    remote_artifact = latest.get("artifact_dir") if latest else None
+    if not isinstance(remote_artifact, str):
+        write_host_summary(
+            summary_path,
+            {
+                "profile": "codex-cua",
+                "remote_exit": remote_exit,
+                "judge": "skipped: no remote artifacts found",
+                "ok": False,
+            },
+        )
+        print("codex-cua: no remote artifacts to judge; inspect the VM run", flush=True)
+        return remote_exit or 1
+
+    remote_artifact_dir = Path(remote_artifact)
+    # latest.json carries the codex *exec* exit (0 when codex itself ran). The
+    # authoritative deterministic-gate result is the smoke's overall exit
+    # (remote_exit), which is nonzero when required tools/operations are missing or
+    # a tool errored. Gate on remote_exit; pass the codex exit to the judge as context.
+    codex_exit = latest.get("exit_code") if latest else None
+    codex_exit = codex_exit if isinstance(codex_exit, int) else remote_exit
+
+    pulled = {
+        name: pull_remote_file(
+            ssh_target, port, ssh_options, remote_artifact_dir / name, local_dir / name
+        )
+        for name in ("codex-output.jsonl", "coverage-summary.json", "last-message.json")
+    }
+    if not all(pulled.values()):
+        write_host_summary(
+            summary_path,
+            {
+                "profile": "codex-cua",
+                "remote_exit": remote_exit,
+                "judge": f"skipped: could not pull artifacts {pulled}",
+                "ok": False,
+            },
+        )
+        print(f"codex-cua: could not pull artifacts for the judge: {pulled}", flush=True)
+        return 1
+
+    judge = subprocess.run(
+        [
+            "python3",
+            str(REPO_ROOT / "scripts" / "live_agent_perf_judge.py"),
+            "--transcript",
+            str(local_dir / "codex-output.jsonl"),
+            "--last-message",
+            str(local_dir / "last-message.json"),
+            "--coverage-summary",
+            str(local_dir / "coverage-summary.json"),
+            "--artifact-dir",
+            str(local_dir / "judge"),
+            "--exit-code",
+            str(codex_exit),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    # Overall success requires BOTH the deterministic VM gate (remote_exit) and the
+    # judge. The judge ran regardless of the gate so triage is always produced.
+    host_ok = remote_exit == 0 and judge.returncode == 0
+    write_host_summary(
+        summary_path,
+        {
+            "profile": "codex-cua",
+            "gate_exit": remote_exit,
+            "codex_exit": codex_exit,
+            "judge_exit": judge.returncode,
+            "ok": host_ok,
+            "artifacts": str(local_dir),
+        },
+    )
+    print(
+        f"codex-cua judge summary: gate_exit={remote_exit} codex_exit={codex_exit} "
+        f"judge_exit={judge.returncode} ok={host_ok}; artifacts: {local_dir}",
+        flush=True,
+    )
+    return 0 if host_ok else 1
+
+
 def format_profile_listing() -> str:
     lines = ["profile  dispatch  curated  host-framebuffer-proof"]
     for descriptor in VM_PROFILE_DESCRIPTORS.values():
@@ -888,6 +1081,56 @@ def sync_checkout(
         command.extend(["--exclude", exclude])
     command.extend([f"{REPO_ROOT}/", f"{ssh_target}:{remote_root}/"])
     subprocess.run(command, cwd=REPO_ROOT, check=True)
+
+
+def sync_openai_bundled_resources(
+    ssh_target: str,
+    port: int,
+    ssh_options: list[str],
+    resource_root: Path,
+) -> bool:
+    """Stage the OpenAI bundled compat marketplace into the VM for codex-cua.
+
+    Returns True when the resources were synced. When the host source is absent,
+    codex-cua falls back to the sky-cua@local dev surface, so this is a best-effort
+    step rather than a hard failure.
+    """
+    source = resource_root.expanduser() / "plugins" / "openai-bundled"
+    marketplace = source / ".agents" / "plugins" / "marketplace.json"
+    if not marketplace.exists():
+        print(
+            f"openai-bundled compat source not found at {marketplace}; "
+            "codex-cua will fall back to the sky-cua@local surface",
+            flush=True,
+        )
+        return False
+    subprocess.run(
+        [
+            *ssh_base_command(port, ssh_options),
+            ssh_target,
+            "mkdir",
+            "-p",
+            OPENAI_BUNDLED_REMOTE_REL,
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    command = [
+        "rsync",
+        "-a",
+        "--delete",
+        "--human-readable",
+        "-e",
+        rsync_ssh_command(port, ssh_options),
+        f"{source}/",
+        f"{ssh_target}:{OPENAI_BUNDLED_REMOTE_REL}/",
+    ]
+    subprocess.run(command, cwd=REPO_ROOT, check=True)
+    print(
+        f"synced openai-bundled compat resources -> {ssh_target}:{OPENAI_BUNDLED_REMOTE_REL}",
+        flush=True,
+    )
+    return True
 
 
 def sync_codex_settings(

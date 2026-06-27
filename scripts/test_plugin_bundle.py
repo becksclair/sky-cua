@@ -14,10 +14,10 @@ from typing import cast
 
 import pytest
 
+import _chrome_bridge
 import _plugin_bundle as plugin_bundle
 import build_plugin
 import live_agent_cursor_kde_smoke
-import live_chrome_host_client_smoke
 from _plugin_bundle import (
     PLUGIN_ID,
     all_runtime_binary_names,
@@ -1083,7 +1083,7 @@ def test_chrome_preflight_default_env_allowlist_matches_primary_mcp_config() -> 
 
 
 def test_bundled_chrome_extension_cursor_overlay_contract() -> None:
-    extension_dir = live_chrome_host_client_smoke.FALLBACK_EXTENSION_DIR
+    extension_dir = _chrome_bridge.FALLBACK_EXTENSION_DIR
     manifest = json.loads((extension_dir / "manifest.json").read_text(encoding="utf-8"))
     content_script = (extension_dir / "content-scripts" / "codex.js").read_text(encoding="utf-8")
     background = (extension_dir / "background.js").read_text(encoding="utf-8")

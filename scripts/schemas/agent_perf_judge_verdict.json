@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "pass": { "type": "boolean" },
+    "subscores": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tool_selection": { "type": "integer", "minimum": 0, "maximum": 25 },
+        "error_recovery": { "type": "integer", "minimum": 0, "maximum": 25 },
+        "efficiency": { "type": "integer", "minimum": 0, "maximum": 25 },
+        "task_completion": { "type": "integer", "minimum": 0, "maximum": 25 }
+      },
+      "required": ["tool_selection", "error_recovery", "efficiency", "task_completion"]
+    },
+    "summary": { "type": "string" },
+    "triage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+          "tool_or_workflow": { "type": "string" },
+          "issue": { "type": "string" },
+          "evidence": { "type": "string" }
+        },
+        "required": ["severity", "tool_or_workflow", "issue", "evidence"]
+      }
+    }
+  },
+  "required": ["score", "pass", "subscores", "summary", "triage"]
+}

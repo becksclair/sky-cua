@@ -94,21 +94,26 @@ pub async fn select(
     connection: &AccessibilityConnection,
     backend_ref: &str,
 ) -> Result<bool, BackendError> {
-    invoke_preferred_action(connection, backend_ref, &["select", "choose"], false).await
+    // Fall back to the element's primary action: these semantic ops are only
+    // dispatched when the snapshot advertised them, and tree.rs only advertises
+    // toggle/select/expand/collapse for the matching checkable/selectable/
+    // expandable element (or when the literal action exists), so invoking the
+    // primary action here drives the right widget when AT-SPI omits the literal name.
+    invoke_preferred_action(connection, backend_ref, &["select", "choose"], true).await
 }
 
 pub async fn expand(
     connection: &AccessibilityConnection,
     backend_ref: &str,
 ) -> Result<bool, BackendError> {
-    invoke_preferred_action(connection, backend_ref, &["expand", "open"], false).await
+    invoke_preferred_action(connection, backend_ref, &["expand", "open"], true).await
 }
 
 pub async fn collapse(
     connection: &AccessibilityConnection,
     backend_ref: &str,
 ) -> Result<bool, BackendError> {
-    invoke_preferred_action(connection, backend_ref, &["collapse", "close"], false).await
+    invoke_preferred_action(connection, backend_ref, &["collapse", "close"], true).await
 }
 
 pub async fn toggle(
@@ -119,7 +124,7 @@ pub async fn toggle(
         connection,
         backend_ref,
         &["toggle", "check", "uncheck"],
-        false,
+        true,
     )
     .await
 }

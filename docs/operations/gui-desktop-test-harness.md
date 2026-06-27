@@ -230,8 +230,12 @@ python3 scripts/run_gui_testing_vm_smoke.py \
 ```
 
 The `opencode-mcp` profile installs sky-cua as an MCP server for OpenCode,
-deploys the `computer-use` skill, and runs dialog dismissal smokes
-through OpenCode's tool-calling loop.
+deploys the `computer-use` skill, and runs a single **wiring check** through
+OpenCode's tool-calling loop: the agent must see the sky-cua tool schema and
+call one read-only tool (`doctor`/`observe`) without error. It runs on the free
+model `opencode/deepseek-v4-flash-free` (override with
+`SKY_CUA_SMOKE_OPENCODE_MODEL`). Substantive tool-use coverage is the
+`codex-cua` profile, not this lane.
 
 Verify OpenCode is functional before the smoke:
 
@@ -263,8 +267,62 @@ python3 scripts/run_gui_testing_vm_smoke.py \
 
 The `pi-mcp` profile installs sky-cua as an MCP server for Pi, merges the
 `sky_cua` entry into Pi's `~/.pi/agent/mcp.json`, deploys the
-`computer-use` and `browser-use` skills to `~/.pi/agent/skills/`, and runs dialog
-dismissal smokes through Pi's tool-calling loop.
+`computer-use` and `browser-use` skills to `~/.pi/agent/skills/`, and runs the
+same single **wiring check** through Pi's tool-calling loop (schema visible +
+one read-only tool call, no error) on `opencode/deepseek-v4-flash-free`
+(override with `SKY_CUA_SMOKE_PI_MODEL`).
+
+## Codex CUA full tool-use profile and the performance judge
+
+The `codex-cua` profile is the substantive codex-CLI gate. In **one** `codex
+exec` run it drives the entire computer-use and browser-use surface against live
+fixtures:
+
+- a GTK pointer fixture (click / secondary-click / drag / scroll / text entry /
+  a check button / a combo box) for the desktop tools, and
+- a live Chrome tab — the profile opens Chrome at `chrome://extensions` and
+  registers the native-messaging host, then the **agent installs the Codex
+  extension itself** with computer-use (Developer mode → Load unpacked → the
+  folder chooser); that unlocks the browser tools, including reading a pixels-only
+  token rendered on a page `<canvas>` (the model-image vision proof).
+
+```bash
+python3 scripts/run_gui_testing_vm_smoke.py \
+  --host 127.0.0.1 --port 22222 --user skycua \
+  --ssh-option StrictHostKeyChecking=no \
+  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
+  --profile codex-cua --sync-codex-settings
+```
+
+The run exercises the **production `computer-use@openai-bundled` compat surface**.
+The runner stages the openai-bundled marketplace into the VM from
+`--openai-bundled-resource-root` (default the host's
+`codex-desktop-linux/codex-app/resources`); when that source is absent it falls
+back to the `sky-cua@local` dev surface (the tool surface is identical either
+way — same `sky-cua-client` server and skills). The resolved surface is recorded
+as `plugin_surface` in `coverage-summary.json`. Pass `--skip-openai-bundled-sync`
+to force the dev fallback.
+
+Two gates apply:
+
+1. **Deterministic coverage gate (in the VM):**
+   `scripts/live_codex_cua_smoke.py` parses the codex transcript and fails unless
+   every required tool/operation/surface was called (see `scripts/_cua_coverage.py`),
+   no tool call errored, and the fixtures' ground truth confirms the actions
+   landed. It writes `coverage-summary.json` next to the transcript.
+2. **Performance judge (on the host):** because the VM lacks host gpt-5.5 auth,
+   the runner pulls the transcript + `coverage-summary.json` + `last-message.json`
+   back to the host and runs `scripts/live_agent_perf_judge.py` (gpt-5.5, high
+   reasoning). The judge scores tool-use 0-100 across tool-selection,
+   error-recovery, efficiency, and task-completion, **hard-fails below the
+   threshold** (default 70, override `--threshold` / `SKY_CUA_JUDGE_THRESHOLD`),
+   and **always** writes `judge-verdict.json` and `judge-triage.json`. The judge
+   runs even when the deterministic gate failed, so a triage list is always
+   produced. Overall success requires both gates to pass.
+
+`--profile all` runs the deterministic `codex-cua` gate in-sequence but **not**
+the host judge (the `all` sequence is VM-local); invoke `--profile codex-cua`
+for the judged run.
 
 ## Portal Selection
 
@@ -352,14 +410,23 @@ Profiles live under `scripts/testing-vm/profiles/`.
   layer-shell cursor overlay. It runs the service-backed KDE cursor smoke in
   non-KDE mode, captures through sky-cua's screenshot request, and proves
   visible cursor pixels on the display containing the fixture point.
-- `opencode-mcp`: real-session OpenCode MCP smoke. Installs sky-cua as an MCP
-  server for OpenCode, deploys skills, and exercises dialog dismissal through
-  OpenCode's tool-calling loop against visible desktop fixtures. It is part of
-  `all`; keep it there only while it enforces MCP tool evidence equivalent to
-  the Pi agent-loop acceptance lane.
-- `pi-mcp`: real-session Pi MCP smoke. Installs sky-cua as an MCP server for Pi
-  via `pi-mcp-adapter`, deploys skills, and exercises dialog dismissal through
-  Pi's tool-calling loop.
+- `opencode-mcp`: real-session OpenCode MCP **wiring check**. Installs sky-cua as
+  an MCP server for OpenCode, deploys skills, and runs one read-only tool call
+  (schema visible + `doctor`/`observe`, no error) on
+  `opencode/deepseek-v4-flash-free`. It proves MCP is wired for the agent;
+  substantive tool-use coverage is `codex-cua`.
+- `pi-mcp`: real-session Pi MCP **wiring check**. Installs sky-cua as an MCP
+  server for Pi via `pi-mcp-adapter`, deploys skills, and runs the same
+  single read-only wiring check through Pi's tool-calling loop.
+- `codex-cua`: the substantive single-run codex tool-use gate. Brings up Chrome +
+  the sky-cua extension + native host, then drives the full computer-use and
+  browser-use surface in one `codex exec` run against the GTK pointer fixture and
+  a live browser page. A deterministic coverage/no-error gate runs in the VM
+  (`scripts/live_codex_cua_smoke.py` + `scripts/_cua_coverage.py`); the host-side
+  performance judge (`scripts/live_agent_perf_judge.py`, gpt-5.5/high) scores
+  tool-use and emits a triage list. Dispatch routes through the host so the judge
+  has gpt-5.5 auth. See "Codex CUA full tool-use profile and the performance
+  judge".
 - `codex-desktop`: real-session launch smoke for the installed
   CodexDesktop-Rebuild package. It requires a visible Codex window on the VM's
   active desktop session and records Codex and Chrome versions.

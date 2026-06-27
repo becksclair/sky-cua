@@ -96,6 +96,7 @@ pub async fn flatten_accessible_tree(
             {
                 actions.push("set_value".to_string());
             }
+            add_state_inferred_actions(&mut actions, &state_flags);
             actions
         } else {
             Vec::new()
@@ -309,6 +310,40 @@ fn add_canonical_action_aliases(actions: &mut Vec<String>) {
     maybe_push("toggle", &["toggle", "check", "uncheck"]);
 }
 
+/// Advertise the semantic action implied by an element's state when the AT-SPI
+/// Action interface only exposes a primary "click"/"press" (normalized to
+/// "activate"). GTK and similar toolkits rarely emit the literal `toggle` /
+/// `expand` / `select` action names, so a check button or expander would
+/// otherwise report no semantic affordance even though its primary action
+/// performs exactly that. The action layer falls back to the primary action when
+/// invoking these, so advertising them here is what makes `desktop_toggle` /
+/// `desktop_semantic` work on standard checkable/expandable/selectable widgets.
+fn add_state_inferred_actions(actions: &mut Vec<String>, state_flags: &[String]) {
+    if !actions.iter().any(|name| name == "activate") {
+        return;
+    }
+    let has = |state: &str| state_flags.iter().any(|flag| flag == state);
+    let mut inferred: Vec<&str> = Vec::new();
+    if has("checkable") {
+        inferred.push("toggle");
+    }
+    if has("selectable") {
+        inferred.push("select");
+    }
+    if has("expandable") {
+        inferred.push(if has("expanded") {
+            "collapse"
+        } else {
+            "expand"
+        });
+    }
+    for action in inferred {
+        if !actions.iter().any(|existing| existing == action) {
+            actions.push(action.to_string());
+        }
+    }
+}
+
 const MAX_TEXT_READBACK_CHARS: i32 = 4096;
 const MAX_TEXT_SELECTIONS: i32 = 8;
 
@@ -317,8 +352,8 @@ mod tests {
     use sky_cua_platform::model::{ElementNumericValueReadback, ElementTextSelection};
 
     use super::{
-        add_canonical_action_aliases, is_sensitive_text_node, readback_summary,
-        shape_text_readback, should_read_numeric_value,
+        add_canonical_action_aliases, add_state_inferred_actions, is_sensitive_text_node,
+        readback_summary, shape_text_readback, should_read_numeric_value,
     };
 
     #[test]
@@ -339,6 +374,37 @@ mod tests {
                 "missing canonical action {expected} in {actions:?}"
             );
         }
+    }
+
+    #[test]
+    fn state_inferred_actions_advertise_semantics_for_stateful_widgets() {
+        // A check button exposing only a primary action gains "toggle".
+        let mut checkbox = vec!["activate".to_string()];
+        add_state_inferred_actions(&mut checkbox, &["checkable".to_string()]);
+        assert!(checkbox.iter().any(|action| action == "toggle"));
+
+        // A collapsed expander gains "expand"; an expanded one gains "collapse".
+        let mut collapsed = vec!["activate".to_string()];
+        add_state_inferred_actions(&mut collapsed, &["expandable".to_string()]);
+        assert!(collapsed.iter().any(|action| action == "expand"));
+        assert!(!collapsed.iter().any(|action| action == "collapse"));
+
+        let mut expanded = vec!["activate".to_string()];
+        add_state_inferred_actions(
+            &mut expanded,
+            &["expandable".to_string(), "expanded".to_string()],
+        );
+        assert!(expanded.iter().any(|action| action == "collapse"));
+
+        // A selectable element gains "select".
+        let mut selectable = vec!["activate".to_string()];
+        add_state_inferred_actions(&mut selectable, &["selectable".to_string()]);
+        assert!(selectable.iter().any(|action| action == "select"));
+
+        // No primary action means nothing is inferred (cannot drive it).
+        let mut inert = vec!["focus".to_string()];
+        add_state_inferred_actions(&mut inert, &["checkable".to_string()]);
+        assert_eq!(inert, vec!["focus".to_string()]);
     }
 
     #[test]

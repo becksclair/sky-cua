@@ -20,7 +20,6 @@ import hashlib
 import http.server
 import json
 import math
-import os
 import re
 import secrets
 import shutil
@@ -31,31 +30,33 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import cast
 from urllib.parse import urlparse
 
+from _chrome_bridge import (
+    DEFAULT_EXTENSION_ID,
+    DEFAULT_HOST_PATH,
+    ManifestRestore,
+    browser_command,
+    default_extension_dir,
+    host_pid_from_socket,
+    install_temp_manifest,
+    launch_browser,
+    restore_manifest,
+    terminate_browser,
+    wait_for_devtools_port,
+    wait_for_extension_target,
+    wait_for_host_process,
+    wait_for_socket,
+)
 from _mcp_stdio import McpClient, stop_service_processes_for_socket
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_EXTENSION_ID = "hehggadaopoacecdllhhajmbjkdcmajg"
-DEFAULT_EXTENSION_VERSION_DIR = "1.1.5_0"
-DEFAULT_EXTENSION_DIR = (
-    Path.home()
-    / ".config/google-chrome/Default/Extensions"
-    / DEFAULT_EXTENSION_ID
-    / DEFAULT_EXTENSION_VERSION_DIR
-)
-FALLBACK_EXTENSION_DIR = (
-    REPO_ROOT / "resources/chrome-extension/codex" / DEFAULT_EXTENSION_VERSION_DIR
-)
-DEFAULT_HOST_PATH = REPO_ROOT / "target/debug/sky-cua-chrome-host"
 DEFAULT_MCP_CLIENT_PATH = REPO_ROOT / "target/debug/sky-cua-client"
-HOST_NAME = "com.openai.codexextension"
 SMOKE_SESSION_ID = "smoke-session"
 SMOKE_TURN_ID = "smoke-turn"
 MCP_BROWSER_SESSION_ID = "sky-cua-mcp"
@@ -122,16 +123,6 @@ def connected_components(points: set[tuple[int, int]]) -> list[dict[str, int]]:
         )
     components.sort(key=lambda component: component["pixels"], reverse=True)
     return components
-
-
-class BrowserSelection(NamedTuple):
-    name: str
-    command: str
-
-
-class ManifestRestore(NamedTuple):
-    path: Path
-    previous_content: bytes | None
 
 
 class DevToolsWebSocket:
@@ -293,12 +284,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--keep-browser-open", action="store_true")
     return parser.parse_args()
-
-
-def default_extension_dir() -> Path:
-    if DEFAULT_EXTENSION_DIR.exists():
-        return DEFAULT_EXTENSION_DIR
-    return FALLBACK_EXTENSION_DIR
 
 
 def read_native_frame(sock: socket.socket, timeout: float = 10) -> dict[str, object]:
@@ -715,57 +700,6 @@ def read_heartbeat(sock: socket.socket, timeout: float = 10) -> tuple[dict[str, 
             },
         )
         return message, True
-
-
-def browser_command(choice: str) -> BrowserSelection:
-    candidates = [
-        ("brave", "brave"),
-        ("brave", "brave-browser"),
-        ("chromium", "chromium"),
-        ("chromium", "chromium-browser"),
-    ]
-    if choice == "brave":
-        candidates = [("brave", "brave"), ("brave", "brave-browser")]
-    elif choice == "chromium":
-        candidates = [("chromium", "chromium"), ("chromium", "chromium-browser")]
-    for browser_name, candidate in candidates:
-        command = shutil.which(candidate)
-        if command is not None:
-            return BrowserSelection(browser_name, command)
-    raise FileNotFoundError(f"no browser command found for {choice}")
-
-
-def wait_for_devtools_port(user_data_dir: Path, proc: subprocess.Popen[str]) -> str:
-    active_port = user_data_dir / "DevToolsActivePort"
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        if active_port.exists():
-            return active_port.read_text(encoding="utf-8").splitlines()[0].strip()
-        if proc.poll() is not None:
-            stderr = proc.stderr.read() if proc.stderr is not None else ""
-            raise RuntimeError(f"browser exited early with {proc.returncode}\n{stderr}")
-        time.sleep(0.1)
-    raise TimeoutError("DevToolsActivePort did not appear")
-
-
-def load_targets(port: str) -> list[dict[str, object]]:
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=3) as response:
-        value = json.loads(response.read().decode("utf-8"))
-    if not isinstance(value, list):
-        raise RuntimeError(f"unexpected DevTools target list: {value!r}")
-    return [target for target in value if isinstance(target, dict)]
-
-
-def wait_for_extension_target(port: str, extension_id: str) -> dict[str, object]:
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        for target in load_targets(port):
-            target_type = target.get("type")
-            target_url = str(target.get("url", ""))
-            if target_type in {"service_worker", "background_page"} and extension_id in target_url:
-                return target
-        time.sleep(0.25)
-    raise TimeoutError(f"extension target for {extension_id} did not appear")
 
 
 def cdp_call(
@@ -1245,83 +1179,6 @@ def wait_for_extension_runtime(websocket_url: str) -> str:
     raise TimeoutError("extension runtime APIs did not become available")
 
 
-def wait_for_socket(socket_dir: Path) -> Path:
-    deadline = time.time() + 15
-    while time.time() < deadline:
-        sockets = sorted(socket_dir.glob("extension-*.sock"))
-        if sockets:
-            return sockets[0]
-        time.sleep(0.1)
-    raise TimeoutError(f"native host socket did not appear in {socket_dir}")
-
-
-def native_manifest_path(browser_name: str) -> Path:
-    home = Path.home()
-    if browser_name == "brave":
-        return (
-            home / ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts" / f"{HOST_NAME}.json"
-        )
-    if browser_name == "chromium":
-        return home / ".config/chromium/NativeMessagingHosts" / f"{HOST_NAME}.json"
-    raise ValueError(f"unsupported browser for native manifest: {browser_name}")
-
-
-def install_temp_manifest(browser_name: str, extension_id: str, host_path: Path) -> ManifestRestore:
-    manifest_path = native_manifest_path(browser_name)
-    previous = manifest_path.read_bytes() if manifest_path.exists() else None
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest = {
-        "name": HOST_NAME,
-        "description": "sky-cua Chrome native messaging host live smoke",
-        "type": "stdio",
-        "path": str(host_path),
-        "allowed_origins": [f"chrome-extension://{extension_id}/"],
-    }
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return ManifestRestore(manifest_path, previous)
-
-
-def restore_manifest(restore: ManifestRestore | None) -> bool:
-    if restore is None:
-        return False
-    if restore.previous_content is None:
-        with suppress(FileNotFoundError):
-            restore.path.unlink()
-        return True
-    restore.path.write_bytes(restore.previous_content)
-    return True
-
-
-def host_process(host_path: Path, pid: int) -> dict[str, object] | None:
-    resolved = str(host_path)
-    proc_dir = Path("/proc") / str(pid)
-    try:
-        raw_cmdline = (proc_dir / "cmdline").read_bytes()
-    except OSError:
-        return None
-    parts = [part.decode("utf-8", "replace") for part in raw_cmdline.split(b"\0") if part]
-    if parts and parts[0] == resolved:
-        return {"pid": pid, "cmdline": parts}
-    return None
-
-
-def host_pid_from_socket(socket_path: Path) -> int:
-    parts = socket_path.stem.split("-")
-    if len(parts) < 2 or not parts[1].isdecimal():
-        raise RuntimeError(f"could not parse host pid from socket path: {socket_path}")
-    return int(parts[1])
-
-
-def wait_for_host_process(host_path: Path, pid: int) -> dict[str, object] | None:
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        match = host_process(host_path, pid)
-        if match is not None:
-            return match
-        time.sleep(0.1)
-    return None
-
-
 def write_task_complete(sessions_dir: Path, session_id: str, turn_id: str) -> Path:
     now = datetime.now(UTC)
     rollout_dir = sessions_dir / now.strftime("%Y") / now.strftime("%m") / now.strftime("%d")
@@ -1337,54 +1194,6 @@ def write_task_complete(sessions_dir: Path, session_id: str, turn_id: str) -> Pa
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(line, separators=(",", ":")) + "\n")
     return path
-
-
-def launch_browser(
-    command: str,
-    *,
-    user_data_dir: Path,
-    extension_dir: Path,
-    socket_dir: Path,
-    sessions_dir: Path,
-) -> subprocess.Popen[str]:
-    env = os.environ.copy()
-    env["CODEX_BROWSER_USE_SOCKET_DIR"] = str(socket_dir)
-    env["SKY_CUA_BROWSER_USE_SOCKET_DIR"] = str(socket_dir)
-    env["CODEX_BROWSER_USE_SESSIONS_DIR"] = str(sessions_dir)
-    env["SKY_CUA_BROWSER_USE_SESSIONS_DIR"] = str(sessions_dir)
-    env["SKY_CUA_CHROME_HOST_TRACE"] = "1"
-    args = [
-        command,
-        f"--user-data-dir={user_data_dir}",
-        "--remote-debugging-port=0",
-        "--remote-allow-origins=*",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-sync",
-        f"--disable-extensions-except={extension_dir}",
-        f"--load-extension={extension_dir}",
-        "--ozone-platform=wayland",
-        "about:blank",
-    ]
-    return subprocess.Popen(
-        args,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-
-def terminate_browser(proc: subprocess.Popen[str], keep_open: bool) -> str:
-    if keep_open:
-        return ""
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
-    return proc.stderr.read() if proc.stderr is not None else ""
 
 
 def create_artifact_dir(artifacts_root: Path) -> Path:
@@ -1430,7 +1239,9 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
         proc: subprocess.Popen[str] | None = None
         try:
             if args.install_temp_native_manifest:
-                manifest_restore = install_temp_manifest(browser.name, args.extension_id, host_path)
+                manifest_restore = install_temp_manifest(
+                    browser.name, args.extension_id, host_path, user_data_dir=user_data_dir
+                )
             proc = launch_browser(
                 browser.command,
                 user_data_dir=user_data_dir,

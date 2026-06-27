@@ -17,10 +17,19 @@ not reachable through the page.
   under `browser_input`.
 - `user_chrome` is the user's running Chrome-family browser and the only
   target.
-- New tab: `browser_open` returns the `tab_id` for later observe/capture/action
-  calls. Existing tab: `list_resources(surface="browser", resource="tabs")`,
-  then `browser_claim_tab(tab_id)` with the listed `tab_id`. Page actions
-  require an opened or claimed tab.
+- Prefer reusing a tab over opening new ones. `browser_open` creates a new
+  session-owned tab on every call, so repeatedly opening leaves a growing pile
+  of Codex tabs in the user's browser. The default workflow is:
+  `list_resources(surface="browser", resource="tabs")`, `browser_claim_tab(tab_id)`
+  the relevant existing tab (e.g. the active/`about:blank` tab), then
+  `browser_navigate(tab_id, url)` it and keep reusing that `tab_id`. Only
+  `browser_open` when you genuinely need a separate new tab that no existing tab
+  can serve. Page actions require an opened or claimed tab.
+- Never claim or drive privileged internal pages — `chrome://*`,
+  `devtools://*`, `view-source:*`, or the extensions page. They are not CDP
+  page targets, so claim and navigate hang and can wedge the debugger
+  transport for later tabs. If the only existing tab is one of these,
+  `browser_open` a fresh tab instead of claiming it.
 - The runtime retries stale session/debugger attachment once per action; later
   failures are real.
 - Pin a browser with `SKY_CUA_BROWSER=brave` (or chrome/chromium).

@@ -66,8 +66,8 @@ Current MCP browser entrypoints:
   raises or lowers the cap up to the service maximum of 5000.
 - `capture_screen(surface="browser")` accepts `target=user_chrome` and `tab_id`, then captures
   the visible viewport, normalizes the image to CSS-pixel dimensions, and
-  re-encodes it with the shared model-screenshot knobs (JPEG by default, WebP
-  via `SKY_CUA_MODEL_SCREENSHOT_FORMAT=webp`). The MCP result attaches the
+  re-encodes it with the shared model-screenshot knobs (WebP by default, JPEG
+  via `SKY_CUA_MODEL_SCREENSHOT_FORMAT=jpeg`). The MCP result attaches the
   image as an MCP image content block when the session's model supports image
   input. For text-only sessions, the service still persists the capture but
   omits response image data and returns `screenshot_path`, `mime_type`, and

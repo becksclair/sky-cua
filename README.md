@@ -270,10 +270,19 @@ It targets the Arch `testing-vm` with real guest desktop sessions rather than
 embedded X servers or container-nested compositors. It only copies selected
 host Codex auth/config into the VM when `--sync-codex-settings` is set.
 
+The substantive codex tool-use gate is the `codex-cua` profile: one `codex exec`
+run that exercises the full computer-use and browser-use tool surface against
+live fixtures (it brings up Chrome + the sky-cua extension + native host in the
+VM), enforces a deterministic coverage/no-error gate, then runs a host-side
+gpt-5.5 judge that scores tool-use quality and emits a triage list:
+
+```bash
+python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile codex-cua --sync-codex-settings
+```
+
 Diagnostic or legacy lanes:
 
 ```bash
-python3 scripts/live_codex_exec_smoke.py
 python3 scripts/live_kdialog_smoke.py
 ```
 

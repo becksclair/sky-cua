@@ -347,6 +347,7 @@ def generate_mcp_config(
                     "SKY_CUA_AGENT_CURSOR",
                     BROWSER_SELECTION_ENV,
                     MCP_BROWSER_EVAL_ENV,
+                    "SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS",
                     "SKY_CUA_COSMIC_HELPER",
                     "SKY_CUA_INPUT_BACKEND",
                     "SKY_CUA_INPUT_HELPER_SOCKET",

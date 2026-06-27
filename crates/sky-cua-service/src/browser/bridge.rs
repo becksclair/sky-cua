@@ -21,18 +21,25 @@ use super::sockets::{
     browser_socket_selection_from_env, find_bridge_sockets,
 };
 
+/// Overall deadline for a browser bridge operation. Defaults to 12s but is
+/// raised by `SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS` for slow or remote desktops
+/// where the extension / native-host CDP relay is sluggish. Keep the default in
+/// sync with `BROWSER_OPEN_TIMEOUT_MS` in `diagnostics.rs`.
 #[cfg(not(test))]
-pub(super) const BROWSER_OPEN_TIMEOUT: Duration = Duration::from_secs(12);
+pub(super) fn browser_open_timeout() -> Duration {
+    Duration::from_millis(super::transport::browser_request_timeout_override_ms().unwrap_or(12_000))
+}
 // Short enough that the aggregate-deadline test stays fast, but with enough
-// headroom that happy-path operation tests do not time out under scheduler
-// load. Keep in sync with `BROWSER_OPEN_TIMEOUT_MS` in `diagnostics.rs`.
+// headroom that happy-path operation tests do not time out under scheduler load.
 #[cfg(test)]
-pub(super) const BROWSER_OPEN_TIMEOUT: Duration = Duration::from_secs(2);
+pub(super) fn browser_open_timeout() -> Duration {
+    Duration::from_secs(2)
+}
 
 pub(crate) async fn list_tabs(target: Option<BrowserTargetKind>) -> BrowserListTabsResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
 
-    match BrowserBridgeExecutor::from_env(TokioInstant::now() + BROWSER_OPEN_TIMEOUT) {
+    match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
         Ok(executor) => executor.list_tabs(Some(resolved_target)).await,
         Err(diagnostic) => BrowserListTabsResponse {
             target: Some(resolved_target),
@@ -59,17 +66,17 @@ pub(crate) async fn open_tab(
         }
     };
 
-    let executor = match BrowserBridgeExecutor::from_env(TokioInstant::now() + BROWSER_OPEN_TIMEOUT)
-    {
-        Ok(executor) => executor,
-        Err(diagnostic) => {
-            return BrowserOpenResponse {
-                target: resolved_target,
-                tab: None,
-                diagnostics: vec![diagnostic],
-            };
-        }
-    };
+    let executor =
+        match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
+            Ok(executor) => executor,
+            Err(diagnostic) => {
+                return BrowserOpenResponse {
+                    target: resolved_target,
+                    tab: None,
+                    diagnostics: vec![diagnostic],
+                };
+            }
+        };
 
     match executor.open_tab(resolved_target, url.as_deref()).await {
         Ok(response) => response,
@@ -98,17 +105,17 @@ pub(crate) async fn claim_tab(
         }
     };
 
-    let executor = match BrowserBridgeExecutor::from_env(TokioInstant::now() + BROWSER_OPEN_TIMEOUT)
-    {
-        Ok(executor) => executor,
-        Err(diagnostic) => {
-            return BrowserClaimTabResponse {
-                target: resolved_target,
-                tab: None,
-                diagnostics: vec![diagnostic],
-            };
-        }
-    };
+    let executor =
+        match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
+            Ok(executor) => executor,
+            Err(diagnostic) => {
+                return BrowserClaimTabResponse {
+                    target: resolved_target,
+                    tab: None,
+                    diagnostics: vec![diagnostic],
+                };
+            }
+        };
 
     match executor.claim_tab(resolved_target, &tab_id).await {
         Ok(response) => response,
@@ -144,20 +151,20 @@ pub(crate) async fn move_mouse(
         };
     }
 
-    let executor = match BrowserBridgeExecutor::from_env(TokioInstant::now() + BROWSER_OPEN_TIMEOUT)
-    {
-        Ok(executor) => executor,
-        Err(diagnostic) => {
-            return BrowserMoveMouseResponse {
-                target: resolved_target,
-                tab_id: normalized_tab_id,
-                x,
-                y,
-                wait_for_arrival,
-                diagnostics: vec![diagnostic],
-            };
-        }
-    };
+    let executor =
+        match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
+            Ok(executor) => executor,
+            Err(diagnostic) => {
+                return BrowserMoveMouseResponse {
+                    target: resolved_target,
+                    tab_id: normalized_tab_id,
+                    x,
+                    y,
+                    wait_for_arrival,
+                    diagnostics: vec![diagnostic],
+                };
+            }
+        };
 
     match executor
         .bind_tab(resolved_target, &normalized_tab_id)
@@ -541,18 +548,18 @@ async fn browser_action_response(
         };
     }
 
-    let executor = match BrowserBridgeExecutor::from_env(TokioInstant::now() + BROWSER_OPEN_TIMEOUT)
-    {
-        Ok(executor) => executor,
-        Err(diagnostic) => {
-            return BrowserActionResponse {
-                target: resolved_target,
-                tab_id: normalized_tab_id,
-                action: action_name.to_string(),
-                diagnostics: vec![diagnostic],
-            };
-        }
-    };
+    let executor =
+        match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
+            Ok(executor) => executor,
+            Err(diagnostic) => {
+                return BrowserActionResponse {
+                    target: resolved_target,
+                    tab_id: normalized_tab_id,
+                    action: action_name.to_string(),
+                    diagnostics: vec![diagnostic],
+                };
+            }
+        };
     let binding = executor.bind_tab(resolved_target, &normalized_tab_id);
 
     if let Some((x, y)) = cursor_before_action
@@ -611,6 +618,6 @@ async fn run_cdp_action(
     tab_id: &str,
     action: BrowserCdpAction,
 ) -> Result<BrowserCdpResult, DiagnosticEntry> {
-    let executor = BrowserBridgeExecutor::from_env(TokioInstant::now() + BROWSER_OPEN_TIMEOUT)?;
+    let executor = BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout())?;
     executor.bind_tab(target, tab_id).run_cdp(action).await
 }

@@ -150,10 +150,12 @@ def test_testing_vm_opencode_sync_has_user_writable_latest_fallback() -> None:
     for profile in (opencode_profile, pi_profile):
         assert "install_policy_args+=(--browser-eval" in profile
         assert "install_policy_args+=(--model-supports-images" in profile
-        assert "missing_fixtures=()" in profile
-        assert "Required dialog fixture(s) missing in testing VM" in profile
-        assert "Skipping %s fixture" not in profile
-        assert "for fixture in zenity kdialog; do" in profile
+        # Consolidated to a single wiring check: no dialog fixtures, no fixture loop.
+        assert "--mode wiring" in profile
+        assert "for fixture in zenity kdialog; do" not in profile
+        assert "missing_fixtures=()" not in profile
+    assert "--agent opencode --mode wiring" in opencode_profile
+    assert "--agent pi --mode wiring" in pi_profile
 
 
 def test_testing_vm_pi_sync_has_user_writable_latest_fallback() -> None:
@@ -1275,3 +1277,18 @@ def test_testing_vm_runner_syncs_essential_codex_settings(
     assert "browser/config.toml" in command_text
     assert "--delete" in command_text
     assert "plugins/" in command_text
+
+
+def test_codex_cua_profile_and_openai_bundled_compat_wiring() -> None:
+    assert "codex-cua" in run_gui_testing_vm_smoke.PROFILES
+    descriptor = run_gui_testing_vm_smoke.VM_PROFILE_DESCRIPTORS["codex-cua"]
+    assert descriptor.dispatch == run_gui_testing_vm_smoke.CODEX_CUA_JUDGE_DISPATCH
+    # The compat marketplace is staged for codex-cua and the `all` sequence.
+    assert {"codex-cua", "all"} == run_gui_testing_vm_smoke.OPENAI_BUNDLED_PROFILES
+    # The runner stage target and the profile-script env must agree on the path.
+    assert ".cache/sky-cua/openai-bundled" in run_gui_testing_vm_smoke.OPENAI_BUNDLED_REMOTE_REL
+    profile = (
+        Path(__file__).resolve().parents[1] / "scripts" / "testing-vm" / "profiles" / "codex-cua.sh"
+    ).read_text(encoding="utf-8")
+    assert "SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT" in profile
+    assert "${HOME}/.cache/sky-cua/openai-bundled" in profile

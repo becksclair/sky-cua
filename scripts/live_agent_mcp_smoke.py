@@ -600,6 +600,82 @@ def run_fixture_smoke(
                     dialog.wait(timeout=5)
 
 
+PI_WIRING_GUIDANCE = (
+    "When using Pi's generic mcp tool, pass an object with tool set to the sky-cua tool name and "
+    "args set to a JSON object, not a JSON string. Use sky_cua_doctor with args {} or "
+    'sky_cua_observe with args {"surface":"desktop"}.'
+)
+
+
+def build_wiring_prompt(agent: str) -> str:
+    """Prompt for the minimal MCP wiring check: list tools, call one read-only tool."""
+    prompt = (
+        "Use the sky-cua MCP tools (server name sky_cua, sky-cua, or computer-use). "
+        "This is a wiring check, not a task: confirm the sky-cua tool schema is available to you, "
+        "then call exactly ONE read-only sky-cua tool to prove the connection works. "
+        'Prefer `doctor` (no arguments) or `observe` with {"surface":"desktop"}. '
+        "Do not perform any input actions (no clicks, typing, key presses, or scrolling) and do not "
+        "use shell commands, process inspection, or non-sky-cua tools. "
+    )
+    if agent == "pi":
+        prompt += PI_WIRING_GUIDANCE + " "
+    prompt += (
+        "After the read-only tool returns, stop and return a JSON object with keys: "
+        "tools_listed (boolean: whether the sky-cua tool schema was visible), "
+        "read_only_tool_called (string: the tool name you called), "
+        "error (string or null: any error you observed)."
+    )
+    return prompt
+
+
+def run_wiring_check(*, agent: str, model: str | None = None) -> int:
+    """Minimal MCP smoke: prove the agent sees the sky-cua schema and a read-only call succeeds.
+
+    This replaces the dialog-dismiss task for opencode/pi in the consolidated matrix. It proves
+    only that MCP is wired for the agent: the schema loads and one read-only tool (doctor/observe)
+    returns without error. Substantive tool-use coverage lives in the codex CUA smoke.
+    """
+    artifact_dir = make_artifact_dir(agent, "wiring")
+    effective_model = model
+    if agent == "opencode" and effective_model is None:
+        effective_model = os.environ.get(
+            "SKY_CUA_SMOKE_OPENCODE_MODEL", DEFAULT_OPENCODE_SMOKE_MODEL
+        )
+    if agent == "pi" and effective_model is None:
+        effective_model = os.environ.get("SKY_CUA_SMOKE_PI_MODEL", DEFAULT_PI_SMOKE_MODEL)
+
+    prompt = build_wiring_prompt(agent)
+    proc = run_agent(agent, prompt, artifact_dir, model=effective_model)
+
+    # A successful read-only sky-cua tool call is the acceptance signal: the schema loaded and a
+    # tool returned without error. Any sky-cua tool name counts (doctor/observe are read-only).
+    stdout_path = artifact_dir / f"{agent}.stdout.log"
+    tool_evidence = _stdout_has_sky_cua_tool_evidence(stdout_path)
+    ok = proc.returncode == 0 and tool_evidence is True
+
+    result = write_result(
+        artifact_dir,
+        agent,
+        proc,
+        dialog_alive=False,
+        extra={
+            "mode": "wiring",
+            "model": effective_model,
+            "ok": ok,
+            "tool_evidence": tool_evidence,
+        },
+    )
+
+    if not ok:
+        print(f"{agent} wiring smoke FAILED: {artifact_dir}", file=sys.stderr)
+        print(json.dumps(result, indent=2), file=sys.stderr)
+        return 1
+
+    print(f"{agent} wiring smoke passed: {artifact_dir}")
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generic agent MCP smoke harness.")
     parser.add_argument(
@@ -609,10 +685,19 @@ def main() -> int:
         help="Agent to use for driving sky-cua.",
     )
     parser.add_argument(
+        "--mode",
+        choices=("wiring", "dialog"),
+        default="wiring",
+        help=(
+            "wiring (default): minimal schema + one read-only tool call. "
+            "dialog: legacy find-and-dismiss-a-dialog task against --fixture."
+        ),
+    )
+    parser.add_argument(
         "--fixture",
         choices=tuple(FIXTURES.keys()),
         default="zenity",
-        help="Desktop fixture to launch.",
+        help="Desktop fixture to launch (dialog mode only).",
     )
     parser.add_argument(
         "--model",
@@ -624,6 +709,8 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if args.mode == "wiring":
+        return run_wiring_check(agent=args.agent, model=args.model)
     return run_fixture_smoke(agent=args.agent, fixture_name=args.fixture, model=args.model)
 
 

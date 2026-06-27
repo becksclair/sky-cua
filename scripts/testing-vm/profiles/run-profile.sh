@@ -98,6 +98,9 @@ opencode-mcp)
 pi-mcp)
 	exec "$profile_dir/pi-mcp.sh" "$@"
 	;;
+codex-cua)
+	exec "$profile_dir/codex-cua.sh" "$@"
+	;;
 *)
 	printf 'unknown testing VM profile: %s\n' "$profile" >&2
 	exit 64
