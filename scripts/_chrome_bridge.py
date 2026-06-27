@@ -91,7 +91,11 @@ def wait_for_devtools_port(user_data_dir: Path, proc: subprocess.Popen[str]) -> 
     deadline = time.time() + 20
     while time.time() < deadline:
         if active_port.exists():
-            return active_port.read_text(encoding="utf-8").splitlines()[0].strip()
+            # Chrome creates the file, then writes the port line; observing it
+            # mid-write yields no lines. Keep polling until the first line lands.
+            lines = active_port.read_text(encoding="utf-8").splitlines()
+            if lines and lines[0].strip():
+                return lines[0].strip()
         if proc.poll() is not None:
             stderr = proc.stderr.read() if proc.stderr is not None else ""
             raise RuntimeError(f"browser exited early with {proc.returncode}\n{stderr}")

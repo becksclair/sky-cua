@@ -2153,9 +2153,15 @@ def read_remote_json(
     )
     if completed.returncode != 0:
         return None
-    payload = json.loads(completed.stdout)
+    # A truncated or half-flushed remote marker must not crash the dispatch: treat
+    # unparseable or non-object payloads as "no usable marker" so callers fall into
+    # their graceful no-artifacts branch and still write a host summary.
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
     if not isinstance(payload, dict):
-        raise RuntimeError(f"remote JSON was not an object: {payload!r}")
+        return None
     return payload
 
 
