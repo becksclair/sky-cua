@@ -133,9 +133,8 @@ pub trait DesktopBackend: Send + Sync {
         &self,
         target: Option<WindowTarget>,
         display_target: Option<DisplayTarget>,
-        capture_all_displays: bool,
     ) -> Result<AppStateSnapshot, BackendError> {
-        if target.is_some() || display_target.is_some() || capture_all_displays {
+        if target.is_some() || display_target.is_some() {
             return Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "targeted screenshots are not available for this backend",

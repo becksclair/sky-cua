@@ -436,7 +436,6 @@ pub enum CaptureScope {
     PrimaryDisplay,
     Display,
     Window,
-    AllDisplays,
     #[default]
     Unknown,
 }

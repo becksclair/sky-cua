@@ -18,7 +18,7 @@ pub(crate) struct CapturePlanOutcome {
 
 const CAPTURE_SOURCE_GEOMETRY_MISSING_STEM: &str =
     "targeted screenshot requires capture source geometry";
-const CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE: &str = "targeted screenshot requires capture source geometry; refresh the window/display state and retry once, then fall back to a broader capture only if subsequent pixel actions use that capture's snapshot_id";
+const CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE: &str = "targeted screenshot requires capture source geometry; refresh the window/display state and retry the targeted capture once. Captures are single-screen; there is no broader capture to fall back to.";
 const CAPTURE_BACKEND_DOWNGRADED_MESSAGE: &str =
     "Snapshot image capture downgraded from PipeWire to Screenshot portal fallback";
 const CAPTURE_BACKEND_DOWNGRADED_DETAILS: &str =
@@ -112,13 +112,7 @@ pub(crate) async fn plan_capture(
             Ok(frame) => {
                 if let Some(capture_info) = capture.as_mut() {
                     capture_info.image_backend = Some(CaptureBackendKind::PortalPipeWire);
-                    if !pipewire_source_covers_all_displays(capture_info, environment) {
-                        capture_info.clear_image_fields();
-                        capture_error = Some(BackendError::new(
-                            BackendErrorCode::PipeWireStreamFailed,
-                            "RemoteDesktop stream does not cover the virtual desktop required for an all-displays screenshot",
-                        ));
-                    } else if let Err(error) = apply_model_capture(
+                    if let Err(error) = apply_model_capture(
                         capture_info,
                         snapshot_id,
                         &frame.path,
@@ -322,24 +316,6 @@ fn compatible_dispatch_source(
     rect_contains_rect(&dispatch_source, final_logical_rect).then_some(dispatch_source)
 }
 
-fn pipewire_source_covers_all_displays(
-    capture_info: &CaptureInfo,
-    environment: &EnvironmentInfo,
-) -> bool {
-    if capture_info.capture_scope != CaptureScope::AllDisplays {
-        return true;
-    }
-    let Some(union) = virtual_desktop_rect(&environment.displays) else {
-        return false;
-    };
-    capture_info
-        .source_logical_rect
-        .as_ref()
-        .is_some_and(|source| {
-            rect_contains_rect(source, &union) && rect_contains_rect(&union, source)
-        })
-}
-
 fn apply_model_capture(
     capture_info: &mut CaptureInfo,
     snapshot_id: &str,
@@ -387,18 +363,7 @@ fn apply_model_capture(
                 Some(cropped_pixel_size),
             )?
         }
-        None => {
-            if capture_info.logical_rect.is_none()
-                && let Some(logical_rect) =
-                    infer_untargeted_capture_rect(&capture_info.capture_scope, environment)
-            {
-                if capture_info.source_logical_rect.is_none() {
-                    capture_info.source_logical_rect = Some(logical_rect.clone());
-                }
-                capture_info.logical_rect = Some(logical_rect);
-            }
-            screenshot::prepare_model_capture(snapshot_id, raw_path)?
-        }
+        None => screenshot::prepare_model_capture(snapshot_id, raw_path)?,
     };
     capture_info.coordinate_space = Some(CoordinateSpace::StreamPixels);
     capture_info.screenshot_path = Some(model_capture.path.display().to_string());
@@ -446,16 +411,6 @@ fn infer_capture_source_rect(
 
     let union = virtual_desktop_rect(&environment.displays)?;
     pixel_size_matches_rect(raw_pixel_size, &union).then_some(union)
-}
-
-fn infer_untargeted_capture_rect(
-    capture_scope: &CaptureScope,
-    environment: &EnvironmentInfo,
-) -> Option<RectF> {
-    if capture_scope != &CaptureScope::AllDisplays {
-        return None;
-    }
-    virtual_desktop_rect(&environment.displays)
 }
 
 fn display_matches_raw_size(
@@ -717,9 +672,8 @@ mod tests {
     use super::{
         CAPTURE_BACKEND_DOWNGRADED_DETAILS, CapturePlanOutcome, CaptureRegionTarget,
         compatible_dispatch_source, display_matches_raw_size, infer_capture_source_rect,
-        infer_untargeted_capture_rect, initial_capture, outcome_missing_capture_source_geometry,
-        pipewire_source_covers_all_displays, pixel_crop_for_target, push_diagnostics,
-        should_fallback_to_screenshot, virtual_desktop_rect,
+        initial_capture, outcome_missing_capture_source_geometry, pixel_crop_for_target,
+        push_diagnostics, should_fallback_to_screenshot, virtual_desktop_rect,
     };
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::test_support::wayland_pipewire_environment;
@@ -803,30 +757,6 @@ mod tests {
         assert_eq!(capture.backend, CaptureBackendKind::PortalPipeWire);
         assert_eq!(capture.image_backend, None);
         assert_eq!(capture.screenshot_path, None);
-    }
-
-    #[test]
-    fn pipewire_all_displays_requires_virtual_desktop_source() {
-        let mut environment = wayland_pipewire_environment();
-        environment.displays = vec![
-            test_display("kwin:eDP-1", 0, true, 0.0, 0.0, 1920.0, 1080.0),
-            test_display("kwin:HDMI-A-1", 1, false, 1920.0, 0.0, 1280.0, 720.0),
-        ];
-        let mut capture = capture_with_backend(
-            CaptureBackendKind::PortalPipeWire,
-            Some(CaptureBackendKind::PortalPipeWire),
-            None,
-        );
-        capture.capture_scope = CaptureScope::AllDisplays;
-        capture.source_logical_rect = Some(environment.displays[0].logical_rect.clone());
-
-        assert!(!pipewire_source_covers_all_displays(&capture, &environment));
-
-        capture.source_logical_rect = super::virtual_desktop_rect(&environment.displays);
-        assert!(pipewire_source_covers_all_displays(&capture, &environment));
-
-        environment.displays.clear();
-        assert!(!pipewire_source_covers_all_displays(&capture, &environment));
     }
 
     #[test]
@@ -1523,7 +1453,7 @@ mod tests {
         ]);
         let target = CaptureRegionTarget {
             desktop_logical_rect: union.clone(),
-            capture_scope: CaptureScope::AllDisplays,
+            capture_scope: CaptureScope::Unknown,
             display: None,
         };
 
@@ -1621,12 +1551,5 @@ mod tests {
             virtual_desktop_rect(&displays),
             Some(rect(-100.0, -50.0, 300.0, 200.0))
         );
-    }
-
-    #[test]
-    fn infer_untargeted_capture_rect_only_for_all_displays() {
-        let env = env_with_displays(vec![display("only", rect(0.0, 0.0, 1920.0, 1080.0), None)]);
-        assert!(infer_untargeted_capture_rect(&CaptureScope::AllDisplays, &env).is_some());
-        assert!(infer_untargeted_capture_rect(&CaptureScope::Display, &env).is_none());
     }
 }

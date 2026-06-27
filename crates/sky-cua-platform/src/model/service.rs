@@ -35,8 +35,6 @@ pub enum ServiceRequest {
         target: Option<WindowTarget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display_target: Option<DisplayTarget>,
-        #[serde(default, skip_serializing_if = "is_false")]
-        capture_all_displays: bool,
     },
     ResetPortalTokens,
     AgentCursorStatus,
@@ -64,10 +62,6 @@ pub enum ServiceRequest {
 
 fn is_default_capture_screen(mode: &CaptureScreenMode) -> bool {
     *mode == CaptureScreenMode::default()
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -224,7 +218,6 @@ mod tests {
                         ..Default::default()
                     }),
                     display_target: None,
-                    capture_all_displays: false,
                 },
                 "screenshot",
             ),
@@ -342,7 +335,6 @@ mod tests {
                 display_name: None,
                 display_index: None,
             }),
-            capture_all_displays: false,
         })
         .expect("screenshot request should serialize");
 
@@ -353,11 +345,11 @@ mod tests {
         let rendered = serde_json::to_value(ServiceRequest::Screenshot {
             target: None,
             display_target: None,
-            capture_all_displays: true,
         })
-        .expect("all-displays screenshot request should serialize");
+        .expect("primary screenshot request should serialize");
 
-        assert_eq!(rendered["capture_all_displays"], true);
+        assert_eq!(rendered["type"], "screenshot");
+        assert!(rendered.get("display_target").is_none());
     }
 
     #[test]

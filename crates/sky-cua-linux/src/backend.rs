@@ -396,7 +396,7 @@ impl LinuxDesktopBackend {
             diagnostics.push_code(
                 "GetAppStateCaptureUnavailable",
                 "get_app_state did not attach a screenshot because no target window, target display, or primary display geometry was available.",
-                Some("Use screenshot(capture_all_displays=true) only when a full virtual desktop image is explicitly required.".to_string()),
+                Some("Refresh desktop/window state, then call capture_desktop (optionally with a window or display selector) to capture a single screen.".to_string()),
             );
             return Ok(None);
         }
@@ -547,7 +547,7 @@ impl LinuxDesktopBackend {
         diagnostics.push_code(
             "GetAppStateCaptureUnavailable",
             "get_app_state did not attach a screenshot because no scoped window/display capture could be produced.",
-            Some("Use screenshot(window_id=...) or screenshot(display_id=...) for explicit visual capture; use screenshot(capture_all_displays=true) only when a full virtual desktop image is required.".to_string()),
+            Some("Use capture_desktop(window_id=...) or capture_desktop(display_id=...) for explicit single-screen visual capture.".to_string()),
         );
         Ok(None)
     }
@@ -1150,7 +1150,6 @@ impl DesktopBackend for LinuxDesktopBackend {
         &self,
         target: Option<WindowTarget>,
         display_target: Option<DisplayTarget>,
-        capture_all_displays: bool,
     ) -> Result<AppStateSnapshot, BackendError> {
         let _ = self.portal.take_lifecycle_events().await;
         let snapshot_id = new_snapshot_id();
@@ -1206,8 +1205,6 @@ impl DesktopBackend for LinuxDesktopBackend {
                 capture_scope: CaptureScope::Display,
                 display: Some(display_ref),
             });
-        } else if capture_all_displays {
-            capture_scope = CaptureScope::AllDisplays;
         } else if let Some(display) = crate::displays::primary_display(&environment.displays) {
             let display_ref = DisplayRef::from(&display);
             capture_scope = CaptureScope::PrimaryDisplay;

@@ -136,7 +136,6 @@ fn inspection_image_role(capture: &CaptureInfo) -> &'static str {
         CaptureScope::Window => "target_window_crop",
         CaptureScope::Display => "display_capture",
         CaptureScope::PrimaryDisplay => "primary_display_capture",
-        CaptureScope::AllDisplays => "virtual_desktop_capture",
         CaptureScope::Unknown => "inspection_image",
     }
 }
@@ -147,7 +146,6 @@ fn inspection_image_scope(capture: &CaptureInfo) -> &'static str {
         CaptureScope::Window => "window",
         CaptureScope::Display => "display",
         CaptureScope::PrimaryDisplay => "primary_display",
-        CaptureScope::AllDisplays => "virtual_desktop",
         CaptureScope::Unknown => "unknown",
     }
 }

@@ -535,7 +535,6 @@ fn handle_tool_call_with_browser_eval_policy(
             match service.call(&ServiceRequest::Screenshot {
                 target: screenshot_target.window,
                 display_target: screenshot_target.display,
-                capture_all_displays: screenshot_target.capture_all_displays,
             })? {
                 ServiceResponse::Screenshot { mut snapshot } => {
                     enrich_snapshot(heuristics, &mut snapshot);
@@ -960,34 +959,20 @@ fn parse_optional_window_target(arguments: &Value) -> Result<Option<WindowTarget
 struct ScreenshotTarget {
     window: Option<WindowTarget>,
     display: Option<DisplayTarget>,
-    capture_all_displays: bool,
 }
 
 fn parse_screenshot_target(arguments: &Value) -> Result<ScreenshotTarget> {
     let window = parse_optional_window_target(arguments)?;
     let display = DisplayTarget::from_argument_fields(arguments)
         .context("invalid screenshot display target arguments")?;
-    let capture_all_displays = match arguments.get("capture_all_displays") {
-        Some(value) => value
-            .as_bool()
-            .ok_or_else(|| anyhow!("capture_all_displays must be a boolean"))?,
-        None => false,
-    };
 
-    let selector_count = usize::from(window.is_some())
-        + usize::from(display.is_some())
-        + usize::from(capture_all_displays);
-    if selector_count > 1 {
+    if window.is_some() && display.is_some() {
         return Err(anyhow!(
-            "screenshot accepts exactly one capture selector: window target fields, display_id/display_name/display_index, or capture_all_displays=true"
+            "screenshot accepts exactly one capture selector: window target fields or display_id/display_name/display_index"
         ));
     }
 
-    Ok(ScreenshotTarget {
-        window,
-        display,
-        capture_all_displays,
-    })
+    Ok(ScreenshotTarget { window, display })
 }
 
 pub(crate) fn action_summary(outcome: &ActionOutcome) -> String {
@@ -1019,7 +1004,7 @@ fn tool_error(code: impl Into<String>, message: impl Into<String>) -> Result<Val
     });
     if code == "CaptureSourceGeometryMissing" {
         structured_content["suggestion"] = json!(
-            "Retry the targeted screenshot once after refreshing the window/display state, then fall back to a broader capture only if subsequent pixel actions use that capture's snapshot_id."
+            "Refresh the window/display state (re-observe) and retry the same targeted capture once; it returns a snapshot_id for pixel actions. Captures are single-screen, so there is no broader capture to fall back to."
         );
     }
     Ok(json!({
@@ -1645,8 +1630,22 @@ mod tests {
         let capture_message = malformed_capture["structuredContent"]["error"]["message"]
             .as_str()
             .expect("desktop capture error message");
-        assert!(capture_message.contains("Choose exactly one capture source"));
+        assert!(capture_message.contains("captures a single screen"));
         assert!(capture_message.contains("do not mix them"));
+
+        let retired_all_displays = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "capture_desktop",
+            json!({"capture_all_displays": true}),
+        )
+        .expect("retired all-displays selector should return invalid request");
+        assert_eq!(
+            retired_all_displays["isError"], true,
+            "capture_desktop must not let the model capture every display"
+        );
 
         let malformed_desktop_action = handle_session_tool_call(
             &service,
@@ -2113,11 +2112,12 @@ mod tests {
             "capture_desktop",
             json!({
                 "display_id": "kwin:HDMI-A-1",
-                "capture_all_displays": false,
                 "screenshot_delivery": null
             }),
         )
-        .expect("false all-displays sentinel with display selector should pass grouped schema");
+        .expect(
+            "null screenshot_delivery sentinel with display selector should pass grouped schema",
+        );
         let mut requests = screenshot_service.take_requests();
         assert_eq!(
             requests.len(),
@@ -2128,7 +2128,6 @@ mod tests {
             ServiceRequest::Screenshot {
                 target: None,
                 display_target: Some(display_target),
-                capture_all_displays: false,
             } => assert_eq!(display_target.display_id.as_deref(), Some("kwin:HDMI-A-1")),
             other => panic!("expected display screenshot request: {other:?}"),
         }
@@ -2158,39 +2157,8 @@ mod tests {
             ServiceRequest::Screenshot {
                 target: None,
                 display_target: Some(display_target),
-                capture_all_displays: false,
             } => assert_eq!(display_target.display_id.as_deref(), Some("kwin:HDMI-A-1")),
             other => panic!("expected display screenshot request: {other:?}"),
-        }
-
-        let all_displays_service = FakeService::with_response(ServiceResponse::Screenshot {
-            snapshot: Box::new(snapshot_with_verbose_element()),
-        });
-        let all_displays_result = handle_session_tool_call(
-            &all_displays_service,
-            &heuristics,
-            &model,
-            &registry,
-            "capture_desktop",
-            json!({
-                "capture_all_displays": true,
-                "window_id": ""
-            }),
-        )
-        .expect("ignored window_id sentinel with all-displays capture should pass grouped schema");
-        let mut requests = all_displays_service.take_requests();
-        assert_eq!(
-            requests.len(),
-            1,
-            "all-displays capture should dispatch, got result: {all_displays_result}"
-        );
-        match requests.remove(0) {
-            ServiceRequest::Screenshot {
-                target: None,
-                display_target: None,
-                capture_all_displays: true,
-            } => {}
-            other => panic!("expected all-displays screenshot request: {other:?}"),
         }
 
         let primary_screenshot_service = FakeService::with_response(ServiceResponse::Screenshot {
@@ -2215,7 +2183,6 @@ mod tests {
             ServiceRequest::Screenshot {
                 target: None,
                 display_target: None,
-                capture_all_displays: false,
             } => {}
             other => panic!("expected primary screenshot request: {other:?}"),
         }
@@ -2248,7 +2215,6 @@ mod tests {
             ServiceRequest::Screenshot {
                 target: None,
                 display_target: Some(display_target),
-                capture_all_displays: false,
             } => assert_eq!(display_target.display_id.as_deref(), Some("kwin:HDMI-A-1")),
             other => panic!("expected display screenshot request: {other:?}"),
         }
@@ -3014,7 +2980,8 @@ mod tests {
         assert!(
             screenshot_schema["properties"]
                 .get("capture_all_displays")
-                .is_some()
+                .is_none(),
+            "capture_desktop must not advertise capture_all_displays to the model"
         );
         assert!(
             schema_accepts(
@@ -3024,30 +2991,27 @@ mod tests {
             "capture_desktop must allow blank display_id sentinels with an active display_name"
         );
         assert!(
-            schema_accepts(
-                screenshot_schema,
-                &json!({"display_index": null, "capture_all_displays": true})
-            ),
-            "capture_desktop must allow null display_index sentinels with all-display capture"
+            !schema_accepts(screenshot_schema, &json!({"capture_all_displays": true})),
+            "capture_desktop must reject the retired capture_all_displays selector"
         );
         assert!(
             !schema_accepts(
                 screenshot_schema,
                 &json!({"display_index": 0, "capture_all_displays": true})
             ),
-            "capture_desktop must still reject active display selectors mixed with all-display capture"
+            "capture_desktop must reject capture_all_displays even alongside a display selector"
         );
         assert!(
             screenshot["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("primary display"))
+                .is_some_and(|description| description.contains("main display"))
         );
         assert!(
             screenshot["description"]
                 .as_str()
                 .is_some_and(|description| {
-                    description.contains("Choose exactly one source")
-                        && description.contains("capture_all_displays")
+                    description.contains("exactly one screen")
+                        && !description.contains("capture_all_displays")
                 })
         );
     }
@@ -3088,7 +3052,6 @@ mod tests {
         let omitted = parse_screenshot_target(&json!({})).expect("omitted target is valid");
         assert!(omitted.window.is_none());
         assert!(omitted.display.is_none());
-        assert!(!omitted.capture_all_displays);
 
         let window = parse_screenshot_target(&json!({"window_id": "hwnd:0x1"}))
             .expect("window target is valid");
@@ -3103,24 +3066,25 @@ mod tests {
             display.display.unwrap().display_id.as_deref(),
             Some("kwin:HDMI-A-1")
         );
+    }
 
-        let display_with_false_all = parse_screenshot_target(
-            &json!({"display_id": "kwin:HDMI-A-1", "capture_all_displays": false}),
+    #[test]
+    fn screenshot_parser_ignores_retired_all_displays_flag() {
+        // capture_all_displays is no longer an agent-facing selector; the grouped
+        // schema rejects it, and any stray value never resolves to a target.
+        let display = parse_screenshot_target(
+            &json!({"display_id": "kwin:HDMI-A-1", "capture_all_displays": true}),
         )
-        .expect("false all-displays sentinel should not count as a selector");
+        .expect("a display selector still resolves regardless of stray fields");
         assert_eq!(
-            display_with_false_all
-                .display
-                .unwrap()
-                .display_id
-                .as_deref(),
+            display.display.unwrap().display_id.as_deref(),
             Some("kwin:HDMI-A-1")
         );
-        assert!(!display_with_false_all.capture_all_displays);
 
-        let all = parse_screenshot_target(&json!({"capture_all_displays": true}))
-            .expect("all-displays target is valid");
-        assert!(all.capture_all_displays);
+        let omitted = parse_screenshot_target(&json!({"capture_all_displays": true}))
+            .expect("stray all-displays flag is not itself a selector");
+        assert!(omitted.window.is_none());
+        assert!(omitted.display.is_none());
     }
 
     #[test]
@@ -3128,13 +3092,6 @@ mod tests {
         let error = parse_screenshot_target(&json!({
             "window_id": "kwin:{window}",
             "display_id": "kwin:eDP-1"
-        }))
-        .unwrap_err();
-        assert!(error.to_string().contains("exactly one capture selector"));
-
-        let error = parse_screenshot_target(&json!({
-            "display_index": 0,
-            "capture_all_displays": true
         }))
         .unwrap_err();
         assert!(error.to_string().contains("exactly one capture selector"));

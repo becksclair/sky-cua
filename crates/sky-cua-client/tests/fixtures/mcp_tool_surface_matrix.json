@@ -4,9 +4,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": false,
-      "description_bytes": 3430,
+      "description_bytes": 3609,
       "largest_schema_bytes": 8081,
-      "serialized_bytes": 78928,
+      "serialized_bytes": 77555,
       "surface": "grouped",
       "tool_count": 34,
       "tools_list": {
@@ -1109,7 +1109,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Capture a fresh desktop frame and returned snapshot_id for pixel actions. Choose exactly one source: no selector for primary display, a window selector, one display selector, or capture_all_displays=true.",
+            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. Call with no selector for the normal case: it captures the main display. Pass one window selector to capture a single window, or one display selector (display_id/display_name/display_index) only when you specifically need a non-main monitor.",
             "inputSchema": {
               "additionalProperties": false,
               "not": {
@@ -1268,183 +1268,6 @@
                     ]
                   },
                   {
-                    "allOf": [
-                      {
-                        "properties": {
-                          "capture_all_displays": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "capture_all_displays"
-                        ]
-                      },
-                      {
-                        "anyOf": [
-                          {
-                            "properties": {
-                              "window_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "window_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "pid": {
-                                "minimum": 1,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "pid"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "tty": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "tty"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_pid": {
-                                "minimum": 1,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "terminal_pid"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_command": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "terminal_command"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_cwd": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "terminal_cwd"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "app_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "app_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "wm_class": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "wm_class"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "title": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "title"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "allOf": [
-                      {
-                        "properties": {
-                          "capture_all_displays": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "capture_all_displays"
-                        ]
-                      },
-                      {
-                        "anyOf": [
-                          {
-                            "properties": {
-                              "display_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "display_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "display_name": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "display_name"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "display_index": {
-                                "minimum": 0,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "display_index"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
                     "anyOf": [
                       {
                         "allOf": [
@@ -1547,10 +1370,6 @@
                       "type": "null"
                     }
                   ]
-                },
-                "capture_all_displays": {
-                  "description": "Capture the full virtual desktop. Defaults to false.",
-                  "type": "boolean"
                 },
                 "display_id": {
                   "anyOf": [
@@ -5942,9 +5761,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": false,
-      "description_bytes": 3533,
+      "description_bytes": 3712,
       "largest_schema_bytes": 8081,
-      "serialized_bytes": 79721,
+      "serialized_bytes": 78348,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -7047,7 +6866,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Capture a fresh desktop frame and returned snapshot_id for pixel actions. Choose exactly one source: no selector for primary display, a window selector, one display selector, or capture_all_displays=true.",
+            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. Call with no selector for the normal case: it captures the main display. Pass one window selector to capture a single window, or one display selector (display_id/display_name/display_index) only when you specifically need a non-main monitor.",
             "inputSchema": {
               "additionalProperties": false,
               "not": {
@@ -7206,183 +7025,6 @@
                     ]
                   },
                   {
-                    "allOf": [
-                      {
-                        "properties": {
-                          "capture_all_displays": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "capture_all_displays"
-                        ]
-                      },
-                      {
-                        "anyOf": [
-                          {
-                            "properties": {
-                              "window_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "window_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "pid": {
-                                "minimum": 1,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "pid"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "tty": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "tty"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_pid": {
-                                "minimum": 1,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "terminal_pid"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_command": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "terminal_command"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_cwd": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "terminal_cwd"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "app_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "app_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "wm_class": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "wm_class"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "title": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "title"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "allOf": [
-                      {
-                        "properties": {
-                          "capture_all_displays": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "capture_all_displays"
-                        ]
-                      },
-                      {
-                        "anyOf": [
-                          {
-                            "properties": {
-                              "display_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "display_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "display_name": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "display_name"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "display_index": {
-                                "minimum": 0,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "display_index"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
                     "anyOf": [
                       {
                         "allOf": [
@@ -7485,10 +7127,6 @@
                       "type": "null"
                     }
                   ]
-                },
-                "capture_all_displays": {
-                  "description": "Capture the full virtual desktop. Defaults to false.",
-                  "type": "boolean"
                 },
                 "display_id": {
                   "anyOf": [
@@ -11928,9 +11566,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": true,
-      "description_bytes": 3430,
+      "description_bytes": 3609,
       "largest_schema_bytes": 8081,
-      "serialized_bytes": 80029,
+      "serialized_bytes": 78656,
       "surface": "grouped",
       "tool_count": 34,
       "tools_list": {
@@ -13097,7 +12735,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Capture a fresh desktop frame and returned snapshot_id for pixel actions. Choose exactly one source: no selector for primary display, a window selector, one display selector, or capture_all_displays=true.",
+            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. Call with no selector for the normal case: it captures the main display. Pass one window selector to capture a single window, or one display selector (display_id/display_name/display_index) only when you specifically need a non-main monitor.",
             "inputSchema": {
               "additionalProperties": false,
               "not": {
@@ -13256,183 +12894,6 @@
                     ]
                   },
                   {
-                    "allOf": [
-                      {
-                        "properties": {
-                          "capture_all_displays": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "capture_all_displays"
-                        ]
-                      },
-                      {
-                        "anyOf": [
-                          {
-                            "properties": {
-                              "window_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "window_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "pid": {
-                                "minimum": 1,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "pid"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "tty": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "tty"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_pid": {
-                                "minimum": 1,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "terminal_pid"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_command": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "terminal_command"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_cwd": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "terminal_cwd"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "app_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "app_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "wm_class": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "wm_class"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "title": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "title"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "allOf": [
-                      {
-                        "properties": {
-                          "capture_all_displays": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "capture_all_displays"
-                        ]
-                      },
-                      {
-                        "anyOf": [
-                          {
-                            "properties": {
-                              "display_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "display_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "display_name": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "display_name"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "display_index": {
-                                "minimum": 0,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "display_index"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
                     "anyOf": [
                       {
                         "allOf": [
@@ -13535,10 +12996,6 @@
                       "type": "null"
                     }
                   ]
-                },
-                "capture_all_displays": {
-                  "description": "Capture the full virtual desktop. Defaults to false.",
-                  "type": "boolean"
                 },
                 "display_id": {
                   "anyOf": [
@@ -17945,9 +17402,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": true,
-      "description_bytes": 3533,
+      "description_bytes": 3712,
       "largest_schema_bytes": 8081,
-      "serialized_bytes": 80822,
+      "serialized_bytes": 79449,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -19114,7 +18571,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Capture a fresh desktop frame and returned snapshot_id for pixel actions. Choose exactly one source: no selector for primary display, a window selector, one display selector, or capture_all_displays=true.",
+            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. Call with no selector for the normal case: it captures the main display. Pass one window selector to capture a single window, or one display selector (display_id/display_name/display_index) only when you specifically need a non-main monitor.",
             "inputSchema": {
               "additionalProperties": false,
               "not": {
@@ -19273,183 +18730,6 @@
                     ]
                   },
                   {
-                    "allOf": [
-                      {
-                        "properties": {
-                          "capture_all_displays": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "capture_all_displays"
-                        ]
-                      },
-                      {
-                        "anyOf": [
-                          {
-                            "properties": {
-                              "window_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "window_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "pid": {
-                                "minimum": 1,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "pid"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "tty": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "tty"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_pid": {
-                                "minimum": 1,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "terminal_pid"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_command": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "terminal_command"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "terminal_cwd": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "terminal_cwd"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "app_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "app_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "wm_class": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "wm_class"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "title": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "title"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "allOf": [
-                      {
-                        "properties": {
-                          "capture_all_displays": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "capture_all_displays"
-                        ]
-                      },
-                      {
-                        "anyOf": [
-                          {
-                            "properties": {
-                              "display_id": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "display_id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "display_name": {
-                                "minLength": 1,
-                                "pattern": ".*\\S.*",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "display_name"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "display_index": {
-                                "minimum": 0,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "display_index"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
                     "anyOf": [
                       {
                         "allOf": [
@@ -19552,10 +18832,6 @@
                       "type": "null"
                     }
                   ]
-                },
-                "capture_all_displays": {
-                  "description": "Capture the full virtual desktop. Defaults to false.",
-                  "type": "boolean"
                 },
                 "display_id": {
                   "anyOf": [

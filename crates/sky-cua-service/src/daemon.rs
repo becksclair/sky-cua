@@ -910,31 +910,20 @@ impl ServiceDaemon {
             ServiceRequest::Screenshot {
                 target,
                 display_target,
-                capture_all_displays,
             } => {
-                if screenshot_selector_count(
-                    target.as_ref(),
-                    display_target.as_ref(),
-                    capture_all_displays,
-                ) > 1
-                {
+                if screenshot_selector_count(target.as_ref(), display_target.as_ref()) > 1 {
                     return error_response(
                         BackendErrorCode::InvalidRequest.as_str(),
-                        "screenshot accepts exactly one capture selector: window target, display target, or capture_all_displays=true",
+                        "screenshot accepts exactly one capture selector: window target or display target",
                     );
                 }
                 debug!(
                     target = ?target,
                     display_target = ?display_target,
-                    capture_all_displays,
                     "handling screenshot request"
                 );
                 let capture_guard = Some(self.overlay.lock().await.prepare_for_capture());
-                match self
-                    .backend
-                    .screenshot(target, display_target, capture_all_displays)
-                    .await
-                {
+                match self.backend.screenshot(target, display_target).await {
                     Ok(mut snapshot) => {
                         if let Some(capture_guard) = capture_guard.as_ref() {
                             snapshot
@@ -1433,11 +1422,8 @@ fn phone_request_is_write(request: &PhoneRequest) -> bool {
 fn screenshot_selector_count(
     target: Option<&WindowTarget>,
     display_target: Option<&DisplayTarget>,
-    capture_all_displays: bool,
 ) -> usize {
-    usize::from(target.is_some())
-        + usize::from(display_target.is_some())
-        + usize::from(capture_all_displays)
+    usize::from(target.is_some()) + usize::from(display_target.is_some())
 }
 
 /// Pick the scrcpy desktop window out of a window list for a managed mirror.
@@ -1645,7 +1631,6 @@ mod tests {
         assert!(request_should_hold_presence(&ServiceRequest::Screenshot {
             target: None,
             display_target: None,
-            capture_all_displays: false,
         }));
         assert!(request_should_hold_presence(
             &ServiceRequest::ExecuteAction {
@@ -1781,7 +1766,6 @@ mod tests {
                     display_name: None,
                     display_index: None,
                 }),
-                capture_all_displays: false,
             })
             .await
         {

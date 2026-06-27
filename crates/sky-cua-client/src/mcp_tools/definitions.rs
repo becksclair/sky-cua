@@ -149,9 +149,11 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
              an existing tab.",
         ),
         "capture_desktop" => Some(
-            "`capture_desktop` expects one flat JSON object. Choose exactly one \
-             capture source: no selector for primary display, one window selector, \
-             one display selector, or `capture_all_displays=true`; do not mix them.",
+            "`capture_desktop` expects one flat JSON object and captures a single \
+             screen. Omit selectors to capture the main display, or pass one window \
+             selector or one display selector \
+             (`display_id`/`display_name`/`display_index`) to target a specific \
+             window or non-main monitor; do not mix them.",
         ),
         "activate_window" => Some(
             "`activate_window` expects one top-level window selector such as \
@@ -423,7 +425,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         grouped_tool_with_constraints(
             "capture_desktop",
-            "Capture a fresh desktop frame and returned snapshot_id for pixel actions. Choose exactly one source: no selector for primary display, a window selector, one display selector, or capture_all_displays=true.",
+            "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. Call with no selector for the normal case: it captures the main display. Pass one window selector to capture a single window, or one display selector (display_id/display_name/display_index) only when you specifically need a non-main monitor.",
             LOCAL_NAVIGATION_ACTION,
             screenshot_properties(can_receive_images),
             json!([]),
@@ -2131,13 +2133,6 @@ fn screenshot_properties(can_receive_images: bool) -> Value {
                 "description": "Zero-based display index from environment.displays. Prefer display_id."
             })),
         );
-        property_map.insert(
-            "capture_all_displays".to_string(),
-            json!({
-                "type": "boolean",
-                "description": "Capture the full virtual desktop. Defaults to false."
-            }),
-        );
     }
 
     if can_receive_images && let Some(property_map) = properties.as_object_mut() {
@@ -2161,14 +2156,6 @@ fn screenshot_constraints() -> Value {
                 {"allOf": [
                     any_active_selector_constraint(&WINDOW_SELECTOR_KEYS),
                     one_active_selector_constraint(&DISPLAY_SELECTOR_KEYS)
-                ]},
-                {"allOf": [
-                    capture_all_true_constraint(),
-                    any_active_selector_constraint(&WINDOW_SELECTOR_KEYS)
-                ]},
-                {"allOf": [
-                    capture_all_true_constraint(),
-                    any_active_selector_constraint(&DISPLAY_SELECTOR_KEYS)
                 ]},
                 {"anyOf": same_group_pair_constraints(&DISPLAY_SELECTOR_KEYS)}
             ]
@@ -2199,15 +2186,6 @@ fn any_active_selector_constraint(selectors: &[&str]) -> Value {
 fn one_active_selector_constraint(selectors: &[&str]) -> Value {
     json!({
         "oneOf": selectors.iter().map(|selector| active_selector_constraint(selector)).collect::<Vec<_>>()
-    })
-}
-
-fn capture_all_true_constraint() -> Value {
-    json!({
-        "properties": {
-            "capture_all_displays": {"const": true}
-        },
-        "required": ["capture_all_displays"]
     })
 }
 

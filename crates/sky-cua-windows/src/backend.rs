@@ -420,7 +420,6 @@ impl DesktopBackend for WindowsDesktopBackend {
         &self,
         target: Option<WindowTarget>,
         display_target: Option<DisplayTarget>,
-        capture_all_displays: bool,
     ) -> Result<AppStateSnapshot, BackendError> {
         let snapshot_id = new_snapshot_id();
         let environment = self.probe_environment().await?;
@@ -453,12 +452,6 @@ impl DesktopBackend for WindowsDesktopBackend {
                 capture_source_for_rect(&display.logical_rect, Some(display_ref.clone()))?,
                 CaptureScope::Display,
                 Some(display_ref),
-            )
-        } else if capture_all_displays {
-            (
-                virtual_desktop_capture_source()?,
-                CaptureScope::AllDisplays,
-                None,
             )
         } else if let Some(display) = primary_display(&environment.displays) {
             let display_ref = DisplayRef::from(&display);
@@ -1036,7 +1029,7 @@ async fn capture_desktop(
     let scope = if window.is_some() {
         CaptureScope::Window
     } else {
-        CaptureScope::AllDisplays
+        CaptureScope::Unknown
     };
     let display = source.display.clone();
     capture_desktop_with_source(snapshot_id, source, scope, display).await
