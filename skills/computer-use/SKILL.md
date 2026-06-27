@@ -104,9 +104,14 @@ coordinates across them.
   visible gesture, not the OS pointer timing). `desktop_keyboard` takes
   `operation` plus `text` or `key`; optional snapshot/window scope can activate
   the target window but does not select an editable element.
-- Prefer semantic primitives when `semantic_actions` support them:
+- Prefer semantic primitives when `semantic_actions` advertise them:
   `desktop_semantic` for focus/select/expand/collapse, `desktop_toggle` for
   toggles, and `desktop_action` for activate plus named/indexed custom actions.
+  These affordances track the element's state — a checkable widget advertises
+  `toggle`, an already-expanded one advertises `collapse` — so they work on
+  standard checkboxes and expanders even when the toolkit omits the literal
+  action name. A semantic op the element does not advertise returns
+  `ActionRequiresPhysicalInput`; use `desktop_pointer` there instead.
 - Use physical click/drag/scroll for sliders, canvases, splitters,
   drag-and-drop, custom-painted widgets, and anything visible but unclear in
   the tree.
