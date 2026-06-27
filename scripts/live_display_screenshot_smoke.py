@@ -156,24 +156,6 @@ def screenshot_point_for_desktop_point(
     }
 
 
-def union_rect(displays: Sequence[Mapping[str, Any]]) -> dict[str, float]:
-    rects = [require_mapping(display, "logical_rect") for display in displays]
-    left = min(require_number(rect, "x") for rect in rects)
-    top = min(require_number(rect, "y") for rect in rects)
-    right = max(require_number(rect, "x") + require_number(rect, "width") for rect in rects)
-    bottom = max(require_number(rect, "y") + require_number(rect, "height") for rect in rects)
-    return {"x": left, "y": top, "width": right - left, "height": bottom - top}
-
-
-def assert_rect_close(
-    actual: Mapping[str, Any], expected: Mapping[str, float], label: str, *, tolerance: float = 1.0
-) -> None:
-    for key, expected_value in expected.items():
-        actual_value = require_number(actual, key)
-        if abs(actual_value - expected_value) > tolerance:
-            raise RuntimeError(f"{label} {key}={actual_value!r}, expected {expected_value!r}")
-
-
 def main() -> int:
     session_backend = require_real_graphical_session()
     gtk_env = gtk_session_env(session_backend)
@@ -299,22 +281,15 @@ def main() -> int:
                     )
                     require_positive_capture(secondary_capture, "explicit secondary screenshot")
 
-                all_result = client.tools_call(
+                rejected_all_result = client.tools_call(
                     24, "capture_desktop", {"capture_all_displays": True}
                 )
-                write_json(artifact_dir / "all-displays-screenshot-result.json", all_result)
-                require_ok(all_result, "all-displays screenshot")
-                all_snapshot = grouped_structured_result(all_result)
-                if not isinstance(all_snapshot, Mapping):
-                    raise RuntimeError("all-displays screenshot did not return structuredContent")
-                all_capture = require_capture(all_snapshot)
-                require_capture_scope(all_capture, "all_displays", "all-displays screenshot")
-                require_positive_capture(all_capture, "all-displays screenshot")
-                assert_rect_close(
-                    require_mapping(all_capture, "logical_rect"),
-                    union_rect(displays),
-                    "all-displays logical_rect",
-                )
+                write_json(artifact_dir / "all-displays-rejection-result.json", rejected_all_result)
+                if not rejected_all_result.get("isError"):
+                    raise RuntimeError(
+                        "capture_desktop must reject capture_all_displays so the agent stays on a "
+                        f"single screen, got: {rejected_all_result!r}"
+                    )
 
                 target_display_id = primary_id
                 target_display = target_window.get("display")

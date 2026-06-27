@@ -1751,8 +1751,11 @@ def screenshot_capture(
         _refresh = get_state_snapshot_without_capture(client, request_timeout=request_timeout)
         response = client.call(request, timeout=request_timeout, raise_errors=False)
         if is_capture_source_geometry_missing_response(response):
+            # Last resort: drop any display selector and capture the main display.
+            # A no-selector screenshot is the single screen most likely to resolve
+            # without targeted source geometry.
             response = client.call(
-                {"type": "screenshot", "capture_all_displays": True},
+                {"type": "screenshot"},
                 raise_errors=False,
                 timeout=request_timeout,
             )

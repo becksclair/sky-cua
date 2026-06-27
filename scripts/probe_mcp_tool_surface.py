@@ -211,12 +211,8 @@ def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
             raise ProbeFailure(f"capture_desktop {name} must reject empty strings")
     if not _schema_contains_not_anyof_required(desktop_capture, "window_id", "display_id"):
         raise ProbeFailure("capture_desktop must reject mixed window/display selectors")
-    if not _schema_contains_not_anyof_required(
-        desktop_capture, "capture_all_displays", "display_id"
-    ):
-        raise ProbeFailure(
-            "capture_desktop must reject capture_all_displays with display selectors"
-        )
+    if "capture_all_displays" in desktop_capture_props:
+        raise ProbeFailure("capture_desktop must not advertise capture_all_displays")
 
     desktop_scroll_props = _properties(_tool_schema(by_name, "desktop_scroll"))
     if "pages" not in desktop_scroll_props or desktop_scroll_props["pages"].get("minimum") != 1:

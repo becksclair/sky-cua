@@ -541,7 +541,7 @@ def test_kde_smoke_targeted_capture_refreshes_and_falls_back_on_missing_source_g
         {"type": "screenshot", "display_target": {"display_id": "kwin:DP-1"}},
         {"type": "get_app_state", "capture_screen": "never"},
         {"type": "screenshot", "display_target": {"display_id": "kwin:DP-1"}},
-        {"type": "screenshot", "capture_all_displays": True},
+        {"type": "screenshot"},
     ]
 
 
@@ -574,7 +574,7 @@ def test_kde_smoke_untargeted_capture_refreshes_and_falls_back_on_missing_source
                 return {"snapshot": {"environment": {"displays": []}}}
             return {
                 "snapshot": {
-                    "snapshot_id": "all-displays-snapshot",
+                    "snapshot_id": "primary-fallback-snapshot",
                     "capture": {
                         "inspection_image_path": str(image_path),
                         "pixel_size": {"width": 20, "height": 10},
@@ -589,13 +589,13 @@ def test_kde_smoke_untargeted_capture_refreshes_and_falls_back_on_missing_source
         request_timeout=1.0,
     )
 
-    assert snapshot["snapshot_id"] == "all-displays-snapshot"
+    assert snapshot["snapshot_id"] == "primary-fallback-snapshot"
     assert returned_path == image_path
     assert client.requests == [
         {"type": "screenshot"},
         {"type": "get_app_state", "capture_screen": "never"},
         {"type": "screenshot"},
-        {"type": "screenshot", "capture_all_displays": True},
+        {"type": "screenshot"},
     ]
 
 

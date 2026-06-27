@@ -292,14 +292,6 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
                             ]
                         }
                     },
-                    {
-                        "not": {
-                            "allOf": [
-                                {"required": ["capture_all_displays"]},
-                                {"anyOf": [{"required": ["display_id"]}]},
-                            ]
-                        }
-                    },
                 ],
             },
         },
