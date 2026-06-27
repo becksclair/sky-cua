@@ -159,21 +159,21 @@ object OverlaySpec {
             /** `catcher_logical_px` from `[desktop.geometry]`. */
             const val CATCHER_LOGICAL_PX: Double = 64.0
             /** `glow_base_stroke_logical_px` from `[desktop.geometry]`. */
-            const val GLOW_BASE_STROKE_LOGICAL_PX: Double = 22.0
+            const val GLOW_BASE_STROKE_LOGICAL_PX: Double = 14.0
             /** `glow_base_blur_logical_px` from `[desktop.geometry]`. */
-            const val GLOW_BASE_BLUR_LOGICAL_PX: Double = 22.0
+            const val GLOW_BASE_BLUR_LOGICAL_PX: Double = 52.0
             /** `glow_core_stroke_logical_px` from `[desktop.geometry]`. */
-            const val GLOW_CORE_STROKE_LOGICAL_PX: Double = 6.0
+            const val GLOW_CORE_STROKE_LOGICAL_PX: Double = 4.0
             /** `glow_core_blur_logical_px` from `[desktop.geometry]`. */
-            const val GLOW_CORE_BLUR_LOGICAL_PX: Double = 9.0
+            const val GLOW_CORE_BLUR_LOGICAL_PX: Double = 12.0
             /** `glow_edge_inset_logical_px` from `[desktop.geometry]`. */
             const val GLOW_EDGE_INSET_LOGICAL_PX: Double = 2.0
             /** `glow_corner_logical_px` from `[desktop.geometry]`. */
             const val GLOW_CORNER_LOGICAL_PX: Double = 46.0
             /** `wave_stroke_logical_px` from `[desktop.geometry]`. */
-            const val WAVE_STROKE_LOGICAL_PX: Double = 5.0
+            const val WAVE_STROKE_LOGICAL_PX: Double = 4.0
             /** `wave_blur_logical_px` from `[desktop.geometry]`. */
-            const val WAVE_BLUR_LOGICAL_PX: Double = 9.0
+            const val WAVE_BLUR_LOGICAL_PX: Double = 22.0
             /** `ripple_stroke_logical_px` from `[desktop.geometry]`. */
             const val RIPPLE_STROKE_LOGICAL_PX: Double = 16.0
             /** `ripple_blur_logical_px` from `[desktop.geometry]`. */
@@ -185,13 +185,13 @@ object OverlaySpec {
         /** `rendering` constants. */
         object Rendering {
             /** `wave_count` from `[desktop.rendering]`. */
-            const val WAVE_COUNT: Int = 3
+            const val WAVE_COUNT: Int = 2
             /** `wave_travel_fraction` from `[desktop.rendering]`. */
-            const val WAVE_TRAVEL_FRACTION: Double = 0.2
+            const val WAVE_TRAVEL_FRACTION: Double = 0.05
             /** `wave_fade_in_fraction` from `[desktop.rendering]`. */
-            const val WAVE_FADE_IN_FRACTION: Double = 0.12
+            const val WAVE_FADE_IN_FRACTION: Double = 0.18
             /** `wave_max_alpha_0_255` from `[desktop.rendering]`. */
-            const val WAVE_MAX_ALPHA_0_255: Int = 165
+            const val WAVE_MAX_ALPHA_0_255: Int = 25
             /** `max_base_alpha_0_255` from `[desktop.rendering]`. */
             const val MAX_BASE_ALPHA_0_255: Int = 200
             /** `max_core_alpha_0_255` from `[desktop.rendering]`. */

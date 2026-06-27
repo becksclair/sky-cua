@@ -788,6 +788,31 @@ fn agent_overlay_gesture_event_round_trips() {
 }
 
 #[test]
+fn agent_overlay_gesture_event_requires_points_and_duration() {
+    // `points` and `duration_ms` are the only gesture fields without a serde
+    // default, and the overlay host validator relies on their absence being a
+    // hard deserialize error. Pin that so a future `#[serde(default)]` slip on
+    // either field cannot silently weaken the wire contract.
+    let missing_points = json!({
+        "event_id": "evt-1",
+        "sequence": 1,
+        "kind": "tap",
+        "coordinate_space": "desktop_logical",
+        "duration_ms": 300
+    });
+    assert!(serde_json::from_value::<AgentOverlayGestureEvent>(missing_points).is_err());
+
+    let missing_duration = json!({
+        "event_id": "evt-1",
+        "sequence": 1,
+        "kind": "tap",
+        "coordinate_space": "desktop_logical",
+        "points": [{ "x": 1.0, "y": 2.0 }]
+    });
+    assert!(serde_json::from_value::<AgentOverlayGestureEvent>(missing_duration).is_err());
+}
+
+#[test]
 fn agent_cursor_capabilities_accepts_old_wire_shape_with_new_nested_fields() {
     let old = json!({
         "backend": "wayland_layer_shell",

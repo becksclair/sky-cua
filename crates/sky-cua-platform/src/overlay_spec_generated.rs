@@ -154,21 +154,21 @@ pub mod overlay_spec {
             /// `catcher_logical_px` from `[desktop.geometry]`.
             pub const CATCHER_LOGICAL_PX: f64 = 64.0;
             /// `glow_base_stroke_logical_px` from `[desktop.geometry]`.
-            pub const GLOW_BASE_STROKE_LOGICAL_PX: f64 = 22.0;
+            pub const GLOW_BASE_STROKE_LOGICAL_PX: f64 = 14.0;
             /// `glow_base_blur_logical_px` from `[desktop.geometry]`.
-            pub const GLOW_BASE_BLUR_LOGICAL_PX: f64 = 22.0;
+            pub const GLOW_BASE_BLUR_LOGICAL_PX: f64 = 52.0;
             /// `glow_core_stroke_logical_px` from `[desktop.geometry]`.
-            pub const GLOW_CORE_STROKE_LOGICAL_PX: f64 = 6.0;
+            pub const GLOW_CORE_STROKE_LOGICAL_PX: f64 = 4.0;
             /// `glow_core_blur_logical_px` from `[desktop.geometry]`.
-            pub const GLOW_CORE_BLUR_LOGICAL_PX: f64 = 9.0;
+            pub const GLOW_CORE_BLUR_LOGICAL_PX: f64 = 12.0;
             /// `glow_edge_inset_logical_px` from `[desktop.geometry]`.
             pub const GLOW_EDGE_INSET_LOGICAL_PX: f64 = 2.0;
             /// `glow_corner_logical_px` from `[desktop.geometry]`.
             pub const GLOW_CORNER_LOGICAL_PX: f64 = 46.0;
             /// `wave_stroke_logical_px` from `[desktop.geometry]`.
-            pub const WAVE_STROKE_LOGICAL_PX: f64 = 5.0;
+            pub const WAVE_STROKE_LOGICAL_PX: f64 = 4.0;
             /// `wave_blur_logical_px` from `[desktop.geometry]`.
-            pub const WAVE_BLUR_LOGICAL_PX: f64 = 9.0;
+            pub const WAVE_BLUR_LOGICAL_PX: f64 = 22.0;
             /// `ripple_stroke_logical_px` from `[desktop.geometry]`.
             pub const RIPPLE_STROKE_LOGICAL_PX: f64 = 16.0;
             /// `ripple_blur_logical_px` from `[desktop.geometry]`.
@@ -179,13 +179,13 @@ pub mod overlay_spec {
         /// `rendering` constants.
         pub mod rendering {
             /// `wave_count` from `[desktop.rendering]`.
-            pub const WAVE_COUNT: u32 = 3;
+            pub const WAVE_COUNT: u32 = 2;
             /// `wave_travel_fraction` from `[desktop.rendering]`.
-            pub const WAVE_TRAVEL_FRACTION: f64 = 0.2;
+            pub const WAVE_TRAVEL_FRACTION: f64 = 0.05;
             /// `wave_fade_in_fraction` from `[desktop.rendering]`.
-            pub const WAVE_FADE_IN_FRACTION: f64 = 0.12;
+            pub const WAVE_FADE_IN_FRACTION: f64 = 0.18;
             /// `wave_max_alpha_0_255` from `[desktop.rendering]`.
-            pub const WAVE_MAX_ALPHA_0_255: u8 = 165;
+            pub const WAVE_MAX_ALPHA_0_255: u8 = 25;
             /// `max_base_alpha_0_255` from `[desktop.rendering]`.
             pub const MAX_BASE_ALPHA_0_255: u8 = 200;
             /// `max_core_alpha_0_255` from `[desktop.rendering]`.

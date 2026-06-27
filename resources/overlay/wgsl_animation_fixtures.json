@@ -16,7 +16,41 @@
         "ripple_radius": 42.0,
         "ripple_alpha": 0.5,
         "cursor": { "x": 50.0, "y": 60.0 },
+        "cursor_scale": 1.076789,
+        "edge_glow_alpha": 0.483,
         "outside_alpha": 0.0
+      }
+    },
+    "tap_offquarter": {
+      "surface": { "width": 96, "height": 96 },
+      "elapsed_ms": 114,
+      "duration_ms": 380,
+      "points": [{ "x": 50.0, "y": 60.0 }],
+      "expected": {
+        "progress": 0.3,
+        "ripple_radius": 29.504,
+        "ripple_alpha": 0.7,
+        "cursor_scale": 0.813508
+      }
+    },
+    "no_no_midshake": {
+      "surface": { "width": 96, "height": 96 },
+      "elapsed_ms": 380,
+      "duration_ms": 760,
+      "points": [{ "x": 50.0, "y": 60.0 }],
+      "expected": {
+        "progress": 0.5,
+        "rotation_offset_deg": -20.0
+      }
+    },
+    "no_no_tail": {
+      "surface": { "width": 96, "height": 96 },
+      "elapsed_ms": 780,
+      "duration_ms": 1000,
+      "points": [{ "x": 50.0, "y": 60.0 }],
+      "expected": {
+        "progress": 0.78,
+        "rotation_offset_deg": 17.526134
       }
     },
     "hidden": {
