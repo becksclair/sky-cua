@@ -141,7 +141,7 @@ and the idle auto-hide watchdog chain are documented in
   removed; live smoke harnesses call the grouped tools
   (`observe`, `list_resources`, `capture_screen`, `desktop_pointer`,
   `desktop_keyboard`, `desktop_scroll`, `desktop_set_value`). The focused
-  pre-install gate is `cargo fmt --check && cargo test -p sky-cua-client &&
+  pre-install gate is `cargo fmt --check && cargo nextest run -p sky-cua-client &&
   uv run ruff format --check scripts && uv run ruff check scripts && uv run
   basedpyright && uv run pytest scripts/test_probe_mcp_tool_surface.py
   scripts/test_live_smoke_helpers.py scripts/test_gui_testing_vm.py`, plus

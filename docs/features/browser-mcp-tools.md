@@ -484,10 +484,10 @@ python3 scripts/live_agentic_loop_smoke.py
 Focused hardening checks from 2026-06-08:
 
 ```bash
-cargo test -p sky-cua-service
+cargo nextest run -p sky-cua-service
 cargo clippy -p sky-cua-service --all-targets -- -D warnings
-cargo fmt --check && cargo test
-cargo test -p sky-cua-client -- --test-threads=1
+cargo fmt --check && cargo nextest run
+cargo nextest run -p sky-cua-client
 ```
 
 - Service regression tests prove CDP actions and `browser_move_mouse` recover

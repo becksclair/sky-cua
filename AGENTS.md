@@ -10,13 +10,23 @@ Subdirectories have their own `AGENTS.md`; read the nearest one before editing f
 ## Root Setup Commands
 
 ```bash
-cargo build && cargo test
+cargo build && cargo nextest run
 uv sync --dev
 uv run ruff format scripts && uv run ruff check scripts
 uv run basedpyright
 uv run pytest
 python3 scripts/build_plugin.py
 ```
+
+Run Rust tests with `cargo nextest run`, not `cargo test`. Parts of the
+`sky-cua-service` suite mutate process-global state (`std::env::set_var` for
+socket dirs, ADB paths, and bridge timeouts) and bind OS sockets / spawn child
+overlay hosts. Under `cargo test` everything shares one process, so concurrent
+env mutation is a data race (UB in Rust 2024) and a different test flakes on
+each run; nextest runs each test in its own process and serializes the
+socket/child-process integration tests via `.config/nextest.toml`. Install once
+with `cargo install cargo-nextest`. nextest does not run doctests; run
+`cargo test --doc` for those (currently none in this workspace).
 
 ## Conventions
 
@@ -90,7 +100,9 @@ parallel structures (`goals/`, `specs/`, `prds/`, `rfcs/`, or similar).
 
 - Run the narrowest relevant crate/package check first, then the root check
   if shared contracts changed.
-- Rust runtime changes: `cargo fmt --check && cargo test`.
+- Rust runtime changes: `cargo fmt --check && cargo nextest run` (use nextest,
+  not `cargo test`; see Root Setup Commands for why). Add `cargo test --doc`
+  when a change touches doctests.
 - Python harness changes: `uv run ruff format --check scripts && uv run ruff check scripts && uv run basedpyright && uv run pytest`.
 - Packaging changes: `python3 scripts/build_plugin.py` and inspect the
   staged bundle shape.

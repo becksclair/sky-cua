@@ -101,13 +101,20 @@ From the repo root:
 
 ```bash
 cargo build
-cargo test
+cargo nextest run   # install once: cargo install cargo-nextest
 uv sync --dev
 uv run ruff format scripts
 uv run ruff check scripts
 uv run basedpyright
 uv run pytest
 ```
+
+Rust tests run under [`cargo-nextest`](https://nexte.st), not `cargo test`:
+some `sky-cua-service` tests mutate process-global environment variables and
+bind OS sockets, which race under `cargo test`'s single-process threading.
+nextest isolates each test in its own process and serializes the heavy
+integration tests via `.config/nextest.toml`. Doctests (none today) still run
+with `cargo test --doc`.
 
 Run the runtime pieces directly:
 
