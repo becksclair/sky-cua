@@ -528,7 +528,7 @@ def test_kde_smoke_targeted_capture_refreshes_and_falls_back_on_missing_source_g
     client = FakeClient()
 
     response, snapshot, capture, returned_path = live_agent_cursor_kde_smoke.screenshot_capture(
-        client,
+        cast(live_agent_cursor_kde_smoke.ServiceClient, client),
         display_target={"display_id": "kwin:DP-1"},
         request_timeout=1.0,
     )
@@ -585,7 +585,7 @@ def test_kde_smoke_untargeted_capture_refreshes_and_falls_back_on_missing_source
     client = FakeClient()
 
     _response, snapshot, _capture, returned_path = live_agent_cursor_kde_smoke.screenshot_capture(
-        client,
+        cast(live_agent_cursor_kde_smoke.ServiceClient, client),
         request_timeout=1.0,
     )
 

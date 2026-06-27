@@ -191,18 +191,42 @@ def tracked_bundle_files(source_paths: list[Path] | None = None) -> list[Path]:
     ]
 
 
+_WORKTREE_BUNDLE_EXCLUDED_SUFFIXES = (".pyc", ".pyo")
+
+
+def is_bundleable_worktree_file(relative_path: Path) -> bool:
+    """Mirror the omissions ``git ls-files`` applies when the index is present.
+
+    The no-git fallback walks the worktree directly, so it must reproduce the
+    gitignored exclusions the git path gets for free; otherwise the two builds
+    diverge. Python bytecode caches and the phone companion APK directory are
+    gitignored. The APK and its metadata sidecar are staged separately and
+    conditionally by ``copy_companion_apk_if_present`` and must not also leak
+    into the generic worktree bundle (which would double-stage them and bypass
+    that dedicated stager's contract).
+    """
+    if "__pycache__" in relative_path.parts:
+        return False
+    if relative_path.suffix in _WORKTREE_BUNDLE_EXCLUDED_SUFFIXES:
+        return False
+    return not relative_path.is_relative_to(COMPANION_APK_DIR)
+
+
 def worktree_bundle_files(source_paths: list[Path]) -> list[Path]:
     files: list[Path] = []
     for relative_path in source_paths:
         source = REPO_ROOT / relative_path
         if source.is_file():
-            files.append(relative_path)
+            if is_bundleable_worktree_file(relative_path):
+                files.append(relative_path)
             continue
         if not source.is_dir():
             continue
         for child in source.rglob("*"):
             if child.is_file():
-                files.append(child.relative_to(REPO_ROOT))
+                child_relative = child.relative_to(REPO_ROOT)
+                if is_bundleable_worktree_file(child_relative):
+                    files.append(child_relative)
     return sorted(files)
 
 

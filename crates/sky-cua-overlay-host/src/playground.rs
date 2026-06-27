@@ -1,22 +1,32 @@
-//! Interactive desktop pointer playground (Wayland layer-shell).
+//! Interactive desktop effects playground (Wayland layer-shell + wgpu).
 //!
-//! The desktop analogue of the Android `PointerPlaygroundActivity`: a maximized,
-//! input-capturing layer-shell surface that hides the system cursor and draws the
-//! real agent cursor glyph wherever the pointer moves, so the computer-use pointer
-//! can be previewed over live desktop content (transparent backdrop) or a
-//! controlled backdrop (grid / dark / light) for contrast testing.
+//! The desktop analogue of the Android pointer playground: a maximized,
+//! input-capturing layer-shell window that renders the *production effect
+//! shader* (smoky edge glow, cursor halo, gesture ripple/trail/no-no, the agent
+//! cursor glyph) so the computer-use overlay can be driven and reviewed live
+//! without executing any real desktop input.
 //!
 //! Unlike the production overlay (an empty-input-region, click-through surface
 //! driven over the serve protocol), this surface owns pointer input and runs its
-//! own blocking event loop. It reuses the production `CursorImage` decode and
-//! `draw_cursor_asset` blit so the previewed glyph is pixel-identical to the agent
-//! cursor. Quit with Ctrl-C; the compositor restores the real cursor on exit.
+//! own blocking event loop, reusing [`WgpuOverlayRenderer`] so what you see is
+//! pixel-identical to the deployed overlay.
+//!
+//! Controls (pointer only; Ctrl-C in the terminal quits):
+//! - move           — the cursor, its smoky halo, and the edge glow follow.
+//! - left click      — tap (ripple + halo + cursor bounce).
+//! - left drag       — drag (smoky trail + cursor rotation).
+//! - right drag      — swipe (smoky trail).
+//! - right click     — no-no (head-shake + mark).
+//! - middle click    — toggle the ambient edge glow on/off.
+//!
+//! Backdrop is chosen at launch (`--backdrop transparent|dark|light`): a solid
+//! canvas makes the pink effects pop, while `transparent` overlays the effects
+//! on the live desktop.
 
 use anyhow::{Context, Result, bail};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_seat,
-    delegate_shm,
     output::{OutputHandler, OutputState},
     seat::{
         Capability, SeatHandler, SeatState,
@@ -29,36 +39,39 @@ use smithay_client_toolkit::{
             LayerSurfaceConfigure,
         },
     },
-    shm::{
-        Shm, ShmHandler,
-        slot::{Buffer, SlotPool},
-    },
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
     globals::{GlobalListContents, registry_queue_init},
-    protocol::{wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_surface},
+    protocol::{wl_output, wl_pointer, wl_registry, wl_seat, wl_surface},
 };
 
 use crate::{
-    cursor_asset,
-    renderer::{CursorImage, draw_cursor_asset},
+    layer_shell::{wayland_display_handle, wayland_window_handle},
+    renderer::{
+        CursorImage, CursorPoint, EffectScene, SurfaceDrawRequest, SurfaceDrawSpec, SurfaceGuard,
+        WgpuOverlayInstance, WgpuOverlayRenderer,
+    },
 };
+use sky_cua_platform::{model::AgentOverlayGestureKind, overlay_spec};
 
 const INITIAL_ROUNDTRIPS: usize = 4;
-const GRID_CELL_PX: u32 = 48;
-const BUFFER_SLOTS_PER_SURFACE: usize = 2;
+const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
+const BTN_MIDDLE: u32 = 0x112;
+/// Pointer travel (surface px) beyond which a press→release reads as a drag
+/// rather than a click.
+const DRAG_THRESHOLD_PX: f64 = 18.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Backdrop {
-    /// Fully transparent: live desktop content shows through behind the cursor.
+    /// Fully transparent: the effects render over live desktop content.
     Transparent,
-    /// Opaque near-black surface for previewing the glyph on a dark background.
+    /// Opaque near-black canvas so the pink effects pop.
     Dark,
-    /// Opaque light surface for previewing the glyph on a light background.
+    /// Opaque light canvas for previewing on a bright background.
     Light,
-    /// White surface with a light grid, mirroring the Android playground backdrop.
-    Grid,
 }
 
 impl Backdrop {
@@ -67,32 +80,63 @@ impl Backdrop {
             "transparent" | "none" | "live" => Some(Self::Transparent),
             "dark" => Some(Self::Dark),
             "light" => Some(Self::Light),
-            "grid" => Some(Self::Grid),
             _ => None,
+        }
+    }
+
+    /// Render-pass clear color. Values are chosen to read dark/light after the
+    /// surface's sRGB encoding; the exact shade is not load-bearing.
+    fn clear_color(self) -> ::wgpu::Color {
+        match self {
+            Self::Transparent => ::wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+            Self::Dark => ::wgpu::Color {
+                r: 0.015,
+                g: 0.015,
+                b: 0.022,
+                a: 1.0,
+            },
+            Self::Light => ::wgpu::Color {
+                r: 0.80,
+                g: 0.80,
+                b: 0.82,
+                a: 1.0,
+            },
         }
     }
 }
 
-/// Parse `playground [--backdrop transparent|grid|dark|light]` and run the loop.
+/// Parse `playground [--backdrop transparent|dark|light]` and run the loop.
 pub(crate) fn run_from_args(args: Vec<String>) -> Result<()> {
-    let mut backdrop = Backdrop::Transparent;
+    let mut backdrop = Backdrop::Dark;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--backdrop" => {
                 let value = iter
                     .next()
-                    .context("--backdrop requires a value: transparent|grid|dark|light")?;
+                    .context("--backdrop requires a value: transparent|dark|light")?;
                 backdrop = Backdrop::parse(&value)
                     .with_context(|| format!("unknown backdrop: {value}"))?;
             }
             other => bail!(
-                "usage: sky-cua-overlay-host playground [--backdrop transparent|grid|dark|light] \
+                "usage: sky-cua-overlay-host playground [--backdrop transparent|dark|light] \
                  (got unexpected argument: {other})"
             ),
         }
     }
     run(backdrop)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn run(backdrop: Backdrop) -> Result<()> {
@@ -104,7 +148,6 @@ fn run(backdrop: Backdrop) -> Result<()> {
         CompositorState::bind(&globals, &qh).context("wl_compositor is unavailable")?;
     let layer_shell =
         LayerShell::bind(&globals, &qh).context("zwlr_layer_shell_v1 is unavailable")?;
-    let shm = Shm::bind(&globals, &qh).context("wl_shm is unavailable")?;
     let output_state = OutputState::new(&globals, &qh);
     let seat_state = SeatState::new(&globals, &qh);
     let cursor = CursorImage::load()?;
@@ -123,34 +166,51 @@ fn run(backdrop: Backdrop) -> Result<()> {
             let layer = create_playground_layer(&compositor, &layer_shell, &qh, output.as_ref());
             PlaygroundSurface {
                 layer,
+                output,
                 configured: false,
                 closed: false,
                 width: 1,
                 height: 1,
-                buffer: None,
-                pointer_pos: None,
             }
         })
         .collect::<Vec<_>>();
 
-    let pool_size = layer_buffer_pool_size(cursor.width, cursor.height, surfaces.len())
-        .context("failed to size playground shared-memory pool")?;
-    let pool =
-        SlotPool::new(pool_size, &shm).context("failed to create Wayland shared-memory pool")?;
+    // Build a wgpu surface guard per layer surface, mirroring the production
+    // layer-shell host so the rendered effects are pixel-identical.
+    let instance = WgpuOverlayInstance::new();
+    let display_handle = wayland_display_handle(&conn)?;
+    let mut surface_guards: Vec<Option<SurfaceGuard>> = Vec::with_capacity(surfaces.len());
+    for surface in &surfaces {
+        match wayland_window_handle(surface.layer.wl_surface()) {
+            Ok(window_handle) => surface_guards.push(
+                SurfaceGuard::from_raw_handles(&instance, display_handle, window_handle).ok(),
+            ),
+            Err(error) => {
+                eprintln!("sky-cua playground: failed to create surface guard: {error:#}");
+                surface_guards.push(None);
+            }
+        }
+    }
+    let mut renderer = WgpuOverlayRenderer::new(&instance, &mut surface_guards, &cursor)
+        .context("failed to initialize wgpu renderer for the effects playground")?;
+    renderer.set_clear_color(backdrop.clear_color());
 
     let mut app = PlaygroundApp {
-        shm,
         output_state,
         seat_state,
-        pool,
         surfaces,
-        cursor,
-        backdrop,
+        surface_guards,
+        renderer,
         pointer: None,
+        pointer_surface: None,
+        cursor_pos: None,
+        left_press: None,
+        right_press: None,
+        active_effect: None,
+        glow_active: true,
         needs_redraw: true,
     };
 
-    // Prime: roundtrip until the compositor configures at least one surface.
     for _ in 0..INITIAL_ROUNDTRIPS {
         event_queue
             .roundtrip(&mut app)
@@ -166,45 +226,55 @@ fn run(backdrop: Backdrop) -> Result<()> {
         bail!("layer-shell playground surfaces were not configured by the compositor");
     }
 
-    app.draw(&qh)?;
-    let _ = conn.flush();
     eprintln!(
-        "sky-cua pointer playground: backdrop={backdrop:?} — move the mouse to preview the agent cursor; Ctrl-C to quit."
+        "sky-cua effects playground: backdrop={backdrop:?}, renderer={} — move/click/drag to \
+         drive the overlay; left=tap/drag, right=no-no/swipe, middle=toggle glow; Ctrl-C to quit.",
+        app.renderer.info().backend
     );
+    app.render(&qh)?;
+    let _ = conn.flush();
 
     loop {
         event_queue
             .blocking_dispatch(&mut app)
             .context("Wayland dispatch failed in the playground loop")?;
+        if !app.has_open() {
+            break;
+        }
         if app.needs_redraw {
-            app.draw(&qh)?;
+            app.render(&qh)?;
             app.needs_redraw = false;
             let _ = conn.flush();
         }
     }
+    Ok(())
 }
 
 struct PlaygroundApp {
-    shm: Shm,
     output_state: OutputState,
     seat_state: SeatState,
-    pool: SlotPool,
     surfaces: Vec<PlaygroundSurface>,
-    cursor: CursorImage,
-    backdrop: Backdrop,
+    surface_guards: Vec<Option<SurfaceGuard>>,
+    renderer: WgpuOverlayRenderer,
     pointer: Option<wl_pointer::WlPointer>,
+    /// Index of the surface the pointer is currently over.
+    pointer_surface: Option<usize>,
+    /// Surface-local pointer position on `pointer_surface`.
+    cursor_pos: Option<(f64, f64)>,
+    left_press: Option<(f64, f64)>,
+    right_press: Option<(f64, f64)>,
+    active_effect: Option<EffectScene>,
+    glow_active: bool,
     needs_redraw: bool,
 }
 
 struct PlaygroundSurface {
     layer: LayerSurface,
+    output: Option<wl_output::WlOutput>,
     configured: bool,
     closed: bool,
     width: u32,
     height: u32,
-    buffer: Option<Buffer>,
-    /// Surface-local pointer position while the pointer is over this surface.
-    pointer_pos: Option<(f64, f64)>,
 }
 
 impl PlaygroundApp {
@@ -224,45 +294,165 @@ impl PlaygroundApp {
             .position(|surface| surface.layer.wl_surface() == wl_surface)
     }
 
-    fn draw(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
-        let surface_count = self.surfaces.len();
-        let backdrop = self.backdrop;
-        for surface in self.surfaces.iter_mut() {
+    /// Logical pixels per physical millimetre for a surface's output (diagonal
+    /// based, robust to per-axis DPI and rotation); falls back to a
+    /// representative logical density when geometry is unknown.
+    fn px_per_mm(&self, index: usize) -> f32 {
+        const FALLBACK_PX_PER_MM: f32 = 4.7;
+        let Some(output) = self.surfaces.get(index).and_then(|s| s.output.as_ref()) else {
+            return FALLBACK_PX_PER_MM;
+        };
+        let Some(info) = self.output_state.info(output) else {
+            return FALLBACK_PX_PER_MM;
+        };
+        let (phys_w_mm, phys_h_mm) = info.physical_size;
+        let Some((logical_w, logical_h)) = info.logical_size else {
+            return FALLBACK_PX_PER_MM;
+        };
+        let phys = ((phys_w_mm as f32).powi(2) + (phys_h_mm as f32).powi(2)).sqrt();
+        let logical = ((logical_w as f32).powi(2) + (logical_h as f32).powi(2)).sqrt();
+        if phys < 1.0 || logical < 1.0 {
+            return FALLBACK_PX_PER_MM;
+        }
+        logical / phys
+    }
+
+    /// Integer buffer scale for a surface's output (see
+    /// [`crate::layer_shell::output_render_scale`]).
+    fn render_scale(&self, index: usize) -> f32 {
+        self.surfaces
+            .get(index)
+            .and_then(|surface| surface.output.as_ref())
+            .and_then(|output| self.output_state.info(output))
+            .map(|info| crate::layer_shell::output_render_scale(&info))
+            .unwrap_or(1.0)
+    }
+
+    /// Start a gesture animation at the given surface-local points. Drives only
+    /// the overlay shader — no real desktop input is performed.
+    fn start_gesture(&mut self, kind: AgentOverlayGestureKind, points: Vec<CursorPoint>) {
+        use overlay_spec::shared::timing::{
+            CLICK_FEEDBACK_MS, NO_NO_WIGGLE_MS, SWIPE_VISUAL_MIN_MS,
+        };
+        let duration_ms = match kind {
+            AgentOverlayGestureKind::Tap => CLICK_FEEDBACK_MS,
+            AgentOverlayGestureKind::NoNo => NO_NO_WIGGLE_MS,
+            AgentOverlayGestureKind::Drag | AgentOverlayGestureKind::Swipe => SWIPE_VISUAL_MIN_MS,
+        };
+        self.active_effect = Some(EffectScene {
+            kind,
+            started_at_ms: now_ms(),
+            duration_ms,
+            points,
+        });
+        self.needs_redraw = true;
+    }
+
+    fn on_button_release(&mut self, button: u32) {
+        let Some(release) = self.cursor_pos else {
+            self.left_press = None;
+            self.right_press = None;
+            return;
+        };
+        let release_point = CursorPoint {
+            x: release.0,
+            y: release.1,
+        };
+        match button {
+            BTN_LEFT => {
+                if let Some((sx, sy)) = self.left_press.take() {
+                    if (release.0 - sx).hypot(release.1 - sy) > DRAG_THRESHOLD_PX {
+                        self.start_gesture(
+                            AgentOverlayGestureKind::Drag,
+                            vec![CursorPoint { x: sx, y: sy }, release_point],
+                        );
+                    } else {
+                        self.start_gesture(AgentOverlayGestureKind::Tap, vec![release_point]);
+                    }
+                }
+            }
+            BTN_RIGHT => {
+                if let Some((sx, sy)) = self.right_press.take() {
+                    if (release.0 - sx).hypot(release.1 - sy) > DRAG_THRESHOLD_PX {
+                        self.start_gesture(
+                            AgentOverlayGestureKind::Swipe,
+                            vec![CursorPoint { x: sx, y: sy }, release_point],
+                        );
+                    } else {
+                        self.start_gesture(AgentOverlayGestureKind::NoNo, vec![release_point]);
+                    }
+                }
+            }
+            BTN_MIDDLE => {
+                self.glow_active = !self.glow_active;
+                self.needs_redraw = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn render(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        // Retire a finished gesture so it plays once per trigger.
+        if let Some(effect) = &self.active_effect
+            && now_ms().saturating_sub(effect.started_at_ms) > effect.duration_ms
+        {
+            self.active_effect = None;
+        }
+
+        let mut requests: Vec<SurfaceDrawRequest> = Vec::with_capacity(self.surfaces.len());
+        for (index, surface) in self.surfaces.iter().enumerate() {
             if surface.closed || !surface.configured {
+                requests.push(None);
                 continue;
             }
             let width = surface.width.max(1);
             let height = surface.height.max(1);
+            // Render at physical buffer resolution so the cursor and effects are
+            // crisp on hidpi / fractionally-scaled outputs.
+            let render_scale = self.render_scale(index);
             surface.layer.set_size(width, height);
-            let stride = width as i32 * 4;
-            ensure_layer_pool_capacity(&mut self.pool, width, height, surface_count)
-                .context("failed to resize playground shared-memory pool")?;
-            let (buffer, canvas) = self
-                .pool
-                .create_buffer(
-                    width as i32,
-                    height as i32,
-                    stride,
-                    wl_shm::Format::Argb8888,
-                )
-                .context("failed to create playground buffer")?;
-            draw_backdrop(canvas, width, height, backdrop);
-            if let Some((x, y)) = surface.pointer_pos {
-                let left = x.round() as i32 - cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X;
-                let top = y.round() as i32 - cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y;
-                draw_cursor_asset(canvas, width, height, &self.cursor, left, top);
-            }
             surface
                 .layer
                 .wl_surface()
-                .damage_buffer(0, 0, width as i32, height as i32);
-            buffer
-                .attach_to(surface.layer.wl_surface())
-                .context("failed to attach playground buffer")?;
-            surface.layer.commit();
-            surface.buffer = Some(buffer);
+                .set_buffer_scale((render_scale as i32).max(1));
+            let buffer_w = (width as f32 * render_scale).round() as i32;
+            let buffer_h = (height as f32 * render_scale).round() as i32;
+            surface
+                .layer
+                .wl_surface()
+                .damage_buffer(0, 0, buffer_w, buffer_h);
+            // Request a frame callback so the breathing glow and gesture
+            // animations keep advancing without further input.
+            surface
+                .layer
+                .wl_surface()
+                .frame(qh, surface.layer.wl_surface().clone());
+
+            let is_pointer_surface = self.pointer_surface == Some(index);
+            let cursor = if is_pointer_surface {
+                self.cursor_pos.map(|(x, y)| CursorPoint { x, y })
+            } else {
+                None
+            };
+            let effect = if is_pointer_surface {
+                self.active_effect.clone()
+            } else {
+                None
+            };
+            requests.push(Some(SurfaceDrawSpec {
+                width,
+                height,
+                cursor,
+                effect,
+                glow_active: self.glow_active,
+                px_per_mm: self.px_per_mm(index),
+                render_scale,
+            }));
         }
-        let _ = qh;
+
+        self.renderer
+            .draw(&mut self.surface_guards, &requests)
+            .context("wgpu draw failed in the effects playground")?;
         Ok(())
     }
 }
@@ -278,86 +468,19 @@ fn create_playground_layer(
         qh,
         surface,
         Layer::Overlay,
-        Some("sky-cua-pointer-playground"),
+        Some("sky-cua-effects-playground"),
         output,
     );
     layer.set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT | Anchor::BOTTOM);
-    // No keyboard focus is needed; Ctrl-C in the terminal quits the playground.
+    // No keyboard focus is needed; pointer drives everything and Ctrl-C quits.
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.set_exclusive_zone(0);
     layer.set_size(0, 0);
     // Leave the default (full) input region so the surface captures pointer
-    // motion — the inverse of the production overlay's empty, click-through region.
+    // input — the inverse of the production overlay's empty, click-through
+    // region.
     layer.commit();
     layer
-}
-
-fn draw_backdrop(canvas: &mut [u8], width: u32, height: u32, backdrop: Backdrop) {
-    match backdrop {
-        Backdrop::Transparent => canvas.fill(0),
-        Backdrop::Dark => fill_solid(canvas, argb(255, 0x1e, 0x1e, 0x2a)),
-        Backdrop::Light => fill_solid(canvas, argb(255, 0xf0, 0xf0, 0xf0)),
-        Backdrop::Grid => {
-            fill_solid(canvas, argb(255, 255, 255, 255));
-            let line = argb(255, 0xd2, 0xd2, 0xd2);
-            let mut y = 0u32;
-            while y < height {
-                let row_start = (y as usize) * (width as usize) * 4;
-                for x in 0..width as usize {
-                    let offset = row_start + x * 4;
-                    canvas[offset..offset + 4].copy_from_slice(&line);
-                }
-                y += GRID_CELL_PX;
-            }
-            let mut x = 0u32;
-            while x < width {
-                for yy in 0..height as usize {
-                    let offset = (yy * width as usize + x as usize) * 4;
-                    canvas[offset..offset + 4].copy_from_slice(&line);
-                }
-                x += GRID_CELL_PX;
-            }
-        }
-    }
-}
-
-/// Pack an opaque color as premultiplied ARGB8888 little-endian bytes. Opaque
-/// colors are unchanged by premultiplication.
-fn argb(a: u8, r: u8, g: u8, b: u8) -> [u8; 4] {
-    let color = ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
-    color.to_le_bytes()
-}
-
-fn fill_solid(canvas: &mut [u8], bytes: [u8; 4]) {
-    for pixel in canvas.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&bytes);
-    }
-}
-
-fn ensure_layer_pool_capacity(
-    pool: &mut SlotPool,
-    width: u32,
-    height: u32,
-    surface_count: usize,
-) -> Result<()> {
-    let required = layer_buffer_pool_size(width, height, surface_count)?;
-    if pool.len() < required {
-        pool.resize(required)?;
-    }
-    Ok(())
-}
-
-fn layer_buffer_pool_size(width: u32, height: u32, surface_count: usize) -> Result<usize> {
-    let surface_count = surface_count.max(1);
-    let bytes_per_buffer = (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
-        .context("playground buffer dimensions overflowed usize")?;
-    bytes_per_buffer
-        .checked_mul(surface_count)
-        .and_then(|bytes| bytes.checked_mul(BUFFER_SLOTS_PER_SURFACE))
-        .map(|bytes| bytes.max(4096))
-        .context("playground buffer pool size overflowed usize")
 }
 
 impl SeatHandler for PlaygroundApp {
@@ -410,26 +533,40 @@ impl PointerHandler for PlaygroundApp {
             let index = self.surface_index(&event.surface);
             match &event.kind {
                 PointerEventKind::Enter { serial } => {
-                    // Hide the real system cursor over our surface; we draw the agent one.
+                    // Hide the system cursor over our surface; the shader draws
+                    // the agent cursor glyph instead.
                     pointer.set_cursor(*serial, None, 0, 0);
-                    if let Some(index) = index {
-                        self.surfaces[index].pointer_pos = Some(event.position);
-                    }
+                    self.pointer_surface = index;
+                    self.cursor_pos = Some(event.position);
                     self.needs_redraw = true;
                 }
                 PointerEventKind::Motion { .. } => {
-                    if let Some(index) = index {
-                        self.surfaces[index].pointer_pos = Some(event.position);
-                    }
+                    self.pointer_surface = index;
+                    self.cursor_pos = Some(event.position);
                     self.needs_redraw = true;
                 }
                 PointerEventKind::Leave { .. } => {
-                    if let Some(index) = index {
-                        self.surfaces[index].pointer_pos = None;
+                    if self.pointer_surface == index {
+                        self.pointer_surface = None;
+                        self.cursor_pos = None;
                     }
                     self.needs_redraw = true;
                 }
-                _ => {}
+                PointerEventKind::Press { button, .. } => {
+                    self.pointer_surface = index;
+                    self.cursor_pos = Some(event.position);
+                    match *button {
+                        BTN_LEFT => self.left_press = Some(event.position),
+                        BTN_RIGHT => self.right_press = Some(event.position),
+                        _ => {}
+                    }
+                }
+                PointerEventKind::Release { button, .. } => {
+                    self.pointer_surface = index;
+                    self.cursor_pos = Some(event.position);
+                    self.on_button_release(*button);
+                }
+                PointerEventKind::Axis { .. } => {}
             }
         }
     }
@@ -461,6 +598,8 @@ impl CompositorHandler for PlaygroundApp {
         _surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
+        // Drive continuous animation: every presented frame schedules the next.
+        self.needs_redraw = true;
     }
 
     fn surface_enter(
@@ -514,12 +653,6 @@ impl LayerShellHandler for PlaygroundApp {
     }
 }
 
-impl ShmHandler for PlaygroundApp {
-    fn shm_state(&mut self) -> &mut Shm {
-        &mut self.shm
-    }
-}
-
 impl OutputHandler for PlaygroundApp {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
@@ -565,7 +698,6 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for PlaygroundApp {
 delegate_compositor!(PlaygroundApp);
 delegate_layer!(PlaygroundApp);
 delegate_output!(PlaygroundApp);
-delegate_shm!(PlaygroundApp);
 delegate_seat!(PlaygroundApp);
 delegate_pointer!(PlaygroundApp);
 
@@ -577,9 +709,16 @@ mod tests {
     fn backdrop_parses_known_aliases_and_rejects_unknown() {
         assert_eq!(Backdrop::parse("transparent"), Some(Backdrop::Transparent));
         assert_eq!(Backdrop::parse("LIVE"), Some(Backdrop::Transparent));
-        assert_eq!(Backdrop::parse("grid"), Some(Backdrop::Grid));
         assert_eq!(Backdrop::parse(" Dark "), Some(Backdrop::Dark));
         assert_eq!(Backdrop::parse("light"), Some(Backdrop::Light));
+        assert_eq!(Backdrop::parse("grid"), None);
         assert_eq!(Backdrop::parse("rainbow"), None);
+    }
+
+    #[test]
+    fn dark_and_light_backdrops_are_opaque_transparent_is_not() {
+        assert_eq!(Backdrop::Transparent.clear_color().a, 0.0);
+        assert_eq!(Backdrop::Dark.clear_color().a, 1.0);
+        assert_eq!(Backdrop::Light.clear_color().a, 1.0);
     }
 }

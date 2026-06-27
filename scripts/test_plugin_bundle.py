@@ -284,6 +284,33 @@ def test_build_bundle_inputs_fall_back_to_worktree_without_git(
     ]
 
 
+def test_worktree_fallback_excludes_gitignored_bytecode_and_companion_apk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resources = tmp_path / "resources"
+    (resources / "__pycache__").mkdir(parents=True)
+    (resources / "__pycache__" / "mod.cpython-313.pyc").write_bytes(b"\x00")
+    (resources / "stray.pyc").write_bytes(b"\x00")
+    (resources / "kept.toml").write_text("kept\n", encoding="utf-8")
+    (resources / "android").mkdir()
+    (resources / "android" / "phone-companion.apk").write_bytes(b"\x00")
+    (resources / "android" / "phone-companion.json").write_text("{}", encoding="utf-8")
+
+    def fail_git(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise subprocess.CalledProcessError(128, ["git", "ls-files"])
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(build_plugin.subprocess, "run", fail_git)
+
+    # The no-git fallback must mirror `git ls-files`: only the tracked source
+    # survives. Bytecode caches and the separately-staged companion APK dir are
+    # gitignored and must not leak into the bundle.
+    assert build_plugin.tracked_bundle_files([Path("resources")]) == [
+        Path("resources/kept.toml"),
+    ]
+
+
 def test_bundle_source_paths_include_standard_optional_plugin_roots() -> None:
     assert Path(".claude-plugin") in build_plugin.BUNDLE_SOURCE_PATHS
     assert Path(".codex-plugin") in build_plugin.BUNDLE_SOURCE_PATHS

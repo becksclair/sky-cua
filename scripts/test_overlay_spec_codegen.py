@@ -81,6 +81,30 @@ def test_generator_is_idempotent() -> None:
     assert first_kt == second_kt
 
 
+def test_motion_fixtures_are_identical_across_languages() -> None:
+    # The Android overlay test consumes its own copy of the motion fixtures
+    # under src/test/resources/, while the canonical copy lives in
+    # resources/overlay/. Nothing regenerates the duplicate, so guard byte
+    # equality here: a spec or fixture change that updates only one copy would
+    # otherwise let the Android parity test silently assert against stale data.
+    canonical = REPO_ROOT / "resources" / "overlay" / "agent_overlay_motion_fixtures.json"
+    android_copy = (
+        REPO_ROOT
+        / "android"
+        / "phone-companion"
+        / "app"
+        / "src"
+        / "test"
+        / "resources"
+        / "overlay"
+        / "agent_overlay_motion_fixtures.json"
+    )
+    assert canonical.read_bytes() == android_copy.read_bytes(), (
+        "agent_overlay_motion_fixtures.json copies have diverged; re-sync the "
+        "Android test copy from resources/overlay/."
+    )
+
+
 def test_check_fails_when_spec_changes(restore_spec: None) -> None:
     _run_generator()
     spec = _load_spec()

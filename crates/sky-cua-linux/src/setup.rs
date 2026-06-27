@@ -21,7 +21,6 @@ const METADATA_JSON: &str = include_str!(
 const EXTENSION_JS: &str = include_str!(
     "../../../resources/gnome-shell-extension/codex-window-control@openai.com/extension.js"
 );
-const CURSOR_CHAT_PNG: &[u8] = include_bytes!("../../sky-cua-overlay-host/assets/cursor-chat.png");
 
 pub async fn setup_accessibility_report<F, Fut>(
     doctor_fn: F,
@@ -157,7 +156,6 @@ fn write_extension_files(extension_dir: &Path) -> Result<(), String> {
         .map_err(|error| format!("failed to create {}: {error}", extension_dir.display()))?;
     write_extension_file(extension_dir, "metadata.json", METADATA_JSON)?;
     write_extension_file(extension_dir, "extension.js", EXTENSION_JS)?;
-    write_extension_file(extension_dir, "cursor-chat.png", CURSOR_CHAT_PNG)?;
     Ok(())
 }
 
@@ -526,9 +524,12 @@ mod tests {
     }
 
     #[test]
-    fn bundled_gnome_extension_includes_agent_cursor_asset() {
+    fn bundled_gnome_extension_exposes_retired_agent_cursor_methods() {
+        // The GNOME Shell cursor actor is retired: the extension keeps the
+        // SetAgentCursorState DBus surface but reports retirement instead of
+        // drawing a cursor, so it no longer references or bundles the asset.
         assert!(EXTENSION_JS.contains("SetAgentCursorState"));
-        assert!(EXTENSION_JS.contains("cursor-chat.png"));
-        assert!(CURSOR_CHAT_PNG.len() > 100);
+        assert!(EXTENSION_JS.contains("retired"));
+        assert!(!EXTENSION_JS.contains("cursor-chat.png"));
     }
 }
