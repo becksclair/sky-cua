@@ -2904,6 +2904,20 @@ mod tests {
             ),
             "desktop_pointer drag must allow explicit source coordinates dragged to an observed target element"
         );
+        assert!(
+            schema_accepts(
+                schema,
+                &json!({"operation": "drag", "from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4, "duration_ms": 500})
+            ),
+            "desktop_pointer drag must accept an optional duration_ms that paces the gesture"
+        );
+        assert!(
+            !schema_accepts(
+                schema,
+                &json!({"operation": "click", "x": 1, "y": 2, "duration_ms": 500})
+            ),
+            "duration_ms is drag-only; click must still reject it"
+        );
 
         let activate = find_tool("desktop_action");
         assert_eq!(activate["inputSchema"]["required"], json!(["operation"]));

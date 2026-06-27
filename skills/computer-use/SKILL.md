@@ -99,7 +99,8 @@ coordinates across them.
   semantic target only. `desktop_scroll` takes `direction` plus a
   snapshot-bound target from the same observation. `desktop_set_value` takes
   `value` plus a semantic target. `desktop_pointer` takes `operation` plus
-  coordinates or an allowed snapshot target. `desktop_keyboard` takes
+  coordinates or an allowed snapshot target; the `drag` operation also accepts
+  an optional `duration_ms` that paces the on-screen drag gesture. `desktop_keyboard` takes
   `operation` plus `text` or `key`; optional snapshot/window scope can activate
   the target window but does not select an editable element.
 - Prefer semantic primitives when `semantic_actions` support them:

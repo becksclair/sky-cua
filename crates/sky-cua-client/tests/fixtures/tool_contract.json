@@ -4196,6 +4196,10 @@
                   }
                 ],
                 "properties": {
+                  "duration_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
                   "element_identifier": {
                     "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                     "minLength": 1,
@@ -4289,6 +4293,10 @@
           }
         ],
         "properties": {
+          "duration_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
           "element_identifier": {
             "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
             "minLength": 1,

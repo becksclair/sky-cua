@@ -169,7 +169,8 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
             "`desktop_pointer` expects one flat JSON object. For click, provide \
              top-level `operation` plus either `x`/`y`, or `snapshot_id` with \
              `element_index`, `name`, or `text`; drag uses top-level \
-             `x`/`y`/`to_x`/`to_y` or `from_x`/`from_y`/`to_x`/`to_y`.",
+             `x`/`y`/`to_x`/`to_y` or `from_x`/`from_y`/`to_x`/`to_y`, plus an \
+             optional `duration_ms`.",
         ),
         "desktop_scroll" => Some(
             "`desktop_scroll` expects top-level `direction` plus a snapshot-resolved \
@@ -1139,7 +1140,8 @@ fn desktop_pointer_properties() -> Value {
             "from_y": coordinate_schema("Drag start y coordinate."),
             "to_x": coordinate_schema("Drag end x coordinate."),
             "to_y": coordinate_schema("Drag end y coordinate."),
-            "to_element_index": {"type": "integer", "minimum": 0}
+            "to_element_index": {"type": "integer", "minimum": 0},
+            "duration_ms": {"type": "integer", "minimum": 0}
         }),
         semantic_selector_properties(),
     ))
@@ -1298,6 +1300,7 @@ fn desktop_pointer_drag_allowed_fields() -> Vec<&'static str> {
         "to_x",
         "to_y",
         "to_element_index",
+        "duration_ms",
     ];
     fields.extend(desktop_selector_allowed_fields());
     fields

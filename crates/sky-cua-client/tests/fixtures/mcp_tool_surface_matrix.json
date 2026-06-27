@@ -5,8 +5,8 @@
       "browser_eval_enabled": false,
       "can_receive_images": false,
       "description_bytes": 3609,
-      "largest_schema_bytes": 8081,
-      "serialized_bytes": 77555,
+      "largest_schema_bytes": 8171,
+      "serialized_bytes": 77645,
       "surface": "grouped",
       "tool_count": 34,
       "tools_list": {
@@ -3482,6 +3482,10 @@
                         }
                       ],
                       "properties": {
+                        "duration_ms": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
                         "element_identifier": {
                           "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                           "minLength": 1,
@@ -3575,6 +3579,10 @@
                 }
               ],
               "properties": {
+                "duration_ms": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "element_identifier": {
                   "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                   "minLength": 1,
@@ -5762,8 +5770,8 @@
       "browser_eval_enabled": true,
       "can_receive_images": false,
       "description_bytes": 3712,
-      "largest_schema_bytes": 8081,
-      "serialized_bytes": 78348,
+      "largest_schema_bytes": 8171,
+      "serialized_bytes": 78438,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -9239,6 +9247,10 @@
                         }
                       ],
                       "properties": {
+                        "duration_ms": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
                         "element_identifier": {
                           "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                           "minLength": 1,
@@ -9332,6 +9344,10 @@
                 }
               ],
               "properties": {
+                "duration_ms": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "element_identifier": {
                   "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                   "minLength": 1,
@@ -11567,8 +11583,8 @@
       "browser_eval_enabled": false,
       "can_receive_images": true,
       "description_bytes": 3609,
-      "largest_schema_bytes": 8081,
-      "serialized_bytes": 78656,
+      "largest_schema_bytes": 8171,
+      "serialized_bytes": 78746,
       "surface": "grouped",
       "tool_count": 34,
       "tools_list": {
@@ -15123,6 +15139,10 @@
                         }
                       ],
                       "properties": {
+                        "duration_ms": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
                         "element_identifier": {
                           "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                           "minLength": 1,
@@ -15216,6 +15236,10 @@
                 }
               ],
               "properties": {
+                "duration_ms": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "element_identifier": {
                   "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                   "minLength": 1,
@@ -17403,8 +17427,8 @@
       "browser_eval_enabled": true,
       "can_receive_images": true,
       "description_bytes": 3712,
-      "largest_schema_bytes": 8081,
-      "serialized_bytes": 79449,
+      "largest_schema_bytes": 8171,
+      "serialized_bytes": 79539,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -20959,6 +20983,10 @@
                         }
                       ],
                       "properties": {
+                        "duration_ms": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
                         "element_identifier": {
                           "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                           "minLength": 1,
@@ -21052,6 +21080,10 @@
                 }
               ],
               "properties": {
+                "duration_ms": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "element_identifier": {
                   "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                   "minLength": 1,
