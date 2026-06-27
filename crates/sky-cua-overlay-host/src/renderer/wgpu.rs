@@ -64,6 +64,9 @@ pub struct WgpuOverlayRenderer {
     point_buffer: ::wgpu::Buffer,
     clock: Box<dyn AnimationClock>,
     info: RendererInfo,
+    /// Render-pass clear color. Transparent for the production click-through
+    /// overlay; the effects playground overrides it to paint a solid backdrop.
+    clear_color: ::wgpu::Color,
 }
 
 impl std::fmt::Debug for WgpuOverlayRenderer {
@@ -180,7 +183,14 @@ impl WgpuOverlayRenderer {
             point_buffer,
             clock,
             info,
+            clear_color: ::wgpu::Color::TRANSPARENT,
         })
+    }
+
+    /// Override the render-pass clear color (defaults to transparent). Used by
+    /// the effects playground to paint a solid backdrop behind the overlay.
+    pub fn set_clear_color(&mut self, color: ::wgpu::Color) {
+        self.clear_color = color;
     }
 
     /// Information about the adapter selected during initialization.
@@ -216,17 +226,37 @@ impl WgpuOverlayRenderer {
 
             let width = spec.width.max(1);
             let height = spec.height.max(1);
-            let config = guard.ensure_configured(&self.device, &self.adapter, width, height);
+            // Render at physical buffer resolution (logical * integer buffer
+            // scale) so the compositor downsamples a sharp buffer instead of
+            // upscaling a soft logical one on hidpi / fractionally-scaled outputs.
+            let render_scale = spec.render_scale.max(1.0);
+            let phys_width = ((width as f32) * render_scale).round().max(1.0) as u32;
+            let phys_height = ((height as f32) * render_scale).round().max(1.0) as u32;
+            let config =
+                guard.ensure_configured(&self.device, &self.adapter, phys_width, phys_height);
 
-            let frame = match guard.acquire_frame(&self.device) {
-                super::surface::SurfaceAcquisitionResult::Success(frame) => frame,
-                super::surface::SurfaceAcquisitionResult::Retry(reason) => {
-                    bail!("wgpu surface {index} frame unavailable: {reason}");
-                }
-                super::surface::SurfaceAcquisitionResult::Validation => {
-                    bail!(
-                        "wgpu validation error while acquiring overlay frame for surface {index}"
-                    );
+            // Transient surface states (lost/outdated after a resize or output
+            // change, a momentary timeout/occlusion) are recoverable: the first
+            // `acquire_frame` reconfigures the surface, so retry once before
+            // failing. Bailing on the first transient would let a routine,
+            // self-healing event permanently fail the renderer closed when the
+            // draw runs on the message path (`render_reply_with_diagnostics`
+            // marks the renderer `Unsupported` on any `Err`).
+            let mut attempt = 0;
+            let frame = loop {
+                match guard.acquire_frame(&self.device) {
+                    super::surface::SurfaceAcquisitionResult::Success(frame) => break frame,
+                    super::surface::SurfaceAcquisitionResult::Validation => {
+                        bail!(
+                            "wgpu validation error while acquiring overlay frame for surface {index}"
+                        );
+                    }
+                    super::surface::SurfaceAcquisitionResult::Retry(reason) => {
+                        attempt += 1;
+                        if attempt >= 2 {
+                            bail!("wgpu surface {index} frame unavailable: {reason}");
+                        }
+                    }
                 }
             };
 
@@ -245,12 +275,7 @@ impl WgpuOverlayRenderer {
                         view: &view,
                         resolve_target: None,
                         ops: ::wgpu::Operations {
-                            load: ::wgpu::LoadOp::Clear(::wgpu::Color {
-                                r: 0.0,
-                                g: 0.0,
-                                b: 0.0,
-                                a: 0.0,
-                            }),
+                            load: ::wgpu::LoadOp::Clear(self.clear_color),
                             store: ::wgpu::StoreOp::Store,
                         },
                         depth_slice: None,
@@ -268,6 +293,9 @@ impl WgpuOverlayRenderer {
                     now_ms: self.clock.now_ms(),
                     cursor: spec.cursor,
                     effect: spec.effect.as_ref(),
+                    glow_active: spec.glow_active,
+                    px_per_mm: spec.px_per_mm,
+                    render_scale,
                 });
                 self.queue
                     .write_buffer(&self.uniform_buffer, 0, effect_uniform_as_bytes(&uniform));
@@ -305,6 +333,11 @@ fn create_effect_bind_group(
     point_buffer: &::wgpu::Buffer,
     cursor: &CursorImage,
 ) -> ::wgpu::BindGroup {
+    // Full mip chain: the texture is rendered at CURSOR_TEXTURE_SCALE x its
+    // on-screen footprint, so a single bilinear tap minifying that 4x reduction
+    // stair-steps the glyph edges. Trilinear sampling of box-filtered mips fixes
+    // it across every output scale.
+    let mip_level_count = 1 + cursor.mips.len() as u32;
     let texture = device.create_texture(&::wgpu::TextureDescriptor {
         label: Some("sky-cua agent cursor texture"),
         size: ::wgpu::Extent3d {
@@ -312,32 +345,38 @@ fn create_effect_bind_group(
             height: cursor.height,
             depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
+        mip_level_count,
         sample_count: 1,
         dimension: ::wgpu::TextureDimension::D2,
-        format: ::wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: ::wgpu::TextureFormat::Rgba8Unorm,
         usage: ::wgpu::TextureUsages::TEXTURE_BINDING | ::wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    queue.write_texture(
-        ::wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: ::wgpu::Origin3d::ZERO,
-            aspect: ::wgpu::TextureAspect::All,
-        },
-        cursor.rgba.as_slice(),
-        ::wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(cursor.width * 4),
-            rows_per_image: Some(cursor.height),
-        },
-        ::wgpu::Extent3d {
-            width: cursor.width,
-            height: cursor.height,
-            depth_or_array_layers: 1,
-        },
-    );
+    let write_level = |level: u32, w: u32, h: u32, rgba: &[u8]| {
+        queue.write_texture(
+            ::wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level,
+                origin: ::wgpu::Origin3d::ZERO,
+                aspect: ::wgpu::TextureAspect::All,
+            },
+            rgba,
+            ::wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            ::wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+    };
+    write_level(0, cursor.width, cursor.height, cursor.rgba.as_slice());
+    for (index, mip) in cursor.mips.iter().enumerate() {
+        write_level(index as u32 + 1, mip.width, mip.height, mip.rgba.as_slice());
+    }
     let texture_view = texture.create_view(&::wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&::wgpu::SamplerDescriptor {
         label: Some("sky-cua cursor sampler"),
@@ -346,7 +385,7 @@ fn create_effect_bind_group(
         address_mode_w: ::wgpu::AddressMode::ClampToEdge,
         mag_filter: ::wgpu::FilterMode::Linear,
         min_filter: ::wgpu::FilterMode::Linear,
-        mipmap_filter: ::wgpu::MipmapFilterMode::Nearest,
+        mipmap_filter: ::wgpu::MipmapFilterMode::Linear,
         ..Default::default()
     });
     let bind_group = device.create_bind_group(&::wgpu::BindGroupDescriptor {

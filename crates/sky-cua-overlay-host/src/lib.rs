@@ -45,13 +45,29 @@ pub mod cursor_asset {
     pub const AGENT_CURSOR_HOTSPOT_Y: i32 = 11;
 
     // The desktop overlay (layer-shell, X11, KWin effect, playground) draws the
-    // cursor at 2x the browser/synthetic size for on-screen legibility: the full
-    // 46x48 source rendered 1:1, with a doubled hotspot. The screenshot-synthetic
-    // and phone cursor planes keep the base 23x24 size above.
-    pub const AGENT_CURSOR_DESKTOP_WIDTH: u32 = 46;
-    pub const AGENT_CURSOR_DESKTOP_HEIGHT: u32 = 48;
-    pub const AGENT_CURSOR_DESKTOP_HOTSPOT_X: i32 = 20;
-    pub const AGENT_CURSOR_DESKTOP_HOTSPOT_Y: i32 = 22;
+    // cursor near the browser/synthetic size: the 46x48 source scaled down to a
+    // compact on-screen footprint, with a proportional hotspot. The
+    // screenshot-synthetic and phone cursor planes keep the base 23x24 size.
+    pub const AGENT_CURSOR_DESKTOP_WIDTH: u32 = 30;
+    pub const AGENT_CURSOR_DESKTOP_HEIGHT: u32 = 31;
+    pub const AGENT_CURSOR_DESKTOP_HOTSPOT_X: i32 = 13;
+    pub const AGENT_CURSOR_DESKTOP_HOTSPOT_Y: i32 = 14;
+
+    // Logical-pixel margin of animated smoke space around the desktop cursor
+    // glyph. The cursor texture is rendered at the glyph size plus this margin
+    // on every side so the WGPU shader has room to billow border-style smoke off
+    // the glyph silhouette (see `renderer::render_vector_cursor` /
+    // `cursor_smoke`). The glyph itself stays `AGENT_CURSOR_DESKTOP_*`; only the
+    // sampled footprint and its hotspot grow.
+    pub const AGENT_CURSOR_SMOKE_MARGIN: u32 = 30;
+    pub const AGENT_CURSOR_FOOTPRINT_WIDTH: u32 =
+        AGENT_CURSOR_DESKTOP_WIDTH + 2 * AGENT_CURSOR_SMOKE_MARGIN;
+    pub const AGENT_CURSOR_FOOTPRINT_HEIGHT: u32 =
+        AGENT_CURSOR_DESKTOP_HEIGHT + 2 * AGENT_CURSOR_SMOKE_MARGIN;
+    pub const AGENT_CURSOR_FOOTPRINT_HOTSPOT_X: i32 =
+        AGENT_CURSOR_DESKTOP_HOTSPOT_X + AGENT_CURSOR_SMOKE_MARGIN as i32;
+    pub const AGENT_CURSOR_FOOTPRINT_HOTSPOT_Y: i32 =
+        AGENT_CURSOR_DESKTOP_HOTSPOT_Y + AGENT_CURSOR_SMOKE_MARGIN as i32;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

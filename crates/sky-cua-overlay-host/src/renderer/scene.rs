@@ -26,6 +26,24 @@ pub struct SurfaceDrawSpec {
     pub height: u32,
     pub cursor: Option<CursorPoint>,
     pub effect: Option<EffectScene>,
+    /// True while the agent holds the in-control lease (the host's visible
+    /// overlay state). Gates the breathing edge glow and inward waves on this
+    /// surface, matching Android's `glowActive`. Distinct from cursor presence.
+    pub glow_active: bool,
+    /// Integer buffer scale for this output (`ceil(native / logical)`): the
+    /// surface renders at `width*render_scale × height*render_scale` physical
+    /// pixels so the compositor downsamples a sharp buffer instead of upscaling
+    /// a soft logical one. All surface-local coordinates and the cursor footprint
+    /// are scaled by this when building the frame uniform. `1.0` = no scaling
+    /// (an unscaled output).
+    pub render_scale: f32,
+    /// Surface-local (logical) pixels per physical millimetre for this output,
+    /// derived from its `wl_output` physical size and logical size. Lets the
+    /// edge glow size its bright rim and containment band in real-world units
+    /// (millimetres/centimetres) so the effect looks identical across monitors
+    /// with different DPI. Falls back to a representative logical density when
+    /// the output geometry is unknown.
+    pub px_per_mm: f32,
 }
 
 /// A full frame: one request per host surface guard.

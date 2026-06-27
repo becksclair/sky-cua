@@ -164,9 +164,15 @@ fn choose_alpha_mode(alpha_modes: &[::wgpu::CompositeAlphaMode]) -> ::wgpu::Comp
     } else if alpha_modes.contains(&::wgpu::CompositeAlphaMode::Auto) {
         ::wgpu::CompositeAlphaMode::Auto
     } else {
+        // The renderer requires transparent compositing (enforced by the init
+        // gate in `WgpuOverlayRenderer`), so never fall back to `Opaque`. Pick
+        // the first transparent mode the surface advertises rather than the
+        // first mode overall, which could be `Opaque` and silently defeat the
+        // transparency guarantee.
         alpha_modes
-            .first()
+            .iter()
             .copied()
+            .find(|mode| *mode != ::wgpu::CompositeAlphaMode::Opaque)
             .unwrap_or(::wgpu::CompositeAlphaMode::Auto)
     }
 }
@@ -228,6 +234,20 @@ mod tests {
                 ::wgpu::CompositeAlphaMode::Opaque,
             ]),
             ::wgpu::CompositeAlphaMode::Opaque
+        );
+    }
+
+    #[test]
+    fn alpha_mode_skips_opaque_when_only_postmultiplied_is_transparent() {
+        // Neither `PreMultiplied` nor `Auto` is advertised, so selection falls
+        // through to the fallback branch. It must still pick the transparent
+        // mode rather than the first (opaque) entry.
+        assert_eq!(
+            choose_alpha_mode(&[
+                ::wgpu::CompositeAlphaMode::Opaque,
+                ::wgpu::CompositeAlphaMode::PostMultiplied,
+            ]),
+            ::wgpu::CompositeAlphaMode::PostMultiplied
         );
     }
 

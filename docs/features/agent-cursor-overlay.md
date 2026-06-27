@@ -4,9 +4,11 @@
 
 Shipped on Linux with WGPU-only production visible rendering on Wayland.
 Windows native overlay deferred until a Windows machine is available for live
-proof. Last verified: 2026-06-25 at commit
-`00a4eb657237924c0bb3b15ae1ce72ae4e593e2b` in the Arch `testing-vm` and on
-the operator KDE Wayland desktop.
+proof. Last verified: 2026-06-27 on the operator KDE Wayland desktop (DP-3
+1440p) — the SDF cursor glyph, glyph-anchored smoke aura, and under-smoke
+grounding shadow, captured via the `agent-cursor-debug` skill flow. The prior
+full VM/commit acceptance is 2026-06-25 at commit
+`00a4eb657237924c0bb3b15ae1ce72ae4e593e2b`.
 
 ## Summary
 
@@ -169,9 +171,9 @@ On Wayland layer-shell with `renderer_backend=wgpu`, visible desktop effects
 are rendered by `crates/sky-cua-overlay-host/src/renderer/shaders.rs` in WGSL.
 The CPU host validates events, maps coordinates into output-local scene data,
 updates bounded uniform/storage buffers, and advances a monotonic clock. It
-does not rasterize or precompose edge glow, inward waves, halo, ripple, trail,
-cursor glide/rotation, no-no frames, or cursor pixels for the normal WGPU
-runtime path.
+does not rasterize or precompose edge glow, halo, ripple, trail, cursor
+glide/rotation, no-no frames, or cursor pixels for the normal WGPU runtime
+path.
 
 The WGPU pass draws a full-screen analytic shader into a premultiplied-alpha
 surface. TOML color channels are authored as sRGB 0..255 values and normalized
@@ -179,6 +181,88 @@ before upload. The surface policy prefers sRGB swapchain formats
 (`Bgra8UnormSrgb`, then `Rgba8UnormSrgb`, then any sRGB format), and the shader
 returns premultiplied color so transparent composition remains correct with
 `CompositeAlphaMode::PreMultiplied` when available.
+
+The analytic effect math is kept in parity with the Android companion's
+`OverlayMath`: the shared spec drives identical timing, easing, and amplitude
+constants, and the WGSL curves — eased-triangle breathing, the no-no head-shake
+envelope, the damped-cosine click bounce, and the eased tap-ripple radius —
+match the Kotlin reference. `resources/overlay/wgsl_animation_fixtures.json`
+pins the desktop output against the canonical samples, including off-quarter
+phases that distinguish the curves, and the GPU conformance test asserts them
+on a real adapter.
+
+The ambient edge glow is gated on the agent-in-control lease (`flags.w`), the
+desktop analogue of the Android companion's `glowActive`: it lights while the
+overlay holds a visible state at full coverage and stays dark otherwise,
+deliberately decoupled from per-surface cursor presence.
+
+On the desktop the edge glow is a drifting, domain-warped value-noise (fbm)
+field rather than the stroked/blurred band the Android companion draws: a bright
+rim hugs the very edge (~0.8mm), a fuller smoke layer banks against the border
+and breaks into wisps further in, and the whole effect crawls over time. It is
+sized in physical units — the host packs each output's logical-pixels-per-
+millimetre (derived from the `wl_output` physical size and logical size) into
+`surface_size_px.z`, so the rim width and the ~2.5cm containment depth read the
+same across monitors of differing DPI. The band is additionally capped to a
+fraction of the smaller screen dimension so it stays proportional on small
+panels instead of swallowing them. The separate concentric inward waves are
+retired on the desktop path — their motion is folded into the glow's drift — so
+`inward_waves` is a no-op there while the Android companion still renders
+discrete waves from `OverlaySpec.Android`. The desktop edge glow therefore no
+longer reads the `glow_*`/`wave_*` stroke/blur spec constants, which remain
+authored for the Android renderer.
+
+#### Cursor glyph, smoke aura, and shadow
+
+The agent pointer is a vector glyph (the path is parity with the Android
+companion's `agent_cursor.xml`), but it is **not** pre-rasterized into the
+texture. `render_vector_cursor` rounds the glyph path (Chaikin corner-cutting,
+`CURSOR_CORNER_ROUNDING` iterations) and bakes a **signed distance field** of
+that path into the cursor texture's R channel; the shader reconstructs the
+black-fill / white-outline glyph from it with `fwidth`-based anti-aliasing at
+the final framebuffer resolution. This is the key correctness property: a thin
+high-contrast outline pre-rasterized into pixels cannot survive the GPU
+minifying the oversized texture (`CURSOR_TEXTURE_SCALE`× the footprint) without
+stair-stepping, whereas a smooth SDF samples and mipmaps cleanly and yields a
+crisp edge at any per-output scale. The texture therefore carries a full
+box-filtered mip chain and is sampled trilinear, and it is a **linear**
+(`Rgba8Unorm`) format — an sRGB format would gamma-warp the distance values.
+
+The texture packs four independent fields, not an RGBA image: R = the glyph
+SDF (shader arrow), G = the smoke anchor (below), B = a stepped luminance and
+A = coverage (both only for the CPU blit fallback / tests). The outline ring
+half-width is `CURSOR_STROKE_EDGE` in normalized SDF units; the Rust constant
+and the WGSL constant must match (guarded by `stroke_edge_matches_shader_constant`).
+The glyph is tinted toward the agent palette — a deep-plum fill rising to a
+soft pink-white outline — rather than pure black/white.
+
+The cursor's aura reuses the **edge-glow recipe with the glyph silhouette as
+the anchor** instead of the screen border: a centred radial field always reads
+as a disc, so `render_vector_cursor` runs a two-pass chamfer distance transform
+seeded on the glyph coverage and stores it in the G channel (1 on the outline →
+0 at the smoke margin). `cursor_smoke` billows the same domain-warped fbm off
+that anchor — fuller near the outline, wisping outward, with the outer boundary
+feathered to nothing so the cloud dissolves with no visible edge. The aura's
+size is the `AGENT_CURSOR_SMOKE_MARGIN` band, its density is the noise
+threshold, and it is sampled at a small up-left uv offset so the cloud centres
+on the hotspot rather than the glyph centroid (the arrow body sits down-right
+of the tip).
+
+The grounding shadow is its **own pass rendered under the smoke** (`cursor_shadow`
+before `cursor_smoke` in `render_pixel`), sampled from the same SDF at a blurred
+mip with a soft falloff. Drawing it under the smoke is deliberate: bundled with
+the arrow on top of the smoke it darkens its own pink aura into a smudge;
+underneath, it darkens the background and is covered where the smoke is dense.
+The smoke's keep-off-the-arrow mask reads the **unshifted** glyph coverage so
+shifting the cloud does not punch a gap that exposes the shadow.
+
+Sizing is a startup-budget constraint, not just an aesthetic one:
+`CursorImage::load` runs at process start and must finish well under the host's
+2-second startup timeout (`HOST_START_TIMEOUT`), or the service kills the
+overlay host and only the standalone KWin effect's edge glow survives. The
+per-pixel analytic SDF (one polygon/path eval per texel, not per supersample),
+the O(n) chamfer transform, and the glyph-bbox-bounded design keep a load that
+once ran ~2.1 s down to a few hundred ms.
 
 System cursor hiding (hiding the compositor's real pointer while the agent
 overlay is visible) is a separate capability described in
@@ -190,7 +274,9 @@ other.
 
 - `crates/sky-cua-platform/src/model.rs` — public types and serialization
 - `crates/sky-cua-service/src/overlay.rs` — `OverlayController`, state
-  ownership, and synthetic screenshot compositing
+  ownership, and synthetic screenshot compositing; pure point/state derivation
+  lives in `overlay/cursor_geometry.rs` and gesture construction in
+  `overlay/gesture.rs`
 - `crates/sky-cua-overlay-host/` — overlay host crate
   - `src/layer_shell.rs` — generic Wayland layer-shell backend (KWin, Hyprland)
   - `src/renderer/` — WGPU renderer, effect scene, uniform/storage buffer ABI,
@@ -224,7 +310,13 @@ python3 scripts/build_plugin.py
 
 The overlay-host crate includes WGPU shader validation, compute conformance
 against `resources/overlay/wgsl_animation_fixtures.json`, and offscreen render
-invariants for hidden transparency and deterministic visible frames.
+invariants for hidden transparency and deterministic visible frames. The cursor
+glyph path has its own unit coverage: the texture is the footprint-plus-smoke-
+margin size, the smoke anchor saturates inside the glyph and falls to zero in
+the far margin, the corners are transparent, and `stroke_edge_matches_shader_constant`
+guards the Rust↔WGSL stroke-width constant against drift. On-screen cursor
+quality is judged by eye via the `agent-cursor-debug` skill, not a pass/fail
+assertion.
 
 VM acceptance via `scripts/run_gui_testing_vm_smoke.py`:
 
@@ -288,11 +380,12 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
 ./target/release/sky-cua-overlay-host playground --backdrop light
 ```
 
-- Wayland-only, via the layer-shell renderer (`src/playground.rs`), which reuses
-  the production `CursorImage` and `draw_cursor_asset`, so the previewed glyph is
-  the real desktop cursor at the 2x desktop render size. It is a distinct
-  production path from the KWin compositor effect, so on KDE it previews the
-  layer-shell rendering of the same asset rather than the effect's.
+- Wayland-only, via the layer-shell renderer (`src/playground.rs`), which drives
+  the production `WgpuOverlayRenderer` with the production `CursorImage`, so the
+  previewed glyph is rendered by the same SDF / smoke / shadow shader path as the
+  real desktop cursor. It is a distinct production path from the KWin compositor
+  effect, so on KDE it previews the layer-shell rendering rather than the
+  effect's.
 - It owns pointer input while open (you cannot click the apps behind it). Move
   the mouse to preview; quit with Ctrl-C — the compositor restores the real
   cursor on exit.

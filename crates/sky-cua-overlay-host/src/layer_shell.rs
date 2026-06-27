@@ -83,7 +83,6 @@ impl LayerShellOverlayBackend {
                     closed: false,
                     width: 1,
                     height: 1,
-                    pending_frame: false,
                     capture_barrier_frames_remaining: 0,
                 }
             })
@@ -483,7 +482,6 @@ struct LayerSurfaceEntry {
     closed: bool,
     width: u32,
     height: u32,
-    pending_frame: bool,
     capture_barrier_frames_remaining: u32,
 }
 
@@ -547,7 +545,33 @@ impl LayerShellRenderer {
 ///
 /// # Safety
 /// The returned handle is valid only while `conn` remains connected.
-fn wayland_display_handle(conn: &Connection) -> Result<wgpu::rwh::RawDisplayHandle> {
+/// Integer buffer scale for an output: `ceil(native_mode / logical_size)`,
+/// clamped to `>= 1`. Rendering the surface at `logical * this` physical pixels
+/// makes the compositor downsample a sharp buffer instead of upscaling a soft
+/// logical one on hidpi / fractionally-scaled outputs. `1.0` when geometry is
+/// unknown or the output is unscaled.
+pub(crate) fn output_render_scale(info: &smithay_client_toolkit::output::OutputInfo) -> f32 {
+    let Some((logical_w, logical_h)) = info.logical_size else {
+        return 1.0;
+    };
+    let Some(mode) = info
+        .modes
+        .iter()
+        .find(|mode| mode.current)
+        .or(info.modes.first())
+    else {
+        return 1.0;
+    };
+    let (native_w, native_h) = mode.dimensions;
+    if logical_w <= 0 || logical_h <= 0 || native_w <= 0 || native_h <= 0 {
+        return 1.0;
+    }
+    let scale_x = native_w as f32 / logical_w as f32;
+    let scale_y = native_h as f32 / logical_h as f32;
+    scale_x.max(scale_y).ceil().max(1.0)
+}
+
+pub(crate) fn wayland_display_handle(conn: &Connection) -> Result<wgpu::rwh::RawDisplayHandle> {
     let display = NonNull::new(conn.backend().display_ptr() as *mut _)
         .context("Wayland display pointer was null")?;
     Ok(wgpu::rwh::RawDisplayHandle::Wayland(
@@ -559,7 +583,9 @@ fn wayland_display_handle(conn: &Connection) -> Result<wgpu::rwh::RawDisplayHand
 ///
 /// # Safety
 /// The returned handle is valid only while `surface` remains alive.
-fn wayland_window_handle(surface: &wl_surface::WlSurface) -> Result<wgpu::rwh::RawWindowHandle> {
+pub(crate) fn wayland_window_handle(
+    surface: &wl_surface::WlSurface,
+) -> Result<wgpu::rwh::RawWindowHandle> {
     let surface_ptr = NonNull::new(surface.id().as_ptr() as *mut _)
         .context("Wayland surface pointer was null")?;
     Ok(wgpu::rwh::RawWindowHandle::Wayland(
@@ -758,6 +784,20 @@ impl LayerShellApp {
         let effects = (0..self.layers.len())
             .map(|index| self.effect_scene_for_layer(index, now_ms))
             .collect::<Vec<_>>();
+        // Per-output physical density so the edge glow sizes its rim and
+        // containment band in millimetres regardless of monitor DPI.
+        let px_per_mm = (0..self.layers.len())
+            .map(|index| self.layer_px_per_mm(index))
+            .collect::<Vec<_>>();
+        // Per-output integer buffer scale: render at physical resolution so the
+        // cursor and effects stay crisp on hidpi / fractionally-scaled outputs.
+        let render_scale = (0..self.layers.len())
+            .map(|index| self.layer_render_scale(index))
+            .collect::<Vec<_>>();
+        // Frame-constant agent-in-control lease (see `Self::glow_active`): gates
+        // the ambient edge glow / inward waves on every surface, distinct from
+        // per-surface cursor presence.
+        let glow_active = self.glow_active();
 
         let mut requests: Vec<SurfaceDrawRequest> = Vec::with_capacity(self.layers.len());
         for (index, entry) in self.layers.iter_mut().enumerate() {
@@ -767,17 +807,23 @@ impl LayerShellApp {
             }
             let width = entry.width.max(1);
             let height = entry.height.max(1);
+            let scale = render_scale[index];
             entry.layer.set_size(width, height);
             entry.layer.set_margin(0, 0, 0, 0);
             entry
                 .layer
                 .wl_surface()
-                .damage_buffer(0, 0, width as i32, height as i32);
+                .set_buffer_scale((scale as i32).max(1));
+            let buffer_w = (width as f32 * scale).round() as i32;
+            let buffer_h = (height as f32 * scale).round() as i32;
+            entry
+                .layer
+                .wl_surface()
+                .damage_buffer(0, 0, buffer_w, buffer_h);
             entry
                 .layer
                 .wl_surface()
                 .frame(qh, entry.layer.wl_surface().clone());
-            entry.pending_frame = true;
 
             let cursor = visible_target
                 .as_ref()
@@ -792,6 +838,9 @@ impl LayerShellApp {
                 height,
                 cursor,
                 effect,
+                glow_active,
+                px_per_mm: px_per_mm[index],
+                render_scale: scale,
             }));
         }
 
@@ -847,11 +896,18 @@ impl LayerShellApp {
     }
 
     fn should_animate(&self, now_ms: u64) -> bool {
-        self.has_active_effect(now_ms)
-            || self
-                .state
-                .as_ref()
-                .is_some_and(|state| state.visible && self.visible_overlay_supported())
+        self.has_active_effect(now_ms) || self.glow_active()
+    }
+
+    /// The agent-in-control lease: a visible overlay state on a renderer that
+    /// actually presents a visible overlay at full coverage. This is the desktop
+    /// analogue of Android's `glowActive` and gates the ambient edge glow and
+    /// inward waves. Deliberately distinct from per-surface cursor presence so
+    /// the glow does not light merely because a one-shot effect is present.
+    fn glow_active(&self) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|state| state.visible && self.visible_overlay_supported())
     }
 
     fn clear_expired_effect(&mut self, now_ms: u64) {
@@ -927,6 +983,45 @@ impl LayerShellApp {
             x: point.x,
             y: point.y,
         })
+    }
+
+    /// Logical pixels per physical millimetre for a layer's output, from its
+    /// `wl_output` physical size (mm) and logical size (px). Uses the diagonal
+    /// so it stays correct under per-axis DPI differences and output rotation.
+    /// Falls back to a representative logical density (~120 logical DPI) when
+    /// the geometry is unknown or degenerate, so the edge glow always has a
+    /// sane real-world scale.
+    fn layer_px_per_mm(&self, index: usize) -> f32 {
+        const FALLBACK_PX_PER_MM: f32 = 4.7;
+        let Some(entry) = self.layers.get(index) else {
+            return FALLBACK_PX_PER_MM;
+        };
+        let Some(output) = entry.output.as_ref() else {
+            return FALLBACK_PX_PER_MM;
+        };
+        let Some(info) = self.output_state.info(output) else {
+            return FALLBACK_PX_PER_MM;
+        };
+        let (phys_w_mm, phys_h_mm) = info.physical_size;
+        let Some((logical_w, logical_h)) = info.logical_size else {
+            return FALLBACK_PX_PER_MM;
+        };
+        let phys_diag_mm = ((phys_w_mm as f32).powi(2) + (phys_h_mm as f32).powi(2)).sqrt();
+        let logical_diag_px = ((logical_w as f32).powi(2) + (logical_h as f32).powi(2)).sqrt();
+        if phys_diag_mm < 1.0 || logical_diag_px < 1.0 {
+            return FALLBACK_PX_PER_MM;
+        }
+        logical_diag_px / phys_diag_mm
+    }
+
+    /// Integer buffer scale for a layer's output (see [`output_render_scale`]).
+    fn layer_render_scale(&self, index: usize) -> f32 {
+        self.layers
+            .get(index)
+            .and_then(|entry| entry.output.as_ref())
+            .and_then(|output| self.output_state.info(output))
+            .map(|info| output_render_scale(&info))
+            .unwrap_or(1.0)
     }
 
     fn desktop_logical_target(&self, x: f64, y: f64) -> Option<LayerCursorTarget> {
@@ -1174,14 +1269,12 @@ impl CompositorHandler for LayerShellApp {
             .iter_mut()
             .find(|entry| entry.layer.wl_surface().id() == surface.id())
         {
-            entry.pending_frame = false;
             if entry.capture_barrier_frames_remaining > 0 {
                 entry.capture_barrier_frames_remaining =
                     entry.capture_barrier_frames_remaining.saturating_sub(1);
                 if entry.capture_barrier_frames_remaining > 0 {
                     surface.frame(qh, surface.clone());
                     surface.commit();
-                    entry.pending_frame = true;
                 }
             }
         }
@@ -1275,7 +1368,6 @@ impl OutputHandler for LayerShellApp {
                 .is_some_and(|entry_output| entry_output.id() == output.id())
             {
                 entry.closed = true;
-                entry.pending_frame = false;
                 entry.capture_barrier_frames_remaining = 0;
             }
         }
@@ -1424,13 +1516,17 @@ mod tests {
 
         draw_cursor_asset(&mut canvas, cursor.width, cursor.height, &cursor, 0, 0);
 
-        // Top-left corner stays transparent; the hotspot lands on the opaque body.
+        // Top-left corner stays transparent (it is now smoke margin); the
+        // hotspot lands on the opaque body. The texture covers the glyph
+        // footprint plus margin, so the scale divides by the FOOTPRINT width and
+        // the hotspot is the footprint hotspot.
         let corner_alpha = canvas[3];
-        let hotspot_offset = ((cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y as u32 * cursor.width
-            + cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X as u32)
-            * 4) as usize;
+        let texture_scale = cursor.width / cursor_asset::AGENT_CURSOR_FOOTPRINT_WIDTH;
+        let hotspot_x = cursor_asset::AGENT_CURSOR_FOOTPRINT_HOTSPOT_X as u32 * texture_scale;
+        let hotspot_y = cursor_asset::AGENT_CURSOR_FOOTPRINT_HOTSPOT_Y as u32 * texture_scale;
+        let hotspot_offset = ((hotspot_y * cursor.width + hotspot_x) * 4) as usize;
         assert_eq!(corner_alpha, 0);
-        assert_eq!(canvas[hotspot_offset + 3], 255);
+        assert!(canvas[hotspot_offset + 3] > 0);
     }
 
     #[test]

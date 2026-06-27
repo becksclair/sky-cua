@@ -156,24 +156,6 @@ impl SystemCursorAdapter {
             Self::Hyprland(adapter) => adapter.set_hidden(hidden),
         }
     }
-
-    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
-        match self {
-            Self::Unsupported(adapter) => adapter.pointer_position(),
-            #[cfg(target_os = "linux")]
-            Self::KwinEffect(adapter) => adapter.pointer_position(),
-            #[cfg(target_os = "linux")]
-            Self::CosmicTransparentXcursor(adapter) => adapter.pointer_position(),
-            #[cfg(target_os = "linux")]
-            Self::Cosmic(adapter) => adapter.pointer_position(),
-            #[cfg(target_os = "linux")]
-            Self::Hyprland(adapter) => adapter.pointer_position(),
-        }
-    }
-
-    pub fn restore(&mut self) -> Result<()> {
-        self.set_hidden(false)
-    }
 }
 
 #[cfg(test)]
@@ -282,12 +264,6 @@ impl KwinEffectSystemCursorAdapter {
         Ok(())
     }
 
-    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
-        let output =
-            self.call_agent_cursor_method("PointerStateJson", std::iter::empty::<&str>())?;
-        parse_kwin_pointer_state_json(&output)
-    }
-
     fn call_agent_cursor_method<I, S>(&self, method: &str, args: I) -> Result<String>
     where
         I: IntoIterator<Item = S>,
@@ -329,38 +305,6 @@ impl KwinEffectSystemCursorAdapter {
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Deserialize)]
-struct KwinPointerStateJson {
-    #[serde(default)]
-    ok: bool,
-    #[serde(default)]
-    pointer: Option<KwinPointerJson>,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Deserialize)]
-struct KwinPointerJson {
-    x: f64,
-    y: f64,
-}
-
-#[cfg(target_os = "linux")]
-fn parse_kwin_pointer_state_json(output: &str) -> Result<Option<SystemPointerPosition>> {
-    let state: KwinPointerStateJson = serde_json::from_str(output.trim())
-        .context("KWin PointerStateJson returned invalid JSON")?;
-    let Some(pointer) = state.ok.then_some(state.pointer).flatten() else {
-        return Ok(None);
-    };
-    if !pointer.x.is_finite() || !pointer.y.is_finite() {
-        return Ok(None);
-    }
-    Ok(Some(SystemPointerPosition {
-        x: pointer.x,
-        y: pointer.y,
-    }))
 }
 
 fn find_qdbus() -> Option<String> {
@@ -433,10 +377,6 @@ impl CosmicTransparentXcursorAdapter {
     pub fn set_hidden(&mut self, hidden: bool) -> Result<()> {
         self.hidden = hidden;
         Ok(())
-    }
-
-    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
-        Ok(None)
     }
 }
 
@@ -550,10 +490,6 @@ impl CosmicCompBridgeAdapter {
         self.hidden = response.hidden;
         self.reason = Some(response.detail);
         Ok(())
-    }
-
-    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
-        Ok(None)
     }
 }
 
@@ -770,10 +706,6 @@ impl HyprlandSystemCursorAdapter {
         ));
         Ok(())
     }
-
-    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
-        Ok(None)
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -888,19 +820,11 @@ fn command_detail(stdout: &[u8], stderr: &[u8]) -> String {
     }
 }
 
-impl UnsupportedSystemCursorAdapter {
-    pub fn pointer_position(&self) -> Result<Option<SystemPointerPosition>> {
-        Ok(None)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::SystemCursorAdapter;
     #[cfg(target_os = "linux")]
-    use super::{
-        environ_has_xcursor_theme, parse_hyprland_cursor_invisible, parse_kwin_pointer_state_json,
-    };
+    use super::{environ_has_xcursor_theme, parse_hyprland_cursor_invisible};
     use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
 
     #[test]
@@ -974,30 +898,5 @@ mod tests {
             b"USER=skycua\0XCURSOR_THEME=sky-cua-blankish\0",
             "sky-cua-blank"
         ));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn parses_kwin_pointer_state_json() {
-        assert_eq!(
-            parse_kwin_pointer_state_json(
-                r#"{"ok":true,"visible":true,"pointer":{"x":123.5,"y":456.25,"coordinate_space":"desktop_logical"}}"#
-            )
-            .expect("parse pointer state"),
-            Some(super::SystemPointerPosition {
-                x: 123.5,
-                y: 456.25
-            })
-        );
-        assert_eq!(
-            parse_kwin_pointer_state_json(r#"{"ok":false}"#).expect("parse disabled state"),
-            None
-        );
-        assert!(
-            parse_kwin_pointer_state_json(r#"not json"#)
-                .expect_err("invalid json should fail")
-                .to_string()
-                .contains("invalid JSON")
-        );
     }
 }

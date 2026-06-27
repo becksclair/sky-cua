@@ -68,7 +68,36 @@ pub struct EffectUniformInput<'a> {
     pub now_ms: u64,
     pub cursor: Option<CursorPoint>,
     pub effect: Option<&'a EffectScene>,
+    /// True while the agent holds the in-control lease (the host's visible
+    /// overlay state). Gates the breathing edge glow and inward waves to match
+    /// Android's `glowActive`; deliberately distinct from cursor presence.
+    pub glow_active: bool,
+    /// Surface-local (logical) pixels per physical millimetre for this output.
+    /// Packed into `surface_size_px.z` so the WGSL edge glow can size its bright
+    /// rim (~0.4mm) and containment band (~25mm) in real-world units, keeping
+    /// the look identical across monitors of differing DPI.
+    pub px_per_mm: f32,
+    /// Integer buffer scale: the logical `width`/`height` and every surface-local
+    /// coordinate (cursor, gesture points) and the cursor footprint are
+    /// multiplied by this so the uniform is in physical buffer pixels. `1.0` for
+    /// an unscaled output.
+    pub render_scale: f32,
 }
+
+/// `now_ms` is reduced modulo the least common multiple of the breathing and
+/// wave periods before the `f32` cast so the animation phase stays stable for
+/// arbitrarily long sessions: a raw `u64` ms clock loses integer precision past
+/// 2^24 ms ≈ 4.66 h once cast to `f32`, which would drift the phase. The
+/// integer reduction is exact and leaves `fract(now / period)` unchanged
+/// because every period divides the modulus (pinned by the assertions below);
+/// the subsequent `f32` division is the same on every platform.
+const BREATHING_CLOCK_MODULUS_MS: u64 = 104_000;
+const _: () =
+    assert!(BREATHING_CLOCK_MODULUS_MS % overlay_spec::shared::timing::BREATHE_PERIOD_MS == 0);
+const _: () =
+    assert!(BREATHING_CLOCK_MODULUS_MS % overlay_spec::shared::timing::WAVE_PERIOD_MS == 0);
+const _: () =
+    assert!(BREATHING_CLOCK_MODULUS_MS % overlay_spec::shared::timing::HALO_BREATHE_PERIOD_MS == 0);
 
 #[must_use]
 pub fn build_effect_uniform(
@@ -80,13 +109,23 @@ pub fn build_effect_uniform(
     let mut effect_elapsed_ms = 0.0_f32;
     let mut effect_duration_ms = 1.0_f32;
 
+    // Everything below is expressed in physical buffer pixels: the surface
+    // renders at `logical * render_scale` so the compositor downsamples a sharp
+    // buffer. Surface-local coordinates and the cursor footprint scale with it.
+    let render_scale = input.render_scale.max(1.0);
+
     if let Some(effect) = input.effect {
         effect_kind = effect_kind_code(effect.kind);
         point_count = effect.points.len().min(MAX_EFFECT_POINTS) as u32;
         effect_elapsed_ms = input.now_ms.saturating_sub(effect.started_at_ms) as f32;
         effect_duration_ms = effect.duration_ms.max(1) as f32;
         for (slot, point) in points.iter_mut().zip(effect.points.iter()) {
-            slot.xy = [point.x as f32, point.y as f32, 0.0, 0.0];
+            slot.xy = [
+                point.x as f32 * render_scale,
+                point.y as f32 * render_scale,
+                0.0,
+                0.0,
+            ];
         }
     }
 
@@ -97,23 +136,37 @@ pub fn build_effect_uniform(
             .unwrap_or(CursorPoint { x: 0.0, y: 0.0 })
     });
     let cursor_visible = u32::from(input.cursor.is_some() || input.effect.is_some());
+    let glow_active = u32::from(input.glow_active);
 
     let uniform = AgentEffectUniform {
         surface_size_px: [
-            input.width.max(1) as f32,
-            input.height.max(1) as f32,
-            0.0,
+            input.width.max(1) as f32 * render_scale,
+            input.height.max(1) as f32 * render_scale,
+            // `.z` carries physical px per mm for real-world effect sizing in
+            // WGSL (logical px/mm scaled into buffer space); `.w` is spare.
+            input.px_per_mm.max(0.1) * render_scale,
             0.0,
         ],
-        cursor: [cursor.x as f32, cursor.y as f32, 0.0, 0.0],
+        cursor: [
+            cursor.x as f32 * render_scale,
+            cursor.y as f32 * render_scale,
+            overlay_spec::shared::effects::BOUNCE_DAMP as f32,
+            overlay_spec::shared::effects::BOUNCE_OMEGA_PI_FRACTION as f32,
+        ],
         cursor_metrics: [
-            cursor_asset::AGENT_CURSOR_DESKTOP_WIDTH as f32,
-            cursor_asset::AGENT_CURSOR_DESKTOP_HEIGHT as f32,
-            cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X as f32,
-            cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y as f32,
+            // Footprint = glyph + smoke margin, with the hotspot shifted by the
+            // margin so the glyph still lands on the cursor point. The shader
+            // maps this enlarged rect over the enlarged cursor texture.
+            cursor_asset::AGENT_CURSOR_FOOTPRINT_WIDTH as f32 * render_scale,
+            cursor_asset::AGENT_CURSOR_FOOTPRINT_HEIGHT as f32 * render_scale,
+            cursor_asset::AGENT_CURSOR_FOOTPRINT_HOTSPOT_X as f32 * render_scale,
+            cursor_asset::AGENT_CURSOR_FOOTPRINT_HOTSPOT_Y as f32 * render_scale,
         ],
         timing: [
-            (input.now_ms % overlay_spec::shared::timing::WAVE_PERIOD_MS.max(1)) as f32,
+            // Raw clock reduced modulo the period LCM; each consumer wraps it by
+            // its own period (BREATHE/WAVE/HALO), matching Android's free-running
+            // `elapsed` fed through `% periodMs` per effect.
+            (input.now_ms % BREATHING_CLOCK_MODULUS_MS) as f32,
             overlay_spec::shared::timing::BREATHE_PERIOD_MS as f32,
             overlay_spec::shared::timing::WAVE_PERIOD_MS as f32,
             overlay_spec::shared::timing::HALO_BREATHE_PERIOD_MS as f32,
@@ -178,7 +231,7 @@ pub fn build_effect_uniform(
             overlay_spec::shared::effects::NO_NO_HOLD_FRACTION as f32,
             overlay_spec::shared::effects::PRESS_IN_FRACTION as f32,
         ],
-        flags: [cursor_visible, effect_kind, point_count, 0],
+        flags: [cursor_visible, effect_kind, point_count, glow_active],
     };
     (uniform, points)
 }
@@ -321,6 +374,9 @@ mod tests {
             now_ms: 220,
             cursor: None,
             effect: Some(&effect),
+            glow_active: false,
+            px_per_mm: 4.7,
+            render_scale: 1.0,
         });
 
         assert_eq!(
@@ -337,6 +393,36 @@ mod tests {
             effect_points_as_bytes(&points).len(),
             16 * MAX_EFFECT_POINTS
         );
+    }
+
+    #[test]
+    fn glow_active_packs_into_flags_w() {
+        // `flags[3]` gates the breathing edge glow and inward waves. It must
+        // track the `glow_active` lease (Android's `glowActive`) and stay off
+        // otherwise, regardless of cursor presence.
+        let (lit, _) = build_effect_uniform(EffectUniformInput {
+            width: 100,
+            height: 200,
+            now_ms: 0,
+            cursor: Some(CursorPoint { x: 1.0, y: 2.0 }),
+            effect: None,
+            glow_active: true,
+            px_per_mm: 4.7,
+            render_scale: 1.0,
+        });
+        assert_eq!(lit.flags[3], 1);
+
+        let (dark, _) = build_effect_uniform(EffectUniformInput {
+            width: 100,
+            height: 200,
+            now_ms: 0,
+            cursor: Some(CursorPoint { x: 1.0, y: 2.0 }),
+            effect: None,
+            glow_active: false,
+            px_per_mm: 4.7,
+            render_scale: 1.0,
+        });
+        assert_eq!(dark.flags[3], 0);
     }
 
     #[test]
