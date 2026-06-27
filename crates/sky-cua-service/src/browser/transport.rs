@@ -166,17 +166,29 @@ pub(super) async fn execute_cdp_until(
 /// wedges the extension session without a reset. The floor therefore yields
 /// to the remaining read budget: near an expired deadline the timer shrinks
 /// below `MIN_COMMAND_TIMEOUT_MS` rather than outliving the read.
+const MIN_COMMAND_TIMEOUT_MS: u64 = 250;
+
 fn cdp_command_timeout_ms(deadline: TokioInstant, now: TokioInstant) -> u64 {
-    const RESPONSE_MARGIN_MS: u64 = 750;
-    const MIN_COMMAND_TIMEOUT_MS: u64 = 250;
     const DEFAULT_MAX_COMMAND_TIMEOUT_MS: u64 = 10_000;
-    const READ_DEADLINE_HEADROOM_MS: u64 = 100;
     // The per-command cap scales with the operator override so a raised overall
     // deadline actually reaches individual CDP commands on slow relays.
     let max_command_timeout_ms =
         browser_request_timeout_override_ms().unwrap_or(DEFAULT_MAX_COMMAND_TIMEOUT_MS);
     let remaining = deadline.checked_duration_since(now).unwrap_or_default();
     let remaining_ms = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX);
+    command_budget_ms(remaining_ms, max_command_timeout_ms)
+}
+
+/// Derive the per-command CDP budget from the remaining deadline and the cap.
+///
+/// The cap is floored at [`MIN_COMMAND_TIMEOUT_MS`] before clamping: an operator
+/// override below the minimum (e.g. a mistyped
+/// `SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS=200`) would otherwise make `min > max` and
+/// panic `u64::clamp` on the first CDP command.
+fn command_budget_ms(remaining_ms: u64, max_command_timeout_ms: u64) -> u64 {
+    const RESPONSE_MARGIN_MS: u64 = 750;
+    const READ_DEADLINE_HEADROOM_MS: u64 = 100;
+    let max_command_timeout_ms = max_command_timeout_ms.max(MIN_COMMAND_TIMEOUT_MS);
     let budget = remaining_ms
         .saturating_sub(RESPONSE_MARGIN_MS)
         .clamp(MIN_COMMAND_TIMEOUT_MS, max_command_timeout_ms);
@@ -288,7 +300,17 @@ mod cdp_timeout_tests {
 
     use tokio::time::Instant as TokioInstant;
 
-    use super::cdp_command_timeout_ms;
+    use super::{cdp_command_timeout_ms, command_budget_ms};
+
+    #[test]
+    fn sub_minimum_cap_is_floored_instead_of_panicking() {
+        // A mistyped operator override below the 250ms floor must not invert the
+        // clamp range (min > max) and panic; it is floored to the minimum.
+        assert_eq!(command_budget_ms(60_000, 200), 250);
+        assert_eq!(command_budget_ms(60_000, 1), 250);
+        // A legitimately raised cap is still honored.
+        assert_eq!(command_budget_ms(60_000, 30_000), 30_000);
+    }
 
     #[test]
     fn generous_deadline_is_capped_at_extension_default() {
