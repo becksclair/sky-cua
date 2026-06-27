@@ -398,12 +398,13 @@ async fn invoke_preferred_action(
             // mistargeted (or stale-snapshot) op cannot fire the wrong primary
             // action. Fail closed if the state set cannot be read.
             if let Some(gate) = gated_action {
+                let role = accessible.get_role_name().await.unwrap_or_default();
                 let state_flags = accessible
                     .get_state()
                     .await
                     .map(|states| states.into_iter().map(|state| state.to_string()).collect())
                     .unwrap_or_else(|_| Vec::new());
-                if !super::state_supports_semantic_action(gate, &state_flags) {
+                if !super::semantic_action_supported(gate, &role, &state_flags) {
                     return Ok(false);
                 }
             }

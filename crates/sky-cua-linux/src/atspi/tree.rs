@@ -96,7 +96,7 @@ pub async fn flatten_accessible_tree(
             {
                 actions.push("set_value".to_string());
             }
-            add_state_inferred_actions(&mut actions, &state_flags);
+            add_state_inferred_actions(&mut actions, &role, &state_flags);
             actions
         } else {
             Vec::new()
@@ -317,15 +317,16 @@ fn add_canonical_action_aliases(actions: &mut Vec<String>) {
 /// otherwise report no semantic affordance even though its primary action
 /// performs exactly that. The dispatch path falls back to the primary action
 /// only when the live element still satisfies the same
-/// [`super::state_supports_semantic_action`] predicate, so advertising them here
-/// is what makes `desktop_toggle` / `desktop_semantic` work on standard
-/// checkable/expandable/selectable widgets without firing on anything else.
-fn add_state_inferred_actions(actions: &mut Vec<String>, state_flags: &[String]) {
+/// [`super::semantic_action_supported`] predicate, so advertising them here is
+/// what makes `desktop_toggle` / `desktop_semantic` work on standard
+/// checkable/expandable/selectable widgets (and check buttons identified only by
+/// role) without firing on anything else.
+fn add_state_inferred_actions(actions: &mut Vec<String>, role: &str, state_flags: &[String]) {
     if !actions.iter().any(|name| name == "activate") {
         return;
     }
     for action in ["toggle", "select", "expand", "collapse"] {
-        if super::state_supports_semantic_action(action, state_flags)
+        if super::semantic_action_supported(action, role, state_flags)
             && !actions.iter().any(|existing| existing == action)
         {
             actions.push(action.to_string());
@@ -367,32 +368,38 @@ mod tests {
 
     #[test]
     fn state_inferred_actions_advertise_semantics_for_stateful_widgets() {
-        // A check button exposing only a primary action gains "toggle".
+        // A GTK check button reports role "check box" but no "checkable" state,
+        // and still gains "toggle".
         let mut checkbox = vec!["activate".to_string()];
-        add_state_inferred_actions(&mut checkbox, &["checkable".to_string()]);
+        add_state_inferred_actions(
+            &mut checkbox,
+            "check box",
+            &["enabled".to_string(), "sensitive".to_string()],
+        );
         assert!(checkbox.iter().any(|action| action == "toggle"));
 
         // A collapsed expander gains "expand"; an expanded one gains "collapse".
         let mut collapsed = vec!["activate".to_string()];
-        add_state_inferred_actions(&mut collapsed, &["expandable".to_string()]);
+        add_state_inferred_actions(&mut collapsed, "toggle button", &["expandable".to_string()]);
         assert!(collapsed.iter().any(|action| action == "expand"));
         assert!(!collapsed.iter().any(|action| action == "collapse"));
 
         let mut expanded = vec!["activate".to_string()];
         add_state_inferred_actions(
             &mut expanded,
+            "toggle button",
             &["expandable".to_string(), "expanded".to_string()],
         );
         assert!(expanded.iter().any(|action| action == "collapse"));
 
         // A selectable element gains "select".
         let mut selectable = vec!["activate".to_string()];
-        add_state_inferred_actions(&mut selectable, &["selectable".to_string()]);
+        add_state_inferred_actions(&mut selectable, "list item", &["selectable".to_string()]);
         assert!(selectable.iter().any(|action| action == "select"));
 
         // No primary action means nothing is inferred (cannot drive it).
         let mut inert = vec!["focus".to_string()];
-        add_state_inferred_actions(&mut inert, &["checkable".to_string()]);
+        add_state_inferred_actions(&mut inert, "check box", &["checkable".to_string()]);
         assert_eq!(inert, vec!["focus".to_string()]);
     }
 
