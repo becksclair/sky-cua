@@ -4212,11 +4212,9 @@
                     "type": "integer"
                   },
                   "from_x": {
-                    "description": "Drag start x coordinate.",
                     "type": "number"
                   },
                   "from_y": {
-                    "description": "Drag start y coordinate.",
                     "type": "number"
                   },
                   "name": {
@@ -4268,11 +4266,9 @@
                     "type": "integer"
                   },
                   "to_x": {
-                    "description": "Drag end x coordinate.",
                     "type": "number"
                   },
                   "to_y": {
-                    "description": "Drag end y coordinate.",
                     "type": "number"
                   },
                   "x": {
@@ -4309,11 +4305,9 @@
             "type": "integer"
           },
           "from_x": {
-            "description": "Drag start x coordinate.",
             "type": "number"
           },
           "from_y": {
-            "description": "Drag start y coordinate.",
             "type": "number"
           },
           "name": {
@@ -4370,11 +4364,9 @@
             "type": "integer"
           },
           "to_x": {
-            "description": "Drag end x coordinate.",
             "type": "number"
           },
           "to_y": {
-            "description": "Drag end y coordinate.",
             "type": "number"
           },
           "x": {

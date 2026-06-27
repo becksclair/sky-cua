@@ -5,8 +5,8 @@
       "browser_eval_enabled": false,
       "can_receive_images": false,
       "description_bytes": 3609,
-      "largest_schema_bytes": 8171,
-      "serialized_bytes": 77645,
+      "largest_schema_bytes": 7851,
+      "serialized_bytes": 77325,
       "surface": "grouped",
       "tool_count": 34,
       "tools_list": {
@@ -3498,11 +3498,9 @@
                           "type": "integer"
                         },
                         "from_x": {
-                          "description": "Drag start x coordinate.",
                           "type": "number"
                         },
                         "from_y": {
-                          "description": "Drag start y coordinate.",
                           "type": "number"
                         },
                         "name": {
@@ -3554,11 +3552,9 @@
                           "type": "integer"
                         },
                         "to_x": {
-                          "description": "Drag end x coordinate.",
                           "type": "number"
                         },
                         "to_y": {
-                          "description": "Drag end y coordinate.",
                           "type": "number"
                         },
                         "x": {
@@ -3595,11 +3591,9 @@
                   "type": "integer"
                 },
                 "from_x": {
-                  "description": "Drag start x coordinate.",
                   "type": "number"
                 },
                 "from_y": {
-                  "description": "Drag start y coordinate.",
                   "type": "number"
                 },
                 "name": {
@@ -3656,11 +3650,9 @@
                   "type": "integer"
                 },
                 "to_x": {
-                  "description": "Drag end x coordinate.",
                   "type": "number"
                 },
                 "to_y": {
-                  "description": "Drag end y coordinate.",
                   "type": "number"
                 },
                 "x": {
@@ -5770,8 +5762,8 @@
       "browser_eval_enabled": true,
       "can_receive_images": false,
       "description_bytes": 3712,
-      "largest_schema_bytes": 8171,
-      "serialized_bytes": 78438,
+      "largest_schema_bytes": 7851,
+      "serialized_bytes": 78118,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -9263,11 +9255,9 @@
                           "type": "integer"
                         },
                         "from_x": {
-                          "description": "Drag start x coordinate.",
                           "type": "number"
                         },
                         "from_y": {
-                          "description": "Drag start y coordinate.",
                           "type": "number"
                         },
                         "name": {
@@ -9319,11 +9309,9 @@
                           "type": "integer"
                         },
                         "to_x": {
-                          "description": "Drag end x coordinate.",
                           "type": "number"
                         },
                         "to_y": {
-                          "description": "Drag end y coordinate.",
                           "type": "number"
                         },
                         "x": {
@@ -9360,11 +9348,9 @@
                   "type": "integer"
                 },
                 "from_x": {
-                  "description": "Drag start x coordinate.",
                   "type": "number"
                 },
                 "from_y": {
-                  "description": "Drag start y coordinate.",
                   "type": "number"
                 },
                 "name": {
@@ -9421,11 +9407,9 @@
                   "type": "integer"
                 },
                 "to_x": {
-                  "description": "Drag end x coordinate.",
                   "type": "number"
                 },
                 "to_y": {
-                  "description": "Drag end y coordinate.",
                   "type": "number"
                 },
                 "x": {
@@ -11583,8 +11567,8 @@
       "browser_eval_enabled": false,
       "can_receive_images": true,
       "description_bytes": 3609,
-      "largest_schema_bytes": 8171,
-      "serialized_bytes": 78746,
+      "largest_schema_bytes": 7851,
+      "serialized_bytes": 78426,
       "surface": "grouped",
       "tool_count": 34,
       "tools_list": {
@@ -15155,11 +15139,9 @@
                           "type": "integer"
                         },
                         "from_x": {
-                          "description": "Drag start x coordinate.",
                           "type": "number"
                         },
                         "from_y": {
-                          "description": "Drag start y coordinate.",
                           "type": "number"
                         },
                         "name": {
@@ -15211,11 +15193,9 @@
                           "type": "integer"
                         },
                         "to_x": {
-                          "description": "Drag end x coordinate.",
                           "type": "number"
                         },
                         "to_y": {
-                          "description": "Drag end y coordinate.",
                           "type": "number"
                         },
                         "x": {
@@ -15252,11 +15232,9 @@
                   "type": "integer"
                 },
                 "from_x": {
-                  "description": "Drag start x coordinate.",
                   "type": "number"
                 },
                 "from_y": {
-                  "description": "Drag start y coordinate.",
                   "type": "number"
                 },
                 "name": {
@@ -15313,11 +15291,9 @@
                   "type": "integer"
                 },
                 "to_x": {
-                  "description": "Drag end x coordinate.",
                   "type": "number"
                 },
                 "to_y": {
-                  "description": "Drag end y coordinate.",
                   "type": "number"
                 },
                 "x": {
@@ -17427,8 +17403,8 @@
       "browser_eval_enabled": true,
       "can_receive_images": true,
       "description_bytes": 3712,
-      "largest_schema_bytes": 8171,
-      "serialized_bytes": 79539,
+      "largest_schema_bytes": 7851,
+      "serialized_bytes": 79219,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -20999,11 +20975,9 @@
                           "type": "integer"
                         },
                         "from_x": {
-                          "description": "Drag start x coordinate.",
                           "type": "number"
                         },
                         "from_y": {
-                          "description": "Drag start y coordinate.",
                           "type": "number"
                         },
                         "name": {
@@ -21055,11 +21029,9 @@
                           "type": "integer"
                         },
                         "to_x": {
-                          "description": "Drag end x coordinate.",
                           "type": "number"
                         },
                         "to_y": {
-                          "description": "Drag end y coordinate.",
                           "type": "number"
                         },
                         "x": {
@@ -21096,11 +21068,9 @@
                   "type": "integer"
                 },
                 "from_x": {
-                  "description": "Drag start x coordinate.",
                   "type": "number"
                 },
                 "from_y": {
-                  "description": "Drag start y coordinate.",
                   "type": "number"
                 },
                 "name": {
@@ -21157,11 +21127,9 @@
                   "type": "integer"
                 },
                 "to_x": {
-                  "description": "Drag end x coordinate.",
                   "type": "number"
                 },
                 "to_y": {
-                  "description": "Drag end y coordinate.",
                   "type": "number"
                 },
                 "x": {
