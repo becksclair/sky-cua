@@ -125,7 +125,7 @@ PipeWire fails.
 - `capture.backend` — the selected primary lane.
 - `capture.image_backend` — the lane that actually produced the image.
 - `capture.capture_scope` — the model-facing scope:
-  `primary_display`, `display`, `window`, `all_displays`, or `unknown`.
+  `primary_display`, `display`, `window`, or `unknown`.
 - `capture.logical_rect` — the screenshot rect exposed to the model in
   `DesktopLogical` coordinates.
 - `capture.source_logical_rect` — the raw portal or capture-source rect used
@@ -140,13 +140,14 @@ runtime emits `CaptureBackendDowngraded` diagnostics on downgrade. See
 [`docs/research/2026-04-pipewire-vs-screenshot-portal.md`](../research/2026-04-pipewire-vs-screenshot-portal.md)
 for the original investigation.
 
-The `screenshot` tool captures the primary display when no selector is
-provided. Explicit `display_id`/`display_name`/`display_index` captures crop to
-that monitor, window-targeted captures activate and focus-verify the window
-before cropping to its bounds, and `capture_all_displays=true` is the only
-virtual-desktop capture path. If display topology is unavailable only for an
-omitted selector, the Linux backend returns an unscoped desktop capture and
-emits a downgrade diagnostic.
+The `capture_desktop` tool captures a single screen, defaulting to the main
+(primary) display when no selector is provided. Explicit
+`display_id`/`display_name`/`display_index` captures crop to that monitor, and
+window-targeted captures activate and focus-verify the window before cropping to
+its bounds. There is no whole-virtual-desktop capture scope. If display topology
+is unavailable for an omitted selector, the Linux backend returns a single
+unscoped desktop capture (`capture_scope=unknown`) and emits a downgrade
+diagnostic.
 
 X11 and XWayland have a fallback snapshot path with synthetic root
 bounds from `xwininfo` plus child-region recovery. The fallback

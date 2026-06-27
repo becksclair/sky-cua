@@ -326,10 +326,11 @@ Profiles live under `scripts/testing-vm/profiles/`.
   asserts focus/crop metadata, and clicks the target through the returned
   cropped `snapshot_id`. The profile supports Wayland sessions and i3/X11.
 - `display-screenshot`: real-session display-targeted screenshot smoke. It
-  asserts `environment.displays`, primary-display default capture, explicit
-  display capture, all-displays opt-in, structured secondary-output skip when
-  only one monitor exists, and snapshot click landing through a display crop.
-  The profile supports Wayland sessions and i3/X11.
+  asserts `environment.displays`, main-display default capture, explicit
+  display capture, rejection of the retired `capture_all_displays` selector,
+  structured secondary-output skip when only one monitor exists, and snapshot
+  click landing through a display crop. The profile supports Wayland sessions
+  and i3/X11.
 - `session-env`: real-session stripped-env proof for detached session-env
   repair. It runs `scripts/live_session_env_smoke.py` on the guest: the MCP
   client starts with graphical session variables stripped and a minimal

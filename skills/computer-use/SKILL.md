@@ -16,18 +16,24 @@ coordinates across them.
   `snapshot_id` are pixels in that snapshot. Structure-only snapshot ids still
   scope `element_index` lookups but cannot translate screenshot pixels. Without
   `snapshot_id`, x/y are live screen coordinates.
-- `capture_desktop` defaults to the primary display. Window targets
-  (`window_id`, `pid`, `app_id`, `wm_class`, `title`,
-  terminal selectors) activate, focus-verify, and crop. `display_*` captures
-  one monitor; `capture_all_displays` captures the virtual desktop.
+- `capture_desktop` captures exactly one screen, never the whole multi-monitor
+  desktop, and defaults to the main display. Call it with no selector for the
+  normal case. A window selector (`window_id`, `pid`, `app_id`, `wm_class`,
+  `title`, terminal selectors) activates, focus-verifies, and crops to that
+  window. A display selector (`display_id`, `display_name`, `display_index`)
+  captures one specific monitor and is only needed when the target is on a
+  non-main display. Every call resolves to one screen; there is no all-display
+  or virtual-desktop capture.
 - Always pass the `snapshot_id` returned by the specific observation or capture
   call that produced the image for screenshot-based actions,
   especially with cropped windows, non-primary displays, scaling, or negative
   origins. If a targeted `capture_desktop` fails with
   `CaptureSourceGeometryMissing` or `targeted screenshot requires capture
-  source geometry`, refresh the relevant window/display state and retry the
-  targeted capture once. Fall back to `capture_all_displays` only when the
-  next pixel action uses that broader capture's returned `snapshot_id`.
+  source geometry`, the issue is missing portal stream geometry, not the
+  capture scope: refresh the relevant window/display state (re-observe or
+  `doctor`) and retry the same targeted capture once. There is no broader
+  whole-desktop capture to fall back to; widening the scope does not escape
+  this error.
 - `environment.displays` lists display ids, primary status, logical rects,
   scale, and backend; windows/focused apps include `display` when known.
 
@@ -60,8 +66,9 @@ coordinates across them.
   `capture.inspection_image_path` first. Other capture paths are source/debug
   artifacts, not the recommended visual inspection image.
 - `capture_desktop` is visual state. Use it instead of structured observation
-  for a specific window/display image or pixel target. Use
-  `screenshot_delivery: "inline"` only when local file paths are unreadable.
+  for a single-screen image or pixel target — main display by default, or one
+  window/display when selected. Use `screenshot_delivery: "inline"` only when
+  local file paths are unreadable.
 - The accessibility tree is structure, not truth. Fallback trees have real
   window bounds but blunt roles; treat them as visual anchors. When tree and
   screenshot disagree, the screenshot wins.
@@ -198,10 +205,9 @@ Valid keyboard calls:
 }
 ```
 
-`capture_desktop` chooses exactly one source: no selector for the primary
-display, one window selector, one display selector, or
-`capture_all_displays=true`. Do not mix window selectors with display selectors
-or all-displays capture.
+`capture_desktop` captures one screen and chooses exactly one source: no
+selector for the main display, one window selector, or one display selector.
+Do not mix window selectors with display selectors.
 
 ## Linux notes
 

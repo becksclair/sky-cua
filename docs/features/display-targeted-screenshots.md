@@ -2,21 +2,31 @@
 
 ## Status
 
-Shipped. Last verified: 2026-06-15 local focused Rust checks, local deploy,
+Shipped. On 2026-06-27 desktop capture was reduced to single-screen only: the
+`capture_all_displays` selector was removed from the MCP `capture_desktop` tool,
+and the whole-virtual-desktop capture path was removed end to end — the
+`ServiceRequest::Screenshot.capture_all_displays` field, the
+`CaptureScope::AllDisplays` scope, and the backend planning for it are all gone.
+Capture now defaults to the main display and resolves to exactly one screen.
+Last broad verification: 2026-06-15 local focused Rust checks, local deploy,
 installed MCP surface proof, and agent-loop proof. KDE Wayland targeted-window
-and display screenshot live-smoke proof remains the 2026-06-13 artifact set.
-Linux VM matrix and an interactive-session Windows live smoke gate are tracked
-in Verification.
+and display screenshot live-smoke proof remains the 2026-06-13 artifact set and
+predates the single-screen change. Linux VM matrix and an interactive-session
+Windows live smoke gate are tracked in Verification.
 
 ## Summary
 
-Desktop screenshots are display-aware. A no-selector `screenshot` captures the
-primary display, explicit display selectors capture one monitor, window
-selectors activate and focus-verify the window before returning an unoccluded
-crop, and full virtual-desktop capture requires `capture_all_displays=true`.
+Desktop screenshots are display-aware and always scoped to a single screen.
+A no-selector `capture_desktop` captures the main (primary) display, explicit
+display selectors capture one specific monitor, and window selectors activate
+and focus-verify the window before returning an unoccluded crop. There is no
+whole-virtual-desktop capture anywhere in the stack — neither the MCP tool nor
+the backend `ServiceRequest` can fan a capture across every monitor; capture
+always resolves to one screen, falling back to an unscoped `Unknown` frame only
+when display topology cannot be enumerated at all.
 `get_app_state(capture_screen="always")` attaches the narrowest proven visual:
 focused/selected window first, then that window's display, then the primary
-display. It does not silently attach an all-displays virtual desktop image.
+display. It does not silently attach a multi-display image.
 
 ## Contract surface
 
@@ -38,18 +48,23 @@ display. It does not silently attach an all-displays virtual desktop image.
 - MCP `get_app_state` projects `capture.inspection_image_path` as the path an
   agent should visually inspect, plus `capture.images[]` entries with role,
   scope, and `recommended_for`.
-- `ServiceRequest::Screenshot` carries `target`, `display_target`, and
-  `capture_all_displays`.
-- MCP `screenshot` accepts flat display selector fields:
-  `display_id`, `display_name`, `display_index`, and `capture_all_displays`.
+- `ServiceRequest::Screenshot` carries only `target` and `display_target`.
+  There is no `capture_all_displays` field; the `Backend::screenshot` trait
+  method takes the same two selectors and nothing else.
+- `CaptureInfo.capture_scope` is one of `window`, `display`, `primary_display`,
+  or `unknown`. The retired `all_displays` scope no longer exists; an
+  unscoped capture (topology unavailable) reports `unknown`.
+- MCP `capture_desktop` accepts flat display selector fields only:
+  `display_id`, `display_name`, and `display_index`. It does not advertise
+  `capture_all_displays`; the schema's `additionalProperties: false` rejects it.
 - Targeted screenshots that cannot map crop pixels because capture source
   geometry is unavailable report `CaptureSourceGeometryMissing`; MCP error
   payloads include `code`, `message`, and an explicit retry/fallback
   `suggestion`.
 
-Exactly one screenshot selector may be provided: a window target, a display
-selector, or `capture_all_displays=true`. Omitted selectors resolve to the
-primary display when display topology is available.
+The MCP tool captures exactly one screen. At most one selector may be provided:
+a window target or a single display selector. Omitting selectors resolves to the
+main (primary) display when display topology is available.
 
 ## Behavior
 
@@ -69,12 +84,11 @@ that omitted-selector path, Linux returns an unscoped desktop capture with a
 diagnostic instead of pretending a display target was proven.
 
 `get_app_state` follows a stricter visual-attachment ladder than the standalone
-`screenshot` default: target window crop when focused/selected window geometry
-is known, target display when window bounds are missing or unusable, primary
-display when there is no target display, and no image when none of those scopes
-can be proven. Diagnostics describe each scope fallback. Agents that require a
-virtual-desktop image must call `screenshot(capture_all_displays=true)`
-explicitly.
+`capture_desktop` default: target window crop when focused/selected window
+geometry is known, target display when window bounds are missing or unusable,
+primary display when there is no target display, and no image when none of those
+scopes can be proven. Diagnostics describe each scope fallback. No capture path
+produces a multi-display image; every capture resolves to one screen.
 
 Linux diagnostics distinguish two display-topology caveats:
 `DisplayTopologyUnavailable` means no provider supplied display geometry, and
@@ -83,11 +97,11 @@ is refreshed; `DisplayTopologyInferred` means XRandR fallback supplied geometry
 in a Wayland session, so agents should prefer window-targeted screenshots and
 use the returned `snapshot_id` for any pixel action.
 
-`capture_all_displays=true` returns the virtual desktop union with
-`capture_scope=all_displays`. Agents should use it only when the whole desktop
-is actually required. On Linux Wayland, a PipeWire frame is accepted for this
-scope only when the active RemoteDesktop stream covers the virtual desktop
-union; otherwise the planner falls back to the Screenshot portal.
+There is no whole-virtual-desktop capture path. When display topology cannot be
+enumerated at all, the backend returns a single unscoped desktop frame with
+`capture_scope=unknown` and a downgrade diagnostic rather than a multi-display
+union. Tools and harnesses that previously requested every display now capture
+the main display (a no-selector `capture_desktop`/`screenshot`) instead.
 
 For snapshot actions, screenshot pixels first map through
 `capture.logical_rect` into desktop-logical coordinates. Linux virtual input
@@ -124,8 +138,9 @@ monitor layouts remain valid.
 - VM smoke profiles:
   `targeted-screenshot` proves window activation, crop metadata, focus
   verification where available, and snapshot-click landing;
-  `display-screenshot` proves primary default, explicit primary, explicit
-  secondary when present, all-displays opt-in, and display-snapshot click
+  `display-screenshot` proves main-display default, explicit primary, explicit
+  secondary when present, rejection of the retired `capture_all_displays`
+  selector, and display-snapshot click
   landing. Current unit/client tests cover the `doctor.display_topology`
   contract; refresh the canonical VM artifacts before treating live
   `doctor.display_topology` output as proven by artifact.

@@ -247,10 +247,11 @@ canonical and grouped by target/intent:
   and `element_limit` to page or narrow dense accessibility trees. Use
   `screenshot_delivery: "inline"` to attach the captured screenshot as an MCP
   image content block for hosts that cannot read `inspection_image_path` files
-- desktop visual capture: `capture_desktop`, which defaults to the primary
-  display, accepts the same window target fields as `activate_window`, accepts
-  `display_id`/`display_name`/`display_index` from `environment.displays`, and
-  uses `capture_all_displays=true` as the explicit full-virtual-desktop opt-in
+- desktop visual capture: `capture_desktop`, which captures exactly one screen
+  and defaults to the main (primary) display, accepts the same window target
+  fields as `activate_window`, and accepts
+  `display_id`/`display_name`/`display_index` from `environment.displays` to
+  target a specific non-main monitor; it exposes no whole-virtual-desktop option
 - desktop semantic actions: `desktop_semantic`, `desktop_toggle`,
   `desktop_action`, and `desktop_set_value`
 - desktop physical or hybrid actions: `desktop_pointer`, `desktop_scroll`, and

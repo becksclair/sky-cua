@@ -77,7 +77,7 @@ Open boxes link to the active ExecPlan that owns the work.
         display-specific runtime changes
 - [x] Agent-agnostic screenshot delivery (browser MCP image blocks + persisted capture paths, `observe(surface="desktop", screenshot_delivery="inline")`, one CSS-pixel browser coordinate space) — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [ ] Re-run the VM smoke matrix for the CSS-pixel browser contract (only the live KDE host is verified so far)
-- [x] Display-targeted desktop screenshots (primary-display default, explicit display/window/all-displays capture, and snapshot coordinate remapping) — [`docs/features/display-targeted-screenshots.md`](docs/features/display-targeted-screenshots.md)
+- [x] Display-targeted desktop screenshots (single-screen capture: main-display default, explicit display/window selectors, and snapshot coordinate remapping) — [`docs/features/display-targeted-screenshots.md`](docs/features/display-targeted-screenshots.md)
   - [x] Desktop observation visual attachment now prefers focused/selected window crops, falls back only to target/primary display scopes, and exposes `inspection_image_path` for visual inspection
 - [x] First-class browser MCP tools for `user_chrome` — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [x] Explicit host opt-in gate for OpenCode/Pi, with Codex Desktop kept on the companion Browser Use path
