@@ -2127,6 +2127,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
+name = "sky-cua-capture"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "sky-cua-platform",
+ "webp",
+]
+
+[[package]]
 name = "sky-cua-chrome-host"
 version = "0.1.0"
 dependencies = [
@@ -2195,12 +2204,12 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sky-cua-capture",
  "sky-cua-input-helper",
  "sky-cua-platform",
  "tokio",
  "tracing",
  "url",
- "webp",
  "xkbcommon",
  "zbus",
 ]
@@ -2267,6 +2276,7 @@ dependencies = [
  "chrono",
  "image",
  "serde_json",
+ "sky-cua-capture",
  "sky-cua-platform",
  "tokio",
  "tracing",

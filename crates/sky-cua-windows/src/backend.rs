@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::Once;
 
@@ -1014,7 +1014,7 @@ struct CaptureResult {
 
 #[derive(Debug, Clone)]
 struct CaptureImageResult {
-    pixel_size: PixelSize,
+    model: sky_cua_capture::ModelCaptureImage,
     blank_frame: Option<CaptureBlankFrame>,
 }
 
@@ -1041,30 +1041,35 @@ async fn capture_desktop_with_source(
     capture_scope: CaptureScope,
     display: Option<DisplayRef>,
 ) -> Result<CaptureResult, BackendError> {
-    let output_path = capture_output_path(snapshot_id)?;
-    if let Some(parent) = output_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            BackendError::new(
-                BackendErrorCode::Internal,
-                format!(
-                    "failed to create Windows capture directory {}: {error}",
-                    parent.display()
-                ),
-            )
-        })?;
-    }
-    let path = output_path.clone();
-    let logical_rect = source.logical_rect.clone();
-    let image_result = tokio::task::spawn_blocking(move || capture_desktop_blocking(&path, source))
+    let captures_dir = captures_dir()?;
+    tokio::fs::create_dir_all(&captures_dir)
         .await
         .map_err(|error| {
             BackendError::new(
                 BackendErrorCode::Internal,
-                format!("Windows capture task failed to join cleanly: {error}"),
+                format!(
+                    "failed to create Windows capture directory {}: {error}",
+                    captures_dir.display()
+                ),
             )
-        })??;
+        })?;
+    let raw_path = raw_capture_output_path(snapshot_id)?;
+    let logical_rect = source.logical_rect.clone();
+    let snapshot = snapshot_id.to_owned();
+    let captures_dir_for_task = captures_dir.clone();
+    let image_result = tokio::task::spawn_blocking(move || {
+        capture_desktop_blocking(&snapshot, &captures_dir_for_task, &raw_path, source)
+    })
+    .await
+    .map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            format!("Windows capture task failed to join cleanly: {error}"),
+        )
+    })??;
 
-    let capture = CaptureInfo {
+    let CaptureImageResult { model, blank_frame } = image_result;
+    let mut capture = CaptureInfo {
         backend: CaptureBackendKind::WindowsGdi,
         image_backend: Some(CaptureBackendKind::WindowsGdi),
         capture_scope,
@@ -1075,19 +1080,28 @@ async fn capture_desktop_with_source(
         mapping_id: None,
         source_logical_rect: logical_rect.clone(),
         logical_rect,
-        pixel_size: Some(image_result.pixel_size.clone()),
-        original_pixel_size: Some(image_result.pixel_size),
-        logical_to_pixel_scale: Some(1.0),
-        screenshot_path: Some(output_path.display().to_string()),
-        original_screenshot_path: None,
-        model_image_format: Some(ModelImageFormat::Jpeg),
-        model_image_quality: Some(85),
-        model_image_bytes: std::fs::metadata(&output_path).ok().map(|meta| meta.len()),
-        model_image_encode_ms: None,
+        pixel_size: model.pixel_size,
+        original_pixel_size: model.original_pixel_size,
+        // Derived below from the model pixel size and logical rect; the model
+        // image is downscaled, so the scale is no longer the identity.
+        logical_to_pixel_scale: None,
+        screenshot_path: Some(model.path.display().to_string()),
+        original_screenshot_path: model
+            .original_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        model_image_format: Some(match model.format {
+            sky_cua_capture::ModelScreenshotFormat::Jpeg => ModelImageFormat::Jpeg,
+            sky_cua_capture::ModelScreenshotFormat::Webp => ModelImageFormat::Webp,
+        }),
+        model_image_quality: Some(model.quality),
+        model_image_bytes: model.bytes,
+        model_image_encode_ms: Some(model.encode_ms),
     };
+    sky_cua_capture::update_model_capture_scale(&mut capture);
     Ok(CaptureResult {
         capture,
-        blank_frame: image_result.blank_frame,
+        blank_frame,
     })
 }
 
@@ -1192,18 +1206,24 @@ fn empty_capture() -> CaptureInfo {
     }
 }
 
-fn capture_output_path(snapshot_id: &str) -> Result<PathBuf, BackendError> {
+fn captures_dir() -> Result<PathBuf, BackendError> {
     let dir = sky_cua_state_dir().map_err(|error| {
         BackendError::new(
             BackendErrorCode::Internal,
             format!("failed to resolve Windows capture state directory: {error}"),
         )
     })?;
-    Ok(dir.join("captures").join(format!("{snapshot_id}.jpg")))
+    Ok(dir.join("captures"))
+}
+
+fn raw_capture_output_path(snapshot_id: &str) -> Result<PathBuf, BackendError> {
+    Ok(captures_dir()?.join(format!("{snapshot_id}.png")))
 }
 
 fn capture_desktop_blocking(
-    path: &PathBuf,
+    snapshot_id: &str,
+    captures_dir: &Path,
+    raw_path: &Path,
     source: CaptureSource,
 ) -> Result<CaptureImageResult, BackendError> {
     ensure_dpi_awareness();
@@ -1307,24 +1327,32 @@ fn capture_desktop_blocking(
                         "failed to build image buffer from Windows screenshot bytes",
                     )
                 })?;
+        // Persist the raw full-resolution capture as PNG, then derive the bounded,
+        // re-encoded model image from it. Coordinate remapping relies on the raw
+        // size being reported as the original pixel size.
         image
-            .save_with_format(path, image::ImageFormat::Jpeg)
+            .save_with_format(raw_path, image::ImageFormat::Png)
             .map_err(|error| {
                 BackendError::new(
                     BackendErrorCode::Internal,
                     format!(
-                        "failed to write Windows screenshot {}: {error}",
-                        path.display()
+                        "failed to write Windows raw screenshot {}: {error}",
+                        raw_path.display()
                     ),
                 )
             })?;
-        Ok(CaptureImageResult {
-            pixel_size: PixelSize {
-                width: width as u32,
-                height: height as u32,
-            },
-            blank_frame,
-        })
+        let original_pixel_size = PixelSize {
+            width: width as u32,
+            height: height as u32,
+        };
+        let model = sky_cua_capture::prepare_model_capture_from_image(
+            captures_dir,
+            snapshot_id,
+            image::DynamicImage::ImageRgb8(image),
+            raw_path,
+            Some(original_pixel_size),
+        )?;
+        Ok(CaptureImageResult { model, blank_frame })
     }
 }
 

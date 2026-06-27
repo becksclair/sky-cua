@@ -106,8 +106,8 @@ async fn cdp_action_recovers_when_tab_is_not_in_browser_session() {
 
     assert!(response.diagnostics.is_empty());
     // The capture is normalized to CSS-pixel dimensions and re-encoded with
-    // the model screenshot knobs (JPEG by default).
-    assert_eq!(response.mime_type, "image/jpeg");
+    // the model screenshot knobs (WebP by default).
+    assert_eq!(response.mime_type, "image/webp");
     assert_eq!(response.width, Some(100));
     assert_eq!(response.height, Some(80));
     assert!(!response.data_base64.is_empty());

@@ -267,8 +267,12 @@ fn capture_format_from_env() -> BrowserCaptureFormat {
 
 fn capture_format_from_value(value: Option<&str>) -> BrowserCaptureFormat {
     match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-        Some("webp") => BrowserCaptureFormat::Webp,
-        _ => BrowserCaptureFormat::Jpeg,
+        Some("jpg" | "jpeg") => BrowserCaptureFormat::Jpeg,
+        // WebP is the default for agent-facing images, matching the desktop
+        // capture path (`sky-cua-capture`); both read the same env var. Unknown
+        // values fall back to WebP rather than failing the capture.
+        Some("webp") | None => BrowserCaptureFormat::Webp,
+        Some(_) => BrowserCaptureFormat::Webp,
     }
 }
 
@@ -421,7 +425,7 @@ mod tests {
         let prepared = prepare_browser_capture("tab-1", &png_base64(200, 160), 100.0, 80.0, true);
         assert_eq!(prepared.width, 100);
         assert_eq!(prepared.height, 80);
-        assert_eq!(prepared.mime_type, "image/jpeg");
+        assert_eq!(prepared.mime_type, "image/webp");
         assert!(!prepared.data_base64.is_empty());
         let decoded = image::load_from_memory(&BASE64.decode(&prepared.data_base64).unwrap())
             .expect("decode prepared capture");
@@ -437,7 +441,7 @@ mod tests {
             prepare_browser_capture("tab-path", &png_base64(200, 160), 100.0, 80.0, false);
         assert_eq!(prepared.width, 100);
         assert_eq!(prepared.height, 80);
-        assert_eq!(prepared.mime_type, "image/jpeg");
+        assert_eq!(prepared.mime_type, "image/webp");
         assert_eq!(prepared.data_base64, "");
         let path = prepared
             .screenshot_path
@@ -540,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_format_parses_webp_and_defaults_to_jpeg() {
+    fn capture_format_parses_explicit_and_defaults_to_webp() {
         assert_eq!(
             capture_format_from_value(Some("webp")),
             BrowserCaptureFormat::Webp
@@ -550,10 +554,20 @@ mod tests {
             BrowserCaptureFormat::Webp
         );
         assert_eq!(
-            capture_format_from_value(Some("png")),
+            capture_format_from_value(Some("jpeg")),
             BrowserCaptureFormat::Jpeg
         );
-        assert_eq!(capture_format_from_value(None), BrowserCaptureFormat::Jpeg);
+        assert_eq!(
+            capture_format_from_value(Some("jpg")),
+            BrowserCaptureFormat::Jpeg
+        );
+        // Unknown values and an unset env default to WebP, matching the desktop
+        // capture path.
+        assert_eq!(
+            capture_format_from_value(Some("png")),
+            BrowserCaptureFormat::Webp
+        );
+        assert_eq!(capture_format_from_value(None), BrowserCaptureFormat::Webp);
     }
 
     #[test]

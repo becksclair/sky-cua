@@ -386,7 +386,7 @@ fn apply_model_capture(
     capture_info.model_image_quality = Some(model_capture.quality);
     capture_info.model_image_bytes = model_capture.bytes;
     capture_info.model_image_encode_ms = Some(model_capture.encode_ms);
-    update_model_capture_scale(capture_info);
+    sky_cua_capture::update_model_capture_scale(capture_info);
     Ok(())
 }
 
@@ -550,18 +550,6 @@ fn logical_rect_for_crop(crop: &PixelRect, source: &RectF, raw_pixel_size: &Pixe
         width: f64::from(crop.width) * scale_x,
         height: f64::from(crop.height) * scale_y,
         space: CoordinateSpace::DesktopLogical,
-    }
-}
-
-fn update_model_capture_scale(capture_info: &mut CaptureInfo) {
-    capture_info.logical_to_pixel_scale = None;
-    if let (Some(pixel_size), Some(logical_rect)) = (
-        capture_info.pixel_size.as_ref(),
-        capture_info.logical_rect.as_ref(),
-    ) && logical_rect.width > 0.0
-    {
-        capture_info.logical_to_pixel_scale =
-            Some(f64::from(pixel_size.width) / logical_rect.width);
     }
 }
 

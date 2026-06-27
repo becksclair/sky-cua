@@ -8,6 +8,11 @@ stable contracts, platform backends, the daemon, and the MCP client.
 - Shared request/response/data contracts: `sky-cua-platform` (never
   duplicated in client/service/backend crates); platform-neutral traits in
   `crates/sky-cua-platform/src/backend.rs`.
+- Shared model-facing screenshot preparation: `crates/sky-cua-capture/src/lib.rs`
+  (downscale-never-upscale, WebP-default encoding, format/quality/bounds env
+  resolution, and the `logical_to_pixel_scale` derivation). Both desktop
+  backends call it so the model image stays identical; the heavy `image`/`webp`
+  encoder deps live here, not in `sky-cua-platform`.
 - Linux portal, AT-SPI, KWin, and X11 logic: `crates/sky-cua-linux/src/**`.
 - Daemon state and IPC serving: `crates/sky-cua-service/src/**` (request
   dispatch in `src/daemon.rs`).
