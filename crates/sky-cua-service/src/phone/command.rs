@@ -399,7 +399,9 @@ mod tests {
     fn resolve_adb_path_trims_and_ignores_blank_config() {
         // A blank/whitespace configured path must not shadow env/PATH resolution.
         let prior = std::env::var(SKY_CUA_ADB_ENV).ok();
-        // SAFETY: single-threaded test; restored below.
+        // SAFETY: env mutation is process-global; nextest runs each test in its
+        // own process (see .config/nextest.toml), so no concurrent thread reads
+        // or writes the environment here. Restored below.
         unsafe { std::env::remove_var(SKY_CUA_ADB_ENV) };
         assert_eq!(resolve_adb_path(Some("   ")), "adb");
         assert_eq!(resolve_adb_path(None), "adb");

@@ -1,0 +1,29 @@
+# cargo-nextest configuration.
+#
+# Why nextest: parts of the sky-cua-service test suite drive process-global
+# state that cannot be made parallel-safe inside a single process — chiefly
+# `std::env::set_var`/`remove_var` (used to pin socket dirs, ADB paths, and
+# bridge timeouts) plus OS-level Unix/TCP sockets and spawned child overlay
+# hosts. Under `cargo test` every test shares one process, so concurrent env
+# mutation is a data race (UB in Rust 2024 — that is why those calls are
+# `unsafe`) and a different test fails on each run. nextest runs every test in
+# its own process, which isolates the environment and makes that class of flake
+# impossible. Prefer `cargo nextest run` over `cargo test` for this workspace.
+
+[test-groups]
+# Resource-heavy integration tests that bind Unix/TCP sockets and spawn child
+# processes. Even with per-test process isolation, fanning 32 of these out at
+# once (this host has 32 cores) starves the async runtimes and races on
+# ephemeral ports. Cap them to one-at-a-time so they are deterministic; the
+# fast unit tests still run fully parallel alongside them.
+serial-integration = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(sky-cua-service) & (test(/browser::tests::/) | test(/overlay::host::/))'
+test-group = 'serial-integration'
+
+[profile.ci]
+# CI keeps the same serialization but surfaces flakes loudly instead of hiding
+# them behind a retry, and fails fast is disabled so one race does not mask the
+# rest of the run.
+fail-fast = false

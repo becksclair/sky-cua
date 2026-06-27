@@ -303,11 +303,17 @@ mod tests {
     fn tcp_transport_request_failure_resets_child_for_respawn() {
         let dir = unique_temp_dir("tcp-host-bad-reply-reset");
         let host_path = dir.join("bad-overlay-host");
-        let port = reserve_local_port();
+        let (port_reservation, port) = reserve_local_port();
         write_bad_reply_overlay_host(&host_path, tcp_bad_reply_server());
         let mut host =
             ManagedOverlayHost::new(host_path, TcpEndpoint::new(format!("127.0.0.1:{port}")));
 
+        // Hold the reservation through setup and release it only now, immediately
+        // before send() spawns the child that rebinds the port, so nothing can
+        // claim it during test setup. The child's SO_REUSEADDR retry covers the
+        // unavoidable handoff window; nextest serializes overlay tests so no
+        // sibling test competes for the port.
+        drop(port_reservation);
         let diagnostic = host
             .send(capabilities_message())
             .expect_err("bad host reply should be diagnostic");
@@ -337,10 +343,16 @@ mod tests {
         dir
     }
 
+    /// Reserve an ephemeral local TCP port, returning the bound listener so the
+    /// caller holds the reservation until the moment the child rebinds it.
+    /// Dropping the listener frees the port; keep it alive through test setup and
+    /// drop it immediately before spawning the child to keep the rebind window as
+    /// small as possible.
     #[cfg(unix)]
-    fn reserve_local_port() -> u16 {
+    fn reserve_local_port() -> (std::net::TcpListener, u16) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve tcp port");
-        listener.local_addr().expect("read tcp addr").port()
+        let port = listener.local_addr().expect("read tcp addr").port();
+        (listener, port)
     }
 
     #[cfg(unix)]
