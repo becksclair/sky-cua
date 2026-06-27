@@ -315,30 +315,19 @@ fn add_canonical_action_aliases(actions: &mut Vec<String>) {
 /// "activate"). GTK and similar toolkits rarely emit the literal `toggle` /
 /// `expand` / `select` action names, so a check button or expander would
 /// otherwise report no semantic affordance even though its primary action
-/// performs exactly that. The action layer falls back to the primary action when
-/// invoking these, so advertising them here is what makes `desktop_toggle` /
-/// `desktop_semantic` work on standard checkable/expandable/selectable widgets.
+/// performs exactly that. The dispatch path falls back to the primary action
+/// only when the live element still satisfies the same
+/// [`super::state_supports_semantic_action`] predicate, so advertising them here
+/// is what makes `desktop_toggle` / `desktop_semantic` work on standard
+/// checkable/expandable/selectable widgets without firing on anything else.
 fn add_state_inferred_actions(actions: &mut Vec<String>, state_flags: &[String]) {
     if !actions.iter().any(|name| name == "activate") {
         return;
     }
-    let has = |state: &str| state_flags.iter().any(|flag| flag == state);
-    let mut inferred: Vec<&str> = Vec::new();
-    if has("checkable") {
-        inferred.push("toggle");
-    }
-    if has("selectable") {
-        inferred.push("select");
-    }
-    if has("expandable") {
-        inferred.push(if has("expanded") {
-            "collapse"
-        } else {
-            "expand"
-        });
-    }
-    for action in inferred {
-        if !actions.iter().any(|existing| existing == action) {
+    for action in ["toggle", "select", "expand", "collapse"] {
+        if super::state_supports_semantic_action(action, state_flags)
+            && !actions.iter().any(|existing| existing == action)
+        {
             actions.push(action.to_string());
         }
     }

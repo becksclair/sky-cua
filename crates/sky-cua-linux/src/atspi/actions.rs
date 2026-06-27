@@ -73,6 +73,7 @@ pub async fn invoke_default_action(
             "click", "press", "activate", "open", "toggle", "jump", "invoke",
         ],
         true,
+        None,
     )
     .await
 }
@@ -86,6 +87,7 @@ pub async fn activate(
         backend_ref,
         &["activate", "press", "click", "open", "jump", "invoke"],
         false,
+        None,
     )
     .await
 }
@@ -94,26 +96,47 @@ pub async fn select(
     connection: &AccessibilityConnection,
     backend_ref: &str,
 ) -> Result<bool, BackendError> {
-    // Fall back to the element's primary action: these semantic ops are only
-    // dispatched when the snapshot advertised them, and tree.rs only advertises
-    // toggle/select/expand/collapse for the matching checkable/selectable/
-    // expandable element (or when the literal action exists), so invoking the
-    // primary action here drives the right widget when AT-SPI omits the literal name.
-    invoke_preferred_action(connection, backend_ref, &["select", "choose"], true).await
+    // These semantic ops fall back to the element's primary action only when the
+    // live element carries the matching state (`gated_action`), mirroring what
+    // tree.rs advertises. So a `select` invoked on a non-selectable element
+    // returns false (-> ActionRequiresPhysicalInput) instead of firing the
+    // element's primary action, even though the literal `select` name is absent.
+    invoke_preferred_action(
+        connection,
+        backend_ref,
+        &["select", "choose"],
+        true,
+        Some("select"),
+    )
+    .await
 }
 
 pub async fn expand(
     connection: &AccessibilityConnection,
     backend_ref: &str,
 ) -> Result<bool, BackendError> {
-    invoke_preferred_action(connection, backend_ref, &["expand", "open"], true).await
+    invoke_preferred_action(
+        connection,
+        backend_ref,
+        &["expand", "open"],
+        true,
+        Some("expand"),
+    )
+    .await
 }
 
 pub async fn collapse(
     connection: &AccessibilityConnection,
     backend_ref: &str,
 ) -> Result<bool, BackendError> {
-    invoke_preferred_action(connection, backend_ref, &["collapse", "close"], true).await
+    invoke_preferred_action(
+        connection,
+        backend_ref,
+        &["collapse", "close"],
+        true,
+        Some("collapse"),
+    )
+    .await
 }
 
 pub async fn toggle(
@@ -125,6 +148,7 @@ pub async fn toggle(
         backend_ref,
         &["toggle", "check", "uncheck"],
         true,
+        Some("toggle"),
     )
     .await
 }
@@ -138,6 +162,7 @@ pub async fn invoke_secondary_action(
         backend_ref,
         &["showmenu", "popup", "menu", "contextmenu", "openmenu"],
         false,
+        None,
     )
     .await
 }
@@ -323,6 +348,7 @@ async fn invoke_preferred_action(
     backend_ref: &str,
     preferred_names: &[&str],
     fallback_to_first: bool,
+    gated_action: Option<&str>,
 ) -> Result<bool, BackendError> {
     let object_ref = parse_backend_ref(backend_ref)?;
     let accessible = object_ref
@@ -356,12 +382,33 @@ async fn invoke_preferred_action(
         )
     })?;
 
-    let Some(preferred_index) = preferred_action_index(
+    // Resolve the literal action by name first; only consider the primary-action
+    // fallback when no literal match exists.
+    let preferred_index = match preferred_action_index(
         actions.iter().map(|candidate| candidate.name.as_str()),
         preferred_names,
-        fallback_to_first,
-    ) else {
-        return Ok(false);
+    ) {
+        Some(index) => index,
+        None => {
+            if !fallback_to_first || actions.is_empty() {
+                return Ok(false);
+            }
+            // For state-driven semantic ops, only fall back to the primary action
+            // when the live element still carries the matching state, so a
+            // mistargeted (or stale-snapshot) op cannot fire the wrong primary
+            // action. Fail closed if the state set cannot be read.
+            if let Some(gate) = gated_action {
+                let state_flags = accessible
+                    .get_state()
+                    .await
+                    .map(|states| states.into_iter().map(|state| state.to_string()).collect())
+                    .unwrap_or_else(|_| Vec::new());
+                if !super::state_supports_semantic_action(gate, &state_flags) {
+                    return Ok(false);
+                }
+            }
+            0
+        }
     };
 
     let action_index = i32::try_from(preferred_index).map_err(|_| {
@@ -378,23 +425,19 @@ async fn invoke_preferred_action(
     })
 }
 
+/// Index of the first action whose (normalized) name matches one of
+/// `preferred_names`, or `None` when none match. The primary-action fallback is
+/// the caller's decision (see [`invoke_preferred_action`]), not this lookup's.
 fn preferred_action_index<'a>(
     action_names: impl IntoIterator<Item = &'a str>,
     preferred_names: &[&str],
-    fallback_to_first: bool,
 ) -> Option<usize> {
-    let mut found_any = false;
-    for (index, action_name) in action_names.into_iter().enumerate() {
-        found_any = true;
+    action_names.into_iter().position(|action_name| {
         let normalized = normalize_action(action_name);
-        if preferred_names
+        preferred_names
             .iter()
             .any(|preferred| normalized == normalize_action(preferred))
-        {
-            return Some(index);
-        }
-    }
-    (fallback_to_first && found_any).then_some(0)
+    })
 }
 
 fn parse_backend_ref(backend_ref: &str) -> Result<atspi::ObjectRefOwned, BackendError> {
@@ -434,29 +477,27 @@ mod tests {
     }
 
     #[test]
-    fn strict_preferred_action_index_does_not_fall_back_to_first_action() {
+    fn preferred_action_index_returns_none_without_a_literal_match() {
         assert_eq!(
-            preferred_action_index(["press", "open"], &["select", "choose"], false),
+            preferred_action_index(["press", "open"], &["select", "choose"]),
             None
         );
-    }
-
-    #[test]
-    fn default_action_index_can_fall_back_to_first_action() {
+        // No fallback to the first action: the lookup is literal-only, and the
+        // primary-action fallback is invoke_preferred_action's gated decision.
         assert_eq!(
-            preferred_action_index(["custom"], &["click", "press"], true),
-            Some(0)
+            preferred_action_index(["custom"], &["click", "press"]),
+            None
         );
     }
 
     #[test]
     fn preferred_action_index_normalizes_names() {
         assert_eq!(
-            preferred_action_index(["Show Menu"], &["showmenu"], false),
+            preferred_action_index(["Show Menu"], &["showmenu"]),
             Some(0)
         );
         assert_eq!(
-            preferred_action_index(["context_menu"], &["contextmenu"], false),
+            preferred_action_index(["context_menu"], &["contextmenu"]),
             Some(0)
         );
     }
