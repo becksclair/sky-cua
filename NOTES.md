@@ -158,6 +158,14 @@ and the idle auto-hide watchdog chain are documented in
 
 ## Smoke harnesses
 
+- `codex-cua` browser-phase wedge (`Page.enable`/`Page.navigate` timeouts,
+  "Detached"): it is the **Codex extension's `chrome.debugger` relay**, not
+  Chrome, not our Rust, not the VM. Raw CDP and direct `chrome.debugger` both
+  work on the same Chrome; only the SW relay wedges. Do NOT tune timeouts (makes
+  it worse), reboot (does nothing), or blame our code (reverts fail identically).
+  Each run now leaves `chrome-debug.log`/`chrome-stderr.log` in the judge dir.
+  Full evidence, probes, ruled-out list, and next steps:
+  [`docs/research/2026-06-chrome-debugger-relay-wedge.md`](docs/research/2026-06-chrome-debugger-relay-wedge.md).
 - The client Unix-socket read timeout must stay generous (60s) for real
   portal approval UX.
 - For `codex exec` plugin tests, validate the JSONL transcript for an actual
