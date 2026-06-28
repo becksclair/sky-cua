@@ -20,7 +20,7 @@ use sky_cua_platform::model::{
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::ModelSessionInfo;
 
-use super::{build_tool_definitions, handle_tool_call};
+use super::{build_tool_definitions, handle_tool_call, validation_tool_definitions};
 
 const PHONE_TOOL_NAMES: &[&str] = &[
     "status",
@@ -198,7 +198,8 @@ fn phone_tools_carry_session_selector_and_strict_schema() {
 
 #[test]
 fn phone_action_schemas_pin_required_fields() {
-    let definitions = build_tool_definitions(false, false);
+    // Per-branch required-field constraints live in the validation schema now.
+    let definitions = validation_tool_definitions(false, false);
     let operation_branch = |schema: &Value, operation: &str| -> Value {
         schema["allOf"]
             .as_array()

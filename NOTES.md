@@ -137,6 +137,14 @@ and the idle auto-hide watchdog chain are documented in
   `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_SESSION_TYPE`,
   `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`); runtime repair is the fallback
   (`docs/features/session-env-repair.md`).
+- Advertised tool `inputSchema` must never carry top-level `allOf`/`oneOf`/
+  `anyOf`/`not`: the Anthropic Messages API rejects them and Claude Code then
+  silently drops the tool (it never surfaces in `ToolSearch`), so under
+  Claude Code the grouped desktop verbs vanish and the agent reaches for the
+  banned built-in `computer-use`. The registry advertises flattened schemas and
+  keeps the rich exact-branch schemas in `validation_schemas` for runtime
+  enforcement (`definitions.rs`). Codex accepts top-level `allOf`; Claude Code/
+  the API do not — guarded by `advertised_schemas_have_no_top_level_composition`.
 - Compact MCP surface closeout: direct desktop/browser/phone tools stay
   removed; live smoke harnesses call the grouped tools
   (`observe`, `list_resources`, `capture_screen`, `desktop_pointer`,

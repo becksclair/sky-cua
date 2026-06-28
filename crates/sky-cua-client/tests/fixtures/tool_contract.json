@@ -30,7 +30,13 @@
         "type": "object"
       },
       "name": "doctor",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -91,6 +97,42 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "component": {
+            "enum": [
+              "browser",
+              "phone",
+              "phone_companion",
+              "session_presence"
+            ],
+            "type": "string"
+          },
+          "refresh_devices": {
+            "anyOf": [
+              {
+                "description": "For component=\"phone\" only, ask the service to refresh device discovery before reporting status.",
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "component"
+        ],
+        "type": "object"
+      },
+      "name": "status",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -193,9 +235,7 @@
           "component"
         ],
         "type": "object"
-      },
-      "name": "status",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -301,6 +341,107 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "include_mdns": {
+            "anyOf": [
+              {
+                "description": "For phone devices only, include mDNS wireless-debugging records.",
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "include_system": {
+            "anyOf": [
+              {
+                "description": "For phone apps only, include system packages.",
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resource": {
+            "enum": [
+              "apps",
+              "windows",
+              "focused_window",
+              "tabs",
+              "devices",
+              "current_app"
+            ],
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "surface": {
+            "enum": [
+              "desktop",
+              "browser",
+              "phone"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title_contains": {
+            "description": "For browser tabs only, case-insensitive title filter.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url_contains": {
+            "description": "For browser tabs only, case-insensitive URL filter.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "surface",
+          "resource"
+        ],
+        "type": "object"
+      },
+      "name": "list_resources",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -593,9 +734,7 @@
           "resource"
         ],
         "type": "object"
-      },
-      "name": "list_resources",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -646,6 +785,218 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backend": {
+            "anyOf": [
+              {
+                "description": "Backend hint for phone observe and screenshot. scrcpy/none are response states, not request inputs.",
+                "enum": [
+                  "auto",
+                  "adb",
+                  "companion"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capture_screen": {
+            "anyOf": [
+              {
+                "description": "Screen-capture policy. Defaults to if_changed. Use always for a fresh frame, never for structure-only loops.",
+                "enum": [
+                  "auto",
+                  "if_changed",
+                  "always",
+                  "never"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "desktop_file_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "description": "Defaults to compact. Use full for verbose element details and full capability data.",
+                "enum": [
+                  "full",
+                  "compact"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "element_limit": {
+            "anyOf": [
+              {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "element_offset": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "element_query": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "include_accessibility": {
+            "anyOf": [
+              {
+                "description": "For phone only, include the accessibility tree in the observation.",
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "include_notifications": {
+            "anyOf": [
+              {
+                "description": "For phone only, include recent notifications in the observation.",
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "screenshot_delivery": {
+            "anyOf": [
+              {
+                "description": "path returns capture.inspection_image_path metadata; inline also attaches the inspection image block.",
+                "enum": [
+                  "path",
+                  "inline"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "surface": {
+            "enum": [
+              "desktop",
+              "browser",
+              "phone"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text_limit": {
+            "anyOf": [
+              {
+                "description": "For browser only, maximum page text characters.",
+                "maximum": 20000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "window_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "surface"
+        ],
+        "type": "object"
+      },
+      "name": "observe",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -1129,9 +1480,7 @@
           "surface"
         ],
         "type": "object"
-      },
-      "name": "observe",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -1170,6 +1519,73 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "description": "Backend hint for phone observe and screenshot. scrcpy/none are response states, not request inputs.",
+                "enum": [
+                  "auto",
+                  "adb",
+                  "companion"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "surface": {
+            "enum": [
+              "browser",
+              "phone"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "surface"
+        ],
+        "type": "object"
+      },
+      "name": "capture_screen",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -1314,9 +1730,7 @@
           "surface"
         ],
         "type": "object"
-      },
-      "name": "capture_screen",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -1366,7 +1780,32 @@
         "type": "object"
       },
       "name": "phone_accessibility_tree",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "node_limit": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -1416,7 +1855,32 @@
         "type": "object"
       },
       "name": "phone_notifications",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -1439,6 +1903,213 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_id": {
+            "anyOf": [
+              {
+                "description": "Exact display_id from environment.displays.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_index": {
+            "anyOf": [
+              {
+                "description": "Zero-based display index from environment.displays. Prefer display_id.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "description": "Display name/connector from environment.displays. Prefer display_id.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "description": "Process ID from list_resources(surface=\"desktop\", resource=\"windows\"). 0 is ignored.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "const": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "screenshot_delivery": {
+            "anyOf": [
+              {
+                "description": "path returns capture.inspection_image_path metadata; inline also attaches the inspection image block.",
+                "enum": [
+                  "path",
+                  "inline"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_command": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_cwd": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_pid": {
+            "anyOf": [
+              {
+                "description": "Terminal process ID from desktop window terminal metadata. 0 is ignored.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "const": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tty": {
+            "anyOf": [
+              {
+                "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "window_id": {
+            "anyOf": [
+              {
+                "description": "Exact window_id from list_resources(surface=\"desktop\", resource=\"windows\").",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wm_class": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "capture_desktop",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "not": {
           "anyOf": [
@@ -1885,9 +2556,7 @@
         },
         "required": [],
         "type": "object"
-      },
-      "name": "capture_desktop",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -1940,7 +2609,23 @@
         "type": "object"
       },
       "name": "setup_desktop",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "enum": [
+              "accessibility",
+              "window_targeting"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -1989,6 +2674,41 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "inhibit_lock": {
+            "description": "Defaults to true for hold/unlock.",
+            "type": "boolean"
+          },
+          "inhibit_suspend": {
+            "description": "Defaults to true for hold/unlock.",
+            "type": "boolean"
+          },
+          "operation": {
+            "enum": [
+              "hold",
+              "unlock",
+              "release"
+            ],
+            "type": "string"
+          },
+          "relock": {
+            "description": "For release only, relock after releasing when supported.",
+            "type": "boolean"
+          },
+          "unlock": {
+            "description": "For hold only, unlock before holding inhibitors when supported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "session_presence",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -2080,9 +2800,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "session_presence",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -2107,6 +2825,154 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "description": "Process ID from list_resources(surface=\"desktop\", resource=\"windows\"). 0 is ignored.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "const": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_command": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_cwd": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_pid": {
+            "anyOf": [
+              {
+                "description": "Terminal process ID from desktop window terminal metadata. 0 is ignored.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "const": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tty": {
+            "anyOf": [
+              {
+                "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "window_id": {
+            "anyOf": [
+              {
+                "description": "Exact window_id from list_resources(surface=\"desktop\", resource=\"windows\").",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wm_class": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "activate_window",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -2372,9 +3238,7 @@
         },
         "required": [],
         "type": "object"
-      },
-      "name": "activate_window",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -2443,6 +3307,78 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "element_identifier": {
+            "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the same desktop observation; pair with its snapshot_id.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Snapshot-scoped element name selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "focus",
+              "select",
+              "expand",
+              "collapse"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "description": "Optional selector refiner; not a standalone target.",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "description": "Exact snapshot_id from the same observe(surface=\"desktop\") or capture_desktop result that supplied this target.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "states": {
+            "description": "Optional selector refiners; not a standalone target.",
+            "items": {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "Snapshot-scoped element text selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_semantic",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -2571,9 +3507,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "desktop_semantic",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -2631,7 +3565,40 @@
         "type": "object"
       },
       "name": "browser_claim_tab",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -2714,7 +3681,63 @@
         "type": "object"
       },
       "name": "browser_move_mouse",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wait_for_arrival": {
+            "anyOf": [
+              {
+                "description": "Wait for the visible cursor overlay to arrive. Defaults to true.",
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x": {
+            "description": "CSS pixel x coordinate.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "y": {
+            "description": "CSS pixel y coordinate.",
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "tab_id",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -2765,6 +3788,97 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "description": "Backend hint for phone connect.",
+                "enum": [
+                  "auto",
+                  "adb",
+                  "companion",
+                  "scrcpy"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "install_companion": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "keep_wireless": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "connect",
+              "disconnect",
+              "refresh"
+            ],
+            "type": "string"
+          },
+          "serial": {
+            "anyOf": [
+              {
+                "description": "ADB serial from phone discovery; accepted only for discovery, pairing, and connect-like paths.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "start_scrcpy": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_connection",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -2973,9 +4087,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "phone_connection",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -3021,7 +4133,27 @@
         "type": "object"
       },
       "name": "phone_pair_wireless",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "host_port": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "pairing_code": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_port",
+          "pairing_code"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -3061,6 +4193,76 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_downgrade": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "force_reinstall": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "install_companion",
+              "open_settings"
+            ],
+            "type": "string"
+          },
+          "package_name": {
+            "anyOf": [
+              {
+                "description": "Target package for app-scoped screens such as app_details.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "screen": {
+            "enum": [
+              "accessibility",
+              "notification_access",
+              "overlay_permission",
+              "app_details",
+              "wireless_debugging",
+              "battery_optimization"
+            ],
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_setup",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -3245,9 +4447,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "phone_setup",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -3293,7 +4493,27 @@
         "type": "object"
       },
       "name": "phone_app_force_stop",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "package_name": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "package_name"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -3319,6 +4539,67 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "element_identifier": {
+            "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the same desktop observation; pair with its snapshot_id.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Snapshot-scoped element name selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "role": {
+            "description": "Optional selector refiner; not a standalone target.",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "description": "Exact snapshot_id from the same observe(surface=\"desktop\") or capture_desktop result that supplied this target.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "states": {
+            "description": "Optional selector refiners; not a standalone target.",
+            "items": {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "Snapshot-scoped element text selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "desktop_toggle",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -3436,9 +4717,7 @@
         },
         "required": [],
         "type": "object"
-      },
-      "name": "desktop_toggle",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -3465,6 +4744,81 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "enum": [
+              "up",
+              "down"
+            ],
+            "type": "string"
+          },
+          "element_identifier": {
+            "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the same desktop observation; pair with its snapshot_id.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Snapshot-scoped element name selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "pages": {
+            "description": "Page-sized scroll steps. Defaults to 1.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "role": {
+            "description": "Optional selector refiner; not a standalone target.",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "description": "Exact snapshot_id from the same observe(surface=\"desktop\") or capture_desktop result that supplied this target.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "states": {
+            "description": "Optional selector refiners; not a standalone target.",
+            "items": {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "Snapshot-scoped element text selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          }
+        },
+        "required": [
+          "direction"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_scroll",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -3587,9 +4941,7 @@
           "direction"
         ],
         "type": "object"
-      },
-      "name": "desktop_scroll",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -3615,6 +4967,73 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "delta_x": {
+            "description": "Horizontal wheel delta in CSS pixels; at least one delta must be non-zero.",
+            "type": "number"
+          },
+          "delta_y": {
+            "description": "Vertical wheel delta in CSS pixels; at least one delta must be non-zero.",
+            "type": "number"
+          },
+          "tab_id": {
+            "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x": {
+            "anyOf": [
+              {
+                "description": "CSS pixel x coordinate.",
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "y": {
+            "anyOf": [
+              {
+                "description": "CSS pixel y coordinate.",
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_scroll",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -3748,9 +5167,7 @@
           "tab_id"
         ],
         "type": "object"
-      },
-      "name": "browser_scroll",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -3807,6 +5224,105 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "element_identifier": {
+            "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the same desktop observation; pair with its snapshot_id.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from_x": {
+            "type": "number"
+          },
+          "from_y": {
+            "type": "number"
+          },
+          "name": {
+            "description": "Snapshot-scoped element name selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "click",
+              "secondary_click",
+              "drag"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "description": "Optional selector refiner; not a standalone target.",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "description": "Exact snapshot_id from the same observe(surface=\"desktop\") or capture_desktop result that supplied this target.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "states": {
+            "description": "Optional selector refiners; not a standalone target.",
+            "items": {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "Snapshot-scoped element text selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "to_element_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to_x": {
+            "type": "number"
+          },
+          "to_y": {
+            "type": "number"
+          },
+          "x": {
+            "description": "Click x coordinate or drag start x.",
+            "type": "number"
+          },
+          "y": {
+            "description": "Click y coordinate or drag start y.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_pointer",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -4382,9 +5898,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "desktop_pointer",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -4423,6 +5937,187 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "type_text",
+              "press_key"
+            ],
+            "type": "string"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "description": "Process ID from list_resources(surface=\"desktop\", resource=\"windows\"). 0 is ignored.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "const": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "description": "Exact snapshot_id from the same observe(surface=\"desktop\") or capture_desktop result that supplied this target.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_command": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_cwd": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_pid": {
+            "anyOf": [
+              {
+                "description": "Terminal process ID from desktop window terminal metadata. 0 is ignored.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "const": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tty": {
+            "anyOf": [
+              {
+                "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "window_id": {
+            "anyOf": [
+              {
+                "description": "Exact window_id from list_resources(surface=\"desktop\", resource=\"windows\").",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wm_class": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_keyboard",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -4950,9 +6645,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "desktop_keyboard",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -4994,6 +6687,87 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "action_index": {
+            "description": "Indexed backend action when operation=perform_action.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "action_name": {
+            "description": "Named backend action when operation=perform_action.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "element_identifier": {
+            "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the same desktop observation; pair with its snapshot_id.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Snapshot-scoped element name selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "activate",
+              "perform_action"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "description": "Optional selector refiner; not a standalone target.",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "description": "Exact snapshot_id from the same observe(surface=\"desktop\") or capture_desktop result that supplied this target.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "states": {
+            "description": "Optional selector refiners; not a standalone target.",
+            "items": {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "Snapshot-scoped element text selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_action",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -5344,9 +7118,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "desktop_action",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -5373,6 +7145,73 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "element_identifier": {
+            "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "element_index": {
+            "description": "Element index from the same desktop observation; pair with its snapshot_id.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Snapshot-scoped element name selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "role": {
+            "description": "Optional selector refiner; not a standalone target.",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "description": "Exact snapshot_id from the same observe(surface=\"desktop\") or capture_desktop result that supplied this target.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "states": {
+            "description": "Optional selector refiners; not a standalone target.",
+            "items": {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "Snapshot-scoped element text selector; requires snapshot_id.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "value": {
+            "description": "Replacement value to write. The text selector still identifies the target element.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_set_value",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -5496,9 +7335,7 @@
           "value"
         ],
         "type": "object"
-      },
-      "name": "desktop_set_value",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -5561,7 +7398,47 @@
         "type": "object"
       },
       "name": "browser_open",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "anyOf": [
+              {
+                "pattern": "^(https?://[^\\s]+|about:blank)$",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -5625,7 +7502,45 @@
         "type": "object"
       },
       "name": "browser_navigate",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "pattern": "^(https?://[^\\s]+|about:blank)$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "url"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -5681,6 +7596,69 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "click",
+              "type_text",
+              "press_key"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "x": {
+            "description": "CSS pixel x coordinate.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "y": {
+            "description": "CSS pixel y coordinate.",
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "operation",
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_input",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -5880,9 +7858,7 @@
           "tab_id"
         ],
         "type": "object"
-      },
-      "name": "browser_input",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -5929,6 +7905,87 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end_x": {
+            "description": "Swipe end x coordinate in snapshot pixels, or raw device pixels when use_device_coordinates=true.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "end_y": {
+            "description": "Swipe end y coordinate in snapshot pixels, or raw device pixels when use_device_coordinates=true.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "operation": {
+            "enum": [
+              "tap",
+              "swipe"
+            ],
+            "type": "string"
+          },
+          "phone_snapshot_id": {
+            "description": "Fresh phone_snapshot_id from the same phone observe/capture_screen result that supplied screenshot coordinates.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "start_x": {
+            "description": "Swipe start x coordinate in snapshot pixels, or raw device pixels when use_device_coordinates=true.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "start_y": {
+            "description": "Swipe start y coordinate in snapshot pixels, or raw device pixels when use_device_coordinates=true.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "use_device_coordinates": {
+            "anyOf": [
+              {
+                "description": "When true, x/y or start/end coordinates are raw device pixels and phone_snapshot_id is not required.",
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x": {
+            "description": "Tap x coordinate in snapshot pixels, or raw device pixels when use_device_coordinates=true.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "y": {
+            "description": "Tap y coordinate in snapshot pixels, or raw device pixels when use_device_coordinates=true.",
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_pointer",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -6169,9 +8226,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "phone_pointer",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -6212,6 +8267,38 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "type_text",
+              "press_key"
+            ],
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_keyboard",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -6293,9 +8380,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "phone_keyboard",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -6351,6 +8436,42 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "description": "Exact action_id from that same notification event.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "event_id": {
+            "description": "Exact event_id from a fresh phone_notifications result or notification-bearing phone observation.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "open",
+              "dismiss",
+              "action"
+            ],
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_notification_action",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -6471,9 +8592,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "phone_notification_action",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -6535,7 +8654,41 @@
         "type": "object"
       },
       "name": "phone_notification_reply",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "description": "Inline-reply action_id from that event.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "event_id": {
+            "description": "event_id from fresh phone notifications.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "text": {
+            "description": "Reply text.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "event_id",
+          "action_id",
+          "text"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -6576,6 +8729,52 @@
       ],
       "content_policy": "grouped_rewrite",
       "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "intent_uri": {
+            "description": "Intent URI or deep link.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "launch",
+              "open_intent"
+            ],
+            "type": "string"
+          },
+          "package_name": {
+            "anyOf": [
+              {
+                "description": "Optional exact Android package name from phone app listing or current-app result, not a display label.",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_app_action",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
         "additionalProperties": false,
         "allOf": [
           {
@@ -6691,9 +8890,7 @@
           "operation"
         ],
         "type": "object"
-      },
-      "name": "phone_app_action",
-      "structured_policy": "grouped_envelope"
+      }
     },
     {
       "annotations": {
@@ -6802,7 +8999,88 @@
         "type": "object"
       },
       "name": "phone_app_install",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_downgrade": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "allow_test_apk": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "apk_paths": {
+            "description": "Host-side APK path(s) to install. Use one path for single APK installs and multiple paths for split or multi-package installs.",
+            "items": {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "grant_runtime_permissions": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "description": "Install strategy hint.",
+                "enum": [
+                  "single",
+                  "multiple",
+                  "multi_package"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reinstall": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "apk_paths"
+        ],
+        "type": "object"
+      }
     },
     {
       "annotations": {
@@ -6866,7 +9144,45 @@
         "type": "object"
       },
       "name": "browser_eval",
-      "structured_policy": "grouped_envelope"
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "description": "Browser bridge target. Defaults to user_chrome.",
+                "enum": [
+                  "user_chrome"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "tab_id",
+          "expression"
+        ],
+        "type": "object"
+      }
     }
   ],
   "version": 1

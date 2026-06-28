@@ -2,7 +2,7 @@
 //! and annotations. Split from `mcp_tools.rs` along the contract-family
 //! boundary; dispatch and response shaping stay in the parent module.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
 
@@ -41,7 +41,14 @@ pub(crate) enum InactiveToolReason {
 #[derive(Debug, Clone)]
 pub(crate) struct McpToolRegistry {
     pub(crate) browser_eval_enabled: bool,
+    /// Advertised tool definitions sent to the host (`tools/list`). Their input
+    /// schemas are flattened: no top-level `allOf`/`oneOf`/`anyOf`/`not`, which
+    /// the Anthropic Messages API rejects (and Claude Code then drops the tool).
     tools: Value,
+    /// Rich per-tool input schemas carrying the discriminated-union/exact-branch
+    /// constraints. These are NOT advertised; they back `validate_arguments` so
+    /// vague or cross-branch calls are still rejected at dispatch time.
+    validation_schemas: BTreeMap<String, Value>,
     active_names: BTreeSet<String>,
     inactive_names: BTreeSet<String>,
 }
@@ -64,14 +71,7 @@ impl McpToolRegistry {
     }
 
     pub(crate) fn validate_arguments(&self, name: &str, arguments: &Value) -> Result<(), String> {
-        let Some(schema) = self
-            .tools
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
-            .and_then(|tool| tool.get("inputSchema"))
-        else {
+        let Some(schema) = self.validation_schemas.get(name) else {
             return Err(format!("missing input schema for {name}"));
         };
         if schema_accepts(schema, arguments) {
@@ -83,7 +83,7 @@ impl McpToolRegistry {
 }
 
 fn schema_rejection_message(name: &str, arguments: &Value) -> String {
-    let mut message = format!("arguments do not match the advertised input schema for {name}");
+    let mut message = format!("arguments do not match the input schema for {name}");
     if let Some(hint) = schema_rejection_hint(name, arguments) {
         message.push_str(". Hint: ");
         message.push_str(hint);
@@ -325,7 +325,8 @@ pub(crate) fn build_tool_registry(
     model: &ModelSessionInfo,
 ) -> McpToolRegistry {
     let can_receive_images = model.can_receive_images();
-    let tools = build_tool_definitions(can_receive_images, process.browser_eval_enabled);
+    let (tools, validation_schemas) =
+        build_tool_definitions_split(can_receive_images, process.browser_eval_enabled);
     let active_names = tool_names(&tools);
     let mut inactive_names = BTreeSet::new();
     if !process.browser_eval_enabled && !active_names.contains("browser_eval") {
@@ -335,6 +336,7 @@ pub(crate) fn build_tool_registry(
     McpToolRegistry {
         browser_eval_enabled: process.browser_eval_enabled,
         tools,
+        validation_schemas,
         active_names,
         inactive_names,
     }
@@ -362,11 +364,80 @@ pub(crate) fn tools_list_result(model: &ModelSessionInfo) -> Value {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn build_tool_definitions(
     can_receive_images: bool,
     browser_eval_enabled: bool,
 ) -> Value {
-    build_grouped_tool_definitions(can_receive_images, browser_eval_enabled)
+    build_tool_definitions_split(can_receive_images, browser_eval_enabled).0
+}
+
+/// Tool definitions whose `inputSchema` is the rich validation schema rather
+/// than the flattened advertised one. For tests that assert the per-branch
+/// constraint shape (which moved out of the advertised surface).
+#[cfg(test)]
+pub(crate) fn validation_tool_definitions(
+    can_receive_images: bool,
+    browser_eval_enabled: bool,
+) -> Value {
+    let (mut tools, validation) =
+        build_tool_definitions_split(can_receive_images, browser_eval_enabled);
+    for tool in tools
+        .as_array_mut()
+        .expect("tool definitions must be an array")
+    {
+        let name = tool["name"].as_str().expect("tool name").to_string();
+        if let Some(rich) = validation.get(&name) {
+            tool["inputSchema"] = rich.clone();
+        }
+    }
+    tools
+}
+
+/// Build the advertised tool list (flattened input schemas) alongside the rich
+/// per-tool validation schemas.
+///
+/// The grouped builders produce schemas whose root carries the exact-branch
+/// discriminated union (`allOf`/`oneOf`), plus `capture_desktop`'s root `not`.
+/// The Anthropic Messages API rejects top-level `allOf`/`oneOf`/`anyOf` in a
+/// tool `input_schema` ("input_schema does not support oneOf, allOf, or anyOf at
+/// the top level"), and under Claude Code's deferred loading the tool silently
+/// never surfaces. We therefore advertise a flattened schema (the root object's
+/// `properties`/`required` already enumerate every field) and keep the rich
+/// schema only for runtime argument validation, so the per-branch guardrails
+/// (e.g. "a click needs coordinates or a selector") still reject vague calls.
+fn build_tool_definitions_split(
+    can_receive_images: bool,
+    browser_eval_enabled: bool,
+) -> (Value, BTreeMap<String, Value>) {
+    let mut tools = build_grouped_tool_definitions(can_receive_images, browser_eval_enabled);
+    let mut validation_schemas = BTreeMap::new();
+    for tool in tools
+        .as_array_mut()
+        .expect("tool definitions must be an array")
+    {
+        let name = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .expect("tool must have a name")
+            .to_string();
+        if let Some(schema) = tool.get("inputSchema").cloned() {
+            validation_schemas.insert(name, schema);
+        }
+        if let Some(schema) = tool.get_mut("inputSchema").and_then(Value::as_object_mut) {
+            flatten_advertised_input_schema(schema);
+        }
+    }
+    (tools, validation_schemas)
+}
+
+/// Strip the root-level schema combinators the Anthropic Messages API rejects.
+/// The root `properties`/`required` already describe the full field set, so the
+/// remaining flat schema stays a valid, self-describing object schema.
+fn flatten_advertised_input_schema(schema: &mut Map<String, Value>) {
+    for key in ["allOf", "oneOf", "anyOf", "not"] {
+        schema.remove(key);
+    }
 }
 
 fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled: bool) -> Value {
@@ -388,7 +459,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         grouped_tool_with_constraints(
             "list_resources",
-            "List bounded resources. Valid pairs: desktop apps/windows/focused_window; browser tabs; phone devices/apps/current_app.",
+            "List bounded resources. Valid pairs: desktop apps/windows/focused_window; browser tabs; phone devices/apps/current_app. Desktop windows include each window's display (its monitor: display_id, name, and primary flag); read it before capturing a specific app so you target the right monitor.",
             READ_ONLY_TOOL,
             list_resources_properties(),
             json!(["surface", "resource"]),
@@ -426,7 +497,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         grouped_tool_with_constraints(
             "capture_desktop",
-            "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. Call with no selector for the normal case: it captures the main display. Pass one window selector to capture a single window, or one display selector (display_id/display_name/display_index) only when you specifically need a non-main monitor.",
+            "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to activate and crop to that window, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
             LOCAL_NAVIGATION_ACTION,
             screenshot_properties(can_receive_images),
             json!([]),
@@ -2796,9 +2867,26 @@ mod annotation_tests {
     #[test]
     fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
         let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
-        let tools = registry.tools.as_array().expect("tools");
+        // The advertised schemas are flattened (no root composition); this test
+        // asserts the *constraint* shape, which now lives in the validation
+        // schemas. Synthesize per-tool objects that carry the advertised metadata
+        // (name/description/annotations) with the rich validation `inputSchema`.
+        let merged_tools: Vec<Value> = registry
+            .tools
+            .as_array()
+            .expect("tools")
+            .iter()
+            .map(|tool| {
+                let mut tool = tool.clone();
+                let name = tool["name"].as_str().expect("tool name").to_string();
+                if let Some(rich) = registry.validation_schemas.get(&name) {
+                    tool["inputSchema"] = rich.clone();
+                }
+                tool
+            })
+            .collect();
         let tool = |name: &str| -> &Value {
-            tools
+            merged_tools
                 .iter()
                 .find(|tool| tool["name"] == name)
                 .unwrap_or_else(|| panic!("missing tool {name}"))
@@ -2887,7 +2975,7 @@ mod annotation_tests {
             "list_resources must constrain surface/resource pairs to dispatchable branches"
         );
 
-        for schema in tools.iter().map(|tool| &tool["inputSchema"]) {
+        for schema in merged_tools.iter().map(|tool| &tool["inputSchema"]) {
             assert_eq!(
                 schema["type"],
                 Value::String("object".to_string()),
@@ -3304,6 +3392,94 @@ mod annotation_tests {
     }
 
     #[test]
+    fn advertised_schema_is_validation_schema_minus_root_composition() {
+        // The advertised schema must differ from the rich validation schema by
+        // exactly the four root composition keywords the Anthropic API rejects —
+        // nothing else. This guards against a future change to
+        // `flatten_advertised_input_schema` silently dropping a property or
+        // `required` entry that runtime enforcement still depends on, which would
+        // desync what the model sees from what `validate_arguments` checks.
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+        for tool in registry.tools.as_array().expect("tools") {
+            let name = tool["name"].as_str().expect("tool name");
+            let advertised = tool["inputSchema"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} advertised inputSchema must be an object"));
+            let mut expected = registry
+                .validation_schemas
+                .get(name)
+                .unwrap_or_else(|| panic!("{name} missing validation schema"))
+                .as_object()
+                .expect("validation schema must be an object")
+                .clone();
+            for key in ["allOf", "oneOf", "anyOf", "not"] {
+                expected.remove(key);
+            }
+            assert_eq!(
+                advertised, &expected,
+                "advertised schema for {name} must equal its validation schema minus root \
+                 composition keywords; flattening dropped or changed something else"
+            );
+        }
+    }
+
+    #[test]
+    fn advertised_schemas_have_no_top_level_composition() {
+        // The Anthropic Messages API rejects top-level `allOf`/`oneOf`/`anyOf` in
+        // a tool `input_schema` ("input_schema does not support oneOf, allOf, or
+        // anyOf at the top level"), and under Claude Code's deferred loading the
+        // tool then silently never surfaces. `not` is undocumented and treated as
+        // unsafe. Validation richness lives in `validation_schemas`, not here.
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+        for tool in registry.tools.as_array().expect("tools") {
+            let name = tool["name"].as_str().expect("tool name");
+            let schema = tool["inputSchema"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} inputSchema must be an object"));
+            for key in ["allOf", "oneOf", "anyOf", "not"] {
+                assert!(
+                    !schema.contains_key(key),
+                    "advertised inputSchema for {name} carries top-level {key}; the Anthropic \
+                     Messages API rejects it and Claude Code drops the tool. Keep the constraint \
+                     in the validation schema instead."
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn validation_schemas_still_reject_vague_grouped_calls() {
+        // Flattening the advertised schema must not weaken runtime enforcement:
+        // `validate_arguments` uses the rich validation schema, so a bare grouped
+        // call with only a discriminator is still rejected.
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+        assert!(
+            registry
+                .validate_arguments("desktop_pointer", &json!({"operation": "click"}))
+                .is_err(),
+            "a click with no coordinates or selector must be rejected at dispatch"
+        );
+        assert!(
+            registry
+                .validate_arguments(
+                    "desktop_pointer",
+                    &json!({"operation": "click", "x": 10, "y": 20})
+                )
+                .is_ok(),
+            "a click with coordinates must be accepted"
+        );
+        assert!(
+            registry
+                .validate_arguments(
+                    "capture_desktop",
+                    &json!({"window_id": "w1", "display_index": 0})
+                )
+                .is_err(),
+            "capture_desktop must still reject mixing a window target with a display target"
+        );
+    }
+
+    #[test]
     fn runtime_schema_validator_fails_closed_for_unsupported_schema_surface() {
         assert!(!schema_accepts(
             &json!({"type": "url"}),
@@ -3379,22 +3555,22 @@ mod annotation_tests {
         let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
         for case in cases {
             let tool_name = case["tool"].as_str().expect("case tool");
+            // Validate against the rich validation schema (what `validate_arguments`
+            // enforces), not the flattened advertised schema, which by design no
+            // longer carries the per-branch constraints that reject bad calls.
             let schema = registry
-                .tools
-                .as_array()
-                .expect("tools")
-                .iter()
-                .find(|tool| tool["name"] == tool_name)
+                .validation_schemas
+                .get(tool_name)
                 .unwrap_or_else(|| panic!("missing schema for {tool_name}"));
             assert!(
-                schema_accepts(&schema["inputSchema"], &case["valid"]),
+                schema_accepts(schema, &case["valid"]),
                 "call case {}/{} is not valid for its generated schema: {}",
                 tool_name,
                 case["branch"].as_str().expect("case branch"),
                 case["valid"]
             );
             assert!(
-                !schema_accepts(&schema["inputSchema"], &case["invalid"]),
+                !schema_accepts(schema, &case["invalid"]),
                 "call case {}/{} invalid sample was accepted by its generated schema: {}",
                 tool_name,
                 case["branch"].as_str().expect("case branch"),
@@ -3567,9 +3743,15 @@ mod annotation_tests {
                     .iter()
                     .find(|tool| tool["name"] == name)
                     .unwrap_or_else(|| panic!("contract references unadvertised tool {name}"));
+                let validation = registry
+                    .validation_schemas
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| public["inputSchema"].clone());
                 let object = contract.as_object_mut().expect("contract object");
                 object.insert("annotations".to_string(), public["annotations"].clone());
                 object.insert("input_schema".to_string(), public["inputSchema"].clone());
+                object.insert("validation_schema".to_string(), validation);
                 object.insert("content_policy".to_string(), json!("grouped_rewrite"));
                 object.insert("structured_policy".to_string(), json!("grouped_envelope"));
                 contract

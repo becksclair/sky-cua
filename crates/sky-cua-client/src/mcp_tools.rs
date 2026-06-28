@@ -32,7 +32,9 @@ pub(crate) use definitions::{
     mcp_process_config_from_env,
 };
 #[cfg(test)]
-pub(crate) use definitions::{build_tool_definitions, tool_definitions};
+pub(crate) use definitions::{
+    build_tool_definitions, tool_definitions, validation_tool_definitions,
+};
 #[cfg(test)]
 mod browser_tests;
 #[cfg(test)]
@@ -1244,7 +1246,7 @@ mod tests {
         effective_capture_screen, grouped_handler_call, handle_action_call,
         handle_session_tool_call, handle_tool_call, invalid_request_tool_error, list_apps_summary,
         parse_app_selector, parse_app_state_detail, parse_screenshot_target, parse_window_target,
-        tool_definitions, tools_list_result,
+        tools_list_result, validation_tool_definitions,
     };
 
     const SNAPSHOT_TEXT_TEST_ELEMENT_COUNT: usize = 123;
@@ -2874,7 +2876,9 @@ mod tests {
 
     #[test]
     fn action_tool_schemas_are_strict_and_snapshot_scoped_where_needed() {
-        let tools = tool_definitions(&ModelSessionInfo::default());
+        // Constraint shape (allOf branches, accept/reject) lives in the rich
+        // validation schema now; the advertised schema is flattened.
+        let tools = validation_tool_definitions(false, false);
         let find_tool = |name: &str| {
             tools
                 .as_array()
