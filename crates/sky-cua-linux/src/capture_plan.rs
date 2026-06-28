@@ -97,17 +97,19 @@ pub(crate) async fn plan_capture(
         }
     }
 
-    let can_crop_pipewire_capture = region_target.is_none()
-        || capture
-            .as_ref()
-            .and_then(|capture_info| capture_info.source_logical_rect.as_ref())
-            .is_some();
     if should_capture_screen
         && environment.capture_backend == CaptureBackendKind::PortalPipeWire
         && environment.input_backend == InputBackendKind::PortalRemoteDesktop
         && portal_session_error.is_none()
-        && can_crop_pipewire_capture
     {
+        // Capture the frame even when the portal stream omitted its logical
+        // position. xdg-desktop-portal-kde does not populate the ScreenCast
+        // stream position the way Mutter does, so `source_logical_rect` is None
+        // here; `apply_model_capture` then recovers it from the captured frame's
+        // pixel size against the display topology, so a targeted crop still
+        // resolves. It only errors when the streamed monitor genuinely cannot
+        // satisfy the requested target (e.g. the target lives on a different
+        // monitor than the one the single-monitor RemoteDesktop session streams).
         match portal.capture_frame(snapshot_id).await {
             Ok(frame) => {
                 if let Some(capture_info) = capture.as_mut() {
@@ -129,16 +131,6 @@ pub(crate) async fn plan_capture(
                 capture_error = Some(error);
             }
         }
-    } else if should_capture_screen
-        && environment.capture_backend == CaptureBackendKind::PortalPipeWire
-        && environment.input_backend == InputBackendKind::PortalRemoteDesktop
-        && portal_session_error.is_none()
-        && region_target.is_some()
-    {
-        capture_error = Some(BackendError::new(
-            BackendErrorCode::CaptureSourceGeometryMissing,
-            CAPTURE_SOURCE_GEOMETRY_MISSING_MESSAGE,
-        ));
     } else if should_attempt_x11_capture(capture_screen, environment) {
         match x11_capture::capture_still(snapshot_id).await {
             Ok(frame) => {
