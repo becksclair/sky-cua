@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -166,6 +166,7 @@ impl SystemCursorAdapter {
             qdbus: "qdbus6".to_string(),
             hidden,
             reason: "KWin effect cursor shim is loaded for tests".to_string(),
+            last_show: None,
         })
     }
 }
@@ -212,6 +213,7 @@ pub struct KwinEffectSystemCursorAdapter {
     qdbus: String,
     hidden: bool,
     reason: String,
+    last_show: Option<Instant>,
 }
 
 #[cfg(target_os = "linux")]
@@ -219,6 +221,12 @@ impl KwinEffectSystemCursorAdapter {
     const KWIN_SERVICE: &str = "org.kde.KWin";
     const KWIN_AGENT_CURSOR_PATH: &str = "/com/skycua/AgentCursor";
     const KWIN_AGENT_CURSOR_INTERFACE: &str = "com.skycua.AgentCursor";
+    // Re-affirm `Show` at least this often while hidden. The effect's idle-hide
+    // failsafe restores the cursor after 8s without shim activity (so a dead
+    // host can't strand a hidden cursor); re-affirming on a shorter cadence keeps
+    // the effect — and its pointer-position polling that drives the agent-cursor
+    // follow — alive for the whole session the overlay is up.
+    const REAFFIRM_INTERVAL: Duration = Duration::from_secs(4);
 
     #[must_use]
     pub fn probe() -> Option<Self> {
@@ -227,6 +235,7 @@ impl KwinEffectSystemCursorAdapter {
             qdbus,
             hidden: false,
             reason: "KWin effect cursor shim is loaded through com.skycua.AgentCursor".to_string(),
+            last_show: None,
         };
         adapter
             .call_agent_cursor_method("BuildId", std::iter::empty::<&str>())
@@ -256,11 +265,25 @@ impl KwinEffectSystemCursorAdapter {
 
     pub fn set_hidden(&mut self, hidden: bool) -> Result<()> {
         if self.hidden == hidden {
+            // Already in the requested state. While hidden, the host calls this
+            // every render tick; turn those no-op calls into a heartbeat that
+            // re-affirms `Show` before the effect's idle-hide failsafe fires, so
+            // the effect keeps polling the pointer and the agent-cursor follow
+            // does not stall a few seconds into a session.
+            if hidden
+                && self
+                    .last_show
+                    .is_none_or(|at| at.elapsed() >= Self::REAFFIRM_INTERVAL)
+            {
+                self.call_agent_cursor_method("Show", std::iter::empty::<&str>())?;
+                self.last_show = Some(Instant::now());
+            }
             return Ok(());
         }
         let method = if hidden { "Show" } else { "Hide" };
         self.call_agent_cursor_method(method, std::iter::empty::<&str>())?;
         self.hidden = hidden;
+        self.last_show = hidden.then(Instant::now);
         Ok(())
     }
 

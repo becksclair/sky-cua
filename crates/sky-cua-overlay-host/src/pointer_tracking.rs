@@ -273,7 +273,19 @@ fn pointer_tracking_debug(args: std::fmt::Arguments<'_>) {
 }
 
 fn spawn_gdbus_pointer_monitor() -> std::io::Result<Child> {
-    Command::new("gdbus")
+    // Run gdbus under `stdbuf -oL` to force line-buffered stdout. gdbus's stdout
+    // is a pipe here, so libc block-buffers it (~4 KiB) by default; PointerMoved
+    // signals would then reach the overlay host in delayed bursts instead of as
+    // they happen, which the user sees as agent-cursor follow lag. Fall back to
+    // bare gdbus when stdbuf is unavailable.
+    let mut command = if command_on_path("stdbuf") {
+        let mut command = Command::new("stdbuf");
+        command.arg("-oL").arg("gdbus");
+        command
+    } else {
+        Command::new("gdbus")
+    };
+    command
         .arg("monitor")
         .arg("--session")
         .arg("--dest")
@@ -284,6 +296,11 @@ fn spawn_gdbus_pointer_monitor() -> std::io::Result<Child> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
+}
+
+fn command_on_path(name: &str) -> bool {
+    env::var_os("PATH")
+        .is_some_and(|paths| env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
 }
 
 fn parse_gdbus_pointer_moved_line(line: &str) -> Option<(f64, f64)> {

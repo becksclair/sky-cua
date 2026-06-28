@@ -48,6 +48,7 @@ private:
     void publishPointerPosition(const QPointF &position);
 
     void armIdleHideTimer();
+    void updatePointerPolling();
     void syncStateJsonVisibility();
 
     KWinSystemCursorAdapter m_systemCursor;
@@ -55,6 +56,12 @@ private:
     // Failsafe: when the overlay host dies without hiding the cursor, this
     // timer restores the user's cursor on its own.
     QTimer m_idleHideTimer;
+    // While the shim is active, poll the live cursor position and emit
+    // PointerMoved on change so the overlay host can track the user's physical
+    // pointer. KWin 6.7 removed startMousePolling()/mouseChanged, and passive
+    // pointerMotion() is not delivered to non-grabbing effects, so polling
+    // cursorPos() is the only way to observe motion without seizing the pointer.
+    QTimer m_pointerPollTimer;
     // Start visible=false: autoloading with Plasma must not hide the user's
     // cursor until the layer-shell overlay host explicitly activates the shim.
     bool m_cursorVisible = false;

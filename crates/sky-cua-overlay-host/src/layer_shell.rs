@@ -220,6 +220,26 @@ impl LayerShellOverlayBackend {
         }
     }
 
+    /// Tick cadence matched to the fastest connected display's current mode, so
+    /// the agent-cursor follow updates at the panel's refresh rate (e.g. 4.2 ms
+    /// on a 240 Hz screen) instead of a fixed 60 Hz. Clamped to [60, 240] Hz and
+    /// defaulting to 60 Hz when no refresh rate is advertised.
+    pub fn pointer_tick_interval(&self) -> std::time::Duration {
+        let max_mhz = self
+            .app
+            .output_state
+            .outputs()
+            .filter_map(|output| self.app.output_state.info(&output))
+            .flat_map(|info| info.modes)
+            .filter(|mode| mode.current && mode.refresh_rate > 0)
+            .map(|mode| mode.refresh_rate)
+            .max();
+        let hz = max_mhz
+            .map(|mhz| (f64::from(mhz) / 1000.0).clamp(60.0, 240.0))
+            .unwrap_or(60.0);
+        std::time::Duration::from_secs_f64(1.0 / hz)
+    }
+
     fn prime(&mut self) -> Result<()> {
         for _ in 0..INITIAL_ROUNDTRIPS {
             self.event_queue

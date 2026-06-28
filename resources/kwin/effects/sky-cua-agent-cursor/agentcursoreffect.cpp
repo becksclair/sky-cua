@@ -25,6 +25,12 @@ constexpr auto DBusInterface = "com.skycua.AgentCursor";
 // The shim must never hide the user's compositor cursor forever if the overlay
 // host or service dies after showing the layer-shell visual overlay.
 constexpr int IdleHideTimeoutMs = 8000;
+// ~250 Hz cursor-position poll while the shim is active, so the host always has
+// a fresh position to render at high-refresh panels (it consumes at the display
+// rate). publishPointerPosition() dedupes sub-pixel deltas, so a stationary
+// cursor emits nothing and the timer only produces signals while the pointer
+// actually moves.
+constexpr int PointerPollIntervalMs = 4;
 
 } // namespace
 
@@ -40,6 +46,12 @@ SkyCuaAgentCursorEffect::SkyCuaAgentCursorEffect()
         m_hasLastPointerPosition = false;
         syncStateJsonVisibility();
         restoreSystemCursor();
+        updatePointerPolling();
+    });
+
+    m_pointerPollTimer.setInterval(PointerPollIntervalMs);
+    QObject::connect(&m_pointerPollTimer, &QTimer::timeout, this, [this] {
+        publishPointerPosition(effects->cursorPos());
     });
 
 #ifndef SKY_CUA_KWIN_EFFECT_HAS_POINTER_MOTION
@@ -111,6 +123,7 @@ bool SkyCuaAgentCursorEffect::SetCursorState(const QString &stateJson)
     m_stateJson = QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact));
     applySystemCursorState();
     armIdleHideTimer();
+    updatePointerPolling();
     publishPointerPosition(effects->cursorPos());
     return true;
 }
@@ -122,6 +135,7 @@ void SkyCuaAgentCursorEffect::Hide()
     syncStateJsonVisibility();
     m_idleHideTimer.stop();
     restoreSystemCursor();
+    updatePointerPolling();
 }
 
 void SkyCuaAgentCursorEffect::Show()
@@ -130,6 +144,7 @@ void SkyCuaAgentCursorEffect::Show()
     syncStateJsonVisibility();
     armIdleHideTimer();
     applySystemCursorState();
+    updatePointerPolling();
     publishPointerPosition(effects->cursorPos());
 }
 
@@ -181,6 +196,17 @@ void SkyCuaAgentCursorEffect::armIdleHideTimer()
         m_idleHideTimer.start();
     } else {
         m_idleHideTimer.stop();
+    }
+}
+
+void SkyCuaAgentCursorEffect::updatePointerPolling()
+{
+    if (m_cursorVisible) {
+        if (!m_pointerPollTimer.isActive()) {
+            m_pointerPollTimer.start();
+        }
+    } else {
+        m_pointerPollTimer.stop();
     }
 }
 

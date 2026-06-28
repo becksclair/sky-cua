@@ -532,6 +532,19 @@ impl OverlayHostBackend {
             Self::LayerShell(backend) => backend.tick(),
         }
     }
+
+    /// Cadence the host event loop should tick at, matched to the fastest
+    /// connected display so the agent-cursor follow renders at the panel's
+    /// refresh rate instead of a fixed 60 Hz. Falls back to 60 Hz when no
+    /// display refresh rate is known.
+    #[must_use]
+    pub fn pointer_tick_interval(&self) -> std::time::Duration {
+        match self {
+            Self::Noop(_backend) => std::time::Duration::from_millis(16),
+            #[cfg(target_os = "linux")]
+            Self::LayerShell(backend) => backend.pointer_tick_interval(),
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

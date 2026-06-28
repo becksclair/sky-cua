@@ -23,7 +23,8 @@ const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(100);
 
-const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(16);
+// Initial loop cadence before the first display-refresh-matched interval is
+// computed; subsequent ticks use OverlayHostBackend::pointer_tick_interval().
 #[cfg(unix)]
 const SOCKET_LOOP_TICK_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -235,7 +236,7 @@ fn run_unix_socket_event_loop(listener: UnixListener) -> Result<()> {
             Timer::from_duration(SOCKET_LOOP_TICK_INTERVAL),
             |_deadline, _timer, state| {
                 state.backend.tick();
-                TimeoutAction::ToDuration(SOCKET_LOOP_TICK_INTERVAL)
+                TimeoutAction::ToDuration(state.backend.pointer_tick_interval())
             },
         )
         .map_err(|error| {
@@ -316,7 +317,7 @@ fn run_accept_loop<S: ClientStream>(
             Ok(stream) => stream,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 backend.tick();
-                std::thread::sleep(ACCEPT_POLL_INTERVAL);
+                std::thread::sleep(backend.pointer_tick_interval());
                 continue;
             }
             Err(error) => {
