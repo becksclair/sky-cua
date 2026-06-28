@@ -291,6 +291,7 @@ def main() -> int:
                 sessions_dir=sessions_dir,
                 load_extension=False,
                 initial_url="chrome://extensions",
+                stderr_path=profile_dir / "chrome_stderr.log",
             )
             stack.callback(terminate_browser, proc, args.keep_browser_open)
             port = wait_for_devtools_port(profile_dir, proc)
@@ -360,10 +361,14 @@ def main() -> int:
     finally:
         # Surface Chrome's verbose log (debugger/devtools/extension events) at the
         # artifact root so the host dispatch can pull it alongside the transcript.
-        chrome_log = artifact_dir / "profile" / "chrome_debug.log"
-        if chrome_log.exists():
-            with contextlib.suppress(OSError):
-                shutil.copy2(chrome_log, artifact_dir / "chrome-debug.log")
+        for src_name, dst_name in (
+            ("chrome_debug.log", "chrome-debug.log"),
+            ("chrome_stderr.log", "chrome-stderr.log"),
+        ):
+            src = artifact_dir / "profile" / src_name
+            if src.exists():
+                with contextlib.suppress(OSError):
+                    shutil.copy2(src, artifact_dir / dst_name)
         # Always write the coverage summary + ready marker so the host judge can run
         # and triage even when this deterministic gate failed.
         (artifact_dir / "coverage-summary.json").write_text(

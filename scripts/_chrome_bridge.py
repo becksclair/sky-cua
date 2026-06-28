@@ -227,6 +227,7 @@ def launch_browser(
     sessions_dir: Path,
     load_extension: bool = True,
     initial_url: str = "about:blank",
+    stderr_path: Path | None = None,
 ) -> subprocess.Popen[str]:
     env = os.environ.copy()
     env["CODEX_BROWSER_USE_SOCKET_DIR"] = str(socket_dir)
@@ -268,11 +269,18 @@ def launch_browser(
         args.append(f"--load-extension={extension_dir}")
     args.append("--ozone-platform=wayland")
     args.append(initial_url)
+    # Chrome inherits its stderr to any native-messaging host it spawns, so the
+    # sky-cua-chrome-host trace (SKY_CUA_CHROME_HOST_TRACE) lands here. Redirect it
+    # to a file when a path is given so the relay trace is a retrievable artifact;
+    # otherwise keep the pipe that terminate_browser drains for its stderr tail.
+    stderr: int | object = subprocess.PIPE
+    if stderr_path is not None:
+        stderr = open(stderr_path, "w", encoding="utf-8")  # noqa: SIM115 (child owns the fd)
     return subprocess.Popen(
         args,
         env=env,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=stderr,
         text=True,
     )
 
