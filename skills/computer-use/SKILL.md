@@ -17,23 +17,39 @@ coordinates across them.
   scope `element_index` lookups but cannot translate screenshot pixels. Without
   `snapshot_id`, x/y are live screen coordinates.
 - `capture_desktop` captures exactly one screen, never the whole multi-monitor
-  desktop, and defaults to the main display. Call it with no selector for the
-  normal case. A window selector (`window_id`, `pid`, `app_id`, `wm_class`,
+  desktop, and with no selector defaults to the main display. When driving or
+  verifying a specific application, target it explicitly instead of relying on
+  the default: a window selector (`window_id`, `pid`, `app_id`, `wm_class`,
   `title`, terminal selectors) activates, focus-verifies, and crops to that
-  window. A display selector (`display_id`, `display_name`, `display_index`)
-  captures one specific monitor and is only needed when the target is on a
-  non-main display. Every call resolves to one screen; there is no all-display
-  or virtual-desktop capture.
+  window, and a display selector (`display_id`, `display_name`,
+  `display_index`) captures one specific monitor. The default no-selector
+  capture only returns the main display, so an application on a secondary
+  monitor will not appear in it — identify the target window first with
+  `list_resources(surface="desktop", resource="windows")` and capture it by
+  selector. Every call resolves to one screen; there is no all-display or
+  virtual-desktop capture.
+- Resolve which monitor a window is on before you screenshot it.
+  `list_resources(surface="desktop", resource="windows")` returns each window's
+  `display` — the monitor's `display_id`, `name`, `index`, and `primary` flag —
+  plus `display_intersections` when a window straddles monitors;
+  `observe(surface="desktop")` carries a `display` only for the single focused
+  app (`focused_app.display`), not a per-window map. Read that first, then either
+  capture the app by window selector (it crops to that window on its own monitor,
+  whichever one it is) or pass its `display.display_id` as a display selector to
+  grab that whole monitor. Never assume the app is on the primary display: a
+  window whose `display.primary` is `false` is invisible to the default
+  no-selector capture.
 - Always pass the `snapshot_id` returned by the specific observation or capture
   call that produced the image for screenshot-based actions,
   especially with cropped windows, non-primary displays, scaling, or negative
-  origins. If a targeted `capture_desktop` fails with
-  `CaptureSourceGeometryMissing` or `targeted screenshot requires capture
-  source geometry`, the issue is missing portal stream geometry, not the
-  capture scope: refresh the relevant window/display state (re-observe or
-  `doctor`) and retry the same targeted capture once. There is no broader
-  whole-desktop capture to fall back to; widening the scope does not escape
-  this error.
+  origins. Targeted crops resolve their geometry from the display topology when
+  the compositor's portal omits stream position (as KDE/KWin does), so a missing
+  stream rect normally self-heals. A persistent `CaptureSourceGeometryMissing`
+  or `targeted screenshot requires capture source geometry` means the topology
+  could not place the captured frame: refresh the relevant window/display state
+  (re-observe or `doctor`) and retry the same targeted capture once. There is no
+  broader whole-desktop capture to fall back to; widening the scope does not
+  escape this error.
 - `environment.displays` lists display ids, primary status, logical rects,
   scale, and backend; windows/focused apps include `display` when known.
 
