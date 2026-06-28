@@ -9,6 +9,20 @@ For web-page content, use `browser-use` when `browser_*` tools are available.
 Browser CSS pixels and desktop screenshot pixels are unrelated; never reuse
 coordinates across them.
 
+## This skill is self-contained
+
+Every action here is a sky-cua MCP tool advertised by `tools/list`: discovery
+(`list_resources`, `observe`, `doctor`), capture (`capture_desktop`), and the
+action verbs (`desktop_pointer`, `desktop_keyboard`, `desktop_action`,
+`desktop_semantic`, `desktop_toggle`, `desktop_set_value`, `desktop_scroll`,
+`setup_desktop`). `desktop_pointer` (click/move/drag) and `desktop_keyboard`
+(type/press keys) ARE the click and type actions — there is no separate input
+tool to unlock. Call these tools directly: sky-cua needs no access grant, so do
+not call `request_access`, and never substitute a different built-in
+`computer-use` server. If the action verbs are not visible in `tools/list`,
+the sky-cua MCP connection is stale — reconnect or restart it; do not fall back
+to another server.
+
 ## Coordinates
 
 - `observe(surface="desktop")` and `capture_desktop` return `snapshot_id`.
