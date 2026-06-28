@@ -245,7 +245,15 @@ impl OverlayController {
                     .send_host_message(OverlayHostMessageKind::Hide, None, None, None)
                     .diagnostics;
             }
-            return Vec::new();
+            // A successful non-pointer action (typing, scrolling, semantic
+            // activation) still means the agent is acting on the desktop. Assert
+            // the ambient "agent in control" glow without a cursor point: the edge
+            // glow is gated on the overlay holding a visible state, decoupled from
+            // cursor presence, so this lights it for keyboard/semantic activity.
+            // The idle watchdog clears it after OVERLAY_IDLE_CLEANUP_MS.
+            let status = self.mark_in_control(request);
+            outcome.agent_cursor = status.state.clone();
+            return status.diagnostics;
         };
         let (mut diagnostics, state) = if let Some(prepared_state) =
             self.prepared_state_for_success(&state, prepared_action_sequence)
@@ -260,6 +268,38 @@ impl OverlayController {
             diagnostics.extend(self.send_gesture_event(gesture));
         }
         diagnostics
+    }
+
+    /// Assert (or refresh) the ambient "agent in control" glow: a visible overlay
+    /// state with no cursor point. The desktop edge glow is gated on the overlay
+    /// holding a visible state (deliberately decoupled from per-surface cursor
+    /// presence), so this lights it while the agent acts via keyboard, scroll, or
+    /// semantic actions even though the pointer never moves. It is the desktop
+    /// analogue of the phone companion's session-scoped `glowActive`; the idle
+    /// watchdog releases it after OVERLAY_IDLE_CLEANUP_MS of inactivity.
+    fn mark_in_control(&mut self, request: &ActionRequest) -> AgentCursorStatus {
+        // Preserve any cursor point the overlay is already showing — the user's
+        // tracked physical pointer (kept current by the host's
+        // `follow_tracked_pointer`) or a prior action target — so the glyph stays
+        // visible at the last known position while the agent acts, instead of
+        // blanking to a glow-only state on every keystroke. The host hides the
+        // real system cursor whenever the overlay holds a visible state, so a
+        // persistent glyph is what keeps the user able to see where their pointer
+        // is. Only the glow (a visible state) is asserted unconditionally.
+        let (model_point, native_point) = self
+            .state
+            .as_ref()
+            .map(|state| (state.model_point.clone(), state.native_point.clone()))
+            .unwrap_or((None, None));
+        self.set_state(AgentCursorState {
+            visible: true,
+            sequence: 0,
+            model_point,
+            native_point,
+            snapshot_id: request.snapshot_id.clone(),
+            source_action: Some(request.action.clone()),
+            updated_at_ms: 0,
+        })
     }
 
     /// Begin the visual part of a pointer action before backend input dispatch.
@@ -1228,6 +1268,83 @@ mod tests {
         assert_eq!(state.sequence, 1);
         assert_eq!(controller.state().expect("controller state").sequence, 1);
         assert_eq!(controller.recent_gesture_ids.len(), 1);
+    }
+
+    #[test]
+    fn update_from_action_lights_in_control_glow_for_non_pointer_action() {
+        let mut controller = OverlayController::new_for_tests();
+        let request = action_request(ActionName::TypeText, serde_json::json!({"text": "hi"}));
+        let mut outcome = ActionOutcome {
+            success: true,
+            message: "ok".to_string(),
+            code: "Ok".to_string(),
+            diagnostics: Vec::new(),
+            agent_cursor: None,
+        };
+
+        controller.update_from_action(&request, &mut outcome);
+
+        let state = controller
+            .state()
+            .expect("non-pointer action should hold the in-control glow state");
+        assert!(state.visible, "in-control glow state must be visible");
+        assert!(
+            state.model_point.is_none() && state.native_point.is_none(),
+            "the in-control glow is decoupled from cursor presence: no point"
+        );
+        assert_eq!(state.source_action, Some(ActionName::TypeText));
+        assert_eq!(
+            outcome.agent_cursor,
+            Some(state),
+            "the glow state should be attached to the successful outcome"
+        );
+    }
+
+    #[test]
+    fn in_control_glow_preserves_existing_cursor_point_so_glyph_stays_visible() {
+        let mut controller = OverlayController::new_for_tests();
+        // Stand in for the host having placed the glyph (a prior action or the
+        // user's tracked physical pointer).
+        controller.set_state(synthetic_state(100, 200));
+        let request = action_request(ActionName::TypeText, serde_json::json!({"text": "x"}));
+        let mut outcome = ActionOutcome {
+            success: true,
+            message: "ok".to_string(),
+            code: "Ok".to_string(),
+            diagnostics: Vec::new(),
+            agent_cursor: None,
+        };
+
+        controller.update_from_action(&request, &mut outcome);
+
+        let state = controller.state().expect("in-control state");
+        assert!(state.visible, "glow stays on");
+        let point = state
+            .model_point
+            .expect("the glyph's prior point must be preserved, not blanked");
+        assert!((point.x - 100.0).abs() < f64::EPSILON && (point.y - 200.0).abs() < f64::EPSILON);
+        assert_eq!(state.source_action, Some(ActionName::TypeText));
+    }
+
+    #[test]
+    fn update_from_action_does_not_light_glow_for_failed_non_pointer_action() {
+        let mut controller = OverlayController::new_for_tests();
+        let request = action_request(ActionName::TypeText, serde_json::json!({"text": "hi"}));
+        let mut outcome = ActionOutcome {
+            success: false,
+            message: "nope".to_string(),
+            code: "Error".to_string(),
+            diagnostics: Vec::new(),
+            agent_cursor: None,
+        };
+
+        controller.update_from_action(&request, &mut outcome);
+
+        assert!(
+            controller.state().is_none(),
+            "a failed action must not assert the in-control glow"
+        );
+        assert!(outcome.agent_cursor.is_none());
     }
 
     #[test]
