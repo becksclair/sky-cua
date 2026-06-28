@@ -114,16 +114,12 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
         {
             "name": "status",
             "inputSchema": {
-                "allOf": [
-                    {
-                        "if": {"properties": {"component": {"const": "phone"}}},
-                        "then": {"properties": {"refresh_devices": {"type": "boolean"}}},
-                    },
-                    {
-                        "if": {"properties": {"component": {"const": "phone_companion"}}},
-                        "then": {"properties": {"session_id": {"type": "string"}}},
-                    },
-                ]
+                "type": "object",
+                "properties": {
+                    "component": {"type": "string"},
+                    "refresh_devices": {"type": "boolean"},
+                    "session_id": {"type": "string"},
+                },
             },
         },
         {
@@ -161,87 +157,52 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
             "name": "desktop_pointer",
             "description": "do not call with only operation",
             "inputSchema": {
-                "allOf": [
-                    {
-                        "if": {"properties": {"operation": {"const": "click"}}},
-                        "then": {"anyOf": [{"required": ["x", "y"]}]},
-                    }
-                ]
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "x": {"type": "number"},
+                    "y": {"type": "number"},
+                },
             },
         },
         {
             "name": "desktop_action",
             "description": "do not call with only operation",
             "inputSchema": {
-                "allOf": [
-                    {
-                        "if": {"properties": {"operation": {"const": "activate"}}},
-                        "then": {"anyOf": [{"required": ["snapshot_id", "element_index"]}]},
-                    },
-                    {
-                        "if": {"properties": {"operation": {"const": "perform_action"}}},
-                        "then": {
-                            "allOf": [
-                                {"anyOf": [{"required": ["snapshot_id", "element_index"]}]},
-                                {"anyOf": [{"required": ["action_name"]}]},
-                            ]
-                        },
-                    },
-                ]
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "element_index": {"type": "integer"},
+                    "action_name": {"type": "string"},
+                },
             },
         },
         {
             "name": "desktop_keyboard",
             "inputSchema": {
-                "allOf": [
-                    {
-                        "if": {"properties": {"operation": {"const": "press_key"}}},
-                        "then": {"required": ["key"]},
-                    },
-                    {
-                        "if": {"properties": {"operation": {"const": "type_text"}}},
-                        "then": {"required": ["text"]},
-                    },
-                ]
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "key": {"type": "string"},
+                    "text": {"type": "string"},
+                },
             },
         },
         {
             "name": "phone_pointer",
             "inputSchema": {
-                "allOf": [
-                    {
-                        "if": {"properties": {"operation": {"const": "tap"}}},
-                        "then": {
-                            "required": ["session_id", "x", "y"],
-                            "anyOf": [
-                                {"required": ["phone_snapshot_id"]},
-                                {
-                                    "required": ["use_device_coordinates"],
-                                    "properties": {"use_device_coordinates": {"const": True}},
-                                },
-                            ],
-                        },
-                    },
-                    {
-                        "if": {"properties": {"operation": {"const": "swipe"}}},
-                        "then": {
-                            "required": [
-                                "session_id",
-                                "start_x",
-                                "start_y",
-                                "end_x",
-                                "end_y",
-                            ],
-                            "anyOf": [
-                                {"required": ["phone_snapshot_id"]},
-                                {
-                                    "required": ["use_device_coordinates"],
-                                    "properties": {"use_device_coordinates": {"const": True}},
-                                },
-                            ],
-                        },
-                    },
-                ]
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "session_id": {"type": "string"},
+                    "x": {"type": "number"},
+                    "y": {"type": "number"},
+                    "start_x": {"type": "number"},
+                    "start_y": {"type": "number"},
+                    "end_x": {"type": "number"},
+                    "end_y": {"type": "number"},
+                    "phone_snapshot_id": {"type": "string"},
+                },
             },
         },
         {
@@ -255,19 +216,20 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
         {
             "name": "phone_connection",
             "inputSchema": {
-                "properties": {"backend": {"enum": ["auto", "adb", "companion", "scrcpy"]}},
-                "allOf": [
-                    {
-                        "if": {"properties": {"operation": {"const": "disconnect"}}},
-                        "then": {"required": ["session_id"]},
-                    }
-                ],
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "session_id": {"type": "string"},
+                    "backend": {"enum": ["auto", "adb", "companion", "scrcpy"]},
+                },
             },
         },
         {
             "name": "capture_desktop",
             "inputSchema": {
+                "type": "object",
                 "properties": {
+                    "window_id": {"type": "string"},
                     "display_id": {
                         "anyOf": [
                             {"type": "string", "minLength": 1},
@@ -283,16 +245,6 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
                         ]
                     },
                 },
-                "allOf": [
-                    {
-                        "not": {
-                            "allOf": [
-                                {"anyOf": [{"required": ["window_id"]}]},
-                                {"anyOf": [{"required": ["display_id"]}]},
-                            ]
-                        }
-                    },
-                ],
             },
         },
         {
@@ -330,8 +282,30 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
     )
     vague_pointer[pointer_index] = {
         "name": "desktop_pointer",
-        "description": "Click things",
-        "inputSchema": {"type": "object"},
+        "description": "do not call with only operation",
+        "inputSchema": {"type": "object", "properties": {"operation": {"type": "string"}}},
     }
     with pytest.raises(probe.ProbeFailure, match="desktop_pointer"):
         probe.require_grouped_action_shape(vague_pointer)
+
+
+def test_require_no_top_level_composition_rejects_advertised_composition() -> None:
+    probe.require_no_top_level_composition(
+        [
+            {"name": "status", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "doctor", "inputSchema": {"type": "object"}},
+        ]
+    )
+
+    with pytest.raises(probe.ProbeFailure, match=r"desktop_pointer.*allOf"):
+        probe.require_no_top_level_composition(
+            [
+                {
+                    "name": "desktop_pointer",
+                    "inputSchema": {
+                        "type": "object",
+                        "allOf": [{"required": ["x", "y"]}],
+                    },
+                }
+            ]
+        )

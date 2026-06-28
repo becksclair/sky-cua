@@ -110,6 +110,26 @@ def require_exact_grouped_tools(names: set[str]) -> None:
         raise ProbeFailure("tools/list does not match grouped surface: " + " ".join(details))
 
 
+def require_no_top_level_composition(tools: Iterable[dict[str, Any]]) -> None:
+    """Every advertised inputSchema must be flat at the top level.
+
+    Top-level allOf/oneOf/anyOf/not on an advertised inputSchema is exactly what
+    makes the Anthropic Messages API / Claude Code drop the tool. The rich
+    per-branch constraints live in a separate, non-advertised validation schema
+    and stay enforced at runtime.
+    """
+    for tool in tools:
+        name = tool.get("name")
+        if not isinstance(name, str):
+            continue
+        schema = tool.get("inputSchema")
+        if not isinstance(schema, dict):
+            continue
+        for keyword in ("allOf", "oneOf", "anyOf", "not"):
+            if keyword in schema:
+                raise ProbeFailure(f"{name} inputSchema must not advertise top-level {keyword}")
+
+
 def require_grouped_action_shape(tools: Iterable[dict[str, Any]]) -> None:
     by_name: dict[str, dict[str, Any]] = {}
     for tool in tools:
@@ -130,35 +150,37 @@ def require_grouped_action_shape(tools: Iterable[dict[str, Any]]) -> None:
     pointer_description = str(by_name["desktop_pointer"].get("description", ""))
     if "do not call with only operation" not in pointer_description:
         raise ProbeFailure("desktop_pointer description must reject operation-only calls")
-    if not _all_of_has_conditional_required(pointer, "click", ["x", "y"]):
-        raise ProbeFailure("desktop_pointer click branch must require coordinates or selector")
+    pointer_props = _properties(pointer)
+    for field in ("x", "y"):
+        if field not in pointer_props:
+            raise ProbeFailure(f"desktop_pointer must advertise {field} coordinate")
 
     action = _tool_schema(by_name, "desktop_action")
     action_description = str(by_name["desktop_action"].get("description", ""))
     if "do not call with only operation" not in action_description:
         raise ProbeFailure("desktop_action description must reject operation-only calls")
-    if not _schema_has_any_required(
-        action, ["element_index", "element_identifier", "name", "text"]
+    action_props = _properties(action)
+    if not any(
+        field in action_props
+        for field in ("element_index", "element_identifier", "name", "action_name", "text")
     ):
-        raise ProbeFailure("desktop_action must require a concrete selector")
+        raise ProbeFailure("desktop_action must advertise a concrete selector field")
 
     keyboard = _tool_schema(by_name, "desktop_keyboard")
-    if not _all_of_has_then_required(keyboard, "press_key", ["key"]):
-        raise ProbeFailure("desktop_keyboard press_key branch must require key")
-    if not _all_of_has_then_required(keyboard, "type_text", ["text"]):
-        raise ProbeFailure("desktop_keyboard type_text branch must require text")
+    keyboard_props = _properties(keyboard)
+    for field in ("key", "text"):
+        if field not in keyboard_props:
+            raise ProbeFailure(f"desktop_keyboard must advertise {field}")
 
     require_hardened_schema_shape(by_name)
 
 
 def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
-    status = _tool_schema(by_name, "status")
-    phone_status = _conditional_then_properties(status, "component", "phone")
-    if "refresh_devices" not in phone_status:
-        raise ProbeFailure("status phone branch must expose refresh_devices")
-    companion_status = _conditional_then_properties(status, "component", "phone_companion")
-    if "session_id" not in companion_status:
-        raise ProbeFailure("status phone_companion branch must expose session_id")
+    status_props = _properties(_tool_schema(by_name, "status"))
+    if "refresh_devices" not in status_props:
+        raise ProbeFailure("status must expose refresh_devices")
+    if "session_id" not in status_props:
+        raise ProbeFailure("status must expose session_id")
 
     browser_move = _tool_schema(by_name, "browser_move_mouse")
     browser_input = _tool_schema(by_name, "browser_input")
@@ -177,17 +199,19 @@ def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
             "browser_open URL schema must allow only anchored HTTP/about:blank or absent sentinels"
         )
 
-    pointer = _tool_schema(by_name, "phone_pointer")
-    if not _all_of_has_then_required(pointer, "tap", ["session_id", "x", "y"]):
-        raise ProbeFailure("phone_pointer tap must require session_id and tap coordinates")
-    if not _conditional_then_has_snapshot_or_raw(pointer, "tap"):
-        raise ProbeFailure("phone_pointer tap must require phone_snapshot_id or raw coordinates")
-    if not _all_of_has_then_required(
-        pointer, "swipe", ["session_id", "start_x", "start_y", "end_x", "end_y"]
+    phone_pointer_props = _properties(_tool_schema(by_name, "phone_pointer"))
+    for field in (
+        "session_id",
+        "x",
+        "y",
+        "start_x",
+        "start_y",
+        "end_x",
+        "end_y",
+        "phone_snapshot_id",
     ):
-        raise ProbeFailure("phone_pointer swipe must require session_id and swipe coordinates")
-    if not _conditional_then_has_snapshot_or_raw(pointer, "swipe"):
-        raise ProbeFailure("phone_pointer swipe must require phone_snapshot_id or raw coordinates")
+        if field not in phone_pointer_props:
+            raise ProbeFailure(f"phone_pointer must advertise {field}")
 
     observe_backend = _properties(_tool_schema(by_name, "observe")).get("backend", {})
     capture_backend = _properties(_tool_schema(by_name, "capture_screen")).get("backend", {})
@@ -199,18 +223,17 @@ def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
     connect_enum = _schema_enum_values(connect_backend)
     if not isinstance(connect_enum, list) or "none" in connect_enum:
         raise ProbeFailure("phone_connection backend request enum must exclude none")
-    if not _all_of_has_then_required(
-        _tool_schema(by_name, "phone_connection"), "disconnect", ["session_id"]
-    ):
-        raise ProbeFailure("phone_connection disconnect must require session_id")
+    if "session_id" not in _properties(_tool_schema(by_name, "phone_connection")):
+        raise ProbeFailure("phone_connection must advertise session_id")
 
     desktop_capture = _tool_schema(by_name, "capture_desktop")
     desktop_capture_props = _properties(desktop_capture)
     for name in ["display_id", "display_name"]:
         if not _string_schema_branch_has_min_length(desktop_capture_props.get(name), 1):
             raise ProbeFailure(f"capture_desktop {name} must reject empty strings")
-    if not _schema_contains_not_anyof_required(desktop_capture, "window_id", "display_id"):
-        raise ProbeFailure("capture_desktop must reject mixed window/display selectors")
+    for name in ["window_id", "display_id"]:
+        if name not in desktop_capture_props:
+            raise ProbeFailure(f"capture_desktop must advertise {name} selector")
     if "capture_all_displays" in desktop_capture_props:
         raise ProbeFailure("capture_desktop must not advertise capture_all_displays")
 
@@ -249,94 +272,10 @@ def _tool_schema(by_name: dict[str, dict[str, Any]], name: str) -> dict[str, Any
     return schema
 
 
-def _all_of(schema: dict[str, Any]) -> list[dict[str, Any]]:
-    value = schema.get("allOf")
-    if not isinstance(value, list):
-        return []
-    return [entry for entry in value if isinstance(entry, dict)]
-
-
 def _properties(schema: dict[str, Any]) -> dict[str, Any]:
     properties = schema.get("properties")
     if isinstance(properties, dict):
         return properties
-    return {}
-
-
-def _all_of_has_conditional_required(
-    schema: dict[str, Any], operation: str, required: list[str]
-) -> bool:
-    return any(
-        _conditional_operation(entry) == operation
-        and _schema_has_any_required(entry.get("then"), required)
-        for entry in _all_of(schema)
-    )
-
-
-def _all_of_has_then_required(schema: dict[str, Any], operation: str, required: list[str]) -> bool:
-    return any(
-        _conditional_operation(entry) == operation
-        and isinstance(entry.get("then"), dict)
-        and _required_contains(entry["then"], required)
-        for entry in _all_of(schema)
-    )
-
-
-def _required_contains(schema: dict[str, Any], required: list[str]) -> bool:
-    actual = schema.get("required")
-    return isinstance(actual, list) and set(required).issubset(actual)
-
-
-def _conditional_then_has_snapshot_or_raw(schema: dict[str, Any], operation: str) -> bool:
-    for entry in _all_of(schema):
-        if _conditional_operation(entry) != operation:
-            continue
-        then = entry.get("then")
-        if not isinstance(then, dict):
-            return False
-        any_of = then.get("anyOf")
-        if not isinstance(any_of, list):
-            return False
-        has_snapshot = any(
-            isinstance(branch, dict) and branch.get("required") == ["phone_snapshot_id"]
-            for branch in any_of
-        )
-        has_raw = any(
-            isinstance(branch, dict)
-            and branch.get("required") == ["use_device_coordinates"]
-            and _properties(branch).get("use_device_coordinates", {}).get("const") is True
-            for branch in any_of
-        )
-        return has_snapshot and has_raw
-    return False
-
-
-def _conditional_operation(schema: dict[str, Any]) -> str | None:
-    return _conditional_const(schema, "operation")
-
-
-def _conditional_const(schema: dict[str, Any], field: str) -> str | None:
-    condition = schema.get("if")
-    if not isinstance(condition, dict):
-        return None
-    properties = condition.get("properties")
-    if not isinstance(properties, dict):
-        return None
-    constraint = properties.get(field)
-    if not isinstance(constraint, dict):
-        return None
-    value = constraint.get("const")
-    return value if isinstance(value, str) else None
-
-
-def _conditional_then_properties(
-    schema: dict[str, Any], discriminator: str, value: str
-) -> dict[str, Any]:
-    for entry in _all_of(schema):
-        if _conditional_const(entry, discriminator) == value and isinstance(
-            entry.get("then"), dict
-        ):
-            return _properties(entry["then"])
     return {}
 
 
@@ -383,44 +322,6 @@ def _schema_enum_values(schema: object) -> list[Any] | None:
             if isinstance(entry, dict) and isinstance(entry.get("enum"), list):
                 return entry["enum"]
     return None
-
-
-def _schema_has_any_required(schema: object, required: list[str]) -> bool:
-    if not isinstance(schema, dict):
-        return False
-    if isinstance(schema.get("required"), list) and any(
-        name in schema["required"] for name in required
-    ):
-        return True
-    for composition in ("allOf", "anyOf", "oneOf"):
-        entries = schema.get(composition)
-        if isinstance(entries, list) and any(
-            _schema_has_any_required(entry, required) for entry in entries
-        ):
-            return True
-    then_schema = schema.get("then")
-    return isinstance(then_schema, dict) and _schema_has_any_required(then_schema, required)
-
-
-def _schema_contains_not_anyof_required(schema: dict[str, Any], first: str, second: str) -> bool:
-    for entry in _all_of(schema):
-        rejected = entry.get("not")
-        if _schema_mentions_required(rejected, first) and _schema_mentions_required(
-            rejected, second
-        ):
-            return True
-    return False
-
-
-def _schema_mentions_required(schema: object, name: str) -> bool:
-    if isinstance(schema, dict):
-        required = schema.get("required")
-        if isinstance(required, list) and name in required:
-            return True
-        return any(_schema_mentions_required(value, name) for value in schema.values())
-    if isinstance(schema, list):
-        return any(_schema_mentions_required(value, name) for value in schema)
-    return False
 
 
 def grouped_payload(result: dict[str, Any], *, tool: str, branch: str) -> dict[str, Any]:
@@ -490,6 +391,7 @@ def probe_grouped(*, installed: bool, phone_enabled: bool, codex_home: Path) -> 
         tools = client.tools_list()
         names = tool_names(tools)
         require_exact_grouped_tools(names)
+        require_no_top_level_composition(tools)
         require_grouped_action_shape(tools)
         steps.append(step_pass("grouped.tools_list", f"tools={len(names)}"))
 
