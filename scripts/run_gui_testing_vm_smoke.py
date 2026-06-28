@@ -206,6 +206,25 @@ DEFAULT_OPENAI_BUNDLED_RESOURCE_ROOT = (
 # points SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT here.
 OPENAI_BUNDLED_REMOTE_REL = ".cache/sky-cua/openai-bundled/plugins/openai-bundled"
 OPENAI_BUNDLED_PROFILES = {"codex-cua", "all"}
+# OpenCode stores its zen API key here, keyed by provider. The pi smoke config
+# authenticates its `opencode` provider via `$OPENCODE_API_KEY`, so we source the
+# key from OpenCode's own store when the caller did not export it, instead of
+# requiring a manual `OPENCODE_API_KEY=...` on every pi/all run.
+OPENCODE_AUTH_JSON = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+
+
+def resolve_opencode_api_key() -> str | None:
+    """Return OpenCode's stored `opencode` (zen) API key, or None if absent."""
+    try:
+        data = json.loads(OPENCODE_AUTH_JSON.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    entry = data.get("opencode") if isinstance(data, dict) else None
+    if isinstance(entry, dict):
+        key = entry.get("key")
+        if isinstance(key, str) and key:
+            return key
+    return None
 
 
 @dataclass(frozen=True)
@@ -1464,8 +1483,16 @@ def run_remote_profile(
         f"PATH={remote_root}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ]
     if profile in AGENT_AUTH_PROFILES:
+        agent_env = dict(os.environ)
+        # pi's `opencode` provider authenticates via $OPENCODE_API_KEY; source it
+        # from OpenCode's own credential store so the pi/all smokes work without a
+        # manual export.
+        if not agent_env.get("OPENCODE_API_KEY"):
+            opencode_key = resolve_opencode_api_key()
+            if opencode_key:
+                agent_env["OPENCODE_API_KEY"] = opencode_key
         for key in (*AGENT_AUTH_ENV_KEYS, *MCP_LAUNCH_POLICY_ENV_KEYS):
-            value = os.environ.get(key)
+            value = agent_env.get(key)
             if value:
                 profile_command.append(f"{key}={value}")
     profile_command.extend(

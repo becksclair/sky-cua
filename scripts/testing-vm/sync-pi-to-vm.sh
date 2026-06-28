@@ -58,3 +58,12 @@ fi
 test -d ~/.pi/agent
 test -f ~/.pi/agent/mcp.json
 printf "Pi config synced and updated to latest on %s\n" "$HOME"'
+
+# Guarantee Pi can reach the OpenCode free tier the smoke drives
+# (opencode/deepseek-v4-flash-free): a stock ~/.pi has no `opencode` provider and
+# a default model that resolves to nothing, so seed it idempotently regardless of
+# the synced host config. Piped over stdin so no helper file lands in the VM; the
+# API key flows at run time via $OPENCODE_API_KEY (sourced by the runner from
+# OpenCode's own credential store).
+ssh "${ssh_options[@]}" "${target}" 'python3 -' \
+	< "$(dirname "$0")/ensure-pi-opencode-provider.py"
