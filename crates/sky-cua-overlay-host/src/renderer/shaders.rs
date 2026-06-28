@@ -13,28 +13,17 @@ const KIND_DRAG: u32 = 2u;
 const KIND_SWIPE: u32 = 3u;
 const KIND_NO_NO: u32 = 4u;
 const MAX_POINTS: u32 = 16u;
-// White-outline ring half-width, in normalized SDF units (the cursor texture's R
-// channel is a signed distance field where 0.5 = on the glyph path). MUST match
-// the Rust `CURSOR_STROKE_EDGE` (guarded by a test).
-const CURSOR_STROKE_EDGE: f32 = 0.15;
-// Soft shadow reconstruction (sampled from the same distance field): centered on
-// the glyph (no offset) so it haloes the cursor on ALL sides, a blurred mip
-// level, a wide soft falloff that fades out before the SDF saturates (0.5) to
-// avoid a ghost edge, and an opacity. Reach/falloff are normalized SDF units, so
-// the shadow's screen size scales with SDF_RANGE_TEXELS.
+// The cursor glyph fill/edge identity, the white-outline ring half-width, the
+// smoke cloud hotspot offset, and the soft shadow reach/falloff/strength/LOD are
+// authored in `resources/overlay/agent_overlay_spec.toml` and arrive in the
+// uniform as `frame.cursor_glyph`, `frame.cursor_smoke`, and
+// `frame.cursor_shadow`; see `build_effect_uniform`.
+//
+// Soft shadow reconstruction (sampled from the same distance field) is centered
+// on the glyph (no offset) so it haloes the cursor on ALL sides. These offsets
+// stay 0.0 here; the reach/falloff/strength/LOD ride in `frame.cursor_shadow`.
 const CURSOR_SHADOW_OFFSET_X: f32 = 0.0;
 const CURSOR_SHADOW_OFFSET_Y: f32 = 0.0;
-const CURSOR_SHADOW_LOD: f32 = 3.0;
-const CURSOR_SHADOW_REACH: f32 = 0.48;
-// Falloff >= reach: no full-strength plateau, just a soft gradient that fades
-// from the silhouette outward, so the shadow reads as a diffuse halo rather than
-// a hard dark band hugging the outline.
-const CURSOR_SHADOW_FALLOFF: f32 = 0.62;
-const CURSOR_SHADOW_STRENGTH: f32 = 0.5;
-// Up-left shift (uv units) of the smoke cloud so it centres on the cursor
-// hotspot rather than the glyph centroid (which sits down-right of the tip).
-const CURSOR_SMOKE_OFFSET_X: f32 = 0.018;
-const CURSOR_SMOKE_OFFSET_Y: f32 = 0.022;
 
 struct AgentEffectUniform {
     surface_size_px: vec4<f32>,
@@ -51,6 +40,9 @@ struct AgentEffectUniform {
     ripple: vec4<f32>,
     trail: vec4<f32>,
     no_no: vec4<f32>,
+    cursor_glyph: vec4<f32>,
+    cursor_shadow: vec4<f32>,
+    cursor_smoke: vec4<f32>,
     flags: vec4<u32>,
 };
 
@@ -329,7 +321,7 @@ fn cursor_smoke(pixel: vec2<f32>, cursor_pos: vec2<f32>) -> vec4<f32> {
     // hotspot (the arrow body sits down-right of it) rather than the glyph
     // centroid. A positive uv offset moves the sampled anchor down-right, so the
     // displayed cloud peak lands up-left.
-    let smoke_uv = uv + vec2<f32>(CURSOR_SMOKE_OFFSET_X, CURSOR_SMOKE_OFFSET_Y);
+    let smoke_uv = uv + vec2<f32>(frame.cursor_smoke.y, frame.cursor_smoke.z);
     // Sample the anchor BEFORE the bounds branch so this implicit-LOD sample
     // stays in uniform control flow (matching `cursor_sample`); a sample after a
     // pixel-dependent early-return is a WGSL derivative-uniformity violation.
@@ -490,8 +482,8 @@ fn cursor_sample(pixel: vec2<f32>, cursor_pos: vec2<f32>) -> vec4<f32> {
     // Reconstruct the glyph from the distance field with fwidth-based AA so the
     // edge is crisp at the framebuffer resolution rather than a minified
     // pre-rasterized stroke. Coverage spans the fill plus the white ring out to
-    // CURSOR_STROKE_EDGE; luminance ramps black fill (d<0) -> white outline (d>0).
-    let alpha = clamp(0.5 - (d - CURSOR_STROKE_EDGE) / aa, 0.0, 1.0);
+    // the stroke edge (`frame.cursor_smoke.x`); luminance ramps black fill (d<0) -> white outline (d>0).
+    let alpha = clamp(0.5 - (d - frame.cursor_smoke.x) / aa, 0.0, 1.0);
     if alpha <= 0.0 {
         return vec4<f32>(0.0);
     }
@@ -500,8 +492,8 @@ fn cursor_sample(pixel: vec2<f32>, cursor_pos: vec2<f32>) -> vec4<f32> {
     // pink-white outline, instead of pure black/white. The fill is kept very dark
     // (it brightens through the sRGB surface) so it reads near-black with a purple
     // cast and holds strong contrast against the outline.
-    let fill = vec3<f32>(0.022, 0.006, 0.038);
-    let edge = mix(vec3<f32>(1.0, 1.0, 1.0), frame.color_agent_pink_light.xyz, 0.5);
+    let fill = frame.cursor_glyph.xyz;
+    let edge = mix(vec3<f32>(1.0, 1.0, 1.0), frame.color_agent_pink_light.xyz, frame.cursor_glyph.w);
     let color = mix(fill, edge, lum);
     return premul(color, alpha);
 }
@@ -524,9 +516,9 @@ fn cursor_shadow(pixel: vec2<f32>, cursor_pos: vec2<f32>) -> vec4<f32> {
     if shadow_uv.x < 0.0 || shadow_uv.y < 0.0 || shadow_uv.x > 1.0 || shadow_uv.y > 1.0 {
         return vec4<f32>(0.0);
     }
-    let ds = textureSampleLevel(cursor_texture, cursor_sampler, shadow_uv, CURSOR_SHADOW_LOD).r - 0.5;
-    let shadow_cov = clamp((CURSOR_SHADOW_REACH - ds) / CURSOR_SHADOW_FALLOFF, 0.0, 1.0);
-    return premul(vec3<f32>(0.0, 0.0, 0.0), shadow_cov * CURSOR_SHADOW_STRENGTH);
+    let ds = textureSampleLevel(cursor_texture, cursor_sampler, shadow_uv, frame.cursor_shadow.w).r - 0.5;
+    let shadow_cov = clamp((frame.cursor_shadow.x - ds) / frame.cursor_shadow.y, 0.0, 1.0);
+    return premul(vec3<f32>(0.0, 0.0, 0.0), shadow_cov * frame.cursor_shadow.z);
 }
 
 fn render_pixel(pixel: vec2<f32>) -> vec4<f32> {

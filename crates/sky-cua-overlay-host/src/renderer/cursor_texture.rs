@@ -103,11 +103,13 @@ struct Point {
 }
 
 /// White-outline ring half-width as a fraction of the SDF's normalized range —
-/// MUST equal the shader's `CURSOR_STROKE_EDGE` (guarded by a test). The ring's
+/// sourced from the shared overlay spec (`cursor_stroke_edge_0_1`), the same key
+/// the shader reads into `frame.cursor_smoke.x` (guarded by a test). The ring's
 /// on-screen width is `CURSOR_STROKE_EDGE * SDF_RANGE_TEXELS / CURSOR_TEXTURE_SCALE`
 /// logical px (independent of the glyph size), so a smaller cursor keeps a
 /// proportionally bolder outline.
-const CURSOR_STROKE_EDGE: f32 = 0.15;
+const CURSOR_STROKE_EDGE: f32 =
+    sky_cua_platform::overlay_spec::shared::effects::CURSOR_STROKE_EDGE_0_1 as f32;
 /// Chaikin corner-rounding iterations applied to the flattened glyph path before
 /// it is turned into a distance field. Higher = rounder, softer corners.
 const CURSOR_CORNER_ROUNDING: u32 = 2;
@@ -476,18 +478,19 @@ fn premultiply(channel: u8, alpha: u8) -> u8 {
 mod tests {
     use super::{CURSOR_STROKE_EDGE, CURSOR_TEXTURE_SCALE, CursorImage, cursor_asset};
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn stroke_edge_matches_shader_constant() {
         // The glyph SDF is reconstructed in the shader: the white outline ring
-        // spans `0..CURSOR_STROKE_EDGE` in normalized distance, and the Rust side
-        // derives `stroke_extent` (coverage seed / A channel) from the SAME
-        // constant. If the WGSL literal drifts from the Rust value the outline and
-        // the smoke seed disagree — guard against it.
-        let needle = format!("const CURSOR_STROKE_EDGE: f32 = {CURSOR_STROKE_EDGE};");
-        assert!(
-            crate::renderer::shaders::EFFECT_SHADER.contains(&needle),
-            "shader CURSOR_STROKE_EDGE must equal Rust {CURSOR_STROKE_EDGE}; expected line `{needle}`"
+        // spans `0..stroke_edge` in normalized distance, and the Rust side derives
+        // `stroke_extent` (coverage seed / A channel) from the SAME value. The
+        // shader now reads the stroke edge from the uniform (`frame.cursor_smoke.x`),
+        // which `build_effect_uniform` fills from `cursor_stroke_edge_0_1`. Guard
+        // that the Rust texture builder reads the very same spec key so the outline
+        // and the smoke seed cannot drift apart.
+        assert_eq!(
+            CURSOR_STROKE_EDGE,
+            sky_cua_platform::overlay_spec::shared::effects::CURSOR_STROKE_EDGE_0_1 as f32,
+            "texture stroke edge must equal the shared spec cursor_stroke_edge_0_1",
         );
     }
 

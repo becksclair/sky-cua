@@ -106,6 +106,17 @@ SCHEMA: dict[str, Any] = {
             "cursor_source_viewbox_height": ("u32", 1, None, False),
             "cursor_hotspot_fraction_x": ("f64", 0.0, 1.0, False),
             "cursor_hotspot_fraction_y": ("f64", 0.0, 1.0, False),
+            "glyph_fill_red_0_1": ("f64", 0.0, 1.0, False),
+            "glyph_fill_green_0_1": ("f64", 0.0, 1.0, False),
+            "glyph_fill_blue_0_1": ("f64", 0.0, 1.0, False),
+            "glyph_edge_white_mix_0_1": ("f64", 0.0, 1.0, False),
+            "cursor_stroke_edge_0_1": ("f64", 0.0, 1.0, False),
+            "cursor_smoke_offset_x_uv": ("f64", 0.0, 1.0, False),
+            "cursor_smoke_offset_y_uv": ("f64", 0.0, 1.0, False),
+            "cursor_shadow_reach_0_1": ("f64", 0.0, 1.0, False),
+            "cursor_shadow_falloff_0_1": ("f64", 0.0, 1.0, False),
+            "cursor_shadow_strength_0_1": ("f64", 0.0, 1.0, False),
+            "cursor_shadow_lod": ("f64", 0.0, None, False),
         },
     },
     "desktop": {
@@ -209,6 +220,10 @@ CROSS_CHECKS: list[tuple[list[str], str]] = [
     (
         ["shared", "effects"],
         "glow_baseline_max_alpha_0_1 must be <= glow_pulse_peak_alpha_0_1",
+    ),
+    (
+        ["shared", "effects"],
+        "cursor_shadow_falloff_0_1 must be >= cursor_shadow_reach_0_1",
     ),
     (
         ["desktop", "geometry"],
@@ -359,6 +374,10 @@ def _validate_cross_checks(data: dict[str, Any]) -> None:
                 _die(message)
             if node.get("glow_baseline_max_alpha_0_1", 0.0) > node.get(
                 "glow_pulse_peak_alpha_0_1", 0.0
+            ):
+                _die(message)
+            if node.get("cursor_shadow_falloff_0_1", 0.0) < node.get(
+                "cursor_shadow_reach_0_1", 0.0
             ):
                 _die(message)
         elif path == ["desktop", "geometry"]:

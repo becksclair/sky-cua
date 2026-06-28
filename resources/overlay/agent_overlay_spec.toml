@@ -65,6 +65,17 @@ cursor_source_viewbox_width = 23
 cursor_source_viewbox_height = 24
 cursor_hotspot_fraction_x = 0.43478260869565216
 cursor_hotspot_fraction_y = 0.4583333333333333
+glyph_fill_red_0_1 = 0.022
+glyph_fill_green_0_1 = 0.006
+glyph_fill_blue_0_1 = 0.038
+glyph_edge_white_mix_0_1 = 0.5
+cursor_stroke_edge_0_1 = 0.15
+cursor_smoke_offset_x_uv = 0.018
+cursor_smoke_offset_y_uv = 0.022
+cursor_shadow_reach_0_1 = 0.48
+cursor_shadow_falloff_0_1 = 0.62
+cursor_shadow_strength_0_1 = 0.5
+cursor_shadow_lod = 3.0
 
 [desktop.geometry]
 cursor_height_logical_px = 35.9375

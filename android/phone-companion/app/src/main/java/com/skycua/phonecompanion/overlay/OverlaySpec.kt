@@ -5,7 +5,7 @@ package com.skycua.phonecompanion.overlay
  * Source: resources/overlay/agent_overlay_spec.toml
  * Schema version: 1
  * Generator: scripts/generate_overlay_spec.py
- * Generator hash: ab5c0faea5b04be5
+ * Generator hash: e1f65e5d3f99748f
  * GENERATED FILE - DO NOT EDIT
  * Run `uv run python scripts/generate_overlay_spec.py` to regenerate.
  */
@@ -138,6 +138,28 @@ object OverlaySpec {
             const val CURSOR_HOTSPOT_FRACTION_X: Double = 0.43478260869565216
             /** `cursor_hotspot_fraction_y` from `[shared.effects]`. */
             const val CURSOR_HOTSPOT_FRACTION_Y: Double = 0.4583333333333333
+            /** `glyph_fill_red_0_1` from `[shared.effects]`. */
+            const val GLYPH_FILL_RED_0_1: Double = 0.022
+            /** `glyph_fill_green_0_1` from `[shared.effects]`. */
+            const val GLYPH_FILL_GREEN_0_1: Double = 0.006
+            /** `glyph_fill_blue_0_1` from `[shared.effects]`. */
+            const val GLYPH_FILL_BLUE_0_1: Double = 0.038
+            /** `glyph_edge_white_mix_0_1` from `[shared.effects]`. */
+            const val GLYPH_EDGE_WHITE_MIX_0_1: Double = 0.5
+            /** `cursor_stroke_edge_0_1` from `[shared.effects]`. */
+            const val CURSOR_STROKE_EDGE_0_1: Double = 0.15
+            /** `cursor_smoke_offset_x_uv` from `[shared.effects]`. */
+            const val CURSOR_SMOKE_OFFSET_X_UV: Double = 0.018
+            /** `cursor_smoke_offset_y_uv` from `[shared.effects]`. */
+            const val CURSOR_SMOKE_OFFSET_Y_UV: Double = 0.022
+            /** `cursor_shadow_reach_0_1` from `[shared.effects]`. */
+            const val CURSOR_SHADOW_REACH_0_1: Double = 0.48
+            /** `cursor_shadow_falloff_0_1` from `[shared.effects]`. */
+            const val CURSOR_SHADOW_FALLOFF_0_1: Double = 0.62
+            /** `cursor_shadow_strength_0_1` from `[shared.effects]`. */
+            const val CURSOR_SHADOW_STRENGTH_0_1: Double = 0.5
+            /** `cursor_shadow_lod` from `[shared.effects]`. */
+            const val CURSOR_SHADOW_LOD: Double = 3.0
         }
 
     }

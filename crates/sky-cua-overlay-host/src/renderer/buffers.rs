@@ -44,10 +44,13 @@ pub struct AgentEffectUniform {
     pub ripple: [f32; 4],
     pub trail: [f32; 4],
     pub no_no: [f32; 4],
+    pub cursor_glyph: [f32; 4],
+    pub cursor_shadow: [f32; 4],
+    pub cursor_smoke: [f32; 4],
     pub flags: [u32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<AgentEffectUniform>() == 240);
+const _: () = assert!(std::mem::size_of::<AgentEffectUniform>() == 288);
 const _: () = assert!(std::mem::align_of::<AgentEffectUniform>() == 4);
 
 #[repr(C)]
@@ -231,6 +234,24 @@ pub fn build_effect_uniform(
             overlay_spec::shared::effects::NO_NO_HOLD_FRACTION as f32,
             overlay_spec::shared::effects::PRESS_IN_FRACTION as f32,
         ],
+        cursor_glyph: [
+            overlay_spec::shared::effects::GLYPH_FILL_RED_0_1 as f32,
+            overlay_spec::shared::effects::GLYPH_FILL_GREEN_0_1 as f32,
+            overlay_spec::shared::effects::GLYPH_FILL_BLUE_0_1 as f32,
+            overlay_spec::shared::effects::GLYPH_EDGE_WHITE_MIX_0_1 as f32,
+        ],
+        cursor_shadow: [
+            overlay_spec::shared::effects::CURSOR_SHADOW_REACH_0_1 as f32,
+            overlay_spec::shared::effects::CURSOR_SHADOW_FALLOFF_0_1 as f32,
+            overlay_spec::shared::effects::CURSOR_SHADOW_STRENGTH_0_1 as f32,
+            overlay_spec::shared::effects::CURSOR_SHADOW_LOD as f32,
+        ],
+        cursor_smoke: [
+            overlay_spec::shared::effects::CURSOR_STROKE_EDGE_0_1 as f32,
+            overlay_spec::shared::effects::CURSOR_SMOKE_OFFSET_X_UV as f32,
+            overlay_spec::shared::effects::CURSOR_SMOKE_OFFSET_Y_UV as f32,
+            0.0,
+        ],
         flags: [cursor_visible, effect_kind, point_count, glow_active],
     };
     (uniform, points)
@@ -346,10 +367,10 @@ mod tests {
 
     #[test]
     fn effect_uniform_layout_matches_wgsl() {
-        assert_eq!(std::mem::size_of::<AgentEffectUniform>(), 240);
+        assert_eq!(std::mem::size_of::<AgentEffectUniform>(), 288);
         assert_eq!(std::mem::align_of::<AgentEffectUniform>(), 4);
         assert_eq!(std::mem::offset_of!(AgentEffectUniform, surface_size_px), 0);
-        assert_eq!(std::mem::offset_of!(AgentEffectUniform, flags), 224);
+        assert_eq!(std::mem::offset_of!(AgentEffectUniform, flags), 272);
         assert_eq!(std::mem::size_of::<AgentEffectPoint>(), 16);
         assert_eq!(
             std::mem::size_of::<AgentEffectPointBuffer>(),
@@ -388,7 +409,7 @@ mod tests {
         assert_eq!(uniform.color_agent_pink[0], 1.0);
         assert!((uniform.color_agent_pink[1] - (96.0 / 255.0)).abs() < f32::EPSILON);
         assert_eq!(points[1].xy, [30.0, 40.0, 0.0, 0.0]);
-        assert_eq!(effect_uniform_as_bytes(&uniform).len(), 240);
+        assert_eq!(effect_uniform_as_bytes(&uniform).len(), 288);
         assert_eq!(
             effect_points_as_bytes(&points).len(),
             16 * MAX_EFFECT_POINTS
