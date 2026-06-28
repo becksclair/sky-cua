@@ -6,7 +6,7 @@ use std::{
 
 use sky_cua_platform::diagnostics::BackendError;
 use sky_cua_platform::model::{
-    AccessibilitySetupReport, DoctorReport, SetupCommandReport, WindowInfo,
+    AccessibilitySetupReport, DoctorReport, EnvironmentInfo, SetupCommandReport, WindowInfo,
     WindowTargetingSetupReport,
 };
 
@@ -55,8 +55,18 @@ where
     })
 }
 
-pub async fn setup_window_targeting_report() -> WindowTargetingSetupReport {
+pub async fn setup_window_targeting_report(
+    environment: &EnvironmentInfo,
+) -> WindowTargetingSetupReport {
     let _ = session_env::hydrate_session_env();
+
+    // The bundled GNOME Shell extension only applies to GNOME (or an unknown
+    // session). On KDE/KWin, COSMIC, Hyprland, sway/i3, or X11 the window
+    // backend is native, so installing and enabling a GNOME extension is wrong
+    // and produces a misleading "GNOME Shell may need a reload" result.
+    if !crate::windowing::registry::window_targeting_uses_gnome_extension(environment) {
+        return setup_window_targeting_via_environment_backend(environment).await;
+    }
 
     let extension_dir = extension_dir();
     let mut wrote_files = false;
@@ -91,6 +101,52 @@ pub async fn setup_window_targeting_report() -> WindowTargetingSetupReport {
         windows,
         windows_error,
         requires_shell_reload,
+        message,
+        permissions_hint,
+    }
+}
+
+/// Report window-targeting readiness on a non-GNOME session by probing the
+/// environment's own window backend (KWin, COSMIC, Hyprland, sway/i3, X11)
+/// instead of installing the GNOME Shell extension.
+async fn setup_window_targeting_via_environment_backend(
+    environment: &EnvironmentInfo,
+) -> WindowTargetingSetupReport {
+    let backend_label = environment
+        .desktop_environment
+        .clone()
+        .or_else(|| environment.compositor.clone())
+        .unwrap_or_else(|| "this session".to_string());
+    let (windows, windows_error) =
+        match crate::windowing::registry::discover_windows(environment).await {
+            Ok(windows) => (windows.into_iter().map(WindowInfo::from).collect(), None),
+            Err(error) => (Vec::new(), Some(format!("{error:#}"))),
+        };
+    let available = windows_error.is_none();
+    let message = if available {
+        format!(
+            "Window targeting is available through the {backend_label} window backend; the GNOME Shell extension is not used on this session."
+        )
+    } else {
+        format!(
+            "Window targeting is unavailable on {backend_label}; the GNOME Shell extension does not apply to this session."
+        )
+    };
+    let permissions_hint = windows_error
+        .as_ref()
+        .map(|_| crate::windowing::registry::WINDOW_PERMISSION_HINT.to_string());
+    WindowTargetingSetupReport {
+        extension_dir: String::new(),
+        wrote_files: false,
+        enable_command: SetupCommandReport {
+            ok: available,
+            detail: format!(
+                "GNOME Shell extension setup skipped: {backend_label} uses its own window backend"
+            ),
+        },
+        windows,
+        windows_error,
+        requires_shell_reload: false,
         message,
         permissions_hint,
     }

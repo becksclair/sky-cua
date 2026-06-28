@@ -769,7 +769,8 @@ impl DesktopBackend for LinuxDesktopBackend {
     async fn setup_window_targeting(
         &self,
     ) -> Result<sky_cua_platform::model::WindowTargetingSetupReport, BackendError> {
-        Ok(crate::setup::setup_window_targeting_report().await)
+        let environment = self.probe_environment().await?;
+        Ok(crate::setup::setup_window_targeting_report(&environment).await)
     }
 
     async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {

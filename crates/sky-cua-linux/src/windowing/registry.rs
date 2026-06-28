@@ -102,6 +102,15 @@ pub fn backend_can_exact_focus(id: &str) -> bool {
     descriptor(id).is_some_and(|descriptor| descriptor.can_exact_focus)
 }
 
+/// True when window targeting on this environment relies on the bundled GNOME
+/// Shell extension: GNOME sessions, or an unknown session with no desktop
+/// signal (the historical default). Non-GNOME sessions (KDE/KWin, COSMIC,
+/// Hyprland, sway/i3, X11) use their own window backend and need no GNOME
+/// Shell extension install/enable.
+pub fn window_targeting_uses_gnome_extension(environment: &EnvironmentInfo) -> bool {
+    backend_can_list_in_environment(BackendKind::GnomeExtension, environment)
+}
+
 pub async fn discover_windows(
     environment: &EnvironmentInfo,
 ) -> Result<Vec<LinuxWindowInfo>, BackendError> {
@@ -655,6 +664,30 @@ mod tests {
             wayland_display: Some("wayland-0".to_string()),
             displays: Vec::new(),
         }
+    }
+
+    #[test]
+    fn window_targeting_uses_gnome_extension_only_for_gnome_or_unknown() {
+        let mut kde = wayland_environment();
+        assert!(
+            !window_targeting_uses_gnome_extension(&kde),
+            "KDE/KWin must not take the GNOME Shell extension path"
+        );
+
+        kde.desktop_environment = Some("GNOME".to_string());
+        kde.compositor = Some("gnome-shell".to_string());
+        assert!(
+            window_targeting_uses_gnome_extension(&kde),
+            "GNOME sessions use the bundled extension"
+        );
+
+        let mut unknown = wayland_environment();
+        unknown.desktop_environment = None;
+        unknown.compositor = None;
+        assert!(
+            window_targeting_uses_gnome_extension(&unknown),
+            "an unknown session with no desktop signal keeps the historical GNOME default"
+        );
     }
 
     #[test]
