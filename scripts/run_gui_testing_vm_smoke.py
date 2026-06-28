@@ -952,6 +952,17 @@ def run_codex_cua_judge_profile(
         print(f"codex-cua: could not pull artifacts for the judge: {pulled}", flush=True)
         return 1
 
+    # Best-effort: pull Chrome's verbose log if the run produced one (absent when
+    # the browser never launched). Never gates the judge.
+    if pull_remote_file(
+        ssh_target,
+        port,
+        ssh_options,
+        remote_artifact_dir / "chrome-debug.log",
+        local_dir / "chrome-debug.log",
+    ):
+        print(f"codex-cua: pulled chrome-debug.log -> {local_dir / 'chrome-debug.log'}", flush=True)
+
     judge = subprocess.run(
         [
             "python3",

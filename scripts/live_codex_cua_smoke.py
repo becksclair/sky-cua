@@ -358,6 +358,12 @@ def main() -> int:
                 report.ok and not ground_failures and result.exit_code == 0
             )
     finally:
+        # Surface Chrome's verbose log (debugger/devtools/extension events) at the
+        # artifact root so the host dispatch can pull it alongside the transcript.
+        chrome_log = artifact_dir / "profile" / "chrome_debug.log"
+        if chrome_log.exists():
+            with contextlib.suppress(OSError):
+                shutil.copy2(chrome_log, artifact_dir / "chrome-debug.log")
         # Always write the coverage summary + ready marker so the host judge can run
         # and triage even when this deterministic gate failed.
         (artifact_dir / "coverage-summary.json").write_text(

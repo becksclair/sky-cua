@@ -247,6 +247,18 @@ def launch_browser(
         # unattended, leads to the debugger detaching and CDP Page.* commands
         # (navigate/enable) timing out. Silence it so the bridge stays attached.
         "--silent-debugger-extension-api",
+        # Always capture Chrome's verbose log alongside the run so debugger /
+        # devtools / extension events (e.g. why chrome.debugger detaches or a CDP
+        # command stalls) are inspectable after the fact. Goes to a file so the
+        # piped stderr below does not flood and block Chrome under --v=1. The
+        # vmodule bumps the browser-automation-relevant modules (the extension
+        # chrome.debugger API, the DevTools agent/session backend, and the MV3
+        # service-worker lifecycle) so a wedged/detached debugger session is
+        # actually recorded rather than swallowed at the global level.
+        "--enable-logging",
+        "--v=1",
+        "--vmodule=*debugger*=3,*devtools*=2,*service_worker*=1",
+        f"--log-file={user_data_dir / 'chrome_debug.log'}",
     ]
     # When load_extension is False the caller installs the extension through the
     # Chrome UI ("Load unpacked"); the `--load-extension` command-line switch is
