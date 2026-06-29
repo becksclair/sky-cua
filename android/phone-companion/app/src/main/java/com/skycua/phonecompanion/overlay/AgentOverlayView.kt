@@ -1,37 +1,26 @@
 package com.skycua.phonecompanion.overlay
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
-import android.graphics.RadialGradient
-import android.graphics.RectF
-import android.graphics.Shader
 import android.view.View
-import androidx.appcompat.content.res.AppCompatResources
-import com.skycua.phonecompanion.R
-import kotlin.math.ceil
 
 /**
  * The single full-screen, pass-through overlay drawn by the companion's
  * AccessibilityService. Driven entirely by mutable state set from the
  * controller, it renders the "agent in control" visuals:
  *
- *  - a soft pastel-pink screen-edge glow, with waves of light that emanate from
- *    the edges and travel inward toward the centre (concentric rounded-rect
- *    pulses) over a gently breathing base,
- *  - the agent cursor — the same `cursor-chat` pointer the desktop agent uses,
- *    scaled up and seated in a soft pink halo that breathes,
+ *  - the desktop's smoky fbm screen-edge glow ([AgslEdgeGlowRenderer]),
+ *  - the agent cursor — the desktop's tilted plum/pink glyph with its grounding
+ *    shadow and glyph-anchored smoke aura ([AgslCursorRenderer]),
  *  - a tap ripple (an expanding, fading ring), and
  *  - a swipe/drag trail (a fading polyline plus the moving cursor).
  *
  * The window flags supplied by the controller ([OverlayFlags.passThroughFlags])
  * make the view non-focusable and non-touchable, so it never intercepts input.
- * `onDraw` is allocation-free: every `Paint`, `RectF`, the trail buffer, and the
- * scaled cursor bitmap are built once and reused.
+ * `onDraw` is allocation-free: every `Paint`, the trail buffer, and the AGSL
+ * renderers' uniforms are built/reused without per-frame allocation.
  *
  * All geometry is expressed in dp and converted with the display density, so the
  * glow and cursor read at a consistent physical size across phones rather than
@@ -44,115 +33,20 @@ class AgentOverlayView(context: Context) : View(context) {
 
     private fun dp(value: Float): Float = value * density
 
-    // --- edge glow + inward waves ---------------------------------------------
+    // --- edge glow ------------------------------------------------------------
 
-    /** Wide, soft base border — the steady "framed in pink" glow. */
-    private val glowBasePaint =
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            color = PINK
-            strokeWidth = dp(GLOW_BASE_STROKE_DP)
-            maskFilter = BlurMaskFilter(dp(GLOW_BASE_BLUR_DP), BlurMaskFilter.Blur.NORMAL)
-        }
-
-    /** Tighter inner edge so the border has a soft luminous core. */
-    private val glowCorePaint =
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            color = PINK_LIGHT
-            strokeWidth = dp(GLOW_CORE_STROKE_DP)
-            maskFilter = BlurMaskFilter(dp(GLOW_CORE_BLUR_DP), BlurMaskFilter.Blur.NORMAL)
-        }
-
-    /** A single inward-travelling wave; alpha is set per-wave each frame. */
-    private val wavePaint =
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            color = PINK_LIGHT
-            strokeWidth = dp(WAVE_STROKE_DP)
-            maskFilter = BlurMaskFilter(dp(WAVE_BLUR_DP), BlurMaskFilter.Blur.NORMAL)
-        }
-    private val glowRect = RectF()
-    private val waveRect = RectF()
+    /**
+     * AGSL edge-glow renderer (the desktop's smoky fbm border). Cheap to
+     * [AgslEdgeGlowRenderer.prepare] (no texture), so it is prepared on the main
+     * thread from [onAttachedToWindow].
+     */
+    private val agslEdgeGlowRenderer = AgslEdgeGlowRenderer()
 
     /** Base glow intensity in [0, 1]; 0 hides the border. Driven by breathing. */
     @Volatile
     private var glowIntensity: Float = 0f
 
-    /** Inward-wave phase in [0, 1); 0 spawns a wave at the edge, 1 at full depth. */
-    @Volatile
-    private var wavePhase: Float = 0f
-
     // --- cursor ---------------------------------------------------------------
-
-    // Rasterize the vector pointer at the exact target pixel size. Drawing the
-    // vector straight to the final bitmap keeps it crisp; the runtime only ever
-    // scales the cursor DOWN (press squash), so it never upsamples a raster.
-    private val cursorBitmap: Bitmap =
-        run {
-            val drawable = AppCompatResources.getDrawable(context, R.drawable.agent_cursor)!!
-            val h = dp(CURSOR_HEIGHT_DP).toInt().coerceAtLeast(1)
-            val w = (h * drawable.intrinsicWidth / drawable.intrinsicHeight).coerceAtLeast(1)
-            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmp ->
-                drawable.setBounds(0, 0, w, h)
-                drawable.draw(Canvas(bmp))
-            }
-        }
-
-    // Hotspot within the scaled bitmap (the point the cursor "points at").
-    private val cursorHotspotX = cursorBitmap.width * HOTSPOT_FRACTION_X
-    private val cursorHotspotY = cursorBitmap.height * HOTSPOT_FRACTION_Y
-
-    private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-
-    // Soft drop shadow for the raised look, matched to the desktop cursor. A
-    // VectorDrawable cannot blur, so the cursor silhouette is pre-rendered once as
-    // a blurred, semi-transparent black blob and composited behind the pointer.
-    // Offset and blur are expressed as fractions of the 48-unit glyph viewBox so
-    // the shadow scales with the cursor size; it is drawn inside the pointer's
-    // rotation so it stays glued to the cursor shape.
-    private val cursorShadowDx: Float = SHADOW_DX_VB * dp(CURSOR_HEIGHT_DP) / VIEWBOX_HEIGHT
-    private val cursorShadowDy: Float = SHADOW_DY_VB * dp(CURSOR_HEIGHT_DP) / VIEWBOX_HEIGHT
-    private val cursorShadowPad: Int =
-        ceil(SHADOW_BLUR_VB * dp(CURSOR_HEIGHT_DP) / VIEWBOX_HEIGHT * 3f).toInt().coerceAtLeast(1)
-    private val cursorShadowBitmap: Bitmap =
-        run {
-            val blurPx = (SHADOW_BLUR_VB * dp(CURSOR_HEIGHT_DP) / VIEWBOX_HEIGHT).coerceAtLeast(0.5f)
-            val shadow =
-                Bitmap.createBitmap(
-                    cursorBitmap.width + cursorShadowPad * 2,
-                    cursorBitmap.height + cursorShadowPad * 2,
-                    Bitmap.Config.ARGB_8888,
-                )
-            val paint =
-                Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    colorFilter =
-                        PorterDuffColorFilter(android.graphics.Color.BLACK, PorterDuff.Mode.SRC_IN)
-                    maskFilter = BlurMaskFilter(blurPx, BlurMaskFilter.Blur.NORMAL)
-                    alpha = (SHADOW_ALPHA * 255f).toInt()
-                }
-            Canvas(shadow).drawBitmap(
-                cursorBitmap,
-                cursorShadowPad.toFloat(),
-                cursorShadowPad.toFloat(),
-                paint,
-            )
-            shadow
-        }
-
-    /** Soft pink halo behind the cursor; centred at the origin and translated. */
-    private val cursorHaloPaint =
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader =
-                RadialGradient(
-                    0f,
-                    0f,
-                    dp(CURSOR_HALO_RADIUS_DP),
-                    intArrayOf(HALO_INNER, HALO_MID, HALO_OUTER),
-                    floatArrayOf(0f, 0.55f, 1f),
-                    Shader.TileMode.CLAMP,
-                )
-        }
 
     @Volatile
     private var cursorVisible: Boolean = false
@@ -171,9 +65,47 @@ class AgentOverlayView(context: Context) : View(context) {
     @Volatile
     private var cursorScale: Float = 1f
 
-    /** Halo breathing in [0, 1]; scales the halo radius and opacity. */
+    /**
+     * Free-running ambient clock (ms) fed to the AGSL cursor renderer for the
+     * smoke aura's drift and breathing. Mirrors the desktop `frame.timing.x`; set
+     * from the controller's ambient loop. The aura computes its own breathing
+     * curve from this clock, so there is no separate "pulse" value.
+     */
     @Volatile
-    private var cursorPulse: Float = 0.5f
+    private var cursorElapsedMs: Float = 0f
+
+    /**
+     * Global smoke-aura alpha multiplier (desktop `frame.halo.w`); 1.0 = full.
+     * The smoke aura is the cursor's "halo", so this fades it in/out without
+     * touching the aura's internal breathing.
+     */
+    @Volatile
+    private var cursorCloudAlpha: Float = 1f
+
+    /**
+     * AGSL cursor renderer (shadow + smoke aura + glyph) — the sole cursor draw
+     * path. It becomes drawable once [prepare] has built its SDF texture off-thread;
+     * until then [drawCursor] no-ops, so the cursor only appears once it is ready.
+     */
+    private val agslCursorRenderer = AgslCursorRenderer()
+
+    // On-screen footprint (glyph + smoke margin) and its hotspot, in scale-1 px.
+    // The glyph renders at CURSOR_HEIGHT_DP tall; the smoke footprint is the glyph
+    // grown by the margin on every side (FOOTPRINT/DESKTOP ratio from the SDF
+    // builder), so the footprint scales with the on-screen glyph size. The hotspot
+    // (the point the cursor "points at") sits margin-in from the footprint corner.
+    private val footprintPxY: Float =
+        dp(CURSOR_HEIGHT_DP) *
+            CursorSdfTexture.FOOTPRINT_HEIGHT / CursorSdfTexture.DESKTOP_HEIGHT
+    private val footprintPxX: Float =
+        footprintPxY *
+            CursorSdfTexture.FOOTPRINT_WIDTH / CursorSdfTexture.FOOTPRINT_HEIGHT
+    private val footprintHotspotPxX: Float =
+        footprintPxX *
+            CursorSdfTexture.FOOTPRINT_HOTSPOT_X / CursorSdfTexture.FOOTPRINT_WIDTH
+    private val footprintHotspotPxY: Float =
+        footprintPxY *
+            CursorSdfTexture.FOOTPRINT_HOTSPOT_Y / CursorSdfTexture.FOOTPRINT_HEIGHT
 
     // --- tap ripple -----------------------------------------------------------
 
@@ -229,15 +161,19 @@ class AgentOverlayView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** Sets the inward-wave phase in [0, 1). */
-    fun setWavePhase(phase: Float) {
-        wavePhase = phase - kotlin.math.floor(phase)
+    /**
+     * Sets the free-running ambient clock (ms) the AGSL cursor renderer uses for
+     * the smoke aura drift/breathing. Fed from the controller's ambient loop so the
+     * aura animates every frame.
+     */
+    fun setCursorElapsedMs(elapsedMs: Float) {
+        cursorElapsedMs = elapsedMs
         invalidate()
     }
 
-    /** Sets the cursor-halo breathing value in [0, 1]; values are clamped. */
-    fun setCursorPulse(pulse: Float) {
-        cursorPulse = OverlayMath.clamp01(pulse)
+    /** Sets the smoke-aura global alpha multiplier in [0, 1]; values are clamped. */
+    fun setCursorCloudAlpha(alpha: Float) {
+        cursorCloudAlpha = OverlayMath.clamp01(alpha)
         invalidate()
     }
 
@@ -318,56 +254,61 @@ class AgentOverlayView(context: Context) : View(context) {
 
     // --- drawing --------------------------------------------------------------
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        // The edge-glow renderer has no texture to build, so prepare it inline on
+        // the main thread (installs the palette / px-per-mm / breathe-period
+        // uniforms). Idempotent, so a re-attach is harmless.
+        agslEdgeGlowRenderer.prepare(context)
+        // Build the AGSL cursor's SDF texture off the main thread (an O(n) chamfer
+        // transform + distance scan; see CursorSdfTexture). Once prepared, request
+        // a redraw so the GPU cursor appears. Guarded so a re-attach does not
+        // rebuild an already-ready renderer.
+        if (!agslCursorRenderer.isReady()) {
+            Thread(
+                {
+                    agslCursorRenderer.prepare(
+                        densityScaledFootprintPxX = footprintPxX,
+                        densityScaledFootprintPxY = footprintPxY,
+                        hotspotPxX = footprintHotspotPxX,
+                        hotspotPxY = footprintHotspotPxY,
+                    )
+                    postInvalidate()
+                },
+                "agsl-cursor-prepare",
+            ).start()
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        // Inward waves retired: the desktop folded that motion into the fbm edge
+        // glow (shaders.rs `inward_waves` is a no-op), so the discrete square-ish
+        // ripple-in rings are gone here too.
         drawGlow(canvas)
-        drawWaves(canvas)
         drawTrail(canvas)
         drawRipple(canvas)
         drawCursor(canvas)
     }
 
-    private fun roundRectAt(rect: RectF, inset: Float) {
-        rect.set(inset, inset, width - inset, height - inset)
-    }
-
-    private fun drawGlow(canvas: Canvas) {
-        val intensity = glowIntensity
-        if (intensity <= 0f) return
-        // Hug the very screen edge: the stroke straddles the border so the outer
-        // half spills off-screen, leaving a band of glow tight against the edge.
-        roundRectAt(glowRect, dp(GLOW_EDGE_INSET_DP))
-        val corner = dp(GLOW_CORNER_DP)
-        glowBasePaint.alpha = (intensity * MAX_BASE_ALPHA).toInt().coerceIn(0, 255)
-        canvas.drawRoundRect(glowRect, corner, corner, glowBasePaint)
-        glowCorePaint.alpha = (intensity * MAX_CORE_ALPHA).toInt().coerceIn(0, 255)
-        canvas.drawRoundRect(glowRect, corner, corner, glowCorePaint)
-    }
-
     /**
-     * Draws [WAVE_COUNT] concentric rounded-rect pulses staggered in phase. Each
-     * spawns at the screen edge and contracts inward toward the centre while
-     * fading, so the border continuously emits waves of light moving inward.
+     * Draws the desktop's smoky fbm edge glow via [agslEdgeGlowRenderer]. The gate
+     * is BINARY (in-control 1/0): the desktop folds
+     * its own `breathing()` into the glow's base alpha, so feeding the controller's
+     * breathing band here too would pulse it twice. [glowIntensity] is >0 exactly
+     * while in control, so `> 0 -> 1` reproduces the desktop's `frame.flags.w` gate
+     * and lets the shader own the breath. [cursorElapsedMs] is the same ambient
+     * clock the cursor smoke drifts on, so the border and the cursor aura churn on
+     * one clock.
      */
-    private fun drawWaves(canvas: Canvas) {
-        if (glowIntensity <= 0f) return
-        val edge = dp(GLOW_EDGE_INSET_DP)
-        val travel = minOf(width, height) * WAVE_TRAVEL_FRACTION
-        val baseCorner = dp(GLOW_CORNER_DP)
-        for (i in 0 until WAVE_COUNT) {
-            var phase = wavePhase + i.toFloat() / WAVE_COUNT
-            phase -= kotlin.math.floor(phase)
-            val inset = edge + phase * travel
-            // Quick fade-in off the edge, then fade out as it travels inward.
-            val fadeIn = OverlayMath.clamp01(phase / WAVE_FADE_IN)
-            val fade = fadeIn * (1f - phase)
-            val alpha = (fade * WAVE_MAX_ALPHA * glowIntensity).toInt().coerceIn(0, 255)
-            if (alpha <= 0) continue
-            roundRectAt(waveRect, inset)
-            wavePaint.alpha = alpha
-            val corner = (baseCorner - phase * travel).coerceAtLeast(dp(8f))
-            canvas.drawRoundRect(waveRect, corner, corner, wavePaint)
-        }
+    private fun drawGlow(canvas: Canvas) {
+        agslEdgeGlowRenderer.draw(
+            canvas = canvas,
+            widthPx = width.toFloat(),
+            heightPx = height.toFloat(),
+            elapsedMs = cursorElapsedMs,
+            gate = if (glowIntensity > 0f) 1f else 0f,
+        )
     }
 
     private fun drawTrail(canvas: Canvas) {
@@ -392,31 +333,27 @@ class AgentOverlayView(context: Context) : View(context) {
         canvas.drawCircle(rippleX, rippleY, rippleRadius, ripplePaint)
     }
 
+    /**
+     * Draws the agent cursor via the AGSL renderer: the soft grounding shadow, the
+     * glyph-anchored smoke aura, and the tilted plum/pink glyph — all in one
+     * screen-space pass so the smoke fbm churns in screen space rather than spinning
+     * with the glyph. Rotation, press scale, position, and the ambient clock ride in
+     * as uniforms; the Canvas is NOT pre-rotated or pre-scaled.
+     *
+     * While the renderer is still building its SDF texture off-thread it no-ops, so
+     * the cursor simply appears once ready.
+     */
     private fun drawCursor(canvas: Canvas) {
         if (!cursorVisible) return
-        canvas.save()
-        canvas.translate(cursorX, cursorY)
-        // Press squash: scales the whole cursor (halo + pointer) about the hotspot.
-        canvas.scale(cursorScale, cursorScale)
-        // Breathing halo: the radius and opacity swell and ebb with [cursorPulse].
-        val haloScale = HALO_SCALE_MIN + (HALO_SCALE_MAX - HALO_SCALE_MIN) * cursorPulse
-        val haloAlpha = HALO_ALPHA_MIN + (HALO_ALPHA_MAX - HALO_ALPHA_MIN) * cursorPulse
-        canvas.save()
-        canvas.scale(haloScale, haloScale)
-        cursorHaloPaint.alpha = (haloAlpha * 255f).toInt().coerceIn(0, 255)
-        canvas.drawCircle(0f, 0f, dp(CURSOR_HALO_RADIUS_DP), cursorHaloPaint)
-        canvas.restore()
-        // Pointer at a fixed size, rotated to face its heading about the hotspot.
-        canvas.rotate(cursorRotationDeg)
-        // Soft drop shadow beneath the pointer, offset down-right for a raised look.
-        canvas.drawBitmap(
-            cursorShadowBitmap,
-            -cursorHotspotX - cursorShadowPad + cursorShadowDx,
-            -cursorHotspotY - cursorShadowPad + cursorShadowDy,
-            cursorPaint,
+        agslCursorRenderer.draw(
+            canvas = canvas,
+            cursorX = cursorX,
+            cursorY = cursorY,
+            rotationDeg = cursorRotationDeg,
+            scale = cursorScale,
+            elapsedMs = cursorElapsedMs,
+            cloudAlpha = cursorCloudAlpha,
         )
-        canvas.drawBitmap(cursorBitmap, -cursorHotspotX, -cursorHotspotY, cursorPaint)
-        canvas.restore()
     }
 
     companion object {
@@ -438,66 +375,10 @@ class AgentOverlayView(context: Context) : View(context) {
             OverlaySpec.Shared.Colors.AGENT_PINK_LIGHT_BLUE_0_255,
         )
 
-        // Cursor halo (radial-gradient stops, centre -> edge).
-        val HALO_INNER: Int = android.graphics.Color.argb(
-            OverlaySpec.Shared.Colors.HALO_INNER_ALPHA_0_255,
-            OverlaySpec.Shared.Colors.HALO_INNER_RED_0_255,
-            OverlaySpec.Shared.Colors.HALO_INNER_GREEN_0_255,
-            OverlaySpec.Shared.Colors.HALO_INNER_BLUE_0_255,
-        )
-        val HALO_MID: Int = android.graphics.Color.argb(
-            OverlaySpec.Shared.Colors.HALO_MID_ALPHA_0_255,
-            OverlaySpec.Shared.Colors.HALO_MID_RED_0_255,
-            OverlaySpec.Shared.Colors.HALO_MID_GREEN_0_255,
-            OverlaySpec.Shared.Colors.HALO_MID_BLUE_0_255,
-        )
-        val HALO_OUTER: Int = android.graphics.Color.argb(
-            OverlaySpec.Shared.Colors.HALO_OUTER_ALPHA_0_255,
-            OverlaySpec.Shared.Colors.HALO_OUTER_RED_0_255,
-            OverlaySpec.Shared.Colors.HALO_OUTER_GREEN_0_255,
-            OverlaySpec.Shared.Colors.HALO_OUTER_BLUE_0_255,
-        )
-
-        // Edge glow geometry (dp). Wide soft blur, but a saturated, present pink.
-        const val GLOW_BASE_STROKE_DP: Float = OverlaySpec.Android.Geometry.GLOW_BASE_STROKE_DP.toFloat()
-        const val GLOW_BASE_BLUR_DP: Float = OverlaySpec.Android.Geometry.GLOW_BASE_BLUR_DP.toFloat()
-        const val GLOW_CORE_STROKE_DP: Float = OverlaySpec.Android.Geometry.GLOW_CORE_STROKE_DP.toFloat()
-        const val GLOW_CORE_BLUR_DP: Float = OverlaySpec.Android.Geometry.GLOW_CORE_BLUR_DP.toFloat()
-        const val GLOW_EDGE_INSET_DP: Float = OverlaySpec.Android.Geometry.GLOW_EDGE_INSET_DP.toFloat()
-        const val GLOW_CORNER_DP: Float = OverlaySpec.Android.Geometry.GLOW_CORNER_DP.toFloat()
-        const val MAX_BASE_ALPHA: Float = OverlaySpec.Android.Rendering.MAX_BASE_ALPHA_0_255.toFloat()
-        const val MAX_CORE_ALPHA: Float = OverlaySpec.Android.Rendering.MAX_CORE_ALPHA_0_255.toFloat()
-
-        // Inward-wave geometry.
-        const val WAVE_COUNT: Int = OverlaySpec.Android.Rendering.WAVE_COUNT
-        const val WAVE_STROKE_DP: Float = OverlaySpec.Android.Geometry.WAVE_STROKE_DP.toFloat()
-        const val WAVE_BLUR_DP: Float = OverlaySpec.Android.Geometry.WAVE_BLUR_DP.toFloat()
-        const val WAVE_TRAVEL_FRACTION: Float = OverlaySpec.Android.Rendering.WAVE_TRAVEL_FRACTION.toFloat()
-        const val WAVE_FADE_IN: Float = OverlaySpec.Android.Rendering.WAVE_FADE_IN_FRACTION.toFloat()
-        const val WAVE_MAX_ALPHA: Float = OverlaySpec.Android.Rendering.WAVE_MAX_ALPHA_0_255.toFloat()
-
-        // Cursor geometry (dp). The hotspot fractions come from the shared spec
-        // (normalized against the 23x24 source viewbox) and the shadow viewbox
-        // height scales the drop-shadow offsets.
+        // Cursor glyph height (dp). The AGSL cursor footprint (glyph + smoke
+        // margin) scales from this; the SDF builder owns the glyph/shadow/aura
+        // geometry, so only the overall size lives here.
         const val CURSOR_HEIGHT_DP: Float = OverlaySpec.Android.Geometry.CURSOR_HEIGHT_DP.toFloat()
-        const val CURSOR_HALO_RADIUS_DP: Float = OverlaySpec.Android.Geometry.CURSOR_HALO_RADIUS_DP.toFloat()
-
-        // Drop shadow matched to the desktop cursor: offset and blur as
-        // fractions of the glyph viewBox so the raised look scales with the
-        // rendered cursor size.
-        const val VIEWBOX_HEIGHT: Float = OverlaySpec.Android.Rendering.VIEWBOX_HEIGHT.toFloat()
-        const val SHADOW_DX_VB: Float = OverlaySpec.Android.Rendering.SHADOW_DX_VIEWBOX_FRACTION.toFloat()
-        const val SHADOW_DY_VB: Float = OverlaySpec.Android.Rendering.SHADOW_DY_VIEWBOX_FRACTION.toFloat()
-        const val SHADOW_BLUR_VB: Float = OverlaySpec.Android.Rendering.SHADOW_BLUR_VIEWBOX_FRACTION.toFloat()
-        const val SHADOW_ALPHA: Float = OverlaySpec.Android.Rendering.SHADOW_ALPHA_0_1.toFloat()
-        const val HOTSPOT_FRACTION_X: Float = OverlaySpec.Shared.Effects.CURSOR_HOTSPOT_FRACTION_X.toFloat()
-        const val HOTSPOT_FRACTION_Y: Float = OverlaySpec.Shared.Effects.CURSOR_HOTSPOT_FRACTION_Y.toFloat()
-
-        // Cursor-halo breathing band (scale + opacity at pulse 0 -> 1).
-        const val HALO_SCALE_MIN: Float = OverlaySpec.Android.Rendering.HALO_SCALE_MIN_FRACTION.toFloat()
-        const val HALO_SCALE_MAX: Float = OverlaySpec.Android.Rendering.HALO_SCALE_MAX_FRACTION.toFloat()
-        const val HALO_ALPHA_MIN: Float = OverlaySpec.Android.Rendering.HALO_ALPHA_MIN_FRACTION.toFloat()
-        const val HALO_ALPHA_MAX: Float = OverlaySpec.Android.Rendering.HALO_ALPHA_MAX_FRACTION.toFloat()
 
         // Ripple geometry (dp): a wide, soft glow band (not a thin line).
         const val RIPPLE_STROKE_DP: Float = OverlaySpec.Android.Geometry.RIPPLE_STROKE_DP.toFloat()

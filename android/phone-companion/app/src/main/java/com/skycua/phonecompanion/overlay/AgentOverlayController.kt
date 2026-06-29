@@ -465,13 +465,10 @@ class AgentOverlayController(
                     val dt = (now - lastCursorFrameMs).coerceAtLeast(0L).toFloat() / 1000f
                     lastCursorFrameMs = now
                     val v = view ?: return@addUpdateListener
-                    // The inward waves and the cursor-halo breathing run
-                    // continuously, including during a gesture; only the base glow
-                    // breathing yields to the gesture's brighter pulse.
-                    if (glowActive) {
-                        v.setWavePhase(OverlayMath.wavePhase(elapsed))
-                    }
-                    v.setCursorPulse(OverlayMath.breathing01(elapsed))
+                    // Feed the free-running clock to the AGSL cursor renderer so its
+                    // smoke aura drifts and breathes every ambient frame (the aura
+                    // derives its own breathing curve from this clock).
+                    v.setCursorElapsedMs(elapsed.toFloat())
                     // Glide the drawn cursor toward its target with inertia. The
                     // target is moved by parking, taps, and swipes; the spring does
                     // the sailing.
