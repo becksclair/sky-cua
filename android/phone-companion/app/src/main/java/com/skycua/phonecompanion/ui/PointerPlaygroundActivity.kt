@@ -3,6 +3,7 @@ package com.skycua.phonecompanion.ui
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -91,9 +92,15 @@ class PointerPlaygroundActivity : Activity() {
 }
 
 /**
- * The playground canvas: a white grid backdrop that hosts the overlay child and
+ * The playground canvas: a themed grid backdrop that hosts the overlay child and
  * intercepts all touch, classifying each gesture into a tap, double-tap, or
  * swipe and forwarding it through the [onTap]/[onDoubleTap]/[onSwipe] callbacks.
+ *
+ * The backdrop follows the device day/night theme — a dark canvas in dark mode, a
+ * white grid in light mode — so the overlay's pink smoke and glow read the way
+ * they actually render over the operator's content. The Activity has no
+ * `configChanges` override, so toggling the system theme recreates it and the
+ * canvas tracks the change.
  */
 private class PlaygroundContainer(context: Context) : FrameLayout(context) {
     var onTap: (Float, Float) -> Unit = { _, _ -> }
@@ -103,15 +110,20 @@ private class PlaygroundContainer(context: Context) : FrameLayout(context) {
     private val density = resources.displayMetrics.density
     private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
 
+    private val dark =
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+    private val bgColor = if (dark) Color.rgb(18, 16, 22) else Color.WHITE
+
     private val gridPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            color = Color.rgb(222, 222, 222)
+            color = if (dark) Color.rgb(44, 42, 50) else Color.rgb(222, 222, 222)
             strokeWidth = 1f * density
         }
     private val hintPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(170, 170, 170)
+            color = if (dark) Color.rgb(120, 116, 128) else Color.rgb(170, 170, 170)
             textAlign = Paint.Align.CENTER
             textSize = HINT_SP * density
         }
@@ -178,7 +190,7 @@ private class PlaygroundContainer(context: Context) : FrameLayout(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        canvas.drawColor(Color.WHITE)
+        canvas.drawColor(bgColor)
         var x = 0f
         while (x <= width) {
             canvas.drawLine(x, 0f, x, height.toFloat(), gridPaint)
