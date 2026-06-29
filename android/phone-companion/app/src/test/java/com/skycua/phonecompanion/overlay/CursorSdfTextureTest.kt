@@ -43,15 +43,19 @@ class CursorSdfTextureTest {
 
     /**
      * Mirrors `cursor_image_is_vector_rendered_with_transparent_corners`: the far
-     * margin corner is fully transparent, and the footprint hotspot is covered.
+     * margin corner has no glyph coverage and the footprint hotspot is covered.
+     * Coverage lives in B (not A): A is forced opaque everywhere so Skia's
+     * premultiplied bitmap sampling can't scale the R/G/B data fields toward zero.
      */
     @Test
-    fun farCornerIsTransparentAndHotspotIsCovered() {
-        assertEquals("the margin corner is transparent", 0.0f, buffer.a(0, 0), 0.0f)
+    fun farCornerHasNoCoverageAndHotspotIsCovered() {
+        assertEquals("the margin corner has no glyph coverage", 0.0f, buffer.b(0, 0), 0.0f)
+        // Guard the data-safe packing: A is opaque even where coverage is zero.
+        assertEquals("alpha is forced opaque to survive premultiply", 1.0f, buffer.a(0, 0), 0.0f)
 
         val hx = CursorSdfTexture.FOOTPRINT_HOTSPOT_X * CursorSdfTexture.TEXTURE_SCALE
         val hy = CursorSdfTexture.FOOTPRINT_HOTSPOT_Y * CursorSdfTexture.TEXTURE_SCALE
-        assertTrue("vector cursor should cover the hotspot", buffer.a(hx, hy) > 0.0f)
+        assertTrue("vector cursor should cover the hotspot", buffer.b(hx, hy) > 0.0f)
     }
 
     /**

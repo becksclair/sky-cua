@@ -33,18 +33,24 @@ import kotlin.math.sqrt
  * - **G** = chamfer smoke anchor. `1.0` on/inside the glyph silhouette, ramping
  *   to `0.0` over the smoke margin band. The shader billows border-style smoke
  *   off the glyph silhouette from this field.
- * - **B** = stepped luminance (CPU-blit fallback gray); `1.0` outside the path,
- *   `0.0` inside, matching the desktop's `glyph_lum`.
- * - **A** = coverage (CPU-blit straight alpha): the fill plus the outline ring.
+ * - **B** = coverage (straight alpha): the glyph fill plus the outline ring. The
+ *   smoke mask reads glyph coverage from here. This is the channel the desktop
+ *   keeps in A; on Android it must live in B (see A, below).
+ * - **A** = forced fully opaque (`255`) everywhere. Skia samples bitmaps
+ *   PREMULTIPLIED on `eval` regardless of [Bitmap.setPremultiplied]`(false)`, so a
+ *   varying alpha would scale the R/G/B data toward `0` and corrupt every field
+ *   (an opaque-black shadow box where R reads `~0`). Holding A opaque makes the
+ *   premultiply an identity, so the data survives; coverage rides in B instead.
  *
  * ## Sampled as DATA, not color (#1 fidelity trap)
  *
- * The bitmap carries signed-distance and anchor *values*, not premultiplied
- * colors. [Buffer.toBitmap] therefore builds an un-premultiplied,
+ * The bitmap carries signed-distance, anchor, and coverage *values*, not
+ * premultiplied colors. [Buffer.toBitmap] therefore builds an un-premultiplied,
  * color-unmanaged bitmap (`setPremultiplied(false)`, sRGB / null color space) so
- * Skia neither premultiplies the channels against alpha nor color-manages them on
- * upload. Premultiplication or a wide-gamut transform would silently corrupt the
- * R/G fields the shader depends on.
+ * Skia does not color-manage them on upload — but note `setPremultiplied(false)`
+ * does NOT stop the per-`eval` premultiply, which is why A is held opaque rather
+ * than carrying coverage. A wide-gamut transform would likewise corrupt the
+ * R/G/B fields the shader depends on.
  *
  * ## Threading
  *
@@ -81,8 +87,16 @@ object CursorSdfTexture {
     /** `AGENT_CURSOR_DESKTOP_HOTSPOT_Y` (lib.rs cursor_asset). */
     const val DESKTOP_HOTSPOT_Y: Int = 14
 
-    /** `AGENT_CURSOR_SMOKE_MARGIN` (lib.rs cursor_asset): smoke band on every side. */
-    const val SMOKE_MARGIN: Int = 30
+    /**
+     * Smoke band on every side, in source units. The desktop
+     * (`AGENT_CURSOR_SMOKE_MARGIN`) uses 30 around a 30px glyph; on the phone the
+     * cursor is physically tiny (a ~36dp glyph on a 600-density panel), so the
+     * cloud needs a proportionally larger reach to read as the same billowy aura.
+     * Enlarging this widens the chamfer anchor band (the cloud extent) and the
+     * sampled footprint together. Tightened so the cloud stays concentrated near
+     * the cursor and fades close in, rather than trailing faint smoke far out.
+     */
+    const val SMOKE_MARGIN: Int = 40
 
     /** `AGENT_CURSOR_FOOTPRINT_WIDTH` (lib.rs cursor_asset): glyph + 2*margin. */
     const val FOOTPRINT_WIDTH: Int = DESKTOP_WIDTH + 2 * SMOKE_MARGIN
@@ -198,18 +212,19 @@ object CursorSdfTexture {
         /** Unpacked G channel `[0,1]` at (x, y) — the chamfer smoke anchor. */
         fun g(x: Int, y: Int): Float = ((pixels[y * width + x] ushr 8) and 0xFF) / 255.0f
 
-        /** Unpacked B channel `[0,1]` at (x, y) — stepped luminance (fallback). */
+        /** Unpacked B channel `[0,1]` at (x, y) — glyph coverage (straight alpha). */
         fun b(x: Int, y: Int): Float = (pixels[y * width + x] and 0xFF) / 255.0f
 
-        /** Unpacked A channel `[0,1]` at (x, y) — coverage (fallback straight alpha). */
+        /** Unpacked A channel `[0,1]` at (x, y) — forced opaque (1.0) to survive premultiply. */
         fun a(x: Int, y: Int): Float = ((pixels[y * width + x] ushr 24) and 0xFF) / 255.0f
 
         /**
          * Wrap this data buffer into an ARGB_8888 [Bitmap] the shader samples as
-         * DATA. Built un-premultiplied and color-unmanaged so Skia neither
-         * premultiplies the R/G fields against alpha nor color-manages them: the
-         * #1 fidelity trap for SDF-in-a-bitmap. Touches the Android framework — NOT
-         * covered by JVM unit tests.
+         * DATA. Built un-premultiplied and color-unmanaged so Skia does not
+         * color-manage the R/G/B fields. The per-`eval` premultiply can't be
+         * disabled, so the data is kept safe by holding A opaque (see class docs) —
+         * the #1 fidelity trap for SDF-in-a-bitmap. Touches the Android framework —
+         * NOT covered by JVM unit tests.
          */
         fun toBitmap(): Bitmap {
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -238,8 +253,8 @@ object CursorSdfTexture {
 
     /**
      * Pure array-layer entry point. Rasterizes the glyph SDF (R), chamfer smoke
-     * anchor (G), stepped luminance (B), and coverage (A) into a packed-ARGB
-     * [Buffer]. No Android types touched; safe to unit-test and to call from a
+     * anchor (G), and glyph coverage (B) into a packed-ARGB [Buffer] with A held
+     * opaque. No Android types touched; safe to unit-test and to call from a
      * worker thread.
      */
     fun buildBuffer(): Buffer {
@@ -278,7 +293,6 @@ object CursorSdfTexture {
         // margin pixels never reconstruct as fill.
         val glyphSdf = FloatArray(width * height) { 1.0f }
         val glyphAlpha = FloatArray(width * height)
-        val glyphLum = FloatArray(width * height)
 
         for (y in gy0 until gy1) {
             for (x in gx0 until gx1) {
@@ -290,21 +304,31 @@ object CursorSdfTexture {
                 glyphSdf[index] = (signed / SDF_RANGE_TEXELS + 0.5f).coerceIn(0.0f, 1.0f)
                 // Coverage = fill plus the ring out to `strokeExtent`.
                 glyphAlpha[index] = (0.5f + strokeExtent - signed).coerceIn(0.0f, 1.0f)
-                glyphLum[index] = if (signed > 0.0f) 1.0f else 0.0f
             }
         }
 
         // G channel: smoke anchor (chamfer distance transform).
         val smokeAnchor = cursorSmokeAnchor(glyphAlpha, width, height, margin)
 
-        // Pack: R = SDF, G = smoke anchor, B = stepped luminance, A = coverage.
+        // Pack: R = SDF, G = smoke anchor, B = coverage, A = 255 (opaque).
+        //
+        // CRITICAL — Android-specific divergence from the desktop (WGPU). A Skia
+        // RuntimeShader samples a bitmap in PREMULTIPLIED space: it multiplies
+        // R/G/B by A on every `eval`, and `setPremultiplied(false)` does NOT stop
+        // that (it only declares the source straight). R (SDF) and G (anchor) are
+        // DATA, not color, so any texel with A < 255 would have its R/G silently
+        // scaled toward 0. With coverage in A (0 outside the glyph), that renders
+        // the whole footprint as an opaque black shadow box (R reads ~0 ->
+        // "deep inside" -> full shadow) and kills the smoke (G reads 0). So store
+        // A fully opaque (premultiply becomes identity) and move the glyph
+        // coverage the smoke mask needs into B. The desktop keeps coverage in A
+        // because WGPU `textureSample` does not premultiply; Android cannot.
         val pixels = IntArray(width * height)
         for (index in pixels.indices) {
             val r = floatToU8(glyphSdf[index] * 255.0f)
             val gCh = floatToU8(smokeAnchor[index] * 255.0f)
-            val b = floatToU8(glyphLum[index] * 255.0f)
-            val aCh = floatToU8(glyphAlpha[index] * 255.0f)
-            pixels[index] = (aCh shl 24) or (r shl 16) or (gCh shl 8) or b
+            val coverage = floatToU8(glyphAlpha[index] * 255.0f)
+            pixels[index] = (0xFF shl 24) or (r shl 16) or (gCh shl 8) or coverage
         }
         return pixels
     }
