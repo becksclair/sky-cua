@@ -13,7 +13,9 @@ android {
 
     defaultConfig {
         applicationId = "com.skycua.phonecompanion"
-        minSdk = 30
+        // AGSL RuntimeShader (the agent-overlay smoke/glow renderer) requires
+        // API 33. Older devices (Android 11-12) are dropped intentionally.
+        minSdk = 33
         targetSdk = 36
         versionCode = 2
         versionName = "0.1.1"
