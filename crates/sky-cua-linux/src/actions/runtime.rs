@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use sky_cua_platform::diagnostics::BackendError;
 use sky_cua_platform::model::{ActionRequest, DiagnosticEntry, FocusedApp};
@@ -92,7 +94,14 @@ pub(crate) trait LinuxActionRuntime {
         button: MouseButton,
     ) -> Result<(), BackendError>;
 
-    async fn portal_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError>;
+    /// Drag along `waypoints` (origin first, destination last), sleeping
+    /// `step_delay` between successive motion events. The whole press-move-release
+    /// stays inside one button grab.
+    async fn portal_drag(
+        &self,
+        waypoints: &[(f64, f64)],
+        step_delay: Duration,
+    ) -> Result<(), BackendError>;
 
     async fn portal_scroll_vertical_at(
         &self,
@@ -143,6 +152,12 @@ pub(crate) trait LinuxActionRuntime {
         keys: &[String],
     ) -> Result<(), BackendError>;
 
+    /// True when Linux virtual-input pointer actions are routed through the
+    /// privileged helper's absolute `EV_ABS` device (the COSMIC route). The
+    /// absolute device maps desktop-logical coordinates linearly, so the action
+    /// layer must pass raw points and skip the ydotool acceleration fudge.
+    fn virtual_pointer_prefers_absolute(&self) -> bool;
+
     fn virtual_click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError>;
 
     fn virtual_pointer_mapping_diagnostic(
@@ -151,7 +166,13 @@ pub(crate) trait LinuxActionRuntime {
         y: f64,
     ) -> Result<Option<DiagnosticEntry>, BackendError>;
 
-    fn virtual_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError>;
+    /// Drag along `waypoints` (origin first, destination last), sleeping
+    /// `step_delay` between successive motion events.
+    fn virtual_drag(
+        &self,
+        waypoints: &[(f64, f64)],
+        step_delay: Duration,
+    ) -> Result<(), BackendError>;
 
     fn virtual_scroll_vertical(&self, steps: i32) -> Result<(), BackendError>;
 

@@ -76,6 +76,20 @@ Inside `LinuxVirtualInput`, adapter probe order is:
   `setxkbmap -query` / `localectl status`, then defaults, and send evdev
   press/release events to the helper. The helper does not parse characters
   or key names.
+- **COSMIC text-input handling**: cosmic-comp's `zwp_text_input_v3` pipeline
+  applies each key event's effect one event late — the final typed character
+  stays in preedit and a trailing `Return`'s activate only fires on the next
+  key — and it drops the tail of a long single keyboard batch even when the
+  events are paced. On the helper (COSMIC) path, `type_text` therefore sends one
+  helper command per character with a fixed inter-command gap (so the gap cannot
+  collapse below the commit window), then commits the final character with a
+  trailing `End` tap. `End` is used rather than a modifier because the
+  inter-character commits are reliable precisely because each is triggered by
+  the next character — a decisive non-modifier — while a trailing modifier is
+  held as a chord prefix and commits the preedit only intermittently under load.
+  `press_key` ships its flush (a `Shift` tap, cursor-safe for navigation keys)
+  in the same batch as the key. Both behaviors are scoped to the helper path;
+  the EIS keyboard path on KDE/GNOME commits per keystroke and is untouched.
 
 Snapshot-based actions map screenshot pixels to desktop logical
 coordinates through `capture.pixel_size` and `capture.logical_rect`,
@@ -145,6 +159,13 @@ input smoke, and restores 1280x800 at 100% afterward.
   virtual device is relative-only in `/proc/bus/input/devices`, and
   `ydotool mousemove --absolute` lands at accelerated/doubled coordinates.
   See [`docs/research/2026-05-ydotool-vs-direct-uinput.md`](../research/2026-05-ydotool-vs-direct-uinput.md).
+- Pointer drags are expanded into an eased, paced waypoint path
+  (`crates/sky-cua-linux/src/actions/drag_path.rs`) and emitted inside one
+  button grab per backend, so toolkit sliders and drag-and-drop gestures track
+  the continuous motion that a single teleport cannot trigger. The
+  `desktop_pointer` `duration_ms` paces the path; when absent the path still
+  interpolates with a small default. The ydotool adapter subsamples the path to
+  16 segments because each move is a subprocess spawn.
 - The fixture's center scroller can be too low in oversized scaled
   fullscreen GTK allocations; the fixture exposes a `scroll_safe` upper
   point for portable scaled-scroll proof.

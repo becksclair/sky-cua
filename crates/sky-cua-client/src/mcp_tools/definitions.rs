@@ -170,7 +170,7 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
              top-level `operation` plus either `x`/`y`, or `snapshot_id` with \
              `element_index`, `name`, or `text`; drag uses top-level \
              `x`/`y`/`to_x`/`to_y` or `from_x`/`from_y`/`to_x`/`to_y`, plus an \
-             optional `duration_ms`.",
+             optional `duration_ms` that paces the interpolated drag motion.",
         ),
         "desktop_scroll" => Some(
             "`desktop_scroll` expects top-level `direction` plus a snapshot-resolved \
@@ -1212,7 +1212,7 @@ fn desktop_pointer_properties() -> Value {
             "to_x": {"type": "number"},
             "to_y": {"type": "number"},
             "to_element_index": {"type": "integer", "minimum": 0},
-            "duration_ms": {"type": "integer", "minimum": 0}
+            "duration_ms": {"type": "integer", "minimum": 0, "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably."}
         }),
         semantic_selector_properties(),
     ))

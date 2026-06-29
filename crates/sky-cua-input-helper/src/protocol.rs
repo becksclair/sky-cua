@@ -15,14 +15,34 @@ pub struct HelperRequest {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum HelperCommand {
     Hello,
-    ObservePointer { bounds: DesktopBounds },
-    KeyEvents { events: Vec<KeyEventCommand> },
+    ObservePointer {
+        bounds: DesktopBounds,
+    },
+    KeyEvents {
+        events: Vec<KeyEventCommand>,
+    },
+    PointerActions {
+        bounds: DesktopBounds,
+        actions: Vec<PointerAction>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeyEventCommand {
     pub code: u16,
     pub pressed: bool,
+}
+
+/// A single absolute-pointer primitive replayed by the privileged helper. Button
+/// indices are `0=left`, `1=right`, `2=middle`; coordinates are desktop-logical
+/// and mapped to absolute device units by the helper's `DesktopBounds`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PointerAction {
+    MoveAbsolute { x: f64, y: f64 },
+    Button { button: u8, pressed: bool },
+    ScrollVertical { steps: i32 },
+    Settle { millis: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -36,7 +56,7 @@ impl Default for HelperCapabilities {
     fn default() -> Self {
         Self {
             protocol_version: PROTOCOL_VERSION,
-            pointer: false,
+            pointer: true,
             keyboard: true,
         }
     }
@@ -131,8 +151,8 @@ pub fn parse_response_line(line: &str) -> Result<HelperResponse, serde_json::Err
 #[cfg(test)]
 mod tests {
     use super::{
-        HelperCommand, HelperStreamEvent, PROTOCOL_VERSION, parse_request_line, request_line,
-        stream_event_line,
+        HelperCommand, HelperStreamEvent, PROTOCOL_VERSION, PointerAction, parse_request_line,
+        request_line, stream_event_line,
     };
     use crate::uinput::DesktopBounds;
 
@@ -153,6 +173,47 @@ mod tests {
         let parsed = parse_request_line(&line).unwrap();
         assert_eq!(parsed.version, PROTOCOL_VERSION);
         assert!(matches!(parsed.command, HelperCommand::KeyEvents { .. }));
+    }
+
+    #[test]
+    fn encodes_versioned_json_line_pointer_actions_requests() {
+        let line = request_line(HelperCommand::PointerActions {
+            bounds: DesktopBounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                scale_milli: 1000,
+            },
+            actions: vec![
+                PointerAction::MoveAbsolute { x: 12.0, y: 34.0 },
+                PointerAction::Button {
+                    button: 0,
+                    pressed: true,
+                },
+                PointerAction::Settle { millis: 120 },
+                PointerAction::Button {
+                    button: 0,
+                    pressed: false,
+                },
+                PointerAction::ScrollVertical { steps: -2 },
+            ],
+        })
+        .unwrap();
+
+        assert!(line.ends_with('\n'));
+        assert!(line.contains("\"version\":1"));
+        assert!(line.contains("\"op\":\"pointer_actions\""));
+        assert!(line.contains("\"kind\":\"move_absolute\""));
+
+        let parsed = parse_request_line(&line).unwrap();
+        assert_eq!(parsed.version, PROTOCOL_VERSION);
+        let HelperCommand::PointerActions { bounds, actions } = parsed.command else {
+            panic!("expected pointer_actions command");
+        };
+        assert_eq!(bounds.width, 1920);
+        assert_eq!(actions.len(), 5);
+        assert_eq!(actions[0], PointerAction::MoveAbsolute { x: 12.0, y: 34.0 });
     }
 
     #[test]

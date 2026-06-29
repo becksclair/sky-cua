@@ -61,6 +61,25 @@ dumps. Per-feature artifact paths live in
   non-US layouts and uppercase keys. The `wayland-pointer` smoke must
   require `PortalEisInputUsed` (no fallback) for every action or it can pass
   through the unproved legacy path.
+- COSMIC helper keyboard has a one-event text-input lag (cosmic-comp
+  `zwp_text_input_v3`): the last typed character stays in preedit and a
+  trailing `Return`'s activate only fires on the next key, and a long single
+  key batch silently drops its tail even when paced (`type_text` of 17 chars
+  lands ~14). Every keycode is delivered on time — it is not a focus or
+  delivery failure. ydotool exhibits the identical lag, so it is compositor
+  behavior, not the device. KDE/GNOME EIS keyboard is unaffected. The fix in
+  `virtual_input.rs` (`type_text_via_helper`) has three parts that all matter:
+  (1) send one helper command per character — a single batch drops its tail
+  regardless of pacing, discrete commands do not; (2) a fixed
+  `COSMIC_KEY_COMMAND_GAP` (30 ms) between commands so the inter-command gap
+  cannot collapse below the commit window; (3) commit the final character with
+  a trailing `End` tap, not `Shift` — the inter-character commits are reliable
+  because each is triggered by the next *character* (a decisive non-modifier),
+  whereas a trailing *modifier* is held as a chord prefix and commits the
+  preedit only ~50% of the time under load. `press_key` keeps the `Shift` flush
+  (shipped in the same batch as the key, and cursor-safe for navigation keys).
+- KDE Screenshot portal returns a local `file://` URI; copy it into
+  `/run/user/<uid>/sky-cua/captures/`.
 - KDE Screenshot portal returns a local `file://` URI; copy it into
   `/run/user/<uid>/sky-cua/captures/`.
 

@@ -76,8 +76,8 @@ pub(crate) enum EisAction {
         button: MouseButton,
     },
     Drag {
-        from: (f64, f64),
-        to: (f64, f64),
+        waypoints: std::sync::Arc<[(f64, f64)]>,
+        step_delay: Duration,
     },
     ScrollVertical {
         x: f64,
@@ -327,7 +327,10 @@ impl EisWorker {
     fn execute(&mut self, action: EisAction) -> Result<String, BackendError> {
         match action {
             EisAction::Click { x, y, button } => self.click_at(x, y, button),
-            EisAction::Drag { from, to } => self.drag(from, to),
+            EisAction::Drag {
+                waypoints,
+                step_delay,
+            } => self.drag(waypoints.as_ref(), step_delay),
             EisAction::ScrollVertical {
                 x,
                 y,
@@ -455,28 +458,53 @@ impl EisWorker {
         Ok(format_action_result(&details, &emulation.detail, None))
     }
 
-    fn drag(&mut self, from: (f64, f64), to: (f64, f64)) -> Result<String, BackendError> {
+    fn drag(
+        &mut self,
+        waypoints: &[(f64, f64)],
+        step_delay: Duration,
+    ) -> Result<String, BackendError> {
         let device = self.pointer_device()?;
-        validate_eis_absolute_point(&device.device, from.0, from.1)?;
-        validate_eis_absolute_point(&device.device, to.0, to.1)?;
+        let Some((first, rest)) = waypoints.split_first() else {
+            return Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                "drag requires at least one waypoint",
+            ));
+        };
+        // The press and release must land on valid points; require those. Interior
+        // points are validated per-frame below so a non-convex region (e.g. the
+        // gap between two monitors) cannot make us emit an off-region motion.
+        let last = rest.last().copied().unwrap_or(*first);
+        validate_eis_absolute_point(&device.device, first.0, first.1)?;
+        validate_eis_absolute_point(&device.device, last.0, last.1)?;
         let details = device.description.clone();
         let emulation = self.ensure_emulating(&device.device)?;
+        // One serial for the whole action, matching click/scroll: `last_serial()`
+        // only advances when we process inbound EIS events, and the drag loop
+        // never pumps them, so the value is stable for the action's duration.
         let serial = self.input.last_serial();
         let evdev = evdev_button(MouseButton::Left) as u32;
+        // Press, then emit every waypoint as its own frame+flush inside one grab
+        // so the compositor sees continuous motion rather than a teleport.
         device
             .pointer_absolute
-            .motion_absolute(from.0 as f32, from.1 as f32);
+            .motion_absolute(first.0 as f32, first.1 as f32);
         device.device.device().frame(serial, monotonic_micros());
         device.button.button(evdev, ei::button::ButtonState::Press);
         device.device.device().frame(serial, monotonic_micros());
         self.input.flush()?;
         thread::sleep(EIS_FRAME_GAP_DELAY);
-        device
-            .pointer_absolute
-            .motion_absolute(to.0 as f32, to.1 as f32);
-        device.device.device().frame(serial, monotonic_micros());
-        self.input.flush()?;
-        thread::sleep(EIS_FRAME_GAP_DELAY);
+        for &(x, y) in rest {
+            // Skip any interpolated point outside the advertised regions rather
+            // than emit a motion the compositor would drop; the destination
+            // (`last`) is validated above so it is always emitted.
+            if validate_eis_absolute_point(&device.device, x, y).is_err() {
+                continue;
+            }
+            device.pointer_absolute.motion_absolute(x as f32, y as f32);
+            device.device.device().frame(serial, monotonic_micros());
+            self.input.flush()?;
+            thread::sleep(step_delay);
+        }
         device
             .button
             .button(evdev, ei::button::ButtonState::Released);

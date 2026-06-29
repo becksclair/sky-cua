@@ -1,3 +1,4 @@
+mod drag_path;
 mod key_sequence;
 pub(crate) mod runtime;
 pub(crate) mod targeting;
@@ -5,6 +6,7 @@ pub(crate) mod targeting;
 use std::process::Stdio;
 use std::time::Duration;
 
+use drag_path::drag_waypoints;
 use runtime::{LinuxActionRuntime, SemanticAtspiAction, SemanticSetValueResult};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
@@ -77,6 +79,30 @@ where
 {
     pub(crate) fn new(runtime: &'a R) -> Self {
         Self { runtime }
+    }
+
+    /// Resolve the dispatch point for a Linux virtual-input pointer action.
+    ///
+    /// When the runtime routes COSMIC pointer actions through the privileged
+    /// helper's absolute `EV_ABS` device, the coordinates map linearly with no
+    /// pointer acceleration, so the raw desktop-logical point is passed straight
+    /// through (no ydotool fudge, no scale diagnostic). Otherwise this preserves
+    /// the existing ydotool coordinate transform.
+    fn linux_virtual_dispatch_point(
+        &self,
+        request: &ActionRequest,
+        point: (f64, f64),
+    ) -> LinuxVirtualDispatchPoint {
+        if self.runtime.virtual_pointer_prefers_absolute() {
+            return LinuxVirtualDispatchPoint {
+                x: point.0,
+                y: point.1,
+                requested_x: point.0,
+                requested_y: point.1,
+                coordinate_scale: None,
+            };
+        }
+        linux_virtual_dispatch_point(request, point)
     }
 
     pub(crate) async fn execute(
@@ -294,7 +320,7 @@ where
                 Ok(success(xtest_message))
             }
             InputBackendKind::LinuxVirtualInput => {
-                let dispatch_point = linux_virtual_dispatch_point(request, (x, y));
+                let dispatch_point = self.linux_virtual_dispatch_point(request, (x, y));
                 let mut diagnostics = dispatch_point.diagnostics();
                 if dispatch_point.coordinate_scale.is_none()
                     && let Some(diagnostic) = self
@@ -382,7 +408,7 @@ where
             InputBackendKind::LinuxVirtualInput => {
                 let mut diagnostics = Vec::new();
                 if let Some((x, y)) = target_point {
-                    let dispatch_point = linux_virtual_dispatch_point(&request, (x, y));
+                    let dispatch_point = self.linux_virtual_dispatch_point(&request, (x, y));
                     if self
                         .runtime
                         .semantic_scroll_vertical_at(
@@ -453,7 +479,7 @@ where
                 vec![portal_targeted_scroll_fallback_diagnostic(portal_error)],
             ));
         }
-        let dispatch_point = linux_virtual_dispatch_point(&virtual_request, (x, y));
+        let dispatch_point = self.linux_virtual_dispatch_point(&virtual_request, (x, y));
         let mut diagnostics = vec![portal_targeted_scroll_fallback_diagnostic(portal_error)];
         diagnostics.extend(dispatch_point.diagnostics());
         self.runtime
@@ -483,33 +509,59 @@ where
             })?
         };
 
+        // Expand the teleport into an eased, paced waypoint path so toolkit
+        // sliders and drag-and-drop gestures see continuous motion under the
+        // grab. `duration_ms` is advertised on the desktop_pointer tool; honor it.
+        let duration_ms = request
+            .arguments
+            .get("duration_ms")
+            .and_then(serde_json::Value::as_u64);
+        let path = drag_waypoints(from, to, duration_ms);
+
         match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
-                self.runtime.portal_drag(from, to).await?;
+                self.runtime
+                    .portal_drag(&path.points, path.per_step_delay)
+                    .await?;
                 Ok(success_with_diagnostics(
                     "Dragged through the RemoteDesktop portal.",
                     self.runtime.portal_take_lifecycle_diagnostics().await,
                 ))
             }
             InputBackendKind::XTest => {
-                self.runtime.xtest_pointer_move_absolute(from.0, from.1)?;
+                let Some((first, rest)) = path.points.split_first() else {
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidRequest,
+                        "drag requires at least one waypoint",
+                    ));
+                };
+                self.runtime.xtest_pointer_move_absolute(first.0, first.1)?;
                 self.runtime.xtest_pointer_button(MouseButton::Left, true)?;
                 tokio::time::sleep(Duration::from_millis(40)).await;
-                self.runtime.xtest_pointer_move_absolute(to.0, to.1)?;
+                for &(x, y) in rest {
+                    self.runtime.xtest_pointer_move_absolute(x, y)?;
+                    tokio::time::sleep(path.per_step_delay).await;
+                }
                 tokio::time::sleep(Duration::from_millis(40)).await;
                 self.runtime
                     .xtest_pointer_button(MouseButton::Left, false)?;
                 Ok(success("Dragged through the X11 input fallback."))
             }
             InputBackendKind::LinuxVirtualInput => {
-                let dispatch_from = linux_virtual_dispatch_point(&request, from);
-                let dispatch_to = linux_virtual_dispatch_point(&request, to);
+                let dispatch_from = self.linux_virtual_dispatch_point(&request, from);
+                let dispatch_to = self.linux_virtual_dispatch_point(&request, to);
                 let mut diagnostics = dispatch_from.diagnostics();
                 diagnostics.extend(dispatch_to.diagnostics());
-                self.runtime.virtual_drag(
-                    (dispatch_from.x, dispatch_from.y),
-                    (dispatch_to.x, dispatch_to.y),
-                )?;
+                let dispatch_points: Vec<(f64, f64)> = path
+                    .points
+                    .iter()
+                    .map(|&point| {
+                        let dispatched = self.linux_virtual_dispatch_point(&request, point);
+                        (dispatched.x, dispatched.y)
+                    })
+                    .collect();
+                self.runtime
+                    .virtual_drag(&dispatch_points, path.per_step_delay)?;
                 Ok(success_with_diagnostics(
                     "Dragged through the Linux virtual input fallback.",
                     diagnostics,
@@ -867,7 +919,7 @@ where
                         ))
                     }
                     InputBackendKind::LinuxVirtualInput => {
-                        let dispatch_point = linux_virtual_dispatch_point(request, (x, y));
+                        let dispatch_point = self.linux_virtual_dispatch_point(request, (x, y));
                         diagnostics.extend(dispatch_point.diagnostics());
                         self.runtime.virtual_click_at(
                             dispatch_point.x,
@@ -1365,12 +1417,14 @@ mod tests {
     };
     use sky_cua_platform::{SetValueFallbackMode, SetValueRouting};
     use std::sync::Mutex;
+    use std::time::Duration;
 
     #[derive(Default)]
     struct FakeRuntime {
         semantic_default: bool,
         xtest_available: bool,
         portal_scroll_at_denied: bool,
+        virtual_prefers_absolute: bool,
         policy: Option<ResolvedSetValueFallbackPolicy>,
         events: Mutex<Vec<String>>,
         diagnostics: Mutex<Vec<DiagnosticEntry>>,
@@ -1487,10 +1541,21 @@ mod tests {
             Ok(())
         }
 
-        async fn portal_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
+        async fn portal_drag(
+            &self,
+            waypoints: &[(f64, f64)],
+            step_delay: Duration,
+        ) -> Result<(), BackendError> {
+            let first = waypoints.first().copied().unwrap_or((0.0, 0.0));
+            let last = waypoints.last().copied().unwrap_or(first);
             self.push_event(format!(
-                "portal_drag:{},{}:{},{}",
-                from.0, from.1, to.0, to.1
+                "portal_drag:{},{}:{},{}:waypoints={}:step_ms={}",
+                first.0,
+                first.1,
+                last.0,
+                last.1,
+                waypoints.len(),
+                step_delay.as_millis()
             ));
             Ok(())
         }
@@ -1592,6 +1657,10 @@ mod tests {
             Ok(())
         }
 
+        fn virtual_pointer_prefers_absolute(&self) -> bool {
+            self.virtual_prefers_absolute
+        }
+
         fn virtual_click_at(
             &self,
             x: f64,
@@ -1614,8 +1683,18 @@ mod tests {
             }))
         }
 
-        fn virtual_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
-            self.push_event(format!("virtual_drag:{from:?}:{to:?}"));
+        fn virtual_drag(
+            &self,
+            waypoints: &[(f64, f64)],
+            step_delay: Duration,
+        ) -> Result<(), BackendError> {
+            let first = waypoints.first().copied().unwrap_or((0.0, 0.0));
+            let last = waypoints.last().copied().unwrap_or(first);
+            self.push_event(format!(
+                "virtual_drag:{first:?}:{last:?}:waypoints={}:step_ms={}",
+                waypoints.len(),
+                step_delay.as_millis()
+            ));
             Ok(())
         }
 
@@ -1882,6 +1961,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn executor_linux_virtual_click_passes_raw_coordinates_on_helper_absolute_route() {
+        let runtime = FakeRuntime {
+            virtual_prefers_absolute: true,
+            ..FakeRuntime::default()
+        };
+        let mut request = action_request(ActionName::Click, json!({"x": 1400.0, "y": 260.0}));
+        let mut environment = wayland_pipewire_environment();
+        environment.desktop_environment = Some("COSMIC".to_string());
+        environment.input_backend = InputBackendKind::LinuxVirtualInput;
+        request.environment = Some(environment);
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("click should succeed");
+
+        // The absolute helper device has no pointer acceleration, so the raw
+        // desktop-logical coordinates are dispatched untouched (no 2x fudge),
+        // and no coordinate-scale diagnostic is emitted.
+        assert_eq!(runtime.take_events(), vec!["virtual_click:1400,260:Left"]);
+        assert!(
+            !outcome
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == "LinuxVirtualInputCoordinateScale" })
+        );
+    }
+
+    #[tokio::test]
     async fn executor_linux_virtual_click_scales_unscaled_cosmic_wayland_coordinates() {
         let runtime = FakeRuntime::default();
         let mut request = action_request(ActionName::Click, json!({"x": 179.0, "y": 240.0}));
@@ -1937,6 +2045,49 @@ mod tests {
         assert_eq!(
             error.message,
             "drag requires either to_element_index or explicit to_x/to_y coordinates"
+        );
+    }
+
+    #[tokio::test]
+    async fn executor_drag_interpolates_waypoints_with_duration() {
+        let runtime = FakeRuntime::default();
+        let request = action_request(
+            ActionName::Drag,
+            json!({
+                "from_x": 100.0,
+                "from_y": 100.0,
+                "to_x": 400.0,
+                "to_y": 100.0,
+                "duration_ms": 600
+            }),
+        );
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("drag should succeed");
+
+        assert_eq!(outcome.message, "Dragged through the RemoteDesktop portal.");
+        let events = runtime.take_events();
+        let drag_events: Vec<&String> = events
+            .iter()
+            .filter(|event| event.starts_with("portal_drag:"))
+            .collect();
+        assert_eq!(drag_events.len(), 1, "events: {events:?}");
+        let event = drag_events[0];
+        assert!(
+            event.starts_with("portal_drag:100,100:400,100:"),
+            "press/release endpoints not preserved: {event}"
+        );
+        let waypoints = event
+            .split("waypoints=")
+            .nth(1)
+            .and_then(|tail| tail.split(':').next())
+            .and_then(|value| value.parse::<usize>().ok())
+            .expect("waypoint count present");
+        assert!(
+            waypoints > 2,
+            "expected interpolated waypoints, got {waypoints}"
         );
     }
 

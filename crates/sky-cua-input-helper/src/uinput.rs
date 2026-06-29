@@ -12,10 +12,21 @@ const UINPUT_SETTLE_DELAY: Duration = Duration::from_millis(650);
 
 const EV_SYN: i32 = 0x00;
 const EV_KEY: i32 = 0x01;
+const EV_REL: i32 = 0x02;
+const EV_ABS: i32 = 0x03;
 const SYN_REPORT: i32 = 0;
+const REL_WHEEL: i32 = 0x08;
+const REL_WHEEL_HI_RES: i32 = 0x0b;
+const ABS_X: i32 = 0x00;
+const ABS_Y: i32 = 0x01;
+const BTN_LEFT: i32 = 0x110;
+const BTN_RIGHT: i32 = 0x111;
+const BTN_MIDDLE: i32 = 0x112;
 const BUS_USB: u16 = 0x03;
 const UI_SET_EVBIT: libc::c_ulong = 0x40045564;
 const UI_SET_KEYBIT: libc::c_ulong = 0x40045565;
+const UI_SET_RELBIT: libc::c_ulong = 0x40045566;
+const UI_SET_ABSBIT: libc::c_ulong = 0x40045567;
 const UI_DEV_CREATE: libc::c_ulong = 0x5501;
 const UI_DEV_DESTROY: libc::c_ulong = 0x5502;
 
@@ -108,6 +119,140 @@ impl UinputKeyboardDevice {
 
 impl Drop for UinputKeyboardDevice {
     fn drop(&mut self) {
+        let _ = unsafe { libc::ioctl(self.file.as_raw_fd(), UI_DEV_DESTROY) };
+    }
+}
+
+/// Absolute `EV_ABS` pointer device that maps desktop-logical coordinates
+/// linearly onto the output, sidestepping libinput pointer acceleration. Created
+/// inside the privileged helper so the unprivileged service can drive precise
+/// pointer actions on compositors without a RemoteDesktop portal (COSMIC).
+#[derive(Debug)]
+pub struct UinputPointerDevice {
+    file: File,
+    bounds: DesktopBounds,
+    /// Buttons currently pressed, as a bitmask keyed by the `button()` index
+    /// (bit 0 = left, 1 = right, 2 = middle). Tracked so `Drop` can release a
+    /// held button before destroying the device.
+    held_buttons: u8,
+}
+
+impl UinputPointerDevice {
+    pub fn create(bounds: DesktopBounds) -> Result<Self> {
+        if bounds.width == 0 || bounds.height == 0 {
+            return Err(UinputError::new(
+                "absolute uinput pointer requires nonzero desktop bounds",
+            ));
+        }
+        let file = OpenOptions::new()
+            .write(true)
+            .open(UINPUT_PATH)
+            .map_err(|error| UinputError::io(&format!("failed to open {UINPUT_PATH}"), error))?;
+        let fd = file.as_raw_fd();
+        ioctl_set(fd, UI_SET_EVBIT, EV_KEY, "UI_SET_EVBIT EV_KEY")?;
+        ioctl_set(fd, UI_SET_EVBIT, EV_REL, "UI_SET_EVBIT EV_REL")?;
+        ioctl_set(fd, UI_SET_EVBIT, EV_ABS, "UI_SET_EVBIT EV_ABS")?;
+        ioctl_set(fd, UI_SET_KEYBIT, BTN_LEFT, "UI_SET_KEYBIT BTN_LEFT")?;
+        ioctl_set(fd, UI_SET_KEYBIT, BTN_RIGHT, "UI_SET_KEYBIT BTN_RIGHT")?;
+        ioctl_set(fd, UI_SET_KEYBIT, BTN_MIDDLE, "UI_SET_KEYBIT BTN_MIDDLE")?;
+        ioctl_set(fd, UI_SET_RELBIT, REL_WHEEL, "UI_SET_RELBIT REL_WHEEL")?;
+        ioctl_set(
+            fd,
+            UI_SET_RELBIT,
+            REL_WHEEL_HI_RES,
+            "UI_SET_RELBIT REL_WHEEL_HI_RES",
+        )?;
+        ioctl_set(fd, UI_SET_ABSBIT, ABS_X, "UI_SET_ABSBIT ABS_X")?;
+        ioctl_set(fd, UI_SET_ABSBIT, ABS_Y, "UI_SET_ABSBIT ABS_Y")?;
+
+        // NOTE: deliberately no INPUT_PROP_DIRECT and no BTN_TOUCH/BTN_TOOL_FINGER.
+        // Declaring either makes udev tag the device ID_INPUT_TOUCHSCREEN, and the
+        // compositor would deliver touch events instead of moving the cursor.
+        let mut user_dev = UinputUserDev::named("sky-cua absolute pointer");
+        user_dev.id.bustype = BUS_USB;
+        user_dev.id.vendor = 0x5c1a;
+        user_dev.id.product = 0x0002;
+        user_dev.id.version = 1;
+        user_dev.absmin[ABS_X as usize] = 0;
+        user_dev.absmin[ABS_Y as usize] = 0;
+        user_dev.absmax[ABS_X as usize] =
+            i32::try_from(bounds.width.saturating_sub(1)).unwrap_or(i32::MAX);
+        user_dev.absmax[ABS_Y as usize] =
+            i32::try_from(bounds.height.saturating_sub(1)).unwrap_or(i32::MAX);
+        write_user_dev(
+            &file,
+            &user_dev,
+            "failed to write uinput pointer device definition",
+        )?;
+        ioctl_no_arg(fd, UI_DEV_CREATE, "UI_DEV_CREATE")?;
+        thread::sleep(UINPUT_SETTLE_DELAY);
+        Ok(Self {
+            file,
+            bounds,
+            held_buttons: 0,
+        })
+    }
+
+    pub fn bounds(&self) -> DesktopBounds {
+        self.bounds
+    }
+
+    pub fn move_absolute(&mut self, x: f64, y: f64) -> Result<()> {
+        let (ax, ay) = self.bounds.logical_to_absolute(x, y);
+        self.emit(EV_ABS, ABS_X, ax)?;
+        self.emit(EV_ABS, ABS_Y, ay)?;
+        self.syn()
+    }
+
+    pub fn button(&mut self, button: u8, pressed: bool) -> Result<()> {
+        let code = match button {
+            0 => BTN_LEFT,
+            1 => BTN_RIGHT,
+            2 => BTN_MIDDLE,
+            other => {
+                return Err(UinputError::new(format!(
+                    "unsupported pointer button index {other}"
+                )));
+            }
+        };
+        self.emit(EV_KEY, code, if pressed { 1 } else { 0 })?;
+        let bit = 1u8 << button;
+        if pressed {
+            self.held_buttons |= bit;
+        } else {
+            self.held_buttons &= !bit;
+        }
+        self.syn()
+    }
+
+    pub fn scroll_vertical(&mut self, steps: i32) -> Result<()> {
+        let s = -steps;
+        self.emit(EV_REL, REL_WHEEL_HI_RES, s.saturating_mul(120))?;
+        self.emit(EV_REL, REL_WHEEL, s)?;
+        self.syn()
+    }
+
+    fn emit(&mut self, event_type: i32, code: i32, value: i32) -> Result<()> {
+        emit_event(&mut self.file, event_type, code, value)
+    }
+
+    fn syn(&mut self) -> Result<()> {
+        self.emit(EV_SYN, SYN_REPORT, 0)
+    }
+}
+
+impl Drop for UinputPointerDevice {
+    fn drop(&mut self) {
+        // Release any button still held before tearing the device down so a
+        // rebuild (or shutdown) cannot strand a press on the compositor. The
+        // client brackets press+release in one batch today, so this is normally
+        // a no-op, but it keeps the device self-cleaning regardless of caller.
+        for (index, code) in [(0u8, BTN_LEFT), (1, BTN_RIGHT), (2, BTN_MIDDLE)] {
+            if self.held_buttons & (1 << index) != 0 {
+                let _ = self.emit(EV_KEY, code, 0);
+                let _ = self.syn();
+            }
+        }
         let _ = unsafe { libc::ioctl(self.file.as_raw_fd(), UI_DEV_DESTROY) };
     }
 }
@@ -248,5 +393,60 @@ mod tests {
 
         assert_eq!(bounds.logical_to_absolute(20.0, 30.0), (20, 20));
         assert_eq!(bounds.logical_to_absolute(-100.0, 500.0), (0, 49));
+    }
+
+    #[test]
+    fn identity_scale_maps_logical_one_to_one() {
+        let bounds = DesktopBounds {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale_milli: 1000,
+        };
+
+        assert_eq!(bounds.logical_to_absolute(0.0, 0.0), (0, 0));
+        assert_eq!(bounds.logical_to_absolute(640.0, 480.0), (640, 480));
+    }
+
+    #[test]
+    fn fractional_scale_maps_logical_to_device_units() {
+        let bounds = DesktopBounds {
+            x: 0,
+            y: 0,
+            width: 1600,
+            height: 1200,
+            scale_milli: 1250,
+        };
+
+        assert_eq!(bounds.logical_to_absolute(194.0, 314.0), (243, 393));
+    }
+
+    #[test]
+    fn nonzero_origin_is_subtracted_before_scaling() {
+        let bounds = DesktopBounds {
+            x: 100,
+            y: 50,
+            width: 1920,
+            height: 1080,
+            scale_milli: 1000,
+        };
+
+        assert_eq!(bounds.logical_to_absolute(100.0, 50.0), (0, 0));
+        assert_eq!(bounds.logical_to_absolute(300.0, 250.0), (200, 200));
+    }
+
+    #[test]
+    fn clamps_to_device_edges() {
+        let bounds = DesktopBounds {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale_milli: 1000,
+        };
+
+        assert_eq!(bounds.logical_to_absolute(-50.0, -50.0), (0, 0));
+        assert_eq!(bounds.logical_to_absolute(5000.0, 5000.0), (1919, 1079));
     }
 }

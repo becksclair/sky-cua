@@ -129,9 +129,13 @@ to another server.
   semantic target only. `desktop_scroll` takes `direction` plus a
   snapshot-bound target from the same observation. `desktop_set_value` takes
   `value` plus a semantic target. `desktop_pointer` takes `operation` plus
-  coordinates or an allowed snapshot target; the `drag` operation also accepts
-  an optional `duration_ms` that paces the cursor-overlay drag animation (the
-  visible gesture, not the OS pointer timing). `desktop_keyboard` takes
+  coordinates or an allowed snapshot target. The `drag` operation injects an
+  interpolated pointer path — it presses at the start, moves through
+  intermediate points while the button is held, then releases — so sliders
+  track and drag-and-drop gestures register. Pass `duration_ms` to pace that
+  injected motion over the given wall-clock time; use it for precise or slow
+  drags (sliders, drag-and-drop). Without `duration_ms` the drag is fast but
+  still interpolated. `desktop_keyboard` takes
   `operation` plus `text` or `key`; optional snapshot/window scope can activate
   the target window but does not select an editable element.
 - Prefer semantic primitives when `semantic_actions` advertise them:
@@ -144,11 +148,21 @@ to another server.
   `ActionRequiresPhysicalInput`; use `desktop_pointer` there instead.
 - Use physical click/drag/scroll for sliders, canvases, splitters,
   drag-and-drop, custom-painted widgets, and anything visible but unclear in
-  the tree.
-- Use `desktop_set_value` only with a proven semantic write path and readback.
-  Otherwise click to focus, select all with the literal key payload `Ctrl+A` on
-  Linux/Windows or `Meta+A` on macOS when replacing, type, then verify with a
-  fresh snapshot.
+  the tree. A `drag` only grabs when its start coordinate lands on the draggable
+  handle itself — the slider thumb, the scrollbar grip, the drag-and-drop
+  source — not the surrounding track. Observe first and aim at the handle; a
+  start point in the empty track will not pick it up. Pass `duration_ms`
+  (≈400–800) on slider and drag-and-drop drags so the paced motion tracks
+  reliably, and read back the result to confirm the value or drop landed.
+- For a slider, spinner, or scrollbar that advertises a numeric value (an
+  AT-SPI Value interface shown in `semantic_actions`), prefer
+  `desktop_set_value`: setting the value is more reliable than pixel-dragging a
+  small thumb. Fall back to a `duration_ms` physical drag when no value path
+  exists or readback does not confirm.
+- Use `desktop_set_value` on text fields only with a proven semantic write path
+  and readback. Otherwise click to focus, select all with the literal key
+  payload `Ctrl+A` on Linux/Windows or `Meta+A` on macOS when replacing, type,
+  then verify with a fresh snapshot.
 - `activate_window` targets by `window_id`, `pid`, `app_id`, `wm_class`,
   `title`, or terminal selectors (`tty`, `terminal_pid`, ...).
   `workspace` metadata is backend-native, not portable.

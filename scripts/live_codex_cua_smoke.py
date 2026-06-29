@@ -181,6 +181,8 @@ C7. Press a key in the entry (desktop_keyboard press_key, e.g. End).
 C8. Toggle the "Enable smoke option" check button (desktop_toggle).
 C9. Expand the "Smoke details" expander (desktop_semantic expand).
 C10. Activate the "Physical click target" button via desktop_action (activate or perform_action).
+C11. Drag the horizontal slider's thumb to the right with a physical `desktop_pointer` drag (pass `duration_ms` ~600). The thumb starts at the far left (value 0); aim the drag start at the thumb itself and drag to about the right third so the value rises well above the middle. Re-observe to confirm the slider value increased.
+C12. Drag-and-drop the "DnD source" chip onto the "Drop zone": a physical `desktop_pointer` drag from the chip to the drop zone (pass `duration_ms` ~600). Re-observe/capture to confirm the drop registered.
 
 Rules:
 - Use only sky-cua MCP tools. Do not use shell commands, OCR utilities, xdotool/wmctrl, file reads, or page-source inspection to obtain values; read the entry/marker via tool readback and the canvas token from the screenshot image.
@@ -208,6 +210,11 @@ def _ground_truth(
         "clicked": bool(state.get("clicked")),
         "secondary_clicked": bool(state.get("secondary_clicked")),
         "drag_completed": bool(state.get("drag_completed")),
+        # >= 40 proves a real thumb-tracking drag (a teleport without a grab
+        # leaves the value near 0) while giving the agent margin on exactly how
+        # far right it drags.
+        "slider_dragged": float(state.get("slider_h_value", 0.0) or 0.0) >= 40.0,
+        "dnd_dropped": bool(state.get("dnd_dropped")),
         "scrolled": int(state.get("scroll_events", 0) or 0) > 0,
         "checkbox_toggled": bool(state.get("checkbox_toggled")),
         "expander_expanded": bool(state.get("expander_expanded")),

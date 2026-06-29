@@ -5227,6 +5227,7 @@
         "additionalProperties": false,
         "properties": {
           "duration_ms": {
+            "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
             "minimum": 0,
             "type": "integer"
           },
@@ -5713,6 +5714,7 @@
                 ],
                 "properties": {
                   "duration_ms": {
+                    "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
                     "minimum": 0,
                     "type": "integer"
                   },
@@ -5806,6 +5808,7 @@
         ],
         "properties": {
           "duration_ms": {
+            "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
             "minimum": 0,
             "type": "integer"
           },

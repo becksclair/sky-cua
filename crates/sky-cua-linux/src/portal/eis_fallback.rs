@@ -94,12 +94,19 @@ impl RemoteDesktopSessionManager {
         }
     }
 
-    pub async fn drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
+    pub async fn drag(
+        &self,
+        waypoints: &[(f64, f64)],
+        step_delay: Duration,
+    ) -> Result<(), BackendError> {
         if !eis_pointer_input_enabled() {
             self.push_eis_pointer_disabled_event("drag").await;
-            return self.legacy_drag(from, to).await;
+            return self.legacy_drag(waypoints, step_delay).await;
         }
-        let action = EisAction::Drag { from, to };
+        let action = EisAction::Drag {
+            waypoints: Arc::from(waypoints),
+            step_delay,
+        };
         match self.run_eis_action_with_retry(action).await {
             Ok(details) => {
                 self.push_lifecycle_event(PortalLifecycleEvent {
@@ -129,18 +136,27 @@ impl RemoteDesktopSessionManager {
                     details: Some(eis_fallback_details(&failure)),
                 })
                 .await;
-                self.legacy_drag(from, to).await
+                self.legacy_drag(waypoints, step_delay).await
             }
         }
     }
 
-    async fn legacy_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
-        self.pointer_move_absolute(from.0, from.1).await?;
+    async fn legacy_drag(
+        &self,
+        waypoints: &[(f64, f64)],
+        step_delay: Duration,
+    ) -> Result<(), BackendError> {
+        let Some((first, rest)) = waypoints.split_first() else {
+            return Ok(());
+        };
+        self.pointer_move_absolute(first.0, first.1).await?;
         self.pointer_button(MouseButton::Left, true).await?;
         tokio::time::sleep(Duration::from_millis(20)).await;
         let result = async {
-            self.pointer_move_absolute(to.0, to.1).await?;
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            for &(x, y) in rest {
+                self.pointer_move_absolute(x, y).await?;
+                tokio::time::sleep(step_delay).await;
+            }
             self.pointer_button(MouseButton::Left, false).await
         }
         .await;

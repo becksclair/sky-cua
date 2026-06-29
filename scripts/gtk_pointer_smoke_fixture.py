@@ -48,6 +48,18 @@ class PointerSmokeWindow(Gtk.Window):
             "submitted_text": "",
             "checkbox_toggled": False,
             "expander_expanded": False,
+            "slider_h_value": 0.0,
+            "slider_v_value": 0.0,
+            "spin_value": 0,
+            "combo_index": 0,
+            "combo_text": "",
+            "switch_active": False,
+            "xy_pad_x": 0.0,
+            "xy_pad_y": 0.0,
+            "xy_pad_dragged": False,
+            "dnd_dropped": False,
+            "dnd_payload": "",
+            "fixture_controls_version": 2,
             "button_press_seen": False,
             "button_release_seen": False,
             "last_pointer_event": {},
@@ -77,8 +89,9 @@ class PointerSmokeWindow(Gtk.Window):
         self.instructions.set_xalign(0.0)
         self.instructions.set_line_wrap(True)
         self.instructions.set_text(
-            "This fixture waits for explicit-coordinate MCP actions. "
-            "The harness should trigger physical click, right-click, drag, and scroll here."
+            "This fixture waits for explicit-coordinate MCP actions across a grid of "
+            "controls: click, right-click, drag, scroll, text entry, sliders, a spin "
+            "button, combo, switch, a 2D drag pad, and drag-and-drop."
         )
 
         self.status = Gtk.Label()
@@ -148,6 +161,78 @@ class PointerSmokeWindow(Gtk.Window):
         self.semantic_expander.add(Gtk.Label(label="Expanded smoke detail content."))
         self.semantic_expander.connect("notify::expanded", self.on_semantic_expander_expanded)
 
+        # Drag-input controls. Sliders and the 2D pad must track the pointer
+        # through continuous motion under the button grab; a single teleport
+        # leaves them unmoved. draw_value is off so the trough spans the whole
+        # widget and the exported from/to points map cleanly to thumb travel.
+        self.slider_h = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 100.0, 1.0)
+        self.slider_h.set_draw_value(False)
+        self.slider_h.set_value(0.0)
+        self.slider_h.connect("value-changed", self.on_slider_h_changed)
+
+        self.slider_v = Gtk.Scale.new_with_range(Gtk.Orientation.VERTICAL, 0.0, 100.0, 1.0)
+        self.slider_v.set_draw_value(False)
+        self.slider_v.set_value(0.0)
+        self.slider_v.connect("value-changed", self.on_slider_v_changed)
+
+        self.spin = Gtk.SpinButton.new_with_range(0.0, 10.0, 1.0)
+        self.spin.set_value(0.0)
+        self.spin.connect("value-changed", self.on_spin_changed)
+
+        self.combo = Gtk.ComboBoxText()
+        for index, label in enumerate(("Choose option", "Alpha", "Bravo", "Charlie")):
+            self.combo.append(str(index), label)
+        self.combo.set_active(0)
+        self.combo.connect("changed", self.on_combo_changed)
+
+        self.switch = Gtk.Switch()
+        self.switch.set_active(False)
+        self.switch.connect("notify::active", self.on_switch_toggled)
+
+        self.xy_pad_pos: tuple[float, float] | None = None
+        self.xy_pad = Gtk.EventBox()
+        self.xy_pad_canvas = Gtk.DrawingArea()
+        self.xy_pad_canvas.connect("draw", self.on_xy_pad_draw)
+        self.xy_pad.add(self.xy_pad_canvas)
+        # BUTTON1_MOTION only: motion fires while button 1 is held, so hovering
+        # the pad cannot spuriously mark it dragged.
+        self.xy_pad.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.BUTTON1_MOTION_MASK
+        )
+        self.xy_pad.connect("button-press-event", self.on_xy_pad_press)
+        self.xy_pad.connect("motion-notify-event", self.on_xy_pad_motion)
+        self.xy_pad.connect("button-release-event", self.on_xy_pad_release)
+
+        # Drag-and-drop: a source chip dragged onto a drop zone. GTK only arms a
+        # drag gesture once motion crosses its threshold while the button is
+        # held, so this only completes with the interpolated backend drag.
+        self.dnd_targets = [
+            Gtk.TargetEntry.new("application/x-sky-cua-chip", Gtk.TargetFlags.SAME_APP, 0)
+        ]
+        self.dnd_source = Gtk.EventBox()
+        dnd_source_frame = Gtk.Frame(label="DnD source")
+        dnd_source_frame.set_shadow_type(Gtk.ShadowType.IN)
+        dnd_source_label = Gtk.Label(label="Drag this chip onto the drop zone")
+        dnd_source_label.set_line_wrap(True)
+        dnd_source_frame.add(dnd_source_label)
+        self.dnd_source.add(dnd_source_frame)
+        self.dnd_source.drag_source_set(
+            Gdk.ModifierType.BUTTON1_MASK, self.dnd_targets, Gdk.DragAction.COPY
+        )
+        self.dnd_source.connect("drag-data-get", self.on_dnd_data_get)
+
+        self.dnd_zone = Gtk.EventBox()
+        dnd_zone_frame = Gtk.Frame(label="Drop zone")
+        dnd_zone_frame.set_shadow_type(Gtk.ShadowType.IN)
+        dnd_zone_label = Gtk.Label(label="Release the chip here")
+        dnd_zone_label.set_line_wrap(True)
+        dnd_zone_frame.add(dnd_zone_label)
+        self.dnd_zone.add(dnd_zone_frame)
+        self.dnd_zone.drag_dest_set(Gtk.DestDefaults.ALL, self.dnd_targets, Gdk.DragAction.COPY)
+        self.dnd_zone.connect("drag-data-received", self.on_dnd_data_received)
+
         for widget in (
             self.header,
             self.instructions,
@@ -159,6 +244,14 @@ class PointerSmokeWindow(Gtk.Window):
             self.scroll_box,
             self.semantic_checkbox,
             self.semantic_expander,
+            self.slider_h,
+            self.slider_v,
+            self.spin,
+            self.combo,
+            self.switch,
+            self.xy_pad,
+            self.dnd_source,
+            self.dnd_zone,
         ):
             self.fixed.put(widget, 0, 0)
 
@@ -273,58 +366,111 @@ class PointerSmokeWindow(Gtk.Window):
         compact = layout_height < 820
         margin_x = max(32, min(64, layout_width // 20))
         top = max(24, min(48, layout_height // 18))
-        section_gap = max(20, min(40, layout_width // 34))
-        region_width = max(300, int(layout_width * 0.32))
-        region_height = max(128, min(220, int(layout_height * (0.18 if compact else 0.22))))
-        button_width = max(220, int(layout_width * 0.18))
-        button_height = 64 if compact else 84
-        entry_width = max(300, int(layout_width * 0.32))
-        entry_height = 44 if compact else 48
+        card_gap = 14 if compact else 24
 
-        self.fixed.move(self.header, margin_x, top)
-        self.header.set_size_request(layout_width - (margin_x * 2), -1)
+        # Chrome: title and instructions pinned to the top, status to the bottom.
         self.fixed.move(self.grid_canvas, 0, 0)
         self.grid_canvas.set_size_request(layout_width, layout_height)
-
-        instructions_y = top + (42 if compact else 56)
+        self.fixed.move(self.header, margin_x, top)
+        self.header.set_size_request(layout_width - (margin_x * 2), -1)
+        instructions_y = top + (40 if compact else 50)
         self.fixed.move(self.instructions, margin_x, instructions_y)
         self.instructions.set_size_request(layout_width - (margin_x * 2), -1)
 
-        entry_x = margin_x
-        entry_y = instructions_y + (62 if compact else 88)
-        self.fixed.move(self.text_entry, entry_x, entry_y)
-        self.text_entry.set_size_request(entry_width, entry_height)
-
-        button_x = margin_x
-        button_y = entry_y + entry_height + (16 if compact else 24)
-        self.fixed.move(self.click_button, button_x, button_y)
-        self.click_button.set_size_request(button_width, button_height)
-
-        region_top = button_y + button_height + (28 if compact else 48)
-        drag_x = margin_x
-        drag_y = region_top
-        self.fixed.move(self.drag_box, drag_x, drag_y)
-        self.drag_box.set_size_request(region_width, region_height)
-
-        secondary_x = margin_x + region_width + section_gap
-        secondary_y = region_top
-        self.fixed.move(self.secondary_box, secondary_x, secondary_y)
-        self.secondary_box.set_size_request(region_width, region_height)
-
-        scroll_x = margin_x
-        scroll_y = region_top + region_height + section_gap
-        self.fixed.move(self.scroll_box, scroll_x, scroll_y)
-        self.scroll_box.set_size_request(region_width, region_height)
-
-        semantic_x = margin_x + region_width + section_gap
-        self.fixed.move(self.semantic_checkbox, semantic_x, scroll_y)
-        self.semantic_checkbox.set_size_request(region_width, 36)
-        self.fixed.move(self.semantic_expander, semantic_x, scroll_y + 52)
-        self.semantic_expander.set_size_request(region_width, 80)
-
-        status_y = scroll_y + region_height + (20 if compact else 48)
+        status_height = 56 if compact else 64
+        status_y = layout_height - status_height - (top // 2)
         self.fixed.move(self.status, margin_x, status_y)
         self.status.set_size_request(layout_width - (margin_x * 2), -1)
+
+        # Every interactive target lives in a uniform 4x4 card grid so the
+        # harness can reach all of them from one state snapshot, on both
+        # fullscreen and windowed sizes, without overflowing the monitor.
+        cols = 4
+        rows = 4
+        grid_top = instructions_y + (50 if compact else 64)
+        grid_bottom = status_y - card_gap
+        grid_width = layout_width - (margin_x * 2)
+        grid_height = max(rows * 80, grid_bottom - grid_top)
+        card_w = (grid_width - (cols - 1) * card_gap) / cols
+        card_h = (grid_height - (rows - 1) * card_gap) / rows
+
+        def cell(col: int, row: int) -> tuple[int, int, int, int]:
+            x = margin_x + col * (card_w + card_gap)
+            y = grid_top + row * (card_h + card_gap)
+            return (round(x), round(y), round(card_w), round(card_h))
+
+        rects: dict[str, tuple[int, int, int, int]] = {}
+
+        def place(widget: Gtk.Widget, name: str, col: int, row: int) -> tuple[int, int, int, int]:
+            rect = cell(col, row)
+            self.fixed.move(widget, rect[0], rect[1])
+            widget.set_size_request(rect[2], rect[3])
+            rects[name] = rect
+            return rect
+
+        # Row 0: text entry, click button, drag region, secondary-click region.
+        ex, ey, ew, eh = cell(0, 0)
+        entry_h = 44 if compact else 48
+        entry_y = ey + max(0, (eh - entry_h) // 2)
+        self.fixed.move(self.text_entry, ex, entry_y)
+        self.text_entry.set_size_request(ew, entry_h)
+        rects["text_entry"] = (ex, entry_y, ew, entry_h)
+        place(self.click_button, "click_button", 1, 0)
+        place(self.drag_box, "drag", 2, 0)
+        place(self.secondary_box, "secondary", 3, 0)
+
+        # Row 1: scroll region, semantic controls, horizontal + vertical sliders.
+        place(self.scroll_box, "scroll", 0, 1)
+        sem_x, sem_y, sem_w, sem_h = cell(1, 1)
+        self.fixed.move(self.semantic_checkbox, sem_x, sem_y)
+        self.semantic_checkbox.set_size_request(sem_w, 36)
+        self.fixed.move(self.semantic_expander, sem_x, sem_y + 44)
+        self.semantic_expander.set_size_request(sem_w, max(40, sem_h - 44))
+        rects["semantic"] = (sem_x, sem_y, sem_w, sem_h)
+
+        sh_x, sh_y, sh_w, sh_h = cell(2, 1)
+        slider_h_h = 48
+        slider_h_y = sh_y + max(0, (sh_h - slider_h_h) // 2)
+        self.fixed.move(self.slider_h, sh_x, slider_h_y)
+        self.slider_h.set_size_request(sh_w, slider_h_h)
+        rects["slider_h"] = (sh_x, slider_h_y, sh_w, slider_h_h)
+
+        sv_x, sv_y, sv_w, sv_h = cell(3, 1)
+        slider_v_w = 56
+        slider_v_x = sv_x + max(0, (sv_w - slider_v_w) // 2)
+        self.fixed.move(self.slider_v, slider_v_x, sv_y)
+        self.slider_v.set_size_request(slider_v_w, sv_h)
+        rects["slider_v"] = (slider_v_x, sv_y, slider_v_w, sv_h)
+
+        # Row 2: spin button, combo, switch, 2D drag pad.
+        sp_x, sp_y, sp_w, sp_h = cell(0, 2)
+        spin_w = min(sp_w, 220)
+        spin_h = 40
+        spin_y = sp_y + max(0, (sp_h - spin_h) // 2)
+        self.fixed.move(self.spin, sp_x, spin_y)
+        self.spin.set_size_request(spin_w, spin_h)
+        rects["spin"] = (sp_x, spin_y, spin_w, spin_h)
+
+        co_x, co_y, co_w, co_h = cell(1, 2)
+        combo_h = 40
+        combo_y = co_y + max(0, (co_h - combo_h) // 2)
+        self.fixed.move(self.combo, co_x, combo_y)
+        self.combo.set_size_request(co_w, combo_h)
+        rects["combo"] = (co_x, combo_y, co_w, combo_h)
+
+        sw_x, sw_y, _sw_w, sw_h = cell(2, 2)
+        switch_w = 96
+        switch_h = 40
+        switch_y = sw_y + max(0, (sw_h - switch_h) // 2)
+        self.fixed.move(self.switch, sw_x, switch_y)
+        self.switch.set_size_request(switch_w, switch_h)
+        rects["switch"] = (sw_x, switch_y, switch_w, switch_h)
+
+        place(self.xy_pad, "xy_pad", 3, 2)
+
+        # Row 3: drag-and-drop source chip and drop zone.
+        place(self.dnd_source, "dnd_source", 0, 3)
+        place(self.dnd_zone, "dnd_zone", 1, 3)
 
         origin_x, origin_y = self.window_origin(width, height)
         self.state["window_origin"] = {"x": origin_x, "y": origin_y}
@@ -337,15 +483,7 @@ class PointerSmokeWindow(Gtk.Window):
             "cell_size": self.grid_cell_size(layout_width, layout_height),
         }
         self.state["monitor"] = self.monitor_state(width, height)
-        self.state["points"] = self.points_from_requested_layout(
-            origin_x=origin_x,
-            origin_y=origin_y,
-            entry=(entry_x, entry_y, entry_width, entry_height),
-            button=(button_x, button_y, button_width, button_height),
-            drag=(drag_x, drag_y, region_width, region_height),
-            secondary=(secondary_x, secondary_y, region_width, region_height),
-            scroll=(scroll_x, scroll_y, region_width, region_height),
-        )
+        self.state["points"] = self.points_from_rects(origin_x, origin_y, rects)
         self.state["ready"] = True
         self.state["last_event"] = f"layout:{width}x{height}"
         self.update_status()
@@ -353,6 +491,52 @@ class PointerSmokeWindow(Gtk.Window):
         # coordinates after activation, which makes the harness click the wrong targets.
         self.write_state()
         return False
+
+    def points_from_rects(
+        self, origin_x: int, origin_y: int, rects: dict[str, tuple[int, int, int, int]]
+    ) -> dict[str, dict[str, float]]:
+        def point(name: str, fx: float = 0.5, fy: float = 0.5) -> dict[str, float]:
+            x, y, w, h = rects[name]
+            return {"x": float(origin_x + x + w * fx), "y": float(origin_y + y + h * fy)}
+
+        def offset(name: str, dx: float, dy: float) -> dict[str, float]:
+            x, y, _w, _h = rects[name]
+            return {"x": float(origin_x + x + dx), "y": float(origin_y + y + dy)}
+
+        points = {
+            "text_entry": point("text_entry"),
+            "click_button": point("click_button"),
+            # Two points inside the drag region, far enough apart to clear the
+            # 80px completion threshold.
+            "drag_from": point("drag", fx=0.28),
+            "drag_to": point("drag", fx=0.74),
+            "secondary": point("secondary"),
+            "scroll": point("scroll"),
+            "scroll_safe": offset(
+                "scroll", rects["scroll"][2] / 2.0, min(48.0, rects["scroll"][3] * 0.2)
+            ),
+            # Horizontal slider: thumb starts at the left (min); drag rightward.
+            "slider_h_from": offset("slider_h", 12.0, rects["slider_h"][3] / 2.0),
+            "slider_h_to": point("slider_h", fx=0.8),
+            # Vertical slider: a normal GTK vertical scale puts its minimum at the
+            # top, so the value-0 thumb sits at the top; drag downward to raise it.
+            "slider_v_from": offset("slider_v", rects["slider_v"][2] / 2.0, 12.0),
+            "slider_v_to": offset(
+                "slider_v", rects["slider_v"][2] / 2.0, rects["slider_v"][3] - 12.0
+            ),
+            # Spin button up-stepper sits at the upper-right of the widget.
+            "spin_up_button": offset("spin", rects["spin"][2] - 12.0, 12.0),
+            "spin_field": point("spin", fx=0.3),
+            "combo": point("combo"),
+            "switch": point("switch"),
+            "switch_off": offset("switch", 12.0, rects["switch"][3] / 2.0),
+            "switch_on": offset("switch", rects["switch"][2] - 12.0, rects["switch"][3] / 2.0),
+            "xy_pad_from": point("xy_pad", fx=0.25, fy=0.25),
+            "xy_pad_to": point("xy_pad", fx=0.75, fy=0.75),
+            "dnd_source": point("dnd_source"),
+            "dnd_target": point("dnd_zone"),
+        }
+        return points
 
     def grid_cell_size(self, width: int, height: int) -> int:
         short_side = min(width, height)
@@ -403,110 +587,6 @@ class PointerSmokeWindow(Gtk.Window):
             cairo.move_to(8, y - 6)
             cairo.show_text(str(y))
         return False
-
-    def center(self, x: int, y: int, width: int, height: int) -> dict[str, float]:
-        return {"x": x + (width / 2.0), "y": y + (height / 2.0)}
-
-    def points_from_requested_layout(
-        self,
-        *,
-        origin_x: int,
-        origin_y: int,
-        entry: tuple[int, int, int, int],
-        button: tuple[int, int, int, int],
-        drag: tuple[int, int, int, int],
-        secondary: tuple[int, int, int, int],
-        scroll: tuple[int, int, int, int],
-    ) -> dict[str, dict[str, float]]:
-        entry_x, entry_y, entry_width, entry_height = entry
-        button_x, button_y, button_width, button_height = button
-        drag_x, drag_y, region_width, region_height = drag
-        secondary_x, secondary_y, secondary_width, secondary_height = secondary
-        scroll_x, scroll_y, scroll_width, scroll_height = scroll
-        return {
-            "text_entry": self.center(
-                origin_x + entry_x, origin_y + entry_y, entry_width, entry_height
-            ),
-            "click_button": self.center(
-                origin_x + button_x, origin_y + button_y, button_width, button_height
-            ),
-            "drag_from": self.center(
-                origin_x + drag_x + 32,
-                origin_y + drag_y + 32,
-                region_width - 160,
-                region_height - 64,
-            ),
-            "drag_to": self.center(
-                origin_x + drag_x + 160,
-                origin_y + drag_y + 32,
-                region_width - 96,
-                region_height - 64,
-            ),
-            "secondary": self.center(
-                origin_x + secondary_x,
-                origin_y + secondary_y,
-                secondary_width,
-                secondary_height,
-            ),
-            "scroll": self.center(
-                origin_x + scroll_x, origin_y + scroll_y, scroll_width, scroll_height
-            ),
-            "scroll_safe": self.center(
-                origin_x + scroll_x,
-                origin_y + scroll_y,
-                scroll_width,
-                min(96, scroll_height),
-            ),
-        }
-
-    def refresh_points_from_allocations(self) -> bool:
-        origin_x, origin_y = self.window_origin(
-            self.get_allocated_width(), self.get_allocated_height()
-        )
-        points = {
-            "text_entry": self.widget_point(self.text_entry, origin_x, origin_y),
-            "click_button": self.widget_point(self.click_button, origin_x, origin_y),
-            "drag_from": self.widget_point(self.drag_box, origin_x, origin_y, x_ratio=0.32),
-            "drag_to": self.widget_point(self.drag_box, origin_x, origin_y, x_ratio=0.72),
-            "secondary": self.widget_point(self.secondary_box, origin_x, origin_y),
-            "scroll": self.widget_point(self.scroll_box, origin_x, origin_y),
-            "scroll_safe": self.widget_point(
-                self.scroll_box,
-                origin_x,
-                origin_y,
-                y_pixels=48.0,
-            ),
-        }
-        if all(point is not None for point in points.values()):
-            self.state["window_origin"] = {"x": origin_x, "y": origin_y}
-            self.state["points"] = points
-            self.state["last_event"] = (
-                f"layout:{self.get_allocated_width()}x{self.get_allocated_height()}:allocations"
-            )
-            self.update_status()
-            self.write_state()
-        return False
-
-    def widget_point(
-        self,
-        widget: Gtk.Widget,
-        origin_x: int,
-        origin_y: int,
-        *,
-        x_ratio: float = 0.5,
-        y_ratio: float = 0.5,
-        y_pixels: float | None = None,
-    ) -> dict[str, float] | None:
-        allocation = widget.get_allocation()
-        if allocation.width <= 0 or allocation.height <= 0:
-            return None
-        local_x = allocation.width * x_ratio
-        local_y = y_pixels if y_pixels is not None else allocation.height * y_ratio
-        translated = widget.translate_coordinates(self, int(local_x), int(local_y))
-        if translated is None:
-            return None
-        x, y = translated
-        return {"x": origin_x + float(x), "y": origin_y + float(y)}
 
     def visible_monitor_size(self, fallback_width: int, fallback_height: int) -> tuple[int, int]:
         gdk_window = self.get_window()
@@ -761,6 +841,124 @@ class PointerSmokeWindow(Gtk.Window):
             return
         self.state["scroll_events"] += 1
         self.state["last_event"] = f"scroll-adjustment:{adjustment.get_value():.1f}"
+        self.update_status()
+        self.write_state(force=True)
+
+    def on_slider_h_changed(self, scale: Gtk.Scale) -> None:
+        self.state["slider_h_value"] = float(scale.get_value())
+        self.state["last_event"] = f"slider-h:{self.state['slider_h_value']:.1f}"
+        self.update_status()
+        self.write_state(force=True)
+
+    def on_slider_v_changed(self, scale: Gtk.Scale) -> None:
+        self.state["slider_v_value"] = float(scale.get_value())
+        self.state["last_event"] = f"slider-v:{self.state['slider_v_value']:.1f}"
+        self.update_status()
+        self.write_state(force=True)
+
+    def on_spin_changed(self, spin: Gtk.SpinButton) -> None:
+        self.state["spin_value"] = int(spin.get_value_as_int())
+        self.state["last_event"] = f"spin:{self.state['spin_value']}"
+        self.update_status()
+        self.write_state(force=True)
+
+    def on_combo_changed(self, combo: Gtk.ComboBoxText) -> None:
+        self.state["combo_index"] = int(combo.get_active())
+        self.state["combo_text"] = combo.get_active_text() or ""
+        self.state["last_event"] = f"combo:{self.state['combo_index']}"
+        self.update_status()
+        self.write_state(force=True)
+
+    def on_switch_toggled(self, switch: Gtk.Switch, _param: object) -> None:
+        self.state["switch_active"] = bool(switch.get_active())
+        self.state["last_event"] = f"switch:{self.state['switch_active']}"
+        self.update_status()
+        self.write_state(force=True)
+
+    def _update_xy_pad(self, event: Gdk.EventButton | Gdk.EventMotion, *, dragged: bool) -> None:
+        allocation = self.xy_pad_canvas.get_allocation()
+        width = max(1, allocation.width)
+        height = max(1, allocation.height)
+        norm_x = min(1.0, max(0.0, float(event.x) / width))
+        norm_y = min(1.0, max(0.0, float(event.y) / height))
+        self.xy_pad_pos = (float(event.x), float(event.y))
+        self.state["xy_pad_x"] = norm_x
+        self.state["xy_pad_y"] = norm_y
+        if dragged:
+            self.state["xy_pad_dragged"] = True
+        self.xy_pad_canvas.queue_draw()
+        self.update_status()
+        self.write_state()
+
+    def on_xy_pad_press(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
+        if event.button == 1:
+            self.state["last_event"] = "xy-pad-press"
+            self._update_xy_pad(event, dragged=False)
+        return False
+
+    def on_xy_pad_motion(self, _widget: Gtk.Widget, event: Gdk.EventMotion) -> bool:
+        # Only count motion while button 1 is held — a real drag, not a hover.
+        if not (event.state & Gdk.ModifierType.BUTTON1_MASK):
+            return False
+        self._update_xy_pad(event, dragged=True)
+        return False
+
+    def on_xy_pad_release(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
+        if event.button == 1:
+            self.state["last_event"] = "xy-pad-release"
+            self._update_xy_pad(event, dragged=True)
+            self.write_state(force=True)
+        return False
+
+    def on_xy_pad_draw(self, widget: Gtk.Widget, context: Any) -> bool:
+        width = widget.get_allocated_width()
+        height = widget.get_allocated_height()
+        if width <= 0 or height <= 0:
+            return False
+        cairo = context
+        cairo.set_source_rgb(0.93, 0.95, 0.99)
+        cairo.paint()
+        cairo.set_source_rgba(0.18, 0.24, 0.30, 0.45)
+        cairo.set_line_width(1.0)
+        cairo.rectangle(0.5, 0.5, width - 1, height - 1)
+        cairo.stroke()
+        if self.xy_pad_pos is not None:
+            pos_x, pos_y = self.xy_pad_pos
+            cairo.set_source_rgb(0.85, 0.12, 0.32)
+            cairo.set_line_width(2.0)
+            cairo.move_to(pos_x - 9, pos_y)
+            cairo.line_to(pos_x + 9, pos_y)
+            cairo.move_to(pos_x, pos_y - 9)
+            cairo.line_to(pos_x, pos_y + 9)
+            cairo.stroke()
+            cairo.arc(pos_x, pos_y, 5.0, 0.0, 6.283185)
+            cairo.stroke()
+        return False
+
+    def on_dnd_data_get(
+        self,
+        _widget: Gtk.Widget,
+        _context: Gdk.DragContext,
+        selection_data: Gtk.SelectionData,
+        _info: int,
+        _time: int,
+    ) -> None:
+        selection_data.set(selection_data.get_target(), 8, b"sky-cua-chip")
+
+    def on_dnd_data_received(
+        self,
+        _widget: Gtk.Widget,
+        _context: Gdk.DragContext,
+        _x: int,
+        _y: int,
+        selection_data: Gtk.SelectionData,
+        _info: int,
+        _time: int,
+    ) -> None:
+        payload = selection_data.get_data()
+        self.state["dnd_dropped"] = True
+        self.state["dnd_payload"] = payload.decode("utf-8", "replace") if payload else ""
+        self.state["last_event"] = "dnd-dropped"
         self.update_status()
         self.write_state(force=True)
 

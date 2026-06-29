@@ -6,7 +6,7 @@
       "can_receive_images": false,
       "description_bytes": 3951,
       "largest_schema_bytes": 2044,
-      "serialized_bytes": 40085,
+      "serialized_bytes": 40317,
       "surface": "grouped",
       "tool_count": 34,
       "tools_list": {
@@ -1603,6 +1603,7 @@
               "additionalProperties": false,
               "properties": {
                 "duration_ms": {
+                  "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -2590,7 +2591,7 @@
       "can_receive_images": false,
       "description_bytes": 4054,
       "largest_schema_bytes": 2044,
-      "serialized_bytes": 40878,
+      "serialized_bytes": 41110,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -4187,6 +4188,7 @@
               "additionalProperties": false,
               "properties": {
                 "duration_ms": {
+                  "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -5222,7 +5224,7 @@
       "can_receive_images": true,
       "description_bytes": 3951,
       "largest_schema_bytes": 2489,
-      "serialized_bytes": 40741,
+      "serialized_bytes": 40973,
       "surface": "grouped",
       "tool_count": 34,
       "tools_list": {
@@ -6866,6 +6868,7 @@
               "additionalProperties": false,
               "properties": {
                 "duration_ms": {
+                  "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -7853,7 +7856,7 @@
       "can_receive_images": true,
       "description_bytes": 4054,
       "largest_schema_bytes": 2489,
-      "serialized_bytes": 41534,
+      "serialized_bytes": 41766,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -9497,6 +9500,7 @@
               "additionalProperties": false,
               "properties": {
                 "duration_ms": {
+                  "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
                   "minimum": 0,
                   "type": "integer"
                 },

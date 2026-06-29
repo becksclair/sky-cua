@@ -156,6 +156,175 @@ def require_gnome_eis_input_used(result: dict[str, Any], action: str, *, is_gnom
         print(f"WARNING: {msg}", file=sys.stderr)
 
 
+def _drag_call(
+    client: McpClient,
+    call_id: int,
+    point_from: dict[str, float],
+    point_to: dict[str, float],
+    *,
+    duration_ms: int,
+) -> dict[str, Any]:
+    return client.tools_call(
+        call_id,
+        "desktop_pointer",
+        {
+            "operation": "drag",
+            "x": point_from["x"],
+            "y": point_from["y"],
+            "to_x": point_to["x"],
+            "to_y": point_to["y"],
+            "duration_ms": duration_ms,
+        },
+    )
+
+
+def drive_extended_controls(
+    client: McpClient,
+    state_path: Path,
+    points: dict[str, dict[str, float]],
+    artifact_dir: Path,
+) -> None:
+    """Exercise the richer control surface (sliders, DnD, spin, combo, switch, XY pad).
+
+    These are the targets that harden dragging and drag-and-drop. The slider, DnD
+    and XY-pad proofs pass a duration_ms so the backend emits an interpolated,
+    paced drag — the behavior a single teleport cannot satisfy.
+    """
+    # Horizontal slider: drag the thumb rightward; the value must track.
+    result = _drag_call(
+        client, 150, points["slider_h_from"], points["slider_h_to"], duration_ms=600
+    )
+    write_json(artifact_dir / "slider-h-result.json", result)
+    require_ok(result, "visible Wayland horizontal slider drag")
+    wait_for_state(
+        state_path,
+        lambda current: float(current.get("slider_h_value", 0.0)) >= 50.0,
+        deadline=time.time() + 8,
+        description="horizontal slider value tracked the drag",
+    )
+    print("Horizontal slider drag passed.")
+
+    # Vertical slider: drag the thumb downward (top = min on a GTK vertical scale).
+    result = _drag_call(
+        client, 151, points["slider_v_from"], points["slider_v_to"], duration_ms=600
+    )
+    write_json(artifact_dir / "slider-v-result.json", result)
+    require_ok(result, "visible Wayland vertical slider drag")
+    wait_for_state(
+        state_path,
+        lambda current: float(current.get("slider_v_value", 0.0)) >= 40.0,
+        deadline=time.time() + 8,
+        description="vertical slider value tracked the drag",
+    )
+    print("Vertical slider drag passed.")
+
+    # Drag-and-drop: the keystone. GTK only arms a drag gesture once motion
+    # crosses its threshold under the button grab, which only the interpolated
+    # backend drag produces.
+    result = _drag_call(client, 152, points["dnd_source"], points["dnd_target"], duration_ms=600)
+    write_json(artifact_dir / "dnd-result.json", result)
+    require_ok(result, "visible Wayland drag-and-drop")
+    wait_for_state(
+        state_path,
+        lambda current: (
+            bool(current.get("dnd_dropped")) and current.get("dnd_payload") == "sky-cua-chip"
+        ),
+        deadline=time.time() + 8,
+        description="drag-and-drop delivered the chip to the drop zone",
+    )
+    print("Drag-and-drop passed.")
+
+    # Spin button: click the up-stepper three times.
+    for index in range(3):
+        result = client.tools_call(
+            153 + index,
+            "desktop_pointer",
+            {
+                "operation": "click",
+                "x": points["spin_up_button"]["x"],
+                "y": points["spin_up_button"]["y"],
+            },
+        )
+        require_ok(result, f"visible Wayland spin increment {index + 1}")
+    wait_for_state(
+        state_path,
+        lambda current: int(current.get("spin_value", 0)) >= 3,
+        deadline=time.time() + 8,
+        description="spin button reached three increments",
+    )
+    print("Spin button increments passed.")
+
+    # Combo box: click to open, then keyboard-select the next item. This is the
+    # only extended-control step that needs the keyboard, so honor a profile that
+    # opted out of keyboard input (e.g. wayland-pointer-scaled sets this env);
+    # the pointer-driven drag controls above still run.
+    if os.environ.get("SKY_CUA_POINTER_SKIP_KEYBOARD") == "1":
+        print("Skipping combo selection (keyboard-driven) for pointer-only profile.")
+    else:
+        result = client.tools_call(
+            156,
+            "desktop_pointer",
+            {"operation": "click", "x": points["combo"]["x"], "y": points["combo"]["y"]},
+        )
+        require_ok(result, "visible Wayland combo open")
+        for call_id, key in ((157, "Down"), (158, "Return")):
+            key_result = client.tools_call(
+                call_id, "desktop_keyboard", {"operation": "press_key", "key": key}
+            )
+            require_ok(key_result, f"visible Wayland combo {key}")
+        wait_for_state(
+            state_path,
+            lambda current: int(current.get("combo_index", 0)) >= 1,
+            deadline=time.time() + 8,
+            description="combo box selected a non-default item",
+        )
+        print("Combo selection passed.")
+
+    # Switch: prefer a knob drag (exercises smooth motion); fall back to a click
+    # if the synthetic knob drag does not toggle.
+    result = _drag_call(client, 159, points["switch_off"], points["switch_on"], duration_ms=400)
+    write_json(artifact_dir / "switch-result.json", result)
+    require_ok(result, "visible Wayland switch drag")
+    try:
+        wait_for_state(
+            state_path,
+            lambda current: bool(current.get("switch_active")),
+            deadline=time.time() + 4,
+            description="switch toggled on via knob drag",
+        )
+        print("Switch knob drag passed.")
+    except RuntimeError:
+        click_result = client.tools_call(
+            160,
+            "desktop_pointer",
+            {"operation": "click", "x": points["switch"]["x"], "y": points["switch"]["y"]},
+        )
+        require_ok(click_result, "visible Wayland switch click fallback")
+        wait_for_state(
+            state_path,
+            lambda current: bool(current.get("switch_active")),
+            deadline=time.time() + 8,
+            description="switch toggled on via click fallback",
+        )
+        print("Switch click fallback passed.")
+
+    # 2D drag pad: free-form drag; the path must reach the bottom-right quadrant.
+    result = _drag_call(client, 161, points["xy_pad_from"], points["xy_pad_to"], duration_ms=500)
+    write_json(artifact_dir / "xy-pad-result.json", result)
+    require_ok(result, "visible Wayland 2D drag pad")
+    wait_for_state(
+        state_path,
+        lambda current: (
+            bool(current.get("xy_pad_dragged"))
+            and float(current.get("xy_pad_x", 0.0)) > 0.5
+            and float(current.get("xy_pad_y", 0.0)) > 0.5
+        ),
+        deadline=time.time() + 8,
+        description="2D drag pad tracked the path to the destination quadrant",
+    )
+    print("2D drag pad passed.")
+
+
 def main() -> int:
     require_real_wayland_session()
 
@@ -425,6 +594,18 @@ def main() -> int:
                 )
                 write_json(artifact_dir / "final-state.json", final_state)
                 print("Visible Wayland scroll passed.")
+
+                # Extended control surface (sliders, drag-and-drop, spin, combo,
+                # switch, 2D pad). Gated on the fixture version so older fixtures
+                # don't fail this lane. These run before the keyboard-skip gate
+                # because they are pointer-driven drag/click hardening.
+                controls_state = load_state(state_path) or {}
+                if int(controls_state.get("fixture_controls_version", 0)) >= 2:
+                    drive_extended_controls(client, state_path, state["points"], artifact_dir)
+                    print("Extended control surface passed.")
+                else:
+                    print("Fixture predates extended controls; skipping slider/DnD proofs.")
+
                 if os.environ.get("SKY_CUA_POINTER_SKIP_KEYBOARD") == "1":
                     print("Skipping keyboard proof for this pointer-focused profile.")
                     print(f"Holding final fixture state for {final_hold:.1f}s...")

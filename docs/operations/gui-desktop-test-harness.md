@@ -279,7 +279,9 @@ exec` run it drives the entire computer-use and browser-use surface against live
 fixtures:
 
 - a GTK pointer fixture (click / secondary-click / drag / scroll / text entry /
-  a check button / a combo box) for the desktop tools, and
+  a check button / an expander / horizontal and vertical sliders / a spin
+  button / a combo box / a switch / a 2D drag pad / drag-and-drop) for the
+  desktop tools, and
 - a live Chrome tab — the profile opens Chrome at `chrome://extensions` and
   registers the native-messaging host, then the **agent installs the Codex
   extension itself** with computer-use (Developer mode → Load unpacked → the

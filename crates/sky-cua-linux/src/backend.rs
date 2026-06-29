@@ -1571,8 +1571,12 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
         self.portal.click_at(x, y, button).await
     }
 
-    async fn portal_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
-        self.portal.drag(from, to).await
+    async fn portal_drag(
+        &self,
+        waypoints: &[(f64, f64)],
+        step_delay: Duration,
+    ) -> Result<(), BackendError> {
+        self.portal.drag(waypoints, step_delay).await
     }
 
     async fn portal_scroll_vertical_at(
@@ -1653,6 +1657,12 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
         input_xtest::press_key_sequence_to_target(window_id, keys)
     }
 
+    fn virtual_pointer_prefers_absolute(&self) -> bool {
+        self.cached_virtual_input()
+            .map(|virtual_input| virtual_input.pointer_via_helper())
+            .unwrap_or(false)
+    }
+
     fn virtual_click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
         self.cached_virtual_input()?.click_at(x, y, button)
     }
@@ -1670,8 +1680,12 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
         }))
     }
 
-    fn virtual_drag(&self, from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
-        self.cached_virtual_input()?.drag(from, to)
+    fn virtual_drag(
+        &self,
+        waypoints: &[(f64, f64)],
+        step_delay: Duration,
+    ) -> Result<(), BackendError> {
+        self.cached_virtual_input()?.drag(waypoints, step_delay)
     }
 
     fn virtual_scroll_vertical(&self, steps: i32) -> Result<(), BackendError> {
