@@ -46,6 +46,11 @@ class AgentOverlayController(
     /** True while a cursor is on screen (persists until disconnect). */
     private var cursorActive: Boolean = false
 
+    // Eased smoke-aura alpha (desktop `frame.halo.w`): 0 hidden, 1 full. Reset to 0
+    // when the cursor appears so the aura blooms in, then eased toward
+    // `cursorActive ? 1 : 0` every ambient frame so it fades rather than popping.
+    private var cursorCloudAlpha: Float = 0f
+
     // The cursor's drawn position chases this target every frame with momentum,
     // giving the "thruster in space" glide: a turn curves the path and the cursor
     // eases to a stop without overshooting. Taps, swipes, parking, and
@@ -469,6 +474,18 @@ class AgentOverlayController(
                     // smoke aura drifts and breathes every ambient frame (the aura
                     // derives its own breathing curve from this clock).
                     v.setCursorElapsedMs(elapsed.toFloat())
+                    // Bloom the smoke aura in/out: ease the global aura alpha toward
+                    // present-or-gone over CURSOR_CLOUD_FADE_S so it fades rather
+                    // than popping when the cursor appears/leaves.
+                    val cloudTarget = if (cursorActive) 1f else 0f
+                    val cloudStep = dt / CURSOR_CLOUD_FADE_S
+                    cursorCloudAlpha =
+                        if (cursorCloudAlpha < cloudTarget) {
+                            minOf(cloudTarget, cursorCloudAlpha + cloudStep)
+                        } else {
+                            maxOf(cloudTarget, cursorCloudAlpha - cloudStep)
+                        }
+                    v.setCursorCloudAlpha(cursorCloudAlpha)
                     // Glide the drawn cursor toward its target with inertia. The
                     // target is moved by parking, taps, and swipes; the spring does
                     // the sailing.
@@ -625,6 +642,9 @@ class AgentOverlayController(
         cursorTargetX = x
         cursorTargetY = y
         if (snap) cursorMover.snapTo(x, y)
+        // Cold appearance: start the aura hidden so the ambient loop blooms it in.
+        // A re-aim while already active (taps/swipes) leaves the aura at full.
+        if (!cursorActive) cursorCloudAlpha = 0f
         cursorActive = true
     }
 
@@ -634,6 +654,17 @@ class AgentOverlayController(
      * to the same idle guard as the production catcher path.
      */
     fun pokePointer() = onPointerTapped()
+
+    /**
+     * Re-bloom the cursor smoke aura from zero on the live (warm) overlay, so the
+     * entrance fade can be felt without a cold relaunch. A cold launch hides the
+     * bloom behind the overlay's first-frame shader compile + the window-enter
+     * transition; this replays it on the already-drawing view. No-op unless a
+     * cursor is currently on screen.
+     */
+    fun replayEntrance() {
+        runOnMain { if (cursorActive) cursorCloudAlpha = 0f }
+    }
 
     /**
      * A finger tapped the pointer: react — but only while the agent is idle, so the
@@ -732,6 +763,13 @@ class AgentOverlayController(
          * visual constant, so it stays local rather than living in [OverlaySpec].
          */
         private const val TRAIL_SAMPLES: Int = 12
+
+        /**
+         * Seconds for the cursor smoke aura to bloom in (or fade out) when the
+         * cursor appears/leaves. A phone-only feel constant for the aura alpha
+         * ramp, not a cross-platform visual, so it stays local.
+         */
+        private const val CURSOR_CLOUD_FADE_S: Float = 0.8f
 
         /** Glow-ripple radius range in dp: it emanates from near the cursor halo
          * (min) and expands outward (max). Density-scaled into px at runtime. */

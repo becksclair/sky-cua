@@ -63,6 +63,7 @@ class PointerPlaygroundActivity : Activity() {
             controller.animateGesture("tap", listOf(OverlayMath.Point(x, y)), 0L)
         }
         container.onDoubleTap = { controller.pokePointer() }
+        container.onReplay = { controller.replayEntrance() }
         container.onSwipe = { sx, sy, ex, ey, durationMs ->
             controller.animateGesture(
                 "swipe",
@@ -106,6 +107,7 @@ private class PlaygroundContainer(context: Context) : FrameLayout(context) {
     var onTap: (Float, Float) -> Unit = { _, _ -> }
     var onDoubleTap: () -> Unit = {}
     var onSwipe: (Float, Float, Float, Float, Long) -> Unit = { _, _, _, _, _ -> }
+    var onReplay: () -> Unit = {}
 
     private val density = resources.displayMetrics.density
     private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
@@ -144,6 +146,11 @@ private class PlaygroundContainer(context: Context) : FrameLayout(context) {
                     onDoubleTap()
                     return true
                 }
+
+                override fun onLongPress(e: MotionEvent) {
+                    longPressConsumed = true
+                    onReplay()
+                }
             },
         )
 
@@ -155,6 +162,10 @@ private class PlaygroundContainer(context: Context) : FrameLayout(context) {
     // True once the detector has claimed the current stream as (the second tap of)
     // a double-tap, so the swipe classifier doesn't also fire on the same UP.
     private var doubleTapConsumed = false
+
+    // True once the stream fired a long-press (replay entrance), so a hold-then-drag
+    // doesn't also classify as a swipe on the same UP.
+    private var longPressConsumed = false
 
     init {
         // Draw the grid backdrop behind the overlay child.
@@ -174,14 +185,15 @@ private class PlaygroundContainer(context: Context) : FrameLayout(context) {
             downY = event.y
             downAt = event.eventTime
             doubleTapConsumed = false
+            longPressConsumed = false
         }
         detector.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_UP) {
             // Classify a swipe by net travel from the touch-down: a tap (even one
             // that jitters past the slop and back) stays below the threshold, and a
-            // double-tap is suppressed so it never doubles as a drag.
+            // double-tap or long-press is suppressed so it never doubles as a drag.
             val dragged = hypot(event.x - downX, event.y - downY) > swipeMinPx
-            if (dragged && !doubleTapConsumed) {
+            if (dragged && !doubleTapConsumed && !longPressConsumed) {
                 onSwipe(downX, downY, event.x, event.y, event.eventTime - downAt)
             }
         }
@@ -208,6 +220,7 @@ private class PlaygroundContainer(context: Context) : FrameLayout(context) {
         private const val CELL_DP = 48f
         private const val HINT_SP = 13f
         private const val HINT_TOP_DP = 72f
-        private const val HINT = "Tap: move + click   •   Double-tap: no-no   •   Swipe: drag"
+        private const val HINT =
+            "Tap: move   •   Double-tap: no-no   •   Swipe: drag   •   Long-press: replay entrance"
     }
 }
