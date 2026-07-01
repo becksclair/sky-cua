@@ -183,6 +183,43 @@ impl BridgeSocketInventory {
     }
 }
 
+/// Newest `extension-*.sock` across the candidate dirs, ignoring the
+/// stale-failure quarantine and browser selection. The heartbeat keepalive
+/// must keep re-establishing against the current host socket even if a per-op
+/// probe transiently quarantined it, and the heartbeat is per-host (not scoped
+/// to the operator's browser selection).
+pub(super) fn newest_bridge_socket_path() -> Option<PathBuf> {
+    let mut newest: Option<(SystemTime, PathBuf)> = None;
+    for dir in candidate_socket_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("extension-") || !name.ends_with(".sock") {
+                continue;
+            }
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if !metadata.file_type().is_socket() {
+                continue;
+            }
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            if newest
+                .as_ref()
+                .is_none_or(|(newest_modified, _)| modified > *newest_modified)
+            {
+                newest = Some((modified, path));
+            }
+        }
+    }
+    newest.map(|(_, path)| path)
+}
+
 pub(super) fn find_bridge_sockets(selection: BrowserSocketSelection) -> Vec<PathBuf> {
     BRIDGE_SOCKET_INVENTORY
         .lock()

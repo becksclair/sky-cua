@@ -247,37 +247,56 @@ impl HostState {
         }
     }
 
-    fn send_chrome(&self, message: &Value) {
-        let mut stdout = self.stdout.lock().expect("stdout mutex poisoned");
-        if let Err(error) = write_frame(&mut *stdout, message) {
-            log(&self.host_name, &format!("native stdout error: {error}"));
-            process::exit(1);
-        }
+    /// Snapshot the Chrome-stdout writer handle and host name so the caller can
+    /// write a frame AFTER dropping the state lock. Writing while the state lock
+    /// is held lets a blocked pipe — a wedged service worker that has stopped
+    /// reading its native port — freeze every other client thread and the Chrome
+    /// reader thread along with it.
+    fn chrome_writer(&self) -> (Arc<Mutex<io::Stdout>>, String) {
+        (Arc::clone(&self.stdout), self.host_name.clone())
     }
 
-    fn send_client(&self, client_id: usize, message: &Value) {
-        let Some(client) = self.clients.get(&client_id) else {
-            return;
-        };
-
-        let mut writer = client.writer.lock().expect("client writer mutex poisoned");
-        if let Err(error) = write_frame(&mut *writer, message) {
-            log(
-                &self.host_name,
-                &format!("client socket write error: {error}"),
-            );
-        }
+    /// Clone a client's writer handle for a post-unlock write, or `None` when the
+    /// client is gone.
+    fn client_writer(&self, client_id: usize) -> Option<SharedClientWriter> {
+        self.clients
+            .get(&client_id)
+            .map(|client| Arc::clone(&client.writer))
     }
 
-    fn broadcast_primary_clients(&self, message: &Value) {
-        for client_id in self
-            .clients
-            .iter()
-            .filter_map(|(id, client)| (client.role == ClientRole::Primary).then_some(*id))
-            .collect::<Vec<_>>()
-        {
-            self.send_client(client_id, message);
-        }
+    /// Clone every current primary client's writer handle for a post-unlock
+    /// broadcast.
+    fn primary_client_writers(&self) -> Vec<SharedClientWriter> {
+        self.clients
+            .values()
+            .filter(|client| client.role == ClientRole::Primary)
+            .map(|client| Arc::clone(&client.writer))
+            .collect()
+    }
+}
+
+/// Write a frame to the Chrome native-messaging pipe. Must be called WITHOUT the
+/// host state lock held: a write to a pipe the service worker has stopped reading
+/// blocks, and holding the state lock across that block would stall every client
+/// thread and the Chrome reader. A hard write error means the Chrome port is dead
+/// — terminal for the host — so exit and let socket removal surface a clean
+/// disconnect rather than a hang.
+fn write_chrome_frame(stdout: &Arc<Mutex<io::Stdout>>, host_name: &str, message: &Value) {
+    let mut stdout = stdout.lock().expect("stdout mutex poisoned");
+    if let Err(error) = write_frame(&mut *stdout, message) {
+        log(host_name, &format!("native stdout error: {error}"));
+        process::exit(1);
+    }
+}
+
+/// Write a frame to a client socket. Must be called WITHOUT the host state lock
+/// held, for the same head-of-line reason as [`write_chrome_frame`]. A write
+/// error is non-fatal: the client's own reader thread observes the broken socket
+/// and deregisters it.
+fn write_client_frame(writer: &SharedClientWriter, host_name: &str, message: &Value) {
+    let mut writer = writer.lock().expect("client writer mutex poisoned");
+    if let Err(error) = write_frame(&mut *writer, message) {
+        log(host_name, &format!("client socket write error: {error}"));
     }
 }
 
@@ -698,16 +717,23 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
             return;
         };
 
-        let mut state = state.lock().expect("host state mutex poisoned");
-        let Some(pending) = state.pending_client_requests.get(&id).cloned() else {
-            return;
+        let (stdout, host_name, outbound) = {
+            let mut state = state.lock().expect("host state mutex poisoned");
+            let Some(pending) = state.pending_client_requests.get(&id).cloned() else {
+                return;
+            };
+            if pending.client_id != client_id {
+                return;
+            }
+            state.pending_client_requests.remove(&id);
+            let (stdout, host_name) = state.chrome_writer();
+            (
+                stdout,
+                host_name,
+                with_id(message, pending.chrome_request_id),
+            )
         };
-        if pending.client_id != client_id {
-            return;
-        }
-        state.pending_client_requests.remove(&id);
-
-        state.send_chrome(&with_id(message, pending.chrome_request_id));
+        write_chrome_frame(&stdout, &host_name, &outbound);
         return;
     }
 
@@ -729,10 +755,16 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
     }
 
     if !is_request(&message) {
-        let state = state.lock().expect("host state mutex poisoned");
-        if state.clients.contains_key(&client_id) {
-            state.send_chrome(&message);
-        }
+        let Some((stdout, host_name)) = ({
+            let state = state.lock().expect("host state mutex poisoned");
+            state
+                .clients
+                .contains_key(&client_id)
+                .then(|| state.chrome_writer())
+        }) else {
+            return;
+        };
+        write_chrome_frame(&stdout, &host_name, &message);
         return;
     }
 
@@ -740,9 +772,17 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         let Some(id) = message.get("id").cloned() else {
             return;
         };
-        let state = state.lock().expect("host state mutex poisoned");
-        state.send_client(
-            client_id,
+        let Some((writer, host_name)) = ({
+            let state = state.lock().expect("host state mutex poisoned");
+            state
+                .client_writer(client_id)
+                .map(|writer| (writer, state.host_name.clone()))
+        }) else {
+            return;
+        };
+        write_client_frame(
+            &writer,
+            &host_name,
             &json!({ "jsonrpc": "2.0", "id": id, "result": "pong" }),
         );
         return;
@@ -767,23 +807,30 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         tracker.observe_turn(session_id, turn_id);
     }
 
-    let mut state = state.lock().expect("host state mutex poisoned");
-    if !state.clients.contains_key(&client_id) {
-        return;
-    }
-    let chrome_id = format!("linux-{}-{}", process::id(), state.next_chrome_id);
-    state.next_chrome_id += 1;
-    state.cleanup_old_requests();
-    state.pending_chrome_requests.insert(
-        chrome_id.clone(),
-        PendingChromeRequest {
-            client_id,
-            client_request_id,
-            created_at: Instant::now(),
-        },
-    );
-    let outbound = with_id(message, Value::String(chrome_id));
-    state.send_chrome(&outbound);
+    let (stdout, host_name, outbound) = {
+        let mut state = state.lock().expect("host state mutex poisoned");
+        if !state.clients.contains_key(&client_id) {
+            return;
+        }
+        let chrome_id = format!("linux-{}-{}", process::id(), state.next_chrome_id);
+        state.next_chrome_id += 1;
+        state.cleanup_old_requests();
+        state.pending_chrome_requests.insert(
+            chrome_id.clone(),
+            PendingChromeRequest {
+                client_id,
+                client_request_id,
+                created_at: Instant::now(),
+            },
+        );
+        let (stdout, host_name) = state.chrome_writer();
+        (
+            stdout,
+            host_name,
+            with_id(message, Value::String(chrome_id)),
+        )
+    };
+    write_chrome_frame(&stdout, &host_name, &outbound);
 }
 
 fn handle_chrome_message(state: &SharedState, message: Value) {
@@ -792,60 +839,94 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
             return;
         };
 
-        let mut state = state.lock().expect("host state mutex poisoned");
-        let Some(pending) = state.pending_chrome_requests.remove(&id) else {
-            trace(
-                &state.host_name,
-                &unmatched_chrome_response_trace(&id, &message),
-            );
-            return;
+        let (writer, host_name, outbound) = {
+            let mut state = state.lock().expect("host state mutex poisoned");
+            let Some(pending) = state.pending_chrome_requests.remove(&id) else {
+                trace(
+                    &state.host_name,
+                    &unmatched_chrome_response_trace(&id, &message),
+                );
+                return;
+            };
+            let Some(writer) = state.client_writer(pending.client_id) else {
+                return;
+            };
+            (
+                writer,
+                state.host_name.clone(),
+                with_id(message, pending.client_request_id),
+            )
         };
-
-        state.send_client(
-            pending.client_id,
-            &with_id(message, pending.client_request_id),
-        );
+        write_client_frame(&writer, &host_name, &outbound);
         return;
     }
 
     if !is_request(&message) {
-        let state = state.lock().expect("host state mutex poisoned");
-        state.broadcast_primary_clients(&message);
+        let (writers, host_name) = {
+            let state = state.lock().expect("host state mutex poisoned");
+            (state.primary_client_writers(), state.host_name.clone())
+        };
+        for writer in writers {
+            write_client_frame(&writer, &host_name, &message);
+        }
         return;
     }
 
     let chrome_request_id = message.get("id").cloned().unwrap_or(Value::Null);
-    let mut state = state.lock().expect("host state mutex poisoned");
-    let client_id = match select_primary_client_id(&state.clients) {
-        Ok(client_id) => client_id,
-        Err(error) => {
-            state.send_chrome(&json!({
-                "jsonrpc": "2.0",
-                "id": chrome_request_id,
-                "error": {
-                    "code": -32000,
-                    "message": error.message()
-                }
-            }));
-            return;
-        }
+
+    enum ChromeRoute {
+        ToClient(SharedClientWriter, Value),
+        RouteError(Arc<Mutex<io::Stdout>>, Value),
+    }
+
+    let (route, host_name) = {
+        let mut state = state.lock().expect("host state mutex poisoned");
+        let host_name = state.host_name.clone();
+        let route = match select_primary_client_id(&state.clients) {
+            Ok(client_id) => {
+                let client_request_id =
+                    format!("chrome-{}-{}", process::id(), state.next_client_request_id);
+                state.next_client_request_id += 1;
+                state.cleanup_old_requests();
+                state.pending_client_requests.insert(
+                    client_request_id.clone(),
+                    PendingClientRequest {
+                        client_id,
+                        chrome_request_id,
+                        created_at: Instant::now(),
+                    },
+                );
+                let Some(writer) = state.client_writer(client_id) else {
+                    return;
+                };
+                ChromeRoute::ToClient(writer, with_id(message, Value::String(client_request_id)))
+            }
+            Err(error) => {
+                let (stdout, _) = state.chrome_writer();
+                ChromeRoute::RouteError(
+                    stdout,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": chrome_request_id,
+                        "error": {
+                            "code": -32000,
+                            "message": error.message()
+                        }
+                    }),
+                )
+            }
+        };
+        (route, host_name)
     };
 
-    let client_request_id = format!("chrome-{}-{}", process::id(), state.next_client_request_id);
-    state.next_client_request_id += 1;
-    state.cleanup_old_requests();
-    state.pending_client_requests.insert(
-        client_request_id.clone(),
-        PendingClientRequest {
-            client_id,
-            chrome_request_id,
-            created_at: Instant::now(),
-        },
-    );
-    state.send_client(
-        client_id,
-        &with_id(message, Value::String(client_request_id)),
-    );
+    match route {
+        ChromeRoute::ToClient(writer, outbound) => {
+            write_client_frame(&writer, &host_name, &outbound)
+        }
+        ChromeRoute::RouteError(stdout, outbound) => {
+            write_chrome_frame(&stdout, &host_name, &outbound)
+        }
+    }
 }
 
 fn select_primary_client_id(
@@ -1608,6 +1689,38 @@ mod tests {
         let (stream, _peer) = UnixStream::pair().unwrap();
 
         authorize_client_peer(&stream).unwrap();
+    }
+
+    #[test]
+    fn chrome_response_is_forwarded_to_the_matching_client_after_unlock() {
+        // Exercises the write-after-unlock routing: a Chrome response is matched
+        // to its pending client request and the reply frame reaches the client's
+        // socket. Regression guard for moving the socket write out from under the
+        // host state lock.
+        let (mut peer, writer_stream) = UnixStream::pair().unwrap();
+        let state = Arc::new(Mutex::new(test_host_state()));
+        {
+            let mut state = state.lock().unwrap();
+            let client_id = state.add_client(Arc::new(Mutex::new(writer_stream)));
+            state.pending_chrome_requests.insert(
+                "linux-1-1".to_string(),
+                PendingChromeRequest {
+                    client_id,
+                    client_request_id: json!("client-req-1"),
+                    created_at: Instant::now(),
+                },
+            );
+        }
+
+        handle_chrome_message(
+            &state,
+            json!({ "jsonrpc": "2.0", "id": "linux-1-1", "result": {"ok": true} }),
+        );
+
+        let forwarded = read_frame(&mut peer).unwrap().unwrap();
+        assert_eq!(forwarded["id"], json!("client-req-1"));
+        assert_eq!(forwarded["result"]["ok"], json!(true));
+        assert!(state.lock().unwrap().pending_chrome_requests.is_empty());
     }
 
     fn test_client() -> Client {

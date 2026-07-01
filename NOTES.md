@@ -185,14 +185,39 @@ and the idle auto-hide watchdog chain are documented in
 
 ## Smoke harnesses
 
-- `codex-cua` browser-phase wedge (`Page.enable`/`Page.navigate` timeouts,
-  "Detached"): it is the **Codex extension's `chrome.debugger` relay**, not
-  Chrome, not our Rust, not the VM. Raw CDP and direct `chrome.debugger` both
-  work on the same Chrome; only the SW relay wedges. Do NOT tune timeouts (makes
-  it worse), reboot (does nothing), or blame our code (reverts fail identically).
-  Each run now leaves `chrome-debug.log`/`chrome-stderr.log` in the judge dir.
-  Full evidence, probes, ruled-out list, and next steps:
+- Browser-use "Detached"/`Page.enable` wedge — **ROOT CAUSE FOUND & FIXED
+  2026-07-01. The 2026-06 "proprietary relay, unfixable" verdict was WRONG.**
+  It is the Codex extension's own **driver-liveness heartbeat**: every 30s the
+  extension pings its *primary* native-host client and, if no reply in 3s,
+  detaches `chrome.debugger` from every tab (`client-heartbeat-alarm` in
+  `resources/chrome-extension/codex/1.1.5_0/background.js`). sky-cua drove the
+  browser via per-op *ephemeral* connections (`session_id: "sky-cua-mcp"`) that
+  the host never routes the heartbeat to, so nothing answered the ping and the
+  extension kept detaching mid-session → "Detached while handling command."
+  Live-proven on real Brave: pings arrive every 30.0s to a primary client;
+  answering `pong` keeps the debugger attached. This also explains the old
+  clues (raising timeouts made it worse = longer idle gaps; desktop control
+  unaffected = no debugger). Do NOT re-investigate as a relay/idle-death bug.
+  Fix: `crates/sky-cua-service/src/browser/keepalive.rs` — a persistent primary
+  keepalive connection in the daemon that answers the heartbeat, started lazily
+  on first browser use (`BrowserBridgeExecutor::from_env`), reconnects across
+  host restarts. Tradeoff: sky-cua becomes the primary client, so it and a
+  concurrent Codex-desktop browser session evict each other. Full write-up:
   [`docs/research/2026-06-chrome-debugger-relay-wedge.md`](docs/research/2026-06-chrome-debugger-relay-wedge.md).
+  - Independent robustness hardening also landed 2026-07-01 (an adversarial
+    audit of `crates/sky-cua-service/src/browser/*` + `sky-cua-chrome-host`
+    found real defects that turned a *recoverable* hiccup into corruption or a
+    terminal hang): (1) a mid-sequence detach on a click/press_key no longer
+    replays the whole multi-CDP-command op (was a silent double-submit; guard
+    now `!replay_safe()`); (2) the native host writes frames AFTER dropping the
+    `HostState` lock so a non-reading SW can't freeze every host thread;
+    (3) a belated reply to one of our own prior requests on a reused stream is
+    skipped, not fatal; (4) service frame cap 4 → 64 MiB (large screenshots);
+    (5) probe/IO timeout honors `SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS`.
+  - Deferred deterministic fix (real but multi-browser-only): per-socket
+    sub-budget so a wedged socket cannot eat the whole deadline before a healthy
+    sibling is tried; the safe fix interacts with the cross-socket
+    mutation-safety machinery, so do it deliberately.
 - The client Unix-socket read timeout must stay generous (60s) for real
   portal approval UX.
 - For `codex exec` plugin tests, validate the JSONL transcript for an actual

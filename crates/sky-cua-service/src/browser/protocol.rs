@@ -1,6 +1,12 @@
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+/// Shared prefix of every request id this service sends. A response whose id
+/// carries this prefix but does not match the in-flight request is a belated
+/// reply to one of our own earlier requests on a reused stream, not a foreign
+/// or malformed frame.
+pub(super) const BRIDGE_REQUEST_ID_PREFIX: &str = "sky-cua-browser-";
+
 pub(super) const LIST_TABS_REQUEST_ID: &str = "sky-cua-browser-list-tabs";
 pub(super) const BRIDGE_INFO_REQUEST_ID: &str = "sky-cua-browser-info";
 pub(super) const OPEN_TAB_REQUEST_ID: &str = "sky-cua-browser-open-tab";
@@ -30,7 +36,13 @@ pub(super) const KEY_DOWN_REQUEST_ID: &str = "sky-cua-browser-key-down";
 pub(super) const KEY_UP_REQUEST_ID: &str = "sky-cua-browser-key-up";
 pub(super) const SCROLL_REQUEST_ID: &str = "sky-cua-browser-scroll";
 pub(super) const EVAL_REQUEST_ID: &str = "sky-cua-browser-eval";
-pub(super) const MAX_FRAME_SIZE: usize = 4 * 1024 * 1024;
+// A single response frame carries the whole base64 PNG of a `Page.captureScreenshot`,
+// which on a 4K/high-DPI viewport routinely exceeds a few MiB once base64-inflated
+// and wrapped in the JSON-RPC envelope. The native host forwards frames up to 100
+// MiB (`sky-cua-chrome-host` `frame::MAX_FRAME_SIZE`), so a low service-side cap was
+// the sole choke point turning a valid large capture into a terminal, non-recoverable
+// bridge failure. Keep this at or below the host cap so the host stays the bound.
+pub(super) const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
 
 pub(super) async fn write_frame(
     writer: &mut (impl AsyncWrite + Unpin),

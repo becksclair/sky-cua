@@ -11,7 +11,19 @@ use super::protocol::{read_frame, write_frame};
 
 #[cfg(not(test))]
 pub(super) fn bridge_request_timeout() -> Duration {
-    Duration::from_secs(3)
+    // Per-IO/probe deadline. Defaults to 3s but honors the operator's overall
+    // browser-request override (SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS) so a slow or
+    // remote desktop whose relay answers the `getInfo` handshake in >3s is given
+    // the configured budget instead of being probed out at the fixed default and
+    // then quarantined as stale (the override is documented as the remedy for
+    // sluggish relays, so it must reach this path too). Floored at the 3s default
+    // so a small override can never shrink the probe budget below healthy.
+    const DEFAULT_MS: u64 = 3_000;
+    Duration::from_millis(
+        browser_request_timeout_override_ms()
+            .unwrap_or(DEFAULT_MS)
+            .max(DEFAULT_MS),
+    )
 }
 
 /// Operator override (milliseconds) for the overall browser request budget and
@@ -113,6 +125,20 @@ pub(super) async fn send_bridge_request_until(
 
         if response.get("id").and_then(Value::as_str) != Some(request_id) {
             if response.get("method").and_then(Value::as_str).is_some() {
+                // A server-initiated notification (has a method): not our reply.
+                continue;
+            }
+            if response
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id.starts_with(super::protocol::BRIDGE_REQUEST_ID_PREFIX))
+            {
+                // A belated reply to one of OUR earlier requests on this reused
+                // stream — e.g. a click's mouseMoved answered only after the
+                // service already moved on to mousePressed, which the sluggish
+                // relay makes routine. Drop the stale frame and keep waiting for
+                // the current request's reply instead of failing this command on
+                // a response that belongs to a prior, already-resolved step.
                 continue;
             }
             return Err(unexpected_bridge_response_diagnostic(response));

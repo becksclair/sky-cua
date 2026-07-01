@@ -59,6 +59,105 @@ async fn bridge_request_times_out_when_peer_only_sends_pings() {
 }
 
 #[tokio::test]
+async fn send_bridge_request_skips_belated_reply_to_prior_own_request() {
+    // On a reused stream a sluggish relay can answer an earlier request only
+    // after the service moved on to the next one. That stale own-reply must be
+    // dropped, not treated as an unexpected response that fails the current
+    // command.
+    let _env_guard = env_lock().await;
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    let server = tokio::spawn(async move {
+        let request = read_frame(&mut server).await.unwrap().unwrap();
+        assert_eq!(
+            request.get("method").and_then(Value::as_str),
+            Some("getInfo")
+        );
+        // A belated reply to one of our own earlier requests (prefixed id).
+        write_frame(
+            &mut server,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "sky-cua-browser-attach-tab",
+                "result": {}
+            }),
+        )
+        .await
+        .unwrap();
+        // The real reply to the in-flight getInfo.
+        write_frame(
+            &mut server,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": BRIDGE_INFO_REQUEST_ID,
+                "result": {"name": "sky-cua-test-bridge"}
+            }),
+        )
+        .await
+        .unwrap();
+    });
+
+    let response = send_bridge_request(
+        &mut client,
+        Path::new("/tmp/sky-cua-browser-stale.sock"),
+        BRIDGE_INFO_REQUEST_ID,
+        "getInfo",
+        browser_session_params(),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+
+    assert_eq!(
+        response.get("id").and_then(Value::as_str),
+        Some(BRIDGE_INFO_REQUEST_ID)
+    );
+}
+
+#[tokio::test]
+async fn send_bridge_request_rejects_foreign_response() {
+    // A response id that is not one of ours (no shared prefix) and carries no
+    // method is a genuinely foreign/malformed frame and must still hard-fail —
+    // the stale-own-reply skip must not swallow it.
+    let _env_guard = env_lock().await;
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    let server = tokio::spawn(async move {
+        let request = read_frame(&mut server).await.unwrap().unwrap();
+        assert_eq!(
+            request.get("method").and_then(Value::as_str),
+            Some("getInfo")
+        );
+        write_frame(
+            &mut server,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "totally-unrelated-id",
+                "result": {}
+            }),
+        )
+        .await
+        .unwrap();
+    });
+
+    let diagnostic = send_bridge_request(
+        &mut client,
+        Path::new("/tmp/sky-cua-browser-foreign.sock"),
+        BRIDGE_INFO_REQUEST_ID,
+        "getInfo",
+        browser_session_params(),
+    )
+    .await
+    .unwrap_err();
+    server.await.unwrap();
+
+    assert_eq!(diagnostic.code, "BrowserBridgeRequestFailed");
+    assert!(
+        diagnostic
+            .message
+            .contains("unexpected browser tab response")
+    );
+}
+
+#[tokio::test]
 async fn read_frame_rejects_invalid_json_without_retry_loop() {
     let (mut client, mut server) = UnixStream::pair().unwrap();
 

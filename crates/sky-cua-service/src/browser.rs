@@ -4,6 +4,7 @@ mod cdp;
 mod coordinates;
 mod diagnostics;
 mod executor;
+mod keepalive;
 mod model_image;
 mod probe;
 mod protocol;

@@ -1,9 +1,76 @@
-# Browser CDP wedge: the extension's chrome.debugger relay, not Chrome or our code
+# Browser CDP wedge: RESOLVED — the extension's 30s driver-liveness heartbeat
 
-Investigated 2026-06-28. Status: **root layer isolated with certainty; exact
-trigger and a validated fix still open.** Read this before spending a single
-hour re-investigating a "the browser smoke's CDP commands hang" report — most of
-the obvious suspects are already eliminated below with evidence.
+Investigated 2026-06-28, **root cause found and fixed 2026-07-01.**
+
+## RESOLVED 2026-07-01 — read this first; the rest of the doc is superseded history
+
+The wedge is **not** MV3 idle-death, **not** an unfixable proprietary relay bug,
+and **not** our Rust. It is the Codex extension's own **driver-liveness
+heartbeat**, and it is fixable entirely on our side.
+
+Root cause (read straight from `resources/chrome-extension/codex/1.1.5_0/background.js`,
+the extension's `client-heartbeat-alarm`): every **30 seconds** the extension
+sends a `ping` request to its **primary** native-host client and waits **3s** for
+a reply. If none arrives it runs `chrome.debugger.detach` on **every tab** and
+stops all sessions — a cleanup so a crashed driver does not leave the browser
+debugged forever. sky-cua drives the browser through per-operation, *ephemeral*
+connections (`session_id: "sky-cua-mcp"`) that the host does **not** route the
+heartbeat to, so nothing sky-cua does answers the ping. Between (and even within)
+operations the extension detaches the debugger; the next command then reports
+"Detached while handling command." That is the wedge.
+
+Everything the 2026-06-28 investigation observed is consistent with this and was
+misread as a relay fault: raw CDP and direct `chrome.debugger` worked because the
+detach only removes *our* attachment; the "relay wedge" was the detached session,
+not a broken relay. The ~50% intermittency is whether a 30s tick lands in an idle
+gap; "settles into a persistent streak" is the agent's think-time growing past
+30s; **raising timeouts made it worse** because it lengthened idle windows;
+desktop control was never affected because it does not use the debugger.
+
+Live proof (against a real Brave + the store `Codex 1.1.5` extension + OpenAI's
+`extension-host`): connecting one client to the host socket with a non-`sky-cua-mcp`
+session id (so the host routes the heartbeat to it) received `ping` requests at
+1.6s, 31.6s, 61.6s, 91.6s — exactly every 30.0s — and answering each `pong` kept
+the debugger attached.
+
+**Fix (shipped): a persistent primary keepalive in the daemon.**
+`crates/sky-cua-service/src/browser/keepalive.rs` holds one long-lived connection
+to the bridge socket, registered as the primary/driving client, whose only job is
+to answer the 30s heartbeat. Started lazily on first browser-bridge use
+(`BrowserBridgeExecutor::from_env`), reconnects across host restarts. Accepted
+tradeoff: sky-cua becomes the primary browser client, so a concurrently-running
+Codex desktop app driving the same browser and sky-cua evict each other.
+
+Live-validated 2026-07-01 on real Brave: with the keepalive armed, a
+debugger-attached tab survived a 45s idle and a 70s idle (two heartbeat ticks)
+— `browser_navigate` returned clean, no "Detached". Control: on a daemon where
+the keepalive was not armed, the same op after 45s idle returned "Debugger is
+not attached." Nuance: the keepalive is a daemon-process task that arms on the
+first browser op in that process, so a daemon restart mid-session leaves a
+window until the next op re-arms it (benign in practice — a fresh daemon has no
+attached sessions to lose, and the next op both re-arms the keepalive and
+re-attaches via recovery). In steady state the daemon is a stable singleton, so
+the keepalive persists once armed.
+
+Also shipped 2026-07-01, independent robustness hardening (an adversarial audit of
+`crates/sky-cua-service/src/browser/*` and `sky-cua-chrome-host` found real
+defects that turned a *recoverable* hiccup into corruption or a terminal hang):
+double-input replay on a mid-sequence detach (now gated on `!replay_safe()`);
+native host froze under a non-reading SW because it wrote frames under the global
+lock (writes now happen after unlock); stale own-reply on a reused stream skipped
+not fatal; service frame cap 4 → 64 MiB; probe/IO timeout honors
+`SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS`.
+
+Everything below is the original 2026-06-28 investigation, preserved for history.
+Its "root layer is the proprietary relay" verdict is **wrong** — the relay was
+fine; the debugger had been detached out from under it by the heartbeat.
+
+---
+
+# (historical) Browser CDP wedge: the extension's chrome.debugger relay
+
+Investigated 2026-06-28. Status (historical, since corrected above): **root layer
+isolated with certainty; exact trigger and a validated fix still open.**
 
 ## Symptom
 

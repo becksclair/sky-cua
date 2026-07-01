@@ -560,6 +560,138 @@ async fn cdp_command_timeout_resets_session_without_replaying_input_action() {
 }
 
 #[tokio::test]
+async fn cdp_detach_resets_session_without_replaying_input_action() {
+    // A mid-sequence "Detached while handling command" is recoverable but is
+    // NOT a CDP-command timeout. A click dispatches mouseMoved -> mousePressed
+    // -> mouseReleased on one stream; if mousePressed lands and mouseReleased
+    // detaches, the session must be reset but the click must not be replayed
+    // (a replay re-presses the button => double activation). This pins the fix
+    // for the earlier gate that only blocked replay for the timeout class.
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-cdp-detach-no-replay");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut stream, cursor_move) = accept_until_non_info_request(&listener).await;
+        assert_eq!(
+            cursor_move.get("method").and_then(Value::as_str),
+            Some("moveMouse")
+        );
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": cursor_move["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+        drop(stream);
+
+        let (mut stream, mouse_move) = accept_until_non_info_request(&listener).await;
+        assert_eq!(
+            mouse_move.get("method").and_then(Value::as_str),
+            Some("executeCdp")
+        );
+        assert_eq!(mouse_move["params"]["commandParams"]["type"], "mouseMoved");
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": mouse_move["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+
+        // mousePressed lands, then mouseReleased comes back detached.
+        let mouse_down = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(
+            mouse_down["params"]["commandParams"]["type"],
+            "mousePressed"
+        );
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": mouse_down["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+
+        let mouse_up = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(mouse_up["params"]["commandParams"]["type"], "mouseReleased");
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": mouse_up["id"],
+                "error": {
+                    "code": 1,
+                    "message": "Detached while handling command."
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        // The wedged debugger session must still be reset for the next call...
+        let claim = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(
+            claim.get("method").and_then(Value::as_str),
+            Some("claimUserTab")
+        );
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": claim["id"],
+                "result": {
+                    "id": 515,
+                    "title": "Reset Tab",
+                    "url": "https://example.test/reset",
+                    "active": true
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        reply_to_detach(&mut stream, 515).await;
+        reply_to_attach_and_enable(&mut stream, 515).await;
+
+        // ...but the click must NOT be replayed after the detach: mousePressed
+        // already landed, so a replay would double-activate the target.
+        assert!(
+            read_frame(&mut stream).await.unwrap().is_none(),
+            "input action was replayed after a mid-sequence debugger detach"
+        );
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    let response = click(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        10.0,
+        20.0,
+    )
+    .await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    let diagnostic = response
+        .diagnostics
+        .first()
+        .expect("click should surface the detach diagnostic");
+    assert!(
+        diagnostic
+            .message
+            .contains("Detached while handling command")
+    );
+    assert!(
+        diagnostic
+            .details
+            .as_deref()
+            .is_some_and(|details| details.contains("was not replayed")),
+        "diagnostic should explain why the action was not replayed: {diagnostic:?}"
+    );
+}
+
+#[tokio::test]
 async fn cdp_command_timeout_is_not_replayed_on_another_bridge_socket() {
     let _env_guard = env_lock().await;
     let socket_dir = unique_test_dir("sky-cua-browser-cdp-timeout-two-sockets");

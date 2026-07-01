@@ -27,6 +27,10 @@ pub(super) struct BrowserBridgeExecutor {
 
 impl BrowserBridgeExecutor {
     pub(super) fn from_env(deadline: TokioInstant) -> Result<Self, DiagnosticEntry> {
+        // Any browser-bridge use starts the heartbeat keepalive (once) so the
+        // extension's 30s driver-liveness ping is answered and it stops
+        // detaching chrome.debugger from our tabs mid-session.
+        super::keepalive::ensure_spawned();
         let selection = browser_socket_selection_from_env()?;
         Self::from_selection(selection, deadline)
     }
@@ -254,19 +258,26 @@ impl BrowserSessionBinding<'_> {
                     self.executor.deadline,
                 )
                 .await?;
-                // A timed-out command may still execute in the browser after
-                // the bridge abandons it: an unattached/not-in-session error
-                // means the command never ran, but a timeout does not. The
-                // session reset above heals the wedged debugger session
-                // either way; replaying the operation is only safe when it
-                // cannot mutate the page a second time.
-                if session::is_cdp_command_timeout_diagnostic(&diagnostic)
-                    && !operation.replay_safe()
-                {
+                // A recoverable failure can arrive part-way through a
+                // multi-command operation: a click dispatches mouseMoved ->
+                // mousePressed -> mouseReleased on one stream, so a timeout,
+                // "Detached while handling command", or unattached error on a
+                // later sub-command can follow an earlier one that already
+                // landed in the page. The session reset above heals the wedged
+                // debugger session, but replaying the whole operation would
+                // re-dispatch the sub-commands that already executed (double
+                // click, double keystroke, double submit). Replay is therefore
+                // only safe when the operation cannot mutate the page twice;
+                // every mutating class is surfaced as reset-not-replayed no
+                // matter which recoverable error tripped it — the earlier
+                // timeout-only gate let a mid-sequence detach double-apply.
+                if !operation.replay_safe() {
                     return Err(DiagnosticEntry {
                         details: Some(
-                            "The tab's debugger session was reset after the timeout. The \
-                             command was not replayed because it may still have executed."
+                            "The tab's debugger session was reset, but the command was not \
+                             replayed because an earlier step may have already taken effect. \
+                             If browser actions keep failing this way the extension's debugger \
+                             relay is likely wedged; use desktop-control tools for this tab."
                                 .to_string(),
                         ),
                         ..diagnostic

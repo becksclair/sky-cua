@@ -326,13 +326,32 @@ and `executeCdp(Page.enable)` on the same bridge socket. Command timeouts take
 this recovery path because the extension abandons a timed-out CDP command
 without cancelling it; the stuck command wedges every later command on that
 tab's debugger session, and only a detach/attach cycle clears it. After the
-reset, the original action is retried once — except after a command timeout
-for actions that mutate the page (click, type, key, navigate, eval, scroll):
-the timed-out command may still have executed in the browser, so replaying it
-could double the input. Those calls surface the timeout diagnostic (with a
-note that the session was reset) instead; snapshot, screenshot, and absolute
-cursor moves are replayed. Failures after the retry are surfaced as
-diagnostics rather than looping indefinitely. Each `executeCdp` request
+reset, the original action is retried once — but only when replaying it cannot
+mutate the page twice. Actions that mutate the page (click, type, key, navigate,
+eval, scroll) are never auto-replayed after any recovered failure, because a
+click/press dispatches several CDP commands on one stream (mouseMoved →
+mousePressed → mouseReleased), so an earlier sub-command may already have landed
+before the failing one — whether the trip was a command timeout, a
+`Debugger is not attached`, or a `Detached while handling command`. Replaying
+the whole operation would re-dispatch the committed sub-commands and double the
+input, so those calls surface the failure diagnostic (with a note that the
+session was reset and steering toward desktop-control tools) instead; snapshot,
+screenshot, and absolute cursor moves are replayed. Failures after the retry are
+surfaced as diagnostics rather than looping indefinitely.
+
+The extension runs a **driver-liveness heartbeat**: every 30 seconds it sends a
+`ping` request to its *primary* native-host client and, if no reply arrives
+within 3 seconds, detaches `chrome.debugger` from every tab (a cleanup so a
+crashed driver does not leave the browser debugged). Because sky-cua's per-op
+connections register as *ephemeral* (`session_id: "sky-cua-mcp"`), the host does
+not route the heartbeat to them, so nothing would answer it and the extension
+would detach the debugger between commands — the historical "Detached while
+handling command" wedge. `browser/keepalive.rs` closes this: on first
+browser-bridge use the daemon starts one persistent connection registered as the
+*primary* client whose only job is to answer the heartbeat `pong`, keeping the
+debugger attached for the whole session; it reconnects across native-host
+restarts. Tradeoff: sky-cua becomes the primary browser client, so a concurrent
+Codex desktop app driving the same browser and sky-cua evict each other. Each `executeCdp` request
 carries a `timeoutMs` derived from the remaining call deadline (capped at the
 extension's 10-second default, and shrunk below the 250 ms floor when the
 deadline is nearly exhausted), so the bridge returns a structured timeout
@@ -436,6 +455,26 @@ cargo test -p sky-cua-service
 - Live smoke: `browser_open` + `browser_screenshot` against Brave through the
   installed MCP client, including capture of a background tab and a minimized
   Brave window.
+
+Resilience hardening from 2026-07-01 (`cargo nextest run -p sky-cua-service
+-p sky-cua-chrome-host`):
+
+- `cdp_detach_resets_session_without_replaying_input_action` proves a
+  mid-sequence `Detached while handling command` on a click resets the session
+  but does not replay the input — the same no-double-apply guarantee the CDP
+  timeout already had, now covering the detach/unattached recoverable classes.
+- `send_bridge_request_skips_belated_reply_to_prior_own_request` /
+  `send_bridge_request_rejects_foreign_response` prove a belated reply to one of
+  our own earlier requests on a reused stream is dropped, while a genuinely
+  foreign frame still hard-fails.
+- `chrome_response_is_forwarded_to_the_matching_client_after_unlock` proves the
+  native host routes a Chrome response to its client with the socket write
+  performed after the `HostState` lock is dropped, so a non-reading (wedged)
+  service worker cannot freeze every host thread on a blocked write.
+- The service bridge frame cap is 64 MiB (below the host's 100 MiB) so a large
+  or high-DPI `Page.captureScreenshot` response is not rejected mid-relay, and
+  the probe/IO timeout honors `SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS` (floored at
+  3s) so a slow-but-healthy relay is not quarantined as stale.
 
 Focused browser reliability checks from 2026-06-15:
 
