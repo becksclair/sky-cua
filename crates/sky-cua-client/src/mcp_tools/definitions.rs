@@ -652,6 +652,20 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             json!(["operation"]),
             desktop_action_constraints()
         ),
+        grouped_tool(
+            "desktop_launch_app",
+            "Launch an application into the agent's private isolated desktop (e.g. a browser, file manager, or editor). Only available in isolated mode; it never launches onto the user's live session. Pass the executable as command and any arguments as args.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            json!({
+                "command": non_blank_string_schema(),
+                "args": {
+                    "type": "array",
+                    "items": non_blank_string_schema(),
+                    "description": "Command-line arguments passed to the application."
+                }
+            }),
+            json!(["command"])
+        ),
         grouped_tool_with_constraints(
             "desktop_set_value",
             "Set a desktop element value. Include replacement value plus target from observe(surface=\"desktop\").",
@@ -2683,6 +2697,7 @@ mod annotation_tests {
         ("desktop_pointer", (false, true, false, false)),
         ("desktop_keyboard", (false, true, false, false)),
         ("desktop_action", (false, true, false, false)),
+        ("desktop_launch_app", (false, true, false, false)),
         ("desktop_set_value", (false, true, true, false)),
         ("browser_open", (false, false, false, true)),
         ("browser_navigate", (false, false, true, true)),
@@ -2834,7 +2849,7 @@ mod annotation_tests {
     fn registry_has_expected_name_budget() {
         let model = ModelSessionInfo::default();
         let registry = build_tool_registry(&process_config(false), &model);
-        assert_eq!(registry.active_names.len(), 34);
+        assert_eq!(registry.active_names.len(), 35);
         assert!(registry.contains("observe"));
         assert!(registry.contains("browser_input"));
         let doctor = registry
@@ -2859,7 +2874,7 @@ mod annotation_tests {
     fn registry_adds_browser_eval_only_when_enabled() {
         let model = ModelSessionInfo::default();
         let registry = build_tool_registry(&process_config(true), &model);
-        assert_eq!(registry.active_names.len(), 35);
+        assert_eq!(registry.active_names.len(), 36);
         assert!(registry.contains("browser_eval"));
         assert_eq!(registry.inactive_reason("browser_eval"), None);
     }
@@ -3766,8 +3781,8 @@ mod annotation_tests {
         json!({
             "version": 1,
             "surface": "grouped",
-            "default_tool_count": 34,
-            "eval_tool_count": 35,
+            "default_tool_count": 35,
+            "eval_tool_count": 36,
             "tools": tools
         })
     }
@@ -4081,6 +4096,19 @@ mod annotation_tests {
                 ],
             ),
             contract_tool(
+                "desktop_launch_app",
+                // The advertised `IsolatedDesktopRequired` code is proven live by
+                // the `desktop_launch_app_refuses_when_not_isolated` handler test
+                // in `mcp_tools`; this contract is the declared surface, that test
+                // is its liveness check.
+                vec![branch_with_extra_errors(
+                    "default",
+                    "desktop_launch_app",
+                    json!({"command": "xmessage", "args": ["hello"]}),
+                    &["IsolatedDesktopRequired"],
+                )],
+            ),
+            contract_tool(
                 "desktop_set_value",
                 vec![branch(
                     "default",
@@ -4224,11 +4252,26 @@ mod annotation_tests {
         handler_id: &'static str,
         minimal_valid_arguments: Value,
     ) -> Value {
+        branch_with_extra_errors(name, handler_id, minimal_valid_arguments, &[])
+    }
+
+    /// Like [`branch`] but advertises additional tool-specific error codes beyond
+    /// the common `InvalidRequest`/`FeatureDisabled`/`UnknownTool` set — e.g.
+    /// `desktop_launch_app`'s `IsolatedDesktopRequired` isolated-session gate — so
+    /// the published contract names every code a host may have to handle.
+    fn branch_with_extra_errors(
+        name: &'static str,
+        handler_id: &'static str,
+        minimal_valid_arguments: Value,
+        extra_errors: &[&str],
+    ) -> Value {
+        let mut expected_errors = vec!["InvalidRequest", "FeatureDisabled", "UnknownTool"];
+        expected_errors.extend_from_slice(extra_errors);
         json!({
             "name": name,
             "handler_id": handler_id,
             "minimal_valid_arguments": minimal_valid_arguments,
-            "expected_errors": ["InvalidRequest", "FeatureDisabled", "UnknownTool"]
+            "expected_errors": expected_errors
         })
     }
 

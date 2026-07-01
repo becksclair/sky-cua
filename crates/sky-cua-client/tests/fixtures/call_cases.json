@@ -644,6 +644,21 @@
     },
     {
       "branch": "default",
+      "handler_id": "desktop_launch_app",
+      "invalid": {
+        "args": false,
+        "command": "xmessage"
+      },
+      "tool": "desktop_launch_app",
+      "valid": {
+        "args": [
+          "hello"
+        ],
+        "command": "xmessage"
+      }
+    },
+    {
+      "branch": "default",
       "handler_id": "set_value",
       "invalid": {
         "element_index": false,

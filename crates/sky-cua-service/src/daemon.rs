@@ -769,6 +769,20 @@ impl ServiceDaemon {
                     Err(error) => error_response(error.code, error.message),
                 }
             }
+            ServiceRequest::LaunchApplication { command, args } => {
+                // Isolation gating lives at the client: the `desktop_launch_app`
+                // MCP tool refuses unless the session is isolated. The daemon is
+                // intentionally ignorant of xpra and launches into whatever
+                // environment it was spawned with, so leak-safety rests on the
+                // client gate plus the isolated daemon's sandbox spawn env —
+                // consistent with the "client orchestrates, daemon ignorant"
+                // design and the project's non-security-hardening posture.
+                debug!(command = %command, "handling launch_application request");
+                match self.backend.launch_application(&command, &args).await {
+                    Ok(launched) => ServiceResponse::LaunchApplication { pid: launched.pid },
+                    Err(error) => error_response(error.code, error.message),
+                }
+            }
             ServiceRequest::ListApps => {
                 debug!("handling list_apps request");
                 let environment = match self.backend.probe_environment().await {

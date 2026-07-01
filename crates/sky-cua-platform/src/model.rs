@@ -1272,6 +1272,15 @@ pub struct PortalTokenResetOutcome {
     pub dropped_cached_session: bool,
 }
 
+/// An application the backend launched into its desktop session.
+///
+/// The process is detached and outlives the launch request; the only fact the
+/// caller learns is the operating-system process id of the spawned child.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LaunchedApplication {
+    pub pid: u32,
+}
+
 impl ActionOutcome {
     #[must_use]
     pub fn unsupported(message: impl Into<String>) -> Self {

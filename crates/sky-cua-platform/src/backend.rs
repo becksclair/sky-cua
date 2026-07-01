@@ -5,8 +5,8 @@ use crate::model::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
     CaptureBackendKind, CaptureScreenMode, DiagnosticEntry, DisplayInfo, DisplayTarget,
     DoctorCheck, DoctorReadiness, DoctorReport, EnvironmentInfo, HeuristicMatch, InputBackendKind,
-    PortalTokenResetOutcome, SemanticBackendKind, SessionPresenceIntent, SessionPresenceStatus,
-    WindowInfo, WindowTarget, WindowTargetingSetupReport,
+    LaunchedApplication, PortalTokenResetOutcome, SemanticBackendKind, SessionPresenceIntent,
+    SessionPresenceStatus, WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
 
 #[async_trait]
@@ -94,6 +94,23 @@ pub trait DesktopBackend: Send + Sync {
         Err(BackendError::new(
             BackendErrorCode::ActionUnsupportedForEnvironment,
             "window targeting setup is only available on Linux backends",
+        ))
+    }
+    /// Launch an application into the backend's own desktop session.
+    ///
+    /// The child inherits the daemon's environment unchanged; in the isolated
+    /// desktop that inherited environment (`DISPLAY=:N`, sandbox session bus, no
+    /// `WAYLAND_DISPLAY`) is what keeps the launched window inside the private
+    /// desktop. Backends that cannot launch applications return an unsupported
+    /// error.
+    async fn launch_application(
+        &self,
+        _command: &str,
+        _args: &[String],
+    ) -> Result<LaunchedApplication, BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            "application launch is only available on Linux backends",
         ))
     }
     async fn list_windows(&self) -> Result<Vec<WindowInfo>, BackendError> {

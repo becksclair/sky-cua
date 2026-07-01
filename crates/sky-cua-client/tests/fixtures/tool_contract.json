@@ -1,6 +1,6 @@
 {
-  "default_tool_count": 34,
-  "eval_tool_count": 35,
+  "default_tool_count": 35,
+  "eval_tool_count": 36,
   "surface": "grouped",
   "tools": [
     {
@@ -7119,6 +7119,81 @@
         },
         "required": [
           "operation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "FeatureDisabled",
+            "UnknownTool",
+            "IsolatedDesktopRequired"
+          ],
+          "handler_id": "desktop_launch_app",
+          "minimal_valid_arguments": {
+            "args": [
+              "hello"
+            ],
+            "command": "xmessage"
+          },
+          "name": "default"
+        }
+      ],
+      "content_policy": "grouped_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "description": "Command-line arguments passed to the application.",
+            "items": {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      },
+      "name": "desktop_launch_app",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "description": "Command-line arguments passed to the application.",
+            "items": {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
         ],
         "type": "object"
       }

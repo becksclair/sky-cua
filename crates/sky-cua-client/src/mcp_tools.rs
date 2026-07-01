@@ -42,11 +42,21 @@ mod phone_tests;
 
 pub(crate) trait McpService {
     fn call(&self, request: &ServiceRequest) -> Result<ServiceResponse>;
+    /// Whether the backing client drives the private isolated desktop. Tools
+    /// scoped to the isolated desktop (e.g. `desktop_launch_app`) gate on this.
+    /// Defaults to `false` so non-isolated harnesses need not override it.
+    fn is_isolated(&self) -> bool {
+        false
+    }
 }
 
 impl McpService for ServiceClient {
     fn call(&self, request: &ServiceRequest) -> Result<ServiceResponse> {
         ServiceClient::call(self, request)
+    }
+
+    fn is_isolated(&self) -> bool {
+        ServiceClient::is_isolated(self)
     }
 }
 
@@ -200,6 +210,7 @@ fn grouped_handler_call(tool_name: &str, arguments: Value) -> Result<GroupedHand
             "perform_action" => ("perform_action", "perform_action".to_string()),
             operation => return Err(anyhow!("unsupported desktop_action operation: {operation}")),
         },
+        "desktop_launch_app" => ("desktop_launch_app", "default".to_string()),
         "desktop_set_value" => ("set_value", "default".to_string()),
         "browser_open" => ("browser_open", "default".to_string()),
         "browser_claim_tab" => ("browser_claim_tab", "default".to_string()),
@@ -427,6 +438,71 @@ fn handle_tool_call_with_browser_eval_policy(
                 "unexpected response for setup_window_targeting: {other:?}"
             )),
         },
+        "desktop_launch_app" => {
+            // Scoped to the isolated desktop: this tool launches applications
+            // into the agent's PRIVATE desktop only. Launching apps onto the
+            // user's live session is intentionally out of scope, so refuse
+            // before any spawn when the client is not isolated.
+            if !service.is_isolated() {
+                return tool_error(
+                    "IsolatedDesktopRequired",
+                    "desktop_launch_app launches applications only into the agent's private \
+                     isolated desktop; launching apps onto the user's live session is \
+                     intentionally out of scope. Enable isolated mode (set SKY_CUA_ISOLATED_DESKTOP=1 \
+                     or [isolated_desktop] enabled = true in sky-cua.toml) and start a new session.",
+                );
+            }
+            let command = match arguments.get("command").and_then(Value::as_str) {
+                Some(command) if !command.trim().is_empty() => command.to_string(),
+                _ => {
+                    return tool_error(
+                        "InvalidRequest",
+                        "desktop_launch_app requires a non-empty 'command'",
+                    );
+                }
+            };
+            let args = match arguments.get("args") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(items)) => {
+                    let mut collected = Vec::with_capacity(items.len());
+                    for item in items {
+                        match item.as_str() {
+                            Some(arg) => collected.push(arg.to_string()),
+                            None => {
+                                return tool_error(
+                                    "InvalidRequest",
+                                    "desktop_launch_app 'args' must be an array of strings",
+                                );
+                            }
+                        }
+                    }
+                    collected
+                }
+                Some(_) => {
+                    return tool_error(
+                        "InvalidRequest",
+                        "desktop_launch_app 'args' must be an array of strings",
+                    );
+                }
+            };
+            match service.call(&ServiceRequest::LaunchApplication {
+                command: command.clone(),
+                args,
+            })? {
+                ServiceResponse::LaunchApplication { pid } => Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": format!("Launched '{command}' in the isolated desktop (pid {pid}).")
+                    }],
+                    "structuredContent": { "pid": pid },
+                    "isError": false
+                })),
+                ServiceResponse::Error { code, message } => tool_error(code, message),
+                other => Err(anyhow!(
+                    "unexpected response for desktop_launch_app: {other:?}"
+                )),
+            }
+        }
         "list_apps" => match service.call(&ServiceRequest::ListApps)? {
             ServiceResponse::ListApps {
                 environment,
@@ -1255,6 +1331,7 @@ mod tests {
     struct FakeService {
         requests: RefCell<Vec<ServiceRequest>>,
         responses: RefCell<VecDeque<ServiceResponse>>,
+        isolated: bool,
     }
 
     impl FakeService {
@@ -1266,7 +1343,15 @@ mod tests {
             Self {
                 requests: RefCell::new(Vec::new()),
                 responses: RefCell::new(responses.into_iter().collect()),
+                isolated: false,
             }
+        }
+
+        /// Mark this fake as driving the private isolated desktop so
+        /// `is_isolated()` reports `true` — the gate `desktop_launch_app` checks.
+        fn isolated(mut self) -> Self {
+            self.isolated = true;
+            self
         }
 
         fn take_requests(&self) -> Vec<ServiceRequest> {
@@ -1281,6 +1366,10 @@ mod tests {
                 .borrow_mut()
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("fake service response queue exhausted"))
+        }
+
+        fn is_isolated(&self) -> bool {
+            self.isolated
         }
     }
 
@@ -1332,6 +1421,69 @@ mod tests {
         assert_eq!(eval_result["isError"], true);
         assert_eq!(eval_result["structuredContent"]["code"], "FeatureDisabled");
         assert!(service.take_requests().is_empty());
+    }
+
+    #[test]
+    fn desktop_launch_app_refuses_when_not_isolated() {
+        // The single most safety-critical branch of this tool: a non-isolated
+        // client must be refused before any dispatch so an app can never be
+        // launched onto the user's real desktop.
+        let service = FakeService::default();
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(false), &model);
+
+        let result = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "desktop_launch_app",
+            json!({"command": "kcalc"}),
+        )
+        .expect("non-isolated launch returns a gating error");
+
+        assert_eq!(result["isError"], true);
+        // The grouped envelope nests the handler's structuredContent under
+        // `result`, so the gating code lives at structuredContent.result.code.
+        assert_eq!(
+            result["structuredContent"]["result"]["code"],
+            "IsolatedDesktopRequired"
+        );
+        // No request reached the service: the refusal precedes dispatch.
+        assert!(service.take_requests().is_empty());
+    }
+
+    #[test]
+    fn desktop_launch_app_dispatches_when_isolated() {
+        let service =
+            FakeService::with_response(ServiceResponse::LaunchApplication { pid: 4242 }).isolated();
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process_config(false), &model);
+
+        let result = handle_session_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            &registry,
+            "desktop_launch_app",
+            json!({"command": "kcalc", "args": ["--help"]}),
+        )
+        .expect("isolated launch dispatches");
+
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["structuredContent"]["result"]["pid"], 4242);
+
+        let requests = service.take_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            ServiceRequest::LaunchApplication { command, args } => {
+                assert_eq!(command, "kcalc");
+                assert_eq!(args, &vec!["--help".to_string()]);
+            }
+            other => panic!("expected a LaunchApplication request, got {other:?}"),
+        }
     }
 
     #[test]
@@ -4456,6 +4608,7 @@ mod tests {
                 "desktop_pointer",
                 "desktop_keyboard",
                 "desktop_action",
+                "desktop_launch_app",
                 "desktop_set_value",
                 "browser_open",
                 "browser_navigate",

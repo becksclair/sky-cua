@@ -17,6 +17,11 @@ pub enum ServiceRequest {
     Doctor,
     SetupAccessibility,
     SetupWindowTargeting,
+    LaunchApplication {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
     ListApps,
     ListWindows,
     FocusedWindow,
@@ -83,6 +88,9 @@ pub enum ServiceResponse {
     },
     SetupWindowTargeting {
         report: Box<WindowTargetingSetupReport>,
+    },
+    LaunchApplication {
+        pid: u32,
     },
     ListApps {
         environment: EnvironmentInfo,
@@ -191,6 +199,13 @@ mod tests {
             (
                 ServiceRequest::SetupWindowTargeting,
                 "setup_window_targeting",
+            ),
+            (
+                ServiceRequest::LaunchApplication {
+                    command: "kcalc".to_string(),
+                    args: vec!["--help".to_string()],
+                },
+                "launch_application",
             ),
             (ServiceRequest::ListApps, "list_apps"),
             (ServiceRequest::ListWindows, "list_windows"),
@@ -548,6 +563,10 @@ mod tests {
                     }),
                 },
                 "setup_window_targeting",
+            ),
+            (
+                ServiceResponse::LaunchApplication { pid: 4321 },
+                "launch_application",
             ),
             (
                 ServiceResponse::ListApps {

@@ -773,6 +773,64 @@ impl DesktopBackend for LinuxDesktopBackend {
         Ok(crate::setup::setup_window_targeting_report(&environment).await)
     }
 
+    async fn launch_application(
+        &self,
+        command: &str,
+        args: &[String],
+    ) -> Result<sky_cua_platform::model::LaunchedApplication, BackendError> {
+        // The child INHERITS the daemon environment verbatim. In the isolated
+        // desktop that environment is the sandbox (`DISPLAY=:N`, sandbox session
+        // bus, `QT_QPA_PLATFORM=xcb`, `GDK_BACKEND=x11`, no `WAYLAND_DISPLAY`),
+        // and pure inheritance is the leak-safety guarantee: do NOT set or mutate
+        // any display/session variable here, or a launched toolkit app could
+        // escape onto the user's live session.
+        let mut process = tokio::process::Command::new(command);
+        process
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+
+        // Detach the child into its own session so it outlives this request and
+        // is never reaped by, or signalled with, the daemon's process group.
+        unsafe {
+            process.pre_exec(|| {
+                // SAFETY: async-signal-safe libc call in the forked child before
+                // exec; the only failure mode (already a session leader) is
+                // benign for a freshly forked process.
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let child = process.spawn().map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                format!("failed to launch application '{command}': {error}"),
+            )
+        })?;
+
+        let pid = child.id().ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                format!("launched application '{command}' has no pid (already exited)"),
+            )
+        })?;
+
+        // Do NOT await the child: it is a detached, long-lived desktop app.
+        // `setsid` made it a new session/process-group leader (detached from the
+        // daemon's controlling terminal and process group) but the daemon stays
+        // its parent. Dropping the tokio `Child` hands it to tokio's orphan
+        // reaper, which collects it on SIGCHLD when it eventually exits. This
+        // relies on `tokio::process` specifically — `std::process::Command` has
+        // no auto-reaper and would leak a zombie for the daemon's lifetime.
+        std::mem::drop(child);
+
+        Ok(sky_cua_platform::model::LaunchedApplication { pid })
+    }
+
     async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
         let environment = self.probe_environment().await?;
         require_supported_environment(&environment)?;
