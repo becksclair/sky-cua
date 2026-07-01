@@ -55,6 +55,36 @@ impl LaunchEnvironment {
         ensure_health_satisfies_browser_env(response)
     }
 
+    /// Build a launch environment whose health-equality expectations are the
+    /// isolated daemon's *sandbox* graphical session, not the client's host
+    /// session. In isolated mode the daemon legitimately runs under
+    /// `DISPLAY=:N`, `XDG_SESSION_TYPE=x11`, the sandbox D-Bus address, and with
+    /// `WAYLAND_DISPLAY` removed; the default `probe()` environment would demand
+    /// the daemon match the *client's* (host Wayland) values and reject the
+    /// sandboxed daemon forever. `spawn_env` is the handle's daemon spawn env;
+    /// `removed_env` are the keys cleared on the daemon (e.g. `WAYLAND_DISPLAY`),
+    /// which must therefore be expected absent. `detached_graphical_env` is set
+    /// so the host-process graphical vars are not consulted for the comparison.
+    #[cfg(unix)]
+    pub(crate) fn for_isolated_daemon(
+        spawn_env: &[(String, String)],
+        removed_env: &[&'static str],
+    ) -> Self {
+        let repaired_desktop_vars = spawn_env
+            .iter()
+            .filter(|(key, _)| GRAPHICAL_SESSION_ENV_KEYS.contains(&key.as_str()))
+            .filter(|(key, _)| !removed_env.contains(&key.as_str()))
+            .cloned()
+            .collect();
+        Self {
+            repaired_desktop_vars,
+            // Skip seeding the required set from the client's live process env;
+            // the sandbox repaired vars above carry the authoritative
+            // expectations for the isolated daemon.
+            detached_graphical_env: true,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn from_repaired_desktop_vars_for_tests(
         repaired_desktop_vars: Vec<(String, String)>,
@@ -690,6 +720,58 @@ mod tests {
     use super::*;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn for_isolated_daemon_scopes_health_to_sandbox_graphical_identity() {
+        // Pure (no process env): mirror IsolatedDesktopHandle::spawn_env() plus a
+        // hypothetical WAYLAND_DISPLAY to prove the removed-env filter excludes it.
+        let spawn_env = vec![
+            ("DISPLAY".to_string(), ":131".to_string()),
+            ("XDG_SESSION_TYPE".to_string(), "x11".to_string()),
+            ("QT_QPA_PLATFORM".to_string(), "xcb".to_string()),
+            ("GDK_BACKEND".to_string(), "x11".to_string()),
+            (
+                "DBUS_SESSION_BUS_ADDRESS".to_string(),
+                "unix:path=/tmp/dbus-sandbox".to_string(),
+            ),
+            (
+                "SKY_CUA_SERVICE_SOCKET_PATH".to_string(),
+                "/run/user/1000/sky-cua/service-isolated-131.sock".to_string(),
+            ),
+            ("WAYLAND_DISPLAY".to_string(), "wayland-0".to_string()),
+        ];
+        let removed_env: &[&'static str] = &["WAYLAND_DISPLAY"];
+
+        let env = LaunchEnvironment::for_isolated_daemon(&spawn_env, removed_env);
+
+        // Detached, so the client's host graphical vars are NOT folded into the
+        // required set — otherwise the host's Wayland identity would reject the
+        // sandboxed X11 daemon forever.
+        assert!(env.detached_graphical_env());
+
+        // The sandbox's graphical identity is exactly what the daemon must echo.
+        assert_eq!(env.repaired_desktop_var("DISPLAY"), Some(":131"));
+        assert_eq!(env.repaired_desktop_var("XDG_SESSION_TYPE"), Some("x11"));
+        assert_eq!(
+            env.repaired_desktop_var("DBUS_SESSION_BUS_ADDRESS"),
+            Some("unix:path=/tmp/dbus-sandbox")
+        );
+
+        // WAYLAND_DISPLAY is removed on the daemon, so it must NOT become a
+        // health expectation even though it is a graphical key — this exclusion
+        // is what closes the toolkit Wayland-escape (the daemon is expected to
+        // run without Wayland).
+        assert_eq!(env.repaired_desktop_var("WAYLAND_DISPLAY"), None);
+
+        // Non-graphical sandbox vars are launch material, not health identity, so
+        // they are excluded from the required set.
+        assert_eq!(env.repaired_desktop_var("QT_QPA_PLATFORM"), None);
+        assert_eq!(env.repaired_desktop_var("GDK_BACKEND"), None);
+        assert_eq!(
+            env.repaired_desktop_var("SKY_CUA_SERVICE_SOCKET_PATH"),
+            None
+        );
+    }
 
     #[test]
     fn startup_health_ignores_repaired_path_differences() {

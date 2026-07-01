@@ -49,6 +49,16 @@ pub const PHONE_COMPANION_RPC_TOKEN_TTL_MS_ENV: &str = "SKY_CUA_PHONE_COMPANION_
 pub const PHONE_CAPABILITY_CACHE_TTL_MS_ENV: &str = "SKY_CUA_PHONE_CAPABILITY_CACHE_TTL_MS";
 pub const PHONE_TARGET_MODELS_ENV: &str = "SKY_CUA_PHONE_TARGET_MODELS";
 
+// Isolated-desktop environment overrides. Each beats the matching
+// `[isolated_desktop]` config key for this process. Names are the public
+// contract surface and are allowlisted in `.mcp.json`.
+pub const ISOLATED_DESKTOP_ENABLED_ENV: &str = "SKY_CUA_ISOLATED_DESKTOP";
+pub const ISOLATED_DESKTOP_DISPLAY_ENV: &str = "SKY_CUA_ISOLATED_DESKTOP_DISPLAY";
+pub const ISOLATED_DESKTOP_RESOLUTION_ENV: &str = "SKY_CUA_ISOLATED_DESKTOP_RESOLUTION";
+pub const ISOLATED_DESKTOP_VIEWER_ENV: &str = "SKY_CUA_ISOLATED_DESKTOP_VIEWER";
+pub const ISOLATED_DESKTOP_LIFECYCLE_ENV: &str = "SKY_CUA_ISOLATED_DESKTOP_LIFECYCLE";
+pub const ISOLATED_DESKTOP_WINDOW_MANAGER_ENV: &str = "SKY_CUA_ISOLATED_DESKTOP_WINDOW_MANAGER";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct MachineConfig {
     /// Chrome-family browser selection: `brave`, `chrome`, `chromium`, or
@@ -57,6 +67,10 @@ pub struct MachineConfig {
     /// Phone-use `[phone]` table. Absent means defaults plus env overrides.
     #[serde(default)]
     pub phone: PhoneConfig,
+    /// Isolated-desktop `[isolated_desktop]` table. Absent means defaults plus
+    /// env overrides.
+    #[serde(default)]
+    pub isolated_desktop: IsolatedDesktopConfig,
 }
 
 /// Parsed `[phone]` table. Every field is optional in the file; defaults and
@@ -102,6 +116,75 @@ pub const PHONE_DEFAULT_COMPANION_RPC_PORT: u16 = 47683;
 pub const PHONE_DEFAULT_COMPANION_RPC_TOKEN_TTL_MS: u64 = 900_000;
 /// Default capability-cache soft refresh hint (30 seconds).
 pub const PHONE_DEFAULT_CAPABILITY_CACHE_TTL_MS: u64 = 30_000;
+
+/// Parsed `[isolated_desktop]` table. Every field is optional in the file;
+/// defaults and per-process env overrides are layered on by
+/// [`resolve_isolated_desktop`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct IsolatedDesktopConfig {
+    pub enabled: Option<bool>,
+    /// `":100"` (default) or the literal `"auto"`, which a downstream module
+    /// resolves to a free display number.
+    pub display: Option<String>,
+    /// Virtual display geometry, e.g. `"1920x1080"`, or the literal `"auto"` (the
+    /// default) which the client sizes to 3/4 of the largest connected monitor.
+    pub resolution: Option<String>,
+    /// Window manager started inside the isolated desktop, e.g. `"openbox"`.
+    pub window_manager: Option<String>,
+    /// Read-only viewer mode: `"attach"`, `"html5"`, or `"none"`.
+    pub viewer: Option<String>,
+    /// Session lifecycle: `"persistent"` or `"ephemeral"`.
+    pub lifecycle: Option<String>,
+}
+
+/// Default isolated-desktop X11 display when neither config nor env overrides it.
+pub const ISOLATED_DESKTOP_DEFAULT_DISPLAY: &str = ":100";
+/// Default isolated-desktop virtual display geometry: the literal `"auto"`, which
+/// the client resolves to three-quarters of the largest connected monitor so the
+/// read-only viewer is a comfortable window on the user's real screen. An explicit
+/// `"<width>x<height>"` overrides it.
+pub const ISOLATED_DESKTOP_DEFAULT_RESOLUTION: &str = "auto";
+/// Default isolated-desktop window manager.
+pub const ISOLATED_DESKTOP_DEFAULT_WINDOW_MANAGER: &str = "openbox";
+
+/// Read-only viewer surfaced for the isolated desktop. Unrecognized strings fall
+/// back to [`ViewerMode::Attach`] during resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewerMode {
+    /// `xpra attach :N --readonly` window on the user's real screen.
+    Attach,
+    /// xpra HTML5 listener; the client logs the URL.
+    Html5,
+    /// No viewer is launched.
+    None,
+}
+
+/// Isolated-desktop lifecycle. Unrecognized strings fall back to
+/// [`Lifecycle::Persistent`] during resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lifecycle {
+    /// The xpra session is reused idempotently across agent sessions and torn
+    /// down only on explicit request.
+    Persistent,
+    /// The xpra session is torn down when the client exits.
+    Ephemeral,
+}
+
+/// Fully resolved isolated-desktop selection: file values overlaid with
+/// per-process environment overrides and concrete defaults. The literal display
+/// string `"auto"` is preserved verbatim (a downstream module picks a free
+/// display number), as is a `resolution` of `"auto"` (the client sizes it to 3/4
+/// of the largest monitor). This is the shape the client consumes; it never
+/// re-reads the file or env directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedIsolatedDesktop {
+    pub enabled: bool,
+    pub display: String,
+    pub resolution: String,
+    pub window_manager: String,
+    pub viewer: ViewerMode,
+    pub lifecycle: Lifecycle,
+}
 
 /// Fully resolved phone-use selection: file values overlaid with per-process
 /// environment overrides and concrete defaults. This is the shape backends and
@@ -337,6 +420,67 @@ fn default_companion_apk_path() -> String {
         .into_owned()
 }
 
+/// Resolve the effective isolated-desktop selection: per-process environment
+/// overrides beat the machine config's `[isolated_desktop]` table, and concrete
+/// defaults fill the rest. Mirrors [`resolved_phone_selection`]; config-file
+/// errors are returned so the caller can attach a diagnostic.
+pub fn resolve_isolated_desktop_selection() -> Result<ResolvedIsolatedDesktop, String> {
+    let isolated_desktop = load_machine_config()?.isolated_desktop;
+    Ok(resolve_isolated_desktop(&isolated_desktop))
+}
+
+/// Pure resolver over an already-parsed `[isolated_desktop]` table plus the
+/// current environment. Split out so tests can exercise layering without file
+/// I/O. Env beats file beats default; the literal display `"auto"` is preserved
+/// verbatim, and unrecognized `viewer`/`lifecycle` strings fall back to their
+/// defaults rather than erroring.
+pub fn resolve_isolated_desktop(cfg: &IsolatedDesktopConfig) -> ResolvedIsolatedDesktop {
+    let viewer = env_string(ISOLATED_DESKTOP_VIEWER_ENV)
+        .or_else(|| normalize(cfg.viewer.clone()))
+        .map(parse_viewer_mode)
+        .unwrap_or(ViewerMode::Attach);
+    let lifecycle = env_string(ISOLATED_DESKTOP_LIFECYCLE_ENV)
+        .or_else(|| normalize(cfg.lifecycle.clone()))
+        .map(parse_lifecycle)
+        .unwrap_or(Lifecycle::Persistent);
+
+    ResolvedIsolatedDesktop {
+        enabled: env_bool(ISOLATED_DESKTOP_ENABLED_ENV)
+            .or(cfg.enabled)
+            .unwrap_or(false),
+        display: env_string(ISOLATED_DESKTOP_DISPLAY_ENV)
+            .or_else(|| normalize(cfg.display.clone()))
+            .unwrap_or_else(|| ISOLATED_DESKTOP_DEFAULT_DISPLAY.to_string()),
+        resolution: env_string(ISOLATED_DESKTOP_RESOLUTION_ENV)
+            .or_else(|| normalize(cfg.resolution.clone()))
+            .unwrap_or_else(|| ISOLATED_DESKTOP_DEFAULT_RESOLUTION.to_string()),
+        window_manager: env_string(ISOLATED_DESKTOP_WINDOW_MANAGER_ENV)
+            .or_else(|| normalize(cfg.window_manager.clone()))
+            .unwrap_or_else(|| ISOLATED_DESKTOP_DEFAULT_WINDOW_MANAGER.to_string()),
+        viewer,
+        lifecycle,
+    }
+}
+
+/// Map a `viewer` string to [`ViewerMode`], defaulting on unrecognized values.
+fn parse_viewer_mode(value: String) -> ViewerMode {
+    match value.to_ascii_lowercase().as_str() {
+        "html5" => ViewerMode::Html5,
+        "none" => ViewerMode::None,
+        // "attach" and any unrecognized value fall back to the default.
+        _ => ViewerMode::Attach,
+    }
+}
+
+/// Map a `lifecycle` string to [`Lifecycle`], defaulting on unrecognized values.
+fn parse_lifecycle(value: String) -> Lifecycle {
+    match value.to_ascii_lowercase().as_str() {
+        "ephemeral" => Lifecycle::Ephemeral,
+        // "persistent" and any unrecognized value fall back to the default.
+        _ => Lifecycle::Persistent,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -540,6 +684,160 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
             resolved.primary_target_models,
             vec!["Pixel 9".to_string(), "Galaxy S26 Ultra".to_string()]
         );
+    }
+
+    const ISOLATED_DESKTOP_TABLE: &str = r#"
+browser = "chrome"
+
+[isolated_desktop]
+enabled = true
+display = ":150"
+resolution = "2560x1440"
+window_manager = "i3"
+viewer = "html5"
+lifecycle = "ephemeral"
+"#;
+
+    /// Keys touched by the isolated-desktop env-override tests; cleared together
+    /// so an ambient override or a sibling test cannot leak across runs.
+    const ISOLATED_DESKTOP_ENV_KEYS: &[&str] = &[
+        ISOLATED_DESKTOP_ENABLED_ENV,
+        ISOLATED_DESKTOP_DISPLAY_ENV,
+        ISOLATED_DESKTOP_RESOLUTION_ENV,
+        ISOLATED_DESKTOP_WINDOW_MANAGER_ENV,
+        ISOLATED_DESKTOP_VIEWER_ENV,
+        ISOLATED_DESKTOP_LIFECYCLE_ENV,
+    ];
+
+    #[test]
+    fn parses_isolated_desktop_table() {
+        let config = parse_machine_config(ISOLATED_DESKTOP_TABLE).expect("valid config");
+        let isolated = config.isolated_desktop;
+        assert_eq!(isolated.enabled, Some(true));
+        assert_eq!(isolated.display.as_deref(), Some(":150"));
+        assert_eq!(isolated.resolution.as_deref(), Some("2560x1440"));
+        assert_eq!(isolated.window_manager.as_deref(), Some("i3"));
+        assert_eq!(isolated.viewer.as_deref(), Some("html5"));
+        assert_eq!(isolated.lifecycle.as_deref(), Some("ephemeral"));
+    }
+
+    #[test]
+    fn missing_isolated_desktop_table_uses_defaults() {
+        // The resolver reads process-global env; take the shared lock and clear
+        // the isolated-desktop keys so a concurrent env-sensitive test cannot
+        // leak overrides into these default checks.
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = EnvGuard::clear(ISOLATED_DESKTOP_ENV_KEYS);
+        let config = parse_machine_config("browser = \"chrome\"\n").expect("valid config");
+        assert_eq!(config.isolated_desktop, IsolatedDesktopConfig::default());
+        let resolved = resolve_isolated_desktop(&config.isolated_desktop);
+        assert!(!resolved.enabled);
+        assert_eq!(resolved.display, ISOLATED_DESKTOP_DEFAULT_DISPLAY);
+        assert_eq!(resolved.resolution, ISOLATED_DESKTOP_DEFAULT_RESOLUTION);
+        assert_eq!(
+            resolved.window_manager,
+            ISOLATED_DESKTOP_DEFAULT_WINDOW_MANAGER
+        );
+        assert_eq!(resolved.viewer, ViewerMode::Attach);
+        assert_eq!(resolved.lifecycle, Lifecycle::Persistent);
+    }
+
+    #[test]
+    fn resolves_isolated_desktop_table_without_env_overrides() {
+        // Env vars are process-global; the lock keeps the env-sensitive
+        // isolated-desktop tests from racing on the same keys.
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = EnvGuard::clear(ISOLATED_DESKTOP_ENV_KEYS);
+        let isolated = parse_machine_config(ISOLATED_DESKTOP_TABLE)
+            .expect("valid config")
+            .isolated_desktop;
+        let resolved = resolve_isolated_desktop(&isolated);
+        assert!(resolved.enabled);
+        assert_eq!(resolved.display, ":150");
+        assert_eq!(resolved.resolution, "2560x1440");
+        assert_eq!(resolved.window_manager, "i3");
+        assert_eq!(resolved.viewer, ViewerMode::Html5);
+        assert_eq!(resolved.lifecycle, Lifecycle::Ephemeral);
+    }
+
+    #[test]
+    fn env_overrides_beat_isolated_desktop_table() {
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = EnvGuard::set(&[
+            (ISOLATED_DESKTOP_ENABLED_ENV, "1"),
+            (ISOLATED_DESKTOP_DISPLAY_ENV, ":200"),
+            (ISOLATED_DESKTOP_RESOLUTION_ENV, "3840x2160"),
+            (ISOLATED_DESKTOP_WINDOW_MANAGER_ENV, "openbox"),
+            (ISOLATED_DESKTOP_VIEWER_ENV, "none"),
+            (ISOLATED_DESKTOP_LIFECYCLE_ENV, "persistent"),
+        ]);
+        let isolated = parse_machine_config(ISOLATED_DESKTOP_TABLE)
+            .expect("valid config")
+            .isolated_desktop;
+        let resolved = resolve_isolated_desktop(&isolated);
+        // File says disabled-defaults differ; env wins on every field.
+        assert!(resolved.enabled);
+        assert_eq!(resolved.display, ":200");
+        assert_eq!(resolved.resolution, "3840x2160");
+        assert_eq!(resolved.window_manager, "openbox");
+        assert_eq!(resolved.viewer, ViewerMode::None);
+        assert_eq!(resolved.lifecycle, Lifecycle::Persistent);
+    }
+
+    #[test]
+    fn isolated_desktop_auto_display_passes_through_verbatim() {
+        // The literal "auto" must survive resolution unchanged so a downstream
+        // module can pick a free display number.
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = EnvGuard::clear(ISOLATED_DESKTOP_ENV_KEYS);
+        let cfg = IsolatedDesktopConfig {
+            display: Some("auto".to_string()),
+            ..IsolatedDesktopConfig::default()
+        };
+        let resolved = resolve_isolated_desktop(&cfg);
+        assert_eq!(resolved.display, "auto");
+    }
+
+    #[test]
+    fn isolated_desktop_viewer_and_lifecycle_string_mapping() {
+        // String-to-enum mapping is case-insensitive and falls back to the
+        // default on an unrecognized value rather than erroring.
+        assert_eq!(parse_viewer_mode("attach".to_string()), ViewerMode::Attach);
+        assert_eq!(parse_viewer_mode("HTML5".to_string()), ViewerMode::Html5);
+        assert_eq!(parse_viewer_mode("None".to_string()), ViewerMode::None);
+        assert_eq!(
+            parse_viewer_mode("nonsense".to_string()),
+            ViewerMode::Attach
+        );
+
+        assert_eq!(
+            parse_lifecycle("persistent".to_string()),
+            Lifecycle::Persistent
+        );
+        assert_eq!(
+            parse_lifecycle("Ephemeral".to_string()),
+            Lifecycle::Ephemeral
+        );
+        assert_eq!(
+            parse_lifecycle("nonsense".to_string()),
+            Lifecycle::Persistent
+        );
+    }
+
+    #[test]
+    fn isolated_desktop_unrecognized_viewer_lifecycle_in_config_default() {
+        // An unrecognized viewer/lifecycle in the config table resolves to the
+        // documented default through the full resolver path.
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = EnvGuard::clear(ISOLATED_DESKTOP_ENV_KEYS);
+        let cfg = IsolatedDesktopConfig {
+            viewer: Some("bogus".to_string()),
+            lifecycle: Some("bogus".to_string()),
+            ..IsolatedDesktopConfig::default()
+        };
+        let resolved = resolve_isolated_desktop(&cfg);
+        assert_eq!(resolved.viewer, ViewerMode::Attach);
+        assert_eq!(resolved.lifecycle, Lifecycle::Persistent);
     }
 
     /// Scoped environment mutator that restores prior values on drop so env-based

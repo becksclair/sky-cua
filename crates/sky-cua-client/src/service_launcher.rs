@@ -22,7 +22,11 @@ use sky_cua_platform::{SERVICE_SOCKET_PATH_ENV, service_socket_path};
 #[cfg(windows)]
 use sky_cua_platform::{SERVICE_TCP_ADDR_ENV, service_tcp_addr};
 
+#[cfg(unix)]
+use crate::isolated_desktop::IsolatedDesktopHandle;
 use crate::launch_environment::LaunchEnvironment;
+#[cfg(unix)]
+use sky_cua_platform::config::{Lifecycle, ViewerMode, resolve_isolated_desktop_selection};
 
 const SERVICE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const SERVICE_WRITE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -37,17 +41,115 @@ pub struct ServiceClient {
     endpoint: ServiceEndpoint,
     child: Arc<Mutex<Option<Child>>>,
     cached_stream: Arc<Mutex<Option<EitherStream>>>,
+    /// Live handle to the private xpra desktop in isolated mode. `None` on the
+    /// non-isolated path. Wrapped in `Arc` because `IsolatedDesktopHandle` owns
+    /// a non-`Clone` child and `ServiceClient` is `Clone`; the handle is shared,
+    /// not duplicated, so `spawn_service` re-spawns stay sandboxed via the same
+    /// handle without re-ensuring xpra.
+    #[cfg(unix)]
+    isolated: Option<std::sync::Arc<crate::isolated_desktop::IsolatedDesktopHandle>>,
+    /// The resolved isolated-desktop lifecycle, recorded alongside the handle so
+    /// shutdown can consult it. `Persistent` (the default) leaves the xpra
+    /// session running across sessions; `Ephemeral` tears it down when the
+    /// client exits. Meaningful only when `isolated` is `Some`.
+    #[cfg(unix)]
+    isolated_lifecycle: Lifecycle,
 }
 
 impl ServiceClient {
     pub fn connect_or_spawn() -> Result<Self> {
+        // Isolated mode: bring up the private xpra desktop and redirect all
+        // socket resolution at the isolated daemon BEFORE the endpoint and any
+        // probe reads it. A config-resolution error must never brick normal
+        // startup, so a bad config logs a warning and falls through to the
+        // non-isolated path.
+        #[cfg(unix)]
+        let isolated = match resolve_isolated_desktop_selection() {
+            Ok(cfg) if cfg.enabled => Some(cfg),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "failed to resolve isolated desktop configuration; \
+                     continuing without an isolated desktop"
+                );
+                None
+            }
+        };
+
+        #[cfg(unix)]
+        let isolated = match isolated {
+            Some(cfg) => {
+                // Fail closed, not open: if isolated mode was requested but the
+                // private desktop cannot be established (missing xpra/openbox/
+                // xdotool, unreachable display, no XDG_RUNTIME_DIR, dbus failure),
+                // surface a clear error rather than silently falling back to the
+                // user's live desktop — a silent fallback would have the agent
+                // drive the real screen, defeating the non-interference purpose.
+                // Milestone 4 refines this into a structured per-tool diagnostic
+                // that keeps non-desktop tools (phone, browser) available; until
+                // then a clear hard failure is the safe behavior.
+                let handle = IsolatedDesktopHandle::ensure(&cfg).with_context(|| {
+                    "isolated desktop was requested (via [isolated_desktop] or \
+                     SKY_CUA_ISOLATED_DESKTOP) but could not be established; refusing \
+                     to fall back to the user's live desktop. Ensure xpra, openbox, and \
+                     xdotool are installed and a display is reachable"
+                })?;
+                // Redirect every socket probe (including the call() re-probe)
+                // at the isolated daemon for this client's lifetime. The
+                // endpoint and spawn paths both honor SKY_CUA_SERVICE_SOCKET_PATH.
+                tracing::debug!(
+                    socket = %handle.socket_path().display(),
+                    "redirecting the sky-cua-service socket at the isolated daemon"
+                );
+                // SAFETY: this runs inside `block_on` on a multi-thread runtime,
+                // so worker threads exist — but they are parked and never touch
+                // the process environment. `connect_or_spawn` does no `tokio::spawn`,
+                // and the only readers of SKY_CUA_SERVICE_SOCKET_PATH
+                // (service_socket_path_for_launch_environment, ServiceEndpoint::new)
+                // run on this startup thread before `serve` spawns any task, so the
+                // mutation is effectively single-threaded. It is set once at startup.
+                unsafe {
+                    std::env::set_var(SERVICE_SOCKET_PATH_ENV, handle.socket_path());
+                }
+                Some((std::sync::Arc::new(handle), cfg.viewer, cfg.lifecycle))
+            }
+            None => None,
+        };
+
+        // In isolated mode the daemon's health-equality expectations must be the
+        // sandbox graphical session, not the client's host (Wayland) session;
+        // otherwise the sandboxed daemon (DISPLAY=:N, XDG_SESSION_TYPE=x11, no
+        // WAYLAND_DISPLAY) is permanently rejected as "stale". The non-isolated
+        // path keeps the probed host launch environment byte-for-byte.
+        #[cfg(unix)]
+        let launch_environment = match &isolated {
+            Some((handle, _, _)) => {
+                LaunchEnvironment::for_isolated_daemon(&handle.spawn_env(), &handle.removed_env())
+            }
+            None => LaunchEnvironment::probe(),
+        };
+        #[cfg(not(unix))]
         let launch_environment = LaunchEnvironment::probe();
         let client = Self::new(&launch_environment)?;
+        #[cfg(unix)]
+        let client = match &isolated {
+            Some((handle, _, lifecycle)) => {
+                client.with_isolated(std::sync::Arc::clone(handle), *lifecycle)
+            }
+            None => client,
+        };
         // Startup probes must fail fast; a stale or half-ready daemon should not
         // consume the entire MCP server startup window before we even spawn a
         // fresh service instance.
         match client.startup_health(&launch_environment) {
-            Ok(_) => return Ok(client),
+            Ok(_) => {
+                #[cfg(unix)]
+                if let Some((handle, viewer, _)) = &isolated {
+                    launch_isolated_viewer(handle, *viewer);
+                }
+                return Ok(client);
+            }
             Err(error) => {
                 if is_stale_startup_health_error(&error) {
                     client.displace_stale_service(&error)?;
@@ -57,6 +159,10 @@ impl ServiceClient {
 
         client.spawn_service(&launch_environment)?;
         client.wait_for_startup_health(&launch_environment)?;
+        #[cfg(unix)]
+        if let Some((handle, viewer, _)) = &isolated {
+            launch_isolated_viewer(handle, *viewer);
+        }
         Ok(client)
     }
 
@@ -79,12 +185,71 @@ impl ServiceClient {
         self.call(&ServiceRequest::ResetPortalTokens)
     }
 
+    /// Whether this client drives the private isolated xpra desktop.
+    ///
+    /// True only when isolated mode was requested and the desktop was
+    /// successfully established (the client holds a live handle). Tools that
+    /// must never touch the user's live session — e.g. launching applications —
+    /// gate on this.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn is_isolated(&self) -> bool {
+        self.isolated.is_some()
+    }
+
+    #[cfg(not(unix))]
+    #[must_use]
+    pub fn is_isolated(&self) -> bool {
+        false
+    }
+
+    /// Tear down the private xpra desktop when the resolved lifecycle is
+    /// [`Lifecycle::Ephemeral`]. A no-op on the non-isolated path and on
+    /// [`Lifecycle::Persistent`] (where the session is reused across agent
+    /// sessions and stopped only on explicit `isolated-desktop stop`).
+    ///
+    /// Best-effort: a teardown failure logs a warning and returns `Ok(())` so the
+    /// MCP shutdown seam never changes its exit code on a failed reap. Stopping
+    /// the xpra session, reaping a client-owned sandbox bus, and removing a stale
+    /// `/tmp/.X<N>-lock` are all delegated to [`IsolatedDesktopHandle::stop`],
+    /// which filters strictly by the known display number so it can never touch
+    /// the user's real session.
+    ///
+    /// [`IsolatedDesktopHandle::stop`]: crate::isolated_desktop::IsolatedDesktopHandle::stop
+    #[cfg(unix)]
+    pub fn shutdown_isolated_if_ephemeral(&self) {
+        let Some(handle) = self.isolated.as_ref() else {
+            return;
+        };
+        if self.isolated_lifecycle != Lifecycle::Ephemeral {
+            return;
+        }
+        if let Err(error) = handle.stop() {
+            tracing::warn!(
+                %error,
+                xpra_display = %handle.display(),
+                "failed to tear down the ephemeral isolated desktop on shutdown \
+                 (best-effort)"
+            );
+        } else {
+            tracing::info!(
+                xpra_display = %handle.display(),
+                "tore down the ephemeral isolated desktop on client shutdown"
+            );
+        }
+    }
+
+    /// On non-Unix targets there is no isolated desktop, so shutdown teardown is
+    /// a no-op. Present so the shutdown seam in `main` can call it unconditionally.
+    #[cfg(not(unix))]
+    pub fn shutdown_isolated_if_ephemeral(&self) {}
+
     pub fn call(&self, request: &ServiceRequest) -> Result<ServiceResponse> {
         match self.call_with_timeouts(request, SERVICE_READ_TIMEOUT, SERVICE_WRITE_TIMEOUT) {
             Ok(response) => Ok(response),
             Err(first_error) => {
                 self.reap_exited_child()?;
-                let launch_environment = LaunchEnvironment::probe();
+                let launch_environment = self.recovery_launch_environment();
                 self.spawn_service(&launch_environment)?;
                 self.wait_for_startup_health(&launch_environment)
                     .with_context(|| format!("after service call failed: {first_error}"))?;
@@ -92,6 +257,21 @@ impl ServiceClient {
                     .with_context(|| format!("after service call failed: {first_error}"))
             }
         }
+    }
+
+    /// The launch environment to use when `call()` recovers by re-spawning the
+    /// daemon. In isolated mode the daemon's health expectations are the sandbox
+    /// graphical session (so a re-spawn is not rejected as "stale"); otherwise
+    /// the host environment is re-probed exactly as before.
+    fn recovery_launch_environment(&self) -> LaunchEnvironment {
+        #[cfg(unix)]
+        if let Some(handle) = self.isolated.as_ref() {
+            return LaunchEnvironment::for_isolated_daemon(
+                &handle.spawn_env(),
+                &handle.removed_env(),
+            );
+        }
+        LaunchEnvironment::probe()
     }
 
     fn take_cached_stream(&self) -> Option<EitherStream> {
@@ -200,7 +380,26 @@ impl ServiceClient {
             endpoint: ServiceEndpoint::new(launch_environment)?,
             child: Arc::new(Mutex::new(None)),
             cached_stream: Arc::new(Mutex::new(None)),
+            #[cfg(unix)]
+            isolated: None,
+            #[cfg(unix)]
+            isolated_lifecycle: Lifecycle::Persistent,
         })
+    }
+
+    /// Attach a live isolated-desktop handle and its resolved lifecycle to this
+    /// client, consuming and returning `self` so the caller can shadow without an
+    /// `unused_mut` warning on the non-isolated path. Used only when isolated
+    /// mode is enabled.
+    #[cfg(unix)]
+    fn with_isolated(
+        mut self,
+        handle: std::sync::Arc<crate::isolated_desktop::IsolatedDesktopHandle>,
+        lifecycle: Lifecycle,
+    ) -> Self {
+        self.isolated = Some(handle);
+        self.isolated_lifecycle = lifecycle;
+        self
     }
 
     fn spawn_service(&self, launch_environment: &LaunchEnvironment) -> Result<()> {
@@ -229,6 +428,22 @@ impl ServiceClient {
         configure_launch_environment_env(&mut command, launch_environment);
 
         self.endpoint.configure_service_command(&mut command);
+
+        // Apply the isolated-desktop sandbox env LAST so it wins over both the
+        // repaired desktop vars and the socket env: DISPLAY=:N, XDG_SESSION_TYPE=x11,
+        // QT_QPA_PLATFORM=xcb, GDK_BACKEND=x11, DBUS_SESSION_BUS_ADDRESS, the
+        // isolated socket, and WAYLAND_DISPLAY removed. call()->spawn_service
+        // reuses self.isolated, so re-spawns stay sandboxed without re-ensuring xpra.
+        #[cfg(unix)]
+        if let Some(handle) = self.isolated.as_ref() {
+            for (key, value) in handle.spawn_env() {
+                command.env(key, value);
+            }
+            for key in handle.removed_env() {
+                command.env_remove(key);
+            }
+        }
+
         let child = command
             .spawn()
             .with_context(|| format!("failed to spawn service at {}", service_path.display()))?;
@@ -413,35 +628,6 @@ fn service_socket_path_for_launch_environment(launch_environment: &LaunchEnviron
 }
 
 #[cfg(unix)]
-fn service_lock_path(socket_path: &std::path::Path) -> PathBuf {
-    let mut lock_name = socket_path
-        .file_name()
-        .map(|name| name.to_os_string())
-        .unwrap_or_else(|| std::ffi::OsString::from("service.sock"));
-    lock_name.push(".lock");
-    socket_path.with_file_name(lock_name)
-}
-
-#[cfg(unix)]
-fn read_singleton_owner_pid(socket_path: &std::path::Path) -> Result<Option<u32>> {
-    let lock_path = service_lock_path(socket_path);
-    let Ok(raw) = std::fs::read_to_string(&lock_path) else {
-        return Ok(None);
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    let pid = trimmed.parse::<u32>().with_context(|| {
-        format!(
-            "invalid sky-cua-service singleton owner pid in {}",
-            lock_path.display()
-        )
-    })?;
-    Ok((pid > 1).then_some(pid))
-}
-
-#[cfg(unix)]
 fn owner_pids_for_termination(
     socket_path: &std::path::Path,
     peer_pid: Option<u32>,
@@ -450,8 +636,8 @@ fn owner_pids_for_termination(
     if let Some(pid) = peer_pid {
         candidates.insert(pid);
     }
-    if let Some(pid) = read_singleton_owner_pid(socket_path)?
-        && pid_looks_like_sky_cua_service(pid)
+    if let Some(pid) = crate::daemon_singleton::read_owner_pid(socket_path)?
+        && crate::daemon_singleton::pid_is_sky_cua_service(pid)
     {
         candidates.insert(pid);
     }
@@ -459,38 +645,10 @@ fn owner_pids_for_termination(
 }
 
 #[cfg(unix)]
-fn pid_looks_like_sky_cua_service(pid: u32) -> bool {
-    let proc_root = PathBuf::from(format!("/proc/{pid}"));
-    let exe_name = std::fs::read_link(proc_root.join("exe"))
-        .ok()
-        .and_then(|path| path.file_name().map(|name| name.to_os_string()));
-    let cmdline = std::fs::read(proc_root.join("cmdline")).ok();
-    process_identity_looks_like_sky_cua_service(exe_name.as_deref(), cmdline.as_deref())
-}
-
-#[cfg(unix)]
-fn process_identity_looks_like_sky_cua_service(
-    exe_name: Option<&std::ffi::OsStr>,
-    cmdline: Option<&[u8]>,
-) -> bool {
-    exe_name.is_some_and(|name| name == "sky-cua-service")
-        || cmdline.is_some_and(|bytes| {
-            bytes
-                .split(|byte| *byte == 0)
-                .filter_map(|part| std::str::from_utf8(part).ok())
-                .any(|part| {
-                    std::path::Path::new(part)
-                        .file_name()
-                        .is_some_and(|name| name == "sky-cua-service")
-                })
-        })
-}
-
-#[cfg(unix)]
 fn singleton_lock_is_available(socket_path: &std::path::Path) -> Result<bool> {
     use std::os::unix::io::AsRawFd;
 
-    let lock_path = service_lock_path(socket_path);
+    let lock_path = crate::daemon_singleton::socket_lock_path(socket_path);
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -518,6 +676,20 @@ impl std::fmt::Display for ServiceEndpoint {
             #[cfg(windows)]
             Self::Tcp(addr) => write!(formatter, "{addr}"),
         }
+    }
+}
+
+/// Launch the configured read-only viewer once the isolated daemon is healthy.
+/// The viewer is non-essential: a failure to start it logs a warning and never
+/// fails the session. [`ViewerMode::None`] is a no-op inside `launch_viewer`.
+#[cfg(unix)]
+fn launch_isolated_viewer(handle: &IsolatedDesktopHandle, viewer: ViewerMode) {
+    if let Err(error) = handle.launch_viewer(viewer) {
+        tracing::warn!(
+            %error,
+            xpra_display = %handle.display(),
+            "failed to launch the isolated desktop viewer (non-essential)"
+        );
     }
 }
 
@@ -908,31 +1080,6 @@ mod tests {
     }
 
     #[test]
-    fn unix_service_lock_path_sits_next_to_socket() {
-        assert_eq!(
-            service_lock_path(std::path::Path::new("/tmp/sky-cua/service.sock")),
-            PathBuf::from("/tmp/sky-cua/service.sock.lock")
-        );
-    }
-
-    #[test]
-    fn unix_service_lock_owner_pid_parses_valid_lock_file() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "sky-cua-client-lock-pid-test-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&temp_dir);
-        fs::create_dir_all(&temp_dir).expect("create test temp dir");
-        let socket_path = temp_dir.join("service.sock");
-        fs::write(service_lock_path(&socket_path), "4242\n").expect("write lock pid");
-
-        let pid = read_singleton_owner_pid(&socket_path).expect("pid should parse");
-
-        let _ = fs::remove_dir_all(&temp_dir);
-        assert_eq!(pid, Some(4242));
-    }
-
-    #[test]
     fn unix_service_termination_ignores_unverified_lock_pid_when_peer_is_known() {
         let temp_dir = std::env::temp_dir().join(format!(
             "sky-cua-client-peer-pid-test-{}",
@@ -941,29 +1088,17 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).expect("create test temp dir");
         let socket_path = temp_dir.join("service.sock");
-        fs::write(service_lock_path(&socket_path), "4242\n").expect("write lock pid");
+        fs::write(
+            crate::daemon_singleton::socket_lock_path(&socket_path),
+            "4242\n",
+        )
+        .expect("write lock pid");
 
         let pids =
             owner_pids_for_termination(&socket_path, Some(7777)).expect("pid should resolve");
 
         let _ = fs::remove_dir_all(&temp_dir);
         assert_eq!(pids, vec![7777]);
-    }
-
-    #[test]
-    fn unix_service_process_identity_matches_service_binary_name() {
-        assert!(process_identity_looks_like_sky_cua_service(
-            Some(OsStr::new("sky-cua-service")),
-            None,
-        ));
-        assert!(process_identity_looks_like_sky_cua_service(
-            None,
-            Some(b"/home/bex/.local/share/sky-cua/bin/sky-cua-service\0daemon\0"),
-        ));
-        assert!(!process_identity_looks_like_sky_cua_service(
-            Some(OsStr::new("unrelated")),
-            Some(b"/usr/bin/unrelated\0"),
-        ));
     }
 
     #[test]
