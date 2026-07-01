@@ -10,6 +10,11 @@ Open boxes link to the active ExecPlan that owns the work.
 
 ## Phase: Linux desktop parity
 
+- [x] Isolated xpra desktop (private X11 desktop the computer-use agent owns;
+      `[isolated_desktop]` config, `desktop_launch_app`, read-only viewer) —
+      [`docs/features/isolated-xpra-desktop.md`](docs/features/isolated-xpra-desktop.md)
+  - [ ] Live host-leak and headline `desktop_launch_app` end-to-end run plus the
+        `isolated-xpra` VM smoke profile
 - [x] AT-SPI rich readback — [`docs/features/atspi-rich-readback.md`](docs/features/atspi-rich-readback.md)
 - [x] Detached session-env repair — [`docs/features/session-env-repair.md`](docs/features/session-env-repair.md)
   - [x] Add stripped-env repair to the curated VM runner profile set
