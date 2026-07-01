@@ -87,6 +87,7 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
         ),
         VmProfileDescriptor("kde-plasma"),
         VmProfileDescriptor("i3"),
+        VmProfileDescriptor("isolated-xpra"),
         VmProfileDescriptor(
             "computer-use",
             preauthorize_gnome_remote_desktop=True,

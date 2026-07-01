@@ -62,6 +62,9 @@ hyprland)
 i3)
 	exec "$profile_dir/i3.sh" "$@"
 	;;
+isolated-xpra)
+	exec "$profile_dir/isolated-xpra.sh" "$@"
+	;;
 computer-use | wayland-pointer)
 	exec "$profile_dir/wayland-pointer.sh" "$@"
 	;;

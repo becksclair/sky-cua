@@ -3,6 +3,13 @@ set -euo pipefail
 
 profile_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+# Self-contained isolated X11 sandbox proof: brings up its own headless xpra
+# desktop, so it runs regardless of which real session the VM is booted into.
+# Skips cleanly (exit 67) when xpra/openbox/xdotool are unavailable; tolerate
+# that skip so a VM without xpra still runs the rest of the suite (xpra/openbox/
+# xdotool are new prerequisites this profile introduced, unlike the always-
+# provisioned deps the other lanes assume).
+"$profile_dir/isolated-xpra.sh" || { rc=$?; [[ "$rc" -eq 67 ]] || exit "$rc"; }
 "$profile_dir/wayland-pointer.sh"
 "$profile_dir/targeted-screenshot.sh"
 "$profile_dir/display-screenshot.sh"

@@ -396,6 +396,20 @@ def test_testing_vm_profile_descriptors_carry_dispatch_and_curated_metadata() ->
     assert not descriptors["desktop-smoke"].curated
 
 
+def test_testing_vm_isolated_xpra_profile_is_registered_as_a_remote_profile() -> None:
+    descriptors = run_gui_testing_vm_smoke.VM_PROFILE_DESCRIPTORS
+
+    assert "isolated-xpra" in descriptors
+    assert "isolated-xpra" in run_gui_testing_vm_smoke.PROFILES
+    isolated = descriptors["isolated-xpra"]
+    # Mirrors the i3 lane: a plain remote profile, not curated, not a
+    # host-framebuffer proof.
+    assert isolated.dispatch == "remote"
+    assert isolated.runner_profile() == "isolated-xpra"
+    assert not isolated.curated
+    assert not isolated.host_framebuffer_proof
+
+
 def test_screenshot_portal_preauth_seeds_all_generic_app_ids() -> None:
     module = load_screenshot_preauth_module()
 
