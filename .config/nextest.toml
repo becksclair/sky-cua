@@ -22,6 +22,21 @@ serial-integration = { max-threads = 1 }
 filter = 'package(sky-cua-service) & (test(/browser::tests::/) | test(/overlay::host::/))'
 test-group = 'serial-integration'
 
+[[profile.default.overrides]]
+# The isolated-xpra env-recipe regression test mutates process-global
+# DISPLAY/XDG_SESSION_TYPE/WAYLAND_DISPLAY and spawns a throwaway X server, so
+# it must not race other display/socket tests.
+filter = 'package(sky-cua-linux) & test(/isolated_x11/)'
+test-group = 'serial-integration'
+
+[[profile.default.overrides]]
+# The isolated-desktop host-leak guard mutates process-global display/session
+# env (DISPLAY/XDG_SESSION_TYPE/WAYLAND_DISPLAY/QT_QPA_PLATFORM/GDK_BACKEND),
+# spawns a throwaway X server, and launches a GUI app into it, so it must run
+# serially with the other display/socket tests.
+filter = 'package(sky-cua-linux) & test(/isolated_app_launch_leak/)'
+test-group = 'serial-integration'
+
 [profile.ci]
 # CI keeps the same serialization but surfaces flakes loudly instead of hiding
 # them behind a retry, and fails fast is disabled so one race does not mask the
