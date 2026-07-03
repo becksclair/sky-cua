@@ -2,7 +2,7 @@
 // Source: resources/overlay/agent_overlay_spec.toml
 // Schema version: 1
 // Generator: scripts/generate_overlay_spec.py
-// Generator hash: e1f65e5d3f99748f
+// Generator hash: dfecd9eee8cf1fd8
 
 #![allow(missing_docs)]
 
@@ -124,6 +124,8 @@ pub mod overlay_spec {
             pub const NO_NO_WIGGLE_DEG: f64 = 20.0;
             /// `max_gesture_points` from `[shared.effects]`.
             pub const MAX_GESTURE_POINTS: u32 = 16;
+            /// `trail_samples` from `[shared.effects]`.
+            pub const TRAIL_SAMPLES: u32 = 12;
             /// `capture_barrier_frames` from `[shared.effects]`.
             pub const CAPTURE_BARRIER_FRAMES: u32 = 2;
             /// `cursor_source_viewbox_width` from `[shared.effects]`.

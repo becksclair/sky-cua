@@ -5,7 +5,7 @@ package com.skycua.phonecompanion.overlay
  * Source: resources/overlay/agent_overlay_spec.toml
  * Schema version: 1
  * Generator: scripts/generate_overlay_spec.py
- * Generator hash: e1f65e5d3f99748f
+ * Generator hash: dfecd9eee8cf1fd8
  * GENERATED FILE - DO NOT EDIT
  * Run `uv run python scripts/generate_overlay_spec.py` to regenerate.
  */
@@ -128,6 +128,8 @@ object OverlaySpec {
             const val NO_NO_WIGGLE_DEG: Double = 20.0
             /** `max_gesture_points` from `[shared.effects]`. */
             const val MAX_GESTURE_POINTS: Int = 16
+            /** `trail_samples` from `[shared.effects]`. */
+            const val TRAIL_SAMPLES: Int = 12
             /** `capture_barrier_frames` from `[shared.effects]`. */
             const val CAPTURE_BARRIER_FRAMES: Int = 2
             /** `cursor_source_viewbox_width` from `[shared.effects]`. */

@@ -758,11 +758,12 @@ class AgentOverlayController(
 
     companion object {
         /**
-         * Number of trail samples used when building the swipe polyline. This is
-         * an Android-specific rendering sampling count, not a cross-platform
-         * visual constant, so it stays local rather than living in [OverlaySpec].
+         * Number of trail samples used when building the swipe polyline. Shared
+         * with the desktop overlay host (which resamples the same 12-point trail),
+         * so the count lives in [OverlaySpec] and is pinned by the cross-language
+         * motion fixtures.
          */
-        private const val TRAIL_SAMPLES: Int = 12
+        private const val TRAIL_SAMPLES: Int = OverlaySpec.Shared.Effects.TRAIL_SAMPLES
 
         /**
          * Seconds for the cursor smoke aura to bloom in (or fade out) when the

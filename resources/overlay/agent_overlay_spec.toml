@@ -60,6 +60,7 @@ no_no_shakes_fraction = 1.5
 no_no_hold_fraction = 0.78
 no_no_wiggle_deg = 20.0
 max_gesture_points = 16
+trail_samples = 12
 capture_barrier_frames = 2
 cursor_source_viewbox_width = 23
 cursor_source_viewbox_height = 24

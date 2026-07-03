@@ -39,6 +39,42 @@ class OverlaySpecFixtureTest {
         return OverlayMath.Point(obj.num("x").toFloat(), obj.num("y").toFloat())
     }
 
+    private fun JsonValue.Obj.points(key: String): List<OverlayMath.Point> {
+        val arr = this.arr(key) ?: error("expected array for $key")
+        return arr.items.map {
+            val p = it as? JsonValue.Obj ?: error("expected point object in $key")
+            OverlayMath.Point(p.num("x").toFloat(), p.num("y").toFloat())
+        }
+    }
+
+    private fun tolerance(name: String): Float {
+        val map = rootFixture.obj("tolerance") ?: error("missing tolerance map")
+        return map.num(name).toFloat()
+    }
+
+    /**
+     * Builds the production cursor mover exactly as [AgentOverlayController] does
+     * at density 1, so trajectory fixtures replay against the shipping constants.
+     */
+    private fun productionMover(): OverlayMath.Mover2D {
+        val density = 1f
+        return OverlayMath.Mover2D(
+            maxSpeed = OverlayMath.CURSOR_MAX_SPEED_DP_S * density,
+            accel = OverlayMath.CURSOR_ACCEL_DP_S2 * density,
+            turnRateRad = Math.toRadians(OverlayMath.CURSOR_TURN_RATE_DEG_S.toDouble()).toFloat(),
+            arriveRadius = OverlayMath.CURSOR_ARRIVE_RADIUS_DP * density,
+            homingRadius = OverlayMath.CURSOR_HOMING_RADIUS_DP * density,
+            homingBoost = OverlayMath.CURSOR_HOMING_TURN_BOOST,
+            defaultHeadingRad = Math.toRadians(OverlayMath.CURSOR_NOSE_DEG.toDouble()).toFloat(),
+        )
+    }
+
+    /** Headings compare across the wrap: |wrapRadians(expected - actual)| <= tol. */
+    private fun assertHeading(message: String, expected: Float, actual: Float, tol: Float) {
+        val diff = Math.abs(OverlayMath.wrapRadians(expected - actual))
+        assertTrue("$message: |wrapRadians($expected - $actual)| = $diff > $tol", diff <= tol)
+    }
+
     @Test
     fun fixtureFileLoadsAndHasExpectedSchemaVersion() {
         assertEquals(1.0, rootFixture.num("schema_version"), eps.toDouble())
@@ -191,6 +227,125 @@ class OverlaySpecFixtureTest {
             val actual = OverlayMath.pointAtProgress(points, progress)
             assertEquals("path x at $progress", expected.x, actual.x, eps)
             assertEquals("path y at $progress", expected.y, actual.y, eps)
+        }
+    }
+
+    /**
+     * Replays each generated mover trajectory against the production
+     * [OverlayMath.Mover2D]: optional bounds, optional snap start, then stepping
+     * toward each segment target for its step count at the case dt. Mid-flight
+     * samples compare at `tolerance.mover`; samples at or past `settled_step`
+     * (and the steady state itself) at `tolerance.default`. Trajectory inputs
+     * are exact float32 decimals, so the replay is bit-exact.
+     */
+    @Test
+    fun moverTrajectoryMatchesFixtures() {
+        val moverTol = tolerance("mover")
+        val defaultTol = tolerance("default")
+        val cases = fixtureArray("mover_trajectory")
+        assertTrue("mover_trajectory family must not be empty", cases.isNotEmpty())
+        for (case in cases) {
+            val name = case.string("name") ?: error("mover_trajectory case missing name")
+            val mover = productionMover()
+            case.obj("bounds")?.let { bounds ->
+                // The desktop port takes a rect; the Kotlin reference clamps each
+                // axis to [0, max], so generated bounds always have zero minimums.
+                assertEquals("$name bounds min_x", 0.0, bounds.num("min_x"), 0.0)
+                assertEquals("$name bounds min_y", 0.0, bounds.num("min_y"), 0.0)
+                mover.setBounds(bounds.num("max_x").toFloat(), bounds.num("max_y").toFloat())
+            }
+            case.obj("start")?.let { start ->
+                mover.snapTo(start.num("x").toFloat(), start.num("y").toFloat())
+            }
+            val dt = case.num("dt").toFloat()
+            val segments =
+                (case.arr("segments") ?: error("$name missing segments")).items.map {
+                    it as? JsonValue.Obj ?: error("expected segment object in $name")
+                }
+            val samplesByStep =
+                (case.arr("samples") ?: error("$name missing samples")).items.associate {
+                    val sample = it as? JsonValue.Obj ?: error("expected sample object in $name")
+                    sample.num("step").toInt() to sample
+                }
+            val settledStep = (case["settled_step"] as? JsonValue.Num)?.toInt()
+            val finalTarget = segments.last().point("target")
+            var step = 0
+            for (segment in segments) {
+                val target = segment.point("target")
+                repeat(segment.num("steps").toInt()) {
+                    mover.step(target.x, target.y, dt)
+                    step += 1
+                    samplesByStep[step]?.let { sample ->
+                        val tol = if (settledStep != null && step >= settledStep) defaultTol else moverTol
+                        assertEquals("$name x at step $step", sample.num("x").toFloat(), mover.x, tol)
+                        assertEquals("$name y at step $step", sample.num("y").toFloat(), mover.y, tol)
+                        assertHeading(
+                            "$name heading at step $step",
+                            sample.num("heading_rad").toFloat(),
+                            mover.headingRad,
+                            tol,
+                        )
+                        assertEquals("$name speed at step $step", sample.num("speed").toFloat(), mover.speed, tol)
+                    }
+                    if (settledStep != null && step >= settledStep) {
+                        // Settled means landed: from settled_step on, the mover
+                        // holds the final target exactly with zero speed.
+                        assertEquals("$name settled x at step $step", finalTarget.x, mover.x, 0f)
+                        assertEquals("$name settled y at step $step", finalTarget.y, mover.y, 0f)
+                        assertEquals("$name settled speed at step $step", 0f, mover.speed, 0f)
+                    }
+                }
+            }
+            val unreplayed = samplesByStep.keys.filter { it > step }
+            assertTrue("$name has samples beyond the replayed steps: $unreplayed", unreplayed.isEmpty())
+        }
+    }
+
+    @Test
+    fun approachAngleMatchesFixtures() {
+        for (case in fixtureArray("approach_angle")) {
+            val current = case.num("current").toFloat()
+            val target = case.num("target").toFloat()
+            val maxDelta = case.num("max_delta").toFloat()
+            val expected = case.num("expected").toFloat()
+            assertEquals(
+                "approach angle current=$current target=$target maxDelta=$maxDelta",
+                expected,
+                OverlayMath.approachAngleDeg(current, target, maxDelta),
+                eps,
+            )
+        }
+    }
+
+    @Test
+    fun wrapRadiansMatchesFixtures() {
+        for (case in fixtureArray("wrap_radians")) {
+            val value = case.num("value").toFloat()
+            val expected = case.num("expected").toFloat()
+            assertHeading("wrap radians of $value", expected, OverlayMath.wrapRadians(value), eps)
+        }
+    }
+
+    /**
+     * Mirrors [AgentOverlayController.sampleTrail] (private): the trail is
+     * [OverlaySpec.Shared.Effects.TRAIL_SAMPLES] arc-length samples of the ideal
+     * polyline from the path start to the swept head at `progress`.
+     */
+    @Test
+    fun trailResampleMatchesFixtures() {
+        val sampleCount = OverlaySpec.Shared.Effects.TRAIL_SAMPLES
+        for (case in fixtureArray("trail_resample")) {
+            val points = case.points("points")
+            val progress = case.num("progress").toFloat()
+            assertEquals("trail_resample sample_count must match the spec", sampleCount, case.num("sample_count").toInt())
+            val expected = case.points("expected")
+            assertEquals("trail_resample expected sample list size", sampleCount, expected.size)
+            for (i in 0 until sampleCount) {
+                val frac = progress * (i.toFloat() / (sampleCount - 1).toFloat())
+                val actual = OverlayMath.pointAtProgress(points, frac)
+                assertEquals("trail sample $i x at progress $progress", expected[i].x, actual.x, eps)
+                assertEquals("trail sample $i y at progress $progress", expected[i].y, actual.y, eps)
+            }
         }
     }
 }
