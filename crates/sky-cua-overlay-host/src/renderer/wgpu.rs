@@ -296,6 +296,8 @@ impl WgpuOverlayRenderer {
                     glow_active: spec.glow_active,
                     px_per_mm: spec.px_per_mm,
                     render_scale,
+                    cursor_rotation_deg: spec.cursor_rotation_deg,
+                    cursor_cloud_alpha: spec.cursor_cloud_alpha,
                 });
                 self.queue
                     .write_buffer(&self.uniform_buffer, 0, effect_uniform_as_bytes(&uniform));

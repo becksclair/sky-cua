@@ -141,12 +141,35 @@ mod serve_mode_tests {
 }
 
 fn serve_json_lines() -> Result<()> {
-    let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     let mut backend = OverlayHostBackend::from_env();
 
-    for line in stdin.lock().lines() {
-        let line = line.context("failed to read overlay host request")?;
+    // Stdin is drained on a reader thread so the serve loop can keep
+    // frame-pacing the overlay between requests, like the socket loops do.
+    // Without the idle ticks the vehicle-steered cursor would integrate one
+    // dt slice per message and freeze mid-glide, and arrival-gated gesture
+    // feedback would never fire on this transport.
+    let (line_tx, line_rx) = std::sync::mpsc::channel::<io::Result<String>>();
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            let disconnected = line_tx.send(line).is_err();
+            if disconnected {
+                return;
+            }
+        }
+    });
+
+    loop {
+        let line = match line_rx.recv_timeout(backend.pointer_tick_interval()) {
+            Ok(line) => line.context("failed to read overlay host request")?,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                backend.tick();
+                continue;
+            }
+            // Stdin reached EOF: the parent is gone, serve is done.
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -160,10 +183,9 @@ fn serve_json_lines() -> Result<()> {
             .context("failed to write reply newline")?;
         stdout.flush().context("failed to flush reply")?;
         if shutdown {
-            break;
+            return Ok(());
         }
     }
-    Ok(())
 }
 
 fn serve_tcp(addr: String) -> Result<()> {

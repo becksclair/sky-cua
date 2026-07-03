@@ -111,6 +111,7 @@ impl OverlayHostConnection {
                     ))
                 } else {
                     Ok(OverlayHostReply {
+                        motion: None,
                         version: OVERLAY_HOST_PROTOCOL_VERSION,
                         ok: true,
                         capabilities: None,

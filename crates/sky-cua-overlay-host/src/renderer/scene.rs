@@ -44,6 +44,13 @@ pub struct SurfaceDrawSpec {
     /// with different DPI. Falls back to a representative logical density when
     /// the output geometry is unknown.
     pub px_per_mm: f32,
+    /// CPU-eased glyph rotation in degrees (the motion driver's easing of the
+    /// travel heading). The shader adds the no-no wiggle on top; 0.0 draws the
+    /// glyph as authored.
+    pub cursor_rotation_deg: f32,
+    /// Smoke-aura master alpha in `[0, 1]`: the motion driver's cloud bloom.
+    /// 1.0 is full presence (the pre-motion behavior).
+    pub cursor_cloud_alpha: f32,
 }
 
 /// A full frame: one request per host surface guard.

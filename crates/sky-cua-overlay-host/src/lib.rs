@@ -8,8 +8,10 @@ use sky_cua_platform::model::{
     AgentOverlayHostLifecycleState, DiagnosticEntry,
 };
 
+pub mod cursor_motion;
 #[cfg(target_os = "linux")]
 mod layer_shell;
+pub mod motion;
 #[cfg(target_os = "linux")]
 mod playground;
 #[cfg(target_os = "linux")]
@@ -117,8 +119,29 @@ pub struct OverlayHostReply {
     pub applied_sequence: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<AgentCursorState>,
+    /// Live drawn-cursor motion pose (layer-shell backend only). `state`
+    /// carries the target; this carries where the vehicle-steered glyph
+    /// actually is, so clients and smokes can assert glide behavior from
+    /// structured fields instead of prose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<OverlayMotionStatus>,
     #[serde(default)]
     pub diagnostics: Vec<DiagnosticEntry>,
+}
+
+/// Structured echo of the motion driver's latest frame. Coordinates are in
+/// the mover's coordinate space (desktop-logical for normal desktop use).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct OverlayMotionStatus {
+    pub x: f64,
+    pub y: f64,
+    pub heading_deg: f64,
+    pub speed: f64,
+    /// True when the mover is parked on its most recent target.
+    pub settled: bool,
+    /// True while a gesture waits for the cursor to sail to its start point
+    /// (arrival-gated feedback has not fired yet).
+    pub pending_gesture_feedback: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -256,6 +279,7 @@ impl NoopOverlayBackend {
         diagnostics: Vec<DiagnosticEntry>,
     ) -> OverlayHostReply {
         OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok,
             capabilities: Some(self.capabilities()),
@@ -574,6 +598,7 @@ pub fn probe_environment_reply() -> OverlayHostReply {
 #[must_use]
 fn noop_probe_reply(capabilities: AgentCursorCapabilities) -> OverlayHostReply {
     OverlayHostReply {
+        motion: None,
         version: OVERLAY_HOST_PROTOCOL_VERSION,
         ok: true,
         capabilities: Some(capabilities),
@@ -586,6 +611,7 @@ fn noop_probe_reply(capabilities: AgentCursorCapabilities) -> OverlayHostReply {
 
 fn error_reply(code: &str, message: &str, details: Option<String>) -> OverlayHostReply {
     OverlayHostReply {
+        motion: None,
         version: OVERLAY_HOST_PROTOCOL_VERSION,
         ok: false,
         capabilities: Some(NoopOverlayBackend::default_capabilities()),
@@ -635,6 +661,46 @@ mod tests {
             rendered["state"]["model_point"]["coordinate_space"],
             "stream_pixels"
         );
+    }
+
+    #[test]
+    fn reply_motion_echo_round_trips_and_stays_optional() {
+        let with_motion = super::OverlayHostReply {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            ok: true,
+            capabilities: None,
+            lifecycle_state: None,
+            applied_sequence: None,
+            state: None,
+            motion: Some(super::OverlayMotionStatus {
+                x: 120.5,
+                y: 480.25,
+                heading_deg: -135.0,
+                speed: 812.0,
+                settled: false,
+                pending_gesture_feedback: true,
+            }),
+            diagnostics: Vec::new(),
+        };
+        let rendered = serde_json::to_value(&with_motion).expect("serialize reply");
+        assert_eq!(rendered["motion"]["x"], 120.5);
+        assert_eq!(rendered["motion"]["settled"], false);
+        assert_eq!(rendered["motion"]["pending_gesture_feedback"], true);
+        let parsed: super::OverlayHostReply =
+            serde_json::from_value(rendered).expect("round trip reply");
+        assert_eq!(parsed, with_motion);
+
+        // A reply without the field (an older host) must still parse, and a
+        // motion-less reply must not serialize the key at all.
+        let legacy: super::OverlayHostReply =
+            serde_json::from_str(r#"{"version":2,"ok":true}"#).expect("parse legacy reply");
+        assert_eq!(legacy.motion, None);
+        let without = super::OverlayHostReply {
+            motion: None,
+            ..with_motion
+        };
+        let rendered = serde_json::to_value(&without).expect("serialize motion-less reply");
+        assert!(rendered.get("motion").is_none());
     }
 
     #[test]

@@ -85,6 +85,12 @@ pub struct EffectUniformInput<'a> {
     /// multiplied by this so the uniform is in physical buffer pixels. `1.0` for
     /// an unscaled output.
     pub render_scale: f32,
+    /// CPU-eased glyph rotation in degrees, packed into `surface_size_px.w`.
+    /// Scale-invariant: no `render_scale` multiply.
+    pub cursor_rotation_deg: f32,
+    /// Smoke-aura master alpha in `[0, 1]`, multiplied into `halo.w` (the lane
+    /// the WGSL smoke already scales by).
+    pub cursor_cloud_alpha: f32,
 }
 
 /// `now_ms` is reduced modulo the least common multiple of the breathing and
@@ -138,7 +144,13 @@ pub fn build_effect_uniform(
             .and_then(|effect| effect.points.first().copied())
             .unwrap_or(CursorPoint { x: 0.0, y: 0.0 })
     });
-    let cursor_visible = u32::from(input.cursor.is_some() || input.effect.is_some());
+    // `flags.x` gates the glyph family only (arrow SDF, smoke aura, shadow).
+    // It tracks CURSOR presence, not effect presence: on a multi-output
+    // desktop a gesture scene is handed to every output it spans, but the
+    // glyph must draw only where the cursor actually is, so an effect-bearing
+    // output without a cursor point must not paint the glyph at the fallback
+    // point. Ripple/trail/no-no are gated by kind + point count, not this.
+    let cursor_visible = u32::from(input.cursor.is_some());
     let glow_active = u32::from(input.glow_active);
 
     let uniform = AgentEffectUniform {
@@ -146,9 +158,10 @@ pub fn build_effect_uniform(
             input.width.max(1) as f32 * render_scale,
             input.height.max(1) as f32 * render_scale,
             // `.z` carries physical px per mm for real-world effect sizing in
-            // WGSL (logical px/mm scaled into buffer space); `.w` is spare.
+            // WGSL (logical px/mm scaled into buffer space); `.w` carries the
+            // CPU-eased glyph rotation in degrees.
             input.px_per_mm.max(0.1) * render_scale,
-            0.0,
+            input.cursor_rotation_deg,
         ],
         cursor: [
             cursor.x as f32 * render_scale,
@@ -211,19 +224,34 @@ pub fn build_effect_uniform(
             overlay_spec::desktop::rendering::WAVE_MAX_ALPHA_0_255 as f32 / 255.0,
         ],
         halo: [
-            overlay_spec::desktop::geometry::CURSOR_HALO_RADIUS_LOGICAL_PX as f32,
+            // Radius lane: logical px scaled into physical buffer px like the
+            // cursor/points/trail, so the no-no mark ring keeps its authored
+            // size on hidpi / fractionally-scaled outputs. `.y`/`.z` are
+            // dimensionless scale fractions and `.w` an alpha — never scaled.
+            overlay_spec::desktop::geometry::CURSOR_HALO_RADIUS_LOGICAL_PX as f32 * render_scale,
             overlay_spec::desktop::rendering::HALO_SCALE_MIN_FRACTION as f32,
             overlay_spec::desktop::rendering::HALO_SCALE_MAX_FRACTION as f32,
-            overlay_spec::desktop::rendering::HALO_ALPHA_MAX_FRACTION as f32,
+            // The smoke aura's master alpha: the spec ceiling scaled by the
+            // motion driver's cloud bloom so the aura fades in on a cold show.
+            overlay_spec::desktop::rendering::HALO_ALPHA_MAX_FRACTION as f32
+                * input.cursor_cloud_alpha.clamp(0.0, 1.0),
         ],
         ripple: [
-            overlay_spec::desktop::geometry::RIPPLE_MIN_LOGICAL_PX as f32,
-            overlay_spec::desktop::geometry::RIPPLE_MAX_LOGICAL_PX as f32,
-            overlay_spec::desktop::geometry::RIPPLE_STROKE_LOGICAL_PX as f32,
+            // Radii + stroke are logical px measured against physical-buffer-px
+            // distances in the shader (the ripple center rides scaled points),
+            // so they scale with the buffer or the burst draws half-size on 2x
+            // outputs. `.w` is an alpha — not scaled.
+            overlay_spec::desktop::geometry::RIPPLE_MIN_LOGICAL_PX as f32 * render_scale,
+            overlay_spec::desktop::geometry::RIPPLE_MAX_LOGICAL_PX as f32 * render_scale,
+            overlay_spec::desktop::geometry::RIPPLE_STROKE_LOGICAL_PX as f32 * render_scale,
             overlay_spec::desktop::rendering::MAX_RIPPLE_ALPHA_0_255 as f32 / 255.0,
         ],
         trail: [
-            overlay_spec::desktop::geometry::TRAIL_STROKE_LOGICAL_PX as f32,
+            // The trail stroke is authored in logical px but the shader
+            // measures point-to-segment distances in physical buffer px
+            // (points are scaled above), so the stroke scales with the
+            // buffer or it would draw half-width on 2x outputs.
+            overlay_spec::desktop::geometry::TRAIL_STROKE_LOGICAL_PX as f32 * render_scale,
             overlay_spec::desktop::rendering::MAX_TRAIL_ALPHA_0_255 as f32 / 255.0,
             overlay_spec::shared::motion::CURSOR_NOSE_DEG as f32,
             overlay_spec::shared::effects::CURSOR_PRESS_SCALE_FRACTION as f32,
@@ -250,7 +278,11 @@ pub fn build_effect_uniform(
             overlay_spec::shared::effects::CURSOR_STROKE_EDGE_0_1 as f32,
             overlay_spec::shared::effects::CURSOR_SMOKE_OFFSET_X_UV as f32,
             overlay_spec::shared::effects::CURSOR_SMOKE_OFFSET_Y_UV as f32,
-            0.0,
+            // `.w` carries the integer buffer scale so the shader can size
+            // authored-logical-px stroke literals (the no-no mark ring/slash)
+            // in physical buffer px, keeping them in step with the scaled
+            // radius on hidpi / fractionally-scaled outputs.
+            render_scale,
         ],
         flags: [cursor_visible, effect_kind, point_count, glow_active],
     };
@@ -398,11 +430,16 @@ mod tests {
             glow_active: false,
             px_per_mm: 4.7,
             render_scale: 1.0,
+            cursor_rotation_deg: 0.0,
+            cursor_cloud_alpha: 1.0,
         });
 
+        // cursor is None here: flags.x (glyph-visible) is 0 even though an
+        // effect is present — the glyph draws only where a real cursor point
+        // was supplied, while the effect's own kind/point-count gate its draw.
         assert_eq!(
             uniform.flags,
-            [1, effect_kind_code(AgentOverlayGestureKind::Swipe), 2, 0]
+            [0, effect_kind_code(AgentOverlayGestureKind::Swipe), 2, 0]
         );
         assert_eq!(uniform.effect[0], 120.0);
         assert_eq!(uniform.cursor[0], 10.0);
@@ -430,6 +467,8 @@ mod tests {
             glow_active: true,
             px_per_mm: 4.7,
             render_scale: 1.0,
+            cursor_rotation_deg: 0.0,
+            cursor_cloud_alpha: 1.0,
         });
         assert_eq!(lit.flags[3], 1);
 
@@ -442,8 +481,91 @@ mod tests {
             glow_active: false,
             px_per_mm: 4.7,
             render_scale: 1.0,
+            cursor_rotation_deg: 0.0,
+            cursor_cloud_alpha: 1.0,
         });
         assert_eq!(dark.flags[3], 0);
+    }
+
+    #[test]
+    fn rotation_and_cloud_pack_into_spare_lanes() {
+        let (uniform, _) = build_effect_uniform(EffectUniformInput {
+            width: 100,
+            height: 200,
+            now_ms: 0,
+            cursor: Some(CursorPoint { x: 1.0, y: 2.0 }),
+            effect: None,
+            glow_active: true,
+            px_per_mm: 4.7,
+            render_scale: 2.0,
+            cursor_rotation_deg: 37.5,
+            cursor_cloud_alpha: 0.5,
+        });
+        // Rotation is scale-invariant: no render_scale multiply.
+        assert_eq!(uniform.surface_size_px[3], 37.5);
+        // Cloud bloom scales the spec's aura-alpha ceiling.
+        assert_eq!(
+            uniform.halo[3],
+            overlay_spec::desktop::rendering::HALO_ALPHA_MAX_FRACTION as f32 * 0.5
+        );
+        // The trail stroke scales with the buffer: the shader measures its
+        // point-to-segment distances in physical px, so an unscaled stroke
+        // would draw half-width on a 2x output.
+        assert_eq!(
+            uniform.trail[0],
+            overlay_spec::desktop::geometry::TRAIL_STROKE_LOGICAL_PX as f32 * 2.0
+        );
+        // Ripple radii + stroke and the no-no halo radius are logical-px
+        // geometry measured against scaled points/distances, so they scale
+        // with the buffer identically. Half-size ripples/halo on a 2x output
+        // was the pre-motion HiDPI bug this pins closed.
+        assert_eq!(
+            uniform.ripple[0],
+            overlay_spec::desktop::geometry::RIPPLE_MIN_LOGICAL_PX as f32 * 2.0
+        );
+        assert_eq!(
+            uniform.ripple[1],
+            overlay_spec::desktop::geometry::RIPPLE_MAX_LOGICAL_PX as f32 * 2.0
+        );
+        assert_eq!(
+            uniform.ripple[2],
+            overlay_spec::desktop::geometry::RIPPLE_STROKE_LOGICAL_PX as f32 * 2.0
+        );
+        assert_eq!(
+            uniform.halo[0],
+            overlay_spec::desktop::geometry::CURSOR_HALO_RADIUS_LOGICAL_PX as f32 * 2.0
+        );
+        // `cursor_smoke.w` carries the integer buffer scale so the shader can
+        // size the no-no mark's authored-px stroke literals in step with the
+        // scaled radius.
+        assert_eq!(uniform.cursor_smoke[3], 2.0);
+        // Dimensionless lanes never scale: ripple alpha, halo scale fractions.
+        assert_eq!(
+            uniform.ripple[3],
+            overlay_spec::desktop::rendering::MAX_RIPPLE_ALPHA_0_255 as f32 / 255.0
+        );
+        assert_eq!(
+            uniform.halo[1],
+            overlay_spec::desktop::rendering::HALO_SCALE_MIN_FRACTION as f32
+        );
+
+        let (out_of_range, _) = build_effect_uniform(EffectUniformInput {
+            width: 100,
+            height: 200,
+            now_ms: 0,
+            cursor: Some(CursorPoint { x: 1.0, y: 2.0 }),
+            effect: None,
+            glow_active: true,
+            px_per_mm: 4.7,
+            render_scale: 1.0,
+            cursor_rotation_deg: 0.0,
+            cursor_cloud_alpha: 7.0,
+        });
+        assert_eq!(
+            out_of_range.halo[3],
+            overlay_spec::desktop::rendering::HALO_ALPHA_MAX_FRACTION as f32,
+            "cloud alpha clamps to [0, 1]"
+        );
     }
 
     #[test]

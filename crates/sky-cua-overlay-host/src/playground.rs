@@ -40,7 +40,7 @@ use smithay_client_toolkit::{
         },
     },
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
     globals::{GlobalListContents, registry_queue_init},
@@ -48,13 +48,18 @@ use wayland_client::{
 };
 
 use crate::{
+    cursor_motion::{CursorMotionDriver, MotionBounds, MotionGesture, MotionStepInput},
     layer_shell::{wayland_display_handle, wayland_window_handle},
+    motion::MotionPoint,
     renderer::{
         CursorImage, CursorPoint, EffectScene, SurfaceDrawRequest, SurfaceDrawSpec, SurfaceGuard,
         WgpuOverlayInstance, WgpuOverlayRenderer,
     },
 };
-use sky_cua_platform::{model::AgentOverlayGestureKind, overlay_spec};
+use sky_cua_platform::{
+    model::{AgentOverlayGestureKind, CoordinateSpace},
+    overlay_spec,
+};
 
 const INITIAL_ROUNDTRIPS: usize = 4;
 const BTN_LEFT: u32 = 0x110;
@@ -206,7 +211,7 @@ fn run(backdrop: Backdrop) -> Result<()> {
         cursor_pos: None,
         left_press: None,
         right_press: None,
-        active_effect: None,
+        motion: CursorMotionDriver::new(),
         glow_active: true,
         needs_redraw: true,
     };
@@ -263,7 +268,10 @@ struct PlaygroundApp {
     cursor_pos: Option<(f64, f64)>,
     left_press: Option<(f64, f64)>,
     right_press: Option<(f64, f64)>,
-    active_effect: Option<EffectScene>,
+    /// The production motion driver: the glyph glides after the physical
+    /// pointer with the same vehicle steering, arrival-gated feedback, and
+    /// trail resampling as the deployed overlay.
+    motion: CursorMotionDriver,
     glow_active: bool,
     needs_redraw: bool,
 }
@@ -329,7 +337,9 @@ impl PlaygroundApp {
     }
 
     /// Start a gesture animation at the given surface-local points. Drives only
-    /// the overlay shader — no real desktop input is performed.
+    /// the overlay shader — no real desktop input is performed. The gesture
+    /// runs the production pipeline: the glyph sails to the start point, the
+    /// feedback (ripple/squash/trail) fires on arrival.
     fn start_gesture(&mut self, kind: AgentOverlayGestureKind, points: Vec<CursorPoint>) {
         use overlay_spec::shared::timing::{
             CLICK_FEEDBACK_MS, NO_NO_WIGGLE_MS, SWIPE_VISUAL_MIN_MS,
@@ -339,11 +349,17 @@ impl PlaygroundApp {
             AgentOverlayGestureKind::NoNo => NO_NO_WIGGLE_MS,
             AgentOverlayGestureKind::Drag | AgentOverlayGestureKind::Swipe => SWIPE_VISUAL_MIN_MS,
         };
-        self.active_effect = Some(EffectScene {
+        self.motion.start_gesture(MotionGesture {
             kind,
-            started_at_ms: now_ms(),
+            points: points
+                .iter()
+                .map(|point| MotionPoint {
+                    x: point.x as f32,
+                    y: point.y as f32,
+                })
+                .collect(),
+            space: CoordinateSpace::StreamLogical,
             duration_ms,
-            points,
         });
         self.needs_redraw = true;
     }
@@ -392,12 +408,50 @@ impl PlaygroundApp {
     }
 
     fn render(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
-        // Retire a finished gesture so it plays once per trigger.
-        if let Some(effect) = &self.active_effect
-            && now_ms().saturating_sub(effect.started_at_ms) > effect.duration_ms
-        {
-            self.active_effect = None;
-        }
+        // Step the production motion driver once per rendered frame, exactly
+        // like the serve host's draw(): the physical pointer is the target and
+        // the drawn glyph is the steered pursuit.
+        let pointer_index = self.pointer_surface;
+        let bounds = pointer_index
+            .and_then(|index| self.surfaces.get(index))
+            .map(|surface| MotionBounds {
+                min_x: 0.0,
+                min_y: 0.0,
+                max_x: surface.width.max(1) as f32,
+                max_y: surface.height.max(1) as f32,
+            })
+            .unwrap_or(MotionBounds {
+                min_x: 0.0,
+                min_y: 0.0,
+                max_x: f32::MAX,
+                max_y: f32::MAX,
+            });
+        let motion_frame = self.motion.step(MotionStepInput {
+            now: Instant::now(),
+            now_ms: now_ms(),
+            visible: true,
+            target: self
+                .cursor_pos
+                .map(|(x, y)| (x, y, CoordinateSpace::StreamLogical)),
+            bounds,
+        });
+        let drawn_cursor = motion_frame.pos.map(|pos| CursorPoint {
+            x: f64::from(pos.x),
+            y: f64::from(pos.y),
+        });
+        let feedback_effect = motion_frame.feedback.as_ref().map(|feedback| EffectScene {
+            kind: feedback.kind,
+            started_at_ms: feedback.started_at_ms,
+            duration_ms: feedback.duration_ms,
+            points: feedback
+                .scene_points()
+                .iter()
+                .map(|point| CursorPoint {
+                    x: f64::from(point.x),
+                    y: f64::from(point.y),
+                })
+                .collect(),
+        });
 
         let mut requests: Vec<SurfaceDrawRequest> = Vec::with_capacity(self.surfaces.len());
         for (index, surface) in self.surfaces.iter().enumerate() {
@@ -428,14 +482,14 @@ impl PlaygroundApp {
                 .wl_surface()
                 .frame(qh, surface.layer.wl_surface().clone());
 
-            let is_pointer_surface = self.pointer_surface == Some(index);
+            let is_pointer_surface = pointer_index == Some(index);
             let cursor = if is_pointer_surface {
-                self.cursor_pos.map(|(x, y)| CursorPoint { x, y })
+                drawn_cursor
             } else {
                 None
             };
             let effect = if is_pointer_surface {
-                self.active_effect.clone()
+                feedback_effect.clone()
             } else {
                 None
             };
@@ -447,6 +501,8 @@ impl PlaygroundApp {
                 glow_active: self.glow_active,
                 px_per_mm: self.px_per_mm(index),
                 render_scale,
+                cursor_rotation_deg: motion_frame.rotation_deg,
+                cursor_cloud_alpha: motion_frame.cloud_alpha,
             }));
         }
 

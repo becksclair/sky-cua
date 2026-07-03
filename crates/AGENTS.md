@@ -14,6 +14,9 @@ stable contracts, platform backends, the daemon, and the MCP client.
   backends call it so the model image stays identical; the heavy `image`/`webp`
   encoder deps live here, not in `sky-cua-platform`.
 - Linux portal, AT-SPI, KWin, and X11 logic: `crates/sky-cua-linux/src/**`.
+- Desktop agent-cursor overlay host (Wayland layer-shell + wgpu renderer +
+  the vehicle-steering motion driver): `crates/sky-cua-overlay-host/` ->
+  [sky-cua-overlay-host/AGENTS.md](sky-cua-overlay-host/AGENTS.md).
 - Daemon state and IPC serving: `crates/sky-cua-service/src/**` (request
   dispatch in `src/daemon.rs`).
 - MCP JSON-RPC behavior and tool text/structured output:

@@ -21,12 +21,16 @@ pub mod animation;
 #[cfg(target_os = "linux")]
 pub mod buffers;
 mod cursor_texture;
+#[cfg(all(test, target_os = "linux"))]
+mod motion_capture;
 #[cfg(target_os = "linux")]
 pub mod scene;
 #[cfg(target_os = "linux")]
 pub mod shaders;
 #[cfg(target_os = "linux")]
 pub mod surface;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod test_support;
 #[cfg(target_os = "linux")]
 pub mod wgpu;
 

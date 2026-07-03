@@ -104,26 +104,6 @@ fn first_effect_point_or_cursor() -> vec2<f32> {
     return frame.cursor.xy;
 }
 
-fn last_effect_point_or_cursor() -> vec2<f32> {
-    let count = active_point_count();
-    if count > 0u {
-        return effect_point(count - 1u);
-    }
-    return frame.cursor.xy;
-}
-
-fn animated_cursor_position() -> vec2<f32> {
-    let kind = frame.flags.y;
-    let progress = ease_in_out(effect_progress());
-    if (kind == KIND_DRAG || kind == KIND_SWIPE) && active_point_count() >= 2u {
-        return mix(first_effect_point_or_cursor(), last_effect_point_or_cursor(), progress);
-    }
-    if kind == KIND_TAP || kind == KIND_NO_NO {
-        return first_effect_point_or_cursor();
-    }
-    return frame.cursor.xy;
-}
-
 fn no_no_rotation_offset(progress: f32) -> f32 {
     // Matches Android `OverlayMath.noNoWiggleDeg`: the oscillation runs on raw
     // progress across [0, 1]; the envelope holds at 1 until `hold_fraction`,
@@ -139,15 +119,11 @@ fn no_no_rotation_offset(progress: f32) -> f32 {
 }
 
 fn cursor_rotation_deg() -> f32 {
-    let kind = frame.flags.y;
-    var rotation = 0.0;
-    if (kind == KIND_DRAG || kind == KIND_SWIPE) && active_point_count() >= 2u {
-        let direction = last_effect_point_or_cursor() - first_effect_point_or_cursor();
-        if length(direction) > 0.001 {
-            rotation = degrees(atan2(direction.y, direction.x)) - frame.trail.z;
-        }
-    }
-    if kind == KIND_NO_NO {
+    // The CPU motion driver eases the glyph toward its travel heading and
+    // ships the result in `surface_size_px.w`; the shader only layers the
+    // no-no wiggle waveform (fixture-pinned) on top of a zero base.
+    var rotation = frame.surface_size_px.w;
+    if frame.flags.y == KIND_NO_NO {
         rotation = rotation + no_no_rotation_offset(effect_progress());
     }
     return rotation;
@@ -158,13 +134,22 @@ fn cursor_scale() -> f32 {
     // then a damped-cosine spring back that overshoots past 1.0. `frame.cursor.z`
     // carries BOUNCE_DAMP and `frame.cursor.w` carries BOUNCE_OMEGA_PI_FRACTION
     // (the spring is `cos(omega_fraction * PI * t)`).
+    // The squash/bounce plays over the whole feedback timeline for taps
+    // (380 ms) and drags/swipes (stretched across the slide, phone parity).
+    // The no-no differs on the phone: it REPLAYS a 380 ms tap feedback under
+    // its separate 760 ms wiggle animator, so the no-no squash runs on the
+    // tap-replay sub-clock — `frame.effect.z` (RIPPLE_BURST_MS) is that same
+    // 380 ms timeline the replayed tap's ripple burst already uses.
     let kind = frame.flags.y;
-    if kind != KIND_TAP {
+    if kind == KIND_NONE {
         return 1.0;
     }
     let press_fraction = frame.no_no.w;
     let depth = 1.0 - frame.trail.w;
-    let progress = effect_progress();
+    var progress = effect_progress();
+    if kind == KIND_NO_NO {
+        progress = saturate(safe_div(frame.effect.x, frame.effect.z));
+    }
     if progress < press_fraction {
         return 1.0 - depth * ease_in_out(safe_div(progress, press_fraction));
     }
@@ -426,27 +411,27 @@ fn segment_distance(pixel: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(length(pixel - (a + ab * t)), t);
 }
 
-fn trail(pixel: vec2<f32>, cursor_pos: vec2<f32>) -> vec4<f32> {
+fn trail(pixel: vec2<f32>) -> vec4<f32> {
+    // Phone-parity trail: the CPU resamples the ideal gesture polyline into
+    // arc-length-even points (start..head) and the stroke is drawn per
+    // segment with a linear tail->head alpha ramp (`OverlayMath.trailAlpha`),
+    // flat agent pink, round caps (point-to-segment distance), smoothstep AA.
     let kind = frame.flags.y;
-    if !(kind == KIND_DRAG || kind == KIND_SWIPE) || active_point_count() < 2u {
+    let count = active_point_count();
+    if !(kind == KIND_DRAG || kind == KIND_SWIPE) || count < 2u {
         return vec4<f32>(0.0);
     }
-    let segment = segment_distance(pixel, first_effect_point_or_cursor(), cursor_pos);
-    let width = max(frame.trail.x, 1.0);
-    if segment.x > width * 2.5 {
-        return vec4<f32>(0.0); // beyond the wispy band; skip the noise field
+    let half_width = max(frame.trail.x, 1.0) * 0.5;
+    var alpha = 0.0;
+    for (var i = 1u; i < count; i = i + 1u) {
+        let seg = segment_distance(pixel, effect_point(i - 1u), effect_point(i));
+        let coverage = 1.0 - smoothstep(half_width - 1.0, half_width + 1.0, seg.x);
+        // Per-segment flat ramp, tail (i=1) nearly transparent -> head
+        // brightest: Android's `trailAlpha(i, count, head=1)`.
+        let ramp = f32(i) / f32(count - 1u);
+        alpha = max(alpha, coverage * ramp);
     }
-    // Smoky, wispy stroke: noise flows along the trail (`segment.y`, origin->
-    // cursor) and across it, pushing the band wider unevenly so it billows like
-    // the border smoke rather than reading as a clean line.
-    let t = frame.timing.x * 0.0004;
-    let smoke = smoke_fbm(vec2<f32>(segment.y * 7.0, segment.x / width), t);
-    let density = smoothstep(0.30, 0.85, smoke);
-    let eff = max(segment.x - density * width * 0.7, 0.0);
-    let band = 1.0 - smoothstep(width * 0.4, width, eff);
-    let tint = mix(frame.color_agent_pink.xyz, frame.color_agent_pink_light.xyz, density);
-    let alpha = band * segment.y * mix(0.55, 1.1, density) * frame.trail.y;
-    return premul(tint, alpha);
+    return premul(frame.color_agent_pink.xyz, alpha * frame.trail.y);
 }
 
 fn no_no_mark(pixel: vec2<f32>, cursor_pos: vec2<f32>) -> vec4<f32> {
@@ -455,8 +440,13 @@ fn no_no_mark(pixel: vec2<f32>, cursor_pos: vec2<f32>) -> vec4<f32> {
     }
     let local = pixel - cursor_pos;
     let radius = frame.halo.x * 0.95;
-    let ring = 1.0 - smoothstep(2.0, 5.0, abs(length(local) - radius));
-    let slash = 1.0 - smoothstep(2.5, 6.0, abs(local.x + local.y) * 0.70710678);
+    // The ring/slash stroke half-widths are authored in logical px; scale them
+    // into physical buffer px (`cursor_smoke.w` = render_scale) so the stroke
+    // tracks the already-scaled radius on hidpi outputs instead of reading
+    // half-thick. `radius` and the UV coordinates are already in buffer px.
+    let s = frame.cursor_smoke.w;
+    let ring = 1.0 - smoothstep(2.0 * s, 5.0 * s, abs(length(local) - radius));
+    let slash = 1.0 - smoothstep(2.5 * s, 6.0 * s, abs(local.x + local.y) * 0.70710678);
     let span = 1.0 - smoothstep(radius * 0.75, radius * 1.25, length(local));
     return premul(frame.color_agent_pink_light.xyz, max(ring, slash * span) * frame.ripple.w);
 }
@@ -522,11 +512,13 @@ fn cursor_shadow(pixel: vec2<f32>, cursor_pos: vec2<f32>) -> vec4<f32> {
 }
 
 fn render_pixel(pixel: vec2<f32>) -> vec4<f32> {
-    let cursor_pos = animated_cursor_position();
+    // The CPU motion driver owns the glyph position (vehicle-steered glide);
+    // the shader draws wherever `frame.cursor.xy` says, every frame.
+    let cursor_pos = frame.cursor.xy;
     var color = vec4<f32>(0.0);
     color = over(edge_glow(pixel), color);
     color = over(inward_waves(pixel), color);
-    color = over(trail(pixel, cursor_pos), color);
+    color = over(trail(pixel), color);
     // Shadow first so the smoke and arrow sit on top of it — it grounds the
     // cursor against the background instead of darkening its own aura.
     color = over(cursor_shadow(pixel, cursor_pos), color);
@@ -563,7 +555,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let ripple_progress = saturate(safe_div(frame.effect.x, frame.effect.z));
     let ripple_radius = mix(frame.ripple.x, frame.ripple.y, ease_in_out(ripple_progress));
     let ripple_alpha = 1.0 - ripple_progress;
-    let cursor_pos = animated_cursor_position();
+    let cursor_pos = frame.cursor.xy;
     let rotation = cursor_rotation_deg();
     let trail_head_alpha = frame.trail.y;
     conformance_out.values[0] = vec4<f32>(progress, ripple_radius, ripple_alpha, 0.0);
@@ -571,7 +563,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     conformance_out.values[2] = vec4<f32>(no_no_rotation_offset(progress), trail_head_alpha, 0.0, 0.0);
     conformance_out.values[3] = edge_glow(vec2<f32>(1.0, frame.surface_size_px.y * 0.5));
     conformance_out.values[4] = ripple(first_effect_point_or_cursor() + vec2<f32>(ripple_radius, 0.0));
-    conformance_out.values[5] = vec4<f32>(0.0);
+    // Trail probe: the midpoint of the head segment sits on the stroke
+    // centerline where coverage is 1 and the per-segment ramp is 1.
+    let head_index = max(active_point_count(), 2u) - 1u;
+    conformance_out.values[5] = trail((effect_point(head_index - 1u) + effect_point(head_index)) * 0.5);
 }
 "#;
 
@@ -679,9 +674,11 @@ mod tests {
             effect_uniform_as_bytes,
         },
         scene::{CursorPoint, EffectScene},
+        test_support::{
+            FrameRenderInput, read_bytes, read_f32_buffer, render_frame_rgba, test_device,
+        },
     };
     use sky_cua_platform::model::AgentOverlayGestureKind;
-    use std::sync::mpsc;
 
     #[test]
     fn shader_contains_phase_four_effect_entry_points() {
@@ -693,7 +690,7 @@ mod tests {
             "fn trail",
             "fn no_no_mark",
             "fn cursor_rotation_deg",
-            "fn animated_cursor_position",
+            "frame.surface_size_px.w",
             "@compute",
         ] {
             assert!(
@@ -701,6 +698,10 @@ mod tests {
                 "missing WGSL symbol {needle}"
             );
         }
+        assert!(
+            !EFFECT_SHADER.contains("fn animated_cursor_position"),
+            "the in-shader drag lerp is retired; the CPU motion driver owns the glyph position"
+        );
     }
 
     #[test]
@@ -745,8 +746,8 @@ mod tests {
             "edge glow rim lights at the screen edge when the agent is in control"
         );
         assert!(
-            (values[20 + 3] - expected["outside_alpha"].as_f64().unwrap() as f32).abs() < 0.001,
-            "outside sample stays transparent"
+            (values[20 + 3] - expected["trail_probe_alpha"].as_f64().unwrap() as f32).abs() < 0.001,
+            "a tap draws no trail at the probe point (trail is slide-gated)"
         );
 
         // tap_offquarter: progress 0.3 exposes the eased ripple radius and the
@@ -807,6 +808,68 @@ mod tests {
         assert!(
             (values[8] - tail["rotation_offset_deg"].as_f64().unwrap() as f32).abs() < 0.01,
             "no_no rotation plays through the eased tail to match Android"
+        );
+
+        // swipe_slide: progress 0.5 on a two-point drag path. Pins the widened
+        // cursor_scale gate (the squash/bounce plays across the whole slide,
+        // matching Android's `clickScale` over the feedback), the zero rotation
+        // lane default, and the phone-parity trail: the head-segment midpoint
+        // sits on the stroke centerline where coverage and ramp are both 1, so
+        // the premultiplied alpha equals MAX_TRAIL_ALPHA.
+        let swipe = &fixture["fixtures"]["swipe_slide"];
+        let expected = &swipe["expected"];
+        let (ub, pb, bind_group) = test_effect_bind_group_with(
+            &device,
+            &queue,
+            &layout,
+            Some((AgentOverlayGestureKind::Swipe, 475, 950)),
+            true,
+            swipe["points"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| CursorPoint {
+                    x: p["x"].as_f64().unwrap(),
+                    y: p["y"].as_f64().unwrap(),
+                })
+                .collect(),
+            0.0,
+        );
+        let _keep_alive = (ub, pb);
+        let values = run_conformance(&device, &queue, &layout, &bind_group);
+        assert!((values[0] - expected["progress"].as_f64().unwrap() as f32).abs() < 0.01);
+        assert!(
+            (values[7] - expected["cursor_scale"].as_f64().unwrap() as f32).abs() < 0.01,
+            "the squash/bounce plays across a swipe slide (widened gate)"
+        );
+        assert!(
+            (values[6] - expected["rotation_deg"].as_f64().unwrap() as f32).abs() < 0.001,
+            "with no CPU rotation the swipe glyph stays as authored (no in-shader atan2)"
+        );
+        assert!(
+            (values[20 + 3] - expected["trail_probe_alpha"].as_f64().unwrap() as f32).abs() < 0.02,
+            "trail head-segment centerline alpha matches MAX_TRAIL_ALPHA"
+        );
+
+        // rotation_passthrough: the CPU-supplied rotation lane must reach
+        // cursor_rotation_deg() unchanged for a non-no-no gesture.
+        let rot = &fixture["fixtures"]["rotation_passthrough"];
+        let expected_rot = rot["cursor_rotation_deg"].as_f64().unwrap() as f32;
+        let (ub, pb, bind_group) = test_effect_bind_group_with(
+            &device,
+            &queue,
+            &layout,
+            Some((AgentOverlayGestureKind::Tap, 190, 380)),
+            true,
+            vec![CursorPoint { x: 50.0, y: 60.0 }],
+            expected_rot,
+        );
+        let _keep_alive = (ub, pb);
+        let values = run_conformance(&device, &queue, &layout, &bind_group);
+        assert_eq!(
+            values[6],
+            rot["expected"]["rotation_deg"].as_f64().unwrap() as f32,
+            "the rotation uniform lane passes through to the glyph"
         );
     }
 
@@ -898,29 +961,6 @@ mod tests {
         assert_eq!(visible, render_offscreen_alpha(&device, &queue, true));
     }
 
-    fn test_device() -> Option<(::wgpu::Device, ::wgpu::Queue)> {
-        let instance = ::wgpu::Instance::new(::wgpu::InstanceDescriptor {
-            backends: ::wgpu::Backends::VULKAN | ::wgpu::Backends::GL,
-            ..::wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-        let adapter =
-            pollster::block_on(instance.request_adapter(&::wgpu::RequestAdapterOptions {
-                power_preference: ::wgpu::PowerPreference::LowPower,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            }))
-            .ok()?;
-        pollster::block_on(adapter.request_device(&::wgpu::DeviceDescriptor {
-            label: Some("sky-cua overlay shader test device"),
-            required_features: ::wgpu::Features::empty(),
-            required_limits: ::wgpu::Limits::default(),
-            experimental_features: ::wgpu::ExperimentalFeatures::disabled(),
-            memory_hints: ::wgpu::MemoryHints::Performance,
-            trace: ::wgpu::Trace::Off,
-        }))
-        .ok()
-    }
-
     fn test_effect_bind_group(
         device: &::wgpu::Device,
         queue: &::wgpu::Queue,
@@ -928,11 +968,31 @@ mod tests {
         scene: Option<(AgentOverlayGestureKind, u64, u64)>,
         glow_active: bool,
     ) -> (::wgpu::Buffer, ::wgpu::Buffer, ::wgpu::BindGroup) {
+        test_effect_bind_group_with(
+            device,
+            queue,
+            layout,
+            scene,
+            glow_active,
+            vec![CursorPoint { x: 50.0, y: 60.0 }],
+            0.0,
+        )
+    }
+
+    fn test_effect_bind_group_with(
+        device: &::wgpu::Device,
+        queue: &::wgpu::Queue,
+        layout: &::wgpu::BindGroupLayout,
+        scene: Option<(AgentOverlayGestureKind, u64, u64)>,
+        glow_active: bool,
+        scene_points: Vec<CursorPoint>,
+        cursor_rotation_deg: f32,
+    ) -> (::wgpu::Buffer, ::wgpu::Buffer, ::wgpu::BindGroup) {
         let effect = scene.map(|(kind, _now_ms, duration_ms)| EffectScene {
             kind,
             started_at_ms: 0,
             duration_ms,
-            points: vec![CursorPoint { x: 50.0, y: 60.0 }],
+            points: scene_points,
         });
         let (uniform, points) = build_effect_uniform(EffectUniformInput {
             width: 96,
@@ -945,6 +1005,8 @@ mod tests {
             // edge glow sizes its physical-unit rim/containment in tests.
             px_per_mm: 4.7,
             render_scale: 1.0,
+            cursor_rotation_deg,
+            cursor_cloud_alpha: 1.0,
         });
         let uniform_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
             label: Some("sky-cua test uniform"),
@@ -1104,38 +1166,9 @@ mod tests {
             .collect()
     }
 
-    fn read_f32_buffer(
-        device: &::wgpu::Device,
-        buffer: &::wgpu::Buffer,
-        f32_count: usize,
-    ) -> Vec<f32> {
-        read_bytes(device, buffer, f32_count * 4)
-            .chunks_exact(4)
-            .map(|chunk| f32::from_ne_bytes(chunk.try_into().expect("four bytes")))
-            .collect()
-    }
-
-    fn read_bytes(device: &::wgpu::Device, buffer: &::wgpu::Buffer, byte_count: usize) -> Vec<u8> {
-        let slice = buffer.slice(..byte_count as u64);
-        let (tx, rx) = mpsc::channel();
-        slice.map_async(::wgpu::MapMode::Read, move |result| {
-            tx.send(result).expect("send map result");
-        });
-        device
-            .poll(::wgpu::PollType::wait_indefinitely())
-            .expect("poll device");
-        rx.recv()
-            .expect("receive map result")
-            .expect("map buffer for read");
-        let data = slice.get_mapped_range().to_vec();
-        buffer.unmap();
-        data
-    }
-
-    /// Render the full effect pipeline (`fs_main`) for one gesture frame into a
-    /// tightly-packed premultiplied RGBA8 buffer over a transparent backdrop,
-    /// using the real cursor glyph. Drives nothing on the desktop; the consumer
-    /// composites the frame over a chosen backdrop for visual gesture review.
+    /// Thin adapter over [`render_frame_rgba`] preserving the historical
+    /// gesture-dump call shape: the effect starts at epoch 0, the glyph parks
+    /// on the first gesture point, no CPU rotation, full cloud presence.
     #[allow(clippy::too_many_arguments)]
     fn render_gesture_rgba(
         device: &::wgpu::Device,
@@ -1147,170 +1180,25 @@ mod tests {
         duration_ms: u64,
         points: &[CursorPoint],
     ) -> Vec<u8> {
-        let layout = create_effect_bind_group_layout(device);
         let effect = EffectScene {
             kind,
             started_at_ms: 0,
             duration_ms,
             points: points.to_vec(),
         };
-        let (uniform, point_data) = build_effect_uniform(EffectUniformInput {
-            width,
-            height,
-            now_ms,
-            cursor: points.first().copied(),
-            effect: Some(&effect),
-            glow_active: true,
-            px_per_mm: 4.7,
-            render_scale: 1.0,
-        });
-        let uniform_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
-            label: Some("sky-cua gesture uniform"),
-            size: std::mem::size_of_val(&uniform) as u64,
-            usage: ::wgpu::BufferUsages::UNIFORM | ::wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buffer, 0, effect_uniform_as_bytes(&uniform));
-        let point_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
-            label: Some("sky-cua gesture points"),
-            size: std::mem::size_of_val(&point_data) as u64,
-            usage: ::wgpu::BufferUsages::STORAGE | ::wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&point_buffer, 0, effect_points_as_bytes(&point_data));
-
-        let cursor = CursorImage::load().expect("load cursor asset");
-        let cursor_texture = device.create_texture(&::wgpu::TextureDescriptor {
-            label: Some("sky-cua gesture cursor texture"),
-            size: ::wgpu::Extent3d {
-                width: cursor.width,
-                height: cursor.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: ::wgpu::TextureDimension::D2,
-            format: ::wgpu::TextureFormat::Rgba8Unorm,
-            usage: ::wgpu::TextureUsages::TEXTURE_BINDING | ::wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            ::wgpu::TexelCopyTextureInfo {
-                texture: &cursor_texture,
-                mip_level: 0,
-                origin: ::wgpu::Origin3d::ZERO,
-                aspect: ::wgpu::TextureAspect::All,
-            },
-            &cursor.rgba,
-            ::wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(cursor.width * 4),
-                rows_per_image: Some(cursor.height),
-            },
-            ::wgpu::Extent3d {
-                width: cursor.width,
-                height: cursor.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let cursor_view = cursor_texture.create_view(&::wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&::wgpu::SamplerDescriptor::default());
-        let bind_group = device.create_bind_group(&::wgpu::BindGroupDescriptor {
-            label: Some("sky-cua gesture bind group"),
-            layout: &layout,
-            entries: &[
-                ::wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                ::wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: point_buffer.as_entire_binding(),
-                },
-                ::wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: ::wgpu::BindingResource::TextureView(&cursor_view),
-                },
-                ::wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: ::wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
-        let pipeline = create_effect_pipeline(device, &layout, ::wgpu::TextureFormat::Rgba8Unorm);
-        let target = device.create_texture(&::wgpu::TextureDescriptor {
-            label: Some("sky-cua gesture target"),
-            size: ::wgpu::Extent3d {
+        render_frame_rgba(
+            device,
+            queue,
+            FrameRenderInput {
                 width,
                 height,
-                depth_or_array_layers: 1,
+                now_ms,
+                cursor: points.first().copied(),
+                effect: Some(&effect),
+                cursor_rotation_deg: 0.0,
+                cursor_cloud_alpha: 1.0,
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: ::wgpu::TextureDimension::D2,
-            format: ::wgpu::TextureFormat::Rgba8Unorm,
-            usage: ::wgpu::TextureUsages::RENDER_ATTACHMENT | ::wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let bytes_per_row = (width * 4).next_multiple_of(256);
-        let readback = device.create_buffer(&::wgpu::BufferDescriptor {
-            label: Some("sky-cua gesture readback"),
-            size: u64::from(bytes_per_row * height),
-            usage: ::wgpu::BufferUsages::MAP_READ | ::wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let target_view = target.create_view(&::wgpu::TextureViewDescriptor::default());
-        let mut encoder = device.create_command_encoder(&::wgpu::CommandEncoderDescriptor {
-            label: Some("sky-cua gesture encoder"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
-                label: Some("sky-cua gesture pass"),
-                color_attachments: &[Some(::wgpu::RenderPassColorAttachment {
-                    view: &target_view,
-                    resolve_target: None,
-                    ops: ::wgpu::Operations {
-                        load: ::wgpu::LoadOp::Clear(::wgpu::Color::TRANSPARENT),
-                        store: ::wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        encoder.copy_texture_to_buffer(
-            target.as_image_copy(),
-            ::wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: ::wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(height),
-                },
-            },
-            ::wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let _keep_alive = (uniform_buffer, point_buffer);
-        queue.submit(Some(encoder.finish()));
-        let padded = read_bytes(device, &readback, (bytes_per_row * height) as usize);
-        let row_bytes = (width * 4) as usize;
-        let mut tight = Vec::with_capacity(row_bytes * height as usize);
-        for row in 0..height as usize {
-            let start = row * bytes_per_row as usize;
-            tight.extend_from_slice(&padded[start..start + row_bytes]);
-        }
-        tight
+        )
     }
 
     /// Gated visual capture: renders each gesture across its timeline to raw RGBA

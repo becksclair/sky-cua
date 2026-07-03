@@ -7,8 +7,8 @@ use anyhow::{Context, Result, bail};
 use sky_cua_platform::model::{
     AgentCursorBackendKind, AgentCursorCapabilities, AgentCursorPoint,
     AgentCursorPointerTrackingBackendKind, AgentCursorRendererBackendKind, AgentCursorState,
-    AgentOverlayCoverageKind, AgentOverlayEffectsCapabilities, AgentOverlayGestureEvent,
-    AgentOverlayHostLifecycleState, CoordinateSpace, DiagnosticEntry, Point2,
+    AgentOverlayCoverageKind, AgentOverlayEffectsCapabilities, AgentOverlayHostLifecycleState,
+    CoordinateSpace, DiagnosticEntry,
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -30,7 +30,12 @@ use wayland_client::{
 
 use crate::{
     GestureEventTracker, OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind,
-    OverlayHostReply, cursor_asset, diagnostic,
+    OverlayHostReply, OverlayMotionStatus, cursor_asset,
+    cursor_motion::{
+        CursorMotionDriver, MotionBounds, MotionFrame, MotionGesture, MotionStepInput,
+    },
+    diagnostic,
+    motion::MotionPoint,
     pointer_tracking::{PointerTracker, PointerTrackingBounds},
     renderer::{
         CursorImage, CursorPoint, EffectScene, SurfaceDrawRequest, SurfaceDrawSpec, SurfaceGuard,
@@ -39,9 +44,27 @@ use crate::{
     system_cursor::{SystemCursorAdapter, SystemPointerPosition},
 };
 
+mod capabilities;
+mod capture_barrier;
+mod cursor_state;
+mod geometry;
+mod motion_adapter;
+mod renderer_selection;
+mod wayland;
+
+use capture_barrier::CaptureBarrierState;
+use cursor_state::{
+    apply_system_pointer_position, cursor_point, state_needs_system_pointer_update,
+};
+use renderer_selection::LayerShellRenderer;
+
+use wayland::create_cursor_layer;
+pub(crate) use wayland::{wayland_display_handle, wayland_window_handle};
+
+pub(crate) use geometry::output_render_scale;
+use geometry::{FALLBACK_PX_PER_MM, OutputGeometry, box_reaches_output, translate_to_output_local};
+
 const INITIAL_ROUNDTRIPS: usize = 4;
-const LAYER_ENV: &str = "SKY_CUA_LAYER_SHELL_LAYER";
-const RENDERER_ENV: &str = "SKY_CUA_LAYER_SHELL_RENDERER";
 
 #[derive(Debug)]
 pub struct LayerShellOverlayBackend {
@@ -103,12 +126,13 @@ impl LayerShellOverlayBackend {
             }
         }
 
-        let app = LayerShellApp {
+        let mut app = LayerShellApp {
             renderer: LayerShellRenderer::Unsupported {
                 reason: Some("layer-shell renderer has not been selected yet".to_string()),
             },
             output_state,
             layers,
+            output_geometry: Vec::new(),
             instance: Some(instance),
             surface_guards,
             cursor,
@@ -116,10 +140,12 @@ impl LayerShellOverlayBackend {
             lifecycle_state: AgentOverlayHostLifecycleState::BackendInitializing,
             capture_barrier: None,
             gesture_tracker: GestureEventTracker::default(),
-            active_effect: None,
+            motion: CursorMotionDriver::new(),
+            last_motion: None,
             frames_submitted: 0,
             last_frame_submission_us: None,
         };
+        app.refresh_output_geometry();
         let mut backend = Self {
             event_queue,
             app,
@@ -162,7 +188,19 @@ impl LayerShellOverlayBackend {
                 let (ok, gesture, diagnostics) =
                     crate::validate_gesture_message(message.gesture, &mut self.app.gesture_tracker);
                 if ok && let Some(gesture) = gesture {
-                    self.app.start_effect(gesture);
+                    self.app.motion.start_gesture(MotionGesture {
+                        kind: gesture.kind,
+                        points: gesture
+                            .points
+                            .iter()
+                            .map(|point| MotionPoint {
+                                x: point.x as f32,
+                                y: point.y as f32,
+                            })
+                            .collect(),
+                        space: gesture.coordinate_space,
+                        duration_ms: gesture.duration_ms,
+                    });
                     return self.render_reply_with_diagnostics(diagnostics);
                 }
                 self.reply(ok, diagnostics)
@@ -179,6 +217,10 @@ impl LayerShellOverlayBackend {
                 if let Some(state) = self.app.state.as_mut() {
                     state.visible = false;
                 }
+                // A capture hide (sequence-bearing barrier) freezes the motion
+                // driver so the restore resumes from the same pose; a plain
+                // hide drops the gesture pipeline and marks the next show cold.
+                self.app.motion.hide(message.sequence.is_some());
                 if let Some(sequence) = message.sequence {
                     self.app.start_capture_barrier(sequence);
                 }
@@ -225,14 +267,14 @@ impl LayerShellOverlayBackend {
     /// on a 240 Hz screen) instead of a fixed 60 Hz. Clamped to [60, 240] Hz and
     /// defaulting to 60 Hz when no refresh rate is advertised.
     pub fn pointer_tick_interval(&self) -> std::time::Duration {
+        // Reads the geometry snapshot, not OutputState: this re-arms on every
+        // timer fire, and `OutputState::info` clones the full mode list.
         let max_mhz = self
             .app
-            .output_state
-            .outputs()
-            .filter_map(|output| self.app.output_state.info(&output))
-            .flat_map(|info| info.modes)
-            .filter(|mode| mode.current && mode.refresh_rate > 0)
-            .map(|mode| mode.refresh_rate)
+            .output_geometry
+            .iter()
+            .flatten()
+            .filter_map(|geometry| geometry.refresh_mhz)
             .max();
         let hz = max_mhz
             .map(|mhz| (f64::from(mhz) / 1000.0).clamp(60.0, 240.0))
@@ -309,26 +351,6 @@ impl LayerShellOverlayBackend {
         self.render_current()
     }
 
-    fn wait_for_capture_barrier(&mut self) -> Result<()> {
-        use std::time::{Duration, Instant};
-        const BARRIER_TIMEOUT: Duration = Duration::from_millis(1500);
-        let deadline = Instant::now() + BARRIER_TIMEOUT;
-        while Instant::now() < deadline {
-            if self.app.capture_barrier.is_none() {
-                return Ok(());
-            }
-            self.event_queue
-                .roundtrip(&mut self.app)
-                .context("Wayland roundtrip failed while waiting for capture barrier")?;
-            if self.app.capture_barrier.is_none() {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        self.app.clear_capture_barrier();
-        bail!("capture barrier timed out waiting for compositor frame acknowledgement")
-    }
-
     fn follow_tracked_pointer(&mut self) -> Result<()> {
         if !self.app.state.as_ref().is_some_and(|state| state.visible) {
             return Ok(());
@@ -354,115 +376,9 @@ impl LayerShellOverlayBackend {
             lifecycle_state: Some(self.app.lifecycle_state()),
             applied_sequence: self.app.applied_sequence(),
             state: self.app.state.clone(),
+            motion: self.app.motion_status(),
             diagnostics,
         }
-    }
-
-    fn capabilities(&self) -> AgentCursorCapabilities {
-        layer_shell_capabilities(
-            self.app.open_layer_count(),
-            self.app.has_open_layer(),
-            self.app.renderer_kind(),
-            self.app.renderer_reason(),
-            self.app.coverage_kind(),
-            self.app.active_output_count(),
-            self.app.rendered_output_count(),
-            self.app.adapter_name(),
-            self.app.last_frame_submission_us,
-            self.app.frames_submitted,
-            self.pointer_tracker.backend(),
-            self.pointer_tracker.exact(),
-            self.pointer_tracker.reason(),
-            &self.system_cursor,
-        )
-    }
-}
-
-fn layer_shell_capabilities(
-    open_layer_count: usize,
-    has_open_layer: bool,
-    renderer_backend: AgentCursorRendererBackendKind,
-    renderer_reason: Option<&str>,
-    coverage: AgentOverlayCoverageKind,
-    active_output_count: usize,
-    rendered_output_count: usize,
-    adapter_name: Option<&str>,
-    last_frame_submission_us: Option<u128>,
-    frames_submitted: u64,
-    pointer_tracking_backend: AgentCursorPointerTrackingBackendKind,
-    pointer_tracking_exact: bool,
-    pointer_tracking_reason: Option<&str>,
-    system_cursor: &SystemCursorAdapter,
-) -> AgentCursorCapabilities {
-    let mut reason = format!(
-        "zwlr_layer_shell_v1 visible overlay active on {} output surface(s)",
-        open_layer_count
-    );
-    if let Some(system_cursor_reason) = system_cursor.reason() {
-        if system_cursor.supported() {
-            reason.push_str("; system cursor: ");
-        } else {
-            reason.push_str("; system cursor hide unsupported: ");
-        }
-        reason.push_str(system_cursor_reason);
-    }
-    if let Some(renderer_reason) = renderer_reason {
-        reason.push_str("; renderer: ");
-        reason.push_str(renderer_reason);
-    }
-    if let Some(pointer_tracking_reason) = pointer_tracking_reason {
-        reason.push_str("; pointer tracking: ");
-        reason.push_str(pointer_tracking_reason);
-    }
-    if let Some(last_frame_submission_us) = last_frame_submission_us {
-        reason.push_str(&format!(
-            "; frame pacing: last_cpu_submit_us={last_frame_submission_us} frames_submitted={frames_submitted}"
-        ));
-    }
-    let visible_overlay = has_open_layer
-        && coverage == AgentOverlayCoverageKind::Full
-        && renderer_backend == AgentCursorRendererBackendKind::Wgpu;
-    AgentCursorCapabilities {
-        backend: AgentCursorBackendKind::WaylandLayerShell,
-        renderer_backend,
-        visible_overlay,
-        screenshot_synthetic_cursor: false,
-        click_through: true,
-        capture_exclusion: false,
-        pointer_tracking_backend,
-        pointer_tracking_exact,
-        system_cursor_hide_supported: system_cursor.supported(),
-        system_cursor_hidden: system_cursor.hidden(),
-        system_cursor_backend: system_cursor.backend(),
-        needs_user_install: false,
-        reason: Some(reason),
-        effects: Some(AgentOverlayEffectsCapabilities {
-            glide: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
-            rotation: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
-            halo: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
-            ripple: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
-            trail: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
-            edge_glow: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
-            inward_wave: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
-            no_no_render: renderer_backend == AgentCursorRendererBackendKind::Wgpu,
-            hit_test: false,
-            sound: sky_cua_platform::overlay_spec::sound::ENABLED,
-        }),
-        coverage: Some(coverage),
-        supported_coordinate_spaces: vec![
-            CoordinateSpace::DesktopLogical,
-            CoordinateSpace::StreamLogical,
-            CoordinateSpace::StreamPixels,
-        ],
-        max_gesture_points: Some(
-            sky_cua_platform::overlay_spec::shared::effects::MAX_GESTURE_POINTS,
-        ),
-        protocol_version: Some(OVERLAY_HOST_PROTOCOL_VERSION),
-        effect_schema_version: Some(sky_cua_platform::overlay_spec::SCHEMA_VERSION),
-        active_output_count: Some(active_output_count.min(u32::MAX as usize) as u32),
-        rendered_output_count: Some(rendered_output_count.min(u32::MAX as usize) as u32),
-        adapter_name: adapter_name.map(str::to_string),
-        ..Default::default()
     }
 }
 
@@ -471,6 +387,11 @@ struct LayerShellApp {
     renderer: LayerShellRenderer,
     output_state: OutputState,
     layers: Vec<LayerSurfaceEntry>,
+    /// Per-layer output geometry snapshot, index-aligned with `layers`.
+    /// Rebuilt only on output events — SCTK's `OutputState::info()` clones
+    /// the full `OutputInfo` per call, which the 60-240 Hz draw path must
+    /// never pay per frame.
+    output_geometry: Vec<Option<OutputGeometry>>,
     surface_guards: Vec<Option<SurfaceGuard>>,
     instance: Option<WgpuOverlayInstance>,
     cursor: CursorImage,
@@ -478,20 +399,13 @@ struct LayerShellApp {
     lifecycle_state: AgentOverlayHostLifecycleState,
     capture_barrier: Option<CaptureBarrierState>,
     gesture_tracker: GestureEventTracker,
-    active_effect: Option<LayerEffectEvent>,
+    /// The vehicle-steering motion driver: owns the drawn cursor pose between
+    /// frames. `state` is only ever its target.
+    motion: CursorMotionDriver,
+    /// The driver's latest frame, for `should_animate` and the reply echo.
+    last_motion: Option<MotionFrame>,
     frames_submitted: u64,
     last_frame_submission_us: Option<u128>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct CaptureBarrierState {
-    sequence: u64,
-}
-
-#[derive(Debug, Clone)]
-struct LayerEffectEvent {
-    gesture: AgentOverlayGestureEvent,
-    started_at_ms: u64,
 }
 
 #[derive(Debug)]
@@ -505,305 +419,55 @@ struct LayerSurfaceEntry {
     capture_barrier_frames_remaining: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RequestedLayerShellRenderer {
-    Auto,
-    Wgpu,
-    UnsupportedLegacy(&'static str),
-}
-
-fn requested_renderer() -> RequestedLayerShellRenderer {
-    match std::env::var(RENDERER_ENV)
-        .unwrap_or_else(|_| "auto".to_string())
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "shm" | "wayland_shm" | "wayland-shm" => RequestedLayerShellRenderer::UnsupportedLegacy(
-            "Wayland SHM visible rendering was retired; WGPU is required",
-        ),
-        "wgpu" | "gpu" => RequestedLayerShellRenderer::Wgpu,
-        "auto" | "" => RequestedLayerShellRenderer::Auto,
-        _ => RequestedLayerShellRenderer::Auto,
-    }
-}
-
-#[derive(Debug)]
-enum LayerShellRenderer {
-    Wgpu(WgpuOverlayRenderer, String),
-    Unsupported { reason: Option<String> },
-}
-
-impl LayerShellRenderer {
-    fn kind(&self) -> AgentCursorRendererBackendKind {
-        match self {
-            Self::Wgpu(_, _) => AgentCursorRendererBackendKind::Wgpu,
-            Self::Unsupported { .. } => AgentCursorRendererBackendKind::None,
-        }
-    }
-
-    fn reason(&self) -> Option<&str> {
-        match self {
-            Self::Wgpu(_, reason) => Some(reason.as_str()),
-            Self::Unsupported { reason } => reason.as_deref(),
-        }
-    }
-
-    fn adapter_name(&self) -> Option<&str> {
-        match self {
-            Self::Wgpu(renderer, _) => Some(renderer.info().adapter_name.as_str()),
-            Self::Unsupported { .. } => None,
-        }
-    }
-
-    fn supports_visible_overlay(&self) -> bool {
-        matches!(self, Self::Wgpu(..))
-    }
-}
-
-/// Extract a raw display handle from the Wayland connection.
-///
-/// # Safety
-/// The returned handle is valid only while `conn` remains connected.
-/// Integer buffer scale for an output: `ceil(native_mode / logical_size)`,
-/// clamped to `>= 1`. Rendering the surface at `logical * this` physical pixels
-/// makes the compositor downsample a sharp buffer instead of upscaling a soft
-/// logical one on hidpi / fractionally-scaled outputs. `1.0` when geometry is
-/// unknown or the output is unscaled.
-pub(crate) fn output_render_scale(info: &smithay_client_toolkit::output::OutputInfo) -> f32 {
-    let Some((logical_w, logical_h)) = info.logical_size else {
-        return 1.0;
-    };
-    let Some(mode) = info
-        .modes
-        .iter()
-        .find(|mode| mode.current)
-        .or(info.modes.first())
-    else {
-        return 1.0;
-    };
-    let (native_w, native_h) = mode.dimensions;
-    if logical_w <= 0 || logical_h <= 0 || native_w <= 0 || native_h <= 0 {
-        return 1.0;
-    }
-    let scale_x = native_w as f32 / logical_w as f32;
-    let scale_y = native_h as f32 / logical_h as f32;
-    scale_x.max(scale_y).ceil().max(1.0)
-}
-
-pub(crate) fn wayland_display_handle(conn: &Connection) -> Result<wgpu::rwh::RawDisplayHandle> {
-    let display = NonNull::new(conn.backend().display_ptr() as *mut _)
-        .context("Wayland display pointer was null")?;
-    Ok(wgpu::rwh::RawDisplayHandle::Wayland(
-        wgpu::rwh::WaylandDisplayHandle::new(display),
-    ))
-}
-
-/// Extract a raw window handle from a `wl_surface`.
-///
-/// # Safety
-/// The returned handle is valid only while `surface` remains alive.
-pub(crate) fn wayland_window_handle(
-    surface: &wl_surface::WlSurface,
-) -> Result<wgpu::rwh::RawWindowHandle> {
-    let surface_ptr = NonNull::new(surface.id().as_ptr() as *mut _)
-        .context("Wayland surface pointer was null")?;
-    Ok(wgpu::rwh::RawWindowHandle::Wayland(
-        wgpu::rwh::WaylandWindowHandle::new(surface_ptr),
-    ))
-}
-
 impl LayerShellApp {
-    fn select_renderer(&mut self, _conn: &Connection) -> Result<()> {
-        match requested_renderer() {
-            RequestedLayerShellRenderer::UnsupportedLegacy(reason) => {
-                self.renderer = LayerShellRenderer::Unsupported {
-                    reason: Some(format!("{RENDERER_ENV}: {reason}")),
-                };
-                self.lifecycle_state = AgentOverlayHostLifecycleState::BackendUnsupported;
-                Ok(())
-            }
-            RequestedLayerShellRenderer::Wgpu => {
-                self.ensure_wgpu_output_coverage().context(
-                    "explicit wgpu layer-shell renderer failed output coverage validation",
-                )?;
-                let instance = self.instance.as_ref().context("wgpu instance is missing")?;
-                let renderer =
-                    WgpuOverlayRenderer::new(instance, &mut self.surface_guards, &self.cursor)
-                        .context("explicit wgpu layer-shell renderer failed to initialize")?;
-                let reason = format!(
-                    "wgpu renderer active on {} via {}",
-                    renderer.info().adapter_name,
-                    renderer.info().backend
-                );
-                self.renderer = LayerShellRenderer::Wgpu(renderer, reason);
-                self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
-                Ok(())
-            }
-            RequestedLayerShellRenderer::Auto => {
-                let wgpu_result = self.ensure_wgpu_output_coverage().and_then(|()| {
-                    let instance = self.instance.as_ref().context("wgpu instance is missing")?;
-                    WgpuOverlayRenderer::new(instance, &mut self.surface_guards, &self.cursor)
-                });
-                match wgpu_result {
-                    Ok(renderer) => {
-                        let reason = format!(
-                            "wgpu renderer active on {} via {}",
-                            renderer.info().adapter_name,
-                            renderer.info().backend
-                        );
-                        self.renderer = LayerShellRenderer::Wgpu(renderer, reason);
-                        self.lifecycle_state = AgentOverlayHostLifecycleState::BackendReady;
-                    }
-                    Err(error) => {
-                        self.renderer = LayerShellRenderer::Unsupported {
-                            reason: Some(format!(
-                                "wgpu unavailable; visible overlay failed closed: {error}"
-                            )),
-                        };
-                        self.lifecycle_state = AgentOverlayHostLifecycleState::BackendUnsupported;
-                    }
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn renderer_kind(&self) -> AgentCursorRendererBackendKind {
-        self.renderer.kind()
-    }
-
-    fn renderer_reason(&self) -> Option<&str> {
-        self.renderer.reason()
-    }
-
-    fn adapter_name(&self) -> Option<&str> {
-        self.renderer.adapter_name()
-    }
-
-    fn visible_overlay_supported(&self) -> bool {
-        self.renderer.supports_visible_overlay()
-            && self.coverage_kind() == AgentOverlayCoverageKind::Full
-    }
-
-    fn active_output_count(&self) -> usize {
-        self.output_state
-            .outputs()
-            .count()
-            .max(self.layers.iter().filter(|entry| !entry.closed).count())
-    }
-
-    fn rendered_output_count(&self) -> usize {
-        match self.renderer {
-            LayerShellRenderer::Wgpu(..) => self
-                .layers
-                .iter()
-                .enumerate()
-                .filter(|(index, entry)| {
-                    !entry.closed
-                        && entry.configured
-                        && self
-                            .surface_guards
-                            .get(*index)
-                            .is_some_and(|guard| guard.is_some())
-                })
-                .count(),
-            LayerShellRenderer::Unsupported { .. } => 0,
-        }
-    }
-
-    fn coverage_kind(&self) -> AgentOverlayCoverageKind {
-        let active_outputs = self.active_output_count();
-        let rendered_outputs = self.rendered_output_count();
-        if active_outputs > 0 && active_outputs == rendered_outputs {
-            AgentOverlayCoverageKind::Full
-        } else {
-            AgentOverlayCoverageKind::None
-        }
-    }
-
-    fn ensure_wgpu_output_coverage(&self) -> Result<()> {
-        let active_outputs = self.active_output_count();
-        let rendered_outputs = self
-            .layers
-            .iter()
-            .enumerate()
-            .filter(|(index, entry)| {
-                !entry.closed
-                    && entry.configured
-                    && self
-                        .surface_guards
-                        .get(*index)
-                        .is_some_and(|guard| guard.is_some())
-            })
-            .count();
-        if active_outputs == 0 {
-            bail!("no active Wayland outputs are available");
-        }
-        if active_outputs != rendered_outputs {
-            bail!(
-                "incomplete wgpu output coverage: active_outputs={active_outputs} rendered_outputs={rendered_outputs}"
-            );
-        }
-        Ok(())
-    }
-
-    fn pointer_tracking_bounds(&self) -> Option<PointerTrackingBounds> {
-        let mut left = i32::MAX;
-        let mut top = i32::MAX;
-        let mut right = i32::MIN;
-        let mut bottom = i32::MIN;
-        for entry in self
-            .layers
-            .iter()
-            .filter(|entry| !entry.closed && entry.configured)
-        {
-            let Some(output) = entry.output.as_ref() else {
-                left = left.min(0);
-                top = top.min(0);
-                right = right.max(i32::try_from(entry.width).unwrap_or(i32::MAX));
-                bottom = bottom.max(i32::try_from(entry.height).unwrap_or(i32::MAX));
-                continue;
-            };
-            let Some(info) = self.output_state.info(output) else {
-                continue;
-            };
-            let position = info.logical_position.unwrap_or(info.location);
-            let Some(size) = info.logical_size else {
-                continue;
-            };
-            left = left.min(position.0);
-            top = top.min(position.1);
-            right = right.max(position.0.saturating_add(size.0));
-            bottom = bottom.max(position.1.saturating_add(size.1));
-        }
-        if right <= left || bottom <= top {
-            return None;
-        }
-        Some(PointerTrackingBounds {
-            x: left,
-            y: top,
-            width: u32::try_from(right - left).ok()?,
-            height: u32::try_from(bottom - top).ok()?,
-            scale_milli: 1000,
-        })
-    }
-
     fn draw(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
         let now_ms = current_epoch_ms();
-        self.clear_expired_effect(now_ms);
         if matches!(self.renderer, LayerShellRenderer::Wgpu(..)) {
             self.ensure_wgpu_output_coverage()
                 .context("wgpu output coverage changed before rendering")?;
         }
-        let visible_target = self
+        // The single motion-stepping site: every render path (tick timer,
+        // message replies, pointer follow) funnels through draw(), so the
+        // driver integrates exactly once per rendered frame.
+        let visible = self.state.as_ref().is_some_and(|state| state.visible);
+        let target = self
             .state
             .as_ref()
             .filter(|state| state.visible)
-            .and_then(|state| self.cursor_target(state));
-        let effects = (0..self.layers.len())
-            .map(|index| self.effect_scene_for_layer(index, now_ms))
+            .and_then(|state| {
+                let point = state.native_point.as_ref().or(state.model_point.as_ref())?;
+                let (x, y) = cursor_point(state)?;
+                Some((x, y, point.coordinate_space.clone()))
+            });
+        let bounds_space = self
+            .motion
+            .upcoming_space(target.as_ref().map(|(_, _, space)| space.clone()));
+        let bounds = self.motion_bounds(bounds_space.as_ref());
+        let motion_frame = self.motion.step(MotionStepInput {
+            now: Instant::now(),
+            now_ms,
+            visible,
+            target,
+            bounds,
+        });
+        // The mover pose and the gesture scene are each in global
+        // desktop-logical space; map them into EVERY output they reach (the
+        // adapter translates unclipped and the shader clips per-pixel), so a
+        // glide or a boundary-spanning ripple/trail renders continuously
+        // across the monitor arrangement rather than popping at an edge.
+        let cursor_pos = motion_frame.pos.filter(|_| visible);
+        let cursors = (0..self.layers.len())
+            .map(|index| {
+                cursor_pos
+                    .and_then(|pos| self.cursor_for_layer(index, pos, motion_frame.space.as_ref()))
+            })
             .collect::<Vec<_>>();
+        let mut effects = (0..self.layers.len())
+            .map(|index| self.feedback_scene_for_layer(index, &motion_frame))
+            .collect::<Vec<_>>();
+        let cursor_rotation_deg = motion_frame.rotation_deg;
+        let cursor_cloud_alpha = motion_frame.cloud_alpha;
+        self.last_motion = Some(motion_frame);
         // Per-output physical density so the edge glow sizes its rim and
         // containment band in millimetres regardless of monitor DPI.
         let px_per_mm = (0..self.layers.len())
@@ -845,14 +509,10 @@ impl LayerShellApp {
                 .wl_surface()
                 .frame(qh, entry.layer.wl_surface().clone());
 
-            let cursor = visible_target
-                .as_ref()
-                .filter(|target| target.layer_index == index)
-                .map(|target| CursorPoint {
-                    x: target.x,
-                    y: target.y,
-                });
-            let effect = effects[index].clone();
+            let cursor = cursors[index];
+            // `effects` is dead after this loop; move the scene out instead
+            // of cloning its trail-points Vec every frame.
+            let effect = effects[index].take();
             requests.push(Some(SurfaceDrawSpec {
                 width,
                 height,
@@ -861,6 +521,8 @@ impl LayerShellApp {
                 glow_active,
                 px_per_mm: px_per_mm[index],
                 render_scale: scale,
+                cursor_rotation_deg,
+                cursor_cloud_alpha,
             }));
         }
 
@@ -890,33 +552,15 @@ impl LayerShellApp {
         Ok(())
     }
 
-    fn cursor_target(&self, state: &AgentCursorState) -> Option<LayerCursorTarget> {
-        let point = state.native_point.as_ref().or(state.model_point.as_ref())?;
-        let (x, y) = cursor_point(state)?;
-        if point.coordinate_space == CoordinateSpace::DesktopLogical
-            && let Some(target) = self.desktop_logical_target(x, y)
-        {
-            return Some(target);
-        }
-        self.first_open_layer_index()
-            .map(|layer_index| LayerCursorTarget { layer_index, x, y })
-    }
-
-    fn start_effect(&mut self, gesture: AgentOverlayGestureEvent) {
-        self.active_effect = Some(LayerEffectEvent {
-            gesture,
-            started_at_ms: current_epoch_ms(),
-        });
-    }
-
-    fn has_active_effect(&self, now_ms: u64) -> bool {
-        self.active_effect.as_ref().is_some_and(|effect| {
-            now_ms.saturating_sub(effect.started_at_ms) <= effect.gesture.duration_ms
-        })
-    }
-
-    fn should_animate(&self, now_ms: u64) -> bool {
-        self.has_active_effect(now_ms) || self.glow_active()
+    fn should_animate(&self, _now_ms: u64) -> bool {
+        // The driver keeps `animating` true while the mover is unsettled, a
+        // gesture is pending arrival or playing feedback, or the cloud is
+        // mid-bloom; pending gestures have no epoch expiry, so no duration
+        // reaper may run here.
+        self.last_motion
+            .as_ref()
+            .is_some_and(|frame| frame.animating)
+            || self.glow_active()
     }
 
     /// The agent-in-control lease: a visible overlay state on a renderer that
@@ -928,154 +572,6 @@ impl LayerShellApp {
         self.state
             .as_ref()
             .is_some_and(|state| state.visible && self.visible_overlay_supported())
-    }
-
-    fn clear_expired_effect(&mut self, now_ms: u64) {
-        if !self.has_active_effect(now_ms) {
-            self.active_effect = None;
-        }
-    }
-
-    fn effect_scene_for_layer(&self, layer_index: usize, now_ms: u64) -> Option<EffectScene> {
-        let active = self.active_effect.as_ref()?;
-        if now_ms.saturating_sub(active.started_at_ms) > active.gesture.duration_ms {
-            return None;
-        }
-        let first_point = active.gesture.points.first()?;
-        let coordinate_space = active.gesture.coordinate_space.clone();
-        let target = self.gesture_point_target(coordinate_space.clone(), first_point)?;
-        if target.layer_index != layer_index {
-            return None;
-        }
-        let points = active
-            .gesture
-            .points
-            .iter()
-            .filter_map(|point| {
-                self.gesture_point_for_layer(layer_index, coordinate_space.clone(), point)
-            })
-            .collect::<Vec<_>>();
-        if points.is_empty() {
-            return None;
-        }
-        Some(EffectScene {
-            kind: active.gesture.kind,
-            started_at_ms: active.started_at_ms,
-            duration_ms: active.gesture.duration_ms,
-            points,
-        })
-    }
-
-    fn gesture_point_target(
-        &self,
-        coordinate_space: CoordinateSpace,
-        point: &Point2,
-    ) -> Option<LayerCursorTarget> {
-        if !point.x.is_finite() || !point.y.is_finite() {
-            return None;
-        }
-        if coordinate_space == CoordinateSpace::DesktopLogical
-            && let Some(target) = self.desktop_logical_target(point.x, point.y)
-        {
-            return Some(target);
-        }
-        self.first_open_layer_index()
-            .map(|layer_index| LayerCursorTarget {
-                layer_index,
-                x: point.x,
-                y: point.y,
-            })
-    }
-
-    fn gesture_point_for_layer(
-        &self,
-        layer_index: usize,
-        coordinate_space: CoordinateSpace,
-        point: &Point2,
-    ) -> Option<CursorPoint> {
-        if !point.x.is_finite() || !point.y.is_finite() {
-            return None;
-        }
-        if coordinate_space == CoordinateSpace::DesktopLogical {
-            return self.desktop_logical_point_for_layer(layer_index, point.x, point.y);
-        }
-        Some(CursorPoint {
-            x: point.x,
-            y: point.y,
-        })
-    }
-
-    /// Logical pixels per physical millimetre for a layer's output, from its
-    /// `wl_output` physical size (mm) and logical size (px). Uses the diagonal
-    /// so it stays correct under per-axis DPI differences and output rotation.
-    /// Falls back to a representative logical density (~120 logical DPI) when
-    /// the geometry is unknown or degenerate, so the edge glow always has a
-    /// sane real-world scale.
-    fn layer_px_per_mm(&self, index: usize) -> f32 {
-        const FALLBACK_PX_PER_MM: f32 = 4.7;
-        let Some(entry) = self.layers.get(index) else {
-            return FALLBACK_PX_PER_MM;
-        };
-        let Some(output) = entry.output.as_ref() else {
-            return FALLBACK_PX_PER_MM;
-        };
-        let Some(info) = self.output_state.info(output) else {
-            return FALLBACK_PX_PER_MM;
-        };
-        let (phys_w_mm, phys_h_mm) = info.physical_size;
-        let Some((logical_w, logical_h)) = info.logical_size else {
-            return FALLBACK_PX_PER_MM;
-        };
-        let phys_diag_mm = ((phys_w_mm as f32).powi(2) + (phys_h_mm as f32).powi(2)).sqrt();
-        let logical_diag_px = ((logical_w as f32).powi(2) + (logical_h as f32).powi(2)).sqrt();
-        if phys_diag_mm < 1.0 || logical_diag_px < 1.0 {
-            return FALLBACK_PX_PER_MM;
-        }
-        logical_diag_px / phys_diag_mm
-    }
-
-    /// Integer buffer scale for a layer's output (see [`output_render_scale`]).
-    fn layer_render_scale(&self, index: usize) -> f32 {
-        self.layers
-            .get(index)
-            .and_then(|entry| entry.output.as_ref())
-            .and_then(|output| self.output_state.info(output))
-            .map(|info| output_render_scale(&info))
-            .unwrap_or(1.0)
-    }
-
-    fn desktop_logical_target(&self, x: f64, y: f64) -> Option<LayerCursorTarget> {
-        self.layers
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| !entry.closed)
-            .filter(|(_, entry)| entry.configured)
-            .filter_map(|(layer_index, entry)| {
-                let output = entry.output.as_ref()?;
-                let info = self.output_state.info(output)?;
-                let position = info.logical_position.unwrap_or(info.location);
-                let size = info.logical_size?;
-                output_local_point((x, y), position, size).map(|(x, y)| LayerCursorTarget {
-                    layer_index,
-                    x,
-                    y,
-                })
-            })
-            .next()
-    }
-
-    fn desktop_logical_point_for_layer(
-        &self,
-        layer_index: usize,
-        x: f64,
-        y: f64,
-    ) -> Option<CursorPoint> {
-        let entry = self.layers.get(layer_index)?;
-        let output = entry.output.as_ref()?;
-        let info = self.output_state.info(output)?;
-        let position = info.logical_position.unwrap_or(info.location);
-        let size = info.logical_size?;
-        output_local_point((x, y), position, size).map(|(x, y)| CursorPoint { x, y })
     }
 
     fn first_open_layer_index(&self) -> Option<usize> {
@@ -1103,139 +599,21 @@ impl LayerShellApp {
         self.lifecycle_state
     }
 
-    fn applied_sequence(&self) -> Option<u64> {
-        self.capture_barrier.map(|barrier| barrier.sequence)
+    /// The structured motion echo for replies: where the vehicle-steered
+    /// glyph actually is, so clients can assert glide behavior from fields
+    /// instead of prose. `None` until the mover has ever been placed.
+    fn motion_status(&self) -> Option<OverlayMotionStatus> {
+        let frame = self.last_motion.as_ref()?;
+        let pos = frame.pos?;
+        Some(OverlayMotionStatus {
+            x: f64::from(pos.x),
+            y: f64::from(pos.y),
+            heading_deg: f64::from(frame.heading_deg),
+            speed: f64::from(frame.speed),
+            settled: frame.settled,
+            pending_gesture_feedback: self.motion.pending_gesture_feedback(),
+        })
     }
-
-    fn start_capture_barrier(&mut self, sequence: u64) {
-        let frames = sky_cua_platform::overlay_spec::shared::effects::CAPTURE_BARRIER_FRAMES;
-        let mut active_surfaces = 0;
-        for entry in &mut self.layers {
-            if !entry.closed && entry.configured {
-                entry.capture_barrier_frames_remaining = frames;
-                active_surfaces += 1;
-            } else {
-                entry.capture_barrier_frames_remaining = 0;
-            }
-        }
-        self.capture_barrier = (active_surfaces > 0).then_some(CaptureBarrierState { sequence });
-    }
-
-    fn capture_barrier_complete(&self) -> bool {
-        self.layers
-            .iter()
-            .filter(|entry| !entry.closed && entry.configured)
-            .all(|entry| entry.capture_barrier_frames_remaining == 0)
-    }
-
-    fn clear_capture_barrier(&mut self) {
-        self.capture_barrier = None;
-        for entry in &mut self.layers {
-            entry.capture_barrier_frames_remaining = 0;
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct LayerCursorTarget {
-    layer_index: usize,
-    x: f64,
-    y: f64,
-}
-
-fn create_cursor_layer(
-    compositor: &CompositorState,
-    layer_shell: &LayerShell,
-    qh: &QueueHandle<LayerShellApp>,
-    output: Option<&wl_output::WlOutput>,
-) -> LayerSurface {
-    let surface = compositor.create_surface(qh);
-    let layer = layer_shell.create_layer_surface(
-        qh,
-        surface,
-        requested_layer(),
-        Some("sky-cua-agent-cursor"),
-        output,
-    );
-    layer.set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT | Anchor::BOTTOM);
-    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    // The production cursor overlay must cover compositor-global logical
-    // coordinates, not the panel-constrained work area. KWin otherwise offsets
-    // click-through layer surfaces away from exclusive panel edges.
-    layer.set_exclusive_zone(-1);
-    layer.set_size(0, 0);
-    set_empty_input_region(compositor, &layer, qh);
-    layer.commit();
-    layer
-}
-
-fn requested_layer() -> Layer {
-    match std::env::var(LAYER_ENV)
-        .unwrap_or_else(|_| "overlay".to_string())
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "background" => Layer::Background,
-        "bottom" => Layer::Bottom,
-        "top" => Layer::Top,
-        "overlay" => Layer::Overlay,
-        _ => Layer::Overlay,
-    }
-}
-
-fn set_empty_input_region(
-    compositor: &CompositorState,
-    layer: &LayerSurface,
-    qh: &QueueHandle<LayerShellApp>,
-) {
-    // An empty Wayland input region makes the overlay click-through.
-    let region = compositor.wl_compositor().create_region(qh, ());
-    layer.set_input_region(Some(&region));
-    region.destroy();
-}
-
-fn cursor_point(state: &AgentCursorState) -> Option<(f64, f64)> {
-    state
-        .native_point
-        .as_ref()
-        .or(state.model_point.as_ref())
-        .and_then(point_to_overlay_coordinates)
-}
-
-fn point_to_overlay_coordinates(point: &AgentCursorPoint) -> Option<(f64, f64)> {
-    if !point.x.is_finite() || !point.y.is_finite() {
-        return None;
-    }
-    match point.coordinate_space {
-        CoordinateSpace::DesktopLogical
-        | CoordinateSpace::StreamLogical
-        | CoordinateSpace::StreamPixels => Some((point.x, point.y)),
-    }
-}
-
-fn state_needs_system_pointer_update(
-    state: &AgentCursorState,
-    position: SystemPointerPosition,
-) -> bool {
-    let Some(point) = state.native_point.as_ref() else {
-        return true;
-    };
-    if point.coordinate_space != CoordinateSpace::DesktopLogical {
-        return true;
-    }
-    (point.x - position.x).abs() >= 0.5 || (point.y - position.y).abs() >= 0.5
-}
-
-fn apply_system_pointer_position(state: &mut AgentCursorState, position: SystemPointerPosition) {
-    state.native_point = Some(AgentCursorPoint {
-        x: position.x,
-        y: position.y,
-        coordinate_space: CoordinateSpace::DesktopLogical,
-        mapping_id: None,
-    });
-    state.sequence = state.sequence.saturating_add(1);
-    state.updated_at_ms = current_epoch_ms();
 }
 
 fn current_epoch_ms() -> u64 {
@@ -1245,289 +623,12 @@ fn current_epoch_ms() -> u64 {
         .unwrap_or_default()
 }
 
-fn output_local_point(
-    point: (f64, f64),
-    position: (i32, i32),
-    size: (i32, i32),
-) -> Option<(f64, f64)> {
-    if size.0 <= 0 || size.1 <= 0 {
-        return None;
-    }
-    let x = point.0 - f64::from(position.0);
-    let y = point.1 - f64::from(position.1);
-    (x >= 0.0 && y >= 0.0 && x < f64::from(size.0) && y < f64::from(size.1)).then_some((x, y))
-}
-
-impl CompositorHandler for LayerShellApp {
-    fn scale_factor_changed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _new_factor: i32,
-    ) {
-    }
-
-    fn transform_changed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _new_transform: wl_output::Transform,
-    ) {
-    }
-
-    fn frame(
-        &mut self,
-        _conn: &Connection,
-        qh: &QueueHandle<Self>,
-        surface: &wl_surface::WlSurface,
-        _time: u32,
-    ) {
-        if let Some(entry) = self
-            .layers
-            .iter_mut()
-            .find(|entry| entry.layer.wl_surface().id() == surface.id())
-        {
-            if entry.capture_barrier_frames_remaining > 0 {
-                entry.capture_barrier_frames_remaining =
-                    entry.capture_barrier_frames_remaining.saturating_sub(1);
-                if entry.capture_barrier_frames_remaining > 0 {
-                    surface.frame(qh, surface.clone());
-                    surface.commit();
-                }
-            }
-        }
-        if self.capture_barrier.is_some() && self.capture_barrier_complete() {
-            self.capture_barrier = None;
-        }
-    }
-
-    fn surface_enter(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
-    ) {
-    }
-
-    fn surface_leave(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
-    ) {
-    }
-}
-
-impl LayerShellHandler for LayerShellApp {
-    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        if let Some(entry) = self.layers.iter_mut().find(|entry| &entry.layer == layer) {
-            entry.closed = true;
-        }
-    }
-
-    fn configure(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        layer: &LayerSurface,
-        configure: LayerSurfaceConfigure,
-        _serial: u32,
-    ) {
-        if let Some(entry) = self.layers.iter_mut().find(|entry| &entry.layer == layer) {
-            entry.configured = true;
-            entry.width = if configure.new_size.0 == 0 {
-                cursor_asset::AGENT_CURSOR_DESKTOP_WIDTH
-            } else {
-                configure.new_size.0
-            };
-            entry.height = if configure.new_size.1 == 0 {
-                cursor_asset::AGENT_CURSOR_DESKTOP_HEIGHT
-            } else {
-                configure.new_size.1
-            };
-        }
-    }
-}
-
-impl OutputHandler for LayerShellApp {
-    fn output_state(&mut self) -> &mut OutputState {
-        &mut self.output_state
-    }
-
-    fn new_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
-    ) {
-        self.lifecycle_state = AgentOverlayHostLifecycleState::BackendUnsupported;
-    }
-
-    fn update_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
-    ) {
-    }
-
-    fn output_destroyed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        output: wl_output::WlOutput,
-    ) {
-        for entry in &mut self.layers {
-            if entry
-                .output
-                .as_ref()
-                .is_some_and(|entry_output| entry_output.id() == output.id())
-            {
-                entry.closed = true;
-                entry.capture_barrier_frames_remaining = 0;
-            }
-        }
-        if self.capture_barrier.is_some() && self.capture_barrier_complete() {
-            self.capture_barrier = None;
-        }
-    }
-}
-
-impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for LayerShellApp {
-    fn event(
-        _state: &mut Self,
-        _registry: &wl_registry::WlRegistry,
-        _event: wl_registry::Event,
-        _data: &GlobalListContents,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<wl_region::WlRegion, ()> for LayerShellApp {
-    fn event(
-        _state: &mut Self,
-        _region: &wl_region::WlRegion,
-        _event: wl_region::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-delegate_compositor!(LayerShellApp);
-delegate_layer!(LayerShellApp);
-delegate_output!(LayerShellApp);
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        OVERLAY_HOST_PROTOCOL_VERSION, RequestedLayerShellRenderer, apply_system_pointer_position,
-        cursor_point, layer_shell_capabilities, output_local_point, requested_renderer,
-        state_needs_system_pointer_update,
-    };
     use crate::{
         cursor_asset,
         renderer::{CursorImage, draw_cursor_asset},
-        system_cursor::{SystemCursorAdapter, SystemPointerPosition},
     };
-    use sky_cua_platform::model::{
-        AgentCursorBackendKind, AgentCursorPoint, AgentCursorPointerTrackingBackendKind,
-        AgentCursorRendererBackendKind, AgentCursorState, AgentCursorSystemCursorBackendKind,
-        AgentOverlayCoverageKind, CoordinateSpace,
-    };
-
-    #[test]
-    fn cursor_point_prefers_native_coordinates_for_visible_overlay() {
-        let state = AgentCursorState {
-            visible: true,
-            sequence: 1,
-            model_point: Some(AgentCursorPoint {
-                x: 10.0,
-                y: 20.0,
-                coordinate_space: CoordinateSpace::StreamPixels,
-                mapping_id: None,
-            }),
-            native_point: Some(AgentCursorPoint {
-                x: 100.0,
-                y: 200.0,
-                coordinate_space: CoordinateSpace::DesktopLogical,
-                mapping_id: None,
-            }),
-            snapshot_id: None,
-            source_action: None,
-            updated_at_ms: 1,
-        };
-
-        assert_eq!(cursor_point(&state), Some((100.0, 200.0)));
-    }
-
-    #[test]
-    fn system_pointer_update_moves_visible_state_to_desktop_coordinates() {
-        let mut state = AgentCursorState {
-            visible: true,
-            sequence: 7,
-            model_point: Some(AgentCursorPoint {
-                x: 10.0,
-                y: 20.0,
-                coordinate_space: CoordinateSpace::StreamPixels,
-                mapping_id: Some("stream".to_string()),
-            }),
-            native_point: None,
-            snapshot_id: None,
-            source_action: None,
-            updated_at_ms: 0,
-        };
-        let position = SystemPointerPosition { x: 300.0, y: 400.0 };
-
-        assert!(state_needs_system_pointer_update(&state, position));
-        apply_system_pointer_position(&mut state, position);
-
-        assert_eq!(state.sequence, 8);
-        assert_eq!(
-            state.native_point,
-            Some(AgentCursorPoint {
-                x: 300.0,
-                y: 400.0,
-                coordinate_space: CoordinateSpace::DesktopLogical,
-                mapping_id: None,
-            })
-        );
-        assert_eq!(cursor_point(&state), Some((300.0, 400.0)));
-        assert!(!state_needs_system_pointer_update(
-            &state,
-            SystemPointerPosition {
-                x: 300.25,
-                y: 400.25
-            }
-        ));
-        assert!(state_needs_system_pointer_update(
-            &state,
-            SystemPointerPosition { x: 301.0, y: 400.0 }
-        ));
-    }
-
-    #[test]
-    fn desktop_output_point_maps_to_output_local_coordinates() {
-        assert_eq!(
-            output_local_point((2020.0, 90.0), (1920, 0), (1280, 720)),
-            Some((100.0, 90.0))
-        );
-        assert_eq!(
-            output_local_point((1919.0, 90.0), (1920, 0), (1280, 720)),
-            None
-        );
-        assert_eq!(
-            output_local_point((3200.0, 90.0), (1920, 0), (1280, 720)),
-            None
-        );
-    }
 
     #[test]
     fn cursor_asset_draw_keeps_background_fully_transparent() {
@@ -1547,102 +648,5 @@ mod tests {
         let hotspot_offset = ((hotspot_y * cursor.width + hotspot_x) * 4) as usize;
         assert_eq!(corner_alpha, 0);
         assert!(canvas[hotspot_offset + 3] > 0);
-    }
-
-    #[test]
-    fn layer_shell_capabilities_report_kwin_system_cursor_split_path() {
-        let capabilities = layer_shell_capabilities(
-            1,
-            true,
-            AgentCursorRendererBackendKind::Wgpu,
-            Some("wgpu renderer active"),
-            AgentOverlayCoverageKind::Full,
-            2,
-            2,
-            Some("llvmpipe"),
-            Some(120),
-            3,
-            AgentCursorPointerTrackingBackendKind::KwinEffectSignal,
-            true,
-            Some("KWin signal tracker active"),
-            &SystemCursorAdapter::test_kwin_effect(true),
-        );
-
-        assert_eq!(
-            capabilities.backend,
-            AgentCursorBackendKind::WaylandLayerShell
-        );
-        assert_eq!(
-            capabilities.renderer_backend,
-            AgentCursorRendererBackendKind::Wgpu
-        );
-        assert!(capabilities.visible_overlay);
-        assert!(capabilities.click_through);
-        assert_eq!(
-            capabilities.pointer_tracking_backend,
-            AgentCursorPointerTrackingBackendKind::KwinEffectSignal
-        );
-        assert!(capabilities.pointer_tracking_exact);
-        assert!(capabilities.system_cursor_hide_supported);
-        assert!(capabilities.system_cursor_hidden);
-        assert_eq!(
-            capabilities.system_cursor_backend,
-            AgentCursorSystemCursorBackendKind::KwinEffect
-        );
-        assert_eq!(capabilities.coverage, Some(AgentOverlayCoverageKind::Full));
-        assert_eq!(capabilities.active_output_count, Some(2));
-        assert_eq!(capabilities.rendered_output_count, Some(2));
-        assert_eq!(capabilities.adapter_name.as_deref(), Some("llvmpipe"));
-        assert_eq!(
-            capabilities.protocol_version,
-            Some(OVERLAY_HOST_PROTOCOL_VERSION)
-        );
-        assert!(
-            capabilities
-                .reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("last_cpu_submit_us=120")
-        );
-    }
-
-    #[test]
-    fn layer_shell_capabilities_fail_closed_for_incomplete_output_coverage() {
-        let capabilities = layer_shell_capabilities(
-            2,
-            true,
-            AgentCursorRendererBackendKind::Wgpu,
-            Some("wgpu renderer active"),
-            AgentOverlayCoverageKind::None,
-            2,
-            1,
-            Some("llvmpipe"),
-            None,
-            0,
-            AgentCursorPointerTrackingBackendKind::None,
-            false,
-            None,
-            &SystemCursorAdapter::test_kwin_effect(false),
-        );
-
-        assert_eq!(capabilities.coverage, Some(AgentOverlayCoverageKind::None));
-        assert_eq!(capabilities.active_output_count, Some(2));
-        assert_eq!(capabilities.rendered_output_count, Some(1));
-        assert!(!capabilities.visible_overlay);
-    }
-
-    #[test]
-    fn layer_shell_renderer_env_selects_wgpu_and_rejects_legacy_shm() {
-        unsafe { std::env::set_var(super::RENDERER_ENV, "wgpu") };
-        assert_eq!(requested_renderer(), RequestedLayerShellRenderer::Wgpu);
-        unsafe { std::env::set_var(super::RENDERER_ENV, "shm") };
-        assert!(matches!(
-            requested_renderer(),
-            RequestedLayerShellRenderer::UnsupportedLegacy(reason)
-                if reason.contains("SHM visible rendering was retired")
-        ));
-        unsafe { std::env::set_var(super::RENDERER_ENV, "auto") };
-        assert_eq!(requested_renderer(), RequestedLayerShellRenderer::Auto);
-        unsafe { std::env::remove_var(super::RENDERER_ENV) };
     }
 }

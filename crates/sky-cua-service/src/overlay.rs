@@ -833,6 +833,7 @@ mod tests {
         let socket_path = dir.join("agent-cursor.sock");
         let mut controller = OverlayController::new_for_tests_with_host(host_path, socket_path);
         controller.apply_host_reply(OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -860,6 +861,7 @@ mod tests {
         let mut controller =
             OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
         controller.apply_host_reply(OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -886,6 +888,7 @@ mod tests {
         let mut controller =
             OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
         controller.apply_host_reply(OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -926,6 +929,7 @@ mod tests {
     fn host_protocol_mismatch_is_reported_as_diagnostic() {
         let mut controller = OverlayController::new_for_tests();
         let diagnostics = controller.apply_host_reply(OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
             ok: true,
             capabilities: None,
@@ -946,6 +950,7 @@ mod tests {
     fn host_protocol_mismatch_does_not_update_cached_capabilities() {
         let mut controller = OverlayController::new_for_tests();
         controller.apply_host_reply(OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
             ok: true,
             capabilities: Some(sky_cua_platform::model::AgentCursorCapabilities {
@@ -985,6 +990,7 @@ mod tests {
     fn host_protocol_mismatch_clears_stale_cached_capabilities() {
         let mut controller = OverlayController::new_for_tests();
         controller.apply_host_reply(OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -996,6 +1002,7 @@ mod tests {
         assert!(controller.capabilities().visible_overlay);
 
         controller.apply_host_reply(OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
             ok: true,
             capabilities: None,
@@ -1513,6 +1520,7 @@ mod tests {
     fn prepare_for_capture_requires_matching_applied_barrier() {
         let mut controller = OverlayController::new_for_tests();
         controller.apply_host_reply(OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -1540,6 +1548,7 @@ mod tests {
         let mut controller =
             OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
         controller.apply_host_reply(OverlayHostReply {
+            motion: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),

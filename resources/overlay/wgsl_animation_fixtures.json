@@ -18,7 +18,7 @@
         "cursor": { "x": 50.0, "y": 60.0 },
         "cursor_scale": 1.076789,
         "edge_glow_alpha": 0.483,
-        "outside_alpha": 0.0
+        "trail_probe_alpha": 0.0
       }
     },
     "tap_offquarter": {
@@ -51,6 +51,28 @@
       "expected": {
         "progress": 0.78,
         "rotation_offset_deg": 17.526134
+      }
+    },
+    "swipe_slide": {
+      "surface": { "width": 96, "height": 96 },
+      "elapsed_ms": 475,
+      "duration_ms": 950,
+      "points": [{ "x": 50.0, "y": 60.0 }, { "x": 80.0, "y": 60.0 }],
+      "expected": {
+        "progress": 0.5,
+        "cursor_scale": 1.076789,
+        "rotation_deg": 0.0,
+        "trail_probe_alpha": 0.745098
+      }
+    },
+    "rotation_passthrough": {
+      "surface": { "width": 96, "height": 96 },
+      "elapsed_ms": 190,
+      "duration_ms": 380,
+      "points": [{ "x": 50.0, "y": 60.0 }],
+      "cursor_rotation_deg": 37.5,
+      "expected": {
+        "rotation_deg": 37.5
       }
     },
     "hidden": {
