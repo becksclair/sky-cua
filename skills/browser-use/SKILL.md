@@ -73,6 +73,36 @@ not reachable through the page.
   shortcuts. Use literal key strings such as `Enter`, `Escape`, `Tab`,
   `Ctrl+K`, and `Ctrl+L`.
 
+### Read-tool argument shapes
+
+`list_resources(surface="browser", resource="tabs")` lists tabs. It accepts
+only the optional keys `target` (`user_chrome`), `url_contains`,
+`title_contains`, and `limit`. `limit` caps the returned tab list to at most
+that many entries (a `0` or absent limit returns all tabs):
+
+```json
+{
+  "surface": "browser",
+  "resource": "tabs",
+  "limit": 20
+}
+```
+
+`observe(surface="browser", tab_id=...)` reads page state. It accepts only the
+optional keys `target`, `text_limit`, `element_query`, `element_offset`, and
+`element_limit`. It never returns an image; `capture_screen`/
+`screenshot_delivery` are desktop-only. For a tab image call
+`capture_screen(surface="browser", tab_id=...)` instead:
+
+```json
+{
+  "surface": "browser",
+  "tab_id": "tab-1",
+  "text_limit": 0,
+  "element_limit": 200
+}
+```
+
 ### Browser argument shape
 
 Every browser action after `browser_open` or `browser_claim_tab` carries the

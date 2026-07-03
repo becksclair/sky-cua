@@ -724,6 +724,126 @@ fn browser_list_tabs_filters_structured_content_when_filter_is_present() {
 }
 
 #[test]
+fn browser_list_tabs_truncates_structured_content_to_limit() {
+    let tabs: Vec<BrowserTab> = (0..5)
+        .map(|index| BrowserTab {
+            tab_id: format!("tab-{index}"),
+            target: BrowserTargetKind::UserChrome,
+            title: Some(format!("Tab {index}")),
+            url: Some(format!("https://example.test/{index}")),
+            active: index == 0,
+        })
+        .collect();
+    let service = FakeService::with_response(browser_service_response!(ListTabs {
+        response: BrowserListTabsResponse {
+            target: Some(BrowserTargetKind::UserChrome),
+            tabs,
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_list_tabs",
+        json!({"target": "user_chrome", "limit": 2}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], false);
+    let returned = result["structuredContent"]["tabs"].as_array().unwrap();
+    assert_eq!(returned.len(), 2);
+    assert_eq!(returned[0]["tab_id"], "tab-0");
+    assert_eq!(returned[1]["tab_id"], "tab-1");
+}
+
+#[test]
+fn browser_list_tabs_limit_zero_returns_all_tabs() {
+    let tabs: Vec<BrowserTab> = (0..3)
+        .map(|index| BrowserTab {
+            tab_id: format!("tab-{index}"),
+            target: BrowserTargetKind::UserChrome,
+            title: Some(format!("Tab {index}")),
+            url: Some(format!("https://example.test/{index}")),
+            active: index == 0,
+        })
+        .collect();
+    let service = FakeService::with_response(browser_service_response!(ListTabs {
+        response: BrowserListTabsResponse {
+            target: Some(BrowserTargetKind::UserChrome),
+            tabs,
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_list_tabs",
+        json!({"limit": 0}),
+    )
+    .unwrap();
+
+    assert_eq!(
+        result["structuredContent"]["tabs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn browser_list_tabs_limit_summary_reports_true_total_not_capped_count() {
+    let tabs: Vec<BrowserTab> = (0..5)
+        .map(|index| BrowserTab {
+            tab_id: format!("tab-{index}"),
+            target: BrowserTargetKind::UserChrome,
+            title: Some(format!("Tab {index}")),
+            url: Some(format!("https://example.test/{index}")),
+            active: index == 0,
+        })
+        .collect();
+    let service = FakeService::with_response(browser_service_response!(ListTabs {
+        response: BrowserListTabsResponse {
+            target: Some(BrowserTargetKind::UserChrome),
+            tabs,
+            diagnostics: Vec::new(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_list_tabs",
+        json!({"target": "user_chrome", "limit": 2}),
+    )
+    .unwrap();
+
+    // The cap returns 2 tabs but must not tell the model only 2 exist: the
+    // summary reports the true discovered total (5) and that it is showing 2.
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("Discovered 5 browser tabs"),
+        "summary should report the true total, got: {text}"
+    );
+    assert!(
+        text.contains("Showing first 2 tab"),
+        "summary should note the cap, got: {text}"
+    );
+    assert_eq!(
+        result["structuredContent"]["tabs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn browser_snapshot_summary_exposes_page_details_for_text_only_agents() {
     let response = BrowserSnapshotResponse {
         target: BrowserTargetKind::UserChrome,

@@ -221,6 +221,35 @@ fn append_browser_tab_match(summary: &mut String, tab: &BrowserTab) {
     );
 }
 
+/// Cap the returned tab list to at most `limit` entries when `limit` is a
+/// positive value. The cap is always expressed as a matching-index set over the
+/// full, untruncated `response.tabs`: when filters are active it truncates the
+/// existing match indexes, and when no filter is active it synthesizes a
+/// leading-window index set. Keeping `response.tabs` intact lets the summary
+/// keep reporting the true discovered total (so a `limit` never makes the model
+/// believe fewer tabs exist), while `browser_list_tabs_structured_response`
+/// still returns only the capped tabs. A `None` or `0` limit leaves the results
+/// untouched.
+pub(crate) fn apply_browser_tab_limit(
+    response: BrowserListTabsResponse,
+    matching_tab_indexes: Option<Vec<usize>>,
+    limit: Option<usize>,
+) -> (BrowserListTabsResponse, Option<Vec<usize>>) {
+    let Some(limit) = limit.filter(|limit| *limit > 0) else {
+        return (response, matching_tab_indexes);
+    };
+    match matching_tab_indexes {
+        Some(mut indexes) => {
+            indexes.truncate(limit);
+            (response, Some(indexes))
+        }
+        None => {
+            let capped = limit.min(response.tabs.len());
+            (response, Some((0..capped).collect()))
+        }
+    }
+}
+
 pub(crate) fn browser_list_tabs_structured_response(
     mut response: BrowserListTabsResponse,
     matching_tab_indexes: Option<Vec<usize>>,

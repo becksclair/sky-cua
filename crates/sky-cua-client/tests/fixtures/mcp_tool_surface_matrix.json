@@ -4,9 +4,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": false,
-      "description_bytes": 4196,
+      "description_bytes": 4468,
       "largest_schema_bytes": 2044,
-      "serialized_bytes": 41025,
+      "serialized_bytes": 41301,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -187,7 +187,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications.",
+            "description": "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications. observe never returns an image: capture_screen/screenshot_delivery apply to the desktop surface only. For a browser tab image call the capture_screen tool (surface=\"browser\", tab_id); for a phone image call capture_screen (surface=\"phone\", session_id) or capture_desktop.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -2622,9 +2622,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": false,
-      "description_bytes": 4299,
+      "description_bytes": 4571,
       "largest_schema_bytes": 2044,
-      "serialized_bytes": 41818,
+      "serialized_bytes": 42094,
       "surface": "grouped",
       "tool_count": 36,
       "tools_list": {
@@ -2805,7 +2805,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications.",
+            "description": "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications. observe never returns an image: capture_screen/screenshot_delivery apply to the desktop surface only. For a browser tab image call the capture_screen tool (surface=\"browser\", tab_id); for a phone image call capture_screen (surface=\"phone\", session_id) or capture_desktop.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -5288,9 +5288,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": true,
-      "description_bytes": 4196,
+      "description_bytes": 4468,
       "largest_schema_bytes": 2489,
-      "serialized_bytes": 41681,
+      "serialized_bytes": 41957,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -5471,7 +5471,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications.",
+            "description": "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications. observe never returns an image: capture_screen/screenshot_delivery apply to the desktop surface only. For a browser tab image call the capture_screen tool (surface=\"browser\", tab_id); for a phone image call capture_screen (surface=\"phone\", session_id) or capture_desktop.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -7953,9 +7953,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": true,
-      "description_bytes": 4299,
+      "description_bytes": 4571,
       "largest_schema_bytes": 2489,
-      "serialized_bytes": 42474,
+      "serialized_bytes": 42750,
       "surface": "grouped",
       "tool_count": 36,
       "tools_list": {
@@ -8136,7 +8136,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications.",
+            "description": "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications. observe never returns an image: capture_screen/screenshot_delivery apply to the desktop surface only. For a browser tab image call the capture_screen tool (surface=\"browser\", tab_id); for a phone image call capture_screen (surface=\"phone\", session_id) or capture_desktop.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {

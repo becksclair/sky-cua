@@ -21,12 +21,12 @@ pub(super) use response::browser_list_tabs_summary;
 #[cfg(test)]
 pub(super) use response::browser_snapshot_summary;
 use response::{
-    browser_action_result, browser_claim_tab_is_error, browser_claim_tab_summary,
-    browser_eval_result, browser_list_tabs_is_error, browser_list_tabs_structured_response,
-    browser_list_tabs_summary_with_matches, browser_move_mouse_is_error,
-    browser_move_mouse_summary, browser_navigate_result, browser_open_is_error,
-    browser_screenshot_result, browser_snapshot_result, browser_snapshot_structured_response,
-    browser_tab_match_indexes,
+    apply_browser_tab_limit, browser_action_result, browser_claim_tab_is_error,
+    browser_claim_tab_summary, browser_eval_result, browser_list_tabs_is_error,
+    browser_list_tabs_structured_response, browser_list_tabs_summary_with_matches,
+    browser_move_mouse_is_error, browser_move_mouse_summary, browser_navigate_result,
+    browser_open_is_error, browser_screenshot_result, browser_snapshot_result,
+    browser_snapshot_structured_response, browser_tab_match_indexes,
 };
 pub(super) use response::{browser_open_summary, browser_status_summary};
 #[cfg(test)]
@@ -85,6 +85,14 @@ pub(super) fn handle_tool_call(
                 Ok(filter) => filter,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
+            let limit = match super::parse_optional_usize(
+                &arguments,
+                "limit",
+                "list_resources browser tabs limit",
+            ) {
+                Ok(limit) => limit,
+                Err(error) => return invalid_request_tool_error(error.to_string()),
+            };
             match service.call(&browser_service_request(BrowserRequest::ListTabs {
                 target,
             }))? {
@@ -93,6 +101,8 @@ pub(super) fn handle_tool_call(
                 } => {
                     let is_error = browser_list_tabs_is_error(&response);
                     let matching_tab_indexes = browser_tab_match_indexes(&response, &filter);
+                    let (response, matching_tab_indexes) =
+                        apply_browser_tab_limit(response, matching_tab_indexes, limit);
                     let text = browser_list_tabs_summary_with_matches(
                         &response,
                         &filter,

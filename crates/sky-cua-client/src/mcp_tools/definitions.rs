@@ -101,13 +101,18 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
         "list_resources" => Some(
             "`list_resources` expects a valid top-level `surface`/`resource` pair. \
              Phone `apps` and `current_app` require top-level `session_id`; browser \
-             `tabs` may use `url_contains`/`title_contains`; desktop resources do \
-             not accept phone or browser fields.",
+             `tabs` accepts only `target`, `url_contains`, `title_contains`, and \
+             `limit` (limit caps the returned tab list); desktop resources do not \
+             accept phone or browser fields.",
         ),
         "observe" => Some(
             "`observe` expects one surface branch: desktop uses desktop observation \
              fields, browser requires top-level `tab_id`, and phone requires \
-             top-level `session_id`; do not mix fields from another surface.",
+             top-level `session_id`; do not mix fields from another surface. The \
+             browser branch accepts only `surface`, `tab_id`, `target`, `text_limit`, \
+             `element_query`, `element_offset`, and `element_limit`; \
+             `capture_screen`/`screenshot_delivery` are desktop-only, so use the \
+             `capture_screen` tool for a browser-tab or phone image.",
         ),
         "capture_screen" => Some(
             "`capture_screen` is only for browser or phone. Browser capture requires \
@@ -467,7 +472,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         grouped_tool_with_constraints(
             "observe",
-            "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications.",
+            "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications. observe never returns an image: capture_screen/screenshot_delivery apply to the desktop surface only. For a browser tab image call the capture_screen tool (surface=\"browser\", tab_id); for a phone image call capture_screen (surface=\"phone\", session_id) or capture_desktop.",
             READ_ONLY_TOOL,
             observe_properties(can_receive_images),
             json!(["surface"]),
@@ -1091,7 +1096,7 @@ fn list_resources_constraints() -> Value {
             exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "apps")], &[], &["surface", "resource"]),
             exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "windows")], &[], &["surface", "resource"]),
             exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "focused_window")], &[], &["surface", "resource"]),
-            exact_branch_schema(&properties, &[("surface", "browser"), ("resource", "tabs")], &[], &["surface", "resource", "target", "url_contains", "title_contains"]),
+            exact_branch_schema(&properties, &[("surface", "browser"), ("resource", "tabs")], &[], &["surface", "resource", "target", "url_contains", "title_contains", "limit"]),
             exact_branch_schema(&properties, &[("surface", "phone"), ("resource", "devices")], &[], &["surface", "resource", "include_mdns"]),
             exact_branch_schema(&properties, &[("surface", "phone"), ("resource", "apps")], &["session_id"], &["surface", "resource", "session_id", "include_system", "limit"]),
             exact_branch_schema(&properties, &[("surface", "phone"), ("resource", "current_app")], &["session_id"], &["surface", "resource", "session_id"])
@@ -3491,6 +3496,65 @@ mod annotation_tests {
                 )
                 .is_err(),
             "capture_desktop must still reject mixing a window target with a display target"
+        );
+    }
+
+    #[test]
+    fn list_resources_browser_tabs_accepts_limit() {
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+        assert!(
+            registry
+                .validate_arguments(
+                    "list_resources",
+                    &json!({
+                        "surface": "browser",
+                        "resource": "tabs",
+                        "target": "user_chrome",
+                        "limit": 20
+                    })
+                )
+                .is_ok(),
+            "browser tabs listing must accept a top-level limit"
+        );
+    }
+
+    #[test]
+    fn observe_browser_branch_rejects_capture_fields() {
+        // Regression guard: capture_screen/screenshot_delivery are desktop-only.
+        // observe returns structure; a browser-tab image comes from the separate
+        // capture_screen tool, so the browser branch must keep rejecting them.
+        let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+        assert!(
+            registry
+                .validate_arguments("observe", &json!({"surface": "browser", "tab_id": "tab-1"}))
+                .is_ok(),
+            "a plain browser observe must be accepted"
+        );
+        assert!(
+            registry
+                .validate_arguments(
+                    "observe",
+                    &json!({
+                        "surface": "browser",
+                        "tab_id": "tab-1",
+                        "capture_screen": "if_changed"
+                    })
+                )
+                .is_err(),
+            "the browser observe branch must reject capture_screen"
+        );
+        assert!(
+            registry
+                .validate_arguments(
+                    "observe",
+                    &json!({
+                        "surface": "browser",
+                        "tab_id": "tab-1",
+                        "screenshot_delivery": "path"
+                    })
+                )
+                .is_err(),
+            "the browser observe branch must reject screenshot_delivery"
         );
     }
 
