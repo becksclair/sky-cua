@@ -12,6 +12,31 @@ use zbus::zvariant::{OwnedFd, OwnedObjectPath};
 
 const BACKEND_NAME: &str = "systemd-logind+screensaver";
 
+/// Upper bound on how long `ensure` waits for a requested unlock to actually
+/// take effect (LockedHint -> false) before proceeding anyway.
+const UNLOCK_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2500);
+/// Poll cadence while waiting for the lock to clear.
+const UNLOCK_SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Poll `LockedHint` until the session reports unlocked or the settle timeout
+/// elapses. Returns whether the lock cleared. A read error is treated as "not
+/// yet cleared", so the loop keeps polling until the deadline; the caller then
+/// degrades to proceeding, since unlock was already requested.
+async fn wait_for_unlock(connection: &zbus::Connection, session_path: &OwnedObjectPath) -> bool {
+    let deadline = tokio::time::Instant::now() + UNLOCK_SETTLE_TIMEOUT;
+    loop {
+        // `Ok(false)` means unlocked; `Ok(true)` and any read error are treated
+        // as still-locked and keep the loop polling until the deadline.
+        if let Ok(false) = logind::locked_hint(connection, session_path).await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(UNLOCK_SETTLE_POLL).await;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionPresenceManager {
     inner: Arc<RwLock<SessionPresenceState>>,
@@ -41,15 +66,32 @@ impl SessionPresenceManager {
         if intent.unlock {
             match ensure_logind_session(&mut state).await {
                 Ok(session) if session.locked => {
-                    match logind::unlock_session(
-                        &system_connection(&mut state)
-                            .await
-                            .expect("connection already resolved"),
-                        &session.id,
-                    )
-                    .await
-                    {
-                        Ok(()) => details.push(format!("requested UnlockSession({})", session.id)),
+                    let connection = system_connection(&mut state)
+                        .await
+                        .expect("connection already resolved");
+                    match logind::unlock_session(&connection, &session.id).await {
+                        Ok(()) => {
+                            // UnlockSession returns as soon as logind accepts the
+                            // request, but kscreenlocker drops the lock (and the
+                            // compositor un-occludes windows) asynchronously. A
+                            // browser/desktop op dispatched immediately after would
+                            // still race a frozen, occluded render process. Wait,
+                            // bounded, for LockedHint to actually clear so the very
+                            // next op sees a live surface.
+                            let cleared = wait_for_unlock(&connection, &session.path).await;
+                            if cleared {
+                                details.push(format!(
+                                    "unlocked session {} (lock cleared)",
+                                    session.id
+                                ));
+                            } else {
+                                details.push(format!(
+                                    "requested UnlockSession({}); lock did not clear within {}ms",
+                                    session.id,
+                                    UNLOCK_SETTLE_TIMEOUT.as_millis()
+                                ));
+                            }
+                        }
                         Err(error) => details.push(error.message),
                     }
                 }

@@ -77,6 +77,15 @@ disabled. `Status` requests remain available and report support honestly. `.mcp.
 the installed MCP env allowlists so host-launched clients can forward the
 opt-in.
 
+The compiled daemon default is `false`, but the installer's `McpLaunchPolicy`
+emits `SKY_CUA_PRESENCE_ENABLED=1` into every deployed host's MCP env block
+(OpenClaw codex-home `config.toml`, opencode, Claude Code/Desktop, pi, and the
+generated `.mcp.json`). So a normally installed sky-cua host has automatic
+presence **on by default** — the agent can drive a desktop that idle-locked
+mid-session instead of going blind against the lock screen. Pass
+`--presence off` at install time (or set `SKY_CUA_PRESENCE_ENABLED=0` in the
+host env block) to keep a deployed host opt-out.
+
 Per-platform capability matrix:
 
 | Platform | Backend name | Unlock | Lock inhibit | Suspend inhibit | Status |
@@ -90,13 +99,22 @@ Per-platform capability matrix:
 
 The explicit tools and CLI commands are direct control surfaces. `hold_session`
 can request unlock and either inhibitor; `unlock_session` always requests
-unlock first; `release_session` drops inhibitors and locks only when `relock`
+unlock first. When an unlock is requested against a session whose `LockedHint`
+is true, the Linux backend does not return the moment logind accepts
+`UnlockSession` — kscreenlocker drops the lock and the compositor un-occludes
+windows asynchronously, so a browser or desktop op dispatched immediately after
+would still race a frozen, occluded render process (observed as a CDP
+`Page.enable` timeout on browser tabs). Instead it polls `LockedHint` until the
+lock clears, bounded to ~2.5s, so the next op sees a live surface; if the lock
+does not clear in time it proceeds anyway and the status detail records that.
+`release_session` drops inhibitors and locks only when `relock`
 is true; `session_presence_status` is read-only. Responses always use
 `SessionPresenceStatus` so callers can branch on structured fields instead of
 parsing text.
 
-The automatic daemon lifecycle is default-off. When
-`SKY_CUA_PRESENCE_ENABLED` is true, `ServiceDaemon::handle` tries to acquire
+The automatic daemon lifecycle is gated on `SKY_CUA_PRESENCE_ENABLED` (compiled
+default off, but the installer sets it on for deployed hosts as noted above).
+When it is true, `ServiceDaemon::handle` tries to acquire
 presence before desktop-affecting requests. Health, doctor,
 `agent_cursor_status`, explicit session-presence requests, browser status, and
 browser tab listing do not trigger the automatic hold. A daemon-held boolean

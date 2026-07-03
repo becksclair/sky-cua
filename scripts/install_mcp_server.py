@@ -72,10 +72,12 @@ CLAUDE_CODE_ALLOW_RULES = ("mcp__sky-cua", "mcp__sky-cua__*")
 AT_SPI_RESTART_TIMEOUT_SECONDS = 5
 MCP_BROWSER_EVAL_ENV = "SKY_CUA_BROWSER_EVAL"
 MCP_MODEL_SUPPORTS_IMAGES_ENV = "SKY_CUA_MODEL_SUPPORTS_IMAGES"
+MCP_PRESENCE_ENABLED_ENV = "SKY_CUA_PRESENCE_ENABLED"
 MCP_LAUNCH_POLICY_STATE = "mcp-launch-policy.json"
 RECOGNIZED_MCP_LAUNCH_ENV = (
     MCP_BROWSER_EVAL_ENV,
     MCP_MODEL_SUPPORTS_IMAGES_ENV,
+    MCP_PRESENCE_ENABLED_ENV,
 )
 
 
@@ -83,6 +85,7 @@ RECOGNIZED_MCP_LAUNCH_ENV = (
 class McpLaunchPolicy:
     browser_eval: str | None = None
     model_supports_images: str | None = None
+    presence_enabled: str | None = None
 
     def env(self) -> dict[str, str]:
         env: dict[str, str] = {}
@@ -90,6 +93,10 @@ class McpLaunchPolicy:
             env[MCP_BROWSER_EVAL_ENV] = self.browser_eval
         if self.model_supports_images is not None:
             env[MCP_MODEL_SUPPORTS_IMAGES_ENV] = self.model_supports_images
+        # Session presence (auto-unlock + lock/suspend inhibitors) is ON by
+        # default for every deployed host; unset or "on" both emit "1". Disable
+        # per-host with `--presence off` or SKY_CUA_PRESENCE_ENABLED=off.
+        env[MCP_PRESENCE_ENABLED_ENV] = "0" if self.presence_enabled == "off" else "1"
         return env
 
 
@@ -138,6 +145,11 @@ def load_persisted_mcp_launch_policy(target_dir: Path) -> McpLaunchPolicy | None
             if raw.get("model_supports_images") is not None
             else None
         ),
+        presence_enabled=(
+            normalize_on_off(str(raw["presence_enabled"]), source=f"{path}:presence_enabled")
+            if raw.get("presence_enabled") is not None
+            else None
+        ),
     )
 
 
@@ -146,6 +158,7 @@ def resolve_mcp_launch_policy(
     *,
     browser_eval: str | None = None,
     model_supports_images: str | None = None,
+    presence_enabled: str | None = None,
     environ: dict[str, str] | None = None,
 ) -> McpLaunchPolicy:
     """Resolve launch policy per field: CLI, persisted state, env, defaults."""
@@ -162,6 +175,11 @@ def resolve_mcp_launch_policy(
             env[MCP_MODEL_SUPPORTS_IMAGES_ENV], source=MCP_MODEL_SUPPORTS_IMAGES_ENV
         )
         if MCP_MODEL_SUPPORTS_IMAGES_ENV in env
+        else None
+    )
+    env_presence_enabled = (
+        normalize_on_off(env[MCP_PRESENCE_ENABLED_ENV], source=MCP_PRESENCE_ENABLED_ENV)
+        if MCP_PRESENCE_ENABLED_ENV in env
         else None
     )
 
@@ -184,6 +202,15 @@ def resolve_mcp_launch_policy(
                 else env_model_supports_images
             )
         ),
+        presence_enabled=(
+            normalize_on_off(presence_enabled, source="--presence")
+            if presence_enabled is not None
+            else (
+                persisted.presence_enabled
+                if persisted is not None and persisted.presence_enabled is not None
+                else env_presence_enabled
+            )
+        ),
     )
 
 
@@ -192,6 +219,7 @@ def write_mcp_launch_policy_state(target_dir: Path, policy: McpLaunchPolicy) -> 
     payload = {
         "browser_eval": policy.browser_eval,
         "model_supports_images": policy.model_supports_images,
+        "presence_enabled": policy.presence_enabled,
     }
     write_text_atomically(path, json.dumps(payload, indent=2) + "\n")
     return path
@@ -888,6 +916,7 @@ def install_local_mcp_server(
     input_helper_group: str | None = None,
     browser_eval: str | None = None,
     model_supports_images: str | None = None,
+    presence_enabled: str | None = None,
 ) -> tuple[Path, Path]:
     """Install runtime binaries and host config; optionally restart installed runtimes.
 
@@ -900,6 +929,7 @@ def install_local_mcp_server(
         target_dir,
         browser_eval=browser_eval,
         model_supports_images=model_supports_images,
+        presence_enabled=presence_enabled,
     )
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1048,6 +1078,15 @@ def main() -> int:
         help="Persist browser_eval availability for launched servers.",
     )
     parser.add_argument(
+        "--presence",
+        choices=("on", "off"),
+        default=None,
+        help=(
+            "Persist session-presence (auto-unlock) for launched servers. "
+            "Deploys default to on; pass off to disable."
+        ),
+    )
+    parser.add_argument(
         "--model-supports-images",
         choices=("true", "false"),
         default=None,
@@ -1109,6 +1148,7 @@ def main() -> int:
         input_helper_group=args.input_helper_group,
         browser_eval=args.browser_eval,
         model_supports_images=args.model_supports_images,
+        presence_enabled=args.presence,
     )
 
     if args.bin_dir:

@@ -591,6 +591,7 @@ def test_mcp_launch_policy_uses_cli_persisted_env_default_precedence(
                 "tool_profile": "compact",
                 "browser_eval": "on",
                 "model_supports_images": "false",
+                "presence_enabled": "on",
             }
         ),
         encoding="utf-8",
@@ -598,14 +599,39 @@ def test_mcp_launch_policy_uses_cli_persisted_env_default_precedence(
     monkeypatch.setenv("SKY_CUA_MCP_TOOL_PROFILE", "legacy")
     monkeypatch.setenv(install_mcp_server.MCP_BROWSER_EVAL_ENV, "off")
     monkeypatch.setenv(install_mcp_server.MCP_MODEL_SUPPORTS_IMAGES_ENV, "true")
+    monkeypatch.setenv(install_mcp_server.MCP_PRESENCE_ENABLED_ENV, "off")
 
     policy = install_mcp_server.resolve_mcp_launch_policy(
         target_dir,
         browser_eval="off",
+        presence_enabled="off",
     )
 
     assert policy.browser_eval == "off"
     assert policy.model_supports_images == "false"
+    # CLI --presence off wins over persisted "on" and env "off".
+    assert policy.presence_enabled == "off"
+
+
+def test_mcp_launch_policy_presence_defaults_on_and_round_trips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    monkeypatch.delenv(install_mcp_server.MCP_PRESENCE_ENABLED_ENV, raising=False)
+
+    # No CLI, no persisted state, no env: presence stays unset but env() emits "1".
+    default_policy = install_mcp_server.resolve_mcp_launch_policy(target_dir)
+    assert default_policy.presence_enabled is None
+    assert default_policy.env()[install_mcp_server.MCP_PRESENCE_ENABLED_ENV] == "1"
+
+    # Explicit off emits "0" and survives a persist round-trip.
+    off_policy = install_mcp_server.McpLaunchPolicy(presence_enabled="off")
+    assert off_policy.env()[install_mcp_server.MCP_PRESENCE_ENABLED_ENV] == "0"
+    install_mcp_server.write_mcp_launch_policy_state(target_dir, off_policy)
+    reloaded = install_mcp_server.resolve_mcp_launch_policy(target_dir)
+    assert reloaded.presence_enabled == "off"
+    assert reloaded.env()[install_mcp_server.MCP_PRESENCE_ENABLED_ENV] == "0"
 
 
 def test_mcp_launch_policy_rejects_invalid_recognized_env(
@@ -631,6 +657,7 @@ def test_generic_mcp_config_pins_canonical_launch_policy(tmp_path: Path) -> None
     assert "SKY_CUA_MCP_TOOL_PROFILE" not in server["env"]  # type: ignore[operator]
     assert server["env"][install_mcp_server.MCP_BROWSER_EVAL_ENV] == "on"  # type: ignore[index]
     assert server["env"][install_mcp_server.MCP_MODEL_SUPPORTS_IMAGES_ENV] == "false"  # type: ignore[index]
+    assert server["env"][install_mcp_server.MCP_PRESENCE_ENABLED_ENV] == "1"  # type: ignore[index]
     for name in install_mcp_server.RECOGNIZED_MCP_LAUNCH_ENV:
         assert name in server["env_vars"]  # type: ignore[operator]
 
@@ -649,6 +676,7 @@ def test_pi_wrapper_exports_canonical_launch_policy(tmp_path: Path) -> None:
     assert "SKY_CUA_MCP_TOOL_PROFILE" not in wrapper_text
     assert "export SKY_CUA_BROWSER_EVAL=on\n" in wrapper_text
     assert "export SKY_CUA_MODEL_SUPPORTS_IMAGES=false\n" in wrapper_text
+    assert "export SKY_CUA_PRESENCE_ENABLED=1\n" in wrapper_text
 
 
 def test_codex_exec_plugin_mention_rejects_stale_compat_root(tmp_path: Path) -> None:
