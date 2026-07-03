@@ -918,9 +918,11 @@ mod tests {
             .iter()
             .map(|key| (*key, std::env::var_os(key)))
             .collect::<Vec<_>>();
+        let old_tmux = std::env::var_os("TMUX");
         let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
         let old_ssh_tty = std::env::var_os("SSH_TTY");
         unsafe {
+            std::env::remove_var("TMUX");
             std::env::remove_var("SSH_CONNECTION");
             std::env::remove_var("SSH_TTY");
             std::env::remove_var("DBUS_SESSION_BUS_ADDRESS");
@@ -935,6 +937,7 @@ mod tests {
         for (key, value) in old_values {
             restore_env(key, value);
         }
+        restore_env("TMUX", old_tmux);
         restore_env("SSH_CONNECTION", old_ssh_connection);
         restore_env("SSH_TTY", old_ssh_tty);
         assert!(
@@ -950,9 +953,11 @@ mod tests {
             .iter()
             .map(|key| (*key, std::env::var_os(key)))
             .collect::<Vec<_>>();
+        let old_tmux = std::env::var_os("TMUX");
         let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
         let old_ssh_tty = std::env::var_os("SSH_TTY");
         unsafe {
+            std::env::remove_var("TMUX");
             std::env::remove_var("SSH_CONNECTION");
             std::env::remove_var("SSH_TTY");
             std::env::set_var("DISPLAY", "localhost:10.0");
@@ -966,6 +971,7 @@ mod tests {
         for (key, value) in old_values {
             restore_env(key, value);
         }
+        restore_env("TMUX", old_tmux);
         restore_env("SSH_CONNECTION", old_ssh_connection);
         restore_env("SSH_TTY", old_ssh_tty);
         assert!(
