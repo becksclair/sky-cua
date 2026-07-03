@@ -18,6 +18,46 @@ BROWSER_SELECTION_ENV = "SKY_CUA_BROWSER"
 SKY_CUA_SKILLS = ("computer-use", "browser-use", "phone-use")
 DEFAULT_LOCAL_INSTALL_DIR = Path.home() / ".local" / "share" / "sky-cua"
 MCP_HOST_CHOICES = ("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw")
+GATEWAY_AUTH_ENV_KEYS = ("OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD")
+
+
+def resolve_gateway_auth_env(openclaw_dir: Path | None) -> dict[str, str]:
+    """Resolve gateway auth credentials from the systemd env file, as a fallback.
+
+    `openclaw mcp set` / `openclaw mcp reload` talk to the running Gateway, and
+    when `gateway.auth` uses a secret reference the CLI needs
+    OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD in its environment.
+    Interactive shells that already sourced the gateway env have them, but a
+    plain install shell (or a service context) does not — the gateway keeps
+    them in `<state_dir>/gateway.systemd.env` (the same file the gateway
+    systemd unit loads via `EnvironmentFile=`). Gateway auth is token OR
+    password, so if EITHER key is already set in the environment the shell is
+    assumed authenticated and nothing is filled (an explicitly-set credential
+    always wins); otherwise whatever auth keys the file provides are returned.
+    The file is never written or logged, and only the two auth keys are read.
+    """
+    if any(os.environ.get(key) for key in GATEWAY_AUTH_ENV_KEYS):
+        return {}
+    state_dir = (openclaw_dir or (Path.home() / ".openclaw")).expanduser()
+    env_file = state_dir / "gateway.systemd.env"
+    if not env_file.exists():
+        return {}
+    resolved: dict[str, str] = {}
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        name, sep, value = line.partition("=")
+        if not sep:
+            continue
+        if name.strip() in GATEWAY_AUTH_ENV_KEYS and value:
+            resolved[name.strip()] = _unquote_env_value(value.strip())
+    return resolved
+
+
+def _unquote_env_value(value: str) -> str:
+    """Strips one matching pair of single or double quotes (systemd
+    ``EnvironmentFile`` permits either), leaving unquoted values untouched."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
 
 
 def subprocess_error_detail(error: Exception) -> str:

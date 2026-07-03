@@ -13,7 +13,7 @@ from pathlib import Path
 
 import _install_shared
 from _install_shared import (
-    install_sky_cua_skills,
+    resolve_gateway_auth_env,
     restore_text_path_snapshot,
     snapshot_text_path,
     subprocess_error_detail,
@@ -41,7 +41,7 @@ def install_openclaw(
     resource_root: Path | None = None,
     launch_env: dict[str, str] | None = None,
 ) -> Path:
-    """Register sky-cua with OpenClaw and copy sky-cua skills into its workspace."""
+    """Register sky-cua with OpenClaw."""
     openclaw_state_dir = (openclaw_dir or DEFAULT_OPENCLAW_DIR).expanduser().resolve()
     openclaw_state_dir.mkdir(parents=True, exist_ok=True)
     root = (resource_root or _install_shared.REPO_ROOT).resolve()
@@ -73,6 +73,11 @@ def install_openclaw(
         json.dumps(server, separators=(",", ":")),
     ]
     env = os.environ.copy()
+    # `openclaw mcp set` / `mcp reload` authenticate to the running Gateway; a
+    # plain install shell rarely exports the gateway credentials, so fill them
+    # in from the gateway env file (a value already in the environment wins).
+    # Without this, the CLI can fail against a password-protected gateway.
+    env.update(resolve_gateway_auth_env(openclaw_state_dir))
     env["OPENCLAW_STATE_DIR"] = str(openclaw_state_dir)
     env["OPENCLAW_CONFIG_PATH"] = str(openclaw_state_dir / "openclaw.json")
     codex_home_snapshots = snapshot_openclaw_agent_codex_mcp_server_updates(codex_home_updates)
@@ -88,8 +93,8 @@ def install_openclaw(
             restore_text_path_snapshot(path, snippet_snapshot)
 
     # Catch BaseException so an operator Ctrl-C mid-registration still rolls
-    # back; after the registration commits, post-commit failures (reload,
-    # skills copy) deliberately keep the consistent committed state.
+    # back; after the registration commits, a post-commit failure (reload)
+    # deliberately keeps the consistent committed state.
     try:
         apply_openclaw_agent_codex_mcp_server_updates(
             codex_home_updates, codex_home_snapshots, emit_messages=False
@@ -111,7 +116,6 @@ def install_openclaw(
         registration_committed = True
         print_openclaw_agent_codex_mcp_server_updates(codex_home_updates)
         reload_openclaw_mcp_runtimes(openclaw_bin, env)
-        install_sky_cua_skills(openclaw_state_dir / "workspace" / "skills")
     except BaseException:
         if not registration_committed:
             rollback()
@@ -365,7 +369,10 @@ def reload_openclaw_mcp_runtimes(openclaw_bin: str, env: dict[str, str]) -> None
 
     Without this, a running OpenClaw gateway keeps serving the previously
     cached sky-cua process and config until restarted. Reload failures are
-    reported but non-fatal: the registration itself already succeeded.
+    reported but non-fatal: the registration itself already succeeded. This
+    includes a reload that cannot even spawn the openclaw binary (OSError /
+    FileNotFoundError) — the committed registration must not be undone by a
+    best-effort reload step.
     """
     command = [openclaw_bin, "mcp", "reload"]
     try:
@@ -376,7 +383,7 @@ def reload_openclaw_mcp_runtimes(openclaw_bin: str, env: dict[str, str]) -> None
             timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
             capture_output=True,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:
         detail = subprocess_error_detail(error)
         print(
             f"warning: openclaw mcp reload failed ({error}{detail}); "

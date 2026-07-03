@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from _agent_mcp_smoke import make_artifact_dir
+from _install_shared import resolve_gateway_auth_env
 from _openclaw_install import CODEX_TOOLS_APPROVAL_MODE
 
 SERVER_NAME = "sky_cua"
@@ -130,28 +131,10 @@ def _timeout_output_text(captured: str | bytes | None) -> str:
     return captured
 
 
-def gateway_auth_environment(openclaw_dir: Path | None) -> dict[str, str]:
-    """Resolve gateway credentials for `openclaw agent` from the systemd env file.
-
-    `openclaw agent` talks to the running Gateway, and when gateway.auth uses a
-    secret reference the CLI needs OPENCLAW_GATEWAY_TOKEN or
-    OPENCLAW_GATEWAY_PASSWORD in its environment. Interactive shells usually do
-    not export these, but gateway deployments keep them in
-    <state_dir>/gateway.systemd.env. Values already present in the environment
-    win; the file is only a fallback and is never written or logged.
-    """
-    if os.environ.get("OPENCLAW_GATEWAY_TOKEN") or os.environ.get("OPENCLAW_GATEWAY_PASSWORD"):
-        return {}
-    state_dir = (openclaw_dir or (Path.home() / ".openclaw")).expanduser()
-    env_file = state_dir / "gateway.systemd.env"
-    if not env_file.exists():
-        return {}
-    resolved: dict[str, str] = {}
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        name, _, value = line.partition("=")
-        if name in ("OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD") and value:
-            resolved[name] = value.strip().strip('"')
-    return resolved
+# `openclaw agent` needs the gateway auth credentials the same way the
+# installer's `mcp set`/`mcp reload` do; both resolve them from the gateway env
+# file via the shared helper. Re-exported under the historical name.
+gateway_auth_environment = resolve_gateway_auth_env
 
 
 def parse_json_output(stdout: str, stage: str) -> dict[str, Any]:

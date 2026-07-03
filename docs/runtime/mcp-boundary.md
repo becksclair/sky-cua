@@ -161,10 +161,10 @@ call; if they do not, reload the host session. For Pi, run `/reload` or restart
 Pi.
 
 `--host openclaw` registers `sky_cua` through `openclaw mcp set`, targeting
-`~/.openclaw/openclaw.json` by default, runs `openclaw mcp reload` so a live
-gateway drops its cached MCP runtime, and copies the packaged `computer-use`
-and `browser-use` skills into `~/.openclaw/workspace/skills`. Use
-`--openclaw-dir` only for profile/test state directories.
+`~/.openclaw/openclaw.json` by default, and runs `openclaw mcp reload` so a
+live gateway drops its cached MCP runtime. The workspace-skills copy into
+`~/.openclaw/workspace/skills` was retired 2026-07-03. Use `--openclaw-dir`
+only for profile/test state directories.
 
 OpenClaw's native codex runtime projects `mcp.servers.sky_cua` into
 Codex-native `mcp_servers` thread config on `thread/start`/`thread/resume`.

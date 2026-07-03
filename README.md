@@ -204,8 +204,8 @@ python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host
 
 If the host does not reconnect automatically after the runtime is stopped,
 restart or reload the host session. For Pi, run `/reload` or restart Pi.
-OpenClaw installs through `openclaw mcp set sky_cua <config>` and copies skills
-into `~/.openclaw/workspace/skills`.
+OpenClaw installs through `openclaw mcp set sky_cua <config>`; it no longer
+copies skills into `~/.openclaw/workspace/skills` (retired 2026-07-03).
 
 For production-like Linux GUI and non-Codex harness proof, use the Arch
 `testing-vm` path in `docs/operations/gui-desktop-test-harness.md`. The VM provisioner

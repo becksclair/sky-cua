@@ -26,28 +26,24 @@ There is no marketplace and no publish flow. The two distribution lanes are:
 
 ## Agent skills sync
 
-For any deploy or publish lane, also replace the bundled sky-cua skills in
-OpenClaw's workspace skill root. This keeps OpenClaw agents on the same
-browser/computer-use/phone-use instructions as the deployed plugin.
-
-Also link the repo-local sky-cua skills into the global agent skill root:
+For any deploy or publish lane, also link the repo-local sky-cua skills into
+the global agent skill root:
 `~/.agents/skills/{computer-use,browser-use,phone-use}` -> `skills/*`. This
 keeps opencode/oracle/worker-style agents on the current repo skill text,
-including `phone-use`.
+including `phone-use`. The links point at the checkout the sync ran from — a
+deploy from a worktree leaves them at the worktree path, so rerun from the
+main checkout to repoint them.
 
-Run after the deploy/publish command succeeds. The helper copies from the actual
-bundle payload at `dist/plugin/sky-cua/skills` for OpenClaw, so `--no-build`
-lanes sync the existing bundle there; global agent skills are symlinks to the
-repo-local skill directories:
+Run after the deploy/publish command succeeds:
 
 ```bash
-python3 scripts/sync_openclaw_workspace_skills.py
+python3 scripts/sync_agent_skills.py
 ```
 
-Only replace the sky-cua-owned skill folders above; do not delete unrelated
-skills in `~/.openclaw/workspace/skills` or `~/.agents/skills`. The helper
-stages OpenClaw copies first and rolls back prior destinations if replacement
-fails.
+Only the sky-cua-owned skill links above are replaced; unrelated skills in
+`~/.agents/skills` are never touched. (The former OpenClaw workspace-skills
+copy into `~/.openclaw/workspace/skills` was retired 2026-07-03 — OpenClaw no
+longer reads bundled copies from there.)
 
 ## Lanes
 
@@ -67,11 +63,11 @@ below), so the bundled companion stays current without a manual Gradle step.
 # Build + deploy locally (also refreshes the installed MCP runtime, and rebuilds
 # the phone-companion APK when its sources changed and the Android toolchain is present)
 python3 scripts/deploy_plugin.py
-python3 scripts/sync_openclaw_workspace_skills.py
+python3 scripts/sync_agent_skills.py
 
 # Also rebuild and reload the KWin agent-cursor effect (Linux/KDE only)
 python3 scripts/deploy_plugin.py --kwin-effect
-python3 scripts/sync_openclaw_workspace_skills.py
+python3 scripts/sync_agent_skills.py
 
 # Force a companion rebuild, or skip it entirely
 python3 scripts/deploy_plugin.py --force-companion
@@ -79,7 +75,7 @@ python3 scripts/deploy_plugin.py --no-companion
 
 # Install existing bundle without rebuilding (skips the companion lane too)
 python3 scripts/deploy_plugin.py --no-build
-python3 scripts/sync_openclaw_workspace_skills.py
+python3 scripts/sync_agent_skills.py
 ```
 
 ### Android phone companion
@@ -174,7 +170,7 @@ Run the narrowest relevant check set. Only run root checks when shared contracts
 
 ```bash
 # Rust
-cargo fmt --check && cargo test
+cargo fmt --check && cargo nextest run
 
 # Python
 uv run ruff format --check scripts && uv run ruff check scripts && uv run basedpyright && uv run pytest

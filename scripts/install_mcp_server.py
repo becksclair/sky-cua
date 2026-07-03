@@ -1035,8 +1035,7 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
         print(f"  1. Snippet written for inspection: {config_path}")
         print("  2. sky_cua was registered with: openclaw mcp set sky_cua <config>")
         print("     and cached MCP runtimes were reloaded with: openclaw mcp reload")
-        print("  3. sky-cua skills were copied into the configured OpenClaw workspace")
-        print("  4. Verify the deployment: python3 scripts/live_openclaw_mcp_smoke.py")
+        print("  3. Verify the deployment: python3 scripts/live_openclaw_mcp_smoke.py")
         print("     (add --agent-turn to also run a live agent turn through the Gateway)")
     else:
         print("\nNext steps for generic MCP hosts:")

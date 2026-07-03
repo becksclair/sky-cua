@@ -14,16 +14,13 @@ import _openclaw_install
 from _install_shared import BROWSER_SELECTION_ENV, SKY_CUA_SKILLS
 
 
-def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
+def test_openclaw_install_sets_mcp_config_without_touching_workspace_skills(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(BROWSER_SELECTION_ENV, "brave")
     repo_root = tmp_path / "repo"
-    for skill_name in SKY_CUA_SKILLS:
-        skill_dir = repo_root / "skills" / skill_name
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+    repo_root.mkdir()
     monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
     calls: list[dict[str, object]] = []
 
@@ -83,11 +80,12 @@ def test_openclaw_install_sets_mcp_config_and_copies_sky_cua_skills(
     reload_env = cast(dict[str, str], calls[1]["env"])
     assert reload_env["OPENCLAW_STATE_DIR"] == str(openclaw_dir)
 
-    for skill_name in SKY_CUA_SKILLS:
-        assert (openclaw_dir / "workspace" / "skills" / skill_name / "SKILL.md").read_text(
-            encoding="utf-8"
-        ) == f"# {skill_name}\n"
-    assert not (openclaw_dir / "workspace" / "skills" / SKY_CUA_SKILLS[0] / "obsolete.md").exists()
+    # The workspace-skills copy was retired (2026-07-03): the installer must
+    # leave any pre-existing workspace skills exactly as it found them.
+    assert (openclaw_dir / "workspace" / "skills" / SKY_CUA_SKILLS[0] / "obsolete.md").read_text(
+        encoding="utf-8"
+    ) == "old"
+    assert not (openclaw_dir / "workspace" / "skills" / SKY_CUA_SKILLS[0] / "SKILL.md").exists()
 
 
 def test_openclaw_bundle_mode_pins_bundle_resource_root(
@@ -466,9 +464,120 @@ def test_openclaw_install_registration_error_preserves_broken_snippet_symlink(
     assert config_path.read_text(encoding="utf-8") == original_config
 
 
-def test_openclaw_install_keeps_codex_home_pin_after_registration_succeeds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_openclaw_install_env_carries_gateway_credentials_from_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # A plain install shell rarely exports the gateway password; the installer
+    # must fill it in from the gateway env file so `mcp set` / `mcp reload` can
+    # authenticate to a password-protected gateway.
+    monkeypatch.delenv("OPENCLAW_GATEWAY_PASSWORD", raising=False)
+    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    openclaw_dir.mkdir(parents=True)
+    (openclaw_dir / "gateway.systemd.env").write_text(
+        'OPENCLAW_GATEWAY_PASSWORD="s3cret"\nOTHER_KEY=ignored\n', encoding="utf-8"
+    )
+    envs: list[dict[str, str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+        timeout: int,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        envs.append(env)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(_openclaw_install.subprocess, "run", fake_run)
+
+    _openclaw_install.install_openclaw(
+        target_dir,
+        target_dir / "bin" / "sky-cua-client",
+        openclaw_dir=openclaw_dir,
+        openclaw_bin="openclaw",
+    )
+
+    # Both the `mcp set` and `mcp reload` subprocesses get the password, and
+    # only the two auth keys are lifted from the file.
+    assert envs, "no openclaw subprocess was run"
+    for env in envs:
+        assert env["OPENCLAW_GATEWAY_PASSWORD"] == "s3cret"
+        assert "OTHER_KEY" not in env
+
+
+def test_resolve_gateway_auth_env_unquotes_single_and_double_and_bare(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # systemd EnvironmentFile permits single or double quotes; both must be
+    # stripped, and a bare value left untouched.
+    import _install_shared
+
+    monkeypatch.delenv("OPENCLAW_GATEWAY_PASSWORD", raising=False)
+    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+    openclaw_dir = tmp_path / "openclaw"
+    openclaw_dir.mkdir(parents=True)
+    (openclaw_dir / "gateway.systemd.env").write_text(
+        "OPENCLAW_GATEWAY_PASSWORD='sng-quoted'\nOPENCLAW_GATEWAY_TOKEN=bare-token\n",
+        encoding="utf-8",
+    )
+    resolved = _install_shared.resolve_gateway_auth_env(openclaw_dir)
+    assert resolved == {
+        "OPENCLAW_GATEWAY_PASSWORD": "sng-quoted",
+        "OPENCLAW_GATEWAY_TOKEN": "bare-token",
+    }
+
+
+def test_openclaw_install_env_keeps_existing_gateway_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A credential already exported by the shell always wins over the file.
+    monkeypatch.setenv("OPENCLAW_GATEWAY_PASSWORD", "from-shell")
+    openclaw_dir = tmp_path / "openclaw"
+    openclaw_dir.mkdir(parents=True)
+    (openclaw_dir / "gateway.systemd.env").write_text(
+        'OPENCLAW_GATEWAY_PASSWORD="from-file"\n', encoding="utf-8"
+    )
+    envs: list[dict[str, str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+        timeout: int,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        envs.append(env)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(_openclaw_install.subprocess, "run", fake_run)
+
+    _openclaw_install.install_openclaw(
+        tmp_path / "installed",
+        tmp_path / "installed" / "bin" / "sky-cua-client",
+        openclaw_dir=openclaw_dir,
+        openclaw_bin="openclaw",
+    )
+
+    assert envs
+    assert all(env["OPENCLAW_GATEWAY_PASSWORD"] == "from-shell" for env in envs)
+
+
+def test_openclaw_install_survives_unspawnable_reload_after_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The reload step is best-effort: if the openclaw binary cannot even be
+    # spawned at reload time (OSError / FileNotFoundError), the already-committed
+    # registration must stay committed and the install must complete with a
+    # warning rather than aborting.
     target_dir = tmp_path / "installed"
     openclaw_dir = tmp_path / "openclaw"
     config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
@@ -485,29 +594,31 @@ def test_openclaw_install_keeps_codex_home_pin_after_registration_succeeds(
         capture_output: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         calls.append(command)
+        if "reload" in command:
+            raise FileNotFoundError("openclaw")
         return subprocess.CompletedProcess(command, 0)
 
-    def fail_skill_install(_skills_dir: Path) -> None:
-        raise OSError("skill copy failed")
-
     monkeypatch.setattr(_openclaw_install.subprocess, "run", fake_run)
-    monkeypatch.setattr(_openclaw_install, "install_sky_cua_skills", fail_skill_install)
 
-    with pytest.raises(OSError, match="skill copy failed"):
-        _openclaw_install.install_openclaw(
-            target_dir,
-            target_dir / "bin" / "sky-cua-client",
-            openclaw_dir=openclaw_dir,
-            openclaw_bin="openclaw",
-        )
+    # No exception: the unspawnable reload is swallowed as non-fatal.
+    config = _openclaw_install.install_openclaw(
+        target_dir,
+        target_dir / "bin" / "sky-cua-client",
+        openclaw_dir=openclaw_dir,
+        openclaw_bin="openclaw",
+    )
 
+    assert config == target_dir / "openclaw_mcp.json"
     assert len(calls) == 2
     assert calls[0][:4] == ["openclaw", "mcp", "set", "sky_cua"]
     assert calls[1] == ["openclaw", "mcp", "reload"]
+    # Registration committed: the snippet and the codex-home pin both persist.
     assert (target_dir / "openclaw_mcp.json").exists()
     config_text = config_path.read_text(encoding="utf-8")
     assert "[mcp_servers.sky_cua]" in config_text
     assert f'command = "{target_dir / "bin" / "sky-cua-client"}"' in config_text
+    # The failure was reported, not silently dropped.
+    assert "openclaw mcp reload failed" in capsys.readouterr().err
 
 
 def test_openclaw_codex_home_toml_escapes_special_path_characters(

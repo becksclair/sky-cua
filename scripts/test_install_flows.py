@@ -506,7 +506,7 @@ def test_generic_mcp_next_steps_document_restart_runtime(
     assert "--restart-runtime" in output
     assert "Restart or reload the OpenCode session" in output
     assert "Restart Pi or run /reload" in output
-    assert "configured OpenClaw workspace" in output
+    assert "live_openclaw_mcp_smoke.py" in output
     assert "~/.openclaw/workspace/skills" not in output
 
 
