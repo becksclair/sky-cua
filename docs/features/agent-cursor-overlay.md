@@ -4,10 +4,16 @@
 
 Shipped on Linux with WGPU-only production visible rendering on Wayland.
 Windows native overlay deferred until a Windows machine is available for live
-proof. Last verified: 2026-06-27 on the operator KDE Wayland desktop (DP-3
-1440p) — the SDF cursor glyph, glyph-anchored smoke aura, and under-smoke
-grounding shadow, captured via the `agent-cursor-debug` skill flow. The prior
-full VM/commit acceptance is 2026-06-25 at commit
+proof. Last verified: 2026-07-02 on the operator KDE Wayland desktop (2560x1440
+logical) — phone-parity cursor motion: the structured
+`layer-shell-motion-glide` smoke passed (snap at A, unsettled strictly-between
+mid-flight via the `motion` echo, exact settle at B), the offline dense-frame
+dump shows the momentum bow on redirect and the ripple-free glide until
+arrival, and the live stills harness captured the glow + glyph + ripple over
+the real desktop (`artifacts/overlay-motion-animations/`). Portal MP4
+recording and VM overlay profiles not yet run for this change. The prior
+glyph/aura/shadow stills acceptance is 2026-06-27; the prior full VM/commit
+acceptance is 2026-06-25 at commit
 `00a4eb657237924c0bb3b15ae1ce72ae4e593e2b`.
 
 ## Summary
@@ -55,6 +61,13 @@ with `event_id`, `sequence`, gesture kind, coordinate space, optional mapping
 id, bounded points, duration, and source action metadata. The host deduplicates
 recent event ids, rejects stale sequences, clamps durations from the generated
 spec, and never replays one-shot events after restart.
+
+Every layer-shell reply (including `ping`) carries an optional structured
+`motion` field — `{ x, y, heading_deg, speed, settled,
+pending_gesture_feedback }` — echoing where the vehicle-steered glyph
+actually is, in the mover's coordinate space. `state` remains the target;
+`motion` is the drawn pose. The field is serde-optional (absent from older
+hosts and the noop backend), so no protocol version bump.
 
 Environment variables (allowlisted in `resources/chrome_preflight.py`):
 
@@ -154,10 +167,15 @@ barrier before reading the desktop. The synthetic screenshot cursor is
 composited regardless.
 
 The visible overlay is explanatory feedback, not an input-dispatch clock.
-Coordinate pointer actions may start a glide when accepted, but backend input
-dispatch follows the existing action contract and is not delayed waiting for
-animation completion. Success effects such as tap ripples are emitted only
-after successful dispatch; failed dispatch cancels pending visual feedback.
+Coordinate pointer actions start a real glide when accepted: the service sends
+the target before input dispatch (`prepare_action_visual`), and the host's
+CPU motion driver sails the glyph toward it with vehicle-steering physics.
+Backend input dispatch follows the existing action contract and is not delayed
+waiting for animation completion — the click lands immediately while the glyph
+may still be in flight. Gesture visual feedback (ripple, press squash, trail)
+is arrival-gated to match the phone: it starts when the glyph settles at the
+gesture point, not when the event arrives. Failed dispatch cancels pending
+visual feedback.
 
 The host lifecycle states are `Hidden`, `VisibleIdle`, `AgentAnimating`,
 `CaptureHidden`, `NoNoFeedbackRenderOnly`, and `FailedOrUnsupported`.
@@ -190,6 +208,59 @@ match the Kotlin reference. `resources/overlay/wgsl_animation_fixtures.json`
 pins the desktop output against the canonical samples, including off-quarter
 phases that distinguish the curves, and the GPU conformance test asserts them
 on a real adapter.
+
+#### Cursor motion (vehicle steering)
+
+The drawn cursor position is owned by a CPU-side motion driver
+(`src/cursor_motion.rs` around the pure math in `src/motion.rs`), an op-for-op
+port of the Android companion's `OverlayMath.Mover2D` and ambient controller
+loop. Every upstream input — `set_cursor` repositioning, gesture events,
+compositor pointer telemetry — only moves a *target*; the vehicle model does
+the sailing with a bounded turn rate (homing-boosted near the target so it
+spirals in instead of orbiting), accel-limited speed with arrive-radius
+deceleration, a settle snap that resets the resting nose heading, and a
+`CURSOR_MAX_STEP_S` dt clamp. A redirect mid-flight keeps its momentum and
+bows the path — the signature curve. Constants come from the shared spec's
+`[shared.motion]` unchanged (dp read as logical px, strict phone parity);
+tuning for large desktops, if ever needed, is a `[desktop.motion]` follow-up.
+
+The driver steps exactly once per rendered frame at the top of
+`LayerShellApp::draw` (both the tick timer and message replies route through
+it), with dt from a monotonic clock and effect timelines on epoch
+milliseconds. It also eases the glyph rotation toward the travel heading
+(`CURSOR_ROTATE_RATE_DEG_PER_S`, active above
+`CURSOR_ROTATE_MIN_SPEED_DP_PER_S`, back to rest when parked; the no-no wiggle
+owns rotation while it plays), ramps the smoke-aura alpha in over ~0.8 s on a
+cold show, arrival-gates gesture feedback
+(`speed == 0 && dist <= GESTURE_ARRIVE_LOGICAL_PX`, feedback clock starts at
+arrival), chases the arc-length head of drag/swipe polylines with full
+steering physics while the trail traces the ideal path (the phone's signature
+pursuit asymmetry), and resamples the trail into `TRAIL_SAMPLES` arc-length
+points per frame. Targets are clamped into output bounds before steering so
+an off-screen gesture target can never wedge the arrival gate open. The
+in-shader drag lerp (`animated_cursor_position`) is retired; the shader draws
+at `frame.cursor.xy` with rotation from `surface_size_px.w` and cloud alpha
+scaling `halo.w`. Capture hides freeze the driver so restore resumes from the
+same pose; plain hides drop the gesture pipeline and re-bloom the aura on the
+next show.
+
+Multi-output rendering treats every output as a window into the shared
+desktop-logical scene (`layer_shell/motion_adapter.rs`): the mover integrates
+in global logical space, and the glyph, ripple, and trail are handed to every
+output they reach — each translated (unclipped) into that output's local
+coordinates while the WGSL clips per-pixel. A glide or a boundary-spanning
+gesture therefore renders continuously across a monitor seam, following the
+compositor's arrangement (logical positions), instead of clipping at an edge
+and popping onto the neighbour. Because each surface applies its own integer
+`render_scale`, outputs at different scales stay visually continuous across the
+seam; the glyph-visible flag (`flags.x`) tracks cursor presence only, so an
+output that receives a gesture scene but not the cursor draws the ripple/trail
+without a stray glyph. All logical-px geometry lanes — cursor footprint,
+trail stroke, ripple radii/stroke, and the no-no halo radius — scale with the
+buffer, so effects keep their authored size on HiDPI / fractionally-scaled
+outputs. Cheap per-output culls (footprint reach for the glyph, ripple-radius
+reach for the scene) keep the continuous per-frame shader work on the one or
+two outputs actually touched.
 
 The ambient edge glow is gated on the agent-in-control lease (`flags.w`), the
 desktop analogue of the Android companion's `glowActive`: it lights while the
@@ -278,7 +349,15 @@ other.
   lives in `overlay/cursor_geometry.rs` and gesture construction in
   `overlay/gesture.rs`
 - `crates/sky-cua-overlay-host/` — overlay host crate
-  - `src/layer_shell.rs` — generic Wayland layer-shell backend (KWin, Hyprland)
+  - `src/layer_shell.rs` — generic Wayland layer-shell backend (KWin, Hyprland);
+    submodules `layer_shell/geometry.rs` (event-invalidated per-output geometry
+    snapshots so the frame loop never clones `OutputInfo`),
+    `layer_shell/motion_adapter.rs` (motion-frame → per-layer scene mapping),
+    and `layer_shell/wayland.rs` (surface creation + SCTK handlers)
+  - `src/motion.rs` — pure vehicle-steering math (`Mover2D`, angle/path
+    helpers), op-for-op port of Android `OverlayMath`
+  - `src/cursor_motion.rs` — the stateful `CursorMotionDriver` (target
+    precedence, arrival gate, rotation easing, cloud bloom, capture freeze)
   - `src/renderer/` — WGPU renderer, effect scene, uniform/storage buffer ABI,
     WGSL shader source, and offscreen/conformance tests
   - `src/system_cursor.rs` — system cursor adapter trait
@@ -299,14 +378,45 @@ Unit and crate-level tests:
 
 ```bash
 cargo fmt --check
-cargo test
+cargo nextest run
+uv run python scripts/generate_overlay_spec.py --check
+uv run python scripts/generate_motion_fixtures.py --check
 uv run ruff format --check scripts
 uv run ruff check scripts
 uv run basedpyright
-uv run pytest scripts/test_agent_cursor_smokes.py scripts/test_overlay_pointer_animations.py scripts/test_overlay_spec_codegen.py
+uv run pytest scripts/test_agent_cursor_smokes.py scripts/test_overlay_pointer_animations.py scripts/test_overlay_motion_animations.py scripts/test_generate_motion_fixtures.py scripts/test_overlay_spec_codegen.py
 cd android/phone-companion && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_SDK_ROOT="$HOME/Android/Sdk" ./gradlew :app:testDebugUnitTest --offline
 python3 scripts/build_plugin.py
 ```
+
+Cursor-motion parity and evidence:
+
+- Cross-language mover fixtures: `resources/overlay/agent_overlay_motion_fixtures.json`
+  gains `mover_trajectory`, `approach_angle`, `wrap_radians`, and
+  `trail_resample` families generated by `scripts/generate_motion_fixtures.py`
+  (Kotlin `OverlayMath.Mover2D` is the behavioral reference; the generator is
+  fixed, never Kotlin). Consumed by Kotlin `OverlaySpecFixtureTest` and the
+  Rust `motion::tests` fixture consumer. Heading comparisons are wrapped
+  (`|wrap_radians(expected − actual)| ≤ tol`), mid-flight samples use
+  `tolerance.mover`, settled samples the default.
+- Deterministic offline motion frames (GPU adapter required):
+  `SKY_CUA_CAPTURE_MOTION=1 cargo nextest run --release -p sky-cua-overlay-host -E 'test(capture_motion_frames_when_requested)'`
+  steps the real motion driver + renderer at fixed dt through corner-glide,
+  mid-flight redirect, swipe-chase, and arrival-gated-tap scenarios (raw
+  frames + manifest under `/tmp/overlay-demo/motion`, for manual channel/
+  frame inspection). `scripts/overlay_motion_animations.py --offline` is the
+  self-contained contact-sheet path: it re-runs the same deterministic
+  capture into its own temp dir and montages those frames — it does not
+  consume a pre-existing manual dump.
+- Live motion harness (operator KDE Wayland, human-judged):
+  `uv run python scripts/overlay_motion_animations.py` — drives the overlay
+  host directly on a private socket (no service, no real input), records via
+  the ScreenCast portal (spectacle-stills fallback), and writes contact
+  sheets to `artifacts/overlay-motion-animations/`.
+- Structured pass/fail glide smoke:
+  `python3 scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-motion-glide`
+  asserts snap-on-first-show, an unsettled mid-flight pose strictly between
+  the endpoints via the `motion` reply echo, and exact settle at the target.
 
 The overlay-host crate includes WGPU shader validation, compute conformance
 against `resources/overlay/wgsl_animation_fixtures.json`, and offscreen render
@@ -436,6 +546,27 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
 - **No-no input interception and sound are follow-on work.** The WGPU renderer
   can draw the no-no render effect, but click interception and audio feedback
   are not part of this shipped contract.
+- **Motion constants are strict phone parity.** Glide speed is 950 logical
+  px/s, so a corner-to-corner traverse on a large desktop takes seconds and
+  the arrival-gated ripple fires visibly after the (already-dispatched)
+  click. If that reads badly in practice, the tuning valve is a
+  `[desktop.motion]` spec override, not divergent hardcoded constants.
+- **Pointer telemetry now glides.** Physical/compositor pointer movement
+  retargets the mover instead of teleporting the glyph, so the agent glyph
+  trails a fast human-driven flick with momentum curvature. Deliberate
+  (everything sails); judge with the harness's `fast_flick` scenario.
+- **No aura fade-out on hide.** The desktop stops rendering entirely when
+  hidden, so only the bloom-in half of the phone's cloud fade exists.
+- **L-shaped multi-monitor dead zones.** A glide passing through a point
+  inside the union bounding box but outside every output has no surface to
+  draw on for those frames — physically correct (there is no screen there),
+  and it follows the arrangement: the glyph reappears where the next output
+  begins rather than popping at an edge.
+- **Live motion recording is KDE/portal-dependent.** The harness's primary
+  recorder needs `org.freedesktop.portal.ScreenCast` + PipeWire + GStreamer
+  and shows one share dialog on first run (restore token persisted under the
+  gitignored artifacts dir); the fallback is a ~2 fps spectacle still loop.
+  Recordings capture the operator's live desktop — never commit them.
 
 ## Related
 

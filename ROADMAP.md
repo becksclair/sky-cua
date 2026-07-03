@@ -31,6 +31,7 @@ Open boxes link to the active ExecPlan that owns the work.
   - [ ] Privileged helper fast path for Wayland input — [`plans/privileged_linux_uinput_helper.md`](plans/privileged_linux_uinput_helper.md)
 - [x] Native agent cursor overlay — [`docs/features/agent-cursor-overlay.md`](docs/features/agent-cursor-overlay.md)
   - [x] WGPU-only Wayland layer-shell visible renderer with evented pointer tracking; legacy SHM, GNOME actor, and X11 shaped-window renderers retired to honest unsupported/Noop reporting
+  - [x] Phone-parity cursor motion: Mover2D vehicle steering, eased heading rotation, arrival-gated gesture feedback, spec-driven trail resample, and cloud bloom on the desktop WGPU host, pinned by cross-language mover fixtures, an offline dense-frame dump, and the live motion harness (`scripts/overlay_motion_animations.py`); portal-MP4 recording and the VM overlay profiles remain as verification gaps tracked in the feature doc
   - [ ] Follow-on X11 WGPU visible overlay host
   - [ ] Follow-on no-no input interception and optional sound feedback
 - [x] Compositor cursor hiding (KWin / Hyprland / COSMIC adapters; X11/GNOME values retained only for compatibility) — [`docs/features/compositor-cursor-hiding.md`](docs/features/compositor-cursor-hiding.md)
