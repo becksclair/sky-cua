@@ -1,6 +1,6 @@
 ---
 name: agent-cursor-debug
-description: Use when building, tuning, or visually debugging the DESKTOP agent cursor — the wgpu layer-shell overlay's pointer glyph, its glyph-anchored smoke aura, and its grounding shadow (NOT the phone overlay, which is overlay-pointer-animations). Covers the capture.py harness that places the cursor and screenshots it with spectacle on KDE Wayland, native-resolution inspection, the renderer's tunable constants in sky-cua-overlay-host, the offline gesture/texture dump, and the hard-won live-capture pitfalls (pkill-kills-the-shell, the 2s host startup budget, snapshot_id + live timestamp, spectacle-not-grim).
+description: Use when building, tuning, or visually debugging the DESKTOP agent cursor — the wgpu layer-shell overlay's pointer glyph, its glyph-anchored smoke aura, its grounding shadow, and its vehicle-steering MOTION (glide/rotation/arrival-gated feedback/trail) (NOT the phone overlay, which is overlay-pointer-animations). Covers the capture.py stills harness, the motion-capture video harness (scripts/overlay_motion_animations.py via the KDE ScreenCast portal), the offline gesture/motion frame dumps (SKY_CUA_CAPTURE_GESTURES / SKY_CUA_CAPTURE_MOTION), the renderer's and motion driver's tunable constants, and the hard-won live-capture pitfalls (pkill-kills-the-shell, the 2s host startup budget, snapshot_id + live timestamp, spectacle-not-grim).
 ---
 
 # Agent Cursor Debug (desktop)
@@ -78,25 +78,65 @@ a high zoom of the raw `capture.png`. Spectacle captures at 2× the logical
 desktop, so zooming the raw capture fakes stair-stepping that is not on screen.
 `capture.py` already does the 2× downsample.
 
-## Offline renderer / texture dump (no live overlay)
+## Motion capture (video)
 
-To inspect the cursor texture or a gesture scene straight from the GPU renderer
-(useful when the live overlay misbehaves, or on a headless box):
+The cursor's movement behavior — the Mover2D glide with momentum curves,
+eased heading rotation, arrival-gated ripple/squash, and the resampled trail
+(`src/motion.rs` + `src/cursor_motion.rs`, constants from the shared spec's
+`[shared.motion]`) — is judged from video, not stills:
 
 ```bash
-SKY_CUA_CAPTURE_GESTURES=1 cargo test --release -p sky-cua-overlay-host \
-  capture_gesture_frames_when_requested -- --nocapture
+cargo build --release -p sky-cua-overlay-host
+uv run python scripts/overlay_motion_animations.py            # default scenarios
+uv run python scripts/overlay_motion_animations.py --scenario redirect
+uv run python scripts/overlay_motion_animations.py --offline  # deterministic frames, no desktop
 ```
 
-Writes RGBA frames + `cursor_texture.rgba` (+ `cursor_dims.txt`) to
-`/tmp/overlay-demo/gestures/`. Split the texture's channels to see R = SDF,
-G = smoke anchor, A = coverage independently.
+It drives the overlay host directly on a private socket (no service, no real
+input), records via the KDE ScreenCast portal (first run shows one share
+dialog; the restore token is persisted under the gitignored artifacts dir) with
+a ~2 fps spectacle-stills fallback, and writes the MP4 + montage contact sheets
+to `artifacts/overlay-motion-animations/`. Trace the glyph across frames:
+redirects must bow the path (momentum), the nose must ease into the travel
+heading, the ripple must wait until the glyph lands (`tap_settle`), and the
+trail must ramp tail→head. Recordings capture the live desktop — sensitive,
+never commit.
+
+A structured pass/fail glide check (no eyeballs) is
+`python3 scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-motion-glide`,
+built on the `motion` reply echo.
+
+## Offline renderer / texture dump (no live overlay)
+
+To inspect the cursor texture, a gesture scene, or the stateful motion
+scenarios straight from the GPU renderer (useful when the live overlay
+misbehaves, or on a headless box):
+
+```bash
+SKY_CUA_CAPTURE_GESTURES=1 cargo nextest run --release -p sky-cua-overlay-host \
+  -E 'test(capture_gesture_frames_when_requested)'
+SKY_CUA_CAPTURE_MOTION=1 cargo nextest run --release -p sky-cua-overlay-host \
+  -E 'test(capture_motion_frames_when_requested)'
+```
+
+The gesture dump writes RGBA frames + `cursor_texture.rgba` (+ `cursor_dims.txt`)
+to `/tmp/overlay-demo/gestures/`; split the texture's channels to see R = SDF,
+G = smoke anchor, A = coverage independently. The motion dump steps the REAL
+`CursorMotionDriver` at a fixed 1/60 s dt through corner-glide / redirect /
+swipe-chase / arrival-gated-tap scenarios and writes dense frames + a manifest
+to `/tmp/overlay-demo/motion/` — fully deterministic, no wall clock.
 
 ## Pitfalls (these cost real time — heed them)
 
-- **`pkill -f sky-cua-overlay-host` kills your own shell.** The pattern matches
-  the shell's argv/env (it carries the host path), so the script dies with no
-  output. Use `pkill -x sky-cua-overlay` (the comm is truncated to 15 chars).
+- **Never blanket-kill overlay hosts by name.** `pkill -f sky-cua-overlay-host`
+  matches the shell's own argv/env and kills the script; `pkill -x sky-cua-overlay`
+  is shell-safe but kills the operator's *live* service-owned host too. Clear a
+  leftover host by SOCKET SCOPE instead: `_overlay_host.terminate_leftover_hosts(sock)`
+  SIGTERMs only a host bound to your private socket (matched by an exact
+  `--socket <path>` argv), never one on a different socket. The isolated
+  service derives its host socket from its own IPC socket dir, so capture.py's
+  host lives at `<artifact_dir>/agent-cursor.sock`, distinct from the operator's
+  `$XDG_RUNTIME_DIR/sky-cua/agent-cursor.sock`.
 - **Do not blanket-kill `sky-cua-service`** — that also kills the operator's
   installed daemon. Kill the smoke service by PID (capture.py does).
 - **The Bash tool waits on lingering background daemons.** Do start + capture +
@@ -120,11 +160,14 @@ G = smoke anchor, A = coverage independently.
 ## Verify the Rust side
 
 ```bash
-cargo fmt --check && cargo test -p sky-cua-overlay-host
+cargo fmt --check && cargo nextest run -p sky-cua-overlay-host
 ```
 
-Covers the SDF/anchor/transparency invariants, the WGSL compute conformance, and
-`stroke_edge_matches_shader_constant` (Rust↔WGSL stroke-width guard).
+Covers the SDF/anchor/transparency invariants, the WGSL compute conformance,
+`stroke_edge_matches_shader_constant` (Rust↔WGSL stroke-width guard), the
+Mover2D behavioral tests + cross-language motion fixtures (`motion::tests`),
+and the driver's arrival-gate/rotation/cloud state machine
+(`cursor_motion::tests`).
 
 ## Safety
 

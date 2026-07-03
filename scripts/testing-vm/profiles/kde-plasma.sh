@@ -132,6 +132,13 @@ PY
 done
 
 qdbus6 org.kde.KWin /com/skycua/AgentCursor com.skycua.AgentCursor.StateJson >"$SHOT_DIR/plasma-effect-state.json"
+
+# Structured cursor-motion proof against the nested Plasma session: show
+# snaps, a far set_cursor glides (mid-flight ping strictly between the
+# endpoints), then settles exactly. Uses the prebuilt overlay host.
+SKY_CUA_USE_PREBUILT_RUNTIMES=1 python3 /workspace/scripts/live_agent_cursor_kde_smoke.py \
+  --mode layer-shell-motion-glide >"$SHOT_DIR/plasma-motion-glide.log" 2>&1
+
 printf 'headed KDE Plasma layer-shell cursor overlay with KWin cursor-hide shim is active; sleeping for inspection\n' >"$SHOT_DIR/plasma-ready.txt"
 cat "$SHOT_DIR/plasma-ready.txt"
 sleep "${SKY_CUA_HEADED_SLEEP_SECONDS:-300}"

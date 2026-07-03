@@ -94,11 +94,15 @@ def main() -> None:
     os.environ["SKY_CUA_SERVICE_BIN"] = str(SERVICE_BIN)
     os.environ["SKY_CUA_OVERLAY_HOST_BIN"] = str(OVERLAY_HOST_BIN)
     import live_agent_cursor_kde_smoke as smoke
+    from _overlay_host import terminate_leftover_hosts
 
     ART.mkdir(parents=True, exist_ok=True)
-    # Kill leftover overlay hosts by EXACT (15-char-truncated) comm. `pkill -f
-    # sky-cua-overlay-host` matches this process's own argv/env and kills it.
-    subprocess.run(["pkill", "-x", "sky-cua-overlay"], check=False)
+    # The isolated service derives its overlay host socket from its own IPC
+    # socket dir (SOCK's parent), so the host lives on <ART>/agent-cursor.sock
+    # — not the operator's $XDG_RUNTIME_DIR one. Clear only a leftover host on
+    # THAT socket, never the operator's live service-owned host.
+    host_socket = SOCK.parent / "agent-cursor.sock"
+    terminate_leftover_hosts(host_socket)
     SOCK.unlink(missing_ok=True)
 
     env = dict(os.environ)
@@ -174,7 +178,8 @@ def main() -> None:
             service.wait(timeout=5)
         except Exception:
             service.kill()
-        subprocess.run(["pkill", "-x", "sky-cua-overlay"], check=False)
+        # Reap the isolated host on this run's socket only.
+        terminate_leftover_hosts(host_socket)
 
 
 if __name__ == "__main__":

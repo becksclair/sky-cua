@@ -12,11 +12,13 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -27,6 +29,8 @@ from typing import Any
 from PIL import Image, ImageChops
 
 import _kwin_effect
+import _overlay_host
+import _session_lock
 from _kwin_effect import (
     KWIN_EFFECT_ID,
     compute_effect_build_id,
@@ -53,6 +57,7 @@ MODE_ARTIFACT_SLUGS = {
     "layer-shell-display-target": "target",
     "layer-shell-click-through": "click",
     "layer-shell-ydotool-click-through": "ydotool-click",
+    "layer-shell-motion-glide": "motion-glide",
     "kwin-effect-static": "kwin",
     "kwin-effect-nested": "kwin-nested",
     "kwin-effect-nested-user-install": "kwin-user",
@@ -68,6 +73,20 @@ CURSOR_ASSET_HEIGHT = 48
 CURSOR_ASSET_HOTSPOT_X = 20
 CURSOR_ASSET_HOTSPOT_Y = 22
 KWIN_EFFECT_NESTED_POINT = (420.0, 260.0)
+#: JSON-lines protocol version spoken by `sky-cua-overlay-host serve`.
+OVERLAY_HOST_PROTOCOL_VERSION = 2
+#: shared::motion::CURSOR_SETTLE_PX — the mover snaps once within this of its
+#: target, so a settled echo must sit within it.
+MOTION_SETTLE_TOLERANCE_PX = 1.5
+#: A mid-flight echo must be strictly between the endpoints: at least this far
+#: from both A and B.
+MOTION_MIDFLIGHT_ENDPOINT_MARGIN_PX = 3.0
+MOTION_GLIDE_POINT_A = (140.0, 140.0)
+# ~660 logical px from A: most of a second of sailing at the spec's max cursor
+# speed, so an early ping reliably samples the glide mid-flight. Fits any
+# 800x600+ output, including the VM compositors.
+MOTION_GLIDE_POINT_B = (720.0, 460.0)
+MOTION_GLIDE_SETTLE_TIMEOUT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -98,6 +117,7 @@ def main() -> int:
             "layer-shell-display-target",
             "layer-shell-click-through",
             "layer-shell-ydotool-click-through",
+            "layer-shell-motion-glide",
             "kwin-effect-static",
             "kwin-effect-nested",
             "kwin-effect-nested-user-install",
@@ -109,6 +129,14 @@ def main() -> int:
         "--allow-non-kde",
         action="store_true",
         help="Run even when the current session does not look like KDE Wayland.",
+    )
+    parser.add_argument(
+        "--no-unlock",
+        action="store_true",
+        help=(
+            "Do not unlock the KDE session before the layer-shell-motion-glide "
+            "drive region (leaves lock state untouched)."
+        ),
     )
     parser.add_argument(
         "--request-timeout",
@@ -143,6 +171,8 @@ def main() -> int:
         return run_layer_shell_fixture_visible_smoke(args)
     if args.mode == "layer-shell-display-target":
         return run_layer_shell_display_target_smoke(args)
+    if args.mode == "layer-shell-motion-glide":
+        return run_layer_shell_motion_glide_smoke(args)
     if args.mode in {"layer-shell-click-through", "layer-shell-ydotool-click-through"}:
         return run_layer_shell_click_through_smoke(args)
 
@@ -698,6 +728,196 @@ def run_layer_shell_fixture_visible_smoke(args: argparse.Namespace) -> int:
         socket_path.unlink(missing_ok=True)
 
 
+def motion_glide_message(kind: str, **fields: Any) -> dict[str, Any]:
+    return {"version": OVERLAY_HOST_PROTOCOL_VERSION, "kind": kind, **fields}
+
+
+def motion_glide_cursor_state(point: tuple[float, float], *, sequence: int) -> dict[str, Any]:
+    """Desktop-logical cursor state for the direct-host motion lane. The host
+    only renders states with a snapshot_id and a ~now updated_at_ms."""
+    return _overlay_host.agent_cursor_state(
+        point, sequence=sequence, snapshot_id="layer-shell-motion-glide"
+    )
+
+
+def motion_echo(reply: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The structured `motion` reply field (drawn-cursor pose), when present."""
+    motion = reply.get("motion")
+    return motion if isinstance(motion, dict) else None
+
+
+def motion_point_distance(motion: Mapping[str, Any], point: tuple[float, float]) -> float:
+    return math.hypot(float(motion["x"]) - point[0], float(motion["y"]) - point[1])
+
+
+def run_layer_shell_motion_glide_smoke(args: argparse.Namespace) -> int:
+    """Structured pass/fail proof of the vehicle-steering glide (no eyeballs).
+
+    Drives the overlay host DIRECTLY on a private socket (no service, no real
+    input) and asserts the structured `motion` reply echo: the first `show`
+    placement snaps (settled at A), a far `set_cursor` leaves the drawn cursor
+    sailing (unsettled, strictly between A and B on an early ping), and the
+    mover settles exactly on B within the settle tolerance. The serve loop
+    ticks at 60-240 Hz while the mover is unsettled, so the glide advances
+    between messages; `ping` never renders and echoes the last drawn frame.
+
+    Hands off the mouse while this runs on a live desktop: compositor pointer
+    telemetry retargets the mover, so physical pointer movement mid-run makes
+    the settle-at-B check fail spuriously.
+    """
+    require_kde_wayland(allow_non_kde=args.allow_non_kde)
+    overlay_host = build_overlay_host_binary()
+
+    artifact_dir = artifact_dir_for_mode(args.mode)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    # Unix socket paths are limited to SUN_LEN (~108 bytes); the artifact tree
+    # is too deep, so the socket lives in a short-lived tmp dir instead.
+    socket_dir = Path(tempfile.mkdtemp(prefix="sky-cua-glide-"))
+    socket_path = socket_dir / "host.sock"
+
+    env = dict(os.environ)
+    env["SKY_CUA_OVERLAY_BACKEND"] = "wayland-layer-shell"
+    host_log = (artifact_dir / "overlay-host.stderr.log").open("wb")
+    host = subprocess.Popen(
+        [str(overlay_host), "serve", "--socket", str(socket_path)],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=host_log,
+    )
+
+    point_a = MOTION_GLIDE_POINT_A
+    point_b = MOTION_GLIDE_POINT_B
+    transcript: list[dict[str, Any]] = []
+    transcript_path = artifact_dir / "motion-replies.json"
+
+    def host_call(label: str, payload: dict[str, Any]) -> dict[str, Any]:
+        reply = overlay_host_socket_call(socket_path, payload, timeout=args.request_timeout)
+        transcript.append({"label": label, "request": payload, "reply": reply})
+        return reply
+
+    # Informational: record the session lock state before any unlock. The glide
+    # lane is echo-based so a locked screen does not corrupt its asserts, but
+    # unlocking keeps it consistent with the recording lanes.
+    lock_session_id = _session_lock.resolve_session_id()
+    session_locked_before = (
+        _session_lock.session_locked(lock_session_id) if lock_session_id is not None else None
+    )
+
+    aborted = True
+    try:
+        # Unlock the KDE session for the drive region (relock afterwards if we
+        # unlocked): keeps this lane honest and consistent with the recorders.
+        with _session_lock.screen_unlocked(enabled=not args.no_unlock):
+            wait_for_socket(socket_path, deadline=time.time() + 15)
+            hello = host_call("hello", motion_glide_message("hello"))
+            capabilities: dict[str, Any] = hello.get("capabilities") or {}
+            if capabilities.get("backend") != "wayland_layer_shell":
+                raise SystemExit(
+                    "layer-shell-motion-glide needs the wgpu layer-shell backend; host selected "
+                    f"{capabilities.get('backend')!r} (reason={capabilities.get('reason')!r})"
+                )
+            effects: dict[str, Any] = capabilities.get("effects") or {}
+
+            show = host_call(
+                "show-at-a",
+                motion_glide_message("show", state=motion_glide_cursor_state(point_a, sequence=1)),
+            )
+            show_motion = motion_echo(show)
+
+            set_reply = host_call(
+                "set-cursor-b",
+                motion_glide_message(
+                    "set_cursor", state=motion_glide_cursor_state(point_b, sequence=2)
+                ),
+            )
+            # A few tick frames so the mover has departed A by more than the
+            # endpoint margin before the mid-flight sample (accel-limited start).
+            time.sleep(0.15)
+            mid = host_call("ping-mid-flight", motion_glide_message("ping"))
+            mid_motion = motion_echo(mid)
+
+            settle_deadline = time.time() + MOTION_GLIDE_SETTLE_TIMEOUT_S
+            settle_started = time.time()
+            final_motion: dict[str, Any] | None = None
+            settle_seconds: float | None = None
+            while time.time() < settle_deadline:
+                poll = host_call("ping-poll", motion_glide_message("ping"))
+                poll_motion = motion_echo(poll)
+                if poll_motion is not None and poll_motion.get("settled") is True:
+                    final_motion = poll_motion
+                    settle_seconds = time.time() - settle_started
+                    break
+                time.sleep(0.1)
+
+        checks: dict[str, bool] = {
+            "glide_capability_advertised": effects.get("glide") is True,
+            "show_reply_ok": show.get("ok") is True,
+            "show_snapped_settled_at_a": (
+                show_motion is not None
+                and show_motion.get("settled") is True
+                and motion_point_distance(show_motion, point_a) <= MOTION_SETTLE_TOLERANCE_PX
+            ),
+            "set_cursor_reply_ok": set_reply.get("ok") is True,
+            "mid_flight_unsettled": (mid_motion is not None and mid_motion.get("settled") is False),
+            "mid_flight_strictly_between_a_and_b": (
+                mid_motion is not None
+                and motion_point_distance(mid_motion, point_a)
+                >= MOTION_MIDFLIGHT_ENDPOINT_MARGIN_PX
+                and motion_point_distance(mid_motion, point_b)
+                >= MOTION_MIDFLIGHT_ENDPOINT_MARGIN_PX
+            ),
+            "settled_at_b_within_tolerance": (
+                final_motion is not None
+                and motion_point_distance(final_motion, point_b) <= MOTION_SETTLE_TOLERANCE_PX
+            ),
+        }
+
+        summary = {
+            "mode": args.mode,
+            "ok": all(checks.values()),
+            "checks": checks,
+            "point_a": {"x": point_a[0], "y": point_a[1]},
+            "point_b": {"x": point_b[0], "y": point_b[1]},
+            "show_motion": show_motion,
+            "mid_flight_motion": mid_motion,
+            "final_motion": final_motion,
+            "settle_seconds": settle_seconds,
+            "session_locked_before_unlock": session_locked_before,
+            "backend": capabilities.get("backend"),
+            "effects": effects,
+            "artifact_dir": str(artifact_dir),
+            "transcript": str(transcript_path),
+        }
+        write_summary(artifact_dir, summary)
+        aborted = False
+        return 0 if summary["ok"] else 1
+    finally:
+        # Persist the transcript even when the lane aborts mid-run (backend
+        # mismatch, host crash): the replies gathered so far are the evidence.
+        with contextlib.suppress(Exception):
+            transcript_path.write_text(
+                json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+        if aborted:
+            with contextlib.suppress(Exception):
+                write_summary(
+                    artifact_dir,
+                    {
+                        "mode": args.mode,
+                        "ok": False,
+                        "aborted": True,
+                        "artifact_dir": str(artifact_dir),
+                        "transcript": str(transcript_path),
+                    },
+                )
+        with contextlib.suppress(Exception):
+            overlay_host_socket_call(socket_path, motion_glide_message("shutdown"), timeout=5.0)
+        terminate_process(host, name="overlay host")
+        host_log.close()
+        shutil.rmtree(socket_dir, ignore_errors=True)
+
+
 def run_kwin_effect_static_smoke(args: argparse.Namespace) -> int:
     if not args.allow_kwin_effect_install:
         raise SystemExit(
@@ -1145,6 +1365,16 @@ def kwin_effect_overlay_host_set_cursor_json(point: tuple[float, float]) -> str:
         },
         separators=(",", ":"),
         sort_keys=True,
+    )
+
+
+def overlay_host_socket_call(
+    socket_path: Path, payload: Mapping[str, Any], *, timeout: float
+) -> dict[str, Any]:
+    """One JSON-lines request/reply per Unix-socket CONNECTION — the transport
+    contract of `sky-cua-overlay-host serve --socket` (connect per message)."""
+    return _overlay_host.call_host(
+        socket_path, payload, timeout=timeout, context=f"request {payload!r}"
     )
 
 

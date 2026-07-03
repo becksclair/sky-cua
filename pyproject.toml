@@ -10,9 +10,16 @@ dependencies = []
 dev = [
     "basedpyright>=1.31.4",
     "pillow>=12.0.0",
+    "pygobject-stubs>=2.17.0",
     "pytest>=8.4.2",
     "ruff>=0.14.0",
 ]
+
+# pygobject-stubs picks its Gtk stub flavor at build time; the repo's only
+# Gtk consumer (gtk_pointer_smoke_fixture.py) is GTK3. The Gio/GLib stubs the
+# ScreenCast portal helper needs are identical in both flavors.
+[tool.uv.config-settings-package]
+pygobject-stubs = { config = "Gtk3,Gdk3" }
 
 [tool.ruff]
 line-length = 100
@@ -63,6 +70,9 @@ typeCheckingMode = "standard"
 reportAny = false
 reportExplicitAny = false
 reportMissingImports = false
+# gi.repository modules are generated at runtime; pygobject-stubs is the only
+# resolvable form, so stub-without-source is expected, not a defect.
+reportMissingModuleSource = false
 reportMissingTypeStubs = false
 reportUnknownArgumentType = false
 reportUnknownMemberType = false

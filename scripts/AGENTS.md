@@ -21,6 +21,17 @@ pytest.
 - Live operator smokes are `live_*_smoke.py` and must fail honestly when app
   state is blocked. JSON schemas for final agent messages:
   `scripts/schemas/*.json`.
+- Overlay motion evidence: `overlay_motion_animations.py` drives the overlay
+  HOST directly on a private socket (no service, no real input; target is
+  `sky-cua-overlay-host serve`) and records scripted glide/redirect/swipe/
+  tap-settle scenarios to `artifacts/overlay-motion-animations/` (KDE
+  ScreenCast portal primary — per-user restore token lives in that gitignored
+  dir, never the repo — spectacle-stills fallback; recordings capture the
+  live desktop and are never committed). Human-judged video/contact sheets;
+  the structured pass/fail glide check is
+  `live_agent_cursor_kde_smoke.py --mode layer-shell-motion-glide`. Shared
+  pieces: `_kde_screencast.py` (portal recorder), `_contact_sheets.py`
+  (montage/pagination, also used by `overlay_pointer_animations.py`).
 - Live smokes gate on deploy freshness. `deploy_freshness.py` fingerprints the
   Rust runtime source (`crates/**` + `Cargo.{toml,lock}`) and every build/deploy
   stamps the client binary it produced. The gate is enforced at the shared

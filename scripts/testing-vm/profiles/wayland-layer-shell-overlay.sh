@@ -13,3 +13,7 @@ export SKY_CUA_SERVICE_BIN="${SKY_CUA_SERVICE_BIN:-/workspace/target/release/sky
 export SKY_CUA_SKIP_LOCAL_BUILD=1
 
 python scripts/live_wayland_layer_shell_overlay_smoke.py --wayland-display "$WAYLAND_DISPLAY"
+
+# Structured cursor-motion proof: show snaps, a far set_cursor glides
+# (mid-flight ping strictly between the endpoints), then settles exactly.
+python scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-motion-glide --allow-non-kde
