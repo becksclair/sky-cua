@@ -71,7 +71,10 @@ not reachable through the page.
   control; focus it first.
 - `browser_input(operation="press_key")` handles focused controls and page
   shortcuts. Use literal key strings such as `Enter`, `Escape`, `Tab`,
-  `Ctrl+K`, and `Ctrl+L`.
+  `Ctrl+K`, and `Ctrl+L`. Editing and navigation keys act on the focused field:
+  `Backspace`/`Delete` delete, `Ctrl+A` selects all, and the arrow keys and
+  `Home`/`End`/`PageUp`/`PageDown` move the caret. To replace a field's
+  contents, focus it, `Ctrl+A`, then `type_text` (or `Backspace`).
 
 ### Read-tool argument shapes
 

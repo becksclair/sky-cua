@@ -5,6 +5,7 @@ mod helpers;
 mod actions;
 mod affinity;
 mod coordinates;
+mod dns_records;
 mod protocol;
 mod session;
 mod session_recovery;

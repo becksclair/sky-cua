@@ -457,6 +457,7 @@ async fn press_key_dispatches_modifier_chord() {
 
     let server = tokio::spawn(async move {
         let mut stream = accept_after_info(&listener).await;
+        read_and_ack_focus_emulation(&mut stream).await;
 
         let key_down = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(
@@ -464,9 +465,17 @@ async fn press_key_dispatches_modifier_chord() {
             Some("executeCdp")
         );
         assert_eq!(key_down["params"]["method"], "Input.dispatchKeyEvent");
-        assert_eq!(key_down["params"]["commandParams"]["type"], "keyDown");
+        // A Ctrl chord holds a non-Shift modifier, so it carries no text and
+        // dispatches as `rawKeyDown` with the virtual key code Blink needs.
+        assert_eq!(key_down["params"]["commandParams"]["type"], "rawKeyDown");
         assert_eq!(key_down["params"]["commandParams"]["key"], "K");
+        assert_eq!(key_down["params"]["commandParams"]["code"], "KeyK");
+        assert_eq!(
+            key_down["params"]["commandParams"]["windowsVirtualKeyCode"],
+            75
+        );
         assert_eq!(key_down["params"]["commandParams"]["modifiers"], 2);
+        assert!(key_down["params"]["commandParams"].get("text").is_none());
         write_frame(
             &mut stream,
             &json!({"jsonrpc": "2.0", "id": key_down["id"], "result": {}}),
@@ -478,6 +487,11 @@ async fn press_key_dispatches_modifier_chord() {
         assert_eq!(key_up["params"]["method"], "Input.dispatchKeyEvent");
         assert_eq!(key_up["params"]["commandParams"]["type"], "keyUp");
         assert_eq!(key_up["params"]["commandParams"]["key"], "K");
+        assert_eq!(key_up["params"]["commandParams"]["code"], "KeyK");
+        assert_eq!(
+            key_up["params"]["commandParams"]["windowsVirtualKeyCode"],
+            75
+        );
         assert_eq!(key_up["params"]["commandParams"]["modifiers"], 2);
         write_frame(
             &mut stream,

@@ -297,7 +297,9 @@ async fn terminal_diagnostic_outranks_an_earlier_not_found() {
         .unwrap();
         drop(stream);
 
-        let (mut stream, mouse_move) = accept_until_non_info_request(&listener_b).await;
+        let (mut stream, focus) = accept_until_non_info_request(&listener_b).await;
+        ack_focus_emulation_frame(&mut stream, &focus).await;
+        let mouse_move = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(mouse_move["params"]["commandParams"]["type"], "mouseMoved");
         write_frame(
             &mut stream,

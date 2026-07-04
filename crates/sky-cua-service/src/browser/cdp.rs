@@ -8,8 +8,8 @@ use tokio::time::Instant as TokioInstant;
 use super::coordinates::viewport_metrics_until;
 use super::protocol::{
     CLICK_DOWN_REQUEST_ID, CLICK_MOVE_REQUEST_ID, CLICK_UP_REQUEST_ID, EVAL_REQUEST_ID,
-    KEY_DOWN_REQUEST_ID, KEY_UP_REQUEST_ID, NAVIGATE_REQUEST_ID, SCREENSHOT_REQUEST_ID,
-    SCROLL_REQUEST_ID, SNAPSHOT_REQUEST_ID, TYPE_TEXT_REQUEST_ID,
+    FOCUS_EMULATION_REQUEST_ID, KEY_DOWN_REQUEST_ID, KEY_UP_REQUEST_ID, NAVIGATE_REQUEST_ID,
+    SCREENSHOT_REQUEST_ID, SCROLL_REQUEST_ID, SNAPSHOT_REQUEST_ID, TYPE_TEXT_REQUEST_ID,
 };
 use super::snapshot;
 use super::transport::execute_cdp_until;
@@ -179,6 +179,7 @@ pub(super) async fn cdp_action_on_stream(
             })
         }
         BrowserCdpAction::Click { x, y } => {
+            ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
             execute_cdp_until(
                 stream,
                 socket,
@@ -212,6 +213,7 @@ pub(super) async fn cdp_action_on_stream(
             Ok(BrowserCdpResult::Action)
         }
         BrowserCdpAction::TypeText { text } => {
+            ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
             execute_cdp_until(
                 stream,
                 socket,
@@ -225,6 +227,7 @@ pub(super) async fn cdp_action_on_stream(
             Ok(BrowserCdpResult::Action)
         }
         BrowserCdpAction::PressKey { key } => {
+            ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
             let key = BrowserKeyStroke::parse(key);
             execute_cdp_until(
                 stream,
@@ -232,7 +235,7 @@ pub(super) async fn cdp_action_on_stream(
                 KEY_DOWN_REQUEST_ID,
                 tab_id_value,
                 "Input.dispatchKeyEvent",
-                key.event_params("keyDown"),
+                key.event_params(key.key_down_type()),
                 deadline,
             )
             .await?;
@@ -335,9 +338,62 @@ pub(super) async fn cdp_action_on_stream(
     }
 }
 
+/// Force the tab's renderer to treat itself as focused before an input action.
+///
+/// sky-cua routinely drives a background tab (or a browser window that is not
+/// the foreground OS window), where `document.hasFocus()` is false. Blink then
+/// drops click-to-focus and does not deliver `Input.insertText` to the focused
+/// element, so clicks and typing silently land nowhere.
+/// `Emulation.setFocusEmulationEnabled` is a per-target override that persists
+/// for the debugger session, so the first input action that runs restores it
+/// for every later one on the same session. Applied before clicks, typing, and
+/// key presses alike: it makes a click focus its target and makes `type_text`
+/// land on an already-focused field even with no preceding click.
+///
+/// It does NOT make synthetic `Input.dispatchKeyEvent` editing/navigation
+/// (Backspace, arrows, Ctrl+A) act on a field that was only focused
+/// programmatically: Blink routes those through the activation and caret a real
+/// mouse gesture establishes, which focus emulation cannot replicate. Pressing
+/// keys against a field therefore still requires a preceding click — the normal
+/// focus-then-edit flow — which the click's own emulation call already covers.
+///
+/// Best effort: a browser without the method must not fail the action, and the
+/// following input command re-surfaces any real session failure.
+async fn ensure_focus_emulation(
+    stream: &mut UnixStream,
+    socket: &Path,
+    tab_id_value: &Value,
+    deadline: TokioInstant,
+) {
+    let _ = execute_cdp_until(
+        stream,
+        socket,
+        FOCUS_EMULATION_REQUEST_ID,
+        tab_id_value,
+        "Emulation.setFocusEmulationEnabled",
+        json!({ "enabled": true }),
+        deadline,
+    )
+    .await;
+}
+
+/// CDP `modifiers` bit for Shift; any modifier other than Shift suppresses the
+/// text a printable key would otherwise emit (Ctrl/Meta/Alt turn the press into
+/// an accelerator, not typed input). Matches Puppeteer/Playwright.
+const SHIFT_MODIFIER_BIT: i32 = 8;
+
 struct BrowserKeyStroke {
     key: String,
+    /// DOM `code` (e.g. `Backspace`, `KeyA`), when the key name is recognized.
+    code: Option<String>,
+    /// Windows virtual key code (e.g. Backspace=8, Delete=46, A=65). `0` for
+    /// unrecognized keys, which are dispatched by `key`/`modifiers` alone.
+    windows_virtual_key_code: i32,
     modifiers: i32,
+    /// Text the key inserts, present only for a printable press with at most
+    /// Shift held. `None` forces a `rawKeyDown` so editing/navigation and
+    /// modifier chords perform their default action instead of typing.
+    text: Option<String>,
 }
 
 impl BrowserKeyStroke {
@@ -367,19 +423,111 @@ impl BrowserKeyStroke {
                 _ => key = segment,
             }
         }
+
+        let (code, windows_virtual_key_code) = key_identity(key);
+        // A printable key inserts text, but only when no accelerator modifier is
+        // held. Blink keys the default editing action off the virtual key code +
+        // modifier flags, so clearing text here (and thus emitting `rawKeyDown`)
+        // is what lets Ctrl+A select-all and Backspace/Delete delete instead of
+        // typing. `Enter` and the `Space`/`Spacebar` aliases carry the text
+        // their key inserts (`"\r"`, `" "`); the named space forms are the only
+        // way to reach this path, since a literal " " is trimmed away before
+        // parsing.
+        let mut text = if key.chars().count() == 1 {
+            Some(key.to_string())
+        } else if key == "Enter" {
+            Some("\r".to_string())
+        } else if key == "Space" || key == "Spacebar" {
+            Some(" ".to_string())
+        } else {
+            None
+        };
+        if modifiers & !SHIFT_MODIFIER_BIT != 0 {
+            text = None;
+        }
+
         Self {
             key: key.to_string(),
+            code,
+            windows_virtual_key_code,
             modifiers,
+            text,
+        }
+    }
+
+    /// The down-event type: `keyDown` when the press produces text (so a
+    /// `char`/`beforeinput` follows), `rawKeyDown` otherwise. Puppeteer and
+    /// Playwright use the same `text ? 'keyDown' : 'rawKeyDown'` rule.
+    fn key_down_type(&self) -> &'static str {
+        if self.text.is_some() {
+            "keyDown"
+        } else {
+            "rawKeyDown"
         }
     }
 
     fn event_params(&self, event_type: &str) -> Value {
-        json!({
+        let mut params = json!({
             "type": event_type,
             "key": self.key,
             "modifiers": self.modifiers,
-        })
+        });
+        if let Some(code) = &self.code {
+            params["code"] = Value::from(code.clone());
+        }
+        if self.windows_virtual_key_code != 0 {
+            params["windowsVirtualKeyCode"] = Value::from(self.windows_virtual_key_code);
+        }
+        // CDP only consumes `text` on `keyDown`; it is ignored (and omitted by
+        // the reference implementations) for `rawKeyDown` and `keyUp`.
+        if event_type == "keyDown"
+            && let Some(text) = &self.text
+        {
+            params["text"] = Value::from(text.clone());
+            params["unmodifiedText"] = Value::from(text.clone());
+        }
+        params
     }
+}
+
+/// Resolve a key name to its DOM `code` and Windows virtual key code using the
+/// US layout shared by Puppeteer and Playwright. Unrecognized keys return
+/// `(None, 0)` and fall back to `key`/`modifiers`-only dispatch, preserving the
+/// prior behavior for chords like the `Ctrl+-` / `Ctrl++` browser-zoom keys.
+fn key_identity(key: &str) -> (Option<String>, i32) {
+    let named = match key {
+        "Backspace" => Some(("Backspace", 8)),
+        "Tab" => Some(("Tab", 9)),
+        "Enter" => Some(("Enter", 13)),
+        "Escape" | "Esc" => Some(("Escape", 27)),
+        " " | "Space" | "Spacebar" => Some(("Space", 32)),
+        "PageUp" => Some(("PageUp", 33)),
+        "PageDown" => Some(("PageDown", 34)),
+        "End" => Some(("End", 35)),
+        "Home" => Some(("Home", 36)),
+        "ArrowLeft" | "Left" => Some(("ArrowLeft", 37)),
+        "ArrowUp" | "Up" => Some(("ArrowUp", 38)),
+        "ArrowRight" | "Right" => Some(("ArrowRight", 39)),
+        "ArrowDown" | "Down" => Some(("ArrowDown", 40)),
+        "Delete" | "Del" => Some(("Delete", 46)),
+        _ => None,
+    };
+    if let Some((code, key_code)) = named {
+        return (Some(code.to_string()), key_code);
+    }
+    // A single ASCII letter or digit derives its `code`/keyCode directly: the
+    // virtual key code is the uppercase/digit ASCII value, matching the layout.
+    if key.chars().count() == 1 {
+        let c = key.chars().next().expect("one char");
+        if c.is_ascii_alphabetic() {
+            let upper = c.to_ascii_uppercase();
+            return (Some(format!("Key{upper}")), i32::from(upper as u8));
+        }
+        if c.is_ascii_digit() {
+            return (Some(format!("Digit{c}")), i32::from(c as u8));
+        }
+    }
+    (None, 0)
 }
 
 /// A `Runtime.evaluate` response can be transport-successful while the page
@@ -440,5 +588,99 @@ mod keystroke_tests {
         let stroke = BrowserKeyStroke::parse("Enter");
         assert_eq!(stroke.key, "Enter");
         assert_eq!(stroke.modifiers, 0);
+    }
+
+    #[test]
+    fn editing_key_carries_virtual_key_code_and_is_raw_key_down() {
+        // Backspace/Delete only delete when Blink receives the virtual key
+        // code; with text absent they must dispatch as `rawKeyDown`.
+        for (name, code, key_code) in [("Backspace", "Backspace", 8), ("Delete", "Delete", 46)] {
+            let stroke = BrowserKeyStroke::parse(name);
+            assert_eq!(stroke.code.as_deref(), Some(code));
+            assert_eq!(stroke.windows_virtual_key_code, key_code);
+            assert!(stroke.text.is_none());
+            assert_eq!(stroke.key_down_type(), "rawKeyDown");
+            let params = stroke.event_params("rawKeyDown");
+            assert_eq!(params["windowsVirtualKeyCode"], key_code);
+            assert_eq!(params["code"], code);
+            assert!(params.get("text").is_none());
+        }
+    }
+
+    #[test]
+    fn ctrl_letter_chord_suppresses_text_for_select_all() {
+        let stroke = BrowserKeyStroke::parse("Ctrl+A");
+        assert_eq!(stroke.key, "A");
+        assert_eq!(stroke.code.as_deref(), Some("KeyA"));
+        assert_eq!(stroke.windows_virtual_key_code, 65);
+        assert_eq!(stroke.modifiers, CTRL);
+        // A non-Shift modifier clears the text so Blink runs the accelerator
+        // (select-all) instead of typing "a".
+        assert!(stroke.text.is_none());
+        assert_eq!(stroke.key_down_type(), "rawKeyDown");
+        assert!(stroke.event_params("keyDown").get("text").is_none());
+    }
+
+    #[test]
+    fn bare_printable_key_types_text_via_key_down() {
+        let stroke = BrowserKeyStroke::parse("a");
+        assert_eq!(stroke.code.as_deref(), Some("KeyA"));
+        assert_eq!(stroke.windows_virtual_key_code, 65);
+        assert_eq!(stroke.text.as_deref(), Some("a"));
+        assert_eq!(stroke.key_down_type(), "keyDown");
+        let params = stroke.event_params("keyDown");
+        assert_eq!(params["text"], "a");
+        assert_eq!(params["unmodifiedText"], "a");
+    }
+
+    #[test]
+    fn shift_alone_keeps_typed_text() {
+        // Shift is the one modifier that still produces text.
+        let stroke = BrowserKeyStroke::parse("Shift+A");
+        assert_eq!(stroke.modifiers, SHIFT);
+        assert_eq!(stroke.text.as_deref(), Some("A"));
+        assert_eq!(stroke.key_down_type(), "keyDown");
+    }
+
+    #[test]
+    fn enter_types_carriage_return() {
+        let stroke = BrowserKeyStroke::parse("Enter");
+        assert_eq!(stroke.code.as_deref(), Some("Enter"));
+        assert_eq!(stroke.windows_virtual_key_code, 13);
+        assert_eq!(stroke.text.as_deref(), Some("\r"));
+        assert_eq!(stroke.key_down_type(), "keyDown");
+    }
+
+    #[test]
+    fn named_space_types_a_space() {
+        // The `Space`/`Spacebar` aliases are the only way to press space (a
+        // literal " " is trimmed away), so they must insert a space rather than
+        // dispatch a text-less rawKeyDown that types nothing.
+        for name in ["Space", "Spacebar"] {
+            let stroke = BrowserKeyStroke::parse(name);
+            assert_eq!(stroke.code.as_deref(), Some("Space"), "code for {name:?}");
+            assert_eq!(stroke.windows_virtual_key_code, 32, "vk for {name:?}");
+            assert_eq!(stroke.text.as_deref(), Some(" "), "text for {name:?}");
+            assert_eq!(stroke.key_down_type(), "keyDown", "type for {name:?}");
+        }
+        // A modifier still turns space into an accelerator with no typed text.
+        let chord = BrowserKeyStroke::parse("Ctrl+Space");
+        assert_eq!(chord.modifiers, CTRL);
+        assert!(chord.text.is_none());
+        assert_eq!(chord.key_down_type(), "rawKeyDown");
+    }
+
+    #[test]
+    fn unrecognized_key_falls_back_to_key_and_modifiers() {
+        // The zoom chords use keys with no layout entry; they must keep
+        // dispatching by name without a virtual key code.
+        let stroke = BrowserKeyStroke::parse("Ctrl+-");
+        assert_eq!(stroke.key, "-");
+        assert_eq!(stroke.modifiers, CTRL);
+        assert!(stroke.code.is_none());
+        assert_eq!(stroke.windows_virtual_key_code, 0);
+        let params = stroke.event_params("rawKeyDown");
+        assert!(params.get("windowsVirtualKeyCode").is_none());
+        assert!(params.get("code").is_none());
     }
 }

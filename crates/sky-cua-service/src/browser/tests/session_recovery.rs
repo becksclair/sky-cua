@@ -465,7 +465,9 @@ async fn cdp_command_timeout_resets_session_without_replaying_input_action() {
         .unwrap();
         drop(stream);
 
-        let (mut stream, mouse_move) = accept_until_non_info_request(&listener).await;
+        let (mut stream, focus) = accept_until_non_info_request(&listener).await;
+        ack_focus_emulation_frame(&mut stream, &focus).await;
+        let mouse_move = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(
             mouse_move.get("method").and_then(Value::as_str),
             Some("executeCdp")
@@ -586,7 +588,9 @@ async fn cdp_detach_resets_session_without_replaying_input_action() {
         .unwrap();
         drop(stream);
 
-        let (mut stream, mouse_move) = accept_until_non_info_request(&listener).await;
+        let (mut stream, focus) = accept_until_non_info_request(&listener).await;
+        ack_focus_emulation_frame(&mut stream, &focus).await;
+        let mouse_move = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(
             mouse_move.get("method").and_then(Value::as_str),
             Some("executeCdp")
@@ -717,7 +721,9 @@ async fn cdp_command_timeout_is_not_replayed_on_another_bridge_socket() {
         .unwrap();
         drop(stream);
 
-        let (mut stream, mouse_move) = accept_until_non_info_request(&listener_a).await;
+        let (mut stream, focus) = accept_until_non_info_request(&listener_a).await;
+        ack_focus_emulation_frame(&mut stream, &focus).await;
+        let mouse_move = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(mouse_move["params"]["commandParams"]["type"], "mouseMoved");
         write_frame(
             &mut stream,

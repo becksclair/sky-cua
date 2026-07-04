@@ -28,6 +28,7 @@ pub(super) const MOVE_MOUSE_REQUEST_ID: &str = "sky-cua-browser-move-mouse";
 pub(super) const VIEWPORT_SCALE_REQUEST_ID: &str = "sky-cua-browser-viewport-scale";
 pub(super) const SNAPSHOT_REQUEST_ID: &str = "sky-cua-browser-snapshot";
 pub(super) const SCREENSHOT_REQUEST_ID: &str = "sky-cua-browser-screenshot";
+pub(super) const FOCUS_EMULATION_REQUEST_ID: &str = "sky-cua-browser-focus-emulation";
 pub(super) const CLICK_MOVE_REQUEST_ID: &str = "sky-cua-browser-click-move";
 pub(super) const CLICK_DOWN_REQUEST_ID: &str = "sky-cua-browser-click-down";
 pub(super) const CLICK_UP_REQUEST_ID: &str = "sky-cua-browser-click-up";

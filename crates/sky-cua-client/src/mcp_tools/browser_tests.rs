@@ -874,7 +874,11 @@ fn browser_snapshot_summary_exposes_page_details_for_text_only_agents() {
     assert!(summary.contains("tab tab-1"));
     assert!(summary.contains("Title: \"Dot Agents | OpenChamber\""));
     assert!(summary.contains("URL: https://chamber.heliasar.com/"));
-    assert!(summary.contains("devicePixelRatio=1.25"));
+    assert!(summary.contains("Viewport: width=1440 height=900."));
+    // The device pixel ratio is deliberately not surfaced: coordinates are a
+    // single normalized CSS-pixel space, so exposing the ratio only tempts a
+    // model to double-correct for scaling.
+    assert!(!summary.contains("devicePixelRatio"));
     assert!(summary.contains("Visible text: \"New session Update Available"));
     assert!(summary.contains("[3] tag=button role=button name=\"Update Available\""));
     assert!(summary.contains("bounds=x:241.60 y:971.20 w:120 h:32"));

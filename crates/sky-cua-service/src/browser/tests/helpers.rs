@@ -89,6 +89,31 @@ pub(super) async fn reply_to_info_request(stream: &mut UnixStream) {
     .unwrap();
 }
 
+/// A click first enables focus emulation so a background/unfocused tab still
+/// focuses the clicked element, so the click connection now carries an
+/// `Emulation.setFocusEmulationEnabled` frame before the pointer events. Assert
+/// and acknowledge an already-read focus frame.
+pub(super) async fn ack_focus_emulation_frame(stream: &mut UnixStream, frame: &Value) {
+    assert_eq!(
+        frame["params"]["method"], "Emulation.setFocusEmulationEnabled",
+        "click must enable focus emulation before dispatching pointer events"
+    );
+    assert_eq!(frame["params"]["commandParams"]["enabled"], true);
+    write_frame(
+        stream,
+        &json!({"jsonrpc": "2.0", "id": frame["id"], "result": {}}),
+    )
+    .await
+    .unwrap();
+}
+
+/// Read and acknowledge the click's leading focus-emulation frame from a stream
+/// whose next frame is that call.
+pub(super) async fn read_and_ack_focus_emulation(stream: &mut UnixStream) {
+    let frame = read_frame(stream).await.unwrap().unwrap();
+    ack_focus_emulation_frame(stream, &frame).await;
+}
+
 pub(super) async fn accept_until_non_info_request(listener: &UnixListener) -> (UnixStream, Value) {
     let (mut stream, _) = listener.accept().await.unwrap();
     loop {

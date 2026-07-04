@@ -83,7 +83,10 @@ Current MCP browser entrypoints:
 - `browser_input(operation="press_key")` accepts `target=user_chrome`,
   `tab_id`, and non-empty `key`, then dispatches the key to the page. Single
   CDP key names and modifier chords such as `Ctrl+K`, `Ctrl+L`, `Shift+Tab`,
-  and `Meta+K` are accepted.
+  and `Meta+K` are accepted. Recognized keys carry their DOM `code` and Windows
+  virtual key code, so editing and navigation keys perform their default action:
+  `Backspace`/`Delete` delete, `Ctrl+A` selects all, and `Enter`, `Tab`,
+  `Escape`, the arrow keys, and `Home`/`End`/`PageUp`/`PageDown` all take effect.
 - `browser_scroll` accepts `target=user_chrome`, `tab_id`, `delta_x`, `delta_y`,
   and optional CSS-pixel `x`/`y` context fields. At least one delta must be
   non-zero, and `x` and `y` must be provided together. When they are provided,
@@ -312,9 +315,18 @@ it as JPEG or WebP per `SKY_CUA_MODEL_SCREENSHOT_FORMAT`/`*_QUALITY`, writes it
 under the runtime captures directory (`$XDG_RUNTIME_DIR/sky-cua/captures`,
 pruned to the eight most recent captures per tab), and reports the path and
 dimensions alongside the encoded data. Click, type, and key actions use CDP
-`Input.*` events with CSS-pixel coordinates passed through unchanged. The
-enabled `browser_eval` path uses `Runtime.evaluate` with `awaitPromise=true`
-and `returnByValue=true`.
+`Input.*` events with CSS-pixel coordinates passed through unchanged. Each of
+those actions first issues a best-effort `Emulation.setFocusEmulationEnabled`
+so the tab's renderer treats itself as focused: sky-cua usually drives a
+background tab whose `document.hasFocus()` is false, where Blink otherwise drops
+click-to-focus and does not deliver `Input.insertText`. This makes clicks focus
+their target and `type_text` land on an already-focused field even with no
+preceding click. It does not make synthetic key events (`Input.dispatchKeyEvent`
+for Backspace/arrows/Ctrl+A) edit a field that was only focused
+programmatically — Blink requires the activation and caret a real click
+establishes — so key-driven editing still expects a preceding click, the normal
+focus-then-edit flow. The enabled `browser_eval` path uses `Runtime.evaluate`
+with `awaitPromise=true` and `returnByValue=true`.
 Snapshot element values are suppressed for password/hidden/token/API-key/auth/
 credential/session/code/PIN-like fields; use desktop computer-use or explicit
 user-directed workflows for sensitive form inspection instead of relying on raw
@@ -501,8 +513,10 @@ python3 scripts/live_agentic_loop_smoke.py
   `browser_scroll` moves the cursor before scrolling the nearest scrollable DOM
   container under `x`/`y`, untargeted `browser_scroll` scrolls the viewport
   without synthesizing an `(0,0)` target, enabled `browser_eval` returns the
-  CDP runtime value, and `browser_press_key` dispatches modifier chords with CDP
-  modifier bits.
+  CDP runtime value, and `browser_press_key` dispatches keys with CDP modifier
+  bits plus the DOM `code` and Windows virtual key code, using `rawKeyDown` when
+  the press carries no text so editing/navigation keys (Backspace, Delete,
+  Ctrl+A, arrows) run their default action instead of no-opping.
 - Client regression tests prove `browser_snapshot` advertises and applies
   `element_query`/`element_offset`/`element_limit`, including a dense
   OpenChamber-style sidebar case where `Update Available` is deep in the element

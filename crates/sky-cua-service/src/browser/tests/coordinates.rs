@@ -38,6 +38,7 @@ async fn click_dispatches_css_pixel_coordinates_directly() {
         drop(stream);
 
         let mut stream = accept_after_info(&listener).await;
+        read_and_ack_focus_emulation(&mut stream).await;
 
         for (expected_type, expected_button) in [
             ("mouseMoved", None),

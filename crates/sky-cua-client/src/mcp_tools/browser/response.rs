@@ -450,18 +450,18 @@ fn append_browser_snapshot_viewport(text: &mut String, snapshot: &Value) {
     };
     let width = viewport.get("width").and_then(Value::as_f64);
     let height = viewport.get("height").and_then(Value::as_f64);
-    let dpr = viewport.get("devicePixelRatio").and_then(Value::as_f64);
-    if width.is_some() || height.is_some() || dpr.is_some() {
+    // `devicePixelRatio` is intentionally omitted: browser tool coordinates are
+    // a single normalized CSS-pixel space, so surfacing the ratio only invites a
+    // model to "correct" for scaling that the capture pipeline already handled.
+    if width.is_some() || height.is_some() {
         let _ = write!(
             text,
-            " Viewport: width={} height={} devicePixelRatio={}.",
+            " Viewport: width={} height={}.",
             width
                 .map(format_browser_number)
                 .unwrap_or_else(|| "unknown".to_string()),
             height
                 .map(format_browser_number)
-                .unwrap_or_else(|| "unknown".to_string()),
-            dpr.map(format_browser_number)
                 .unwrap_or_else(|| "unknown".to_string())
         );
     }
