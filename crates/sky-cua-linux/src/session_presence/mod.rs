@@ -49,6 +49,10 @@ struct SessionPresenceState {
     session_path: Option<OwnedObjectPath>,
     sleep_inhibitor: Option<OwnedFd>,
     lock_inhibitor: Option<screensaver::LockInhibitor>,
+    /// True only when `ensure` actually issued an UnlockSession because the
+    /// session was locked on entry. `release` consults this so it re-locks
+    /// only the sessions it unlocked, never one the user had already unlocked.
+    unlocked_session: bool,
 }
 
 impl SessionPresenceManager {
@@ -71,6 +75,11 @@ impl SessionPresenceManager {
                         .expect("connection already resolved");
                     match logind::unlock_session(&connection, &session.id).await {
                         Ok(()) => {
+                            // We issued the unlock, so we own re-locking it on
+                            // release. Record it before waiting for the lock to
+                            // clear — the request is what makes us the owner,
+                            // regardless of whether the hint clears in time.
+                            state.unlocked_session = true;
                             // UnlockSession returns as soon as logind accepts the
                             // request, but kscreenlocker drops the lock (and the
                             // compositor un-occludes windows) asynchronously. A
@@ -147,7 +156,14 @@ impl SessionPresenceManager {
             details.push("no ScreenSaver inhibitor was held".to_string());
         }
 
-        if relock {
+        // Only re-lock a session we unlocked ourselves. If the user already had
+        // the session unlocked when automation began, `unlocked_session` stays
+        // false and we leave it unlocked. Consume the flag unconditionally so a
+        // release ends the hold's re-lock obligation: a later release never
+        // resurrects a stale one, and a second release does not re-lock.
+        let owned_unlock = std::mem::take(&mut state.unlocked_session);
+        let relock_owned_session = relock && owned_unlock;
+        if relock_owned_session {
             match ensure_logind_session(&mut state).await {
                 Ok(session) => {
                     match logind::lock_session(
@@ -164,6 +180,10 @@ impl SessionPresenceManager {
                 }
                 Err(error) => details.push(error.message),
             }
+        } else if relock {
+            details.push(
+                "session was already unlocked before automation; leaving it unlocked".to_string(),
+            );
         }
 
         status_from_state(&mut state, details).await
@@ -365,5 +385,26 @@ mod tests {
         assert!(!released_once.suspend_inhibited);
         assert!(!released_twice.lock_inhibited);
         assert!(!released_twice.suspend_inhibited);
+    }
+
+    #[tokio::test]
+    async fn release_does_not_claim_unlock_ownership_without_unlocking() {
+        // A manager that never issued an UnlockSession must not treat itself as
+        // the unlock owner, so `release(relock = true)` on it must never take
+        // the re-lock branch. This is the regression guard for re-locking a
+        // session the user had already unlocked before automation began.
+        let manager = SessionPresenceManager::new();
+
+        assert!(
+            !manager.inner.read().await.unlocked_session,
+            "a fresh manager has not unlocked anything"
+        );
+
+        let _ = manager.release(true).await;
+
+        assert!(
+            !manager.inner.read().await.unlocked_session,
+            "release must leave the ownership flag clear when it never unlocked"
+        );
     }
 }
