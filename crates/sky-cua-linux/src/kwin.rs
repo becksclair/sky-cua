@@ -451,6 +451,14 @@ fn parse_window_info(output: &str, focused: bool) -> Option<KWinWindowInfo> {
         .get("caption")
         .cloned()
         .filter(|value| !value.trim().is_empty());
+    // KWin's getWindowInfo reports the owning client PID. It is the reliable
+    // correlator to an AT-SPI application whose accessible name is the program
+    // prgname rather than the window app_id/wm_class (e.g. `pixy-hid` vs
+    // `ai.emeet.pixy-control`). KWin uses 0 for windows with no known PID.
+    let pid = values
+        .get("pid")
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|pid| *pid > 0);
 
     if uuid.is_none()
         && desktop_file_stem.is_none()
@@ -488,7 +496,7 @@ fn parse_window_info(output: &str, focused: bool) -> Option<KWinWindowInfo> {
         app: AppInfo {
             app_id: window_id,
             name,
-            pid: None,
+            pid,
             executable: desktop_file_stem.clone(),
             desktop_file_id,
             app_user_model_id: None,
@@ -518,6 +526,7 @@ fn parse_gdbus_map(output: &str) -> HashMap<String, String> {
         "desktopFile",
         "height",
         "minimized",
+        "pid",
         "resourceClass",
         "resourceName",
         "desktop",
@@ -668,6 +677,7 @@ mod tests {
              desktopFile: tidal-hifi\n\
              height: 999\n\
              minimized: false\n\
+             pid: 4242\n\
              resourceClass: tidal-hifi\n\
              resourceName: tidal-hifi\n\
              workspace: 2\n\
@@ -689,11 +699,40 @@ mod tests {
         );
         assert_eq!(parsed.app.window_title.as_deref(), Some("TIDAL Hi-Fi"));
         assert_eq!(parsed.app.name, "tidal-hifi");
+        assert_eq!(parsed.app.pid, Some(4242));
         assert_eq!(parsed.workspace, Some(2));
         assert!(!parsed.app.is_focused_candidate);
         let bounds = parsed.bounds.expect("expected bounds");
         assert_eq!(bounds.width, 1383.0);
         assert_eq!(bounds.height, 999.0);
+    }
+
+    #[test]
+    fn parses_window_info_without_pid_or_with_zero_pid_as_none() {
+        let absent = parse_window_info(
+            "caption: TIDAL Hi-Fi\n\
+             uuid: {71afaa3f-26ba-47a3-a07b-abc3ce9a4296}\n\
+             width: 1383\n\
+             height: 999\n\
+             x: 61\n\
+             y: 276\n",
+            false,
+        )
+        .expect("expected a parsed window");
+        assert_eq!(absent.app.pid, None);
+
+        let zero = parse_window_info(
+            "caption: TIDAL Hi-Fi\n\
+             pid: 0\n\
+             uuid: {71afaa3f-26ba-47a3-a07b-abc3ce9a4296}\n\
+             width: 1383\n\
+             height: 999\n\
+             x: 61\n\
+             y: 276\n",
+            false,
+        )
+        .expect("expected a parsed window");
+        assert_eq!(zero.app.pid, None);
     }
 
     #[test]

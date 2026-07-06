@@ -52,7 +52,22 @@ pub(crate) fn enrich_accessible_apps_from_windows(
         if app.info.executable.is_none() {
             app.info.executable = window_app.executable.clone();
         }
-        if app.info.desktop_file_id.is_none() {
+        // Adopt the matched window's authoritative desktop identity. An AT-SPI
+        // app's own `app_id` is an opaque bus ref (":1.16:/org/a11y/...") and
+        // its `desktop_file_id` is guessed from the executable name (e.g.
+        // "pixy-hid.desktop"), so neither round-trips to the identity an agent
+        // reads from list_resources(windows)/capture_desktop
+        // ("ai.emeet.pixy-control.desktop"). Once a window is matched (now
+        // reliably by client PID), the window's identity is authoritative, so
+        // rewriting these lets `select_app` resolve the tree under the app_id
+        // the agent already holds. Tree building and actions resolve through
+        // `object_ref`/`backend_ref`, never this string, so the rewrite is safe.
+        // Guard on the window carrying a real app_id (never the synthesized
+        // "backend:window_id" fallback).
+        if window.app_id.is_some() {
+            app.info.app_id = window_app.app_id.clone();
+        }
+        if window_app.desktop_file_id.is_some() {
             app.info.desktop_file_id = window_app.desktop_file_id.clone();
         }
         if app.info.toolkit_guess.is_none() {
@@ -146,6 +161,12 @@ fn linux_window_match_score(
     let window_resource_name = window.app_id.as_deref().map(normalize_match_key);
     let window_resource_class = window.wm_class.as_deref().map(normalize_match_key);
 
+    // An exact title match adds score but is deliberately NOT a standalone
+    // identity signal: generic/shared captions ("Settings", "Untitled", a
+    // document name) would otherwise correlate unrelated apps. The reliable
+    // cross-toolkit correlator for Wayland windows whose app_id/name differ
+    // from the AT-SPI app name is the client PID, which KWin's getWindowInfo
+    // provides and the PID rule above consumes.
     if !window_title.is_empty()
         && !app_title.is_empty()
         && normalize_match_key(&window_title) == normalize_match_key(&app_title)
@@ -627,6 +648,40 @@ mod tests {
     }
 
     #[test]
+    fn client_pid_correlates_wayland_window_to_atspi_app_when_names_differ() {
+        // Reproduces the emeet-cam case: a GTK4 Wayland window whose app_id
+        // (`ai.emeet.pixy-control`) and wm_class differ from the AT-SPI app
+        // name (`pixy-hid`, the prgname). The reliable correlator is the client
+        // PID that KWin's getWindowInfo now supplies; with it populated the
+        // window resolves to its real accessibility tree instead of falling
+        // back to synthetic geometry. Title alone must NOT be enough (guarded
+        // by linux_window_match_rejects_title_only_similarity).
+        let mut window = linux_window("kwin:{pixy}", "ai.emeet.pixy-control", true);
+        window.pid = Some(228_756);
+        window.title = Some("Cam Kontrol".to_string());
+
+        let mut app = app_info("pixy-hid", "pixy-hid");
+        app.pid = Some(228_756);
+        app.window_title = Some("Cam Kontrol".to_string());
+        assert!(
+            linux_window_matches_app(&window, &app),
+            "matching client PID should correlate the window to its AT-SPI app"
+        );
+
+        // A different PID with no other aligning signal must not match, even
+        // when the caption happens to collide.
+        let mut other = app_info("pixy-hid", "pixy-hid");
+        other.pid = Some(999_999);
+        other.window_title = Some("Cam Kontrol".to_string());
+        window.app_id = None;
+        window.wm_class = None;
+        assert!(
+            !linux_window_matches_app(&window, &other),
+            "a differing PID with only a shared caption must not match"
+        );
+    }
+
+    #[test]
     fn select_app_prefers_focused_candidate_when_selector_scores_tie() {
         let background = discovered_app("app-1", "Demo", "/org/a11y/demo/background");
         let mut focused = discovered_app("app-2", "Demo", "/org/a11y/demo/focused");
@@ -659,6 +714,46 @@ mod tests {
             .expect("selector should match both windows");
 
         assert_eq!(selected.window_id, focused.window_id);
+    }
+
+    #[test]
+    fn enrich_adopts_window_identity_so_window_app_id_resolves_to_the_tree() {
+        // The emeet-cam shape: an AT-SPI app discovered with an opaque bus-ref
+        // app_id and a prgname-guessed desktop_file_id, matched to its window
+        // purely by client PID. After enrichment it must carry the window's
+        // authoritative app_id/desktop_file_id so a selector using the window
+        // app_id (what agents read from list_resources(windows)) resolves here.
+        let mut app = discovered_app(
+            ":1.16:/org/a11y/atspi/accessible/root",
+            "pixy-hid",
+            "/org/a11y/pixy/app",
+        );
+        app.info.desktop_file_id = Some("pixy-hid.desktop".to_string());
+        app.info.pid = Some(321_330);
+
+        let mut window = linux_window("kwin:{pixy}", "ai.emeet.pixy-control.desktop", true);
+        window.pid = Some(321_330);
+        window.wm_class = Some("ai.emeet.pixy-control".to_string());
+        window.title = Some("Cam Kontrol".to_string());
+
+        enrich_accessible_apps_from_windows(std::slice::from_mut(&mut app), &[window]);
+
+        assert_eq!(app.info.app_id, "ai.emeet.pixy-control.desktop");
+        assert_eq!(
+            app.info.desktop_file_id.as_deref(),
+            Some("ai.emeet.pixy-control.desktop")
+        );
+
+        let selector = AppSelector {
+            app_id: Some("ai.emeet.pixy-control.desktop".to_string()),
+            desktop_file_id: None,
+            window_title: None,
+            name: None,
+        };
+        assert!(
+            select_app(std::slice::from_ref(&app), &selector).is_some(),
+            "the window app_id must now resolve to the enriched AT-SPI app"
+        );
     }
 
     #[test]
