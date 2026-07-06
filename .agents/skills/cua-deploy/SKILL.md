@@ -50,10 +50,14 @@ longer reads bundled copies from there.)
 ### Local deploy (default)
 
 Use when iterating on unreleased changes locally. Installs as `sky-cua@local` and refreshes the
-MCP runtime in one command; in Linux desktop sessions this also attempts a
-best-effort refresh of the user AT-SPI accessibility bus before sky-cua
-reconnects so wedged semantic trees do not survive deploys. Does not touch the
-marketplace.
+MCP runtime in one command. Resetting the user AT-SPI accessibility bus is
+opt-in (`--refresh-accessibility`): the reset wipes every running app's
+accessibility registration, and while Chromium apps re-register lazily, GTK apps
+register eagerly at startup and go dark until relaunched — so an always-on reset
+silently breaks semantic targeting of any GTK app running across the deploy.
+sky-cua self-heals a wedged AT-SPI connection on reconnect, so pass the flag only
+when the registry is genuinely wedged (and relaunch target GTK apps afterward).
+Does not touch the marketplace.
 
 A build-bearing deploy also rebuilds and stages the Android phone-companion APK
 automatically (toolchain-gated, change-detected — see "Android phone companion"
@@ -137,12 +141,14 @@ python3 install.py
 
 ## MCP runtime restart (standalone)
 
-Refresh the local MCP server install and bounce the runtime without a full deploy. In Linux
-desktop sessions this also attempts a best-effort refresh of the user AT-SPI
-accessibility bus before sky-cua reconnects:
+Refresh the local MCP server install and bounce the runtime without a full deploy. Resetting
+the user AT-SPI accessibility bus is opt-in (`--refresh-accessibility`) for the
+same reason as the deploy lane — it de-registers running GTK apps' trees until
+they are relaunched:
 
 ```bash
 python3 scripts/install_mcp_server.py --host claude-code --restart-runtime
+# add --refresh-accessibility only when the AT-SPI registry is wedged
 ```
 
 For OpenClaw, reload after config changes:
@@ -204,7 +210,7 @@ Set `SKY_CUA_ALLOW_STALE_DEPLOY=1` only to intentionally bypass the gate.
 
 | Script | Key flags |
 |---|---|
-| `deploy_plugin.py` | `--no-build`, `--symlink`, `--kwin-effect`, `--no-companion`, `--force-companion`, `--local-install-host` |
+| `deploy_plugin.py` | `--no-build`, `--symlink`, `--kwin-effect`, `--no-companion`, `--force-companion`, `--refresh-accessibility`, `--local-install-host` |
 | `package.py` | `--no-build`, `--platform`, `--version-from-tag [TAG]`, `--release-dir` |
 | `install.py` | `--agents`, `--mode {auto,repo,bundle}`, `--bundle-root`, `--target-dir`, `--kwin-effect`, `--skip-system-deps`, `--dry-run` |
-| `install_mcp_server.py` | `--host`, `--restart-runtime`, `--kwin-effect` |
+| `install_mcp_server.py` | `--host`, `--restart-runtime`, `--refresh-accessibility`, `--kwin-effect` |

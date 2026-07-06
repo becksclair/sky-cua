@@ -190,7 +190,9 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert parsed["plugins"][PLUGIN_ID]["enabled"] is True
     assert parsed["plugins"][COMPUTER_USE_COMPAT_PLUGIN_ID]["enabled"] is False
-    assert atspi_refreshes == 1
+    # The AT-SPI registry reset is opt-in (--refresh-accessibility); a default
+    # deploy must not wipe running apps' accessibility registrations.
+    assert atspi_refreshes == 0
     assert calls["restart_runtime"] is True
     assert calls["refresh_accessibility"] is False
     assert calls["host"] == "claude-code"

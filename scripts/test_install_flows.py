@@ -278,8 +278,16 @@ def test_generic_mcp_restart_runtime_stops_installed_processes(
 
     install_mcp_server.restart_runtime_processes(target_dir)
 
-    assert atspi_refreshes == 1
+    # The AT-SPI registry reset is opt-in: a plain restart must not wipe running
+    # apps' accessibility registrations.
+    assert atspi_refreshes == 0
     assert calls == [[target_dir]]
+
+    install_mcp_server.restart_runtime_processes(target_dir, refresh_accessibility=True)
+
+    # Explicitly requested, the reset runs.
+    assert atspi_refreshes == 1
+    assert calls == [[target_dir], [target_dir]]
 
 
 def test_refresh_accessibility_bus_restarts_user_atspi(

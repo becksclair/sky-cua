@@ -758,7 +758,7 @@ def link_current_platform_binaries(target_dir: Path, bin_dir: Path) -> None:
             print(f"Copied {src} -> {dst}")
 
 
-def restart_runtime_processes(target_dir: Path, *, refresh_accessibility: bool = True) -> None:
+def restart_runtime_processes(target_dir: Path, *, refresh_accessibility: bool = False) -> None:
     """Stop installed sky-cua runtime processes so hosts respawn fresh binaries."""
     if refresh_accessibility:
         refresh_accessibility_bus()
@@ -911,7 +911,7 @@ def install_local_mcp_server(
     restart_runtime: bool = False,
     bundle_root: Path | None = None,
     claude_config_dir: Path | None = None,
-    refresh_accessibility: bool = True,
+    refresh_accessibility: bool = False,
     install_input_helper: bool = False,
     input_helper_group: str | None = None,
     browser_eval: str | None = None,
@@ -1130,6 +1130,17 @@ def main() -> int:
             "KWin agent-cursor effect (Linux/KDE only)."
         ),
     )
+    parser.add_argument(
+        "--refresh-accessibility",
+        action="store_true",
+        help=(
+            "With --restart-runtime, reset the user AT-SPI registry (pkill "
+            "at-spi2-registryd + restart at-spi-dbus-bus) before reconnecting. Off "
+            "by default because it wipes every running app's accessibility "
+            "registration; GTK apps must be relaunched afterwards. Use only when "
+            "AT-SPI is genuinely wedged."
+        ),
+    )
     args = parser.parse_args()
 
     target_dir = args.target_dir.resolve()
@@ -1148,6 +1159,7 @@ def main() -> int:
         browser_eval=args.browser_eval,
         model_supports_images=args.model_supports_images,
         presence_enabled=args.presence,
+        refresh_accessibility=args.refresh_accessibility,
     )
 
     if args.bin_dir:

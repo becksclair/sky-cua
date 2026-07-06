@@ -103,7 +103,22 @@ def fast_deploy(args: argparse.Namespace) -> int:
     destination = installed_plugin_root(args.codex_home)
     stale_roots = retired_channel_cache_roots(args.codex_home)
     if sys.platform != "win32":
-        refresh_accessibility_bus()
+        # The AT-SPI registry reset (pkill at-spi2-registryd + restart
+        # at-spi-dbus-bus) is a heavy hammer: it wipes every running app's
+        # accessibility registration, not just sky-cua's. Chromium apps
+        # re-register lazily on the next query, but GTK apps register eagerly at
+        # startup and go dark until relaunched — so a deploy silently breaks
+        # semantic targeting of any GTK app running across it (a live-smoke flake
+        # generator). sky-cua already self-heals a wedged AT-SPI connection on
+        # reconnect (reset_accessibility_connection + retry), so the reset is
+        # opt-in rather than default. Pass --refresh-accessibility when the
+        # registry is genuinely wedged.
+        if getattr(args, "refresh_accessibility", False):
+            refresh_accessibility_bus()
+            print(
+                "note: reset the user AT-SPI registry; GTK apps running across "
+                "this deploy must be relaunched to re-register their trees.",
+            )
         stop_unix_runtime_processes([*stale_roots, destination])
     drop_retired_channel_caches(args.codex_home, stale_roots=stale_roots, stop_unix=False)
     stop_windows_cache_processes(destination)
@@ -236,6 +251,16 @@ def main(argv: list[str] | None = None) -> int:
         choices=("true", "false"),
         default=None,
         help="Persist an explicit model image-capability override for the refreshed local MCP install.",
+    )
+    parser.add_argument(
+        "--refresh-accessibility",
+        action="store_true",
+        help=(
+            "Reset the user AT-SPI registry (pkill at-spi2-registryd + restart "
+            "at-spi-dbus-bus) before reconnecting. Off by default because it wipes "
+            "every running app's accessibility registration; GTK apps must be "
+            "relaunched afterwards. Use only when AT-SPI is genuinely wedged."
+        ),
     )
     args = parser.parse_args(argv)
     return fast_deploy(args)
