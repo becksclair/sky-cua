@@ -60,9 +60,9 @@ FIXTURES = {
 }
 PI_MCP_WRAPPER_GUIDANCE = (
     "When using Pi's generic mcp tool, pass an object with tool set to the sky-cua "
-    "tool name and args set to a JSON object, not a JSON string. Prefer "
-    'sky_cua_observe with args {"surface":"desktop","element_query":"<title>"}, '
-    'then sky_cua_desktop_keyboard with args {"operation":"press_key","key":"Enter"}. '
+    "tool name and args set to a JSON string. Prefer "
+    'sky_cua_observe with args "{\\"surface\\":\\"desktop\\",\\"element_query\\":\\"<title>\\"}", '
+    'then sky_cua_desktop_keyboard with args "{\\"operation\\":\\"press_key\\",\\"key\\":\\"Enter\\"}". '
     "Do not call desktop list_resources with title_contains; desktop windows do not support "
     "that filter."
 )
@@ -92,6 +92,7 @@ SKY_CUA_ACTION_TOOL_NAMES = {
     "phone_pair_wireless",
     "phone_pointer",
     "phone_setup",
+    "desktop_launch_app",
 }
 
 
@@ -602,8 +603,8 @@ def run_fixture_smoke(
 
 PI_WIRING_GUIDANCE = (
     "When using Pi's generic mcp tool, pass an object with tool set to the sky-cua tool name and "
-    "args set to a JSON object, not a JSON string. Use sky_cua_doctor with args {} or "
-    'sky_cua_observe with args {"surface":"desktop"}.'
+    'args set to a JSON string. Use sky_cua_doctor with args "{}" or '
+    'sky_cua_observe with args "{\\"surface\\":\\"desktop\\"}".'
 )
 
 

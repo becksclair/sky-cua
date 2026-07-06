@@ -43,6 +43,7 @@ GROUPED_TOOLS: frozenset[str] = frozenset(
         "desktop_pointer",
         "desktop_keyboard",
         "desktop_action",
+        "desktop_launch_app",
         "desktop_scroll",
         "desktop_semantic",
         "desktop_set_value",
@@ -147,7 +148,7 @@ def require_grouped_action_shape(tools: Iterable[dict[str, Any]]) -> None:
         raise ProbeFailure(f"doctor must be read-only diagnostics: {doctor!r}")
 
     pointer = _tool_schema(by_name, "desktop_pointer")
-    pointer_description = str(by_name["desktop_pointer"].get("description", ""))
+    pointer_description = str(by_name["desktop_pointer"].get("description", "")).lower()
     if "do not call with only operation" not in pointer_description:
         raise ProbeFailure("desktop_pointer description must reject operation-only calls")
     pointer_props = _properties(pointer)
@@ -156,7 +157,7 @@ def require_grouped_action_shape(tools: Iterable[dict[str, Any]]) -> None:
             raise ProbeFailure(f"desktop_pointer must advertise {field} coordinate")
 
     action = _tool_schema(by_name, "desktop_action")
-    action_description = str(by_name["desktop_action"].get("description", ""))
+    action_description = str(by_name["desktop_action"].get("description", "")).lower()
     if "do not call with only operation" not in action_description:
         raise ProbeFailure("desktop_action description must reject operation-only calls")
     action_props = _properties(action)
@@ -243,6 +244,22 @@ def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
     if "steps" in desktop_scroll_props or "delta_y" in desktop_scroll_props:
         raise ProbeFailure("desktop_scroll must not expose legacy magnitude fields")
 
+    launch_app = _tool_schema(by_name, "desktop_launch_app")
+    launch_app_description = str(by_name["desktop_launch_app"].get("description", ""))
+    if "private isolated desktop" not in launch_app_description:
+        raise ProbeFailure("desktop_launch_app description must state isolated-desktop scope")
+    launch_app_props = _properties(launch_app)
+    if not _required_string_schema_rejects_empty(launch_app_props.get("command")):
+        raise ProbeFailure("desktop_launch_app command must reject empty strings")
+    args_schema = launch_app_props.get("args")
+    if not isinstance(args_schema, dict) or args_schema.get("type") != "array":
+        raise ProbeFailure("desktop_launch_app args must be an array")
+    args_items = args_schema.get("items")
+    if not _required_string_schema_rejects_empty(args_items):
+        raise ProbeFailure("desktop_launch_app args items must reject empty strings")
+    if launch_app.get("required") != ["command"]:
+        raise ProbeFailure("desktop_launch_app must require command")
+
     install_props = _properties(_tool_schema(by_name, "phone_app_install"))
     if "apk_path" in install_props:
         raise ProbeFailure("phone_app_install must not expose apk_path alias")
@@ -310,6 +327,26 @@ def _string_schema_branch_has_min_length(schema: object, min_length: int) -> boo
     return False
 
 
+def _required_string_schema_rejects_empty(schema: object) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list):
+        return bool(any_of) and all(
+            _required_string_schema_rejects_empty(entry) for entry in any_of
+        )
+    if schema.get("type") != "string":
+        return False
+    if "const" in schema:
+        const = schema.get("const")
+        return isinstance(const, str) and const != ""
+    enum = schema.get("enum")
+    if isinstance(enum, list):
+        return bool(enum) and all(isinstance(value, str) and value != "" for value in enum)
+    min_length = schema.get("minLength")
+    return isinstance(min_length, int) and min_length >= 1
+
+
 def _schema_enum_values(schema: object) -> list[Any] | None:
     if not isinstance(schema, dict):
         return None
@@ -343,7 +380,9 @@ def grouped_payload(result: dict[str, Any], *, tool: str, branch: str) -> dict[s
     return payload
 
 
-def grouped_error_payload(result: dict[str, Any], *, tool: str, code: str) -> dict[str, Any]:
+def grouped_error_payload(
+    result: dict[str, Any], *, tool: str, code: str, branch: str | None = None
+) -> dict[str, Any]:
     if result.get("isError") is not True:
         raise ProbeFailure(f"{tool} invalid branch did not set isError: {result!r}")
     payload = result.get("structuredContent")
@@ -351,9 +390,14 @@ def grouped_error_payload(result: dict[str, Any], *, tool: str, code: str) -> di
         raise ProbeFailure(f"{tool} invalid branch returned no structuredContent: {result!r}")
     if payload.get("tool") != tool:
         raise ProbeFailure(f"{tool} invalid branch returned wrong grouped identity: {payload!r}")
-    if payload.get("branch") is not None:
-        raise ProbeFailure(f"{tool} invalid branch did not return branch=null: {payload!r}")
+    if payload.get("branch") != branch:
+        raise ProbeFailure(
+            f"{tool} invalid branch returned wrong branch: "
+            f"expected {branch!r}, got {payload.get('branch')!r}; payload={payload!r}"
+        )
     error = payload.get("error")
+    if branch is not None and not isinstance(error, dict):
+        error = payload.get("result")
     if not isinstance(error, dict) or error.get("code") != code:
         raise ProbeFailure(f"{tool} invalid branch returned wrong error code: {payload!r}")
     return payload
@@ -374,6 +418,7 @@ def make_client(*, installed: bool, phone_enabled: bool, codex_home: Path) -> Mc
     env = dict(os.environ)
     env.pop("SKY_CUA_MCP_TOOL_PROFILE", None)
     env.setdefault("SKY_CUA_MODEL_SUPPORTS_IMAGES", "false")
+    env["SKY_CUA_ISOLATED_DESKTOP"] = "0"
     if phone_enabled:
         env.setdefault("SKY_CUA_PHONE", "1")
     return McpClient(
@@ -408,10 +453,15 @@ def probe_grouped(*, installed: bool, phone_enabled: bool, codex_home: Path) -> 
                 "phone_pointer",
                 {"operation": "tap", "session_id": "phone-1", "x": 1, "y": 1},
             ),
+            (14, "desktop_launch_app", {"command": "true"}),
         ]
         for request_id, tool, arguments in invalid_cases:
             invalid = client.tools_call(request_id, tool, arguments)
-            grouped_error_payload(invalid, tool=tool, code="InvalidRequest")
+            expected_code = (
+                "IsolatedDesktopRequired" if tool == "desktop_launch_app" else "InvalidRequest"
+            )
+            expected_branch = "default" if tool == "desktop_launch_app" else None
+            grouped_error_payload(invalid, tool=tool, code=expected_code, branch=expected_branch)
         steps.append(step_pass("grouped.invalid_branch", f"cases={len(invalid_cases)}"))
 
         for request_id, tool, arguments, branch in (

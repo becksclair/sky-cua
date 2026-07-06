@@ -57,8 +57,9 @@ def test_agent_smoke_pi_prompt_documents_generic_mcp_wrapper() -> None:
     )
 
     assert "Pi's generic mcp tool" in prompt
-    assert '"args":"{' not in prompt
-    assert "args set to a JSON object, not a JSON string" in prompt
+    assert "args set to a JSON string" in prompt
+    assert "args set to a JSON object" not in prompt
+    assert 'args "{\\"operation\\":\\"press_key\\",\\"key\\":\\"Enter\\"}"' in prompt
     assert "Do not call desktop list_resources with title_contains" in prompt
 
 
@@ -528,6 +529,130 @@ def test_agent_smoke_accepts_pi_anonymous_split_action_events(tmp_path: Path) ->
     )
 
     assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(stdout) is True
+
+
+def test_pi_redactor_summarizes_ctx_execute_stdio_mcp_intent_without_evidence(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "pi.raw.jsonl"
+    redacted = tmp_path / "pi.stdout.log"
+    raw.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "tool_execution_start",
+                        "toolName": "ctx_execute",
+                        "args": {
+                            "language": "javascript",
+                            "code": (
+                                "spawn('/home/bex/.local/share/sky-cua/pi_mcp_wrapper.sh');"
+                                "JSON.stringify({method:'tools/call',params:{name:'desktop_keyboard',"
+                                "arguments:{operation:'press_key',key:'Enter'}}});"
+                            ),
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_execution_end",
+                        "toolName": "ctx_execute",
+                        "isError": False,
+                        "result": {"stdout": "dismissed"},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    _agent_mcp_smoke.redact_pi_json_stdout(raw, redacted)
+
+    text = redacted.read_text(encoding="utf-8")
+    assert "pi_mcp_wrapper.sh" not in text
+    assert "press_key" not in text
+    assert "ctx_execute_mcp_intent" in text
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_tool_evidence(redacted) is False
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(redacted) is False
+
+
+def test_pi_redactor_rejects_ctx_execute_without_known_mcp_wrapper(tmp_path: Path) -> None:
+    raw = tmp_path / "pi.raw.jsonl"
+    redacted = tmp_path / "pi.stdout.log"
+    raw.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "tool_execution_start",
+                        "toolName": "ctx_execute",
+                        "args": {
+                            "language": "javascript",
+                            "code": (
+                                "require('child_process').spawn('xdotool', ['key', 'Enter']);"
+                                "JSON.stringify({method:'tools/call',params:{name:'desktop_keyboard'}});"
+                            ),
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_execution_end",
+                        "toolName": "ctx_execute",
+                        "isError": False,
+                        "result": {"stdout": "dismissed"},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    _agent_mcp_smoke.redact_pi_json_stdout(raw, redacted)
+
+    assert "ctx_execute_mcp_intent" not in redacted.read_text(encoding="utf-8")
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(redacted) is False
+
+
+def test_pi_redactor_rejects_ctx_execute_with_generic_client_name_only(tmp_path: Path) -> None:
+    raw = tmp_path / "pi.raw.jsonl"
+    redacted = tmp_path / "pi.stdout.log"
+    raw.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "tool_execution_start",
+                        "toolName": "ctx_execute",
+                        "args": {
+                            "language": "javascript",
+                            "code": (
+                                "const note = 'sky-cua-client';"
+                                "JSON.stringify({method:'tools/call',params:{name:'desktop_keyboard'}});"
+                            ),
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_execution_end",
+                        "toolName": "ctx_execute",
+                        "isError": False,
+                        "result": {"stdout": "dismissed"},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    _agent_mcp_smoke.redact_pi_json_stdout(raw, redacted)
+
+    assert "ctx_execute_mcp_intent" not in redacted.read_text(encoding="utf-8")
+    assert live_agent_mcp_smoke._stdout_has_sky_cua_action_tool_evidence(redacted) is False
 
 
 def test_agent_smoke_rejects_mismatched_split_tool_completion(tmp_path: Path) -> None:

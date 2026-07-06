@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,36 @@ def test_grouped_error_payload_requires_structured_error_code() -> None:
     )
 
     assert payload["error"]["code"] == "InvalidRequest"
+
+    delegated_payload = probe.grouped_error_payload(
+        {
+            "isError": True,
+            "structuredContent": {
+                "tool": "desktop_launch_app",
+                "branch": "default",
+                "result": {"code": "IsolatedDesktopRequired", "message": "disabled"},
+            },
+        },
+        tool="desktop_launch_app",
+        code="IsolatedDesktopRequired",
+        branch="default",
+    )
+
+    assert delegated_payload["result"]["code"] == "IsolatedDesktopRequired"
+
+    with pytest.raises(probe.ProbeFailure, match="wrong error code"):
+        probe.grouped_error_payload(
+            {
+                "isError": True,
+                "structuredContent": {
+                    "tool": "status",
+                    "branch": None,
+                    "result": {"code": "InvalidRequest", "message": "wrong slot"},
+                },
+            },
+            tool="status",
+            code="InvalidRequest",
+        )
 
     with pytest.raises(probe.ProbeFailure, match="wrong error code"):
         probe.grouped_error_payload(
@@ -189,6 +220,27 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
             },
         },
         {
+            "name": "desktop_launch_app",
+            "description": "Launch an application into the agent's private isolated desktop.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["command"],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "minLength": 1,
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                    },
+                },
+            },
+        },
+        {
             "name": "phone_pointer",
             "inputSchema": {
                 "type": "object",
@@ -275,6 +327,33 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
     ]
 
     probe.require_grouped_action_shape(base_tools)
+
+    weak_launch_command = copy.deepcopy(base_tools)
+    launch_index = next(
+        index
+        for index, tool in enumerate(weak_launch_command)
+        if tool["name"] == "desktop_launch_app"
+    )
+    weak_launch_command[launch_index]["inputSchema"]["properties"]["command"] = {
+        "anyOf": [
+            {"type": "string", "minLength": 1},
+            {"type": "string", "const": ""},
+            {"type": "null"},
+        ]
+    }
+    with pytest.raises(probe.ProbeFailure, match="desktop_launch_app command"):
+        probe.require_grouped_action_shape(weak_launch_command)
+
+    weak_launch_args = copy.deepcopy(base_tools)
+    weak_launch_args[launch_index]["inputSchema"]["properties"]["args"]["items"] = {
+        "anyOf": [
+            {"type": "string", "minLength": 1},
+            {"type": "string", "const": ""},
+            {"type": "null"},
+        ]
+    }
+    with pytest.raises(probe.ProbeFailure, match="desktop_launch_app args items"):
+        probe.require_grouped_action_shape(weak_launch_args)
 
     vague_pointer = [dict(tool) for tool in base_tools]
     pointer_index = next(

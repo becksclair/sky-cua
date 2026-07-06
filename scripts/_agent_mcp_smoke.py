@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -20,6 +21,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OPENCODE_SMOKE_MODEL = "opencode/deepseek-v4-flash-free"
 DEFAULT_PI_SMOKE_MODEL = "opencode/deepseek-v4-flash-free"
 TOOL_FAILURE_STATUSES = {"canceled", "cancelled", "error", "failed", "failure", "timeout"}
+SKY_CUA_CTX_EXECUTE_MCP_WRAPPER_MARKERS = (
+    "pi_mcp_wrapper.sh",
+    "/sky-cua/bin/sky-cua-client",
+    ".local/share/sky-cua/bin/sky-cua-client",
+)
+SKY_CUA_CTX_EXECUTE_TOOL_RE = re.compile(
+    r"""(?x)
+    (?:
+        ["'](?:name|tool)["']\s*:\s*["'](?P<quoted>[A-Za-z0-9_-]+)["']
+        |
+        \b(?:name|tool)\s*:\s*["'](?P<bare>[A-Za-z0-9_-]+)["']
+    )
+    """
+)
 RESULT_PAYLOAD_KEYS = (
     "result",
     "content",
@@ -339,6 +354,9 @@ def redacted_pi_event(event: dict[str, Any]) -> dict[str, Any] | None:
             redacted[key] = value
     for key in ("arguments", "args", "input", "parameters"):
         promote_tool_identity(event.get(key), redacted)
+    ctx_execute_mcp_intent = ctx_execute_mcp_intent_summary(event)
+    if ctx_execute_mcp_intent is not None:
+        redacted["ctx_execute_mcp_intent"] = ctx_execute_mcp_intent
     for key in ("isError", "is_error", "status", "phase", "state"):
         value = event.get(key)
         if isinstance(value, (bool, str)):
@@ -378,6 +396,66 @@ def redacted_pi_event(event: dict[str, Any]) -> dict[str, Any] | None:
     if set(redacted) == {"type"}:
         return None
     return redacted if redacted else None
+
+
+def ctx_execute_mcp_intent_summary(event: dict[str, Any]) -> dict[str, Any] | None:
+    if not event_names_ctx_execute(event):
+        return None
+    code = first_string_for_key(event, "code")
+    if not code:
+        return None
+    uses_known_wrapper = any(marker in code for marker in SKY_CUA_CTX_EXECUTE_MCP_WRAPPER_MARKERS)
+    uses_tools_call = "tools/call" in code
+    if not uses_known_wrapper or not uses_tools_call:
+        return None
+    tools = sorted(
+        {
+            match.group("quoted") or match.group("bare")
+            for match in SKY_CUA_CTX_EXECUTE_TOOL_RE.finditer(code)
+            if match.group("quoted") or match.group("bare")
+        }
+    )
+    if not tools:
+        return None
+    return {
+        "tools": tools,
+        "uses_known_wrapper": True,
+        "uses_tools_call": True,
+    }
+
+
+def event_names_ctx_execute(value: object) -> bool:
+    if isinstance(value, list):
+        return any(event_names_ctx_execute(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    for key in ("toolName", "tool_name", "tool", "name"):
+        item = value.get(key)
+        if isinstance(item, str) and item == "ctx_execute":
+            return True
+    for key in ("arguments", "args", "details", "input", "parameters", "toolCall", "tool_call"):
+        if event_names_ctx_execute(value.get(key)):
+            return True
+    return False
+
+
+def first_string_for_key(value: object, wanted_key: str) -> str | None:
+    if isinstance(value, list):
+        for item in value:
+            found = first_string_for_key(item, wanted_key)
+            if found is not None:
+                return found
+        return None
+    if not isinstance(value, dict):
+        return None
+    item = value.get(wanted_key)
+    if isinstance(item, str):
+        return item
+    for key in ("arguments", "args", "details", "input", "parameters", "toolCall", "tool_call"):
+        found = first_string_for_key(value.get(key), wanted_key)
+        if found is not None:
+            return found
+    return None
 
 
 def promote_tool_identity(value: object, redacted: dict[str, Any]) -> None:
