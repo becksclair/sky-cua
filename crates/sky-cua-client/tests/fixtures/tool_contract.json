@@ -5319,11 +5319,11 @@
             "type": "number"
           },
           "x": {
-            "description": "Click x coordinate or drag start x.",
+            "description": "Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
             "type": "number"
           },
           "y": {
-            "description": "Click y coordinate or drag start y.",
+            "description": "Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
             "type": "number"
           }
         },
@@ -5452,11 +5452,11 @@
                     "type": "string"
                   },
                   "x": {
-                    "description": "Click x coordinate or drag start x.",
+                    "description": "Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                     "type": "number"
                   },
                   "y": {
-                    "description": "Click y coordinate or drag start y.",
+                    "description": "Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                     "type": "number"
                   }
                 },
@@ -5578,11 +5578,11 @@
                     "type": "string"
                   },
                   "x": {
-                    "description": "Click x coordinate or drag start x.",
+                    "description": "Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                     "type": "number"
                   },
                   "y": {
-                    "description": "Click y coordinate or drag start y.",
+                    "description": "Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                     "type": "number"
                   }
                 },
@@ -5801,11 +5801,11 @@
                     "type": "number"
                   },
                   "x": {
-                    "description": "Click x coordinate or drag start x.",
+                    "description": "Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                     "type": "number"
                   },
                   "y": {
-                    "description": "Click y coordinate or drag start y.",
+                    "description": "Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                     "type": "number"
                   }
                 },
@@ -5900,11 +5900,11 @@
             "type": "number"
           },
           "x": {
-            "description": "Click x coordinate or drag start x.",
+            "description": "Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
             "type": "number"
           },
           "y": {
-            "description": "Click y coordinate or drag start y.",
+            "description": "Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
             "type": "number"
           }
         },

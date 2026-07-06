@@ -2021,13 +2021,13 @@ fn linux_window_elements(window: &linux_windowing::LinuxWindowInfo) -> Vec<Eleme
     }
     let app = app_from_linux_window(window);
 
-    let mut elements = vec![ElementNode {
+    let elements = vec![ElementNode {
         element_index: 0,
         parent_index: None,
         role: "window".to_string(),
         name: app.window_title.clone().or_else(|| Some(app.name.clone())),
         description: Some(format!(
-            "{} window surfaced from the window registry without a matching AT-SPI tree. The child regions below are geometric anchors only: use them to narrow the search space, then confirm the real target on the screenshot before clicking, dragging, or typing.",
+            "{} window surfaced from the window registry without a matching AT-SPI tree, so no semantic elements are available for this window. Do not guess at sub-elements: capture this window, read the target's pixel position off the screenshot, and click with desktop_pointer using this capture's snapshot_id plus those x/y pixels (the snapshot_id translates screenshot pixels to the screen for you).",
             window.backend
         )),
         value: None,
@@ -2040,332 +2040,7 @@ fn linux_window_elements(window: &linux_windowing::LinuxWindowInfo) -> Vec<Eleme
         backend_ref: None,
     }];
 
-    if bounds.width < 220.0 || bounds.height < 180.0 {
-        return elements;
-    }
-
-    let top_band_height = (bounds.height * 0.13).clamp(44.0, 96.0);
-    let content_y = bounds.y + top_band_height;
-    let content_height = (bounds.height - top_band_height).max(40.0);
-    let sidebar_width = if bounds.width >= 520.0 {
-        (bounds.width * 0.23).clamp(140.0, 320.0)
-    } else {
-        0.0
-    };
-    let space = bounds.space.clone();
-    let main_x = bounds.x + sidebar_width;
-    let main_width = (bounds.width - sidebar_width).max(120.0);
-    let header_bounds = RectF {
-        x: bounds.x,
-        y: bounds.y,
-        width: bounds.width,
-        height: top_band_height,
-        space: space.clone(),
-    };
-    let search_width = (bounds.width * 0.38)
-        .clamp(180.0, 480.0)
-        .min(bounds.width - 32.0);
-    let search_height = (top_band_height * 0.62).clamp(28.0, 52.0);
-    let search_bounds = RectF {
-        x: bounds.x + ((bounds.width - search_width) / 2.0),
-        y: bounds.y + ((top_band_height - search_height) / 2.0),
-        width: search_width,
-        height: search_height,
-        space: space.clone(),
-    };
-    let toolbar_width = (bounds.width * 0.18).clamp(120.0, 260.0);
-    let toolbar_bounds = RectF {
-        x: bounds.x + bounds.width - toolbar_width - 12.0,
-        y: bounds.y,
-        width: toolbar_width,
-        height: top_band_height,
-        space: space.clone(),
-    };
-
-    push_kwin_anchor(
-        &mut elements,
-        0,
-        "wayland_header_band",
-        Some("Top band".to_string()),
-        "Heuristic top band derived from the KWin window bounds. It often contains app navigation, tabs, or a search bar, but it is not a semantic tree node. Use the screenshot to verify the real control before acting.",
-        vec![
-            "kwin_fallback",
-            "physical_target",
-            "vision_anchor",
-            "container",
-            "action_like",
-        ],
-        header_bounds,
-    );
-
-    push_kwin_anchor(
-        &mut elements,
-        1,
-        "wayland_search_candidate",
-        Some("Search candidate".to_string()),
-        "Heuristic search/text-entry candidate carved out of the top band. Treat it as a likely text-target anchor only; confirm the visible search field on the screenshot before clicking or typing.",
-        vec![
-            "kwin_fallback",
-            "physical_target",
-            "vision_anchor",
-            "leaf",
-            "search_like",
-            "text_like",
-        ],
-        search_bounds,
-    );
-
-    push_kwin_anchor(
-        &mut elements,
-        1,
-        "wayland_toolbar_candidate",
-        Some("Action strip candidate".to_string()),
-        "Heuristic action strip on the right side of the top band. It often contains buttons or profile controls, but the screenshot must confirm the actual target.",
-        vec![
-            "kwin_fallback",
-            "physical_target",
-            "vision_anchor",
-            "leaf",
-            "action_like",
-        ],
-        toolbar_bounds,
-    );
-
-    if sidebar_width > 0.0 {
-        let sidebar_bounds = RectF {
-            x: bounds.x,
-            y: content_y,
-            width: sidebar_width,
-            height: content_height,
-            space: space.clone(),
-        };
-        let sidebar_index = push_kwin_anchor(
-            &mut elements,
-            0,
-            "wayland_sidebar_region",
-            Some("Sidebar candidate".to_string()),
-            "Heuristic left-side navigation rail derived from the window geometry. It is useful for orienting around libraries, playlists, or side panels, but the screenshot should confirm the visible list or rail before interaction.",
-            vec![
-                "kwin_fallback",
-                "physical_target",
-                "vision_anchor",
-                "container",
-                "navigation_like",
-                "list_like",
-            ],
-            sidebar_bounds.clone(),
-        );
-        let sidebar_list_height =
-            (sidebar_bounds.height * 0.72).clamp(120.0, sidebar_bounds.height);
-        let sidebar_list_bounds = RectF {
-            x: sidebar_bounds.x,
-            y: sidebar_bounds.y + 8.0,
-            width: sidebar_bounds.width,
-            height: sidebar_list_height - 8.0,
-            space: space.clone(),
-        };
-        let sidebar_list_index = push_kwin_anchor(
-            &mut elements,
-            sidebar_index,
-            "wayland_list_candidate",
-            Some("Sidebar list candidate".to_string()),
-            "Heuristic list-like region inside the sidebar. Use it as a structural hint for playlist or library rails, then verify the actual rows on the screenshot before clicking or scrolling.",
-            vec![
-                "kwin_fallback",
-                "physical_target",
-                "vision_anchor",
-                "leaf",
-                "list_like",
-                "navigation_like",
-            ],
-            sidebar_list_bounds.clone(),
-        );
-        let sidebar_row_band_count =
-            ((sidebar_list_bounds.height / 96.0).floor() as usize).clamp(2, 5);
-        let sidebar_row_band_height = (sidebar_list_bounds.height * 0.16)
-            .clamp(46.0, 104.0)
-            .min((sidebar_list_bounds.height - 12.0).max(40.0));
-        let sidebar_row_band_gap = ((sidebar_list_bounds.height
-            - sidebar_row_band_height * sidebar_row_band_count as f64)
-            / (sidebar_row_band_count as f64 + 1.0))
-            .clamp(6.0, 28.0);
-        for band in 0..sidebar_row_band_count {
-            let row_y = sidebar_list_bounds.y
-                + sidebar_row_band_gap
-                + band as f64 * (sidebar_row_band_height + sidebar_row_band_gap);
-            push_kwin_anchor(
-                &mut elements,
-                sidebar_list_index,
-                "wayland_row_band_candidate",
-                Some(format!("Sidebar row band candidate {}", band + 1)),
-                "Heuristic visible row band inside the sidebar list. It often contains playlist or library rows with text and context actions. Verify the row text on the screenshot before clicking, right-clicking, or dragging.",
-                vec![
-                    "kwin_fallback",
-                    "physical_target",
-                    "vision_anchor",
-                    "leaf",
-                    "list_like",
-                    "row_like",
-                    "text_like",
-                ],
-                RectF {
-                    x: sidebar_list_bounds.x + 4.0,
-                    y: row_y,
-                    width: (sidebar_list_bounds.width - 8.0).max(40.0),
-                    height: sidebar_row_band_height,
-                    space: sidebar_list_bounds.space.clone(),
-                },
-            );
-        }
-    }
-
-    let main_bounds = RectF {
-        x: main_x,
-        y: content_y,
-        width: main_width,
-        height: content_height,
-        space: space.clone(),
-    };
-    let main_index = push_kwin_anchor(
-        &mut elements,
-        0,
-        "wayland_main_region",
-        Some("Main content candidate".to_string()),
-        "Heuristic main content region. This usually contains the primary page or detail view. Use it to orient the screenshot search, not as a promise about semantics.",
-        vec![
-            "kwin_fallback",
-            "physical_target",
-            "vision_anchor",
-            "container",
-            "content_like",
-        ],
-        main_bounds.clone(),
-    );
-    let list_candidate_height = (main_bounds.height * 0.68).clamp(140.0, main_bounds.height);
-    let main_list_bounds = RectF {
-        x: main_bounds.x + 8.0,
-        y: main_bounds.y + 8.0,
-        width: (main_bounds.width - 16.0).max(40.0),
-        height: (list_candidate_height - 8.0).max(40.0),
-        space,
-    };
-    let main_list_index = push_kwin_anchor(
-        &mut elements,
-        main_index,
-        "wayland_list_candidate",
-        Some("Main list candidate".to_string()),
-        "Heuristic list/grid region inside the main content area. This is often where search results, playlists, or tracks appear. Confirm the visible rows or tiles on the screenshot before clicking, scrolling, or dragging.",
-        vec![
-            "kwin_fallback",
-            "physical_target",
-            "vision_anchor",
-            "leaf",
-            "list_like",
-            "content_like",
-        ],
-        main_list_bounds.clone(),
-    );
-    let main_row_band_count = ((main_list_bounds.height / 108.0).floor() as usize).clamp(2, 5);
-    let visible_row_band_height = (main_list_bounds.height * 0.11)
-        .clamp(44.0, 104.0)
-        .min((main_list_bounds.height - 12.0).max(40.0));
-    let row_band_width = (main_list_bounds.width - 8.0).max(56.0);
-    let main_row_band_gap = ((main_list_bounds.height
-        - visible_row_band_height * main_row_band_count as f64)
-        / (main_row_band_count as f64 + 1.0))
-        .clamp(8.0, 32.0);
-    for band in 0..main_row_band_count {
-        let row_y = main_list_bounds.y
-            + main_row_band_gap
-            + band as f64 * (visible_row_band_height + main_row_band_gap);
-        push_kwin_anchor(
-            &mut elements,
-            main_list_index,
-            "wayland_row_band_candidate",
-            Some(format!("Main row band candidate {}", band + 1)),
-            "Heuristic visible row band inside the main list/grid area. It often contains track or result rows with text and row-level actions. Use the screenshot to confirm the real row before clicking or opening a context menu.",
-            vec![
-                "kwin_fallback",
-                "physical_target",
-                "vision_anchor",
-                "leaf",
-                "list_like",
-                "row_like",
-                "text_like",
-            ],
-            RectF {
-                x: main_list_bounds.x,
-                y: row_y,
-                width: row_band_width,
-                height: visible_row_band_height,
-                space: main_bounds.space.clone(),
-            },
-        );
-    }
-    let action_cluster_width = (main_bounds.width * 0.18).clamp(64.0, 180.0);
-    let action_cluster_height = (visible_row_band_height * 1.25).clamp(44.0, 120.0);
-    for band in 0..main_row_band_count {
-        let row_y = main_list_bounds.y
-            + main_row_band_gap
-            + band as f64 * (visible_row_band_height + main_row_band_gap);
-        push_kwin_anchor(
-            &mut elements,
-            main_list_index,
-            "wayland_action_cluster_candidate",
-            Some(format!("Main action cluster candidate {}", band + 1)),
-            "Heuristic right-edge action cluster inside a visible row area. This often lines up with overflow buttons, kebab menus, or row-level actions. Confirm the visible affordance on the screenshot before clicking or right-clicking.",
-            vec![
-                "kwin_fallback",
-                "physical_target",
-                "vision_anchor",
-                "leaf",
-                "action_like",
-                "menu_like",
-            ],
-            RectF {
-                x: (main_bounds.x + main_bounds.width - action_cluster_width - 12.0)
-                    .max(main_bounds.x + 8.0),
-                y: (row_y - 2.0).max(main_list_bounds.y),
-                width: action_cluster_width,
-                height: action_cluster_height
-                    .min((main_list_bounds.y + main_list_bounds.height - row_y).max(32.0)),
-                space: main_bounds.space.clone(),
-            },
-        );
-    }
-
     elements
-}
-
-fn push_kwin_anchor(
-    elements: &mut Vec<ElementNode>,
-    parent_index: usize,
-    role: &str,
-    name: Option<String>,
-    description: &str,
-    state_flags: Vec<&str>,
-    bounds: RectF,
-) -> usize {
-    let element_index = elements.len();
-    elements.push(ElementNode {
-        element_index,
-        parent_index: Some(parent_index),
-        role: role.to_string(),
-        name,
-        description: Some(description.to_string()),
-        value: None,
-        text: None,
-        numeric_value: None,
-        supports_editable_text: false,
-        state_flags: state_flags
-            .into_iter()
-            .map(std::string::ToString::to_string)
-            .collect(),
-        semantic_actions: Vec::new(),
-        bounds: Some(bounds),
-        backend_ref: None,
-    });
-    element_index
 }
 
 fn x11_window_elements(window: &X11WindowInfo) -> Vec<ElementNode> {
@@ -3367,7 +3042,7 @@ mod tests {
     }
 
     #[test]
-    fn creates_structural_anchor_regions_for_kwin_fallback_windows() {
+    fn emits_only_the_honest_window_anchor_for_kwin_fallback_windows() {
         let window = LinuxWindowInfo {
             window_id: "kwin:{tidal-window}".to_string(),
             title: Some("TIDAL Hi-Fi".to_string()),
@@ -3392,70 +3067,41 @@ mod tests {
         };
 
         let elements = linux_window_elements(&window);
-        assert!(elements.len() >= 8);
-        assert_eq!(elements[0].role, "window");
+        // Only the real window bounds are surfaced. No synthetic media-player
+        // geometry ("sidebar", "row band", "action cluster") is fabricated,
+        // because inventing sub-elements a Wayland app never exposed misleads
+        // the agent into semantic targeting that cannot work; the honest signal
+        // is the screenshot + snapshot_id pixel path.
+        assert_eq!(elements.len(), 1);
+        let anchor = &elements[0];
+        assert_eq!(anchor.role, "window");
+        assert_eq!(anchor.parent_index, None);
+        assert_eq!(
+            anchor.bounds.as_ref().map(|bounds| bounds.width),
+            Some(1280.0)
+        );
         assert!(
-            elements[0]
+            anchor
                 .state_flags
                 .iter()
                 .any(|flag| flag == "vision_anchor")
         );
-        assert_eq!(elements[1].role, "wayland_header_band");
-        assert_eq!(elements[1].parent_index, Some(0));
         assert!(
-            elements[1]
-                .description
-                .as_deref()
-                .is_some_and(|description| description.contains("screenshot"))
-        );
-        assert!(elements.iter().any(|element| {
-            element.role == "wayland_search_candidate"
-                && element.state_flags.iter().any(|flag| flag == "search_like")
-                && element.state_flags.iter().any(|flag| flag == "text_like")
-        }));
-        assert!(elements.iter().any(|element| {
-            element.role == "wayland_sidebar_region"
-                && element
-                    .state_flags
-                    .iter()
-                    .any(|flag| flag == "navigation_like")
-        }));
-        assert!(elements.iter().any(|element| {
-            element.role == "wayland_list_candidate"
-                && element.state_flags.iter().any(|flag| flag == "list_like")
-                && element
-                    .state_flags
-                    .iter()
-                    .any(|flag| flag == "vision_anchor")
-        }));
-        assert!(elements.iter().any(|element| {
-            element.role == "wayland_row_band_candidate"
-                && element.state_flags.iter().any(|flag| flag == "row_like")
-                && element.state_flags.iter().any(|flag| flag == "text_like")
-        }));
-        assert!(
-            elements
+            anchor
+                .state_flags
                 .iter()
-                .filter(|element| element.role == "wayland_row_band_candidate")
-                .count()
-                >= 4
+                .any(|flag| flag == "physical_target")
         );
-        assert!(elements.iter().any(|element| {
-            element.role == "wayland_action_cluster_candidate"
-                && element.state_flags.iter().any(|flag| flag == "action_like")
-                && element.state_flags.iter().any(|flag| flag == "menu_like")
-        }));
+        assert!(anchor.semantic_actions.is_empty());
+        // The description must steer the agent to the snapshot_id pixel path.
+        let description = anchor.description.as_deref().unwrap_or_default();
+        assert!(description.contains("snapshot_id"));
+        assert!(description.contains("screenshot"));
+        // No fabricated candidate roles survive.
         assert!(
-            elements
+            !elements
                 .iter()
-                .filter(|element| element.role == "wayland_action_cluster_candidate")
-                .count()
-                >= 2
-        );
-        assert!(
-            elements
-                .iter()
-                .any(|element| element.role == "wayland_main_region")
+                .any(|element| element.role.starts_with("wayland_"))
         );
     }
 

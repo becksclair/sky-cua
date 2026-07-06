@@ -4,9 +4,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": false,
-      "description_bytes": 4468,
-      "largest_schema_bytes": 2044,
-      "serialized_bytes": 41301,
+      "description_bytes": 4791,
+      "largest_schema_bytes": 2116,
+      "serialized_bytes": 41918,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -1598,7 +1598,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop. Use live coordinates, or snapshot_id plus element_index/name/text from the same desktop observation or capture; do not call with only operation.",
+            "description": "Click, secondary-click, or drag on the desktop. Preferred: pass the snapshot_id from the same capture_desktop/observe plus x/y read off that screenshot; those pixels are translated to the screen for you and work even when no semantic elements are exposed (e.g. Wayland apps with no matched AT-SPI tree). Or pass snapshot_id plus element_index/name/text for a semantic target. Bare x/y with no snapshot_id are raw screen coordinates and should be used only when you have no snapshot. Do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -1684,11 +1684,11 @@
                   "type": "number"
                 },
                 "x": {
-                  "description": "Click x coordinate or drag start x.",
+                  "description": "Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                   "type": "number"
                 },
                 "y": {
-                  "description": "Click y coordinate or drag start y.",
+                  "description": "Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                   "type": "number"
                 }
               },
@@ -2622,9 +2622,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": false,
-      "description_bytes": 4571,
-      "largest_schema_bytes": 2044,
-      "serialized_bytes": 42094,
+      "description_bytes": 4894,
+      "largest_schema_bytes": 2116,
+      "serialized_bytes": 42711,
       "surface": "grouped",
       "tool_count": 36,
       "tools_list": {
@@ -4216,7 +4216,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop. Use live coordinates, or snapshot_id plus element_index/name/text from the same desktop observation or capture; do not call with only operation.",
+            "description": "Click, secondary-click, or drag on the desktop. Preferred: pass the snapshot_id from the same capture_desktop/observe plus x/y read off that screenshot; those pixels are translated to the screen for you and work even when no semantic elements are exposed (e.g. Wayland apps with no matched AT-SPI tree). Or pass snapshot_id plus element_index/name/text for a semantic target. Bare x/y with no snapshot_id are raw screen coordinates and should be used only when you have no snapshot. Do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -4302,11 +4302,11 @@
                   "type": "number"
                 },
                 "x": {
-                  "description": "Click x coordinate or drag start x.",
+                  "description": "Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                   "type": "number"
                 },
                 "y": {
-                  "description": "Click y coordinate or drag start y.",
+                  "description": "Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                   "type": "number"
                 }
               },
@@ -5288,9 +5288,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": true,
-      "description_bytes": 4468,
+      "description_bytes": 4791,
       "largest_schema_bytes": 2489,
-      "serialized_bytes": 41957,
+      "serialized_bytes": 42574,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -6929,7 +6929,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop. Use live coordinates, or snapshot_id plus element_index/name/text from the same desktop observation or capture; do not call with only operation.",
+            "description": "Click, secondary-click, or drag on the desktop. Preferred: pass the snapshot_id from the same capture_desktop/observe plus x/y read off that screenshot; those pixels are translated to the screen for you and work even when no semantic elements are exposed (e.g. Wayland apps with no matched AT-SPI tree). Or pass snapshot_id plus element_index/name/text for a semantic target. Bare x/y with no snapshot_id are raw screen coordinates and should be used only when you have no snapshot. Do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -7015,11 +7015,11 @@
                   "type": "number"
                 },
                 "x": {
-                  "description": "Click x coordinate or drag start x.",
+                  "description": "Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                   "type": "number"
                 },
                 "y": {
-                  "description": "Click y coordinate or drag start y.",
+                  "description": "Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                   "type": "number"
                 }
               },
@@ -7953,9 +7953,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": true,
-      "description_bytes": 4571,
+      "description_bytes": 4894,
       "largest_schema_bytes": 2489,
-      "serialized_bytes": 42750,
+      "serialized_bytes": 43367,
       "surface": "grouped",
       "tool_count": 36,
       "tools_list": {
@@ -9594,7 +9594,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Click, secondary-click, or drag on the desktop. Use live coordinates, or snapshot_id plus element_index/name/text from the same desktop observation or capture; do not call with only operation.",
+            "description": "Click, secondary-click, or drag on the desktop. Preferred: pass the snapshot_id from the same capture_desktop/observe plus x/y read off that screenshot; those pixels are translated to the screen for you and work even when no semantic elements are exposed (e.g. Wayland apps with no matched AT-SPI tree). Or pass snapshot_id plus element_index/name/text for a semantic target. Bare x/y with no snapshot_id are raw screen coordinates and should be used only when you have no snapshot. Do not call with only operation.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -9680,11 +9680,11 @@
                   "type": "number"
                 },
                 "x": {
-                  "description": "Click x coordinate or drag start x.",
+                  "description": "Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                   "type": "number"
                 },
                 "y": {
-                  "description": "Click y coordinate or drag start y.",
+                  "description": "Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate.",
                   "type": "number"
                 }
               },

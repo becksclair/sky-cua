@@ -172,10 +172,15 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
         ),
         "desktop_pointer" => Some(
             "`desktop_pointer` expects one flat JSON object. For click, provide \
-             top-level `operation` plus either `x`/`y`, or `snapshot_id` with \
-             `element_index`, `name`, or `text`; drag uses top-level \
-             `x`/`y`/`to_x`/`to_y` or `from_x`/`from_y`/`to_x`/`to_y`, plus an \
-             optional `duration_ms` that paces the interpolated drag motion.",
+             top-level `operation` plus one target: `snapshot_id` with `x`/`y` \
+             read off that capture's screenshot (pixels are translated to the \
+             screen for you — the most reliable option, and the one to use when \
+             no semantic elements are exposed), or `snapshot_id` with \
+             `element_index`, `name`, or `text` (semantic), or bare `x`/`y` with \
+             no `snapshot_id` (raw screen coordinates — only when you have no \
+             snapshot). Drag uses top-level `x`/`y`/`to_x`/`to_y` or \
+             `from_x`/`from_y`/`to_x`/`to_y`, plus an optional `duration_ms` \
+             that paces the interpolated drag motion.",
         ),
         "desktop_scroll" => Some(
             "`desktop_scroll` expects top-level `direction` plus a snapshot-resolved \
@@ -635,7 +640,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         grouped_tool_with_constraints(
             "desktop_pointer",
-            "Click, secondary-click, or drag on the desktop. Use live coordinates, or snapshot_id plus element_index/name/text from the same desktop observation or capture; do not call with only operation.",
+            "Click, secondary-click, or drag on the desktop. Preferred: pass the snapshot_id from the same capture_desktop/observe plus x/y read off that screenshot; those pixels are translated to the screen for you and work even when no semantic elements are exposed (e.g. Wayland apps with no matched AT-SPI tree). Or pass snapshot_id plus element_index/name/text for a semantic target. Bare x/y with no snapshot_id are raw screen coordinates and should be used only when you have no snapshot. Do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             desktop_pointer_properties(),
             json!(["operation"]),
@@ -1224,8 +1229,8 @@ fn desktop_pointer_properties() -> Value {
     action_tool_properties(merge_properties(
         json!({
             "operation": {"type": "string", "enum": ["click", "secondary_click", "drag"]},
-            "x": coordinate_schema("Click x coordinate or drag start x."),
-            "y": coordinate_schema("Click y coordinate or drag start y."),
+            "x": coordinate_schema("Click x coordinate or drag start x. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate."),
+            "y": coordinate_schema("Click y coordinate or drag start y. With snapshot_id it is a screenshot pixel from that capture (translated to the screen for you); without snapshot_id it is a raw screen coordinate."),
             "from_x": {"type": "number"},
             "from_y": {"type": "number"},
             "to_x": {"type": "number"},
@@ -2949,7 +2954,7 @@ mod annotation_tests {
             tool("desktop_pointer")["description"]
                 .as_str()
                 .expect("desktop_pointer description")
-                .contains("do not call with only operation")
+                .contains("Do not call with only operation")
         );
 
         let activate_schema = &tool("activate_window")["inputSchema"];
