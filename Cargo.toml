@@ -70,4 +70,3 @@ url = "2.5.7"
 wayland-client = { version = "0.31.11", features = ["system"] }
 wayland-protocols = { version = "0.32.9", features = ["client", "staging"] }
 wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl", "vulkan", "gles"] }
-x11rb = { version = "0.13.2", features = ["shape", "xfixes"] }
