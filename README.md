@@ -109,6 +109,9 @@ uv run basedpyright
 uv run pytest
 ```
 
+`just verify` runs the full headless suite in one command (Rust + Python +
+Kotlin-when-JDK-present).
+
 Rust tests run under [`cargo-nextest`](https://nexte.st), not `cargo test`:
 some `sky-cua-service` tests mutate process-global environment variables and
 bind OS sockets, which race under `cargo test`'s single-process threading.

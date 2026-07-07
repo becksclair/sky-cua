@@ -18,6 +18,10 @@ uv run pytest
 python3 scripts/build_plugin.py
 ```
 
+`just verify` runs the aggregate headless suite (Rust fmt/clippy/nextest,
+Python ruff/basedpyright/pytest, and the Kotlin companion unit tests when a
+JDK is present) in one command; see the root `justfile`.
+
 Run Rust tests with `cargo nextest run`, not `cargo test`. Parts of the
 `sky-cua-service` suite mutate process-global state (`std::env::set_var` for
 socket dirs, ADB paths, and bridge timeouts) and bind OS sockets / spawn child
@@ -100,9 +104,10 @@ parallel structures (`goals/`, `specs/`, `prds/`, `rfcs/`, or similar).
 
 - Run the narrowest relevant crate/package check first, then the root check
   if shared contracts changed.
-- Rust runtime changes: `cargo fmt --check && cargo nextest run` (use nextest,
-  not `cargo test`; see Root Setup Commands for why). Add `cargo test --doc`
-  when a change touches doctests.
+- Rust runtime changes: `cargo fmt --check && cargo clippy --workspace
+  --all-targets && cargo nextest run` (use nextest, not `cargo test`; see Root
+  Setup Commands for why). Add `cargo test --doc` when a change touches
+  doctests.
 - Python harness changes: `uv run ruff format --check scripts && uv run ruff check scripts && uv run basedpyright && uv run pytest`.
 - Packaging changes: `python3 scripts/build_plugin.py` and inspect the
   staged bundle shape.
