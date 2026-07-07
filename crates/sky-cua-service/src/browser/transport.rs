@@ -235,6 +235,11 @@ const DEFAULT_MAX_COMMAND_TIMEOUT_MS: u64 = 10_000;
 /// again, so a discarded tab never recovered. The reserve binds only when a
 /// command's budget would exceed [`DEFAULT_MAX_COMMAND_TIMEOUT_MS`]: default
 /// and short deadlines keep their historical geometry byte-for-byte.
+///
+/// Fixed rather than override-scaled: 4s funds recovery on relays with
+/// sub-second round trips. A relay slow enough that five round trips exceed it
+/// may still starve recovery — scale this with the override if live daemon
+/// logs ever show a timed-out recovery on such a deployment.
 const RECOVERY_RESERVE_MS: u64 = 4_000;
 
 fn cdp_command_timeout_ms(deadline: TokioInstant, now: TokioInstant) -> u64 {

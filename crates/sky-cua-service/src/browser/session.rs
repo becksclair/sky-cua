@@ -514,7 +514,14 @@ async fn wake_tab_until(
     tab_id: &Value,
     deadline: TokioInstant,
 ) -> Result<(), DiagnosticEntry> {
-    execute_cdp_until(
+    // Capped tightly: a healthy browser answers Page.bringToFront in
+    // milliseconds (browser-process-side, no renderer involved), and the wake
+    // often runs inside the recovery reserve — letting a hung wake consume it
+    // would starve the final capped Page.enable, the same
+    // one-command-starves-the-cure asymmetry the budget reserve exists to
+    // prevent.
+    const WAKE_TIMEOUT_CAP_MS: u64 = 1_500;
+    execute_cdp_capped_until(
         stream,
         socket,
         request_id,
@@ -522,6 +529,7 @@ async fn wake_tab_until(
         "Page.bringToFront",
         json!({}),
         deadline,
+        WAKE_TIMEOUT_CAP_MS,
     )
     .await?;
     Ok(())
