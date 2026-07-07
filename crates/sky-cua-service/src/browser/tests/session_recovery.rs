@@ -904,3 +904,110 @@ async fn claim_wakes_a_discarded_tab_when_page_enable_times_out() {
     let tab = response.tab.expect("claim should return the tab");
     assert_eq!(tab.tab_id, "616");
 }
+
+#[tokio::test]
+async fn recovery_wakes_a_discarded_tab_discovered_by_its_enable_timeout() {
+    // A never-attached discarded tab enters recovery via "Debugger unattached"
+    // (not a timeout), so the wake cannot be keyed on the trigger. The capped
+    // recovery Page.enable times out instead — that timeout wedges the fresh
+    // session, so recovery must reset again, wake, re-enable, and then replay
+    // the (replay-safe) operation. This is the exact live failure observed
+    // against a Brave sleeping tab on 2026-07-08.
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-recover-lazy-wake");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut stream, snapshot_request) = accept_until_non_info_request(&listener).await;
+        assert_eq!(snapshot_request["params"]["method"], "Runtime.evaluate");
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": snapshot_request["id"],
+                "error": {"code": 1, "message": "Debugger unattached"}
+            }),
+        )
+        .await
+        .unwrap();
+
+        let claim = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(
+            claim.get("method").and_then(Value::as_str),
+            Some("claimUserTab")
+        );
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": claim["id"],
+                "result": {
+                    "id": 717,
+                    "title": "Sleeping Tab",
+                    "url": "https://example.test/asleep",
+                    "active": true
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        reply_to_detach(&mut stream, 717).await;
+        let attach = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(attach.get("method").and_then(Value::as_str), Some("attach"));
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": attach["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+
+        // No wake yet: the trigger was not a timeout. The capped enable hangs.
+        let enable = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(enable["params"]["method"], "Page.enable");
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": enable["id"],
+                "error": {
+                    "code": 1,
+                    "message": "Timed out after 1250ms waiting for CDP command Page.enable."
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Lazy wake: reset once more, bring the tab to front, enable again.
+        reply_to_detach(&mut stream, 717).await;
+        reply_to_attach_wake_and_enable(&mut stream, 717).await;
+
+        // The snapshot operation is replay-safe and is retried.
+        reply_to_snapshot_request(&mut stream, 717, "Awake Tab", "https://example.test/awake")
+            .await;
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    let response = snapshot(
+        Some(BrowserTargetKind::UserChrome),
+        "717".to_string(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    assert!(
+        response.diagnostics.is_empty(),
+        "expected the lazy wake to recover the snapshot, got {:?}",
+        response.diagnostics
+    );
+    assert_eq!(response.title.as_deref(), Some("Awake Tab"));
+}

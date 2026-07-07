@@ -11,13 +11,14 @@ use super::protocol::{
     ATTACH_TAB_REQUEST_ID, ATTACH_TAB_RETRY_REQUEST_ID, CLAIM_TAB_REQUEST_ID,
     CLAIM_TAB_RETRY_REQUEST_ID, DETACH_TAB_FOR_RETRY_REQUEST_ID, ENABLE_PAGE_REQUEST_ID,
     ENABLE_PAGE_RETRY_REQUEST_ID, MOVE_MOUSE_REQUEST_ID, NAVIGATE_REQUEST_ID, OPEN_TAB_REQUEST_ID,
-    RECLAIM_SESSION_TABS_REQUEST_ID, RECOVER_ATTACH_TAB_REQUEST_ID, RECOVER_CLAIM_TAB_REQUEST_ID,
+    RECLAIM_SESSION_TABS_REQUEST_ID, RECOVER_CLAIM_TAB_REQUEST_ID,
     RECOVER_CLAIM_TAB_RETRY_REQUEST_ID, RECOVER_ENABLE_PAGE_REQUEST_ID,
     RECOVER_WAKE_TAB_REQUEST_ID, WAKE_TAB_REQUEST_ID,
 };
 use super::tabs::{parse_single_tab, tab_id_value};
 use super::transport::{
-    browser_session_params, execute_cdp_until, merge_json, send_bridge_request_until,
+    browser_session_params, execute_cdp_capped_until, execute_cdp_until, merge_json,
+    send_bridge_request_until,
 };
 
 pub(super) async fn open_tab_from_socket(
@@ -218,10 +219,68 @@ async fn attach_and_enable_tab_until(
                 || is_cdp_command_timeout_diagnostic(&diagnostic) =>
         {
             // A Page.enable timeout right after a successful attach is the
-            // discarded-tab signature: the debugger attaches browser-side but
-            // renderer-bound commands hang because no renderer exists. Wake
-            // the tab before retrying; see `wake_tab_until`.
-            let wake_tab = is_cdp_command_timeout_diagnostic(&diagnostic);
+            // discarded-tab signature; a timed-out enable also wedges the
+            // session, so the reset below is required before any retry.
+            let wake_first = is_cdp_command_timeout_diagnostic(&diagnostic);
+            reset_wake_and_enable_until(
+                stream,
+                socket,
+                tab_id,
+                deadline,
+                wake_first,
+                WAKE_TAB_REQUEST_ID,
+                ENABLE_PAGE_RETRY_REQUEST_ID,
+            )
+            .await
+        }
+        Err(diagnostic) => Err(diagnostic),
+    }
+}
+
+/// Budget ceiling for `Page.enable` during wedge recovery. A live tab answers
+/// it in milliseconds; only a discarded tab's missing renderer makes it hang,
+/// so a hang past this cap is the discarded-tab signal. Kept far below the
+/// extension's 10s default so the wake + final enable still fit inside the
+/// overall operation deadline.
+const RECOVERY_ENABLE_TIMEOUT_CAP_MS: u64 = 4_000;
+
+/// Reset a tab's debugger session (detach/attach), then enable the page
+/// domain, waking a discarded tab when needed. With `wake_first` (the caller
+/// already saw a CDP command timeout — the discarded-tab signature) the wake
+/// precedes the enable. Otherwise the wake happens lazily: if the capped
+/// enable itself times out, that timeout wedges the fresh session, so the
+/// session is reset once more, the tab woken, and the enable retried.
+async fn reset_wake_and_enable_until(
+    stream: &mut UnixStream,
+    socket: &Path,
+    tab_id: &Value,
+    deadline: TokioInstant,
+    wake_first: bool,
+    wake_request_id: &'static str,
+    enable_request_id: &'static str,
+) -> Result<(), DiagnosticEntry> {
+    let _ = detach_tab_until(
+        stream,
+        socket,
+        DETACH_TAB_FOR_RETRY_REQUEST_ID,
+        tab_id,
+        deadline,
+    )
+    .await;
+    attach_tab_until(
+        stream,
+        socket,
+        ATTACH_TAB_RETRY_REQUEST_ID,
+        tab_id,
+        deadline,
+    )
+    .await?;
+    if wake_first {
+        let _ = wake_tab_until(stream, socket, wake_request_id, tab_id, deadline).await;
+    }
+    match enable_page_capped_until(stream, socket, enable_request_id, tab_id, deadline).await {
+        Ok(()) => Ok(()),
+        Err(diagnostic) if !wake_first && is_cdp_command_timeout_diagnostic(&diagnostic) => {
             let _ = detach_tab_until(
                 stream,
                 socket,
@@ -238,24 +297,13 @@ async fn attach_and_enable_tab_until(
                 deadline,
             )
             .await?;
-            if wake_tab {
-                let _ = wake_tab_until(stream, socket, WAKE_TAB_REQUEST_ID, tab_id, deadline).await;
-            }
-            enable_page_until(
-                stream,
-                socket,
-                ENABLE_PAGE_RETRY_REQUEST_ID,
-                tab_id,
-                deadline,
-            )
-            .await
-            .map_err(|diagnostic| {
-                if wake_tab {
-                    with_sleeping_tab_details(diagnostic)
-                } else {
-                    diagnostic
-                }
-            })
+            let _ = wake_tab_until(stream, socket, wake_request_id, tab_id, deadline).await;
+            enable_page_capped_until(stream, socket, enable_request_id, tab_id, deadline)
+                .await
+                .map_err(with_sleeping_tab_details)
+        }
+        Err(diagnostic) if wake_first && is_cdp_command_timeout_diagnostic(&diagnostic) => {
+            Err(with_sleeping_tab_details(diagnostic))
         }
         Err(diagnostic) => Err(diagnostic),
     }
@@ -343,6 +391,29 @@ async fn enable_page_until(
     Ok(())
 }
 
+/// `enable_page_until` with the recovery-time budget cap; see
+/// [`RECOVERY_ENABLE_TIMEOUT_CAP_MS`].
+async fn enable_page_capped_until(
+    stream: &mut UnixStream,
+    socket: &Path,
+    request_id: &'static str,
+    tab_id: &Value,
+    deadline: TokioInstant,
+) -> Result<(), DiagnosticEntry> {
+    execute_cdp_capped_until(
+        stream,
+        socket,
+        request_id,
+        tab_id,
+        "Page.enable",
+        json!({}),
+        deadline,
+        RECOVERY_ENABLE_TIMEOUT_CAP_MS,
+    )
+    .await?;
+    Ok(())
+}
+
 fn is_debugger_unattached_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
     diagnostic.code == "BrowserBridgeRequestFailed"
         && debugger_unattached_message(&diagnostic.message)
@@ -390,11 +461,14 @@ fn debugger_unattached_message(message: &str) -> bool {
         || message.contains("Detached while handling command")
 }
 
-/// `wake_tab` must be true only when the triggering failure was a CDP command
-/// timeout (`is_cdp_command_timeout_diagnostic`): that is the signature of a
-/// discarded (asleep) tab whose renderer is gone, and the wake activates the
-/// tab — a user-visible tab switch that must not happen for ordinary
-/// debugger-detach recoveries on healthy background tabs.
+/// `wake_tab` is true when the triggering failure was a CDP command timeout
+/// (`is_cdp_command_timeout_diagnostic`) — the signature of a discarded
+/// (asleep) tab whose renderer is gone — so the wake precedes the re-enable.
+/// A discarded tab can also enter recovery via `Debugger unattached` (a
+/// never-attached sleeping tab); that case is caught lazily when the capped
+/// recovery `Page.enable` itself times out. The wake activates the tab — a
+/// user-visible tab switch — so it never runs for recoveries whose enable
+/// succeeds (healthy background tabs stay in the background).
 pub(super) async fn recover_cdp_session_until(
     stream: &mut UnixStream,
     socket: &Path,
@@ -411,47 +485,16 @@ pub(super) async fn recover_cdp_session_until(
         deadline,
     )
     .await?;
-    let _ = detach_tab_until(
+    reset_wake_and_enable_until(
         stream,
         socket,
-        DETACH_TAB_FOR_RETRY_REQUEST_ID,
         tab_id,
         deadline,
-    )
-    .await;
-    attach_tab_until(
-        stream,
-        socket,
-        RECOVER_ATTACH_TAB_REQUEST_ID,
-        tab_id,
-        deadline,
-    )
-    .await?;
-    if wake_tab {
-        let _ = wake_tab_until(
-            stream,
-            socket,
-            RECOVER_WAKE_TAB_REQUEST_ID,
-            tab_id,
-            deadline,
-        )
-        .await;
-    }
-    enable_page_until(
-        stream,
-        socket,
+        wake_tab,
+        RECOVER_WAKE_TAB_REQUEST_ID,
         RECOVER_ENABLE_PAGE_REQUEST_ID,
-        tab_id,
-        deadline,
     )
     .await
-    .map_err(|diagnostic| {
-        if wake_tab {
-            with_sleeping_tab_details(diagnostic)
-        } else {
-            diagnostic
-        }
-    })
 }
 
 /// Wake a discarded (asleep) tab. `Page.bringToFront` is handled in the

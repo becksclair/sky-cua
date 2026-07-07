@@ -165,7 +165,36 @@ pub(super) async fn execute_cdp_until(
     command_params: Value,
     deadline: TokioInstant,
 ) -> Result<Value, DiagnosticEntry> {
-    let timeout_ms = cdp_command_timeout_ms(deadline, TokioInstant::now());
+    execute_cdp_capped_until(
+        stream,
+        socket,
+        request_id,
+        tab_id,
+        method,
+        command_params,
+        deadline,
+        u64::MAX,
+    )
+    .await
+}
+
+/// `execute_cdp_until` with an explicit ceiling on the per-command
+/// `timeoutMs`. Used where the caller knows a healthy reply arrives in
+/// milliseconds (e.g. `Page.enable` during wedge recovery) and a hang carries
+/// meaning (discarded tab), so burning the full default budget on it would
+/// starve the cure that follows.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn execute_cdp_capped_until(
+    stream: &mut UnixStream,
+    socket: &Path,
+    request_id: &'static str,
+    tab_id: &Value,
+    method: &'static str,
+    command_params: Value,
+    deadline: TokioInstant,
+    max_timeout_ms: u64,
+) -> Result<Value, DiagnosticEntry> {
+    let timeout_ms = cdp_command_timeout_ms(deadline, TokioInstant::now()).min(max_timeout_ms);
     send_bridge_request_until(
         stream,
         socket,
