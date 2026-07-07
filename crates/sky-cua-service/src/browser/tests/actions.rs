@@ -40,18 +40,39 @@ async fn open_tab_rejects_unsupported_url_before_bridge() {
 async fn navigate_rejects_unsupported_url_with_navigate_diagnostic() {
     let response = navigate(
         Some(BrowserTargetKind::UserChrome),
-        "tab-1".to_string(),
+        "1".to_string(),
         "file:///etc/passwd".to_string(),
     )
     .await;
 
-    assert_eq!(response.tab_id, "tab-1");
+    assert_eq!(response.tab_id, "1");
     assert_eq!(response.url, "");
     assert_eq!(response.diagnostics.len(), 1);
     assert_eq!(response.diagnostics[0].code, "BrowserOpenUrlUnsupported");
     assert_eq!(
         response.diagnostics[0].message,
         "browser_navigate url must use http://, https://, or about:blank."
+    );
+}
+
+#[tokio::test]
+async fn navigate_rejects_non_integer_tab_id_before_bridge() {
+    let response = navigate(
+        Some(BrowserTargetKind::UserChrome),
+        "t11".to_string(),
+        "https://example.test/".to_string(),
+    )
+    .await;
+
+    assert_eq!(response.diagnostics.len(), 1);
+    assert_eq!(response.diagnostics[0].code, "BrowserTabIdInvalid");
+    assert!(
+        response.diagnostics[0]
+            .details
+            .as_deref()
+            .is_some_and(|details| details.contains("browser_open")),
+        "diagnostic must steer toward a real tab id source, got {:?}",
+        response.diagnostics[0].details
     );
 }
 

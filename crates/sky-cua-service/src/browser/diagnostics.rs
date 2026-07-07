@@ -42,7 +42,12 @@ pub(super) fn validate_open_url(url: Option<String>) -> Result<Option<String>, D
 
 pub(super) fn validate_tab_id(tab_id: String) -> Result<String, DiagnosticEntry> {
     let tab_id = tab_id.trim();
-    (!tab_id.is_empty())
+    // Bridge tab ids are Chrome's per-browser integer tab ids. Forwarding
+    // anything else to the extension yields opaque Chrome API signature errors
+    // ("No matching signature", "Invalid type: expected integer, found
+    // string"), so reject handles from other tool surfaces (e.g. "t11") here
+    // with an actionable diagnostic instead.
+    (!tab_id.is_empty() && tab_id.parse::<i64>().is_ok())
         .then(|| tab_id.to_string())
         .ok_or_else(invalid_tab_id_diagnostic)
 }
@@ -132,8 +137,13 @@ pub(super) fn unexpected_bridge_response_diagnostic(response: Value) -> Diagnost
 fn invalid_tab_id_diagnostic() -> DiagnosticEntry {
     DiagnosticEntry {
         code: "BrowserTabIdInvalid".to_string(),
-        message: "Browser tab id must be a non-empty string.".to_string(),
-        details: None,
+        message: "Browser tab id must be an integer Chrome tab id.".to_string(),
+        details: Some(
+            "Use a tab id returned by browser_open or list_resources (browser tabs). \
+             Tab handles from other browser tool surfaces (for example \"t11\") do not \
+             name sky-cua bridge tabs."
+                .to_string(),
+        ),
     }
 }
 
