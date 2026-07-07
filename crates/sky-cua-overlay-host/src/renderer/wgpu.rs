@@ -46,7 +46,11 @@ impl Default for WgpuOverlayInstance {
 pub struct RendererInfo {
     pub adapter_name: String,
     pub backend: String,
+    // Captured from the real adapter for future diagnostics surfaces; no
+    // current caller reads these two beyond `adapter_name`/`backend`.
+    #[allow(dead_code)]
     pub driver: String,
+    #[allow(dead_code)]
     pub driver_info: String,
 }
 

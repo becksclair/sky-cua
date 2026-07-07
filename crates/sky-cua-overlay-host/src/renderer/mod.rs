@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Platform-agnostic WGPU renderer for the desktop agent cursor overlay.
 //!
 //! This module intentionally imports no Wayland, X11, GNOME Shell, D-Bus, or

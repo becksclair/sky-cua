@@ -14,9 +14,6 @@ pub struct CursorVertex {
     pub uv: [f32; 2],
 }
 
-/// Six-vertex triangle list covering the cursor sprite.
-pub type CursorQuad = [CursorVertex; 6];
-
 const _: () = assert!(std::mem::size_of::<CursorVertex>() == 16);
 const _: () = assert!(std::mem::align_of::<CursorVertex>() == 4);
 
@@ -301,6 +298,7 @@ pub fn effect_kind_code(kind: AgentOverlayGestureKind) -> u32 {
 
 /// Build a flat `[f32; 24]` vertex buffer for a cursor hotspot at `(x, y)` in
 /// surface-local pixels, converted to NDC for the given surface size.
+#[allow(dead_code)] // only reachable via the test-only cursor-quad tests below
 pub fn cursor_quad_vertices(x: f64, y: f64, surface_width: u32, surface_height: u32) -> [f32; 24] {
     let left = x - f64::from(cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_X);
     let top = y - f64::from(cursor_asset::AGENT_CURSOR_DESKTOP_HOTSPOT_Y);
@@ -316,31 +314,12 @@ pub fn cursor_quad_vertices(x: f64, y: f64, surface_width: u32, surface_height: 
     ]
 }
 
-/// Layout description for uploading [`CursorVertex`] to wgpu.
-pub fn cursor_vertex_buffer_layout() -> ::wgpu::VertexBufferLayout<'static> {
-    ::wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<CursorVertex>() as ::wgpu::BufferAddress,
-        step_mode: ::wgpu::VertexStepMode::Vertex,
-        attributes: &[
-            ::wgpu::VertexAttribute {
-                format: ::wgpu::VertexFormat::Float32x2,
-                offset: 0,
-                shader_location: 0,
-            },
-            ::wgpu::VertexAttribute {
-                format: ::wgpu::VertexFormat::Float32x2,
-                offset: (2 * std::mem::size_of::<f32>()) as ::wgpu::BufferAddress,
-                shader_location: 1,
-            },
-        ],
-    }
-}
-
 /// Reinterpret an `&[f32]` as `&[u8]` for `queue.write_buffer`.
 ///
 /// # Safety
 /// `f32` is safe to transmute to bytes, and the slice length is a multiple of
 /// four. The returned slice borrows the input and is valid for its lifetime.
+#[allow(dead_code)] // only reachable via the test-only byte-length assertion below
 pub fn f32_slice_as_bytes(values: &[f32]) -> &[u8] {
     let byte_len = std::mem::size_of_val(values);
     unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), byte_len) }
@@ -365,10 +344,12 @@ fn normalize_u8(value: u8) -> f32 {
     f32::from(value) / 255.0
 }
 
+#[allow(dead_code)] // only reachable via the test-only cursor_quad_vertices
 fn ndc_x(x: f64, width: u32) -> f32 {
     ((x / f64::from(width.max(1))) * 2.0 - 1.0) as f32
 }
 
+#[allow(dead_code)] // only reachable via the test-only cursor_quad_vertices
 fn ndc_y(y: f64, height: u32) -> f32 {
     (1.0 - (y / f64::from(height.max(1))) * 2.0) as f32
 }

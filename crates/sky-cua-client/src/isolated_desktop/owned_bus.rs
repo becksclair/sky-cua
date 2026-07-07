@@ -12,11 +12,6 @@
 //! test module because they share its `ENV_LOCK` (serializing `XDG_RUNTIME_DIR`
 //! mutation with the socket-path tests).
 
-// Mirrors the parent's crate-wide allow: the `cfg(not(unix))` shim is not built on
-// every target, and several helpers are reached only through the parent's unit
-// tests; the scoped allow keeps those from warning without per-item attributes.
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 

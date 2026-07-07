@@ -45,13 +45,6 @@ impl SurfaceGuard {
         self.surface.get_capabilities(adapter)
     }
 
-    /// Returns true when the guard already holds a config for `width`x`height`.
-    pub fn is_configured_for(&self, width: u32, height: u32) -> bool {
-        self.config
-            .as_ref()
-            .is_some_and(|config| config.width == width && config.height == height)
-    }
-
     /// Configure or reconfigure the surface for the given size and adapter.
     pub fn configure(
         &mut self,
@@ -118,11 +111,6 @@ impl SurfaceGuard {
     /// Borrows the underlying wgpu surface.
     pub fn surface(&self) -> &::wgpu::Surface<'static> {
         &self.surface
-    }
-
-    /// Borrows the active config, if any.
-    pub fn config(&self) -> Option<&::wgpu::SurfaceConfiguration> {
-        self.config.as_ref()
     }
 }
 

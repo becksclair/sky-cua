@@ -53,21 +53,6 @@ pub struct SurfaceDrawSpec {
     pub cursor_cloud_alpha: f32,
 }
 
-/// A full frame: one request per host surface guard.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FrameScene {
-    pub surfaces: Vec<SurfaceDrawRequest>,
-}
-
-impl FrameScene {
-    #[must_use]
-    pub fn new(surface_count: usize) -> Self {
-        Self {
-            surfaces: vec![None; surface_count],
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectScene {
     pub kind: AgentOverlayGestureKind,
@@ -78,6 +63,7 @@ pub struct EffectScene {
 
 impl EffectScene {
     #[must_use]
+    #[allow(dead_code)] // only reachable via the test-only expiry check below
     pub fn is_active_at(&self, now_ms: u64) -> bool {
         now_ms.saturating_sub(self.started_at_ms) <= self.duration_ms
     }
