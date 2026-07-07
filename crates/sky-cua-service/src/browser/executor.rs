@@ -256,6 +256,7 @@ impl BrowserSessionBinding<'_> {
                     socket,
                     &tab_id,
                     self.executor.deadline,
+                    session::is_cdp_command_timeout_diagnostic(&diagnostic),
                 )
                 .await?;
                 // A recoverable failure can arrive part-way through a

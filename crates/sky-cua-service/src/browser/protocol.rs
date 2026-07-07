@@ -20,6 +20,8 @@ pub(super) const RECOVER_CLAIM_TAB_RETRY_REQUEST_ID: &str =
     "sky-cua-browser-recover-claim-tab-retry";
 pub(super) const RECOVER_ATTACH_TAB_REQUEST_ID: &str = "sky-cua-browser-recover-attach-tab";
 pub(super) const RECOVER_ENABLE_PAGE_REQUEST_ID: &str = "sky-cua-browser-recover-enable-page";
+pub(super) const WAKE_TAB_REQUEST_ID: &str = "sky-cua-browser-wake-tab";
+pub(super) const RECOVER_WAKE_TAB_REQUEST_ID: &str = "sky-cua-browser-recover-wake-tab";
 pub(super) const NAVIGATE_REQUEST_ID: &str = "sky-cua-browser-navigate";
 pub(super) const CLAIM_TAB_REQUEST_ID: &str = "sky-cua-browser-claim-tab";
 pub(super) const CLAIM_TAB_RETRY_REQUEST_ID: &str = "sky-cua-browser-claim-tab-retry";

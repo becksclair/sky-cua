@@ -224,6 +224,54 @@ pub(super) async fn reply_to_detach(stream: &mut UnixStream, tab_id: i64) {
     .unwrap();
 }
 
+/// Serve the attach -> wake -> enable sequence of a timeout-triggered
+/// session recovery (`recover_cdp_session_until` with `wake_tab`).
+pub(super) async fn reply_to_attach_wake_and_enable(stream: &mut UnixStream, tab_id: i64) {
+    let attach = read_frame(stream).await.unwrap().unwrap();
+    assert_eq!(attach.get("method").and_then(Value::as_str), Some("attach"));
+    assert_eq!(attach["params"]["tabId"], tab_id);
+    write_frame(
+        stream,
+        &json!({"jsonrpc": "2.0", "id": attach["id"], "result": {}}),
+    )
+    .await
+    .unwrap();
+
+    reply_to_wake(stream, tab_id).await;
+
+    let enable = read_frame(stream).await.unwrap().unwrap();
+    assert_eq!(
+        enable.get("method").and_then(Value::as_str),
+        Some("executeCdp")
+    );
+    assert_eq!(enable["params"]["target"]["tabId"], tab_id);
+    assert_eq!(enable["params"]["method"], "Page.enable");
+    write_frame(
+        stream,
+        &json!({"jsonrpc": "2.0", "id": enable["id"], "result": {}}),
+    )
+    .await
+    .unwrap();
+}
+
+/// Reply to the `Page.bringToFront` wake issued by timeout-triggered session
+/// recovery before its `Page.enable`.
+pub(super) async fn reply_to_wake(stream: &mut UnixStream, tab_id: i64) {
+    let wake = read_frame(stream).await.unwrap().unwrap();
+    assert_eq!(
+        wake.get("method").and_then(Value::as_str),
+        Some("executeCdp")
+    );
+    assert_eq!(wake["params"]["target"]["tabId"], tab_id);
+    assert_eq!(wake["params"]["method"], "Page.bringToFront");
+    write_frame(
+        stream,
+        &json!({"jsonrpc": "2.0", "id": wake["id"], "result": {}}),
+    )
+    .await
+    .unwrap();
+}
+
 /// Serve one snapshot `Runtime.evaluate` request with a minimal page payload.
 /// The reply shape encodes the bridge snapshot contract; tests share this so
 /// the contract lives in one place.

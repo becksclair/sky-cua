@@ -13,6 +13,7 @@ use super::protocol::{
     ENABLE_PAGE_RETRY_REQUEST_ID, MOVE_MOUSE_REQUEST_ID, NAVIGATE_REQUEST_ID, OPEN_TAB_REQUEST_ID,
     RECLAIM_SESSION_TABS_REQUEST_ID, RECOVER_ATTACH_TAB_REQUEST_ID, RECOVER_CLAIM_TAB_REQUEST_ID,
     RECOVER_CLAIM_TAB_RETRY_REQUEST_ID, RECOVER_ENABLE_PAGE_REQUEST_ID,
+    RECOVER_WAKE_TAB_REQUEST_ID, WAKE_TAB_REQUEST_ID,
 };
 use super::tabs::{parse_single_tab, tab_id_value};
 use super::transport::{
@@ -212,7 +213,15 @@ async fn attach_and_enable_tab_until(
     attach_tab_until(stream, socket, ATTACH_TAB_REQUEST_ID, tab_id, deadline).await?;
     match enable_page_until(stream, socket, ENABLE_PAGE_REQUEST_ID, tab_id, deadline).await {
         Ok(()) => Ok(()),
-        Err(diagnostic) if is_debugger_unattached_diagnostic(&diagnostic) => {
+        Err(diagnostic)
+            if is_debugger_unattached_diagnostic(&diagnostic)
+                || is_cdp_command_timeout_diagnostic(&diagnostic) =>
+        {
+            // A Page.enable timeout right after a successful attach is the
+            // discarded-tab signature: the debugger attaches browser-side but
+            // renderer-bound commands hang because no renderer exists. Wake
+            // the tab before retrying; see `wake_tab_until`.
+            let wake_tab = is_cdp_command_timeout_diagnostic(&diagnostic);
             let _ = detach_tab_until(
                 stream,
                 socket,
@@ -229,6 +238,10 @@ async fn attach_and_enable_tab_until(
                 deadline,
             )
             .await?;
+            if wake_tab {
+                let _ =
+                    wake_tab_until(stream, socket, WAKE_TAB_REQUEST_ID, tab_id, deadline).await;
+            }
             enable_page_until(
                 stream,
                 socket,
@@ -237,6 +250,13 @@ async fn attach_and_enable_tab_until(
                 deadline,
             )
             .await
+            .map_err(|diagnostic| {
+                if wake_tab {
+                    with_sleeping_tab_details(diagnostic)
+                } else {
+                    diagnostic
+                }
+            })
         }
         Err(diagnostic) => Err(diagnostic),
     }
@@ -371,11 +391,17 @@ fn debugger_unattached_message(message: &str) -> bool {
         || message.contains("Detached while handling command")
 }
 
+/// `wake_tab` must be true only when the triggering failure was a CDP command
+/// timeout (`is_cdp_command_timeout_diagnostic`): that is the signature of a
+/// discarded (asleep) tab whose renderer is gone, and the wake activates the
+/// tab — a user-visible tab switch that must not happen for ordinary
+/// debugger-detach recoveries on healthy background tabs.
 pub(super) async fn recover_cdp_session_until(
     stream: &mut UnixStream,
     socket: &Path,
     tab_id: &Value,
     deadline: TokioInstant,
+    wake_tab: bool,
 ) -> Result<(), DiagnosticEntry> {
     claim_user_tab_with_stale_sky_cua_reclaim_until(
         stream,
@@ -402,6 +428,9 @@ pub(super) async fn recover_cdp_session_until(
         deadline,
     )
     .await?;
+    if wake_tab {
+        let _ = wake_tab_until(stream, socket, RECOVER_WAKE_TAB_REQUEST_ID, tab_id, deadline).await;
+    }
     enable_page_until(
         stream,
         socket,
@@ -410,6 +439,53 @@ pub(super) async fn recover_cdp_session_until(
         deadline,
     )
     .await
+    .map_err(|diagnostic| {
+        if wake_tab {
+            with_sleeping_tab_details(diagnostic)
+        } else {
+            diagnostic
+        }
+    })
+}
+
+/// Wake a discarded (asleep) tab. `Page.bringToFront` is handled in the
+/// browser process, so it succeeds even when the tab has no renderer — and
+/// activating a discarded tab makes Chrome reload it, after which
+/// renderer-bound commands (`Page.enable`, `Runtime.evaluate`, input) work
+/// again. It is the only wake primitive the extension bridge exposes (no
+/// tabs.reload/update relay exists). Live-verified against Brave's sleeping
+/// tabs on 2026-07-08. Failures are ignored by callers: the follow-up
+/// `Page.enable` reports the truth either way.
+async fn wake_tab_until(
+    stream: &mut UnixStream,
+    socket: &Path,
+    request_id: &'static str,
+    tab_id: &Value,
+    deadline: TokioInstant,
+) -> Result<(), DiagnosticEntry> {
+    execute_cdp_until(
+        stream,
+        socket,
+        request_id,
+        tab_id,
+        "Page.bringToFront",
+        json!({}),
+        deadline,
+    )
+    .await?;
+    Ok(())
+}
+
+fn with_sleeping_tab_details(diagnostic: DiagnosticEntry) -> DiagnosticEntry {
+    DiagnosticEntry {
+        details: Some(
+            "The tab's renderer did not respond, which usually means the tab was \
+             discarded (asleep). It was activated to wake it; retry the operation, \
+             or reopen the page in a fresh tab with browser_open."
+                .to_string(),
+        ),
+        ..diagnostic
+    }
 }
 
 pub(super) async fn move_mouse_on_stream(

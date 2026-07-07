@@ -348,7 +348,7 @@ async fn terminal_diagnostic_outranks_an_earlier_not_found() {
         .await
         .unwrap();
         reply_to_detach(&mut stream, 515).await;
-        reply_to_attach_and_enable(&mut stream, 515).await;
+        reply_to_attach_wake_and_enable(&mut stream, 515).await;
         assert!(read_frame(&mut stream).await.unwrap().is_none());
     });
 

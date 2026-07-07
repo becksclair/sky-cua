@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::BrowserTargetKind;
 use tokio::net::UnixListener;
 
-use crate::browser::bridge::{click, screenshot, snapshot};
+use crate::browser::bridge::{claim_tab, click, screenshot, snapshot};
 use crate::browser::protocol::{read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
 
@@ -201,7 +201,7 @@ async fn cdp_action_recovers_when_cdp_command_times_out() {
         .unwrap();
 
         reply_to_detach(&mut stream, 515).await;
-        reply_to_attach_and_enable(&mut stream, 515).await;
+        reply_to_attach_wake_and_enable(&mut stream, 515).await;
         reply_to_viewport_metrics(&mut stream, 515, 100.0, 80.0, 2.0).await;
 
         let retried_capture = read_frame(&mut stream).await.unwrap().unwrap();
@@ -524,7 +524,7 @@ async fn cdp_command_timeout_resets_session_without_replaying_input_action() {
         .await
         .unwrap();
         reply_to_detach(&mut stream, 515).await;
-        reply_to_attach_and_enable(&mut stream, 515).await;
+        reply_to_attach_wake_and_enable(&mut stream, 515).await;
 
         // ...but the click must not be replayed: the timed-out dispatch may
         // still have landed in the browser, and a replay would double-click.
@@ -772,7 +772,7 @@ async fn cdp_command_timeout_is_not_replayed_on_another_bridge_socket() {
         .await
         .unwrap();
         reply_to_detach(&mut stream, 515).await;
-        reply_to_attach_and_enable(&mut stream, 515).await;
+        reply_to_attach_wake_and_enable(&mut stream, 515).await;
         assert!(read_frame(&mut stream).await.unwrap().is_none());
         let _ = a_done_tx.send(());
     });
@@ -825,4 +825,82 @@ async fn cdp_command_timeout_is_not_replayed_on_another_bridge_socket() {
         .first()
         .expect("click should surface the timeout diagnostic");
     assert!(diagnostic.message.contains("waiting for CDP command"));
+}
+
+#[tokio::test]
+async fn claim_wakes_a_discarded_tab_when_page_enable_times_out() {
+    // A discarded (asleep) tab attaches browser-side but its renderer is gone,
+    // so Page.enable times out. The retry must wake the tab with
+    // Page.bringToFront (browser-side, works without a renderer) before
+    // re-enabling; activation makes Chrome reload the tab.
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-claim-wake");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut stream, claim) = accept_until_non_info_request(&listener).await;
+        assert_eq!(
+            claim.get("method").and_then(Value::as_str),
+            Some("claimUserTab")
+        );
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": claim["id"],
+                "result": {
+                    "id": 616,
+                    "title": "Sleeping Tab",
+                    "url": "https://example.test/asleep",
+                    "active": true
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        let attach = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(attach.get("method").and_then(Value::as_str), Some("attach"));
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": attach["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+
+        let enable = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(enable["params"]["method"], "Page.enable");
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": enable["id"],
+                "error": {
+                    "code": 1,
+                    "message": "Timed out after 1250ms waiting for CDP command Page.enable."
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        reply_to_detach(&mut stream, 616).await;
+        reply_to_attach_wake_and_enable(&mut stream, 616).await;
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    let response = claim_tab(Some(BrowserTargetKind::UserChrome), "616".to_string()).await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    assert!(
+        response.diagnostics.is_empty(),
+        "expected the wake retry to recover the claim, got {:?}",
+        response.diagnostics
+    );
+    let tab = response.tab.expect("claim should return the tab");
+    assert_eq!(tab.tab_id, "616");
 }
