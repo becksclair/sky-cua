@@ -10,9 +10,35 @@ sandbox — present on `:N`, absent from the user's real `:0`, with a clean
 sandbox environ (`DISPLAY=:N`, sandbox `DBUS_SESSION_BUS_ADDRESS`, no
 `WAYLAND_DISPLAY`) — while the user's desktop stayed untouched. Also verified:
 config/spawn-env unit tests and the gated `isolated_x11_probe` env-recipe
-regression test. The isolated-xpra VM smoke profile has landed; its live VM run
-is the one remaining unautomated gate (the dev VM's SSH was unserviceable at
-verification time).
+regression test.
+
+The previously-outstanding VM live-proof gate closed 2026-07-07: the
+`isolated-xpra` VM smoke profile ran green on the Arch testing-vm (COSMIC
+session, `wayland-1`) via `scripts/run_gui_testing_vm_smoke.py --profile
+isolated-xpra` (a default build+sync run, then a `--skip-host-build` re-run
+after installing xpra in the guest). Evidence: sandbox up on `:131` at
+1920x1080, `dep_xpra/openbox/xdotool=true`, xmessage launched into the
+sandbox, "app present on :131", "app absent from host displays: :0",
+launched-app environ confirmed `DISPLAY=:131` with no `WAYLAND_DISPLAY`, and a
+clean stop (`stopped=true`). The same day, both host live-proofs were
+re-run and stayed green on the KDE Wayland host: the gated
+`isolated_app_launch_leak_guard_keeps_app_off_host` test (`cargo nextest run
+-p sky-cua-linux -E 'test(isolated_app_launch_leak_guard_keeps_app_off_host)'`,
+31s, real xpra+kcalc, not skipped) and a live MCP end-to-end
+(`SKY_CUA_ISOLATED_DESKTOP=1` → `desktop_launch_app` launching kcalc with
+`DISPLAY=:100`, `WAYLAND_DISPLAY` unset, private D-Bus
+(`unix:path=/tmp/dbus-...`), kcalc visible in the sandbox `observe`, host
+session untouched).
+
+Provisioning gap found during the VM run: the testing-vm provisioner does
+not yet install `xpra`, `xdotool`, or `xorg-xdpyinfo` into the guest, so the
+first `isolated-xpra` profile run needed a manual `pacman -Sy xpra xdotool
+xorg-xdpyinfo` before a `--skip-host-build` re-run could pass. Follow-up:
+add these packages to `scripts/testing-vm/` provisioning so the profile is
+green on a fresh guest without manual intervention. Separately, the guest's
+sshd and DHCP lease had died after a host suspend during this session
+(recovered via the qemu-guest-agent path: `systemctl restart sshd` plus a
+network bounce) — an environment quirk, not a profile defect.
 
 ## Summary
 
@@ -233,9 +259,12 @@ the same number.
 - VM smoke: an `isolated-xpra` profile for `scripts/run_gui_testing_vm_smoke.py`
   (modeled on `i3.sh`, wired into the registry, `run-profile.sh`, and the `all`
   set) that brings the private desktop up, launches an app and captures it, and
-  asserts no host leak, exiting `67` when xpra is unavailable. The profile has
-  landed; executing it live in the testing VM remains the outstanding live-proof
-  gate.
+  asserts no host leak, exiting `67` when xpra is unavailable. Live-run
+  2026-07-07 on the Arch testing-vm (COSMIC, `wayland-1`): green after
+  installing `xpra`/`xdotool`/`xorg-xdpyinfo` into the guest (the provisioner
+  does not yet install them — a follow-up for `scripts/testing-vm/`
+  provisioning); confirmed sandbox-up, app-present-on-sandbox,
+  app-absent-from-host, and clean-stop assertions all passed.
 
 ## Known limitations
 
@@ -250,9 +279,12 @@ the same number.
   the `ximagesrc` and `pngenc` elements for capture. Missing dependencies fail
   closed with a structured, naming error.
 - Host live-proof is complete (leak guard + headline `desktop_launch_app`
-  end-to-end, KDE Wayland, 2026-06-30). The one remaining unautomated gate is a
-  live run of the `isolated-xpra` VM smoke profile; the profile is written and
-  wired, but the dev VM's SSH was unserviceable at verification time.
+  end-to-end, KDE Wayland, 2026-06-30, re-proven 2026-07-07). The
+  `isolated-xpra` VM smoke profile is also live-proven (2026-07-07, Arch
+  testing-vm, COSMIC guest). The remaining gap is operational, not a proof
+  gap: the testing-vm provisioner does not yet install `xpra`/`xdotool`/
+  `xorg-xdpyinfo`, so a fresh guest needs a manual package install before the
+  profile passes — tracked as a `scripts/testing-vm/` provisioning follow-up.
 - Ephemeral teardown reaps the xpra session and the isolated daemon on the
   normal and pipe-error MCP exits, but not on `SIGKILL`/panic; a hard-killed
   ephemeral session leaves the xpra server, recoverable via
