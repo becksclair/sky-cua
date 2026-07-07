@@ -223,8 +223,21 @@ pub(super) async fn execute_cdp_capped_until(
 /// below `MIN_COMMAND_TIMEOUT_MS` rather than outliving the read.
 const MIN_COMMAND_TIMEOUT_MS: u64 = 250;
 
+const DEFAULT_MAX_COMMAND_TIMEOUT_MS: u64 = 10_000;
+
+/// Deadline budget kept out of a single command's reach so wedge recovery
+/// (session resets, the discarded-tab wake, and one capped `Page.enable`) can
+/// still run inside the operation deadline after that command times out.
+/// Without it, `SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS` raised the first command's
+/// budget and the overall deadline in lockstep, leaving a fixed ~750ms
+/// recovery window that the slow relays the override exists for cannot fit
+/// five bridge round trips into — and every retry burned the full override
+/// again, so a discarded tab never recovered. The reserve binds only when a
+/// command's budget would exceed [`DEFAULT_MAX_COMMAND_TIMEOUT_MS`]: default
+/// and short deadlines keep their historical geometry byte-for-byte.
+const RECOVERY_RESERVE_MS: u64 = 4_000;
+
 fn cdp_command_timeout_ms(deadline: TokioInstant, now: TokioInstant) -> u64 {
-    const DEFAULT_MAX_COMMAND_TIMEOUT_MS: u64 = 10_000;
     // The per-command cap scales with the operator override so a raised overall
     // deadline actually reaches individual CDP commands on slow relays.
     let max_command_timeout_ms =
@@ -240,13 +253,22 @@ fn cdp_command_timeout_ms(deadline: TokioInstant, now: TokioInstant) -> u64 {
 /// override below the minimum (e.g. a mistyped
 /// `SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS=200`) would otherwise make `min > max` and
 /// panic `u64::clamp` on the first CDP command.
+///
+/// A budget above [`DEFAULT_MAX_COMMAND_TIMEOUT_MS`] must additionally leave
+/// [`RECOVERY_RESERVE_MS`] of the remaining deadline untouched; see the
+/// reserve's rationale.
 fn command_budget_ms(remaining_ms: u64, max_command_timeout_ms: u64) -> u64 {
     const RESPONSE_MARGIN_MS: u64 = 750;
     const READ_DEADLINE_HEADROOM_MS: u64 = 100;
     let max_command_timeout_ms = max_command_timeout_ms.max(MIN_COMMAND_TIMEOUT_MS);
     let budget = remaining_ms
         .saturating_sub(RESPONSE_MARGIN_MS)
-        .clamp(MIN_COMMAND_TIMEOUT_MS, max_command_timeout_ms);
+        .clamp(MIN_COMMAND_TIMEOUT_MS, max_command_timeout_ms)
+        .min(
+            remaining_ms
+                .saturating_sub(RECOVERY_RESERVE_MS)
+                .max(DEFAULT_MAX_COMMAND_TIMEOUT_MS),
+        );
     budget.min(
         remaining_ms
             .saturating_sub(READ_DEADLINE_HEADROOM_MS)
@@ -365,6 +387,21 @@ mod cdp_timeout_tests {
         assert_eq!(command_budget_ms(60_000, 1), 250);
         // A legitimately raised cap is still honored.
         assert_eq!(command_budget_ms(60_000, 30_000), 30_000);
+    }
+
+    #[test]
+    fn oversized_budgets_leave_the_recovery_reserve() {
+        // An operator override raises both the deadline and the per-command
+        // cap; the command must still leave the recovery reserve behind it so
+        // a discarded-tab wake fits after a first-command timeout.
+        assert_eq!(command_budget_ms(30_000, 30_000), 26_000);
+        // Between the default ceiling and default+reserve, the budget parks at
+        // the stock 10s ceiling rather than starving recovery.
+        assert_eq!(command_budget_ms(13_000, 13_000), 10_000);
+        // A budget already at or below the stock ceiling is never reduced:
+        // the reserve binds only above it.
+        assert_eq!(command_budget_ms(60_000, 30_000), 30_000);
+        assert_eq!(command_budget_ms(12_000, 10_000), 10_000);
     }
 
     #[test]
