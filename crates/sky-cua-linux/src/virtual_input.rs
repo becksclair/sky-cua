@@ -1314,6 +1314,7 @@ where
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
             Ok(None) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 return Err(BackendError::new(
                     BackendErrorCode::ActionUnsupportedForEnvironment,
                     format!("ydotool command timed out: ydotool {}", args.join(" ")),
@@ -1321,6 +1322,7 @@ where
             }
             Err(error) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 return Err(BackendError::new(
                     BackendErrorCode::ActionUnsupportedForEnvironment,
                     format!("failed to wait for ydotool: {error}"),
