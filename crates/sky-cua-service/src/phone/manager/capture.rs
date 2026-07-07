@@ -1,12 +1,18 @@
 //! Screenshot capture and the `phone_observe` aggregation.
 //!
 //! Capture routes companion-first (its on-device screenshot carries native
-//! overlay metadata) then ADB `screencap`, mints and registers a snapshot,
+//! overlay metadata) then ADB `screencap`, decodes the frame exactly once,
 //! composites the screenshot-synthetic cursor when a fresh cursor exists (never
-//! when the native overlay already captured it), and returns the device size,
-//! coordinate mapping, and cursor capabilities. `phone_observe` stitches a
-//! capture together with the current app, an optional accessibility summary and
-//! recent notifications, the cursor, and the dynamic action menu.
+//! when the native overlay already captured it), and — when the model wants
+//! inline image data — downscales and re-encodes it through the same
+//! model-screenshot knobs the desktop and browser capture lanes honor. Decode,
+//! composite, and encode all run off the async executor via
+//! `tokio::task::spawn_blocking`. Coordinate actions resolve through the
+//! delivered (possibly downscaled) image plane, never blindly against device
+//! pixels, so a `phone_tap` on a downscaled snapshot still lands on the right
+//! device pixel. `phone_observe` stitches a capture together with the current
+//! app, an optional accessibility summary and recent notifications, the
+//! cursor, and the dynamic action menu.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -64,24 +70,27 @@ impl PhoneManager {
         // the fallback to be honest about why the preferred backend was not used
         // instead of silently returning the ADB image as if nothing happened.
         let mut diagnostics: Vec<DiagnosticEntry> = Vec::new();
-        let (mut png, width, height, contains_native_overlay, backend_used) = match backend {
-            PhoneBackendKind::Companion => match self.companion_screenshot(ctx).await {
-                Ok(shot) => shot,
-                Err(diag) => {
-                    // Companion screenshot failed; record the classified reason,
-                    // then fall back to ADB screencap.
-                    diagnostics.push(diag);
-                    let png = self.adb_screencap(ctx).await?;
-                    let (w, h) = decode_png_dimensions(&png)?;
-                    (png, w, h, false, PhoneBackendKind::Adb)
+        let (mut png, width, height, contains_native_overlay, backend_used, decoded_image) =
+            match backend {
+                PhoneBackendKind::Companion => match self.companion_screenshot(ctx).await {
+                    Ok((bytes, w, h, native, used)) => (bytes, w, h, native, used, None),
+                    Err(diag) => {
+                        // Companion screenshot failed; record the classified
+                        // reason, then fall back to ADB screencap.
+                        diagnostics.push(diag);
+                        let raw = self.adb_screencap(ctx).await?;
+                        let (png, image) = decode_capture_blocking(raw).await?;
+                        let (w, h) = (image.width(), image.height());
+                        (png, w, h, false, PhoneBackendKind::Adb, Some(image))
+                    }
+                },
+                _ => {
+                    let raw = self.adb_screencap(ctx).await?;
+                    let (png, image) = decode_capture_blocking(raw).await?;
+                    let (w, h) = (image.width(), image.height());
+                    (png, w, h, false, PhoneBackendKind::Adb, Some(image))
                 }
-            },
-            _ => {
-                let png = self.adb_screencap(ctx).await?;
-                let (w, h) = decode_png_dimensions(&png)?;
-                (png, w, h, false, PhoneBackendKind::Adb)
-            }
-        };
+            };
 
         let device_size = PixelSize { width, height };
         // Drift guard: a live orientation flip or resolution change shows up as a
@@ -103,29 +112,71 @@ impl PhoneManager {
         }
         let captured_at = now_ms();
         let snapshot_id = snapshot::mint(&ctx.serial, captured_at);
-        let mapping = mapping::identity_mapping(
-            &format!("{snapshot_id}-map"),
-            &ctx.session_id,
-            &ctx.serial,
-            device_size.clone(),
-            captured_at,
-        );
 
         // Composite the synthetic cursor when one is live for this session and
-        // the native overlay did not already capture it. Never double-composite.
+        // the native overlay did not already capture it (never double-composite),
+        // then — when the model wants inline image data — downscale and re-encode
+        // through the shared model-screenshot knobs. Both are CPU-bound, so they
+        // run together off the async executor; the adb/companion round trip above
+        // is the only I/O and stays async.
         let cursor_state = self
             .sessions
             .get(&ctx.session_id)
             .and_then(|entry| entry.cursor.current(captured_at));
-        if self.selection.screenshot_cursor
-            && !contains_native_overlay
-            && let Some(point) = self
-                .sessions
+        let cursor_point = if self.selection.screenshot_cursor && !contains_native_overlay {
+            self.sessions
                 .get(&ctx.session_id)
                 .and_then(|entry| entry.cursor.screenshot_point(captured_at))
-        {
-            composite_cursor(&mut png, point);
-        }
+        } else {
+            None
+        };
+
+        let serial_owned = ctx.serial.clone();
+        let snapshot_id_owned = snapshot_id.clone();
+        let device_size_for_blocking = device_size.clone();
+        let assembly = tokio::task::spawn_blocking(move || {
+            assemble_capture(
+                png,
+                decoded_image,
+                cursor_point,
+                include_image,
+                device_size_for_blocking,
+                &serial_owned,
+                &snapshot_id_owned,
+            )
+        })
+        .await
+        .map_err(|join_error| DiagnosticEntry {
+            code: "PhoneScreenshotAssemblyFailed".to_string(),
+            message: format!(
+                "phone screenshot compositing/encoding task failed to join cleanly: {join_error}"
+            ),
+            details: None,
+        })?;
+        png = assembly.png;
+        diagnostics.extend(assembly.diagnostics);
+
+        // The mapping for a 1:1 ADB screencap is identity; a downscaled model
+        // delivery instead needs `screenshot_size` distinct from `device_size` so
+        // `screenshot_to_device` scales coordinate actions back to the real
+        // device pixel, not the smaller delivered plane.
+        let mapping_id = format!("{snapshot_id}-map");
+        let mapping = mapping::build_mapping(&mapping::MappingBuild {
+            mapping_id: &mapping_id,
+            session_id: &ctx.session_id,
+            serial: &ctx.serial,
+            device_size: device_size.clone(),
+            screenshot_size: assembly.delivered_size,
+            rotation_degrees: 0,
+            host_window_rect: None,
+            host_content_rect: None,
+            captured_at_ms: captured_at,
+        })
+        .map_err(|error| DiagnosticEntry {
+            code: error.code().to_string(),
+            message: format!("phone capture produced an invalid coordinate mapping: {error}"),
+            details: None,
+        })?;
 
         // Register the snapshot so a later coordinate action can resolve it.
         if let Some(entry) = self.sessions.get_mut(&ctx.session_id) {
@@ -139,12 +190,7 @@ impl PhoneManager {
         }
 
         let cursor_caps = self.cursor_capabilities(&ctx.profile);
-        let inline_image = include_image.then(|| PhoneImage {
-            mime_type: "image/png".to_string(),
-            data_base64: BASE64.encode(&png),
-            width: Some(width),
-            height: Some(height),
-        });
+        let inline_image = assembly.inline_image;
         let screenshot_path = if include_image {
             None
         } else {
@@ -410,14 +456,18 @@ fn observe_actions(
     (profile.available_actions, profile.unavailable_actions)
 }
 
-/// Decode the dimensions of a captured PNG. A truncated or non-PNG payload
-/// (e.g. a partial `screencap` over a flaky wireless link) must not become a
-/// degenerate 0x0 "successful" screenshot; it is a structured capture failure so
-/// the caller routes through [`PhoneManager::screenshot_failure`] instead of
+/// Decode a captured PNG into pixels. A truncated or non-PNG payload (e.g. a
+/// partial `screencap` over a flaky wireless link) must not become a
+/// degenerate 0x0 "successful" screenshot; it is a structured capture failure
+/// so the caller routes through [`PhoneManager::screenshot_failure`] instead of
 /// registering a 0x0 snapshot.
-fn decode_png_dimensions(png: &[u8]) -> Result<(u32, u32), DiagnosticEntry> {
+///
+/// This is the only decode of a given capture's bytes: callers that need the
+/// pixels for compositing or model-image encoding reuse the returned image
+/// instead of decoding again.
+fn decode_capture(png: &[u8]) -> Result<image::DynamicImage, DiagnosticEntry> {
     match image::load_from_memory_with_format(png, ImageFormat::Png) {
-        Ok(image) if image.width() > 0 && image.height() > 0 => Ok((image.width(), image.height())),
+        Ok(image) if image.width() > 0 && image.height() > 0 => Ok(image),
         _ => Err(DiagnosticEntry {
             code: "PhoneScreencapDecodeFailed".to_string(),
             message: "captured screenshot bytes did not decode as a non-empty PNG".to_string(),
@@ -426,23 +476,226 @@ fn decode_png_dimensions(png: &[u8]) -> Result<(u32, u32), DiagnosticEntry> {
     }
 }
 
-/// Composite the synthetic agent cursor into a PNG in memory, re-encoding the
-/// result. A composition error leaves the original bytes untouched.
-fn composite_cursor(png: &mut Vec<u8>, point: PhonePoint) {
-    let Ok(image) = image::load_from_memory_with_format(png, ImageFormat::Png) else {
-        return;
-    };
+/// Decode a capture off the async executor, handing the bytes back alongside
+/// the decoded image so the caller does not need to keep a second copy around.
+async fn decode_capture_blocking(
+    png: Vec<u8>,
+) -> Result<(Vec<u8>, image::DynamicImage), DiagnosticEntry> {
+    match tokio::task::spawn_blocking(move || {
+        let decoded = decode_capture(&png);
+        (png, decoded)
+    })
+    .await
+    {
+        Ok((png, Ok(image))) => Ok((png, image)),
+        Ok((_, Err(diagnostic))) => Err(diagnostic),
+        Err(join_error) => Err(DiagnosticEntry {
+            code: "PhoneScreencapDecodeFailed".to_string(),
+            message: format!("phone screenshot decode task failed to join cleanly: {join_error}"),
+            details: None,
+        }),
+    }
+}
+
+/// Composite the synthetic agent cursor into an already-decoded frame and
+/// re-encode the result to PNG. Returns the composited image and its PNG bytes
+/// on success so callers can reuse both for model delivery and on-disk
+/// persistence; returns `None` on any compose/encode failure, leaving the
+/// original capture untouched (never fabricate a corrupted composite).
+fn composite_cursor(
+    image: image::DynamicImage,
+    point: PhonePoint,
+) -> Option<(image::DynamicImage, Vec<u8>)> {
     let mut rgba = image.to_rgba8();
     if cursor::compose_synthetic_cursor(&mut rgba, point).is_err() {
-        return;
+        return None;
     }
+    let composed = image::DynamicImage::ImageRgba8(rgba);
     let mut out = std::io::Cursor::new(Vec::new());
-    if image::DynamicImage::ImageRgba8(rgba)
-        .write_to(&mut out, ImageFormat::Png)
-        .is_ok()
-    {
-        *png = out.into_inner();
+    if composed.write_to(&mut out, ImageFormat::Png).is_err() {
+        return None;
     }
+    Some((composed, out.into_inner()))
+}
+
+/// Result of the CPU-bound part of a capture: the (possibly composited) raw
+/// PNG bytes, the inline model image when one was requested, the pixel size
+/// of whatever plane the model actually saw, and any diagnostics collected
+/// along the way.
+struct CaptureAssembly {
+    png: Vec<u8>,
+    inline_image: Option<PhoneImage>,
+    delivered_size: PixelSize,
+    diagnostics: Vec<DiagnosticEntry>,
+}
+
+/// Composite the cursor (if a fresh one exists) and — when the model wants
+/// inline image data — downscale and re-encode through the shared
+/// model-screenshot knobs. Pure and synchronous so it can run inside
+/// `spawn_blocking` without touching manager state.
+fn assemble_capture(
+    mut png: Vec<u8>,
+    mut decoded_image: Option<image::DynamicImage>,
+    cursor_point: Option<PhonePoint>,
+    include_image: bool,
+    device_size: PixelSize,
+    serial: &str,
+    snapshot_id: &str,
+) -> CaptureAssembly {
+    let mut diagnostics = Vec::new();
+
+    if let Some(point) = cursor_point {
+        let source = decoded_image.take().or_else(|| decode_capture(&png).ok());
+        if let Some(source) = source
+            && let Some((composed, encoded_png)) = composite_cursor(source, point)
+        {
+            png = encoded_png;
+            decoded_image = Some(composed);
+        }
+    }
+
+    if !include_image {
+        return CaptureAssembly {
+            png,
+            inline_image: None,
+            delivered_size: device_size,
+            diagnostics,
+        };
+    }
+
+    let (inline_image, delivered_size) = match decoded_image.or_else(|| decode_capture(&png).ok()) {
+        Some(image) => {
+            let (built, size, mut prep_diagnostics) =
+                prepare_inline_image(serial, snapshot_id, image, device_size.clone(), &png);
+            diagnostics.append(&mut prep_diagnostics);
+            (built, size)
+        }
+        None => {
+            // The frame decoded fine earlier in this same request (the ADB
+            // integrity gate, or the compositing branch above) or never needed
+            // decoding until now (a companion frame with no cursor to
+            // composite); if it fails to decode here, degrade to the raw
+            // full-resolution PNG rather than losing the capture.
+            diagnostics.push(DiagnosticEntry {
+                code: "PhoneScreenshotModelImageDegraded".to_string(),
+                message: "phone screenshot could not be decoded for model-image downscaling; \
+                          delivering the full-resolution PNG instead"
+                    .to_string(),
+                details: None,
+            });
+            (
+                PhoneImage {
+                    mime_type: "image/png".to_string(),
+                    data_base64: BASE64.encode(&png),
+                    width: Some(device_size.width),
+                    height: Some(device_size.height),
+                },
+                device_size.clone(),
+            )
+        }
+    };
+
+    CaptureAssembly {
+        png,
+        inline_image: Some(inline_image),
+        delivered_size,
+        diagnostics,
+    }
+}
+
+/// Downscale and re-encode a decoded capture for model delivery, reusing the
+/// shared `sky-cua-capture` resize/encode logic (and its
+/// `SKY_CUA_MODEL_SCREENSHOT_*` env knobs) so the phone lane never re-derives
+/// its own resolution policy. A capture already within the model bounds is
+/// encoded at native size (no upscale, no no-op resize).
+///
+/// The model image is written to a transient file (the shared encoder is
+/// file-based) and read back into base64 immediately; the file is removed
+/// right after so this delivery mode leaves nothing behind on disk.
+fn prepare_inline_image(
+    serial: &str,
+    snapshot_id: &str,
+    image: image::DynamicImage,
+    device_size: PixelSize,
+    png: &[u8],
+) -> (PhoneImage, PixelSize, Vec<DiagnosticEntry>) {
+    let dir = phone_model_captures_dir();
+    let source_path = dir.join(format!("{snapshot_id}-device.png"));
+    let prepared = sky_cua_capture::prepare_model_capture_from_image(
+        &dir,
+        snapshot_id,
+        image,
+        &source_path,
+        Some(device_size.clone()),
+    );
+    match prepared {
+        Ok(prepared) => match std::fs::read(&prepared.path) {
+            Ok(bytes) => {
+                let _ = std::fs::remove_file(&prepared.path);
+                let pixel_size = prepared.pixel_size.unwrap_or_else(|| device_size.clone());
+                let mime_type = match prepared.format {
+                    sky_cua_capture::ModelScreenshotFormat::Jpeg => "image/jpeg",
+                    sky_cua_capture::ModelScreenshotFormat::Webp => "image/webp",
+                };
+                (
+                    PhoneImage {
+                        mime_type: mime_type.to_string(),
+                        data_base64: BASE64.encode(bytes),
+                        width: Some(pixel_size.width),
+                        height: Some(pixel_size.height),
+                    },
+                    pixel_size,
+                    Vec::new(),
+                )
+            }
+            Err(error) => degraded_full_resolution_image(
+                png,
+                device_size,
+                format!(
+                    "failed to read prepared model image for phone {serial} at {}: {error}",
+                    prepared.path.display()
+                ),
+            ),
+        },
+        Err(error) => degraded_full_resolution_image(
+            png,
+            device_size,
+            format!(
+                "model image preparation failed for phone {serial}: {}",
+                error.message
+            ),
+        ),
+    }
+}
+
+/// Fallback delivery when model-image preparation fails: the full-resolution
+/// PNG rides as-is, with a non-fatal diagnostic explaining the degrade. Mirrors
+/// the browser capture lane's degrade-instead-of-fail contract.
+fn degraded_full_resolution_image(
+    png: &[u8],
+    device_size: PixelSize,
+    message: String,
+) -> (PhoneImage, PixelSize, Vec<DiagnosticEntry>) {
+    (
+        PhoneImage {
+            mime_type: "image/png".to_string(),
+            data_base64: BASE64.encode(png),
+            width: Some(device_size.width),
+            height: Some(device_size.height),
+        },
+        device_size,
+        vec![DiagnosticEntry {
+            code: "PhoneScreenshotModelImageDegraded".to_string(),
+            message: format!(
+                "phone model image downscale failed; delivering full-resolution PNG: {message}"
+            ),
+            details: None,
+        }],
+    )
+}
+
+fn phone_model_captures_dir() -> PathBuf {
+    phone_captures_dir().join("model")
 }
 
 fn write_phone_capture_file(serial: &str, png: &[u8]) -> Result<PathBuf, String> {

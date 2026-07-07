@@ -12,6 +12,7 @@ chrono.workspace = true
 image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sky-cua-capture = { path = "../sky-cua-capture" }
 sky-cua-overlay-host = { path = "../sky-cua-overlay-host" }
 sky-cua-platform = { path = "../sky-cua-platform" }
 tokio = { workspace = true, features = ["net", "process", "signal"] }

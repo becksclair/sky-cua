@@ -700,6 +700,177 @@ async fn screenshot_with_undecodable_png_is_a_structured_failure() {
     }
 }
 
+/// A test-only guard that restores an env var's prior value on drop, so a
+/// panic mid-test (or an early return) cannot leak an override into whatever
+/// process nextest reuses next. nextest runs each test in its own process, so
+/// this is about test hygiene within the process, not cross-test isolation.
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+/// The model-facing inline image is downscaled to fit the configured
+/// `SKY_CUA_MODEL_SCREENSHOT_MAX_*` bounds, not delivered at full device
+/// resolution. `device_size` still reports the real capture size.
+#[tokio::test]
+async fn screenshot_delivers_downscaled_model_image_within_configured_bounds() {
+    let _max_width = EnvVarGuard::set("SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH", "200");
+    let _max_height = EnvVarGuard::set("SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT", "200");
+
+    let (mut manager, runner) = adb_only_manager();
+    let session = connect(&mut manager).await;
+    runner.set_output(
+        "adb",
+        &["-s", SERIAL, "exec-out", "screencap", "-p"],
+        crate::phone::command::CommandOutput {
+            status: Some(0),
+            stdout: png_bytes(1080, 2400),
+            stderr: Vec::new(),
+        },
+    );
+
+    match manager
+        .handle(PhoneRequest::Screenshot(PhoneScreenshotRequest {
+            session: selector(&session.session_id),
+            backend: None,
+            include_image_data: true,
+        }))
+        .await
+    {
+        PhoneResponse::Screenshot(shot) => {
+            assert_eq!(
+                shot.device_size,
+                PixelSize {
+                    width: 1080,
+                    height: 2400,
+                }
+            );
+            let image = shot
+                .inline_image
+                .expect("include_image_data=true must deliver an inline image");
+            let width = image.width.expect("delivered width");
+            let height = image.height.expect("delivered height");
+            assert!(
+                width <= 200 && height <= 200,
+                "delivered image {width}x{height} exceeds the configured 200x200 bound"
+            );
+            assert!(
+                width < 1080 && height < 2400,
+                "a 1080x2400 device capture bounded to 200x200 must actually downscale, got {width}x{height}"
+            );
+            assert!(
+                !image.data_base64.is_empty(),
+                "a downscaled model image must still carry image bytes"
+            );
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+/// THE regression test for the mapping invariant: a `phone_tap` naming a
+/// snapshot whose delivered model image was downscaled below device
+/// resolution must still resolve to the correct device pixel, not the
+/// (smaller) delivered-image pixel. Verified by inspecting the device point
+/// the companion `overlay_gesture` call actually receives.
+#[tokio::test]
+async fn tap_on_downscaled_snapshot_resolves_to_device_pixel() {
+    let _max_width = EnvVarGuard::set("SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH", "200");
+    let _max_height = EnvVarGuard::set("SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT", "200");
+
+    let server = RecordingCompanion::start().await;
+    let runner = Arc::new(FakeCommandRunner::new());
+    let selection = resolve_phone_selection(&PhoneConfig::default());
+    let mut manager = PhoneManager::with_runner(runner.clone(), selection);
+    let now = PhoneManager::now_ms_for_tests();
+    manager.insert_companion_session_for_tests("sess-1", SERIAL, server.port, COMPANION_TOKEN, now);
+    runner.set_output(
+        "adb",
+        &["-s", SERIAL, "exec-out", "screencap", "-p"],
+        crate::phone::command::CommandOutput {
+            status: Some(0),
+            stdout: png_bytes(1080, 2400),
+            stderr: Vec::new(),
+        },
+    );
+
+    // Force the ADB capture path explicitly so this test does not depend on
+    // the companion-screenshot RPC (the recording stub does not implement it).
+    let (snapshot_id, delivered_width, delivered_height) = match manager
+        .handle(PhoneRequest::Screenshot(PhoneScreenshotRequest {
+            session: selector("sess-1"),
+            backend: Some(PhoneBackendKind::Adb),
+            include_image_data: true,
+        }))
+        .await
+    {
+        PhoneResponse::Screenshot(shot) => {
+            let image = shot.inline_image.expect("inline image");
+            let width = image.width.expect("delivered width");
+            let height = image.height.expect("delivered height");
+            assert!(
+                width < 1080 && height < 2400,
+                "test setup must actually downscale below device resolution, got {width}x{height}"
+            );
+            (shot.phone_snapshot_id, width, height)
+        }
+        other => panic!("unexpected: {other:?}"),
+    };
+
+    // Tap a quarter of the way into the *delivered* (downscaled) image. If
+    // coordinate resolution incorrectly treated the delivered image as 1:1
+    // with the device, this would dispatch at (delivered_width/4,
+    // delivered_height/4) device pixels instead of the correct
+    // (device_width/4, device_height/4).
+
+    let action = match manager
+        .handle(PhoneRequest::Tap(PhoneTapRequest {
+            session: selector("sess-1"),
+            phone_snapshot_id: Some(snapshot_id),
+            x: f64::from(delivered_width) / 4.0,
+            y: f64::from(delivered_height) / 4.0,
+            use_device_coordinates: false,
+        }))
+        .await
+    {
+        PhoneResponse::Action(action) => action,
+        other => panic!("unexpected: {other:?}"),
+    };
+    assert_eq!(
+        action.backend,
+        PhoneBackendKind::Companion,
+        "{:?}",
+        action.diagnostics
+    );
+
+    let body = server
+        .request_for("overlay_gesture")
+        .expect("a successful tap must animate the overlay");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("json body");
+    let points = parsed["params"]["points"].as_array().expect("points");
+    assert_eq!(points.len(), 1);
+    // 1080/4 = 270.0, 2400/4 = 600.0: the real device pixel, not the
+    // delivered-image pixel.
+    assert_eq!(points[0]["x"], serde_json::json!(270.0));
+    assert_eq!(points[0]["y"], serde_json::json!(600.0));
+}
+
 #[tokio::test]
 async fn tap_with_stale_snapshot_is_rejected() {
     let (mut manager, runner) = adb_only_manager();
