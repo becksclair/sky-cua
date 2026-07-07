@@ -59,6 +59,8 @@ pub enum PhoneRequest {
 /// the browser family collapses click/type/scroll into `BrowserActionResponse`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+// boxing would churn the wire/model contract; revisit if size matters
+#[allow(clippy::large_enum_variant)]
 pub enum PhoneResponse {
     Observe(PhoneObserveResponse),
     Status(PhoneStatusReport),

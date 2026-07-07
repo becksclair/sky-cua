@@ -27,6 +27,10 @@ impl LayerShellOverlayBackend {
     }
 }
 
+// This function's signature is not the ROADMAP-tracked plan_capture config-struct
+// refactor; a config-struct split here is a signature refactor out of scope for
+// this lint pass.
+#[allow(clippy::too_many_arguments)]
 fn layer_shell_capabilities(
     open_layer_count: usize,
     has_open_layer: bool,

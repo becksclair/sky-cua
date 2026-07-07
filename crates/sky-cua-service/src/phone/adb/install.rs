@@ -66,6 +66,9 @@ fn classify_install(adb: &str, argv: &[&str], output: &CommandOutput) -> Install
 
 /// Single-APK install/update: `adb -s S install [-r -d -t -g] <apk>`.
 /// Reachable through [`install_replace`] (the companion auto-install path).
+// signature refactor out of scope for this lint pass (unrelated to the
+// tracked plan_capture config-struct refactor)
+#[allow(clippy::too_many_arguments)]
 pub(in crate::phone) async fn install_single(
     runner: &dyn CommandRunner,
     configured_adb_path: Option<&str>,
@@ -94,6 +97,9 @@ pub(in crate::phone) async fn install_single(
 }
 
 /// Split-APK install of one package: `adb -s S install-multiple [...] <apks>`.
+// signature refactor out of scope for this lint pass (unrelated to the
+// tracked plan_capture config-struct refactor)
+#[allow(clippy::too_many_arguments)]
 pub(in crate::phone) async fn install_multiple(
     runner: &dyn CommandRunner,
     configured_adb_path: Option<&str>,
@@ -124,6 +130,9 @@ pub(in crate::phone) async fn install_multiple(
 }
 
 /// Several packages at once: `adb -s S install-multi-package [...] <apks>`.
+// signature refactor out of scope for this lint pass (unrelated to the
+// tracked plan_capture config-struct refactor)
+#[allow(clippy::too_many_arguments)]
 pub(in crate::phone) async fn install_multi_package(
     runner: &dyn CommandRunner,
     configured_adb_path: Option<&str>,
