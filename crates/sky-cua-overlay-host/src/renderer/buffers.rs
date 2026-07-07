@@ -98,12 +98,15 @@ pub struct EffectUniformInput<'a> {
 /// because every period divides the modulus (pinned by the assertions below);
 /// the subsequent `f32` division is the same on every platform.
 const BREATHING_CLOCK_MODULUS_MS: u64 = 104_000;
-const _: () =
-    assert!(BREATHING_CLOCK_MODULUS_MS % overlay_spec::shared::timing::BREATHE_PERIOD_MS == 0);
-const _: () =
-    assert!(BREATHING_CLOCK_MODULUS_MS % overlay_spec::shared::timing::WAVE_PERIOD_MS == 0);
-const _: () =
-    assert!(BREATHING_CLOCK_MODULUS_MS % overlay_spec::shared::timing::HALO_BREATHE_PERIOD_MS == 0);
+const _: () = assert!(
+    BREATHING_CLOCK_MODULUS_MS.is_multiple_of(overlay_spec::shared::timing::BREATHE_PERIOD_MS)
+);
+const _: () = assert!(
+    BREATHING_CLOCK_MODULUS_MS.is_multiple_of(overlay_spec::shared::timing::WAVE_PERIOD_MS)
+);
+const _: () = assert!(
+    BREATHING_CLOCK_MODULUS_MS.is_multiple_of(overlay_spec::shared::timing::HALO_BREATHE_PERIOD_MS)
+);
 
 #[must_use]
 pub fn build_effect_uniform(

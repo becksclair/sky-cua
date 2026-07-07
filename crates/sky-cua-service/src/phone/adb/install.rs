@@ -23,12 +23,12 @@ pub(in crate::phone) struct InstallOutcome {
 }
 
 /// Build the shared `install` flag tail from the explicit option set.
-fn install_flags<'a>(
+fn install_flags(
     reinstall: bool,
     allow_downgrade: bool,
     allow_test_apk: bool,
     grant_runtime_permissions: bool,
-    extra: &mut Vec<&'a str>,
+    extra: &mut Vec<&str>,
 ) {
     if reinstall {
         extra.push("-r");

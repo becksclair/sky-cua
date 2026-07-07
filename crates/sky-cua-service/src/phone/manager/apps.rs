@@ -152,8 +152,8 @@ impl PhoneManager {
         };
         let serial = self.serial_of(&session_id);
 
-        if self.companion_app_management(&session_id) {
-            if let Some(success) = self
+        if self.companion_app_management(&session_id)
+            && let Some(success) = self
                 .companion_app_op(
                     &session_id,
                     AppOp::Launch,
@@ -161,15 +161,14 @@ impl PhoneManager {
                     None,
                 )
                 .await
-            {
-                return companion_app_result(
-                    session_id,
-                    serial,
-                    PhoneAppResponseKind::Launch,
-                    success,
-                    "phone_app_launch",
-                );
-            }
+        {
+            return companion_app_result(
+                session_id,
+                serial,
+                PhoneAppResponseKind::Launch,
+                success,
+                "phone_app_launch",
+            );
         }
 
         let outcome = adb::launch_package(
@@ -194,8 +193,8 @@ impl PhoneManager {
         };
         let serial = self.serial_of(&session_id);
 
-        if self.companion_app_management(&session_id) {
-            if let Some(success) = self
+        if self.companion_app_management(&session_id)
+            && let Some(success) = self
                 .companion_app_op(
                     &session_id,
                     AppOp::OpenIntent,
@@ -203,15 +202,14 @@ impl PhoneManager {
                     Some(request.intent_uri.clone()),
                 )
                 .await
-            {
-                return companion_app_result(
-                    session_id,
-                    serial,
-                    PhoneAppResponseKind::OpenIntent,
-                    success,
-                    "phone_app_open_intent",
-                );
-            }
+        {
+            return companion_app_result(
+                session_id,
+                serial,
+                PhoneAppResponseKind::OpenIntent,
+                success,
+                "phone_app_open_intent",
+            );
         }
 
         let outcome = adb::start_intent(

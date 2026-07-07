@@ -327,8 +327,7 @@ fn is_supported_rotation(rotation_degrees: i32) -> bool {
 /// Normalize any multiple-of-90 rotation into 0/90/180/270. Non-multiples pass
 /// through unchanged so [`is_supported_rotation`] rejects them.
 fn normalize_rotation(rotation_degrees: i32) -> i32 {
-    let r = rotation_degrees.rem_euclid(360);
-    r
+    rotation_degrees.rem_euclid(360)
 }
 
 fn point_is_finite(point: PhonePoint) -> bool {

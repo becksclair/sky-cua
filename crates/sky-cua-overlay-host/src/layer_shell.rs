@@ -225,15 +225,15 @@ impl LayerShellOverlayBackend {
                     self.app.start_capture_barrier(sequence);
                 }
                 let mut reply = self.render_reply();
-                if message.sequence.is_some() {
-                    if let Err(error) = self.wait_for_capture_barrier() {
-                        reply.ok = false;
-                        reply.diagnostics.push(diagnostic(
-                            "OverlayCaptureBarrierTimeout",
-                            "Overlay host capture barrier timed out before the hidden frame was applied.",
-                            Some(error.to_string()),
-                        ));
-                    }
+                if message.sequence.is_some()
+                    && let Err(error) = self.wait_for_capture_barrier()
+                {
+                    reply.ok = false;
+                    reply.diagnostics.push(diagnostic(
+                        "OverlayCaptureBarrierTimeout",
+                        "Overlay host capture barrier timed out before the hidden frame was applied.",
+                        Some(error.to_string()),
+                    ));
                 }
                 if let Some(reason) = message.reason.filter(|value| !value.trim().is_empty()) {
                     reply.diagnostics.push(diagnostic(

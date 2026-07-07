@@ -394,7 +394,7 @@ fn create_effect_bind_group(
         mipmap_filter: ::wgpu::MipmapFilterMode::Linear,
         ..Default::default()
     });
-    let bind_group = device.create_bind_group(&::wgpu::BindGroupDescriptor {
+    device.create_bind_group(&::wgpu::BindGroupDescriptor {
         label: Some("sky-cua overlay effect bind group"),
         layout: bind_group_layout,
         entries: &[
@@ -415,6 +415,5 @@ fn create_effect_bind_group(
                 resource: ::wgpu::BindingResource::Sampler(&sampler),
             },
         ],
-    });
-    bind_group
+    })
 }

@@ -1,3 +1,14 @@
+// These are compile-time invariants over generated config constants (regenerated
+// from resources/overlay/agent_overlay_spec.toml), so they are checked once at
+// compile time rather than as runtime tests.
+const _: () = assert!(crate::overlay_spec::shared::timing::MIN_GESTURE_DURATION_MS > 0);
+const _: () = assert!(
+    crate::overlay_spec::shared::timing::MIN_GESTURE_DURATION_MS
+        <= crate::overlay_spec::shared::timing::MAX_GESTURE_DURATION_MS
+);
+const _: () = assert!(crate::overlay_spec::shared::effects::MAX_GESTURE_POINTS >= 1);
+const _: () = assert!(crate::overlay_spec::shared::effects::MAX_GESTURE_POINTS <= 1024);
+
 #[cfg(test)]
 mod tests {
     use crate::overlay_spec;
@@ -5,15 +16,6 @@ mod tests {
     #[test]
     fn schema_version_matches() {
         assert_eq!(overlay_spec::SCHEMA_VERSION, 1);
-    }
-
-    #[test]
-    fn shared_timing_positive() {
-        assert!(overlay_spec::shared::timing::MIN_GESTURE_DURATION_MS > 0);
-        assert!(
-            overlay_spec::shared::timing::MIN_GESTURE_DURATION_MS
-                <= overlay_spec::shared::timing::MAX_GESTURE_DURATION_MS
-        );
     }
 
     #[test]
@@ -40,12 +42,6 @@ mod tests {
         let hy = overlay_spec::shared::effects::CURSOR_HOTSPOT_FRACTION_Y;
         assert!((0.0..=1.0).contains(&hx));
         assert!((0.0..=1.0).contains(&hy));
-    }
-
-    #[test]
-    fn max_gesture_points_bounded() {
-        assert!(overlay_spec::shared::effects::MAX_GESTURE_POINTS >= 1);
-        assert!(overlay_spec::shared::effects::MAX_GESTURE_POINTS <= 1024);
     }
 
     #[test]

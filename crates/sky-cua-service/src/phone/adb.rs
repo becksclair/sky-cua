@@ -664,17 +664,17 @@ pub(super) async fn foreground_app(
     // to activity dump for OEMs that move it.
     let window_argv = serial_args(serial, &["shell", "dumpsys", "window"]);
     let window_output = runner.run(&adb, &window_argv).await?;
-    if window_output.success() {
-        if let Some(app) = parse_current_focus(&window_output.stdout_string()) {
-            return Ok(Some(app));
-        }
+    if window_output.success()
+        && let Some(app) = parse_current_focus(&window_output.stdout_string())
+    {
+        return Ok(Some(app));
     }
     let activity_argv = serial_args(serial, &["shell", "dumpsys", "activity", "activities"]);
     let activity_output = runner.run(&adb, &activity_argv).await?;
-    if activity_output.success() {
-        if let Some(app) = parse_current_focus(&activity_output.stdout_string()) {
-            return Ok(Some(app));
-        }
+    if activity_output.success()
+        && let Some(app) = parse_current_focus(&activity_output.stdout_string())
+    {
+        return Ok(Some(app));
     }
     // No focus from either probe. If at least one probe failed, the foreground is
     // unknown (not empty): surface a structured failure keyed on the failing

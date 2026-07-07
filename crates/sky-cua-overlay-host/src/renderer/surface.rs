@@ -80,10 +80,11 @@ impl SurfaceGuard {
         width: u32,
         height: u32,
     ) -> ::wgpu::SurfaceConfiguration {
-        if let Some(config) = self.config.as_ref() {
-            if config.width == width && config.height == height {
-                return config.clone();
-            }
+        if let Some(config) = self.config.as_ref()
+            && config.width == width
+            && config.height == height
+        {
+            return config.clone();
         }
         self.configure(device, adapter, width, height)
     }
