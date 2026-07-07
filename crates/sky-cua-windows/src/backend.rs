@@ -975,6 +975,8 @@ fn window_element(window: &WindowInfo, element_index: usize) -> ElementNode {
             "Top-level Win32 window fallback with screenshot-local bounds".to_string(),
         ),
         value: None,
+        // Synthetic window-level fallback element (no UIA element backs it), so
+        // there is no Value/RangeValue/Text pattern to read; leave readback empty.
         text: None,
         numeric_value: None,
         supports_editable_text: false,
