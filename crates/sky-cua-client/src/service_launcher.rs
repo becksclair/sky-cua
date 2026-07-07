@@ -12,7 +12,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use sky_cua_platform::sky_cua_state_dir;
 use sky_cua_platform::{
     CLIENT_CLEARED_SESSION_ENV_KEYS_ENV,
     model::{DoctorSessionEnvRepair, ServiceRequest, ServiceResponse},
@@ -41,10 +40,6 @@ const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const STARTUP_HEALTH_ATTEMPTS: usize = 160;
 #[cfg(unix)]
 const STALE_SERVICE_TERMINATION_TIMEOUT: Duration = Duration::from_secs(3);
-/// Rotate the daemon stderr log once it grows past this size; one rotated
-/// generation (`.log.old`) is kept. Sized so weeks of info-level tracing fit
-/// while a runaway error loop cannot fill the state dir.
-const DAEMON_LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct ServiceClient {
     endpoint: ServiceEndpoint,
@@ -473,7 +468,9 @@ impl ServiceClient {
             .arg("daemon")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(self.endpoint.daemon_stderr_destination());
+            .stderr(crate::daemon_log::daemon_stderr_destination(
+                &self.endpoint.daemon_log_stem(),
+            ));
 
         configure_launch_environment_env(&mut command, launch_environment);
 
@@ -604,36 +601,6 @@ impl ServiceEndpoint {
                 })
                 .map(EitherStream::Tcp),
         }
-    }
-
-    /// Where the spawned daemon's stderr goes. The daemon's stderr carries its
-    /// tracing output — the only runtime record the service produces — so it
-    /// is appended to a per-endpoint log in the sky-cua state dir (rotated
-    /// once past `DAEMON_LOG_ROTATE_BYTES`, keeping one `.old` generation).
-    /// Logging setup must never block a daemon launch: any failure falls back
-    /// to discarding stderr, matching the old behavior.
-    fn daemon_stderr_destination(&self) -> Stdio {
-        match self.open_daemon_log() {
-            Ok(file) => Stdio::from(file),
-            Err(_) => Stdio::null(),
-        }
-    }
-
-    fn open_daemon_log(&self) -> std::io::Result<std::fs::File> {
-        let dir = sky_cua_state_dir()?;
-        std::fs::create_dir_all(&dir)?;
-        let stem = self.daemon_log_stem();
-        let path = dir.join(format!("{stem}.log"));
-        let oversized = std::fs::metadata(&path)
-            .map(|metadata| metadata.len() > DAEMON_LOG_ROTATE_BYTES)
-            .unwrap_or(false);
-        if oversized {
-            let _ = std::fs::rename(&path, dir.join(format!("{stem}.log.old")));
-        }
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
     }
 
     /// One log per daemon endpoint: the default daemon and an isolated-desktop
@@ -1095,6 +1062,21 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn daemon_log_stem_is_derived_from_the_socket_file_stem() {
+        let default_endpoint =
+            ServiceEndpoint::Unix(PathBuf::from("/run/user/1000/sky-cua/service.sock"));
+        assert_eq!(default_endpoint.daemon_log_stem(), "daemon-service");
+
+        let isolated_endpoint = ServiceEndpoint::Unix(PathBuf::from(
+            "/run/user/1000/sky-cua/service-isolated-100.sock",
+        ));
+        assert_eq!(
+            isolated_endpoint.daemon_log_stem(),
+            "daemon-service-isolated-100"
+        );
+    }
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 

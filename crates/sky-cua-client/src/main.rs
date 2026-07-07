@@ -1,4 +1,5 @@
 mod app_state;
+mod daemon_log;
 #[cfg(unix)]
 mod daemon_singleton;
 mod heuristics;
