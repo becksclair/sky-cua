@@ -54,23 +54,13 @@ After this change, native Wayland apps that expose only a KWin fallback window i
 
 - Observation: the real TIDAL blocker is no longer visibility. The current rich harness can now list and focus `tidal-hifi.desktop`, but the post-focus snapshot only contains one fallback window node and reports `AccessibilityCoverageLimited`.
   Evidence: `artifacts/codex-e2e/tidal-playlist-app-server/20260423T170741Z/last-message.json` and its transcript.
-- Observation (2026-07-08): a completed live fallback-anchor proof cannot be
-  produced by an ad-hoc `sky-cua-client mcp` process spawned on a scratch
-  socket. Such a service enumerates KWin windows fine (a runner-query path),
-  but `activate_window` fails with "timed out waiting for the KWin script
-  result callback" and plain `observe` returns `focused_app: None` with no
-  elements and no `capture` backend. The focus/activation and capture paths
-  need the fully-provisioned runtime: KWin-script callback-service
-  registration and a portal-approved ScreenCast/RemoteDesktop session, neither
-  of which an ephemeral spawned service has. This is why the plan specifies
-  the `live_agentic_loop_smoke.py` / app-server harness (which drives the
-  installed, portal-approved runtime) rather than a hand probe.
-- Observation (2026-07-08): `scripts/live_agentic_loop_smoke.py` currently
-  ships only `--fixture {zenity,kdialog}`. Proving a fallback-only target
-  therefore needs a new fixture entry (launch + reset for the chosen app, e.g.
-  Obsidian with a throwaway vault) wired into that harness, not just target
-  selection. That fixture-wiring plus one run against a freshly deployed
-  runtime is the bounded remaining work.
+- Observation (2026-07-08, superseded by the live proof above): an early hand
+  probe using an ad-hoc `sky-cua-client mcp` on a scratch socket failed
+  (`activate_window` KWin-callback timeout, empty `observe`). Root-caused to
+  the `SKY_CUA_SERVICE_SOCKET_PATH` override spawning a second un-established
+  daemon; against the installed singleton daemon the proof succeeds (see
+  Decision Log). Recorded so the false trail isn't re-walked.
+- (2026-07-08) Landed a fallback-only-app fixture (`obsidian-fallback`) for `scripts/live_agentic_loop_smoke.py`, driven through `scripts/live_obsidian_fallback_smoke.py`. Obsidian, launched into a throwaway scratch vault with `--ozone-platform=wayland` forced, is the intended fallback-only proving target (AT-SPI-dark Electron shell, resettable state). The deterministic pass gate does not trust the agent's self-report: it scans the agent CLI's raw (unredacted) stdout transcript for an `observe` tool result whose `elements` carry a `vision_anchor` state flag with no richer AT-SPI role alongside it, matching `linux_window_elements`'s single-anchor shape in `crates/sky-cua-linux/src/backend.rs`. The harness normally redacts tool-result payloads out of persisted logs (`_agent_mcp_smoke.redact_pi_json_stdout`), so this fixture opts into the existing `SKY_CUA_SMOKE_KEEP_RAW_AGENT_LOG` escape hatch for the duration of its own run instead of weakening redaction generally. Implementation + unit tests only; the full agent-loop live run has not passed yet (2026-07-08: Obsidian would not launch cleanly on the proof host — XWayland auth without `XAUTHORITY`, and `--ozone-platform=wayland` did not start — so the underlying mechanism was proven via an ambient `kwin:{uuid}` window instead). The exact Obsidian first-run affordance targeted (`TRUST_AUTHOR_AFFORDANCE = "Trust author"`) and the launch command (`live_obsidian_fallback_smoke.build_launch_argv`) remain best-offline-guesses behind named seams, pending a reliably-launchable target.
 
 ## Decision Log
 
