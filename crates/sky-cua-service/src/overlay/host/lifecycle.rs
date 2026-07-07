@@ -144,7 +144,7 @@ impl<E: OverlayHostEndpoint> ManagedOverlayHost<E> {
                 )
             })?;
         self.child = Some(child);
-        self.wait_for_ready()
+        tokio::task::block_in_place(|| self.wait_for_ready())
     }
 
     fn wait_for_ready(&mut self) -> Result<(), String> {
