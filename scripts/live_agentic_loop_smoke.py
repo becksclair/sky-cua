@@ -7,16 +7,16 @@ import argparse
 
 from _agent_mcp_smoke import DEFAULT_PI_SMOKE_MODEL
 from live_agent_mcp_smoke import FIXTURES, run_fixture_smoke
-from live_obsidian_fallback_smoke import run_obsidian_fallback_smoke
+from live_fallback_anchor_smoke import run_fallback_anchor_smoke
 
 DEFAULT_AGENT = "pi"
 DEFAULT_FIXTURE = "zenity"
 ACCEPTANCE_AGENTS = ("opencode", "pi")
-# obsidian-fallback drives a distinct flow (fallback-anchor proof, not a
-# dialog-dismiss task) through live_obsidian_fallback_smoke.run_obsidian_fallback_smoke,
+# fallback-anchor drives a distinct flow (fallback-anchor proof, not a
+# dialog-dismiss task) through live_fallback_anchor_smoke.run_fallback_anchor_smoke,
 # so it is offered as a --fixture choice here without joining the FIXTURES
 # dict of dialog-dismissal flows in live_agent_mcp_smoke.
-FIXTURE_CHOICES = (*FIXTURES.keys(), "obsidian-fallback")
+FIXTURE_CHOICES = (*FIXTURES.keys(), "fallback-anchor")
 
 
 def main() -> int:
@@ -41,8 +41,8 @@ def main() -> int:
         help=(f"Agent model override. Pi defaults to {DEFAULT_PI_SMOKE_MODEL} when omitted."),
     )
     args = parser.parse_args()
-    if args.fixture == "obsidian-fallback":
-        return run_obsidian_fallback_smoke(agent=args.agent, model=args.model)
+    if args.fixture == "fallback-anchor":
+        return run_fallback_anchor_smoke(agent=args.agent, model=args.model)
     return run_fixture_smoke(agent=args.agent, fixture_name=args.fixture, model=args.model)
 
 
