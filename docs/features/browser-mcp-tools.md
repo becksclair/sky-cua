@@ -354,21 +354,27 @@ surfaced as diagnostics rather than looping indefinitely.
 **Discarded (asleep) tabs.** A tab the browser has discarded (Brave marks these
 with a sleeping icon) attaches browser-side, but renderer-bound commands
 (`Page.enable`, `Runtime.evaluate`, input dispatch) hang until the extension's
-`timeoutMs` expires because no renderer process exists — the discarded-tab
-signature is a CDP command timeout right after a successful attach. When
-recovery is triggered by a command timeout, it issues `Page.bringToFront`
-between `attach` and `Page.enable`: that command is handled in the browser
-process, so it succeeds without a renderer, and activating a discarded tab
-makes Chrome reload it (live-verified against Brave sleeping tabs,
-2026-07-08). The wake fires only for timeout-triggered recoveries — an
-ordinary debugger-detach recovery on a healthy background tab must not steal
-the user's active tab. The wake is a user-visible tab switch; when the
-post-wake `Page.enable` still fails, the diagnostic details name the likely
-discarded state and steer toward retrying or reopening the URL with
-`browser_open`. The bridge exposes no `tabs.reload`/`tabs.update` relay and
-its tab payloads carry no `discarded` flag, so proactive detection (waking
-before the first 10s timeout is burned) is not possible with the current
-extension surface.
+`timeoutMs` expires because no renderer process exists. The cure is
+`Page.bringToFront`: handled in the browser process, it succeeds without a
+renderer, and activating a discarded tab makes Chrome reload it
+(live-verified against Brave sleeping tabs, 2026-07-08). Session recovery
+wakes the tab through two routes. When the triggering failure was itself a
+CDP command timeout (the discarded-tab signature), the wake runs right after
+the session reset, before the re-enable. When recovery was entered another
+way — typically `Debugger unattached`, because a discarded tab gets a fresh
+tab id and has never been attached — the wake is discovered lazily: the
+recovery `Page.enable` is capped at 4 s (`RECOVERY_ENABLE_TIMEOUT_CAP_MS`; a
+live tab answers in milliseconds, so a hang past the cap is the discarded
+signal), and when that capped enable times out the session is reset once more
+(the timed-out enable wedges it), the tab woken, and the enable retried — all
+inside one operation deadline. The claim path's first enable is capped the
+same way. Healthy background tabs are never brought to the foreground: their
+enable succeeds before any wake is reachable. When the post-wake `Page.enable`
+still fails, the diagnostic details name the likely discarded state and steer
+toward retrying or reopening the URL with `browser_open`. The bridge exposes
+no `tabs.reload`/`tabs.update` relay and its tab payloads carry no `discarded`
+flag, so the hang-then-wake dance is the only detection the extension surface
+allows.
 
 The extension runs a **driver-liveness heartbeat**: every 30 seconds it sends a
 `ping` request to its *primary* native-host client and, if no reply arrives

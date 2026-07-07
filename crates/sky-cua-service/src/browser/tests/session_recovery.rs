@@ -871,6 +871,13 @@ async fn claim_wakes_a_discarded_tab_when_page_enable_times_out() {
 
         let enable = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(enable["params"]["method"], "Page.enable");
+        // The claim path's first enable must carry the recovery cap so a
+        // discarded tab's hang cannot starve the wake retry that follows.
+        let enable_timeout = enable["params"]["timeoutMs"].as_u64().unwrap();
+        assert!(
+            enable_timeout <= 4_000,
+            "first enable must be capped, got {enable_timeout}ms"
+        );
         write_frame(
             &mut stream,
             &json!({

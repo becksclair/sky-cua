@@ -212,7 +212,13 @@ async fn attach_and_enable_tab_until(
     deadline: TokioInstant,
 ) -> Result<(), DiagnosticEntry> {
     attach_tab_until(stream, socket, ATTACH_TAB_REQUEST_ID, tab_id, deadline).await?;
-    match enable_page_until(stream, socket, ENABLE_PAGE_REQUEST_ID, tab_id, deadline).await {
+    // The first enable is capped too: an existing user tab can be discarded, and
+    // burning the extension's full 10s default on its hang would starve the
+    // wake retry below (the same budget asymmetry the executor recovery path
+    // avoids). Safe for slow relays: the extension's timeoutMs measures
+    // browser-side execution, not relay latency, and a live tab answers
+    // Page.enable in milliseconds.
+    match enable_page_capped_until(stream, socket, ENABLE_PAGE_REQUEST_ID, tab_id, deadline).await {
         Ok(()) => Ok(()),
         Err(diagnostic)
             if is_debugger_unattached_diagnostic(&diagnostic)
@@ -244,20 +250,13 @@ async fn attach_and_enable_tab_until(
 /// overall operation deadline.
 const RECOVERY_ENABLE_TIMEOUT_CAP_MS: u64 = 4_000;
 
-/// Reset a tab's debugger session (detach/attach), then enable the page
-/// domain, waking a discarded tab when needed. With `wake_first` (the caller
-/// already saw a CDP command timeout — the discarded-tab signature) the wake
-/// precedes the enable. Otherwise the wake happens lazily: if the capped
-/// enable itself times out, that timeout wedges the fresh session, so the
-/// session is reset once more, the tab woken, and the enable retried.
-async fn reset_wake_and_enable_until(
+/// Detach (best-effort) and re-attach a tab's debugger session — the only
+/// reset that clears a stuck timed-out CDP command wedging the session.
+async fn reset_tab_session_until(
     stream: &mut UnixStream,
     socket: &Path,
     tab_id: &Value,
     deadline: TokioInstant,
-    wake_first: bool,
-    wake_request_id: &'static str,
-    enable_request_id: &'static str,
 ) -> Result<(), DiagnosticEntry> {
     let _ = detach_tab_until(
         stream,
@@ -274,29 +273,32 @@ async fn reset_wake_and_enable_until(
         tab_id,
         deadline,
     )
-    .await?;
+    .await
+}
+
+/// Reset a tab's debugger session (detach/attach), then enable the page
+/// domain, waking a discarded tab when needed. With `wake_first` (the caller
+/// already saw a CDP command timeout — the discarded-tab signature) the wake
+/// precedes the enable. Otherwise the wake happens lazily: if the capped
+/// enable itself times out, that timeout wedges the fresh session, so the
+/// session is reset once more, the tab woken, and the enable retried.
+async fn reset_wake_and_enable_until(
+    stream: &mut UnixStream,
+    socket: &Path,
+    tab_id: &Value,
+    deadline: TokioInstant,
+    wake_first: bool,
+    wake_request_id: &'static str,
+    enable_request_id: &'static str,
+) -> Result<(), DiagnosticEntry> {
+    reset_tab_session_until(stream, socket, tab_id, deadline).await?;
     if wake_first {
         let _ = wake_tab_until(stream, socket, wake_request_id, tab_id, deadline).await;
     }
     match enable_page_capped_until(stream, socket, enable_request_id, tab_id, deadline).await {
         Ok(()) => Ok(()),
         Err(diagnostic) if !wake_first && is_cdp_command_timeout_diagnostic(&diagnostic) => {
-            let _ = detach_tab_until(
-                stream,
-                socket,
-                DETACH_TAB_FOR_RETRY_REQUEST_ID,
-                tab_id,
-                deadline,
-            )
-            .await;
-            attach_tab_until(
-                stream,
-                socket,
-                ATTACH_TAB_RETRY_REQUEST_ID,
-                tab_id,
-                deadline,
-            )
-            .await?;
+            reset_tab_session_until(stream, socket, tab_id, deadline).await?;
             let _ = wake_tab_until(stream, socket, wake_request_id, tab_id, deadline).await;
             enable_page_capped_until(stream, socket, enable_request_id, tab_id, deadline)
                 .await
