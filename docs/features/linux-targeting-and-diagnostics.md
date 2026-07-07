@@ -95,9 +95,9 @@ a bound Unix socket; `select_app_prefers_focused_candidate_when_selector_scores_
 
 Live proof: these changes have been in tree since 2026-05-23 and were
 exercised by the subsequent full VM smoke matrix runs (`--profile all`,
-COSMIC, June 2026, recorded in `TODO_IMPROVE_CODEBASE.md` ICA-010/ICA-011
-verification notes) and by daily live KDE host use. No dedicated
-single-purpose VM profile exists for these seams.
+COSMIC, June 2026; ICA-010/ICA-011 verification is complete) and by daily
+live KDE host use. No dedicated single-purpose VM profile exists for these
+seams.
 
 ## Known limitations
 

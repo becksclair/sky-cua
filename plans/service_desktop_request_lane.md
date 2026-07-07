@@ -107,7 +107,7 @@ Third, classify requests conservatively. The initial safe bypass set is `Health`
 
 Fourth, update `crates/sky-cua-service/src/ipc_server.rs` to store `Arc<ServiceRuntime>` or an equivalent shared runtime instead of `Arc<tokio::sync::Mutex<ServiceDaemon>>`. Preserve active connection accounting, the reconnect race fix in last-client cursor cleanup, and idle timeout behavior.
 
-Finally, update `TODO_IMPROVE_CODEBASE.md` progress for `ICA-007` after the slice is verified. Do not retire this plan until source tests, clean-and-review, and the requested VM smoke gate have passed.
+Finally, record progress on `ICA-007` (completed; backlog file retired 2026-07-07, see git history) after the slice is verified. Do not retire this plan until source tests, clean-and-review, and the requested VM smoke gate have passed.
 
 ## Concrete Steps
 
@@ -149,7 +149,7 @@ Baseline before implementation:
     rtk cargo test -p sky-cua-service
     cargo test: 33 passed (1 suite, 0.05s)
 
-Relevant open backlog item: `TODO_IMPROVE_CODEBASE.md` `ICA-007`.
+Relevant backlog item: `ICA-007` (completed; backlog file retired 2026-07-07, see git history).
 
 ## Interfaces and Dependencies
 
