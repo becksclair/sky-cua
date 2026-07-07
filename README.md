@@ -340,6 +340,10 @@ Use / Chrome companion plugin coverage and the native messaging host, see
   transparent for the full session instead of restoring it when the overlay
   hides.
 - Windows exposes UIA child trees and semantic actions (invoke, select,
-  expand/collapse, toggle, focus), but element readback is not yet native:
-  `text`, `numeric_value`, and `supports_editable_text` are not populated
-  from UIA patterns (tracked in ROADMAP as native Windows/UIA readback).
+  expand/collapse, toggle, focus), and element readback (`text`,
+  `numeric_value`, `supports_editable_text`) is now populated natively from
+  UIA ValuePattern/TextPattern/RangeValuePattern, live-proven against
+  Notepad and a Mouse Properties slider (2026-07-07; see
+  `docs/features/windows-uia-automation.md`). The top-level Win32 window
+  fallback (used when UIA collection itself fails) still reports these
+  fields as empty, since there is no UIA pattern to read from in that path.

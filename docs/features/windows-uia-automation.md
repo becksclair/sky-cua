@@ -4,8 +4,10 @@
 
 Shipped. Last verified: 2026-05-08 via release-plugin install plus
 direct-installed-cache MCP smoke against Microsoft Edge and Sumwall
-Browser. Capture-ladder upgrades, broader app-shell live smokes, and
-native UIA readback remain open ExecPlans (see "Related").
+Browser; native UIA readback (`text`, `numeric_value`,
+`supports_editable_text`) live-proven 2026-07-07 (see "Verification").
+Capture-ladder upgrades and broader app-shell live smokes remain open
+ExecPlans (see "Related").
 
 ## Summary
 
@@ -59,6 +61,31 @@ Action routing:
   through the existing coordinate path and uses SendInput or window
   messages.
 - Tool results report which lane was used.
+
+Element readback:
+
+- `ElementNode.text`, `.numeric_value`, and `.supports_editable_text` are
+  populated per node from the cheapest available UIA source, mirroring the
+  Linux AT-SPI reader's shape:
+  - `supports_editable_text` reuses the existing ValuePattern-present /
+    not-readonly / not-password predicate that already gates the
+    `set_value` semantic action, so the flag and the action never drift.
+  - `text` prefers an already-fetched `IUIAutomationValuePattern` string (no
+    extra COM round trip) when the element has one; otherwise it probes
+    `IUIAutomationTextPattern`'s `DocumentRange` for document/rich-edit
+    controls without a `ValuePattern`. Password elements always report
+    `text: None`.
+  - `numeric_value` comes from `IUIAutomationRangeValuePattern`
+    (`CurrentValue`/`CurrentMinimum`/`CurrentMaximum`); `minimum_increment`
+    falls back to `0.0` when `CurrentSmallChange` is unimplemented by the
+    provider, matching the Linux AT-SPI reader's "no defined increment"
+    sentinel.
+  - Text is capped at `MAX_UIA_TEXT_READBACK_CHARS` (4096 chars), mirroring
+    the Linux AT-SPI reader's `MAX_TEXT_READBACK_CHARS`; `truncated` is set
+    when the source exceeds the cap.
+  - The top-level Win32 window fallback element (used only when UIA
+    collection itself fails) has no pattern to read and always reports
+    `text: None`, `numeric_value: None`, `supports_editable_text: false`.
 
 Capture:
 
@@ -134,6 +161,46 @@ Latest accepted live smoke evidence (per
   `focus_element`/`activate_element`/`select_element` against Edge
   through Windows UI Automation.
 
+Native UIA readback live proof (2026-07-07, commit `bc48635`, Windows
+devbox, `cargo +nightly test -p sky-cua-windows` / `-p sky-cua-platform` /
+`-p sky-cua-client` all green except one pre-existing, unrelated
+`sky-cua-platform::config` path-separator test failure; `cargo +nightly fmt
+--check` clean):
+
+- Editable text (Notepad, UIA ValuePattern): seeded a known string through
+  the backend's own `SetValue` action (`UIA ValuePattern.SetValue`, no
+  window focus required) against the "Text Editor" element, then re-read
+  `get_app_state`. Evidence:
+  ```
+  target_element idx=1 role=text name=Some("Text Editor") backend_ref=Some("uia:hwnd=0x500da;path=0")
+  set_value_outcome success=true code=Completed message=Set the value through Windows UI Automation ValuePattern.
+  AFTER idx=1 role=text name=Some("Text Editor") supports_editable_text=true text=Some(ElementTextReadback { character_count: 37, caret_offset: None, content: Some("sky-cua-uia-readback-proof-2026-07-07"), content_suppressed: false, truncated: false, selections: [] }) numeric_value=None
+  ```
+- RangeValue slider (Mouse Properties, Pointer Options tab, pointer-speed
+  trackbar): live `get_app_state` dump against the real control panel.
+  Evidence:
+  ```
+  idx=6 role=slider name=Some("Fast") supports_editable_text=false text=None numeric_value=Some(ElementNumericValueReadback { current: 50.0, minimum: 0.0, maximum: 100.0, minimum_increment: 10.0, text: None })
+  idx=17 role=slider name=Some("Long") supports_editable_text=false text=None numeric_value=Some(ElementNumericValueReadback { current: 100.0, minimum: 0.0, maximum: 100.0, minimum_increment: 20.0, text: None })
+  ```
+- Method: an ephemeral devbox-only checkout
+  (`C:\Users\bex\sky-cua-uia-readback-verify`) with two ephemeral
+  `examples/` binaries (`uia_readback_dump.rs`,
+  `uia_readback_seed_and_verify.rs`, neither committed to the repo) drove
+  `WindowsDesktopBackend::get_app_state`/`execute_action` directly. Both
+  fixtures required an interactive Windows session (UIA and window
+  creation are session-local); the devbox's default SSH shell runs in the
+  non-interactive Session 0 service session, so an RDP logon
+  (`devbox-rdp`) plus a `schtasks /RU bex /IT` scheduled task were used to
+  run the harness inside the real interactive session. A first attempt
+  seeded Notepad's text via `SendKeys` from a scheduled task and got
+  `text: None` back; independent verification (clipboard copy, Win32
+  `GetWindowText`) showed the keystrokes never reached the window (a
+  fixture-seeding artifact of the scheduled-task environment, not a UIA
+  readback defect), so the harness was switched to seed through the
+  backend's own `SetValue` action instead, which does not require window
+  focus.
+
 ## Known limitations
 
 - **Sumwall app-shell coverage is sparse.** When Sumwall is minimized or
@@ -147,10 +214,6 @@ Latest accepted live smoke evidence (per
   fires; the capture-ladder upgrade to Windows Graphics Capture or DXGI
   Desktop Duplication is tracked in
   [`plans/windows_capture_ladder.md`](../../plans/windows_capture_ladder.md).
-- **No native UIA readback yet.** `ElementNode.text`,
-  `numeric_value`, and `supports_editable_text` compile but extract
-  empty values on Windows. Native extraction is a roadmap item under
-  "Windows parity"; the Linux AT-SPI extraction shape is the model.
 - **Windows native overlay is deferred.** See
   [`docs/features/agent-cursor-overlay.md`](agent-cursor-overlay.md).
 

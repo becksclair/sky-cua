@@ -71,7 +71,7 @@ Open boxes link to the active ExecPlan that owns the work.
         opt-in backend after visible overlay support is live; avoid making
         brittle process-local `ShowCursor(FALSE)` behavior the default design
 - [ ] Broader Windows app-shell live smokes (Edge, Sumwall, others) — [`plans/windows_app_shell_smokes.md`](plans/windows_app_shell_smokes.md)
-- [ ] Native Windows/UIA readback (`text`, `numeric_value`, `supports_editable_text`)
+- [x] Native Windows/UIA readback (`text`, `numeric_value`, `supports_editable_text`) — live-proven 2026-07-07 against Notepad (editable text) and a Mouse Properties pointer-speed slider (RangeValue) — [`docs/features/windows-uia-automation.md`](docs/features/windows-uia-automation.md)
 
 ## Phase: Host portability
 
