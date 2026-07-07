@@ -239,8 +239,7 @@ async fn attach_and_enable_tab_until(
             )
             .await?;
             if wake_tab {
-                let _ =
-                    wake_tab_until(stream, socket, WAKE_TAB_REQUEST_ID, tab_id, deadline).await;
+                let _ = wake_tab_until(stream, socket, WAKE_TAB_REQUEST_ID, tab_id, deadline).await;
             }
             enable_page_until(
                 stream,
@@ -429,7 +428,14 @@ pub(super) async fn recover_cdp_session_until(
     )
     .await?;
     if wake_tab {
-        let _ = wake_tab_until(stream, socket, RECOVER_WAKE_TAB_REQUEST_ID, tab_id, deadline).await;
+        let _ = wake_tab_until(
+            stream,
+            socket,
+            RECOVER_WAKE_TAB_REQUEST_ID,
+            tab_id,
+            deadline,
+        )
+        .await;
     }
     enable_page_until(
         stream,
