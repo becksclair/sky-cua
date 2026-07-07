@@ -39,16 +39,20 @@ After this change, native Wayland apps that expose only a KWin fallback window i
   socket. Also: `observe` desktop-branch selectors take `{surface, app_id}` (or
   `name`/`window_title`) with NO `include_accessibility` — mixing that field is
   a schema `InvalidRequest`.
-- [~] (2026-07-08) Repeatable-fixture target still open. The
-  `obsidian-fallback` agentic-loop fixture
-  (`scripts/live_obsidian_fallback_smoke.py`) landed with unit coverage, but
-  Obsidian has launch friction on this host (XWayland auth failure without
-  `XAUTHORITY`; `--ozone-platform=wayland` did not start). The mechanism proof
-  above used an ambient `kwin:{uuid}` window instead. Remaining bounded work:
-  give the fixture a reliably-launchable AT-SPI-dark target (or fix the
-  Obsidian launch seam) and run one full agent-loop pass; the fixture's two
-  guessed seams (`build_launch_argv`, `TRUST_AUTHOR_AFFORDANCE`) are still
-  unvalidated live.
+- [x] (2026-07-08) Repeatable-fixture target found and landed: mpv, not
+  Obsidian. The `fallback-anchor` agentic-loop fixture
+  (`scripts/live_fallback_anchor_smoke.py`) landed with unit coverage.
+  Obsidian was tried first and found NOT fallback-only: live probing showed
+  it registers a shallow AT-SPI tree (`backend_ref:
+  ":1.x:/org/a11y/atspi/accessible/root"`, role `application` → `frame`,
+  `AccessibilityCoverageLimited: False`), so the vision-anchor fallback never
+  fires for it, on top of launch friction (XWayland auth failure without
+  `XAUTHORITY`; `--ozone-platform=wayland` did not start). mpv, launched via
+  `mpv --idle --force-window --no-config --title <T>`, is the verified
+  fallback-only target instead: a native Wayland window with ZERO AT-SPI,
+  needing no vault/config and no first-run affordance, resetting by simply
+  closing. The mechanism proof above used an ambient `kwin:{uuid}` window;
+  a full mpv-targeted agent-loop pass is still pending.
 
 ## Surprises & Discoveries
 
@@ -60,7 +64,7 @@ After this change, native Wayland apps that expose only a KWin fallback window i
   the `SKY_CUA_SERVICE_SOCKET_PATH` override spawning a second un-established
   daemon; against the installed singleton daemon the proof succeeds (see
   Decision Log). Recorded so the false trail isn't re-walked.
-- (2026-07-08) Landed a fallback-only-app fixture (`obsidian-fallback`) for `scripts/live_agentic_loop_smoke.py`, driven through `scripts/live_obsidian_fallback_smoke.py`. Obsidian, launched into a throwaway scratch vault with `--ozone-platform=wayland` forced, is the intended fallback-only proving target (AT-SPI-dark Electron shell, resettable state). The deterministic pass gate does not trust the agent's self-report: it scans the agent CLI's raw (unredacted) stdout transcript for an `observe` tool result whose `elements` carry a `vision_anchor` state flag with no richer AT-SPI role alongside it, matching `linux_window_elements`'s single-anchor shape in `crates/sky-cua-linux/src/backend.rs`. The harness normally redacts tool-result payloads out of persisted logs (`_agent_mcp_smoke.redact_pi_json_stdout`), so this fixture opts into the existing `SKY_CUA_SMOKE_KEEP_RAW_AGENT_LOG` escape hatch for the duration of its own run instead of weakening redaction generally. Implementation + unit tests only; the full agent-loop live run has not passed yet (2026-07-08: Obsidian would not launch cleanly on the proof host — XWayland auth without `XAUTHORITY`, and `--ozone-platform=wayland` did not start — so the underlying mechanism was proven via an ambient `kwin:{uuid}` window instead). The exact Obsidian first-run affordance targeted (`TRUST_AUTHOR_AFFORDANCE = "Trust author"`) and the launch command (`live_obsidian_fallback_smoke.build_launch_argv`) remain best-offline-guesses behind named seams, pending a reliably-launchable target.
+- (2026-07-08) Landed a fallback-only-app fixture (`fallback-anchor`) for `scripts/live_agentic_loop_smoke.py`, driven through `scripts/live_fallback_anchor_smoke.py`. mpv, launched idle via `mpv --idle --force-window --no-config --title <T>`, is the verified fallback-only proving target (native Wayland window, ZERO AT-SPI, resettable by closing). Obsidian was tried first and rejected: it registers a shallow AT-SPI tree (`backend_ref` populated, role `application` → `frame`, `AccessibilityCoverageLimited: False`), so the vision-anchor fallback path never fires for it — it would have proven the wrong code path — and it also had launch friction on this host (XWayland auth without `XAUTHORITY`; `--ozone-platform=wayland` did not start). The deterministic pass gate does not trust the agent's self-report: it scans the agent CLI's raw (unredacted) stdout transcript for an `observe` tool result whose `elements` carry a `vision_anchor` state flag with no richer AT-SPI role alongside it, matching `linux_window_elements`'s single-anchor shape in `crates/sky-cua-linux/src/backend.rs`. The harness normally redacts tool-result payloads out of persisted logs (`_agent_mcp_smoke.redact_pi_json_stdout`), so this fixture opts into the existing `SKY_CUA_SMOKE_KEEP_RAW_AGENT_LOG` escape hatch for the duration of its own run instead of weakening redaction generally. Implementation + unit tests only; the full agent-loop live run against mpv has not passed yet (the underlying fallback mechanism was proven separately via an ambient `kwin:{uuid}` window, see above).
 
 ## Decision Log
 
@@ -92,11 +96,12 @@ After this change, native Wayland apps that expose only a KWin fallback window i
 Implemented in source and unit-covered. The vision-anchor fallback mechanism is
 **live-proven** on a KDE Plasma 6 Wayland host (2026-07-08, see Progress): a
 KWin-only window with no AT-SPI tree yields the single honest `vision_anchor`
-window element with portal capture live. The `obsidian-fallback` agentic-loop
-fixture landed as tested infrastructure; a full agent-loop pass with a
-reliably-launchable target remains the one bounded gap (Obsidian has
-host-specific launch friction). The plan's original multi-region-anchor design
-was superseded by the single-honest-anchor shape (see Decision Log).
+window element with portal capture live. The `fallback-anchor` agentic-loop
+fixture landed as tested infrastructure, targeting mpv (Obsidian was tried
+first and found not fallback-only, plus had host-specific launch friction); a
+full mpv-targeted agent-loop pass remains the one bounded gap. The plan's
+original multi-region-anchor design was superseded by the single-honest-anchor
+shape (see Decision Log).
 
 ## Context and Orientation
 
