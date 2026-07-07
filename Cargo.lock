@@ -2143,6 +2143,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sky-cua-platform",
 ]
 
 [[package]]

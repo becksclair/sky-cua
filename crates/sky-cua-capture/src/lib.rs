@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use image::ImageEncoder;
+use sky_cua_platform::config::{
+    MODEL_SCREENSHOT_FORMAT_ENV, MODEL_SCREENSHOT_JPEG_QUALITY_ENV,
+    MODEL_SCREENSHOT_WEBP_QUALITY_ENV,
+};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{CaptureInfo, PixelSize};
 
@@ -23,9 +27,6 @@ const MODEL_SCREENSHOT_MIN_BOUND: u32 = 64;
 const MODEL_SCREENSHOT_MAX_BOUND: u32 = 4096;
 const MODEL_SCREENSHOT_MAX_WIDTH_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_MAX_WIDTH";
 const MODEL_SCREENSHOT_MAX_HEIGHT_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_MAX_HEIGHT";
-const MODEL_SCREENSHOT_FORMAT_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_FORMAT";
-const MODEL_SCREENSHOT_JPEG_QUALITY_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY";
-const MODEL_SCREENSHOT_WEBP_QUALITY_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY";
 
 /// Resampling filter for shrinking oversized captures. Lanczos3 is the sharpest
 /// filter the `image` crate provides; it preserves edge and text detail on

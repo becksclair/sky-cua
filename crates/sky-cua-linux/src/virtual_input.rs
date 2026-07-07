@@ -13,6 +13,7 @@ use sky_cua_input_helper::protocol::{
     request_line,
 };
 use sky_cua_input_helper::uinput::DesktopBounds;
+use sky_cua_platform::config::INPUT_HELPER_SOCKET_ENV as SKY_CUA_INPUT_HELPER_SOCKET;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use xkbcommon::xkb;
 
@@ -29,7 +30,6 @@ const HELPER_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 /// device on a bounds change (each rebuild costs `UINPUT_SETTLE_DELAY` ~650ms).
 const HELPER_DEVICE_REBUILD_ALLOWANCE: Duration = Duration::from_millis(1000);
 const DEFAULT_HELPER_SOCKET_PATH: &str = "/run/sky-cua/input-helper.sock";
-const SKY_CUA_INPUT_HELPER_SOCKET: &str = "SKY_CUA_INPUT_HELPER_SOCKET";
 
 /// Keycode tapped after a COSMIC helper keyboard batch to flush the
 /// compositor's one-event-late text-input pipeline.

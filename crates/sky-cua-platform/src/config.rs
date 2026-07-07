@@ -59,6 +59,31 @@ pub const ISOLATED_DESKTOP_VIEWER_ENV: &str = "SKY_CUA_ISOLATED_DESKTOP_VIEWER";
 pub const ISOLATED_DESKTOP_LIFECYCLE_ENV: &str = "SKY_CUA_ISOLATED_DESKTOP_LIFECYCLE";
 pub const ISOLATED_DESKTOP_WINDOW_MANAGER_ENV: &str = "SKY_CUA_ISOLATED_DESKTOP_WINDOW_MANAGER";
 
+// Cross-cutting env keys declared once here and re-exported (via
+// `pub(crate) use ... as ...;`) by every crate that previously declared its
+// own independent copy of the same string. Keep additions here even when the
+// only consumer today is a single crate outside `sky-cua-platform`, so a
+// second consumer never has to re-declare the literal.
+/// Overlay-host backend selection, read by both the service's overlay
+/// connection manager and the overlay-host process itself.
+pub const OVERLAY_BACKEND_ENV: &str = "SKY_CUA_OVERLAY_BACKEND";
+/// Unix socket path for the privileged Linux input helper, read by the
+/// virtual-input backend (client of the helper) and the overlay-host's
+/// pointer-tracking module (which also talks to the helper for exact hover).
+pub const INPUT_HELPER_SOCKET_ENV: &str = "SKY_CUA_INPUT_HELPER_SOCKET";
+/// Model-facing screenshot re-encode container, shared by the desktop capture
+/// pipeline and the browser viewport capture pipeline.
+pub const MODEL_SCREENSHOT_FORMAT_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_FORMAT";
+/// Model-facing JPEG encode quality (0-100), shared by the desktop capture
+/// pipeline and the browser viewport capture pipeline.
+pub const MODEL_SCREENSHOT_JPEG_QUALITY_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY";
+/// Model-facing WebP encode quality (0-100), shared by the desktop capture
+/// pipeline and the browser viewport capture pipeline.
+pub const MODEL_SCREENSHOT_WEBP_QUALITY_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY";
+/// Browser-use bridge socket directory override, shared by the service's
+/// browser socket discovery and the standalone Chrome extension host process.
+pub const BROWSER_USE_SOCKET_DIR_ENV: &str = "SKY_CUA_BROWSER_USE_SOCKET_DIR";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct MachineConfig {
     /// Chrome-family browser selection: `brave`, `chrome`, `chromium`, or
