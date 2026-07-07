@@ -1,0 +1,79 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libdbus-1-dev \
+            pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: cargo nextest run
+        run: cargo nextest run
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: uv sync
+        run: uv sync --dev
+
+      - name: ruff format --check
+        run: uv run ruff format --check scripts
+
+      - name: ruff check
+        run: uv run ruff check scripts
+
+      - name: basedpyright
+        run: uv run basedpyright
+
+      - name: pytest
+        run: uv run pytest
+
+      # scripts/build_plugin.py is intentionally not run here: it calls
+      # `cargo build --release` for several crates (LTO thin, codegen-units
+      # = 1) as its first step, which belongs to the rust job's toolchain
+      # and would roughly double this job's runtime for no verification
+      # value beyond what `cargo nextest run` already proves. Packaging is
+      # exercised manually per AGENTS.md "Definition of Done" (Packaging
+      # changes: `python3 scripts/build_plugin.py`).
+
+  # Kotlin (android/phone-companion) unit tests are not run in CI: provisioning
+  # a JDK + Android SDK image for a solo-repo companion app is not worth the
+  # runner cost yet. Run them locally with `just verify-kotlin`, which skips
+  # cleanly when no JDK is present and runs
+  # `:app:testDebugUnitTest` otherwise.
