@@ -55,6 +55,11 @@ from pathlib import Path
 from typing import Any
 
 from _agent_mcp_smoke import make_artifact_dir, run_agent, write_result
+from _model_preflight import (
+    DEFAULT_FALLBACK_ANCHOR_MODELS,
+    format_probe_table,
+    select_working_model,
+)
 from live_agent_mcp_smoke import PI_MCP_WRAPPER_GUIDANCE
 
 MPV_BIN = "mpv"
@@ -235,6 +240,26 @@ def run_fallback_anchor_smoke(*, agent: str, model: str | None = None) -> int:
             f"fallback-anchor fixture requires an agent with tool-evidence enforcement "
             f"(opencode or pi), got {agent!r}"
         )
+
+    # Model pre-flight: the DEFAULT_FALLBACK_ANCHOR_MODELS candidates are
+    # opencode/opencode-go model ids, so pre-flight only applies to the
+    # opencode agent path. Pi selects its own model (defaulting to
+    # DEFAULT_PI_SMOKE_MODEL inside run_agent) and is left untouched here —
+    # extending pre-flight to pi's provider-specific model ids is future
+    # work, not needed for this fixture today.
+    if agent == "opencode" and model is None:
+        selected_model, probe_results = select_working_model(DEFAULT_FALLBACK_ANCHOR_MODELS)
+        print("model pre-flight results:", file=sys.stderr)
+        print(format_probe_table(probe_results), file=sys.stderr)
+        if selected_model is None:
+            print(
+                "model pre-flight FAILED: no candidate model was reachable; "
+                "refusing to fall through to a hardcoded model that would hang.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"model pre-flight selected: {selected_model}", file=sys.stderr)
+        model = selected_model
 
     artifact_dir = make_artifact_dir(agent, "fallback-anchor")
     launch_argv = build_launch_argv()

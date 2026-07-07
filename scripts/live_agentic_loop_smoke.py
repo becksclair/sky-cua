@@ -38,7 +38,12 @@ def main() -> int:
     parser.add_argument(
         "--model",
         default=None,
-        help=(f"Agent model override. Pi defaults to {DEFAULT_PI_SMOKE_MODEL} when omitted."),
+        help=(
+            f"Agent model override. Pi defaults to {DEFAULT_PI_SMOKE_MODEL} when omitted. "
+            "For opencode with --fixture fallback-anchor, omitting --model runs a "
+            "pre-flight that probes DEFAULT_FALLBACK_ANCHOR_MODELS and auto-selects the "
+            "first reachable one instead of a hardcoded default."
+        ),
     )
     args = parser.parse_args()
     if args.fixture == "fallback-anchor":
