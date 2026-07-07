@@ -22,6 +22,17 @@ The service can also be run directly for debugging:
 ./bin/sky-cua-service daemon
 ```
 
+**Daemon logs.** When the client spawns the daemon, it captures the daemon's
+stderr into a per-endpoint log under the sky-cua state dir
+(`~/.local/state/sky-cua/daemon-<socket-stem>.log` on Linux; the isolated
+desktop daemon gets its own file) and passes the same path via
+`SKY_CUA_DAEMON_LOG_PATH` so the daemon routes tracing output through a
+self-rotating writer (rotated past 8 MiB to one `.log.old` generation, both
+at spawn and at runtime). Stderr capture still catches pre-init output and
+panics. An operator-run `sky-cua-service daemon` has no log path env set and
+logs to plain stderr. These files are the primary forensic record for
+daemon-side incidents — agent transcripts are the only other trace.
+
 For local operator triage without an MCP host, `sky-cua-client` also exposes a
 JSON-first CLI surface over the same service requests:
 
