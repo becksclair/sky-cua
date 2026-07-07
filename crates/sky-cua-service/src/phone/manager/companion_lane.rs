@@ -83,12 +83,12 @@ impl PhoneManager {
         let expired = self
             .sessions
             .iter()
-            .filter_map(|(session_id, entry)| {
-                (entry.overlay_active
+            .filter(|(_, entry)| {
+                entry.overlay_active
                     && now_ms.saturating_sub(entry.last_overlay_activity_ms)
-                        >= super::COMPANION_OVERLAY_IDLE_TIMEOUT_MS)
-                    .then(|| session_id.clone())
+                        >= super::COMPANION_OVERLAY_IDLE_TIMEOUT_MS
             })
+            .map(|(session_id, _)| session_id.clone())
             .collect::<Vec<_>>();
 
         for session_id in &expired {

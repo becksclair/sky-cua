@@ -98,6 +98,9 @@ impl PhoneCursorTracker {
     /// Update the cursor after a *successful* action against this session. The
     /// `session_id`/`serial` are verified to belong to this tracker so a caller
     /// cannot leak another device's cursor in here. Returns the new state.
+    // signature refactor out of scope for this lint pass (unrelated to the
+    // tracked plan_capture config-struct refactor)
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn record_action(
         &mut self,
         session_id: &str,

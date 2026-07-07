@@ -129,6 +129,9 @@ pub(super) fn exact_branch_constraints(
     })
 }
 
+// A named type alias would be clearer, but factoring it out is a signature
+// refactor out of scope for this lint pass; allow rather than restructure.
+#[allow(clippy::type_complexity)]
 pub(super) fn exact_branch_one_of(
     properties: &Value,
     branches: &[(Vec<(&str, &str)>, &[&str], &[&str], Option<Value>)],

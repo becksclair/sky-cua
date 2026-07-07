@@ -470,6 +470,10 @@ mod tests {
     }
 
     #[tokio::test]
+    // This lock only ever serializes env-mutating tests within a single
+    // cargo-nextest process (one test per process), so holding it across the
+    // await below is benign; it is not a shared-runtime concurrency hazard.
+    #[allow(clippy::await_holding_lock)]
     async fn real_command_runner_times_out_stuck_processes() {
         let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let _guard = EnvGuard::set(SKY_CUA_COMMAND_TIMEOUT_MS_ENV, "1");

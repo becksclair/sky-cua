@@ -111,14 +111,13 @@ impl CompositorHandler for LayerShellApp {
             .layers
             .iter_mut()
             .find(|entry| entry.layer.wl_surface().id() == surface.id())
+            && entry.capture_barrier_frames_remaining > 0
         {
+            entry.capture_barrier_frames_remaining =
+                entry.capture_barrier_frames_remaining.saturating_sub(1);
             if entry.capture_barrier_frames_remaining > 0 {
-                entry.capture_barrier_frames_remaining =
-                    entry.capture_barrier_frames_remaining.saturating_sub(1);
-                if entry.capture_barrier_frames_remaining > 0 {
-                    surface.frame(qh, surface.clone());
-                    surface.commit();
-                }
+                surface.frame(qh, surface.clone());
+                surface.commit();
             }
         }
         if self.capture_barrier.is_some() && self.capture_barrier_complete() {

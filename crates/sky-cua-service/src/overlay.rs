@@ -786,11 +786,10 @@ mod tests {
         assert!(guard.restore_visible_overlay);
         assert!(guard.diagnostics.is_empty());
         assert!(
-            controller
+            !controller
                 .state()
                 .expect("service state follows host-hidden capture state")
                 .visible
-                == false
         );
         let restore_diagnostics = controller.restore_after_capture(guard);
         assert!(restore_diagnostics.is_empty());

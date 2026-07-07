@@ -188,7 +188,6 @@ impl NoopOverlayBackend {
             active_output_count: Some(0),
             rendered_output_count: Some(0),
             adapter_name: None,
-            ..Default::default()
         }
     }
 

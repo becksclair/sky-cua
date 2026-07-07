@@ -3,7 +3,7 @@ verify: verify-rust verify-python verify-kotlin
 
 verify-rust:
     cargo fmt --check
-    cargo clippy --workspace --all-targets
+    cargo clippy --workspace --all-targets -- -D warnings
     cargo nextest run
 
 verify-python:

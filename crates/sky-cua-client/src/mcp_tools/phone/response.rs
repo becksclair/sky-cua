@@ -438,6 +438,212 @@ fn strip_inline_image_base64(structured: &mut Value) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// action / companion / accessibility / notifications / app
+// ---------------------------------------------------------------------------
+
+pub(crate) fn phone_action_result(response: PhoneActionResponse) -> Result<Value> {
+    // An action that never reached a backend (no companion/scrcpy/ADB dispatch)
+    // did not happen — a snapshot-safety rejection, an unavailable backend, or
+    // an out-of-bounds coordinate. Treat that as an error even if the specific
+    // diagnostic code is not in the allowlist, so the agent never reads a
+    // rejected tap/swipe as a success.
+    let is_error = matches!(response.backend, PhoneBackendKind::None)
+        || phone_diagnostics_are_error(&response.diagnostics);
+    let mut text = if is_error {
+        format!(
+            "Could not perform phone action {} on session {}.",
+            response.action, response.session_id
+        )
+    } else {
+        format!(
+            "Performed phone action {} on session {}.",
+            response.action, response.session_id
+        )
+    };
+    append_first_diagnostic(&mut text, &response.diagnostics);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
+pub(crate) fn phone_companion_status_summary(response: &PhoneCompanionStatusResponse) -> String {
+    let companion = &response.companion;
+    let mut summary = format!(
+        "Companion {} on session {}: installed={} accessibility_enabled={} rpc_reachable={}.",
+        companion.package_name,
+        response.session_id,
+        companion.installed,
+        companion.accessibility_enabled,
+        companion.rpc_reachable
+    );
+    append_first_diagnostic(&mut summary, &response.diagnostics);
+    summary
+}
+
+pub(crate) fn phone_companion_status_result(
+    response: PhoneCompanionStatusResponse,
+) -> Result<Value> {
+    let is_error = phone_diagnostics_are_error(&response.diagnostics);
+    let text = phone_companion_status_summary(&response);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
+pub(crate) fn phone_accessibility_tree_summary(
+    response: &PhoneAccessibilityTreeResponse,
+) -> String {
+    let mut summary = format!(
+        "Phone accessibility tree for session {}: {} node{}{}.",
+        response.session_id,
+        response.nodes.len(),
+        if response.nodes.len() == 1 { "" } else { "s" },
+        if response.truncated {
+            " (truncated)"
+        } else {
+            ""
+        }
+    );
+    if let Some(package) = response
+        .package_name
+        .as_deref()
+        .filter(|package| !package.is_empty())
+    {
+        let _ = write!(&mut summary, " Foreground: {package}.");
+    }
+    if response.redacted {
+        summary.push_str(" Some node text was redacted.");
+    }
+    append_first_diagnostic(&mut summary, &response.diagnostics);
+    summary
+}
+
+pub(crate) fn phone_accessibility_tree_result(
+    response: PhoneAccessibilityTreeResponse,
+) -> Result<Value> {
+    let is_error = response.nodes.is_empty() && phone_diagnostics_are_error(&response.diagnostics);
+    let text = phone_accessibility_tree_summary(&response);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
+pub(crate) fn phone_notifications_summary(response: &PhoneNotificationsResponse) -> String {
+    let mut summary = format!(
+        "Phone notifications for session {}: {} event{}{} (listener {}).",
+        response.session_id,
+        response.events.len(),
+        if response.events.len() == 1 { "" } else { "s" },
+        if response.truncated {
+            " (truncated)"
+        } else {
+            ""
+        },
+        if response.listener_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    for event in response.events.iter().take(8) {
+        let title = event
+            .title
+            .as_deref()
+            .map(|value| summary_text_field(value, 80))
+            .unwrap_or_default();
+        let _ = write!(
+            &mut summary,
+            " [{}] {}{}",
+            event.event_id,
+            event.package_name,
+            if title.is_empty() {
+                String::new()
+            } else {
+                format!(" \"{title}\"")
+            }
+        );
+    }
+    append_first_diagnostic(&mut summary, &response.diagnostics);
+    summary
+}
+
+pub(crate) fn phone_notifications_result(response: PhoneNotificationsResponse) -> Result<Value> {
+    // A notifications result that never reached a backend (`backend == None`,
+    // e.g. an unavailable/required-companion response or a notification-op
+    // rejection) did not happen; flip `isError` even when the diagnostic code
+    // is not in the allowlist, mirroring `phone_action_result`.
+    let is_error = matches!(response.backend, PhoneBackendKind::None)
+        || phone_diagnostics_are_error(&response.diagnostics);
+    let text = phone_notifications_summary(&response);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
+fn phone_app_response_kind_label(kind: PhoneAppResponseKind) -> &'static str {
+    match kind {
+        PhoneAppResponseKind::Current => "current",
+        PhoneAppResponseKind::List => "list",
+        PhoneAppResponseKind::Launch => "launch",
+        PhoneAppResponseKind::OpenIntent => "open_intent",
+        PhoneAppResponseKind::ForceStop => "force_stop",
+        PhoneAppResponseKind::Install => "install",
+        PhoneAppResponseKind::OpenSettings => "open_settings",
+    }
+}
+
+pub(crate) fn phone_app_summary(response: &PhoneAppResponse) -> String {
+    let kind = phone_app_response_kind_label(response.kind);
+    let mut summary = if response.success {
+        format!(
+            "Phone app {} succeeded on session {} (backend {:?}).",
+            kind, response.session_id, response.backend
+        )
+    } else {
+        format!(
+            "Phone app {} did not complete on session {}.",
+            kind, response.session_id
+        )
+    };
+    if let Some(app) = response.current_app.as_ref() {
+        let _ = write!(&mut summary, " Foreground: {}.", app.package_name);
+    }
+    if !response.apps.is_empty() {
+        let _ = write!(
+            &mut summary,
+            " {} app{}{}.",
+            response.apps.len(),
+            if response.apps.len() == 1 { "" } else { "s" },
+            if response.truncated {
+                " (truncated)"
+            } else {
+                ""
+            }
+        );
+    }
+    append_first_diagnostic(&mut summary, &response.diagnostics);
+    summary
+}
+
+pub(crate) fn phone_app_result(response: PhoneAppResponse) -> Result<Value> {
+    let is_error = !response.success || phone_diagnostics_are_error(&response.diagnostics);
+    let text = phone_app_summary(&response);
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": response,
+        "isError": is_error
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use sky_cua_platform::model::{PhoneConnectionKind, PhoneDevice, PhoneDeviceState};
@@ -686,210 +892,4 @@ mod tests {
              companion=disabled sessions=0 devices=0. Diagnostic: diagnostic PhoneUseDisabled"
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// action / companion / accessibility / notifications / app
-// ---------------------------------------------------------------------------
-
-pub(crate) fn phone_action_result(response: PhoneActionResponse) -> Result<Value> {
-    // An action that never reached a backend (no companion/scrcpy/ADB dispatch)
-    // did not happen — a snapshot-safety rejection, an unavailable backend, or
-    // an out-of-bounds coordinate. Treat that as an error even if the specific
-    // diagnostic code is not in the allowlist, so the agent never reads a
-    // rejected tap/swipe as a success.
-    let is_error = matches!(response.backend, PhoneBackendKind::None)
-        || phone_diagnostics_are_error(&response.diagnostics);
-    let mut text = if is_error {
-        format!(
-            "Could not perform phone action {} on session {}.",
-            response.action, response.session_id
-        )
-    } else {
-        format!(
-            "Performed phone action {} on session {}.",
-            response.action, response.session_id
-        )
-    };
-    append_first_diagnostic(&mut text, &response.diagnostics);
-    Ok(json!({
-        "content": [{"type": "text", "text": text}],
-        "structuredContent": response,
-        "isError": is_error
-    }))
-}
-
-pub(crate) fn phone_companion_status_summary(response: &PhoneCompanionStatusResponse) -> String {
-    let companion = &response.companion;
-    let mut summary = format!(
-        "Companion {} on session {}: installed={} accessibility_enabled={} rpc_reachable={}.",
-        companion.package_name,
-        response.session_id,
-        companion.installed,
-        companion.accessibility_enabled,
-        companion.rpc_reachable
-    );
-    append_first_diagnostic(&mut summary, &response.diagnostics);
-    summary
-}
-
-pub(crate) fn phone_companion_status_result(
-    response: PhoneCompanionStatusResponse,
-) -> Result<Value> {
-    let is_error = phone_diagnostics_are_error(&response.diagnostics);
-    let text = phone_companion_status_summary(&response);
-    Ok(json!({
-        "content": [{"type": "text", "text": text}],
-        "structuredContent": response,
-        "isError": is_error
-    }))
-}
-
-pub(crate) fn phone_accessibility_tree_summary(
-    response: &PhoneAccessibilityTreeResponse,
-) -> String {
-    let mut summary = format!(
-        "Phone accessibility tree for session {}: {} node{}{}.",
-        response.session_id,
-        response.nodes.len(),
-        if response.nodes.len() == 1 { "" } else { "s" },
-        if response.truncated {
-            " (truncated)"
-        } else {
-            ""
-        }
-    );
-    if let Some(package) = response
-        .package_name
-        .as_deref()
-        .filter(|package| !package.is_empty())
-    {
-        let _ = write!(&mut summary, " Foreground: {package}.");
-    }
-    if response.redacted {
-        summary.push_str(" Some node text was redacted.");
-    }
-    append_first_diagnostic(&mut summary, &response.diagnostics);
-    summary
-}
-
-pub(crate) fn phone_accessibility_tree_result(
-    response: PhoneAccessibilityTreeResponse,
-) -> Result<Value> {
-    let is_error = response.nodes.is_empty() && phone_diagnostics_are_error(&response.diagnostics);
-    let text = phone_accessibility_tree_summary(&response);
-    Ok(json!({
-        "content": [{"type": "text", "text": text}],
-        "structuredContent": response,
-        "isError": is_error
-    }))
-}
-
-pub(crate) fn phone_notifications_summary(response: &PhoneNotificationsResponse) -> String {
-    let mut summary = format!(
-        "Phone notifications for session {}: {} event{}{} (listener {}).",
-        response.session_id,
-        response.events.len(),
-        if response.events.len() == 1 { "" } else { "s" },
-        if response.truncated {
-            " (truncated)"
-        } else {
-            ""
-        },
-        if response.listener_enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-    for event in response.events.iter().take(8) {
-        let title = event
-            .title
-            .as_deref()
-            .map(|value| summary_text_field(value, 80))
-            .unwrap_or_default();
-        let _ = write!(
-            &mut summary,
-            " [{}] {}{}",
-            event.event_id,
-            event.package_name,
-            if title.is_empty() {
-                String::new()
-            } else {
-                format!(" \"{title}\"")
-            }
-        );
-    }
-    append_first_diagnostic(&mut summary, &response.diagnostics);
-    summary
-}
-
-pub(crate) fn phone_notifications_result(response: PhoneNotificationsResponse) -> Result<Value> {
-    // A notifications result that never reached a backend (`backend == None`,
-    // e.g. an unavailable/required-companion response or a notification-op
-    // rejection) did not happen; flip `isError` even when the diagnostic code
-    // is not in the allowlist, mirroring `phone_action_result`.
-    let is_error = matches!(response.backend, PhoneBackendKind::None)
-        || phone_diagnostics_are_error(&response.diagnostics);
-    let text = phone_notifications_summary(&response);
-    Ok(json!({
-        "content": [{"type": "text", "text": text}],
-        "structuredContent": response,
-        "isError": is_error
-    }))
-}
-
-fn phone_app_response_kind_label(kind: PhoneAppResponseKind) -> &'static str {
-    match kind {
-        PhoneAppResponseKind::Current => "current",
-        PhoneAppResponseKind::List => "list",
-        PhoneAppResponseKind::Launch => "launch",
-        PhoneAppResponseKind::OpenIntent => "open_intent",
-        PhoneAppResponseKind::ForceStop => "force_stop",
-        PhoneAppResponseKind::Install => "install",
-        PhoneAppResponseKind::OpenSettings => "open_settings",
-    }
-}
-
-pub(crate) fn phone_app_summary(response: &PhoneAppResponse) -> String {
-    let kind = phone_app_response_kind_label(response.kind);
-    let mut summary = if response.success {
-        format!(
-            "Phone app {} succeeded on session {} (backend {:?}).",
-            kind, response.session_id, response.backend
-        )
-    } else {
-        format!(
-            "Phone app {} did not complete on session {}.",
-            kind, response.session_id
-        )
-    };
-    if let Some(app) = response.current_app.as_ref() {
-        let _ = write!(&mut summary, " Foreground: {}.", app.package_name);
-    }
-    if !response.apps.is_empty() {
-        let _ = write!(
-            &mut summary,
-            " {} app{}{}.",
-            response.apps.len(),
-            if response.apps.len() == 1 { "" } else { "s" },
-            if response.truncated {
-                " (truncated)"
-            } else {
-                ""
-            }
-        );
-    }
-    append_first_diagnostic(&mut summary, &response.diagnostics);
-    summary
-}
-
-pub(crate) fn phone_app_result(response: PhoneAppResponse) -> Result<Value> {
-    let is_error = !response.success || phone_diagnostics_are_error(&response.diagnostics);
-    let text = phone_app_summary(&response);
-    Ok(json!({
-        "content": [{"type": "text", "text": text}],
-        "structuredContent": response,
-        "isError": is_error
-    }))
 }

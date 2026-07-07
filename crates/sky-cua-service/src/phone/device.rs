@@ -198,12 +198,11 @@ pub(super) fn parse_hyperos_version(getprop_stdout: &str) -> Option<String> {
         "ro.miui.ui.version.name",
     ] {
         for line in getprop_stdout.lines() {
-            if let Some((k, v)) = parse_getprop_line(line) {
-                if k == key {
-                    if let Some(value) = nonempty(&v) {
-                        return Some(value);
-                    }
-                }
+            if let Some((k, v)) = parse_getprop_line(line)
+                && k == key
+                && let Some(value) = nonempty(&v)
+            {
+                return Some(value);
             }
         }
     }

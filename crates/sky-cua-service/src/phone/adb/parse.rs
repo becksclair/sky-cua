@@ -178,14 +178,16 @@ pub(in crate::phone) fn classify_connection_kind(serial: &str) -> PhoneConnectio
     if serial.contains("_adb-tls-connect") || serial.contains("_adb-tls-pairing") {
         return PhoneConnectionKind::WirelessDebugging;
     }
-    if let Some((host, port)) = serial.rsplit_once(':') {
-        if !host.is_empty() && port.chars().all(|c| c.is_ascii_digit()) && !port.is_empty() {
-            return if port == "5555" {
-                PhoneConnectionKind::LegacyTcpip
-            } else {
-                PhoneConnectionKind::WirelessDebugging
-            };
-        }
+    if let Some((host, port)) = serial.rsplit_once(':')
+        && !host.is_empty()
+        && port.chars().all(|c| c.is_ascii_digit())
+        && !port.is_empty()
+    {
+        return if port == "5555" {
+            PhoneConnectionKind::LegacyTcpip
+        } else {
+            PhoneConnectionKind::WirelessDebugging
+        };
     }
     PhoneConnectionKind::Usb
 }
@@ -356,13 +358,12 @@ pub(in crate::phone) struct ForegroundApp {
 pub(in crate::phone) fn parse_current_focus(stdout: &str) -> Option<ForegroundApp> {
     for line in stdout.lines() {
         let trimmed = line.trim();
-        if trimmed.contains("mCurrentFocus")
+        if (trimmed.contains("mCurrentFocus")
             || trimmed.contains("mResumedActivity")
-            || trimmed.contains("mFocusedApp")
+            || trimmed.contains("mFocusedApp"))
+            && let Some(app) = extract_component(trimmed)
         {
-            if let Some(app) = extract_component(trimmed) {
-                return Some(app);
-            }
+            return Some(app);
         }
     }
     None
@@ -372,10 +373,7 @@ pub(in crate::phone) fn parse_current_focus(stdout: &str) -> Option<ForegroundAp
 /// the last whitespace-separated token containing a `/`, with a trailing `}`
 /// stripped.
 fn extract_component(line: &str) -> Option<ForegroundApp> {
-    let token = line
-        .split_whitespace()
-        .filter(|t| t.contains('/'))
-        .next_back()?;
+    let token = line.split_whitespace().rfind(|t| t.contains('/'))?;
     let token = token.trim_end_matches(['}', ',']);
     let (package, activity) = token.split_once('/')?;
     if package.is_empty() || package.contains('=') {

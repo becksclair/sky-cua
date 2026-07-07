@@ -326,6 +326,9 @@ pub mod overlay_spec {
         /// `enabled` from `[sound]`.
         pub const ENABLED: bool = false;
         /// `no_no_sound_asset` from `[sound]`.
+        // Regenerated verbatim by scripts/generate_overlay_spec.py (Python, out of
+        // scope for this lint pass); allow rather than hand-edit generated output.
+        #[allow(clippy::redundant_static_lifetimes)]
         pub const NO_NO_SOUND_ASSET: &'static str = "";
     }
 }

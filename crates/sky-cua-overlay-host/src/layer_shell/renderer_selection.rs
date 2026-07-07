@@ -28,6 +28,10 @@ fn requested_renderer() -> RequestedLayerShellRenderer {
     }
 }
 #[derive(Debug)]
+// internal renderer-selection state, not a wire contract; boxing the renderer
+// would just add indirection on a hot path for no real benefit here, but
+// revisit if size matters
+#[allow(clippy::large_enum_variant)]
 pub(super) enum LayerShellRenderer {
     Wgpu(WgpuOverlayRenderer, String),
     Unsupported { reason: Option<String> },

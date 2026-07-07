@@ -219,12 +219,12 @@ impl CursorMotionDriver {
     /// touched, so a redirect mid-flight keeps its momentum (the signature
     /// curve).
     pub fn start_gesture(&mut self, gesture: MotionGesture) {
-        if let Some(active) = self.active.take() {
-            if active.gesture.kind == AgentOverlayGestureKind::NoNo {
-                // The wiggle owned the rotation; resume ambient easing from
-                // the rest pose, as the phone does when the animator ends.
-                self.rotation_deg = 0.0;
-            }
+        if let Some(active) = self.active.take()
+            && active.gesture.kind == AgentOverlayGestureKind::NoNo
+        {
+            // The wiggle owned the rotation; resume ambient easing from
+            // the rest pose, as the phone does when the animator ends.
+            self.rotation_deg = 0.0;
         }
         self.rest_aim = None;
         self.pending = if gesture.points.is_empty() {
@@ -240,10 +240,10 @@ impl CursorMotionDriver {
     /// cloud. The in-flight feedback tail is dropped either way (phone
     /// parity: `hideForCapture` cancels the running animator).
     pub fn hide(&mut self, capture: bool) {
-        if let Some(active) = self.active.take() {
-            if active.gesture.kind == AgentOverlayGestureKind::NoNo {
-                self.rotation_deg = 0.0;
-            }
+        if let Some(active) = self.active.take()
+            && active.gesture.kind == AgentOverlayGestureKind::NoNo
+        {
+            self.rotation_deg = 0.0;
         }
         if capture {
             self.capture_suspended = true;
@@ -380,29 +380,29 @@ impl CursorMotionDriver {
         // head becomes the rest aim (see `rest_aim`) so the glyph holds the
         // gesture's landing point instead of sailing back toward a stale
         // pre-dispatch state target.
-        if let Some(active) = &self.active {
-            if input.now_ms.saturating_sub(active.started_at_ms) >= active.gesture.duration_ms {
-                let was_no_no = active.gesture.kind == AgentOverlayGestureKind::NoNo;
-                let parked = if is_slide(&active.gesture) {
-                    *active.gesture.points.last().unwrap_or(&active.arrival)
-                } else {
-                    active.arrival
-                };
-                let stale_origin = active
-                    .gesture
-                    .points
-                    .first()
-                    .copied()
-                    .unwrap_or(active.arrival);
-                self.rest_aim = Some(RestAim {
-                    parked: input.bounds.clamp(parked),
-                    stale_origin,
-                    space: active.gesture.space.clone(),
-                });
-                self.active = None;
-                if was_no_no {
-                    self.rotation_deg = 0.0;
-                }
+        if let Some(active) = &self.active
+            && input.now_ms.saturating_sub(active.started_at_ms) >= active.gesture.duration_ms
+        {
+            let was_no_no = active.gesture.kind == AgentOverlayGestureKind::NoNo;
+            let parked = if is_slide(&active.gesture) {
+                *active.gesture.points.last().unwrap_or(&active.arrival)
+            } else {
+                active.arrival
+            };
+            let stale_origin = active
+                .gesture
+                .points
+                .first()
+                .copied()
+                .unwrap_or(active.arrival);
+            self.rest_aim = Some(RestAim {
+                parked: input.bounds.clamp(parked),
+                stale_origin,
+                space: active.gesture.space.clone(),
+            });
+            self.active = None;
+            if was_no_no {
+                self.rotation_deg = 0.0;
             }
         }
 

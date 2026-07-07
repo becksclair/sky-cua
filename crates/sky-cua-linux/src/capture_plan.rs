@@ -55,6 +55,8 @@ pub(crate) struct CaptureRegionTarget {
     pub(crate) display: Option<DisplayRef>,
 }
 
+// tracked in ROADMAP: refactor capture_plan::plan_capture to replace its 9
+// positional arguments with a config struct
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn plan_capture(
     portal: &RemoteDesktopSessionManager,
