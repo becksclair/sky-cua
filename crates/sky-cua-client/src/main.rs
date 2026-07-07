@@ -48,6 +48,15 @@ fn run() -> Result<ExitCode> {
         return run_isolated_desktop(&args[1..]);
     }
 
+    // Hidden development/CI subcommand: dumps every `SKY_CUA_*` key
+    // `sky-cua-platform` declares as its canonical source of truth, one per
+    // line. Used by `scripts/test_env_key_contract.py` and by operators
+    // auditing the runtime env-key contract; not part of the advertised
+    // operator CLI surface.
+    if args.first().map(String::as_str) == Some("env-keys") {
+        return run_env_keys(&args[1..]);
+    }
+
     let mode = operator_cli::parse_cli_mode(args)?;
     match mode {
         operator_cli::CliMode::Mcp => {
@@ -77,6 +86,20 @@ fn run() -> Result<ExitCode> {
         operator_cli::CliMode::ClearPortalTokens => operator_cli::run_clear_portal_tokens(),
         operator_cli::CliMode::Operator(command) => operator_cli::run_operator_command(command),
     }
+}
+
+/// Print every `SKY_CUA_*` key `sky-cua-platform` declares, one per line.
+fn run_env_keys(args: &[String]) -> Result<ExitCode> {
+    use anyhow::bail;
+
+    if let Some(extra) = args.first() {
+        bail!("unexpected argument for env-keys: {extra}");
+    }
+
+    for key in sky_cua_platform::config::all_env_keys() {
+        println!("{key}");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Dispatch the hidden `isolated-desktop {ensure|status|stop}` development
