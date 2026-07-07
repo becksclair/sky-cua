@@ -3402,7 +3402,7 @@ mod annotation_tests {
     fn mcp_tool_surface_matrix_fixture_matches_generated_registry() {
         assert_fixture_matches(
             "mcp_tool_surface_matrix.json",
-            include_str!("../../tests/fixtures/mcp_tool_surface_matrix.json"),
+            include_str!("../../../tests/fixtures/mcp_tool_surface_matrix.json"),
             generated_surface_matrix(),
         );
     }
@@ -3611,7 +3611,7 @@ mod annotation_tests {
 
         assert_fixture_matches(
             "tool_contract.json",
-            include_str!("../../tests/fixtures/tool_contract.json"),
+            include_str!("../../../tests/fixtures/tool_contract.json"),
             generated,
         );
     }
@@ -3664,7 +3664,7 @@ mod annotation_tests {
 
         assert_fixture_matches(
             "call_cases.json",
-            include_str!("../../tests/fixtures/call_cases.json"),
+            include_str!("../../../tests/fixtures/call_cases.json"),
             generated,
         );
     }
