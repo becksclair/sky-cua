@@ -1,5 +1,6 @@
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -16,6 +17,20 @@ pub struct PipeWireFrameCapture {
 }
 
 const FORCE_FAILURE_ENV: &str = "SKY_CUA_FORCE_PIPEWIRE_CAPTURE_FAILURE";
+
+/// Deadline for joining the blocking GStreamer capture task. Overridable via
+/// `SKY_CUA_PIPEWIRE_CAPTURE_JOIN_TIMEOUT_MS` so tests can exercise the
+/// timeout path without waiting out the production default.
+fn capture_join_timeout() -> Duration {
+    static TIMEOUT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *TIMEOUT.get_or_init(|| {
+        std::env::var("SKY_CUA_PIPEWIRE_CAPTURE_JOIN_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(15))
+    })
+}
 
 pub async fn capture_png_frame(
     snapshot_id: &str,
@@ -45,22 +60,45 @@ pub async fn capture_png_frame(
     }
 
     let blocking_output_path = output_path.clone();
-    tokio::task::spawn_blocking(move || {
+    let handle = tokio::task::spawn_blocking(move || {
         capture_png_frame_blocking(blocking_output_path, node_id, remote_fd)
-    })
-    .await
-    .map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::PipeWireStreamFailed,
-            format!("PipeWire frame capture task failed to join cleanly: {error}"),
-        )
-    })??;
+    });
+    join_capture_task(handle).await?;
 
     let pixel_size = screenshot::pixel_size_from_path(&output_path);
     Ok(PipeWireFrameCapture {
         path: output_path,
         pixel_size,
     })
+}
+
+/// Bound the join of a `spawn_blocking` capture task to [`capture_join_timeout`].
+///
+/// A `pipeline.set_state(Null)` teardown deep inside the blocking task can
+/// deadlock; without a bound, awaiting the `JoinHandle` hangs the async
+/// caller forever, which (before this fix) wedged the daemon's shared
+/// desktop request lane. On elapse the `timeout` future is dropped — this
+/// only stops *waiting* for the blocking OS thread, it does not cancel it
+/// (`spawn_blocking` tasks are not abortable), so the orphaned thread runs
+/// to completion independently and cannot corrupt caller-side state.
+async fn join_capture_task<T: Send + 'static>(
+    handle: tokio::task::JoinHandle<Result<T, BackendError>>,
+) -> Result<T, BackendError> {
+    match tokio::time::timeout(capture_join_timeout(), handle).await {
+        Ok(join_result) => join_result.map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::PipeWireStreamFailed,
+                format!("PipeWire frame capture task failed to join cleanly: {error}"),
+            )
+        })?,
+        Err(_) => Err(BackendError::new(
+            BackendErrorCode::PipeWireStreamFailed,
+            format!(
+                "PipeWire frame capture task exceeded the {:?} join timeout and was abandoned",
+                capture_join_timeout()
+            ),
+        )),
+    }
 }
 
 fn should_force_capture_failure() -> bool {
@@ -251,8 +289,11 @@ pub(crate) fn duplicate_remote_fd(remote_fd: &OwnedFd) -> Result<OwnedFd, Backen
 
 #[cfg(test)]
 mod tests {
-    use super::{FORCE_FAILURE_ENV, PipeWireFrameCapture, should_force_capture_failure};
+    use super::{
+        FORCE_FAILURE_ENV, PipeWireFrameCapture, join_capture_task, should_force_capture_failure,
+    };
     use serial_test::serial;
+    use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 
     #[test]
     fn capture_struct_holds_a_path() {
@@ -280,5 +321,41 @@ mod tests {
         } else {
             unsafe { std::env::remove_var(FORCE_FAILURE_ENV) };
         }
+    }
+
+    // Each test runs in its own nextest process, so setting this env var
+    // before the first call to `capture_join_timeout()` (which caches it in
+    // a `OnceLock`) is race-free within that process.
+    #[tokio::test]
+    async fn capture_join_task_exceeding_the_timeout_returns_pipewire_stream_failed() {
+        unsafe { std::env::set_var("SKY_CUA_PIPEWIRE_CAPTURE_JOIN_TIMEOUT_MS", "50") };
+        let handle = tokio::task::spawn_blocking(|| -> Result<(), BackendError> {
+            // Long enough to comfortably outlast the 50ms test deadline;
+            // `spawn_blocking` tasks are not abortable, so the tokio runtime
+            // teardown still joins this thread after the test body returns.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            Ok(())
+        });
+        let started = std::time::Instant::now();
+        let result = join_capture_task(handle).await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "join_capture_task should return promptly once the timeout elapses, took {:?}",
+            started.elapsed()
+        );
+        let error =
+            result.expect_err("a task exceeding the join timeout must be reported as an error");
+        assert_eq!(error.code, BackendErrorCode::PipeWireStreamFailed.as_str());
+        assert!(error.message.contains("join timeout"));
+    }
+
+    #[tokio::test]
+    async fn capture_join_task_within_the_timeout_returns_the_task_result() {
+        unsafe { std::env::set_var("SKY_CUA_PIPEWIRE_CAPTURE_JOIN_TIMEOUT_MS", "5000") };
+        let handle = tokio::task::spawn_blocking(|| -> Result<u32, BackendError> { Ok(42) });
+        let result = join_capture_task(handle)
+            .await
+            .expect("task within the timeout should succeed");
+        assert_eq!(result, 42);
     }
 }

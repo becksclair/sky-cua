@@ -260,15 +260,47 @@ impl LinuxDesktopBackend {
         &self,
     ) -> Result<(AccessibilityConnection, Vec<DiscoveredApp>), BackendError> {
         let connection = self.accessibility_connection().await?;
-        match discover_apps(&connection).await {
+        match self
+            .at_spi_call_with_timeout(discover_apps(&connection))
+            .await
+        {
             Ok(apps) => Ok((connection, apps)),
             Err(error) if is_retryable_accessibility_error(&error) => {
                 self.reset_accessibility_connection().await;
                 let connection = self.accessibility_connection().await?;
-                let apps = discover_apps(&connection).await?;
+                let apps = self
+                    .at_spi_call_with_timeout(discover_apps(&connection))
+                    .await?;
                 Ok((connection, apps))
             }
             Err(error) => Err(error),
+        }
+    }
+
+    /// Bound a single AT-SPI zbus call (app discovery walk, per-app element
+    /// snapshot) to [`at_spi_walk_timeout`] as defense in depth alongside the
+    /// server-side desktop request deadline in `sky-cua-service`. zbus 5.14
+    /// has no default method timeout, so an unresponsive AT-SPI bus can hang
+    /// a call forever; on elapse this drops the awaited future (abandoning a
+    /// pure read — safe, nothing here mutates persisted state) and resets
+    /// the cached connection so the next call reconnects instead of reusing
+    /// a connection that may be talking to a wedged peer.
+    async fn at_spi_call_with_timeout<T>(
+        &self,
+        future: impl std::future::Future<Output = Result<T, BackendError>>,
+    ) -> Result<T, BackendError> {
+        match tokio::time::timeout(at_spi_walk_timeout(), future).await {
+            Ok(result) => result,
+            Err(_) => {
+                self.reset_accessibility_connection().await;
+                Err(BackendError::new(
+                    BackendErrorCode::AccessibilityUnavailable,
+                    format!(
+                        "AT-SPI call exceeded the {:?} walk timeout and was abandoned; the accessibility connection was reset",
+                        at_spi_walk_timeout()
+                    ),
+                ))
+            }
         }
     }
 
@@ -1171,7 +1203,9 @@ impl DesktopBackend for LinuxDesktopBackend {
         focused_app.display = focused_window.and_then(|window| window.display.clone());
         let focused_app = Some(focused_app);
 
-        let (elements, snapshot_diags) = snapshot_for_app(&connection, &chosen_app).await?;
+        let (elements, snapshot_diags) = self
+            .at_spi_call_with_timeout(snapshot_for_app(&connection, &chosen_app))
+            .await?;
         for entry in snapshot_diags {
             diagnostics.push(
                 BackendErrorCode::AccessibilityCoverageLimited,
@@ -1412,6 +1446,22 @@ impl DesktopBackend for LinuxDesktopBackend {
     async fn session_presence_status(&self) -> sky_cua_platform::model::SessionPresenceStatus {
         self.session_presence.status().await
     }
+
+    async fn reset_desktop_session_state(&self) {
+        // Dropping the cached AT-SPI connection is synchronous (closes the
+        // socket, no D-Bus round trip), so it cannot itself hang.
+        self.reset_accessibility_connection().await;
+        // `reset_session` clears the cached portal session handle
+        // synchronously under a write lock *before* attempting a graceful
+        // portal `Session.Close()` D-Bus call. That close call can hang on
+        // the same unbounded zbus timeout that caused the request this
+        // reset is recovering from to wedge in the first place, so bound it
+        // here defensively: by the time this timeout could fire the
+        // meaningful state (the cached session reference) is already gone,
+        // so an elapsed close is a harmless best-effort cleanup, not a
+        // correctness issue.
+        let _ = tokio::time::timeout(Duration::from_secs(5), self.portal.reset_session()).await;
+    }
 }
 
 fn require_screenshot_image(
@@ -1568,7 +1618,9 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
                 selector_match_score(&candidate_app.info, selector).is_some()
             })
         }) {
-            let (elements, _) = snapshot_for_app(&connection, candidate_app).await?;
+            let (elements, _) = self
+                .at_spi_call_with_timeout(snapshot_for_app(&connection, candidate_app))
+                .await?;
             let Some((area, scrollbar)) = vertical_scrollbar_for_point(&elements, x, y) else {
                 continue;
             };
@@ -1774,6 +1826,20 @@ fn x11_mouse_button(button: MouseButton) -> X11MouseButton {
 fn is_retryable_accessibility_error(error: &BackendError) -> bool {
     error.code == BackendErrorCode::AccessibilityUnavailable.as_str()
         && error.message.contains("Resource temporarily unavailable")
+}
+
+/// Deadline for a single AT-SPI zbus call (app discovery, element snapshot).
+/// Overridable via `SKY_CUA_AT_SPI_WALK_TIMEOUT_MS` so tests can exercise the
+/// timeout path without waiting out the production default.
+fn at_spi_walk_timeout() -> Duration {
+    static TIMEOUT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *TIMEOUT.get_or_init(|| {
+        std::env::var("SKY_CUA_AT_SPI_WALK_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(10))
+    })
 }
 
 fn keyboard_input_ready(environment: &EnvironmentInfo) -> bool {
