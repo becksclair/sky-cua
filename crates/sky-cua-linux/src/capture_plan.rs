@@ -121,7 +121,9 @@ pub(crate) async fn plan_capture(
                         frame.pixel_size,
                         region_target,
                         environment,
-                    ) {
+                    )
+                    .await
+                    {
                         capture_info.clear_image_fields();
                         capture_error = Some(error);
                     }
@@ -143,7 +145,8 @@ pub(crate) async fn plan_capture(
                         frame.pixel_size,
                         region_target,
                         environment,
-                    )?;
+                    )
+                    .await?;
                 }
             }
             Err(error) => diagnostics.push(
@@ -174,7 +177,8 @@ pub(crate) async fn plan_capture(
                         original_pixel_size,
                         region_target,
                         environment,
-                    )?;
+                    )
+                    .await?;
                 }
             }
             Err(error) => diagnostics.push(
@@ -275,7 +279,7 @@ fn should_fallback_to_screenshot(
         && matches!(environment.session_kind, SessionKind::Wayland)
 }
 
-fn apply_independent_model_capture(
+async fn apply_independent_model_capture(
     capture_info: &mut CaptureInfo,
     snapshot_id: &str,
     raw_path: &std::path::Path,
@@ -293,7 +297,8 @@ fn apply_independent_model_capture(
         raw_pixel_size,
         region_target,
         environment,
-    )?;
+    )
+    .await?;
     capture_info.source_logical_rect =
         compatible_dispatch_source(dispatch_source, capture_info.logical_rect.as_ref());
     Ok(())
@@ -308,7 +313,7 @@ fn compatible_dispatch_source(
     rect_contains_rect(&dispatch_source, final_logical_rect).then_some(dispatch_source)
 }
 
-fn apply_model_capture(
+async fn apply_model_capture(
     capture_info: &mut CaptureInfo,
     snapshot_id: &str,
     raw_path: &std::path::Path,
@@ -339,23 +344,48 @@ fn apply_model_capture(
                 &raw_pixel_size,
                 capture_info.image_backend.as_ref(),
             )?;
-            let (cropped_path, cropped_image) =
-                screenshot::crop_capture(snapshot_id, raw_path, crop.pixel_rect)?;
-            capture_info.logical_rect = Some(crop.logical_rect);
-            capture_info.capture_scope = target.capture_scope.clone();
-            capture_info.display = target.display.clone();
             let cropped_pixel_size = PixelSize {
                 width: crop.pixel_rect.width,
                 height: crop.pixel_rect.height,
             };
-            screenshot::prepare_model_capture_from_image(
-                snapshot_id,
-                cropped_image,
-                &cropped_path,
-                Some(cropped_pixel_size),
-            )?
+            let snapshot_id_owned = snapshot_id.to_owned();
+            let raw_path_owned = raw_path.to_owned();
+            let model_capture = tokio::task::spawn_blocking(move || {
+                let (cropped_path, cropped_image) =
+                    screenshot::crop_capture(&snapshot_id_owned, &raw_path_owned, crop.pixel_rect)?;
+                screenshot::prepare_model_capture_from_image(
+                    &snapshot_id_owned,
+                    cropped_image,
+                    &cropped_path,
+                    Some(cropped_pixel_size),
+                )
+            })
+            .await
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Internal,
+                    format!("model capture crop/encode task failed to join cleanly: {error}"),
+                )
+            })??;
+            capture_info.logical_rect = Some(crop.logical_rect);
+            capture_info.capture_scope = target.capture_scope.clone();
+            capture_info.display = target.display.clone();
+            model_capture
         }
-        None => screenshot::prepare_model_capture(snapshot_id, raw_path)?,
+        None => {
+            let snapshot_id_owned = snapshot_id.to_owned();
+            let raw_path_owned = raw_path.to_owned();
+            tokio::task::spawn_blocking(move || {
+                screenshot::prepare_model_capture(&snapshot_id_owned, &raw_path_owned)
+            })
+            .await
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Internal,
+                    format!("model capture encode task failed to join cleanly: {error}"),
+                )
+            })??
+        }
     };
     capture_info.coordinate_space = Some(CoordinateSpace::StreamPixels);
     capture_info.screenshot_path = Some(model_capture.path.display().to_string());
