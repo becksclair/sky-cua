@@ -560,8 +560,10 @@ where
                         (dispatched.x, dispatched.y)
                     })
                     .collect();
-                self.runtime
-                    .virtual_drag(&dispatch_points, path.per_step_delay)?;
+                let runtime = self.runtime;
+                tokio::task::block_in_place(|| {
+                    runtime.virtual_drag(&dispatch_points, path.per_step_delay)
+                })?;
                 Ok(success_with_diagnostics(
                     "Dragged through the Linux virtual input fallback.",
                     diagnostics,
@@ -627,7 +629,8 @@ where
                 Ok(success("Typed text through the X11 input fallback."))
             }
             InputBackendKind::LinuxVirtualInput => {
-                self.runtime.virtual_type_text(&text)?;
+                let runtime = self.runtime;
+                tokio::task::block_in_place(|| runtime.virtual_type_text(&text))?;
                 Ok(success(
                     "Typed text through the Linux virtual input fallback.",
                 ))
@@ -668,7 +671,8 @@ where
                 ))
             }
             InputBackendKind::LinuxVirtualInput => {
-                self.runtime.virtual_press_key_sequence(&keys)?;
+                let runtime = self.runtime;
+                tokio::task::block_in_place(|| runtime.virtual_press_key_sequence(&keys))?;
                 Ok(success(
                     "Pressed the key sequence through the Linux virtual input fallback.",
                 ))
