@@ -20,6 +20,8 @@ pacman-key --init
 pacman-key --populate archlinux
 pacman -Syu --noconfirm
 
+# xpra (with xdotool, xorg-xdpyinfo, and openbox below) satisfies the
+# isolated-xpra smoke profile's guest dependencies.
 pacman -S --noconfirm --needed \
 	alsa-lib \
 	alacritty \
@@ -136,6 +138,7 @@ pacman -S --noconfirm --needed \
 	xorg-xmessage \
 	xorg-xwayland \
 	xorg-xwininfo \
+	xpra \
 	zenity
 
 cat >/etc/mkinitcpio.conf.d/sky-cua-testing-vm.conf <<'EOF'
