@@ -1,6 +1,6 @@
 #[cfg(unix)]
 use std::collections::BTreeSet;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(windows)]
 use std::net::TcpStream;
 #[cfg(unix)]
@@ -28,6 +28,10 @@ use crate::launch_environment::LaunchEnvironment;
 #[cfg(unix)]
 use sky_cua_platform::config::{Lifecycle, ViewerMode, resolve_isolated_desktop_selection};
 
+/// Cap on a single IPC line (request or response). Must match the daemon's
+/// `MAX_IPC_LINE_BYTES` in `sky-cua-service`: screenshots travel base64-inline
+/// in responses, so this stays generous rather than truncating real replies.
+const MAX_IPC_LINE_BYTES: u64 = 64 * 1024 * 1024;
 const SERVICE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const SERVICE_WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 const STARTUP_HEALTH_READ_TIMEOUT: Duration = Duration::from_millis(250);
@@ -366,9 +370,17 @@ impl ServiceClient {
 
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
-        reader.read_line(&mut line)?;
-        if line.trim().is_empty() {
+        let read = {
+            let mut limited = (&mut reader).take(MAX_IPC_LINE_BYTES);
+            limited.read_line(&mut line)?
+        };
+        if read == 0 || line.trim().is_empty() {
             return Err(anyhow!("sky-cua-service connection closed before response"));
+        }
+        if read as u64 == MAX_IPC_LINE_BYTES && !line.ends_with('\n') {
+            return Err(anyhow!(
+                "sky-cua-service response exceeded {MAX_IPC_LINE_BYTES} bytes without a newline"
+            ));
         }
         let response: ServiceResponse = serde_json::from_str(line.trim_end())?;
         let stream = reader.into_inner();

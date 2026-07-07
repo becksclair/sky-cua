@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use sky_cua_platform::model::ServiceRequest;
+use sky_cua_platform::model::{ServiceRequest, ServiceResponse};
 #[cfg(windows)]
 use sky_cua_platform::service_tcp_addr;
 #[cfg(unix)]
 use sky_cua_platform::{SERVICE_SOCKET_PATH_ENV, service_socket_path};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 #[cfg(windows)]
 use tokio::net::{TcpListener, TcpStream};
 #[cfg(unix)]
@@ -17,6 +17,11 @@ use tracing::{info, warn};
 use crate::daemon::ServiceDaemon;
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Cap on a single IPC line (request or response). Screenshots travel
+/// base64-inline in responses; requests are small. 64MiB is generous
+/// headroom while still bounding memory against a wedged/malicious peer.
+const MAX_IPC_LINE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Default)]
 struct ConnectionTracker {
@@ -375,18 +380,53 @@ where
     let mut reader = BufReader::new(reader);
     loop {
         let mut line = String::new();
-        let read = reader.read_line(&mut line).await?;
+        let read = {
+            let mut limited = (&mut reader).take(MAX_IPC_LINE_BYTES);
+            limited.read_line(&mut line).await?
+        };
         if read == 0 {
             return Ok(());
         }
-        let request: ServiceRequest = serde_json::from_str(line.trim_end()).map_err(|error| {
-            anyhow::anyhow!("failed to parse sky-cua IPC request as JSON: {error}")
-        })?;
-        let response = daemon.handle(request).await;
-        let encoded = serde_json::to_vec(&response)?;
-        writer.write_all(&encoded).await?;
-        writer.write_all(b"\n").await?;
-        writer.flush().await?;
+        if read as u64 == MAX_IPC_LINE_BYTES && !line.ends_with('\n') {
+            // The stream is unsynchronized past this point (we stopped mid
+            // frame, not at a line boundary), so closing the connection here
+            // is correct, unlike the malformed-JSON case below.
+            let response = oversized_request_response();
+            write_response(&mut writer, &response).await?;
+            return Ok(());
+        }
+        let response = match serde_json::from_str::<ServiceRequest>(line.trim_end()) {
+            Ok(request) => daemon.handle(request).await,
+            Err(error) => malformed_request_response(&error),
+        };
+        write_response(&mut writer, &response).await?;
+    }
+}
+
+async fn write_response<W>(writer: &mut W, response: &ServiceResponse) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let encoded = serde_json::to_vec(response)?;
+    writer.write_all(&encoded).await?;
+    writer.write_all(b"\n").await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+fn malformed_request_response(error: &serde_json::Error) -> ServiceResponse {
+    ServiceResponse::Error {
+        code: "invalid_request".to_string(),
+        message: format!("failed to parse sky-cua IPC request as JSON: {error}"),
+    }
+}
+
+fn oversized_request_response() -> ServiceResponse {
+    ServiceResponse::Error {
+        code: "request_too_large".to_string(),
+        message: format!(
+            "sky-cua IPC request line exceeded {MAX_IPC_LINE_BYTES} bytes without a newline"
+        ),
     }
 }
 
@@ -565,5 +605,108 @@ mod tests {
             .expect("register after cleanup");
         register_task.await.expect("register task");
         assert!(!connections.is_idle().await);
+    }
+
+    #[tokio::test]
+    async fn malformed_json_line_gets_error_response_and_connection_survives() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let daemon = Arc::new(ServiceDaemon::new_for_tests().expect("daemon"));
+        let handle = tokio::spawn(handle_stream(server, daemon));
+
+        let (mut read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(&mut read_half);
+
+        write_half
+            .write_all(b"not valid json\n")
+            .await
+            .expect("write malformed line");
+
+        let mut first_response = String::new();
+        reader
+            .read_line(&mut first_response)
+            .await
+            .expect("read error response");
+        match serde_json::from_str::<sky_cua_platform::model::ServiceResponse>(
+            first_response.trim_end(),
+        )
+        .expect("parse error response")
+        {
+            sky_cua_platform::model::ServiceResponse::Error { code, .. } => {
+                assert_eq!(code, "invalid_request");
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        // The connection must still be usable after a malformed frame.
+        let valid_request =
+            serde_json::to_string(&ServiceRequest::Health).expect("encode health request");
+        write_half
+            .write_all(valid_request.as_bytes())
+            .await
+            .expect("write valid request");
+        write_half.write_all(b"\n").await.expect("write newline");
+
+        let mut second_response = String::new();
+        reader
+            .read_line(&mut second_response)
+            .await
+            .expect("read second response");
+        serde_json::from_str::<sky_cua_platform::model::ServiceResponse>(
+            second_response.trim_end(),
+        )
+        .expect("second response is still well-formed JSON");
+
+        write_half
+            .shutdown()
+            .await
+            .expect("shut down client write half");
+        handle
+            .await
+            .expect("handle_stream task should not panic")
+            .expect("handle_stream should return Ok after client closes");
+    }
+
+    #[tokio::test]
+    async fn oversized_line_gets_error_response_and_connection_closes() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let daemon = Arc::new(ServiceDaemon::new_for_tests().expect("daemon"));
+        let handle = tokio::spawn(handle_stream(server, daemon));
+
+        let (mut read_half, mut write_half) = tokio::io::split(client);
+        let writer_task = tokio::spawn(async move {
+            // Send more than MAX_IPC_LINE_BYTES without ever sending a
+            // newline, so the reader hits the cap mid-frame.
+            let chunk = vec![b'a'; 1024 * 1024];
+            let mut sent: u64 = 0;
+            while sent <= MAX_IPC_LINE_BYTES {
+                if write_half.write_all(&chunk).await.is_err() {
+                    break;
+                }
+                sent += chunk.len() as u64;
+            }
+        });
+
+        let mut reader = BufReader::new(&mut read_half);
+        let mut response_line = String::new();
+        reader
+            .read_line(&mut response_line)
+            .await
+            .expect("read oversized-line error response");
+        match serde_json::from_str::<sky_cua_platform::model::ServiceResponse>(
+            response_line.trim_end(),
+        )
+        .expect("parse error response")
+        {
+            sky_cua_platform::model::ServiceResponse::Error { code, .. } => {
+                assert_eq!(code, "request_too_large");
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        handle
+            .await
+            .expect("handle_stream task should not panic")
+            .expect("handle_stream should close cleanly after an oversized frame");
+        let _ = writer_task.await;
     }
 }
