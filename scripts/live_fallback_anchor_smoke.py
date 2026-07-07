@@ -90,8 +90,7 @@ def build_launch_argv() -> list[str]:
         "--idle",
         "--force-window",
         "--no-config",
-        "--title",
-        FIXTURE_WINDOW_TITLE,
+        f"--title={FIXTURE_WINDOW_TITLE}",
     ]
 
 

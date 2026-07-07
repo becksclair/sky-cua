@@ -60,9 +60,8 @@ def test_mpv_launch_argv_idles_with_distinctive_title() -> None:
     assert "--idle" in argv
     assert "--force-window" in argv
     assert "--no-config" in argv
-    assert "--title" in argv
-    title_index = argv.index("--title")
-    assert argv[title_index + 1] == live_fallback_anchor_smoke.FIXTURE_WINDOW_TITLE
+    expected_title_arg = f"--title={live_fallback_anchor_smoke.FIXTURE_WINDOW_TITLE}"
+    assert expected_title_arg in argv
 
 
 @pytest.mark.parametrize(
