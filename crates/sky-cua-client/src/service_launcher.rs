@@ -473,8 +473,9 @@ impl ServiceClient {
 
         // Tell the daemon where its per-endpoint log lives so it can size-cap
         // and rotate its own tracing output at runtime, instead of appending
-        // without bound until its next launch. The inherited stderr above still
-        // captures pre-tracing-init output and panics into the same file; the
+        // without bound until its next launch. The inherited stderr above
+        // captures pre-tracing-init output; the daemon then keeps fd 2 pointed
+        // at the live log across rotations (unix), so panics follow it too; the
         // daemon routes steady-state tracing to this path via its self-rotating
         // writer. Absent this var, the daemon falls back to plain stderr.
         if let Some(log_path) = crate::daemon_log::daemon_log_path(&log_stem) {

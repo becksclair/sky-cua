@@ -54,8 +54,10 @@ async fn async_main() -> Result<()> {
 /// `DAEMON_LOG_PATH_ENV`, so the long-lived daemon size-caps its own output at
 /// runtime instead of appending unbounded until its next launch. When the var is
 /// absent (an operator running `sky-cua-service daemon` by hand, or a one-shot
-/// subcommand) tracing goes to plain stderr as before. Client-side stderr
-/// capture is unchanged: it still catches pre-init output and panics.
+/// subcommand) tracing goes to plain stderr as before. Pre-init output and
+/// panics land in the client-captured stderr file; on unix the writer re-points
+/// fd 2 at each fresh log so they keep following the live log across rotations
+/// (on Windows panic capture ends at the first runtime rotation).
 fn init_tracing() {
     let filter =
         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());

@@ -5,11 +5,13 @@
 //! spawn) let a runaway warn/error loop append without any size bound until the
 //! next respawn. This writer moves the size cap into the daemon: it appends to
 //! the same per-endpoint log path the client hands it via `DAEMON_LOG_PATH_ENV`
-//! and rotates `<path>` to `<path>.old` once it crosses [`ROTATE_BYTES`],
-//! keeping exactly one rotated generation — the same contract, and the same
-//! advisory-lock + re-check guard, as the client-side rotation in
-//! `sky-cua-client`'s `daemon_log` so the two rotators cannot clobber each
-//! other's fresh log.
+//! and rotates `<path>` to `<path>.old` once it crosses
+//! [`DAEMON_LOG_ROTATE_BYTES`], keeping exactly one rotated generation. The
+//! rename runs the shared guarded protocol in
+//! `sky_cua_platform::log_rotation`, the same one the client-side spawn
+//! rotation uses, so the two rotators cannot clobber each other's fresh log.
+//! On unix each fresh handle is also dup2'd onto fd 2 so panic output and the
+//! stderr fallback follow the live log across rotations.
 //!
 //! Hot path: each tracing event takes one mutex lock and compares a cached
 //! running byte count against the cap — no `stat` syscall per write. Only when
@@ -23,12 +25,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use sky_cua_platform::log_rotation::{DAEMON_LOG_ROTATE_BYTES, guarded_rotate_oversized};
 use tracing_subscriber::fmt::MakeWriter;
-
-/// Rotate the log once it grows past this size; one rotated generation
-/// (`.log.old`) is kept. Mirrors `DAEMON_LOG_ROTATE_BYTES` in
-/// `sky-cua-client`'s `daemon_log` so both rotators enforce the same cap.
-const ROTATE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// A `MakeWriter` that appends tracing output to a fixed log path and rotates it
 /// in place once it exceeds the cap. Cheap to clone (shares one locked handle).
@@ -41,11 +39,17 @@ struct Inner {
     path: PathBuf,
     old_path: PathBuf,
     /// The current append handle, or `None` if it could not be opened — in which
-    /// case writes degrade to stderr until a future write reopens it.
+    /// case writes degrade to stderr and each subsequent event retries the open.
     file: Option<File>,
     /// Cached running byte count of `file`, kept so the hot path never stats.
     bytes: u64,
     cap: u64,
+    /// Re-point fd 2 at every fresh log handle so panic output and the stderr
+    /// fallback follow the live log across rotations (the inherited stderr fd
+    /// stays bound to the pre-rotation inode otherwise). Production-only: the
+    /// daemon enables it; tests must not hijack the test harness's stderr.
+    /// Unix-only — on Windows panic capture ends at the first runtime rotation.
+    redirect_stderr: bool,
 }
 
 impl RotatingLog {
@@ -54,10 +58,15 @@ impl RotatingLog {
     /// Never fails: if the file cannot be opened the writer degrades to stderr,
     /// so tracing setup and daemon startup are never blocked by a logging error.
     pub(crate) fn new(path: PathBuf) -> Self {
-        Self::with_cap(path, ROTATE_BYTES)
+        Self::with_cap_and_redirect(path, DAEMON_LOG_ROTATE_BYTES, true)
     }
 
+    #[cfg(test)]
     fn with_cap(path: PathBuf, cap: u64) -> Self {
+        Self::with_cap_and_redirect(path, cap, false)
+    }
+
+    fn with_cap_and_redirect(path: PathBuf, cap: u64, redirect_stderr: bool) -> Self {
         let old_path = old_path_for(&path);
         let mut inner = Inner {
             path,
@@ -65,6 +74,7 @@ impl RotatingLog {
             file: None,
             bytes: 0,
             cap,
+            redirect_stderr,
         };
         inner.open_rotating();
         Self {
@@ -84,15 +94,11 @@ impl Inner {
         {
             Ok(file) => {
                 let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+                self.adopt(file, len);
                 if len > self.cap {
                     // Reuse the runtime rotation path for the initial oversized
                     // case so the open-time and steady-state guards are identical.
-                    self.file = Some(file);
-                    self.bytes = len;
                     self.rotate();
-                } else {
-                    self.file = Some(file);
-                    self.bytes = len;
                 }
             }
             Err(_) => {
@@ -102,11 +108,10 @@ impl Inner {
         }
     }
 
-    /// Rotate `<path>` to `<path>.old` and reopen a fresh log, guarded exactly
-    /// as `sky-cua-client`'s `rotate_oversized_log`: hold an advisory lock on the
-    /// oversized handle so a concurrent client-side spawn rotation cannot rename
-    /// its fresh log over the just-rotated generation, then re-check by path
-    /// while holding the lock in case that rotator already swapped the file.
+    /// Rotate `<path>` to `<path>.old` and reopen a fresh log. The rename is
+    /// guarded by the shared cross-process protocol in
+    /// `sky_cua_platform::log_rotation` so the concurrent client-side spawn
+    /// rotation cannot clobber a freshly rotated generation.
     ///
     /// Best-effort: any failure leaves the current handle in place (we keep
     /// appending to the oversized file rather than losing output).
@@ -119,15 +124,8 @@ impl Inner {
 
         // A contended lock means another rotator is mid-flight — leave our handle
         // alone and let whichever file wins keep receiving appends.
-        if file.try_lock().is_err() {
+        if !guarded_rotate_oversized(file, &self.path, &self.old_path, self.cap) {
             return;
-        }
-
-        let still_oversized = std::fs::metadata(&self.path)
-            .map(|meta| meta.len() > self.cap)
-            .unwrap_or(false);
-        if still_oversized {
-            let _ = std::fs::rename(&self.path, &self.old_path);
         }
         // Dropping/replacing the handle below releases the advisory lock with it.
         self.reopen_after_rotate();
@@ -142,8 +140,8 @@ impl Inner {
             .open(&self.path)
         {
             Ok(file) => {
-                self.bytes = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-                self.file = Some(file);
+                let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+                self.adopt(file, len);
             }
             Err(_) => {
                 self.file = None;
@@ -152,10 +150,32 @@ impl Inner {
         }
     }
 
+    /// Install a fresh handle (and byte count), re-pointing fd 2 at it when
+    /// stderr redirection is enabled so panics keep landing in the live log.
+    fn adopt(&mut self, file: File, len: u64) {
+        #[cfg(unix)]
+        if self.redirect_stderr {
+            use std::os::unix::io::AsRawFd;
+            // SAFETY: dup2 onto fd 2 replaces the process's stderr with a valid
+            // open descriptor; both fds remain owned and are not closed here.
+            unsafe {
+                let _ = libc::dup2(file.as_raw_fd(), 2);
+            }
+        }
+        self.bytes = len;
+        self.file = Some(file);
+    }
+
     /// Append `buf` to the log, rotating first if the cached count is over the
     /// cap. Returns `false` if the bytes could not be written to the file (so
     /// the caller can fall back to stderr).
     fn write_event(&mut self, buf: &[u8]) -> bool {
+        if self.file.is_none() {
+            // Degraded (open or write previously failed): retry the open on
+            // every event so a transient failure (ENOSPC, EIO, missing dir)
+            // does not silence file logging for the daemon's lifetime.
+            self.reopen_after_rotate();
+        }
         if self.bytes > self.cap {
             self.rotate();
         }
@@ -305,6 +325,23 @@ mod tests {
         // The oversized current generation replaced the ancient .old.
         let rotated = std::fs::read(old_path_for(&path)).unwrap();
         assert_eq!(rotated.len(), (cap + 1) as usize);
+    }
+
+    #[test]
+    fn degraded_writer_recovers_when_the_path_becomes_writable() {
+        // A transient open/write failure must not silence file logging for the
+        // daemon's lifetime: each degraded event retries the open.
+        let dir = temp_dir("recover");
+        let path = dir.join("missing-parent").join("daemon-service.log");
+
+        let log = RotatingLog::with_cap(path.clone(), 1024);
+        write(&log, b"lost-to-stderr\n");
+        assert!(!path.exists());
+
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write(&log, b"recovered\n");
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "recovered\n");
     }
 
     #[test]

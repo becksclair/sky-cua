@@ -9,16 +9,8 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use sky_cua_platform::log_rotation::{DAEMON_LOG_ROTATE_BYTES, guarded_rotate_oversized};
 use sky_cua_platform::sky_cua_state_dir;
-
-/// Rotate the log once it grows past this size; one rotated generation
-/// (`.log.old`) is kept. This client-side rotation runs at daemon launch (when
-/// the stderr destination is opened); the daemon itself applies the same cap to
-/// its own tracing writer at runtime (see `sky-cua-service`'s `log_writer`), so
-/// a long-lived daemon in a warn/error loop no longer appends without bound
-/// until its next launch. Both rotators target the same path and use the same
-/// advisory-lock + re-check guard so neither can clobber the other's fresh log.
-const DAEMON_LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Stderr destination for a daemon spawn. `stem` names the per-endpoint log
 /// file (`<stem>.log`); distinct daemons (default vs. isolated-desktop socket)
@@ -62,22 +54,18 @@ fn open_rotating_log(dir: &Path, stem: &str) -> std::io::Result<File> {
 /// the log path.
 fn rotate_oversized_log(dir: &Path, stem: &str, file: File) -> std::io::Result<File> {
     let path = dir.join(format!("{stem}.log"));
-    // Rotation is guarded by an advisory lock on the oversized file so two
-    // concurrent spawners cannot both rotate: the loser would otherwise rename
-    // the winner's fresh log over the just-rotated `.old` generation and
-    // destroy it. A contended lock means someone else is rotating right now —
-    // appending to whichever file wins is fine.
-    if file.try_lock().is_err() {
+    // The rename is guarded by the shared cross-process protocol in
+    // `sky_cua_platform::log_rotation` — the daemon's runtime rotator uses the
+    // same sequence, so neither side can clobber the other's fresh log. A
+    // contended lock means the other rotator is mid-flight; appending to
+    // whichever file wins is fine.
+    if !guarded_rotate_oversized(
+        &file,
+        &path,
+        &dir.join(format!("{stem}.log.old")),
+        DAEMON_LOG_ROTATE_BYTES,
+    ) {
         return Ok(file);
-    }
-    // Re-check by path while holding the lock: the lock lives on the inode
-    // this handle opened, but a rotator that finished before we acquired it
-    // has already swapped the path to a fresh file.
-    let still_oversized = std::fs::metadata(&path)
-        .map(|metadata| metadata.len() > DAEMON_LOG_ROTATE_BYTES)
-        .unwrap_or(false);
-    if still_oversized {
-        let _ = std::fs::rename(&path, dir.join(format!("{stem}.log.old")));
     }
     std::fs::OpenOptions::new()
         .create(true)

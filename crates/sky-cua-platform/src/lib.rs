@@ -3,6 +3,7 @@ pub mod backend;
 pub mod config;
 pub mod diagnostics;
 pub mod fd_hygiene;
+pub mod log_rotation;
 pub mod model;
 pub mod overlay_spec_generated;
 pub mod paths;

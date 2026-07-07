@@ -28,8 +28,9 @@ stderr into a per-endpoint log under the sky-cua state dir
 desktop daemon gets its own file) and passes the same path via
 `SKY_CUA_DAEMON_LOG_PATH` so the daemon routes tracing output through a
 self-rotating writer (rotated past 8 MiB to one `.log.old` generation, both
-at spawn and at runtime). Stderr capture still catches pre-init output and
-panics. An operator-run `sky-cua-service daemon` has no log path env set and
+at spawn and at runtime). Stderr capture catches pre-init output; on unix the
+daemon re-points fd 2 at each fresh log so panics follow the live log across
+rotations (on Windows panic capture ends at the first runtime rotation). An operator-run `sky-cua-service daemon` has no log path env set and
 logs to plain stderr. These files are the primary forensic record for
 daemon-side incidents — agent transcripts are the only other trace.
 
