@@ -52,8 +52,10 @@ packaged adapter around that runtime, not the runtime boundary itself.
   hosts that cannot read files by path
 - Claude Code host support through `.claude-plugin/` (plugin + marketplace
   manifests) and `scripts/install_mcp_server.py --host claude-code`
-- Windows compile/runtime foundation through `sky-cua-windows`, including
-  top-level window fallback snapshots, GDI screenshots, and SendInput actions
+- Windows UIA inspection and semantic actions through `sky-cua-windows`,
+  including real app-shell child trees, semantic invoke/select/toggle
+  routing, top-level window fallback snapshots, GDI screenshots, and
+  SendInput actions
 - Linux window targeting through a registry of KWin, X11, GNOME, COSMIC,
   Hyprland, and i3 backends, with terminal metadata selectors where available
 - Linux compositor cursor overlay and hide/show support through X11/XFixes,
@@ -334,6 +336,7 @@ Use / Chrome companion plugin coverage and the native messaging host, see
   The no-patch `cosmic_transparent_xcursor` mode keeps the native cursor
   transparent for the full session instead of restoring it when the overlay
   hides.
-- Windows v1 is intentionally conservative: it exposes real top-level window
-  bounds and physical actions, but does not yet provide rich UI Automation
-  child trees or semantic invoke/value routing.
+- Windows exposes UIA child trees and semantic actions (invoke, select,
+  expand/collapse, toggle, focus), but element readback is not yet native:
+  `text`, `numeric_value`, and `supports_editable_text` are not populated
+  from UIA patterns (tracked in ROADMAP as native Windows/UIA readback).
