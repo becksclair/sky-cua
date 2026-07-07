@@ -254,14 +254,16 @@ structural cleanups, performance fixes, and test gaps, not user-facing features;
 pick them off between feature work.
 
 - [ ] Split or reduce god files past the ~800–1000 line threshold:
-  - `crates/sky-cua-linux/src/backend.rs`
+  - [x] `crates/sky-cua-linux/src/backend.rs` → split into
+        `backend/{mod,desktop_backend,action_runtime,elements,tests}.rs` (2026-07-08)
+  - [x] `crates/sky-cua-service/src/daemon.rs` → split into
+        `daemon/{mod,desktop,phone,browser,session_presence,capture_reuse,agent_cursor,tests}.rs` (2026-07-08)
+  - [x] `crates/sky-cua-client/src/mcp_tools/definitions.rs` → split by tool family (advisor plan 009)
   - `crates/sky-cua-linux/src/capture_plan.rs`
   - `crates/sky-cua-client/src/mcp_tools.rs`
-  - `crates/sky-cua-service/src/daemon.rs`
   - `crates/sky-cua-windows/src/backend.rs`
   - `crates/sky-cua-linux/src/virtual_input.rs`
   - `crates/sky-cua-chrome-host/src/host.rs`
-  - `crates/sky-cua-client/src/mcp_tools/definitions.rs`
 - [ ] Extract KDE clipboard fallback from the generic action executor and
       introduce a backend-abstracted text-input strategy
 - [ ] Centralize `input_backend` dispatch and coordinate-mapping helpers
