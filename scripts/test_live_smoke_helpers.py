@@ -15,6 +15,7 @@ import _cua_coverage
 import live_agent_mcp_smoke
 import live_agentic_loop_smoke
 import live_desktop_smoke
+import live_obsidian_fallback_smoke
 import live_openclaw_mcp_smoke
 import live_portal_downgrade_smoke
 import live_wayland_pointer_smoke
@@ -37,6 +38,323 @@ def test_agentic_loop_default_uses_tool_evidence_enforced_agent() -> None:
 
 def test_agent_smoke_fixtures_are_dialog_dismissal_flows() -> None:
     assert set(live_agent_mcp_smoke.FIXTURES) == {"kdialog", "zenity"}
+
+
+def test_agentic_loop_fixture_choices_include_obsidian_fallback() -> None:
+    # obsidian-fallback is a distinct flow (fallback-anchor proof, not a
+    # dialog-dismiss task), so it stays out of FIXTURES but must still be a
+    # selectable --fixture value.
+    assert "obsidian-fallback" in live_agentic_loop_smoke.FIXTURE_CHOICES
+    assert set(live_agentic_loop_smoke.FIXTURE_CHOICES) == {
+        "kdialog",
+        "zenity",
+        "obsidian-fallback",
+    }
+    assert live_agentic_loop_smoke.DEFAULT_FIXTURE == "zenity"
+
+
+@pytest.mark.parametrize(
+    ("vault_path", "expected_uri_fragment"),
+    [
+        (Path("/tmp/sky-cua-obsidian-vault-abc123"), "path=/tmp/sky-cua-obsidian-vault-abc123"),
+        (Path("/tmp/vault with spaces"), "path=/tmp/vault%20with%20spaces"),
+    ],
+)
+def test_obsidian_launch_argv_uses_uri_and_forces_wayland(
+    vault_path: Path, expected_uri_fragment: str
+) -> None:
+    argv = live_obsidian_fallback_smoke.build_launch_argv(vault_path)
+
+    assert argv[0] == live_obsidian_fallback_smoke.OBSIDIAN_BIN
+    assert "--ozone-platform=wayland" in argv
+    assert any(arg.startswith("obsidian://open?") for arg in argv)
+    assert any(expected_uri_fragment in arg for arg in argv)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        pytest.param(
+            {
+                "elements": [
+                    {
+                        "element_index": 0,
+                        "role": "window",
+                        "state_flags": ["vision_anchor", "physical_target"],
+                    }
+                ]
+            },
+            True,
+            id="single_vision_anchor_window",
+        ),
+        pytest.param(
+            {
+                "elements": [
+                    {
+                        "element_index": 0,
+                        "role": "window",
+                        "state_flags": ["native_window_fallback", "physical_target"],
+                    }
+                ]
+            },
+            False,
+            id="fallback_root_without_vision_anchor_flag",
+        ),
+        pytest.param(
+            {
+                "elements": [
+                    {"element_index": 0, "role": "window", "state_flags": ["vision_anchor"]},
+                    {"element_index": 1, "role": "push_button", "state_flags": ["focusable"]},
+                ]
+            },
+            False,
+            id="vision_anchor_plus_rich_atspi_child_is_not_fallback_only",
+        ),
+        pytest.param(
+            {"elements": []},
+            False,
+            id="empty_elements",
+        ),
+        pytest.param(
+            {"focused_app": {"name": "obsidian"}},
+            False,
+            id="payload_without_elements_key",
+        ),
+        pytest.param(
+            "not a dict",
+            False,
+            id="non_dict_payload",
+        ),
+        pytest.param(
+            {
+                "elements": [
+                    {
+                        "element_index": 0,
+                        "role": "x11_leaf_region",
+                        "state_flags": ["vision_anchor", "x11_fallback"],
+                    }
+                ]
+            },
+            True,
+            id="native_fallback_role_other_than_window_still_counts",
+        ),
+    ],
+)
+def test_observe_payload_proves_fallback_table(payload: object, expected: bool) -> None:
+    assert live_obsidian_fallback_smoke.observe_payload_proves_fallback(payload) is expected
+
+
+def test_stdout_proves_fallback_scans_raw_jsonl_including_embedded_json_strings(
+    tmp_path: Path,
+) -> None:
+    fallback_element = {
+        "elements": [
+            {
+                "element_index": 0,
+                "role": "window",
+                "state_flags": ["vision_anchor", "physical_target"],
+            }
+        ]
+    }
+    lines = [
+        json.dumps({"type": "tool_use_start", "tool": "sky_cua_observe"}),
+        # Result payload embedded as a JSON string within a text content
+        # block, the shape pi/opencode raw transcripts actually use.
+        json.dumps(
+            {
+                "type": "tool_result",
+                "content": [{"type": "text", "text": json.dumps(fallback_element)}],
+            }
+        ),
+        "not json at all",
+    ]
+    stdout_path = tmp_path / "pi.stdout.log"
+    stdout_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert live_obsidian_fallback_smoke.stdout_proves_fallback(stdout_path) is True
+
+
+def test_stdout_proves_fallback_false_without_matching_evidence(tmp_path: Path) -> None:
+    stdout_path = tmp_path / "pi.stdout.log"
+    stdout_path.write_text(
+        json.dumps({"type": "tool_use_start", "tool": "sky_cua_observe"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert live_obsidian_fallback_smoke.stdout_proves_fallback(stdout_path) is False
+
+
+def test_stdout_proves_fallback_false_for_missing_file(tmp_path: Path) -> None:
+    assert live_obsidian_fallback_smoke.stdout_proves_fallback(tmp_path / "missing.log") is False
+
+
+def test_kill_obsidian_process_tree_matches_command_line_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pgrep_output = (
+        "1234 /usr/bin/obsidian --ozone-platform=wayland obsidian://open?path=/tmp/vault\n"
+        "1235 /usr/lib/obsidian/app.asar/renderer --type=renderer\n"
+        "9999 /usr/bin/some-other-app --unrelated\n"
+    )
+    killed_pids: list[int] = []
+
+    def fake_run(argv: list[str], **_kwargs: object) -> object:
+        assert argv == ["pgrep", "-af", "obsidian"]
+        return live_obsidian_fallback_smoke.subprocess.CompletedProcess(
+            argv, returncode=0, stdout=pgrep_output, stderr=""
+        )
+
+    def fake_kill(pid: int, _sig: int) -> None:
+        killed_pids.append(pid)
+
+    monkeypatch.setattr(live_obsidian_fallback_smoke.subprocess, "run", fake_run)
+    monkeypatch.setattr(live_obsidian_fallback_smoke.os, "kill", fake_kill)
+
+    live_obsidian_fallback_smoke.kill_obsidian_process_tree()
+
+    assert sorted(killed_pids) == [1234, 1235]
+
+
+def test_kill_obsidian_process_tree_tolerates_missing_pgrep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError("pgrep")
+
+    monkeypatch.setattr(live_obsidian_fallback_smoke.subprocess, "run", fake_run)
+
+    live_obsidian_fallback_smoke.kill_obsidian_process_tree()  # must not raise
+
+
+def test_run_obsidian_fallback_smoke_rejects_agents_without_tool_evidence() -> None:
+    with pytest.raises(ValueError, match="opencode or pi"):
+        live_obsidian_fallback_smoke.run_obsidian_fallback_smoke(agent="claude")
+
+
+def test_run_obsidian_fallback_smoke_passes_when_fallback_proved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire_obsidian_fallback_smoke_fakes(
+        tmp_path,
+        monkeypatch,
+        fallback_element_present=True,
+    )
+
+    assert live_obsidian_fallback_smoke.run_obsidian_fallback_smoke(agent="pi") == 0
+
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["fallback_proved"] is True
+    assert result["ok"] is True
+
+
+def test_run_obsidian_fallback_smoke_fails_without_fallback_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire_obsidian_fallback_smoke_fakes(
+        tmp_path,
+        monkeypatch,
+        fallback_element_present=False,
+    )
+
+    assert live_obsidian_fallback_smoke.run_obsidian_fallback_smoke(agent="pi") == 1
+
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["fallback_proved"] is False
+    assert result["ok"] is False
+
+
+def test_run_obsidian_fallback_smoke_tears_down_process_tree_and_vault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    teardown_calls: list[str] = []
+    vault_path = tmp_path / "vault"
+    vault_path.mkdir()
+
+    monkeypatch.setattr(
+        live_obsidian_fallback_smoke,
+        "kill_obsidian_process_tree",
+        lambda: teardown_calls.append("kill"),
+    )
+    monkeypatch.setattr(
+        live_obsidian_fallback_smoke,
+        "delete_scratch_vault",
+        lambda path: teardown_calls.append(f"delete:{path}"),
+    )
+    _wire_obsidian_fallback_smoke_fakes(
+        tmp_path,
+        monkeypatch,
+        fallback_element_present=True,
+        vault_path=vault_path,
+        patch_teardown=False,
+    )
+
+    live_obsidian_fallback_smoke.run_obsidian_fallback_smoke(agent="pi")
+
+    assert teardown_calls == ["kill", f"delete:{vault_path}"]
+
+
+def _wire_obsidian_fallback_smoke_fakes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fallback_element_present: bool,
+    vault_path: Path | None = None,
+    patch_teardown: bool = True,
+) -> None:
+    resolved_vault_path = vault_path or (tmp_path / "vault")
+    resolved_vault_path.mkdir(exist_ok=True)
+
+    class FakeLaunchProcess:
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+    def fake_run_agent(
+        agent: str,
+        _prompt: str,
+        artifact_dir: Path,
+        **_kwargs: object,
+    ) -> object:
+        stdout = artifact_dir / f"{agent}.stdout.log"
+        if fallback_element_present:
+            body = {
+                "elements": [
+                    {
+                        "element_index": 0,
+                        "role": "window",
+                        "state_flags": ["vision_anchor", "physical_target"],
+                    }
+                ]
+            }
+        else:
+            body = {"elements": []}
+        stdout.write_text(
+            json.dumps({"type": "tool_result", "result": body}) + "\n",
+            encoding="utf-8",
+        )
+        return live_obsidian_fallback_smoke.subprocess.CompletedProcess([agent], returncode=0)
+
+    monkeypatch.setattr(live_obsidian_fallback_smoke, "make_artifact_dir", lambda *_args: tmp_path)
+    monkeypatch.setattr(
+        live_obsidian_fallback_smoke, "create_scratch_vault", lambda: resolved_vault_path
+    )
+    monkeypatch.setattr(
+        live_obsidian_fallback_smoke.subprocess, "Popen", lambda *_a, **_k: FakeLaunchProcess()
+    )
+    monkeypatch.setattr(live_obsidian_fallback_smoke, "run_agent", fake_run_agent)
+    monkeypatch.setattr(live_obsidian_fallback_smoke.time, "sleep", lambda *_a: None)
+    if patch_teardown:
+        monkeypatch.setattr(
+            live_obsidian_fallback_smoke, "kill_obsidian_process_tree", lambda: None
+        )
+        monkeypatch.setattr(
+            live_obsidian_fallback_smoke, "delete_scratch_vault", lambda _path: None
+        )
 
 
 def test_agent_smoke_prompt_tells_agents_to_return_after_action() -> None:
