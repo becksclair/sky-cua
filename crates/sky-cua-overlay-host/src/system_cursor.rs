@@ -311,12 +311,20 @@ impl KwinEffectSystemCursorAdapter {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let output = Command::new(&self.qdbus)
+        // This runs on the overlay render/tick heartbeat, so a stuck qdbus
+        // subprocess must not hang the caller indefinitely.
+        const QDBUS_TIMEOUT: Duration = Duration::from_secs(5);
+
+        let mut command = Command::new(&self.qdbus);
+        command
             .arg(service)
             .arg(object_path)
             .arg(method)
             .args(args)
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = spawn_with_timeout(&mut command, QDBUS_TIMEOUT)
             .with_context(|| format!("failed to run {}", self.qdbus))?;
         if !output.status.success() {
             bail!(
@@ -327,6 +335,30 @@ impl KwinEffectSystemCursorAdapter {
             );
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+}
+
+/// Spawn `command`, waiting up to `timeout` for it to finish. On timeout the
+/// child is killed and reaped before returning an error, so a wedged helper
+/// never leaks a zombie process or hangs the caller.
+fn spawn_with_timeout(command: &mut Command, timeout: Duration) -> Result<std::process::Output> {
+    let mut child = command.spawn().context("failed to spawn subprocess")?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => return child.wait_with_output().context("collect output"),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("subprocess timed out after {timeout:?}");
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error).context("failed to wait for subprocess");
+            }
+        }
     }
 }
 
@@ -595,8 +627,16 @@ struct CosmicBridgeResponse {
 
 #[cfg(target_os = "linux")]
 fn cosmic_bridge_request(socket_path: &PathBuf, command: &str) -> Result<CosmicBridgeResponse> {
+    const BRIDGE_IO_TIMEOUT: Duration = Duration::from_secs(2);
+
     let mut stream = UnixStream::connect(socket_path)
         .with_context(|| format!("failed to connect to {}", socket_path.display()))?;
+    stream
+        .set_read_timeout(Some(BRIDGE_IO_TIMEOUT))
+        .context("configure COSMIC cursor bridge read timeout")?;
+    stream
+        .set_write_timeout(Some(BRIDGE_IO_TIMEOUT))
+        .context("configure COSMIC cursor bridge write timeout")?;
     let request = serde_json::to_vec(&CosmicBridgeRequest { command })
         .context("serialize COSMIC cursor bridge request")?;
     stream
