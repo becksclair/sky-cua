@@ -10,6 +10,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use sky_cua_platform::config::INPUT_HELPER_SOCKET_ENV;
 use sky_cua_platform::model::AgentCursorPointerTrackingBackendKind;
 use zbus::blocking::Proxy;
 
@@ -21,7 +22,6 @@ const KWIN_AGENT_CURSOR_INTERFACE: &str = "com.skycua.AgentCursor";
 const KWIN_SIGNAL_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 const HELPER_STREAM_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 const HELPER_PROTOCOL_VERSION: u32 = 1;
-const INPUT_HELPER_SOCKET_ENV: &str = "SKY_CUA_INPUT_HELPER_SOCKET";
 const DEFAULT_INPUT_HELPER_SOCKET: &str = "/run/sky-cua/input-helper.sock";
 const POINTER_TRACKING_DEBUG_ENV: &str = "SKY_CUA_POINTER_TRACKING_DEBUG";
 

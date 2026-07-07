@@ -10,9 +10,9 @@ use sky_cua_platform::model::DiagnosticEntry;
 
 use super::diagnostics::browser_bridge_disconnected_diagnostic;
 
-pub(super) const SKY_CUA_SOCKET_DIR_ENV: &str = "SKY_CUA_BROWSER_USE_SOCKET_DIR";
+pub(super) use sky_cua_platform::config::BROWSER_USE_SOCKET_DIR_ENV as SKY_CUA_SOCKET_DIR_ENV;
 pub(super) const CODEX_SOCKET_DIR_ENV: &str = "CODEX_BROWSER_USE_SOCKET_DIR";
-pub(super) const SKY_CUA_BROWSER_ENV: &str = "SKY_CUA_BROWSER";
+pub(super) use sky_cua_platform::config::BROWSER_SELECTION_ENV as SKY_CUA_BROWSER_ENV;
 const DEFAULT_SOCKET_DIR: &str = "/tmp/codex-browser-use";
 pub(super) const MAX_BRIDGE_SOCKET_CANDIDATES: usize = 32;
 const SOCKET_FAMILY_CACHE_TTL: Duration = Duration::from_secs(10);

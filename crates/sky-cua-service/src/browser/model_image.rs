@@ -13,11 +13,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use image::ImageEncoder;
+use sky_cua_platform::config::{
+    MODEL_SCREENSHOT_FORMAT_ENV, MODEL_SCREENSHOT_JPEG_QUALITY_ENV,
+    MODEL_SCREENSHOT_WEBP_QUALITY_ENV,
+};
 use sky_cua_platform::model::DiagnosticEntry;
-
-const MODEL_SCREENSHOT_FORMAT_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_FORMAT";
-const MODEL_SCREENSHOT_JPEG_QUALITY_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_JPEG_QUALITY";
-const MODEL_SCREENSHOT_WEBP_QUALITY_ENV: &str = "SKY_CUA_MODEL_SCREENSHOT_WEBP_QUALITY";
 const DEFAULT_JPEG_QUALITY: u8 = 85;
 const DEFAULT_WEBP_QUALITY: u8 = 85;
 const KEPT_CAPTURES_PER_TAB: usize = 8;

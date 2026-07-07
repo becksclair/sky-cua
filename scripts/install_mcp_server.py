@@ -367,6 +367,8 @@ def generate_mcp_config(
                     "SKY_CUA_REPO_ROOT": str(root),
                     **policy.env(),
                 },
+                # Guarded by scripts/test_env_key_contract.py — new SKY_CUA_*
+                # keys must be added here or exempted there.
                 "env_vars": [
                     "CODEX_COMPUTER_USE_COSMIC_HELPER",
                     "DBUS_SESSION_BUS_ADDRESS",

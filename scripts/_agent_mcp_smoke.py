@@ -76,6 +76,8 @@ AGENT_ENV_ALLOWLIST = {
     "XDG_SESSION_TYPE",
     "YDOTOOL_SOCKET",
 }
+# Guarded by scripts/test_env_key_contract.py — new SKY_CUA_* keys must be
+# added here or exempted there.
 SKY_CUA_RUNTIME_ENV_ALLOWLIST = {
     "SKY_CUA_AGENT_CURSOR",
     "SKY_CUA_BROWSER",

@@ -13,7 +13,7 @@ use sky_cua_platform::model::DiagnosticEntry;
 #[cfg(not(unix))]
 use sky_cua_platform::overlay_host_tcp_addr;
 
-const OVERLAY_BACKEND_ENV: &str = "SKY_CUA_OVERLAY_BACKEND";
+use sky_cua_platform::config::OVERLAY_BACKEND_ENV;
 const OVERLAY_HOST_PATH_ENV: &str = "SKY_CUA_OVERLAY_HOST_PATH";
 
 /// Endpoint the production connection uses on this platform.

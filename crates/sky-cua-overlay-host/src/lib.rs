@@ -33,7 +33,7 @@ pub fn run_playground(args: Vec<String>) -> anyhow::Result<()> {
 pub fn run_playground(_args: Vec<String>) -> anyhow::Result<()> {
     anyhow::bail!("sky-cua-overlay-host playground requires a Linux/Wayland session")
 }
-const OVERLAY_BACKEND_ENV: &str = "SKY_CUA_OVERLAY_BACKEND";
+use sky_cua_platform::config::OVERLAY_BACKEND_ENV;
 
 pub mod cursor_asset {
     pub const AGENT_CURSOR_PNG: &[u8] = include_bytes!("../assets/cursor-chat.png");
