@@ -105,18 +105,11 @@ KNOWN_NOT_FORWARDED: dict[str, str] = {
     "SKY_CUA_COSMIC_CURSOR_READY": "internal IPC path between overlay-host and sky-cua-cosmic-helper, not operator config",
     "SKY_CUA_COSMIC_CURSOR_STATE": "internal IPC path between overlay-host and sky-cua-cosmic-helper, not operator config",
     "SKY_CUA_FORCE_PIPEWIRE_CAPTURE_FAILURE": "test-only fault injection (portal/pipewire.rs)",
-    "SKY_CUA_INPUT_HELPER_SOCKET_MODE": "input-helper systemd socket permission, set once at install time alongside SKY_CUA_INPUT_HELPER_SOCKET_GROUP; not per-invocation MCP forwarding",
-    "SKY_CUA_LAYER_SHELL_LAYER": "overlay-host layer-shell dev/debug override, not an operator toggle",
-    "SKY_CUA_LAYER_SHELL_RENDERER": "overlay-host layer-shell dev/debug override, not an operator toggle",
+    "SKY_CUA_INPUT_HELPER_SOCKET_MODE": "input-helper systemd socket permission, set once at install time alongside SKY_CUA_INPUT_HELPER_SOCKET_GROUP into /etc/sky-cua/input-helper.env; the privileged sky-cua-input-helper.service never inherits from the MCP-launched process tree, so forwarding it through the per-invocation env_vars allowlist would be a no-op, not a real gap",
     "SKY_CUA_PHONE_COMMAND_TIMEOUT_MS": "internal phone-backend command timeout tuning, not a documented operator override",
     "SKY_CUA_POINTER_TRACKING_DEBUG": "overlay-host pointer-tracking debug logging toggle, not an operator toggle",
     "SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS": "test-only (browser/transport.rs test fixture)",
     "SKY_CUA_UPDATE_MCP_FIXTURES": "dev-only MCP tool-fixture regeneration toggle (mcp_tools/definitions.rs)",
-    "SKY_CUA_VIRTUAL_INPUT_HEIGHT": "explicit COSMIC desktop-bounds override for the virtual-input backend; not yet in the installer's forwarding list (real gap, not by design)",
-    "SKY_CUA_VIRTUAL_INPUT_SCALE": "explicit COSMIC desktop-bounds override for the virtual-input backend; not yet in the installer's forwarding list (real gap, not by design)",
-    "SKY_CUA_VIRTUAL_INPUT_WIDTH": "explicit COSMIC desktop-bounds override for the virtual-input backend; not yet in the installer's forwarding list (real gap, not by design)",
-    "SKY_CUA_VIRTUAL_INPUT_X": "explicit COSMIC desktop-bounds override for the virtual-input backend; not yet in the installer's forwarding list (real gap, not by design)",
-    "SKY_CUA_VIRTUAL_INPUT_Y": "explicit COSMIC desktop-bounds override for the virtual-input backend; not yet in the installer's forwarding list (real gap, not by design)",
 }
 
 
