@@ -23,6 +23,10 @@ pub enum BackendErrorCode {
     InvalidRequest,
     NotImplemented,
     Internal,
+    /// A desktop request (observe/doctor/list/screenshot) exceeded the
+    /// server-side deadline and was abandoned so a single hung AT-SPI or
+    /// portal call cannot wedge the shared desktop request lane forever.
+    DesktopRequestDeadlineExceeded,
 }
 
 impl BackendErrorCode {
@@ -48,6 +52,7 @@ impl BackendErrorCode {
             Self::InvalidRequest => "InvalidRequest",
             Self::NotImplemented => "NotImplemented",
             Self::Internal => "Internal",
+            Self::DesktopRequestDeadlineExceeded => "DesktopRequestDeadlineExceeded",
         }
     }
 }

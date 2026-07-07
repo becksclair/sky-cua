@@ -181,6 +181,15 @@ pub trait DesktopBackend: Send + Sync {
     async fn session_presence_status(&self) -> SessionPresenceStatus {
         SessionPresenceStatus::unsupported("none")
     }
+
+    /// Drop cached live desktop-session handles (the AT-SPI connection, the
+    /// portal RemoteDesktop/ScreenCast session) after a desktop request was
+    /// abandoned server-side for exceeding its deadline. Persisted portal
+    /// tokens are NOT touched — this only clears in-memory session handles so
+    /// the next request opens a fresh connection instead of reusing one that
+    /// may still be wedged on the compositor/portal side. Backends with no
+    /// live session cache (e.g. Windows) default to a no-op.
+    async fn reset_desktop_session_state(&self) {}
 }
 
 #[async_trait]

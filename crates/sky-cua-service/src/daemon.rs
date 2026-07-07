@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use sky_cua_platform::DESKTOP_LAUNCH_ENV_KEYS;
 use sky_cua_platform::backend::DesktopBackend;
-use sky_cua_platform::diagnostics::BackendErrorCode;
+use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
     BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, CaptureInfo,
@@ -24,6 +24,33 @@ use crate::phone::host_scrcpy_default_max_size;
 use crate::session_store::SessionStore;
 use crate::snapshot_manager::SnapshotManager;
 use tracing::debug;
+
+/// Deadline for a single read-only desktop backend call made while holding
+/// `desktop_lane` (see [`ServiceDaemon::with_desktop_deadline`]). Bounds the
+/// unbounded zbus AT-SPI calls and PipeWire portal hangs that would
+/// otherwise wedge every subsequent desktop request behind the shared lane.
+/// Overridable via `SKY_CUA_DESKTOP_REQUEST_DEADLINE_MS` so tests can
+/// exercise the timeout path without waiting out the production default.
+/// Kept below the MCP host's own patience (~15s per call, but hosts retry)
+/// and the Rust client's socket read timeout (60s, `service_launcher.rs`).
+fn desktop_request_deadline() -> Duration {
+    static DEADLINE: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *DEADLINE.get_or_init(|| {
+        std::env::var("SKY_CUA_DESKTOP_REQUEST_DEADLINE_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(50))
+    })
+}
+
+/// Cap on how long the elapsed-deadline recovery path (dropping cached
+/// AT-SPI/portal session handles) is allowed to run. The recovery itself
+/// makes a best-effort D-Bus close call that could, in principle, hit the
+/// same unbounded-zbus-timeout hang this whole mechanism exists to route
+/// around; bounding it keeps the lane-freeing guarantee intact even if the
+/// backend's own cleanup misbehaves.
+const DESKTOP_DEADLINE_RESET_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ServiceDaemon {
     backend: Box<dyn DesktopBackend>,
@@ -709,6 +736,56 @@ impl ServiceDaemon {
         }
     }
 
+    /// Bound a single desktop backend call to [`desktop_request_deadline`]
+    /// while `desktop_lane` is held.
+    ///
+    /// Cancel-safety: this wraps only the leaf backend future via
+    /// `tokio::time::timeout`, never the surrounding request-handling arm.
+    /// Every caller in `handle_desktop_request` either (a) has no
+    /// synchronous state that needs restoring around the call (`Doctor`,
+    /// `ListApps`, `ListWindows`, `FocusedWindow`, `SetupAccessibility`,
+    /// `SetupWindowTargeting`), or (b) already has an existing `Err(error)`
+    /// arm that performs the required compensation (`GetAppState` and
+    /// `Screenshot` restore the capture-hidden overlay cursor on error). By
+    /// racing only the inner future we always get a `Result` back
+    /// synchronously and that existing error handling runs unconditionally
+    /// — nothing about the caller's own future is ever dropped or
+    /// abandoned mid-flight, so there is no risk of leaving, e.g., the
+    /// overlay cursor stuck hidden. On elapse the awaited backend future
+    /// itself IS dropped (that's the whole point — it frees the lane), but
+    /// every desktop backend call reachable from a read-only request is a
+    /// pure read with no cross-await mutation of persisted state, so
+    /// abandoning it mid-poll cannot corrupt anything (see the plan 017
+    /// cancel-safety audit). Mutating requests (`ExecuteAction`,
+    /// `LaunchApplication`, `SessionPresence::Ensure/Release`,
+    /// `ActivateWindow`, `ResetPortalTokens`) intentionally do NOT go
+    /// through this helper.
+    async fn with_desktop_deadline<T>(
+        &self,
+        future: impl std::future::Future<Output = Result<T, BackendError>>,
+    ) -> Result<T, BackendError> {
+        match tokio::time::timeout(desktop_request_deadline(), future).await {
+            Ok(result) => result,
+            Err(_) => {
+                // Best-effort session reset, itself bounded (see
+                // `DESKTOP_DEADLINE_RESET_TIMEOUT`) so a wedged close call
+                // cannot re-extend the lane hold this is meant to end.
+                let _ = tokio::time::timeout(
+                    DESKTOP_DEADLINE_RESET_TIMEOUT,
+                    self.backend.reset_desktop_session_state(),
+                )
+                .await;
+                Err(BackendError::new(
+                    BackendErrorCode::DesktopRequestDeadlineExceeded,
+                    format!(
+                        "desktop request exceeded the {:?} deadline and was abandoned; backend session state was reset so the next request starts clean",
+                        desktop_request_deadline()
+                    ),
+                ))
+            }
+        }
+    }
+
     async fn handle_desktop_request(&self, request: ServiceRequest) -> ServiceResponse {
         match request {
             ServiceRequest::Health => unreachable!("health bypasses the desktop request lane"),
@@ -749,20 +826,30 @@ impl ServiceDaemon {
                     status: self.backend.session_presence_status().await,
                 },
             },
-            ServiceRequest::Doctor => match self.backend.doctor().await {
-                Ok(report) => ServiceResponse::Doctor {
-                    report: Box::new(report),
-                },
-                Err(error) => error_response(error.code, error.message),
-            },
-            ServiceRequest::SetupAccessibility => match self.backend.setup_accessibility().await {
-                Ok(report) => ServiceResponse::SetupAccessibility {
-                    report: Box::new(report),
-                },
-                Err(error) => error_response(error.code, error.message),
-            },
+            ServiceRequest::Doctor => {
+                match self.with_desktop_deadline(self.backend.doctor()).await {
+                    Ok(report) => ServiceResponse::Doctor {
+                        report: Box::new(report),
+                    },
+                    Err(error) => error_response(error.code, error.message),
+                }
+            }
+            ServiceRequest::SetupAccessibility => {
+                match self
+                    .with_desktop_deadline(self.backend.setup_accessibility())
+                    .await
+                {
+                    Ok(report) => ServiceResponse::SetupAccessibility {
+                        report: Box::new(report),
+                    },
+                    Err(error) => error_response(error.code, error.message),
+                }
+            }
             ServiceRequest::SetupWindowTargeting => {
-                match self.backend.setup_window_targeting().await {
+                match self
+                    .with_desktop_deadline(self.backend.setup_window_targeting())
+                    .await
+                {
                     Ok(report) => ServiceResponse::SetupWindowTargeting {
                         report: Box::new(report),
                     },
@@ -785,11 +872,14 @@ impl ServiceDaemon {
             }
             ServiceRequest::ListApps => {
                 debug!("handling list_apps request");
-                let environment = match self.backend.probe_environment().await {
+                let environment = match self
+                    .with_desktop_deadline(self.backend.probe_environment())
+                    .await
+                {
                     Ok(environment) => environment,
                     Err(error) => return error_response(error.code, error.message),
                 };
-                match self.backend.list_apps().await {
+                match self.with_desktop_deadline(self.backend.list_apps()).await {
                     Ok(apps) => {
                         let diagnostics = self.backend.session_env_diagnostics();
                         ServiceResponse::ListApps {
@@ -811,11 +901,17 @@ impl ServiceDaemon {
             }
             ServiceRequest::ListWindows => {
                 debug!("handling list_windows request");
-                let environment = match self.backend.probe_environment().await {
+                let environment = match self
+                    .with_desktop_deadline(self.backend.probe_environment())
+                    .await
+                {
                     Ok(environment) => environment,
                     Err(error) => return error_response(error.code, error.message),
                 };
-                match self.backend.list_windows().await {
+                match self
+                    .with_desktop_deadline(self.backend.list_windows())
+                    .await
+                {
                     Ok(windows) => ServiceResponse::ListWindows {
                         environment,
                         windows,
@@ -830,11 +926,17 @@ impl ServiceDaemon {
             }
             ServiceRequest::FocusedWindow => {
                 debug!("handling focused_window request");
-                let environment = match self.backend.probe_environment().await {
+                let environment = match self
+                    .with_desktop_deadline(self.backend.probe_environment())
+                    .await
+                {
                     Ok(environment) => environment,
                     Err(error) => return error_response(error.code, error.message),
                 };
-                match self.backend.focused_window().await {
+                match self
+                    .with_desktop_deadline(self.backend.focused_window())
+                    .await
+                {
                     Ok(window) => ServiceResponse::FocusedWindow {
                         environment,
                         window: window.map(Box::new),
@@ -875,7 +977,10 @@ impl ServiceDaemon {
                 } else {
                     None
                 };
-                match self.backend.get_app_state(selector, capture_screen).await {
+                match self
+                    .with_desktop_deadline(self.backend.get_app_state(selector, capture_screen))
+                    .await
+                {
                     Ok(mut snapshot) => {
                         let reused_capture = if capture_screen == CaptureScreenMode::IfChanged {
                             let snapshots = self.snapshots.lock().await;
@@ -937,7 +1042,10 @@ impl ServiceDaemon {
                     "handling screenshot request"
                 );
                 let capture_guard = Some(self.overlay.lock().await.prepare_for_capture());
-                match self.backend.screenshot(target, display_target).await {
+                match self
+                    .with_desktop_deadline(self.backend.screenshot(target, display_target))
+                    .await
+                {
                     Ok(mut snapshot) => {
                         if let Some(capture_guard) = capture_guard.as_ref() {
                             snapshot
@@ -1471,7 +1579,7 @@ mod tests {
     use image::{ImageBuffer, Rgba};
     use serde_json::json;
     use sky_cua_platform::backend::DesktopBackend;
-    use sky_cua_platform::diagnostics::BackendError;
+    use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
     use sky_cua_platform::model::{
         ActionName, ActionOutcome, ActionRequest, AgentCursorPoint, AgentCursorState, AppInfo,
         AppSelector, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
@@ -1607,6 +1715,52 @@ mod tests {
                 self.second_execute_started.notify_one();
             }
             Ok(self.outcome.clone())
+        }
+    }
+
+    /// A backend whose `probe_environment` never resolves, standing in for
+    /// an unbounded AT-SPI zbus call or a PipeWire teardown deadlock. Used
+    /// to prove `with_desktop_deadline` bounds the desktop request lane
+    /// (plan 017): a request against this backend must be abandoned at the
+    /// deadline rather than hanging forever, and the shared lane mutex must
+    /// be free again for the very next request on the same daemon.
+    #[derive(Debug, Clone, Default)]
+    struct HangingBackend {
+        reset_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl DesktopBackend for HangingBackend {
+        async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+            std::future::pending::<()>().await;
+            unreachable!("probe_environment must never resolve in the deadline test")
+        }
+
+        async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_app_state(
+            &self,
+            _selector: Option<AppSelector>,
+            _capture_screen: CaptureScreenMode,
+        ) -> Result<AppStateSnapshot, BackendError> {
+            std::future::pending::<()>().await;
+            unreachable!("get_app_state must never resolve in the deadline test")
+        }
+
+        async fn execute_action(
+            &self,
+            _request: ActionRequest,
+        ) -> Result<ActionOutcome, BackendError> {
+            Err(BackendError::new(
+                BackendErrorCode::Internal,
+                "HangingBackend does not support execute_action",
+            ))
+        }
+
+        async fn reset_desktop_session_state(&self) {
+            self.reset_calls.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -2280,6 +2434,66 @@ mod tests {
         match second_task.await.expect("second task") {
             ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
             other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    /// Core invariant for plan 017: a desktop request whose backend call
+    /// never resolves (standing in for the observed unbounded AT-SPI zbus
+    /// call / PipeWire teardown deadlock) must be abandoned at the deadline
+    /// with a structured error rather than hanging forever, AND the shared
+    /// `desktop_lane` mutex it was holding must be free again immediately
+    /// afterward — a second request on the SAME daemon must not itself wait
+    /// behind the (now-dropped) hung future. Uses a short env-overridden
+    /// deadline so the test itself stays fast; this test runs in its own
+    /// nextest process, so setting the env var before the first
+    /// `desktop_request_deadline()` call (which caches it) is race-free.
+    #[tokio::test]
+    async fn desktop_lane_deadline_frees_the_lane() {
+        unsafe { std::env::set_var("SKY_CUA_DESKTOP_REQUEST_DEADLINE_MS", "50") };
+        let backend = HangingBackend::default();
+        let reset_calls = backend.reset_calls.clone();
+        let daemon = daemon_with_backend(Box::new(backend));
+
+        let started = std::time::Instant::now();
+        let first = daemon.handle(ServiceRequest::Doctor).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the deadline should fire promptly instead of hanging, took {:?}",
+            started.elapsed()
+        );
+        match first {
+            ServiceResponse::Error { code, .. } => {
+                assert_eq!(
+                    code,
+                    BackendErrorCode::DesktopRequestDeadlineExceeded.as_str()
+                );
+            }
+            other => panic!("expected a desktop_request_deadline_exceeded error: {other:?}"),
+        }
+        assert_eq!(
+            reset_calls.load(Ordering::SeqCst),
+            1,
+            "an elapsed deadline must reset backend session state exactly once"
+        );
+
+        // THE core invariant: desktop_lane must be free again. A second
+        // request on the same daemon must return promptly, not wait behind
+        // the first (dropped, not merely finished) hung future.
+        let started = std::time::Instant::now();
+        let second = daemon.handle(ServiceRequest::Doctor).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the lane must be free after the first deadline fired, took {:?}",
+            started.elapsed()
+        );
+        match second {
+            ServiceResponse::Error { code, .. } => {
+                assert_eq!(
+                    code,
+                    BackendErrorCode::DesktopRequestDeadlineExceeded.as_str()
+                );
+            }
+            other => panic!("expected the second request to also time out cleanly: {other:?}"),
         }
     }
 
