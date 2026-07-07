@@ -52,7 +52,22 @@ After this change, native Wayland apps that expose only a KWin fallback window i
   fallback-only target instead: a native Wayland window with ZERO AT-SPI,
   needing no vault/config and no first-run affordance, resetting by simply
   closing. The mechanism proof above used an ambient `kwin:{uuid}` window;
-  a full mpv-targeted agent-loop pass is still pending.
+  the mpv target is verified for the fixture.
+- [~] (2026-07-08) Fixture launch path live-validated; two real bugs found and
+  fixed by live runs. (1) mpv rejects space-separated `--title value`; the
+  argv now uses the joined `--title=<value>` form. (2) the fixture inherits
+  the session env, so mpv's ancillary XWayland connection needs `XAUTHORITY`
+  set (present on any real desktop session; a real host or the VM harness has
+  it). With both fixed, mpv launches under the harness and the agent CLI
+  receives the correct observe-and-report prompt. The full end-to-end
+  agent-loop PASS is BLOCKED on agent-CLI billing, not on any sky-cua code:
+  pi's only configured model (`opencode/deepseek-v4-flash-free`) times out
+  repeatedly, and opencode's zen provider returns `401 CreditsError`
+  ("Insufficient balance"). Completing the agent-loop pass needs a
+  reliably-credentialed model (top up opencode credits or add a pi provider
+  API key), then rerun:
+  `python3 scripts/live_agentic_loop_smoke.py --agent <pi|opencode>
+  --fixture fallback-anchor --model <working-model>` with `XAUTHORITY` set.
 
 ## Surprises & Discoveries
 
