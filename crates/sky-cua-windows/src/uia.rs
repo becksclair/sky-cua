@@ -2,7 +2,8 @@ use std::ffi::c_void;
 
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    ActionName, ActionOutcome, ActionRequest, CaptureInfo, CoordinateSpace, ElementNode, RectF,
+    ActionName, ActionOutcome, ActionRequest, CaptureInfo, CoordinateSpace, ElementNode,
+    ElementNumericValueReadback, ElementTextReadback, RectF,
 };
 use windows::Win32::Foundation::{HWND as UiaHwnd, RECT as UiaRect, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
@@ -14,20 +15,21 @@ use windows::Win32::UI::Accessibility::{
     ExpandCollapseState_Expanded, ExpandCollapseState_LeafNode,
     ExpandCollapseState_PartiallyExpanded, IUIAutomation, IUIAutomationElement,
     IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
-    IUIAutomationLegacyIAccessiblePattern, IUIAutomationSelectionItemPattern,
-    IUIAutomationTogglePattern, IUIAutomationTreeWalker, IUIAutomationValuePattern, ToggleState,
-    ToggleState_Indeterminate, ToggleState_Off, ToggleState_On, UIA_ButtonControlTypeId,
-    UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_CustomControlTypeId,
-    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_ExpandCollapsePatternId,
-    UIA_GroupControlTypeId, UIA_HeaderControlTypeId, UIA_HyperlinkControlTypeId,
-    UIA_ImageControlTypeId, UIA_InvokePatternId, UIA_LegacyIAccessiblePatternId,
-    UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_MenuBarControlTypeId,
-    UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_PaneControlTypeId,
-    UIA_RadioButtonControlTypeId, UIA_ScrollBarControlTypeId, UIA_SelectionItemPatternId,
+    IUIAutomationLegacyIAccessiblePattern, IUIAutomationRangeValuePattern,
+    IUIAutomationSelectionItemPattern, IUIAutomationTextPattern, IUIAutomationTogglePattern,
+    IUIAutomationTreeWalker, IUIAutomationValuePattern, ToggleState, ToggleState_Indeterminate,
+    ToggleState_Off, ToggleState_On, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId,
+    UIA_ComboBoxControlTypeId, UIA_CustomControlTypeId, UIA_DocumentControlTypeId,
+    UIA_EditControlTypeId, UIA_ExpandCollapsePatternId, UIA_GroupControlTypeId,
+    UIA_HeaderControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
+    UIA_InvokePatternId, UIA_LegacyIAccessiblePatternId, UIA_ListControlTypeId,
+    UIA_ListItemControlTypeId, UIA_MenuBarControlTypeId, UIA_MenuControlTypeId,
+    UIA_MenuItemControlTypeId, UIA_PaneControlTypeId, UIA_RadioButtonControlTypeId,
+    UIA_RangeValuePatternId, UIA_ScrollBarControlTypeId, UIA_SelectionItemPatternId,
     UIA_SemanticZoomControlTypeId, UIA_SeparatorControlTypeId, UIA_SliderControlTypeId,
     UIA_SpinnerControlTypeId, UIA_SplitButtonControlTypeId, UIA_StatusBarControlTypeId,
-    UIA_TabControlTypeId, UIA_TabItemControlTypeId, UIA_TextControlTypeId, UIA_TogglePatternId,
-    UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
+    UIA_TabControlTypeId, UIA_TabItemControlTypeId, UIA_TextControlTypeId, UIA_TextPatternId,
+    UIA_TogglePatternId, UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
     UIA_TreeItemControlTypeId, UIA_ValuePatternId, UIA_WindowControlTypeId,
 };
 use windows::core::BSTR;
@@ -35,6 +37,9 @@ use windows::core::BSTR;
 const MAX_UIA_NODES: usize = 512;
 const MAX_UIA_DEPTH: usize = 10;
 const MAX_UIA_CHILDREN_PER_NODE: usize = 250;
+/// Mirrors the AT-SPI text readback cap in `sky-cua-linux` (`MAX_TEXT_READBACK_CHARS`)
+/// so both backends bound `ElementNode.text.content` to the same size.
+const MAX_UIA_TEXT_READBACK_CHARS: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq)]
 struct ParsedUiaRef {
@@ -120,6 +125,8 @@ struct UiaElementInfo {
     toggle_state: Option<&'static str>,
     has_legacy_default_action: bool,
     has_value: bool,
+    text: Option<ElementTextReadback>,
+    numeric_value: Option<ElementNumericValueReadback>,
     bounds: Option<DesktopRect>,
 }
 
@@ -514,6 +521,30 @@ fn read_element_info(
         .as_ref()
         .and_then(|pattern| unsafe { pattern.CurrentToggleState() }.ok())
         .and_then(toggle_state_name);
+    let range_value_pattern = unsafe {
+        element.GetCurrentPatternAs::<IUIAutomationRangeValuePattern>(UIA_RangeValuePatternId)
+    }
+    .ok();
+    let numeric_value = if password == Some(true) {
+        None
+    } else {
+        range_value_pattern
+            .as_ref()
+            .and_then(read_range_value_readback)
+    };
+    // Cheapest source first: an already-fetched ValuePattern string costs no
+    // extra COM round trip. Only probe TextPattern (an extra live call) when
+    // there is no ValuePattern value to fall back on.
+    let text = if password == Some(true) {
+        None
+    } else if let Some(value) = value.as_ref() {
+        Some(text_readback_from_value(value))
+    } else {
+        let text_pattern =
+            unsafe { element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) }
+                .ok();
+        text_pattern.as_ref().and_then(read_text_pattern_readback)
+    };
 
     UiaElementInfo {
         path,
@@ -557,10 +588,69 @@ fn read_element_info(
         .and_then(|pattern| bstr_property(|| unsafe { pattern.CurrentDefaultAction() }))
         .is_some(),
         has_value: value_pattern.is_some(),
+        text,
+        numeric_value,
         bounds: unsafe { element.CurrentBoundingRectangle() }
             .ok()
             .and_then(desktop_rect_from_uia),
     }
+}
+
+fn read_range_value_readback(
+    pattern: &IUIAutomationRangeValuePattern,
+) -> Option<ElementNumericValueReadback> {
+    let current = unsafe { pattern.CurrentValue() }.ok()?;
+    let minimum = unsafe { pattern.CurrentMinimum() }.ok()?;
+    let maximum = unsafe { pattern.CurrentMaximum() }.ok()?;
+    // CurrentSmallChange is not implemented by every RangeValuePattern provider;
+    // 0.0 is the same "no defined increment" sentinel the Linux AT-SPI reader
+    // and the scroll-step fallback in the Linux backend already use.
+    let minimum_increment = unsafe { pattern.CurrentSmallChange() }.unwrap_or(0.0);
+    Some(ElementNumericValueReadback {
+        current,
+        minimum,
+        maximum,
+        minimum_increment,
+        text: None,
+    })
+}
+
+fn text_readback_from_value(value: &str) -> ElementTextReadback {
+    let full_len = value.chars().count();
+    let truncated = full_len > MAX_UIA_TEXT_READBACK_CHARS;
+    let content: String = value.chars().take(MAX_UIA_TEXT_READBACK_CHARS).collect();
+    ElementTextReadback {
+        character_count: i32::try_from(full_len).unwrap_or(i32::MAX),
+        caret_offset: None,
+        content: Some(content),
+        content_suppressed: false,
+        truncated,
+        selections: Vec::new(),
+    }
+}
+
+fn read_text_pattern_readback(pattern: &IUIAutomationTextPattern) -> Option<ElementTextReadback> {
+    let document_range = unsafe { pattern.DocumentRange() }.ok()?;
+    // Request one character past the cap so a full-length response can be told
+    // apart from a response truncated at the cap, without fetching arbitrarily
+    // large documents whole (unlike the ValuePattern path, TextPattern exposes
+    // no lightweight character-count-only property).
+    let capped_len = i32::try_from(MAX_UIA_TEXT_READBACK_CHARS + 1).unwrap_or(i32::MAX);
+    let text = unsafe { document_range.GetText(capped_len) }
+        .ok()?
+        .to_string();
+    let content: String = text.chars().take(MAX_UIA_TEXT_READBACK_CHARS).collect();
+    let truncated = text.chars().count() > MAX_UIA_TEXT_READBACK_CHARS;
+    Some(ElementTextReadback {
+        // The true document length is unknown when truncated (see above); report
+        // the bounded content length rather than overclaiming an exact count.
+        character_count: i32::try_from(content.chars().count()).unwrap_or(i32::MAX),
+        caret_offset: None,
+        content: Some(content),
+        content_suppressed: false,
+        truncated,
+        selections: Vec::new(),
+    })
 }
 
 fn element_node_from_info(
@@ -616,7 +706,9 @@ fn element_node_from_info(
     if info.has_toggle {
         semantic_actions.push("toggle".to_string());
     }
-    if info.has_value && info.readonly != Some(true) && info.password != Some(true) {
+    let supports_editable_text =
+        info.has_value && info.readonly != Some(true) && info.password != Some(true);
+    if supports_editable_text {
         semantic_actions.push("set_value".to_string());
     }
 
@@ -628,9 +720,9 @@ fn element_node_from_info(
         name: info.name,
         description,
         value: info.value,
-        text: None,
-        numeric_value: None,
-        supports_editable_text: false,
+        text: info.text,
+        numeric_value: info.numeric_value,
+        supports_editable_text,
         state_flags,
         semantic_actions,
         bounds: info
@@ -1033,6 +1125,8 @@ mod tests {
             toggle_state: None,
             has_legacy_default_action: false,
             has_value: false,
+            text: None,
+            numeric_value: None,
             bounds: Some(DesktopRect {
                 x: 430.0,
                 y: 204.0,
@@ -1103,6 +1197,8 @@ mod tests {
                 toggle_state: None,
                 has_legacy_default_action: false,
                 has_value: true,
+                text: None,
+                numeric_value: None,
                 bounds: None,
             },
             None,
@@ -1146,6 +1242,8 @@ mod tests {
                 toggle_state: None,
                 has_legacy_default_action: false,
                 has_value: false,
+                text: None,
+                numeric_value: None,
                 bounds: None,
             },
             None,
@@ -1251,6 +1349,8 @@ mod tests {
             UiaElementInfo {
                 readonly: Some(true),
                 has_value: true,
+                text: None,
+                numeric_value: None,
                 has_selection_item: false,
                 has_expand_collapse: false,
                 expand_collapse_state: None,
@@ -1268,6 +1368,8 @@ mod tests {
             UiaElementInfo {
                 password: Some(true),
                 has_value: true,
+                text: None,
+                numeric_value: None,
                 has_selection_item: false,
                 has_expand_collapse: false,
                 expand_collapse_state: None,
@@ -1503,6 +1605,8 @@ mod tests {
             toggle_state: None,
             has_legacy_default_action: false,
             has_value: false,
+            text: None,
+            numeric_value: None,
             bounds: None,
         }
     }
