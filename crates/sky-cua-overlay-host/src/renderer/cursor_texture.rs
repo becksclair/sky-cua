@@ -5,10 +5,6 @@
 //! a stepped luminance / coverage (B/A) used only by the CPU blit fallback — plus
 //! the box-filtered mip chain the GPU minifies trilinear. Pure CPU and
 //! platform-agnostic; no Wayland/wgpu types.
-//!
-//! Overrides the parent renderer module's blanket `allow(dead_code)` so unused
-//! cursor helpers surface here instead of being silently masked.
-#![warn(dead_code)]
 
 use crate::cursor_asset;
 use anyhow::Result;

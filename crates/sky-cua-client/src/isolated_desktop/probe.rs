@@ -6,12 +6,6 @@
 //! is `#[cfg(unix)]` (declared in `main.rs`), so this submodule inherits that
 //! gate and needs none of its own.
 
-// Mirrors the parent's crate-wide allow: `all_present` and a few accessors are
-// exercised only by unit tests and the hidden `isolated-desktop` subcommand,
-// not the binary's main paths; the scoped allow keeps those test-only `pub`
-// items from warning without per-item attributes.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail};
@@ -42,6 +36,7 @@ impl std::fmt::Display for DisplayGeometry {
 /// diagnostic can report exactly which one is missing rather than surfacing a
 /// generic spawn failure. The order is the dependency-check order in
 /// [`ensure_dependencies`].
+#[allow(dead_code)] // only reachable via the test-only `missing()` order assertion
 const REQUIRED_DEPENDENCIES: &[&str] = &["xpra", "openbox", "xdotool"];
 
 /// Presence of the external binaries isolated mode depends on. Reported as
@@ -79,6 +74,7 @@ impl IsolatedDesktopDependencies {
     }
 
     /// Whether every required binary is present.
+    #[allow(dead_code)] // only reachable via the unit tests and the hidden `isolated-desktop` subcommand
     pub fn all_present(&self) -> bool {
         self.xpra && self.openbox && self.xdotool
     }

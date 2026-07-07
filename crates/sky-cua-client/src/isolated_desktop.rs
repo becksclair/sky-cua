@@ -17,14 +17,6 @@
 //! xpra 6.4.4). A client-owned `dbus-daemon` fallback exists for hosts where
 //! that field is absent.
 
-// The spine (service_launcher) consumes the handle's spawn-env / removed-env /
-// launch-viewer / stop surface, and the app-launch path consumes the rest. A few
-// accessors and the dependency-probe helpers (e.g. geometry/owns_bus and
-// `IsolatedDesktopDependencies::all_present`) are exercised only by the unit tests
-// and the hidden `isolated-desktop` subcommand, not the binary's main paths; the
-// crate-wide allow keeps those from warning without sprinkling per-item attributes.
-#![allow(dead_code)]
-
 mod owned_bus;
 mod probe;
 
