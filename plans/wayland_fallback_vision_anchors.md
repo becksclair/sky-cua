@@ -68,6 +68,25 @@ After this change, native Wayland apps that expose only a KWin fallback window i
   API key), then rerun:
   `python3 scripts/live_agentic_loop_smoke.py --agent <pi|opencode>
   --fixture fallback-anchor --model <working-model>` with `XAUTHORITY` set.
+- [x] (2026-07-08) **FULL AGENT-LOOP PASS — 011 closed end-to-end.**
+  `live_agentic_loop_smoke.py --agent opencode --fixture fallback-anchor`
+  returned `smoke passed` / `fallback_proved: true` on the live KDE Wayland
+  host. Every layer verified: (1) the model pre-flight
+  (`scripts/_model_preflight.py`) probed `deepseek-v4-pro`/`flash`/`flash-free`
+  in parallel and auto-selected `opencode-go/deepseek-v4-pro`; (2) the agent
+  drove the steered sequence — `list_resources` to read the mpv window's
+  `app_id`, then `observe(surface=desktop, app_id=mpv.desktop)`; (3) sky-cua
+  returned the single `vision_anchor`/`native_window_fallback` window element;
+  (4) the gate recognized sky-cua's text-form observe result
+  (`states=…,vision_anchor,…,native_window_fallback,…`). Getting here required
+  four fixes, each found by a live run: retarget Obsidian→mpv (Obsidian is not
+  AT-SPI-dark), mpv `--title=` argv form, `XAUTHORITY` for mpv's XWayland
+  probe, the model pre-flight (agent-CLI billing/reachability), the agent
+  prompt steering, and the gate's text-form recognizer. Operational note: a
+  long session of repeated observe/capture probes can wedge the installed
+  daemon (observe/list_resources/doctor time out); a fresh daemon is instantly
+  healthy and handles repeated observe calls in ~0.7s each — see the separate
+  robustness follow-up.
 
 ## Surprises & Discoveries
 
