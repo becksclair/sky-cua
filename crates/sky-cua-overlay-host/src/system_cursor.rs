@@ -780,12 +780,26 @@ impl Drop for HyprlandSystemCursorAdapter {
     }
 }
 
+// hyprctl runs on the same overlay tick heartbeat as the qdbus calls above,
+// so a stuck subprocess must not hang the caller indefinitely.
+#[cfg(target_os = "linux")]
+const HYPRCTL_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[cfg(target_os = "linux")]
+fn run_hyprctl(args: &[&str]) -> Result<std::process::Output> {
+    let mut command = Command::new("hyprctl");
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    spawn_with_timeout(&mut command, HYPRCTL_TIMEOUT)
+        .with_context(|| format!("failed to run hyprctl {}", args.join(" ")))
+}
+
 #[cfg(target_os = "linux")]
 fn query_hyprland_cursor_invisible() -> Result<bool> {
-    let output = Command::new("hyprctl")
-        .args(["getoption", "cursor:invisible", "-j"])
-        .output()
-        .context("failed to run hyprctl getoption cursor:invisible -j")?;
+    let output = run_hyprctl(&["getoption", "cursor:invisible", "-j"])?;
     if output.status.success()
         && let Some(value) =
             parse_hyprland_cursor_invisible(&String::from_utf8_lossy(&output.stdout))
@@ -793,10 +807,7 @@ fn query_hyprland_cursor_invisible() -> Result<bool> {
         return Ok(value);
     }
 
-    let output = Command::new("hyprctl")
-        .args(["getoption", "cursor:invisible"])
-        .output()
-        .context("failed to run hyprctl getoption cursor:invisible")?;
+    let output = run_hyprctl(&["getoption", "cursor:invisible"])?;
     if !output.status.success() {
         bail!(
             "hyprctl getoption cursor:invisible failed: {}",
@@ -810,10 +821,7 @@ fn query_hyprland_cursor_invisible() -> Result<bool> {
 #[cfg(target_os = "linux")]
 fn set_hyprland_cursor_invisible(hidden: bool) -> Result<()> {
     let value = if hidden { "true" } else { "false" };
-    let output = Command::new("hyprctl")
-        .args(["keyword", "cursor:invisible", value])
-        .output()
-        .with_context(|| format!("failed to run hyprctl keyword cursor:invisible {value}"))?;
+    let output = run_hyprctl(&["keyword", "cursor:invisible", value])?;
     if output.status.success() {
         return Ok(());
     }
