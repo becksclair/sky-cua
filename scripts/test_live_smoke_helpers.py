@@ -181,6 +181,51 @@ def test_stdout_proves_fallback_false_for_missing_file(tmp_path: Path) -> None:
     assert live_fallback_anchor_smoke.stdout_proves_fallback(tmp_path / "missing.log") is False
 
 
+def test_text_proves_fallback_true_on_real_captured_line() -> None:
+    # Verbatim from a live opencode run: sky-cua's observe result logged as
+    # the tool's TEXT-summary content block, with no structured JSON at all.
+    line = (
+        "... states=native_window_fallback,physical_target,vision_anchor,"
+        "container,content_like,focused,active "
+        "bounds=(563.0,336.0 652.0x394.0 DesktopLogical) ..."
+    )
+    assert live_fallback_anchor_smoke.text_proves_fallback(line) is True
+
+
+def test_text_proves_fallback_false_without_native_window_fallback_flag() -> None:
+    line = "... states=physical_target,vision_anchor,container,focused ..."
+    assert live_fallback_anchor_smoke.text_proves_fallback(line) is False
+
+
+def test_text_proves_fallback_false_without_vision_anchor_flag() -> None:
+    line = "... states=native_window_fallback,physical_target,container,focused ..."
+    assert live_fallback_anchor_smoke.text_proves_fallback(line) is False
+
+
+def test_text_proves_fallback_false_without_either_flag() -> None:
+    line = "... states=physical_target,container,content_like,focused,active ..."
+    assert live_fallback_anchor_smoke.text_proves_fallback(line) is False
+
+
+def test_text_proves_fallback_false_on_empty_or_garbage_text() -> None:
+    assert live_fallback_anchor_smoke.text_proves_fallback("") is False
+    assert live_fallback_anchor_smoke.text_proves_fallback("not a states line at all") is False
+
+
+def test_stdout_proves_fallback_true_on_text_only_states_line(tmp_path: Path) -> None:
+    # No structured JSON anywhere in the file, only the text-summary form
+    # sky-cua's observe result actually takes in some agent CLIs' raw logs.
+    stdout_path = tmp_path / "opencode.stdout.log"
+    stdout_path.write_text(
+        "role=window states=native_window_fallback,physical_target,vision_anchor,"
+        "container,content_like,focused,active "
+        "bounds=(563.0,336.0 652.0x394.0 DesktopLogical)\n",
+        encoding="utf-8",
+    )
+
+    assert live_fallback_anchor_smoke.stdout_proves_fallback(stdout_path) is True
+
+
 def test_kill_fallback_anchor_mpv_matches_command_line_markers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

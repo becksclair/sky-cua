@@ -47,6 +47,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -155,6 +156,38 @@ def _element_has_rich_atspi_role(element: dict[str, Any]) -> bool:
     return isinstance(role, str) and role not in NATIVE_FALLBACK_ROLES
 
 
+_STATES_RE = re.compile(r"states=([a-z0-9_,]+)")
+
+# The text-form proof requires both flags in the same `states=` list:
+# `native_window_fallback` marks the honest KWin single-window fallback (no
+# AT-SPI), and `vision_anchor` marks the anchor element itself. A real
+# AT-SPI element would carry neither in a `states=` summary, so requiring
+# both together is robust against false positives on rich-AT-SPI apps.
+_TEXT_FALLBACK_FLAGS = frozenset({"vision_anchor", "native_window_fallback"})
+
+
+def text_proves_fallback(stdout_text: str) -> bool:
+    """True when raw stdout text contains sky-cua's text-summary proof of
+    the fallback anchor.
+
+    Some agent CLIs (observed live with opencode) log sky-cua's observe
+    result as the tool's TEXT-summary content block rather than structured
+    JSON, e.g.:
+
+        ... states=native_window_fallback,physical_target,vision_anchor,
+        container,content_like,focused,active bounds=(...) ...
+
+    This scans every `states=<comma-list>` token in the text and returns
+    True if any one token's flag set is a superset of
+    `{"vision_anchor", "native_window_fallback"}`.
+    """
+    for match in _STATES_RE.finditer(stdout_text):
+        flags = set(match.group(1).split(","))
+        if flags >= _TEXT_FALLBACK_FLAGS:
+            return True
+    return False
+
+
 def stdout_proves_fallback(stdout_path: Path) -> bool:
     """Scan a raw agent stdout JSONL log for at least one observe response
     that proves fallback-only mode.
@@ -163,11 +196,15 @@ def stdout_proves_fallback(stdout_path: Path) -> bool:
     JSON, sometimes double-encoded as a string inside a text content block,
     so this walks every JSON-shaped value reachable from each line (parsing
     embedded JSON strings too) looking for an `elements` list that satisfies
-    `observe_payload_proves_fallback`.
+    `observe_payload_proves_fallback`. Some agent CLIs instead log sky-cua's
+    observe result as a TEXT-summary content block with no structured JSON
+    at all, so this also falls back to `text_proves_fallback` against the
+    raw file text.
     """
     if not stdout_path.exists():
         return False
-    for raw_line in stdout_path.read_text(encoding="utf-8").splitlines():
+    stdout_text = stdout_path.read_text(encoding="utf-8")
+    for raw_line in stdout_text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
@@ -177,7 +214,7 @@ def stdout_proves_fallback(stdout_path: Path) -> bool:
             continue
         if any(observe_payload_proves_fallback(candidate) for candidate in _iter_json_like(event)):
             return True
-    return False
+    return text_proves_fallback(stdout_text)
 
 
 def _iter_json_like(value: object) -> list[object]:
