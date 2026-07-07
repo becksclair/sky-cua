@@ -252,6 +252,13 @@ impl ServiceClient {
         match self.call_with_timeouts(request, SERVICE_READ_TIMEOUT, SERVICE_WRITE_TIMEOUT) {
             Ok(response) => Ok(response),
             Err(first_error) => {
+                // A respawn-then-retry re-sends the identical request. That's
+                // only safe when the request is idempotent, or the first
+                // failure provably preceded daemon receipt (so nothing was
+                // ever executed to double up on).
+                if !should_retry_error(request, &first_error) {
+                    return Err(ambiguous_failure_error(first_error));
+                }
                 self.reap_exited_child()?;
                 let launch_environment = self.recovery_launch_environment();
                 self.spawn_service(&launch_environment)?;
@@ -318,31 +325,35 @@ impl ServiceClient {
         write_timeout: Duration,
     ) -> Result<(ServiceResponse, Option<u32>)> {
         // Attempt 1: try cached stream if available.
-        let mut cached_response: Option<Result<ServiceResponse>> = None;
         if let Some(stream) = self.take_cached_stream() {
             match self.perform_call_on_stream(stream, request, read_timeout, write_timeout) {
                 Ok((response, stream, owner_pid)) => {
                     self.store_cached_stream(stream);
                     return Ok((response, owner_pid));
                 }
-                Err(error) if is_stale_stream_error(&error) => {
+                Err(failure) if is_stale_stream_failure(&failure) => {
                     self.clear_cached_stream();
+                    // Cache invalidation (dropping a dead cached stream) is
+                    // orthogonal to whether re-sending the request is safe.
+                    // Only fall through to attempt 2 when this exact request
+                    // may be safely repeated.
+                    if !should_retry(request, &failure) {
+                        return Err(ambiguous_failure_error(failure.into()));
+                    }
                 }
-                Err(error) => {
+                Err(failure) => {
+                    // A non-stale error from the cached stream is an
+                    // application-level failure (e.g. a daemon error
+                    // response), not a connection problem — return it
+                    // directly rather than retrying with a fresh connect.
                     self.clear_cached_stream();
-                    cached_response = Some(Err(error));
+                    return Err(failure.into());
                 }
             }
         }
 
-        // If we got a non-stale error from the cached stream, return it directly
-        // rather than retrying with a fresh connect.
-        if let Some(Err(error)) = cached_response {
-            return Err(error);
-        }
-
         // Attempt 2: fresh connection.
-        let stream = self.endpoint.connect()?;
+        let stream = self.endpoint.connect().map_err(CallFailure::BeforeWrite)?;
         let (response, stream, owner_pid) =
             self.perform_call_on_stream(stream, request, read_timeout, write_timeout)?;
         self.store_cached_stream(stream);
@@ -355,34 +366,56 @@ impl ServiceClient {
         request: &ServiceRequest,
         read_timeout: Duration,
         write_timeout: Duration,
-    ) -> Result<(ServiceResponse, EitherStream, Option<u32>)> {
+    ) -> Result<(ServiceResponse, EitherStream, Option<u32>), CallFailure> {
         let owner_pid = stream.peer_pid();
         stream
             .set_read_timeout(Some(read_timeout))
-            .context("failed to set a read timeout on the sky-cua-service socket")?;
+            .context("failed to set a read timeout on the sky-cua-service socket")
+            .map_err(CallFailure::BeforeWrite)?;
         stream
             .set_write_timeout(Some(write_timeout))
-            .context("failed to set a write timeout on the sky-cua-service socket")?;
-        let payload = serde_json::to_vec(request)?;
-        stream.write_all(&payload)?;
-        stream.write_all(b"\n")?;
-        stream.flush()?;
+            .context("failed to set a write timeout on the sky-cua-service socket")
+            .map_err(CallFailure::BeforeWrite)?;
+        let payload = serde_json::to_vec(request).map_err(|error| {
+            CallFailure::BeforeWrite(
+                anyhow::Error::new(error).context("failed to serialize request"),
+            )
+        })?;
+        stream
+            .write_all(&payload)
+            .map_err(|error| CallFailure::BeforeWrite(error.into()))?;
+        stream
+            .write_all(b"\n")
+            .map_err(|error| CallFailure::BeforeWrite(error.into()))?;
+        stream
+            .flush()
+            .map_err(|error| CallFailure::BeforeWrite(error.into()))?;
 
+        // Everything past this point runs after the request has been written
+        // (and flushed) to the daemon: the daemon may already have received
+        // and executed it, so any failure from here on is classified
+        // `AfterWrite` and is not safe to blind-retry for a non-idempotent
+        // request (see `should_retry`).
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
         let read = {
             let mut limited = (&mut reader).take(MAX_IPC_LINE_BYTES);
-            limited.read_line(&mut line)?
+            limited
+                .read_line(&mut line)
+                .map_err(|error| CallFailure::AfterWrite(error.into()))?
         };
         if read == 0 || line.trim().is_empty() {
-            return Err(anyhow!("sky-cua-service connection closed before response"));
+            return Err(CallFailure::AfterWrite(anyhow!(
+                "sky-cua-service connection closed before response"
+            )));
         }
         if read as u64 == MAX_IPC_LINE_BYTES && !line.ends_with('\n') {
-            return Err(anyhow!(
+            return Err(CallFailure::AfterWrite(anyhow!(
                 "sky-cua-service response exceeded {MAX_IPC_LINE_BYTES} bytes without a newline"
-            ));
+            )));
         }
-        let response: ServiceResponse = serde_json::from_str(line.trim_end())?;
+        let response: ServiceResponse = serde_json::from_str(line.trim_end())
+            .map_err(|error| CallFailure::AfterWrite(error.into()))?;
         let stream = reader.into_inner();
         Ok((response, stream, owner_pid))
     }
@@ -829,6 +862,82 @@ fn unix_stream_peer_pid(stream: &UnixStream) -> Option<u32> {
     (credentials.pid > 1).then_some(credentials.pid as u32)
 }
 
+/// Which side of the request write a `perform_call_on_stream` failure occurred
+/// on. This is orthogonal to [`is_stale_stream_error`] (which decides whether
+/// a *cached* connection should be dropped): it decides whether a *request*
+/// can be safely re-sent.
+///
+/// `BeforeWrite` failures (connect, timeout setup, serialize, write, flush)
+/// provably precede daemon receipt — the daemon never saw the request, so
+/// resending is always safe. `AfterWrite` failures (read errors, an empty
+/// response, an oversized response, a JSON parse failure) occur strictly
+/// after the request was fully written and flushed to the daemon, which may
+/// already have executed it; resending is only safe for idempotent requests.
+#[derive(Debug)]
+enum CallFailure {
+    BeforeWrite(anyhow::Error),
+    AfterWrite(anyhow::Error),
+}
+
+impl std::fmt::Display for CallFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BeforeWrite(error) | Self::AfterWrite(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+// `CallFailure` wraps an already-fully-formatted `anyhow::Error`, so it has no
+// separate `source()`; the wrapped message is everything callers need. This
+// (plus `Send + Sync + 'static`, satisfied because `anyhow::Error` is) is
+// enough for anyhow's blanket `From<E: std::error::Error + Send + Sync +
+// 'static>` impl, which is what lets `?` convert a `CallFailure` into an
+// `anyhow::Error` while remaining downcastable via `.chain()`.
+impl std::error::Error for CallFailure {}
+
+/// Whether a request that failed with `failure` should be retried (either on
+/// a fresh connection after a stale cached stream, or via a full respawn).
+///
+/// Idempotent requests are always retried: repeating them cannot corrupt
+/// observable state. Non-idempotent requests are retried only when `failure`
+/// provably precedes daemon receipt (`BeforeWrite`) — an `AfterWrite` failure
+/// means the daemon may already have executed the action, so blind-retrying
+/// would risk double-executing a click, keystroke, launch, or other mutating
+/// action.
+fn should_retry(request: &ServiceRequest, failure: &CallFailure) -> bool {
+    request.is_idempotent() || matches!(failure, CallFailure::BeforeWrite(_))
+}
+
+/// Same gate as [`should_retry`], applied to an already-converted
+/// `anyhow::Error` (the public `call_with_timeouts` boundary type). Recovers
+/// the original [`CallFailure`] from the error chain; when none is found (the
+/// error did not originate from `perform_call_on_stream` or the fresh
+/// connect), falls back to idempotency alone — the conservative, safe
+/// default for a failure of unknown stage.
+fn should_retry_error(request: &ServiceRequest, error: &anyhow::Error) -> bool {
+    match error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<CallFailure>())
+    {
+        Some(failure) => should_retry(request, failure),
+        None => request.is_idempotent(),
+    }
+}
+
+/// Build the error returned for a non-retryable ambiguous failure on a
+/// non-idempotent request. The wording is agent-facing: it tells the model to
+/// re-observe current state rather than blindly repeating the action.
+/// Wraps (rather than replaces) `error` via `.context()` so the original
+/// `CallFailure` survives in the chain for any further inspection.
+fn ambiguous_failure_error(error: anyhow::Error) -> anyhow::Error {
+    let message = format!(
+        "action may or may not have executed: response was lost after the request was sent \
+         ({error}); not retrying a non-idempotent action — observe the current state before \
+         repeating it"
+    );
+    error.context(message)
+}
+
 fn is_stale_stream_error(error: &anyhow::Error) -> bool {
     let error_string = error.to_string().to_lowercase();
     error_string.contains("broken pipe")
@@ -837,6 +946,17 @@ fn is_stale_stream_error(error: &anyhow::Error) -> bool {
         || error_string.contains("connection closed before response")
         || error_string.contains("not connected")
         || error_string.contains("unexpected eof")
+}
+
+/// [`is_stale_stream_error`] applied to a [`CallFailure`], for the cached
+/// -stream retry site (which sees the failure before it is converted to
+/// `anyhow::Error`).
+fn is_stale_stream_failure(failure: &CallFailure) -> bool {
+    match failure {
+        CallFailure::BeforeWrite(error) | CallFailure::AfterWrite(error) => {
+            is_stale_stream_error(error)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1073,6 +1193,90 @@ mod tests {
         let error = anyhow!("sky-cua-service connection closed before response");
 
         assert!(is_stale_stream_error(&error));
+    }
+
+    fn action_request() -> sky_cua_platform::ActionRequest {
+        sky_cua_platform::ActionRequest {
+            action: sky_cua_platform::ActionName::Click,
+            snapshot_id: None,
+            element_index: None,
+            arguments: serde_json::json!({}),
+            resolved_element: None,
+            resolved_target_element: None,
+            resolved_capture: None,
+            resolved_focused_app: None,
+            environment: None,
+        }
+    }
+
+    #[test]
+    fn idempotent_request_is_retried_after_an_after_write_failure() {
+        let request = ServiceRequest::Health;
+        let failure = CallFailure::AfterWrite(anyhow!("boom"));
+
+        assert!(should_retry(&request, &failure));
+    }
+
+    #[test]
+    fn execute_action_after_write_failure_is_not_retried() {
+        let request = ServiceRequest::ExecuteAction {
+            request: Box::new(action_request()),
+        };
+        let failure =
+            CallFailure::AfterWrite(anyhow!("sky-cua-service connection closed before response"));
+
+        assert!(!should_retry(&request, &failure));
+
+        let error = ambiguous_failure_error(failure.into());
+        assert!(
+            error.to_string().contains("may or may not have executed"),
+            "unexpected error message: {error}"
+        );
+    }
+
+    #[test]
+    fn execute_action_before_write_failure_is_retried() {
+        let request = ServiceRequest::ExecuteAction {
+            request: Box::new(action_request()),
+        };
+        let failure = CallFailure::BeforeWrite(anyhow!(
+            "failed to connect to sky-cua-service socket: connection refused"
+        ));
+
+        assert!(should_retry(&request, &failure));
+    }
+
+    #[test]
+    fn browser_click_is_non_idempotent_but_browser_status_is_idempotent() {
+        let click = ServiceRequest::Browser {
+            request: sky_cua_platform::BrowserRequest::Click {
+                target: Some(sky_cua_platform::BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                x: 10.0,
+                y: 10.0,
+            },
+        };
+        let status = ServiceRequest::Browser {
+            request: sky_cua_platform::BrowserRequest::Status,
+        };
+        let after_write = CallFailure::AfterWrite(anyhow!("boom"));
+
+        assert!(!should_retry(&click, &after_write));
+        assert!(should_retry(&status, &after_write));
+    }
+
+    #[test]
+    fn should_retry_error_recovers_call_failure_stage_from_the_error_chain() {
+        let request = ServiceRequest::ExecuteAction {
+            request: Box::new(action_request()),
+        };
+        let after_write_error: anyhow::Error =
+            CallFailure::AfterWrite(anyhow!("connection closed before response")).into();
+        let before_write_error: anyhow::Error =
+            CallFailure::BeforeWrite(anyhow!("connection refused")).into();
+
+        assert!(!should_retry_error(&request, &after_write_error));
+        assert!(should_retry_error(&request, &before_write_error));
     }
 
     #[test]
