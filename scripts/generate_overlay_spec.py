@@ -424,7 +424,7 @@ def _rust_const_type(t: str) -> str:
         "f32": "f32",
         "f64": "f64",
         "bool": "bool",
-        "string": "&'static str",
+        "string": "&str",
     }[t]
 
 
