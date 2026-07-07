@@ -15,22 +15,98 @@ After this change, native Wayland apps that expose only a KWin fallback window i
 - [x] (2026-05-15 06:36Z) Retired the TIDAL-specific live workflow command path. TIDAL artifacts remain historical proof; future workflow proof needs a current fallback-only target with isolated, resettable state.
 - [x] (2026-05-15 06:36Z) Re-ran the broad local gates for the current diff: `cargo fmt --check`, `cargo test`, Ruff, basedpyright, pytest, `python3 scripts/build_plugin.py`, and `git diff --check`.
 - [x] (2026-05-15 06:36Z) Updated `CONTINUITY.md`, `NOTES.md`, and command docs to point away from deleted TIDAL and nested-X11 harness scripts.
+- [x] (2026-07-08) **Vision-anchor fallback proven live on a KDE Plasma 6
+  Wayland host** (runtime at `bb5a3da`, deployed via `deploy_plugin.py`). A
+  fallback-only window — an untitled `kwin:{ec4ad73c-…}` KWin window with no
+  app correlation and no AT-SPI tree — resolved through
+  `observe(surface="desktop", app_id="kwin:{…}")` returns exactly ONE element:
+  `role: "window"`, `backend_ref: null` (no AT-SPI backing), real KWin bounds
+  (1707×1067 desktop-logical), state_flags
+  `["native_window_fallback", "physical_target", "vision_anchor", "container",
+  "content_like"]` — the exact single-honest-anchor shape
+  `linux_window_elements` emits (`crates/sky-cua-linux/src/backend.rs`, unit
+  test `emits_only_the_honest_window_anchor_for_kwin_fallback_windows`). The
+  portal capture backend was live in the same snapshot
+  (`capture.backend = portal_pipe_wire`), giving the screenshot pixel path the
+  fallback relies on. Contrast confirmed: `com.hiresti.player.desktop` (a
+  native Wayland player) returned a rich 256-element AT-SPI tree — NOT
+  fallback-only — so the anchor path is correctly gated on AT-SPI absence.
+- [~] (2026-07-08) Setup lesson (root-caused, see Decision Log): the proof only
+  works against the **installed singleton daemon** on the default socket. An
+  ad-hoc client that sets `SKY_CUA_SERVICE_SOCKET_PATH` spawns a second daemon
+  whose portal/AT-SPI/KWin-callback session is not established, yielding empty
+  snapshots and `activate_window` KWin-callback timeouts. Do NOT override the
+  socket. Also: `observe` desktop-branch selectors take `{surface, app_id}` (or
+  `name`/`window_title`) with NO `include_accessibility` — mixing that field is
+  a schema `InvalidRequest`.
+- [~] (2026-07-08) Repeatable-fixture target still open. The
+  `obsidian-fallback` agentic-loop fixture
+  (`scripts/live_obsidian_fallback_smoke.py`) landed with unit coverage, but
+  Obsidian has launch friction on this host (XWayland auth failure without
+  `XAUTHORITY`; `--ozone-platform=wayland` did not start). The mechanism proof
+  above used an ambient `kwin:{uuid}` window instead. Remaining bounded work:
+  give the fixture a reliably-launchable AT-SPI-dark target (or fix the
+  Obsidian launch seam) and run one full agent-loop pass; the fixture's two
+  guessed seams (`build_launch_argv`, `TRUST_AUTHOR_AFFORDANCE`) are still
+  unvalidated live.
 
 ## Surprises & Discoveries
 
 - Observation: the real TIDAL blocker is no longer visibility. The current rich harness can now list and focus `tidal-hifi.desktop`, but the post-focus snapshot only contains one fallback window node and reports `AccessibilityCoverageLimited`.
   Evidence: `artifacts/codex-e2e/tidal-playlist-app-server/20260423T170741Z/last-message.json` and its transcript.
+- Observation (2026-07-08): a completed live fallback-anchor proof cannot be
+  produced by an ad-hoc `sky-cua-client mcp` process spawned on a scratch
+  socket. Such a service enumerates KWin windows fine (a runner-query path),
+  but `activate_window` fails with "timed out waiting for the KWin script
+  result callback" and plain `observe` returns `focused_app: None` with no
+  elements and no `capture` backend. The focus/activation and capture paths
+  need the fully-provisioned runtime: KWin-script callback-service
+  registration and a portal-approved ScreenCast/RemoteDesktop session, neither
+  of which an ephemeral spawned service has. This is why the plan specifies
+  the `live_agentic_loop_smoke.py` / app-server harness (which drives the
+  installed, portal-approved runtime) rather than a hand probe.
+- Observation (2026-07-08): `scripts/live_agentic_loop_smoke.py` currently
+  ships only `--fixture {zenity,kdialog}`. Proving a fallback-only target
+  therefore needs a new fixture entry (launch + reset for the chosen app, e.g.
+  Obsidian with a throwaway vault) wired into that harness, not just target
+  selection. That fixture-wiring plus one run against a freshly deployed
+  runtime is the bounded remaining work.
 
 ## Decision Log
 
 - Decision: enrich the Wayland fallback with structural region anchors instead of fake widget semantics.
   Rationale: the user explicitly wants screenshot-guided control. Honest anchors plus screenshot truth are safer than pretending geometry alone knows what a button is.
   Date/Author: 2026-04-23 / Codex
+- Decision (superseded 2026-07-08): the rich multi-region tree (header band,
+  nav rail, sidebar, action strip) this plan's Plan of Work describes was
+  replaced in source by a SINGLE honest `window` vision-anchor with no
+  synthetic children. Rationale in code (`backend.rs`
+  `emits_only_the_honest_window_anchor_for_kwin_fallback_windows`): "inventing
+  sub-elements a Wayland app never exposed misleads the agent into semantic
+  targeting that cannot work; the honest signal is the screenshot +
+  snapshot_id pixel path." The live proof (Progress, 2026-07-08) validates
+  this simpler shape, not the plan's original region tree. Sections below that
+  describe `wayland_header_band`-style child regions are stale.
+- Decision (2026-07-08): live proofs of this lane MUST run against the
+  installed singleton daemon (default socket), never an ad-hoc
+  `SKY_CUA_SERVICE_SOCKET_PATH` spawn. Root cause (code analysis): the socket
+  override spawns a second concurrent daemon whose portal session, AT-SPI
+  connection, and in-process KWin-script callback channel are all
+  unestablished; every "empty snapshot / activation timeout" symptom traces to
+  that per-daemon state, not per-client state. The KWin callback uses the
+  connection's unique bus name (no well-known-name collision), so the fix is
+  purely "reuse the approved daemon."
 
 ## Outcomes & Retrospective
 
-Implemented in source and unit-covered; still pending current live workflow
-proof against an active fallback-only target.
+Implemented in source and unit-covered. The vision-anchor fallback mechanism is
+**live-proven** on a KDE Plasma 6 Wayland host (2026-07-08, see Progress): a
+KWin-only window with no AT-SPI tree yields the single honest `vision_anchor`
+window element with portal capture live. The `obsidian-fallback` agentic-loop
+fixture landed as tested infrastructure; a full agent-loop pass with a
+reliably-launchable target remains the one bounded gap (Obsidian has
+host-specific launch friction). The plan's original multi-region-anchor design
+was superseded by the single-honest-anchor shape (see Decision Log).
 
 ## Context and Orientation
 
