@@ -12,6 +12,7 @@
 ## Status
 
 - **Priority**: P1 (real reliability defect — total daemon unresponsiveness)
+- **Status**: DONE — merged 2026-07-08 at `032c027`, live-proven
 - **Effort**: M
 - **Risk**: MED (touches the daemon's core request lane; a wrong deadline or a
   cache-reset-on-timeout mistake could abort healthy slow requests or leave
