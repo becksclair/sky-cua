@@ -461,16 +461,27 @@ impl PhoneManager {
                 });
             }
         }
-        // The mapping for ADB screencap is identity (screenshot pixels == device
-        // pixels). Build it from the record's device size so out-of-bounds points
+        // Rebuild the mapping from the record's geometry so out-of-bounds points
         // are rejected by the mapping lane rather than dispatched to the device.
-        let mapping = mapping::identity_mapping(
-            &record.mapping_id,
-            &ctx.session_id,
-            &ctx.serial,
-            record.device_size.clone(),
-            record.captured_at_ms,
-        );
+        // `screenshot_size` may be smaller than `device_size` when the model was
+        // handed a downscaled capture; `build_mapping` scales through that ratio
+        // (it degenerates to the identity case when the two sizes match).
+        let mapping = mapping::build_mapping(&mapping::MappingBuild {
+            mapping_id: &record.mapping_id,
+            session_id: &ctx.session_id,
+            serial: &ctx.serial,
+            device_size: record.device_size.clone(),
+            screenshot_size: record.screenshot_size.clone(),
+            rotation_degrees: record.rotation_degrees,
+            host_window_rect: None,
+            host_content_rect: None,
+            captured_at_ms: record.captured_at_ms,
+        })
+        .map_err(|error| DiagnosticEntry {
+            code: error.code().to_string(),
+            message: format!("snapshot mapping invalid: {error}"),
+            details: None,
+        })?;
         mapping::screenshot_to_device(&mapping, PhonePoint { x, y }).map_err(|error| {
             DiagnosticEntry {
                 code: error.code().to_string(),

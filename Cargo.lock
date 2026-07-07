@@ -2258,6 +2258,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sky-cua-capture",
  "sky-cua-linux",
  "sky-cua-overlay-host",
  "sky-cua-platform",

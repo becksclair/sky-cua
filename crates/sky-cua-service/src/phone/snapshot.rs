@@ -36,6 +36,11 @@ pub(super) struct PhoneSnapshotRecord {
     pub serial: String,
     pub backend: PhoneBackendKind,
     pub device_size: PixelSize,
+    /// Pixel dimensions of the image the model actually saw (the delivered,
+    /// possibly downscaled, model image). A coordinate action names this plane,
+    /// not `device_size`, so `phone_tap`/`phone_swipe` must translate through it
+    /// rather than assuming a 1:1 screenshot.
+    pub screenshot_size: PixelSize,
     pub rotation_degrees: i32,
     pub mapping_id: String,
     pub captured_at_ms: u64,
@@ -152,6 +157,10 @@ pub(super) fn record_from_mapping(
         serial: mapping.serial.clone(),
         backend,
         device_size,
+        screenshot_size: PixelSize {
+            width: mapping.screenshot_rect.width.round() as u32,
+            height: mapping.screenshot_rect.height.round() as u32,
+        },
         rotation_degrees: mapping.rotation_degrees,
         mapping_id: mapping.mapping_id.clone(),
         captured_at_ms: mapping.captured_at_ms,
@@ -263,6 +272,7 @@ mod tests {
             serial: serial.to_string(),
             backend: PhoneBackendKind::Adb,
             device_size: size(1080, 2400),
+            screenshot_size: size(1080, 2400),
             rotation_degrees: 0,
             mapping_id: format!("map-{id}"),
             captured_at_ms,
@@ -315,6 +325,40 @@ mod tests {
         assert_eq!(rec.rotation_degrees, 90);
         assert_eq!(rec.captured_at_ms, 555);
         assert_eq!(rec.backend, PhoneBackendKind::Companion);
+        assert_eq!(rec.screenshot_size, size(1080, 2400));
+    }
+
+    #[test]
+    fn record_from_mapping_records_downscaled_screenshot_size() {
+        // The delivered model image is smaller than the device: the record must
+        // carry the delivered (screenshot) plane, not the device plane, so a
+        // later coordinate action scales through the right ratio.
+        let mapping = PhoneCoordinateMapping {
+            mapping_id: "map-2".to_string(),
+            session_id: "sess-1".to_string(),
+            serial: "emulator-5554".to_string(),
+            device_rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 1080.0,
+                height: 2400.0,
+                space: CoordinateSpace::StreamPixels,
+            },
+            screenshot_rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 540.0,
+                height: 1200.0,
+                space: CoordinateSpace::StreamPixels,
+            },
+            host_window_rect: None,
+            host_content_rect: None,
+            rotation_degrees: 0,
+            captured_at_ms: 555,
+        };
+        let rec = record_from_mapping("snap-2", PhoneBackendKind::Adb, size(1080, 2400), &mapping);
+        assert_eq!(rec.device_size, size(1080, 2400));
+        assert_eq!(rec.screenshot_size, size(540, 1200));
     }
 
     #[test]
