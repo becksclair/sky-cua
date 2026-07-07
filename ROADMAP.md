@@ -255,6 +255,11 @@ pick them off between feature work.
   - `crates/sky-cua-linux/src/backend.rs`
   - `crates/sky-cua-linux/src/capture_plan.rs`
   - `crates/sky-cua-client/src/mcp_tools.rs`
+  - `crates/sky-cua-service/src/daemon.rs`
+  - `crates/sky-cua-windows/src/backend.rs`
+  - `crates/sky-cua-linux/src/virtual_input.rs`
+  - `crates/sky-cua-chrome-host/src/host.rs`
+  - `crates/sky-cua-client/src/mcp_tools/definitions.rs`
 - [ ] Extract KDE clipboard fallback from the generic action executor and
       introduce a backend-abstracted text-input strategy
 - [ ] Centralize `input_backend` dispatch and coordinate-mapping helpers
