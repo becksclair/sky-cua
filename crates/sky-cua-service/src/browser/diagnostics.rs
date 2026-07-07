@@ -15,12 +15,14 @@ fn browser_open_timeout_ms() -> u128 {
     2_000
 }
 
-pub(super) fn validate_action_tab_id(normalized_tab_id: &str) -> Vec<DiagnosticEntry> {
-    let mut diagnostics = Vec::new();
-    if normalized_tab_id.is_empty() {
-        diagnostics.push(invalid_tab_id_diagnostic());
+/// Action-path variant of [`validate_tab_id`]: the response contract echoes a
+/// `tab_id` field even on rejection, so an invalid id normalizes to an empty
+/// echo plus the diagnostic instead of an early return.
+pub(super) fn normalize_action_tab_id(tab_id: String) -> (String, Vec<DiagnosticEntry>) {
+    match validate_tab_id(tab_id) {
+        Ok(tab_id) => (tab_id, Vec::new()),
+        Err(diagnostic) => (String::new(), vec![diagnostic]),
     }
-    diagnostics
 }
 
 pub(super) fn validate_point(x: f64, y: f64) -> Result<(), DiagnosticEntry> {
@@ -46,10 +48,14 @@ pub(super) fn validate_tab_id(tab_id: String) -> Result<String, DiagnosticEntry>
     // anything else to the extension yields opaque Chrome API signature errors
     // ("No matching signature", "Invalid type: expected integer, found
     // string"), so reject handles from other tool surfaces (e.g. "t11") here
-    // with an actionable diagnostic instead.
-    (!tab_id.is_empty() && tab_id.parse::<i64>().is_ok())
-        .then(|| tab_id.to_string())
-        .ok_or_else(invalid_tab_id_diagnostic)
+    // with an actionable diagnostic instead. The id is canonicalized through
+    // the parsed integer ("+11"/"007" -> "11"/"7") so string-keyed lookups
+    // like the tab-socket affinity cache match the ids the bridge echoes back.
+    tab_id
+        .parse::<i64>()
+        .ok()
+        .map(|id| id.to_string())
+        .ok_or_else(|| invalid_tab_id_diagnostic(tab_id))
 }
 
 pub(crate) fn browser_bridge_disconnected_diagnostic() -> DiagnosticEntry {
@@ -134,10 +140,15 @@ pub(super) fn unexpected_bridge_response_diagnostic(response: Value) -> Diagnost
     }
 }
 
-fn invalid_tab_id_diagnostic() -> DiagnosticEntry {
+fn invalid_tab_id_diagnostic(rejected: &str) -> DiagnosticEntry {
+    let message = if rejected.is_empty() {
+        "Browser tab id must be an integer Chrome tab id.".to_string()
+    } else {
+        format!("Browser tab id {rejected:?} is not an integer Chrome tab id.")
+    };
     DiagnosticEntry {
         code: "BrowserTabIdInvalid".to_string(),
-        message: "Browser tab id must be an integer Chrome tab id.".to_string(),
+        message,
         details: Some(
             "Use a tab id returned by browser_open or list_resources (browser tabs). \
              Tab handles from other browser tool surfaces (for example \"t11\") do not \

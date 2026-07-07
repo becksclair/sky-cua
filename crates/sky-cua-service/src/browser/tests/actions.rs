@@ -67,6 +67,11 @@ async fn navigate_rejects_non_integer_tab_id_before_bridge() {
     assert_eq!(response.diagnostics.len(), 1);
     assert_eq!(response.diagnostics[0].code, "BrowserTabIdInvalid");
     assert!(
+        response.diagnostics[0].message.contains("\"t11\""),
+        "diagnostic must name the rejected id, got {:?}",
+        response.diagnostics[0].message
+    );
+    assert!(
         response.diagnostics[0]
             .details
             .as_deref()
@@ -74,6 +79,23 @@ async fn navigate_rejects_non_integer_tab_id_before_bridge() {
         "diagnostic must steer toward a real tab id source, got {:?}",
         response.diagnostics[0].details
     );
+}
+
+#[tokio::test]
+async fn navigate_canonicalizes_non_canonical_integer_tab_id() {
+    // "+11" and "007" parse as integers; the echoed id must be the canonical
+    // form so string-keyed lookups (tab-socket affinity) match the ids the
+    // bridge itself reports.
+    let response = navigate(
+        Some(BrowserTargetKind::UserChrome),
+        "+11".to_string(),
+        "file:///etc/passwd".to_string(),
+    )
+    .await;
+
+    assert_eq!(response.tab_id, "11");
+    assert_eq!(response.diagnostics.len(), 1);
+    assert_eq!(response.diagnostics[0].code, "BrowserOpenUrlUnsupported");
 }
 
 #[test]

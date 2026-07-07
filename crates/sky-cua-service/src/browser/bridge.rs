@@ -11,7 +11,7 @@ use tokio::time::Instant as TokioInstant;
 use super::cdp::{BrowserCdpAction, BrowserCdpResult};
 use super::diagnostics::{
     invalid_key_diagnostic, invalid_scroll_diagnostic, invalid_text_diagnostic,
-    unsupported_open_url_diagnostic, validate_action_tab_id, validate_open_url, validate_point,
+    normalize_action_tab_id, unsupported_open_url_diagnostic, validate_open_url, validate_point,
     validate_tab_id,
 };
 use super::executor::BrowserBridgeExecutor;
@@ -135,8 +135,7 @@ pub(crate) async fn move_mouse(
     wait_for_arrival: bool,
 ) -> BrowserMoveMouseResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
-    let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
-    let mut diagnostics = validate_action_tab_id(&normalized_tab_id);
+    let (normalized_tab_id, mut diagnostics) = normalize_action_tab_id(tab_id);
     if let Err(diagnostic) = validate_point(x, y) {
         diagnostics.push(diagnostic);
     }
@@ -189,9 +188,8 @@ pub(crate) async fn navigate(
     url: String,
 ) -> BrowserNavigateResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
-    let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
+    let (normalized_tab_id, mut diagnostics) = normalize_action_tab_id(tab_id);
     let normalized_url = normalize_browser_open_url(&url).unwrap_or_default();
-    let mut diagnostics = validate_action_tab_id(&normalized_tab_id);
     if normalized_url.is_empty() {
         diagnostics.push(unsupported_open_url_diagnostic("browser_navigate"));
     }
@@ -238,8 +236,7 @@ pub(crate) async fn snapshot(
     element_query: Option<String>,
 ) -> BrowserSnapshotResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
-    let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
-    let diagnostics = validate_action_tab_id(&normalized_tab_id);
+    let (normalized_tab_id, diagnostics) = normalize_action_tab_id(tab_id);
     if !diagnostics.is_empty() {
         return BrowserSnapshotResponse {
             target: resolved_target,
@@ -293,8 +290,7 @@ pub(crate) async fn screenshot(
     include_image_data: bool,
 ) -> BrowserScreenshotResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
-    let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
-    let diagnostics = validate_action_tab_id(&normalized_tab_id);
+    let (normalized_tab_id, diagnostics) = normalize_action_tab_id(tab_id);
     if !diagnostics.is_empty() {
         return BrowserScreenshotResponse {
             target: resolved_target,
@@ -456,7 +452,7 @@ pub(crate) async fn eval_with_policy(
     browser_eval_enabled: bool,
 ) -> BrowserEvalResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
-    let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
+    let (normalized_tab_id, mut diagnostics) = normalize_action_tab_id(tab_id);
     if !browser_eval_enabled {
         return BrowserEvalResponse {
             target: resolved_target,
@@ -471,7 +467,6 @@ pub(crate) async fn eval_with_policy(
             }],
         };
     }
-    let mut diagnostics = validate_action_tab_id(&normalized_tab_id);
     if expression.trim().is_empty() {
         diagnostics.push(invalid_text_diagnostic());
     }
@@ -560,8 +555,7 @@ async fn browser_action_response(
     action: BrowserCdpAction,
 ) -> BrowserActionResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
-    let normalized_tab_id = validate_tab_id(tab_id).unwrap_or_default();
-    let mut diagnostics = validate_action_tab_id(&normalized_tab_id);
+    let (normalized_tab_id, mut diagnostics) = normalize_action_tab_id(tab_id);
     if let Err(diagnostic) = action_validation {
         diagnostics.push(diagnostic);
     }
