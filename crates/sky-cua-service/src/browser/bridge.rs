@@ -320,13 +320,39 @@ pub(crate) async fn screenshot(
             css_width,
             css_height,
         }) => {
-            let prepared = super::model_image::prepare_browser_capture(
-                &normalized_tab_id,
-                &data_base64,
-                css_width,
-                css_height,
-                include_image_data,
-            );
+            let tab_id_for_task = normalized_tab_id.clone();
+            let prepared = match tokio::task::spawn_blocking(move || {
+                super::model_image::prepare_browser_capture(
+                    &tab_id_for_task,
+                    &data_base64,
+                    css_width,
+                    css_height,
+                    include_image_data,
+                )
+            })
+            .await
+            {
+                Ok(prepared) => prepared,
+                Err(join_error) => {
+                    return BrowserScreenshotResponse {
+                        target: resolved_target,
+                        tab_id: normalized_tab_id,
+                        mime_type: "image/png".to_string(),
+                        data_base64: String::new(),
+                        screenshot_path: None,
+                        width: None,
+                        height: None,
+                        diagnostics: vec![DiagnosticEntry {
+                            code: "BrowserScreenshotDegraded".to_string(),
+                            message: format!(
+                                "Browser screenshot post-processing task failed to join \
+                                 cleanly: {join_error}"
+                            ),
+                            details: None,
+                        }],
+                    };
+                }
+            };
             BrowserScreenshotResponse {
                 target: resolved_target,
                 tab_id: normalized_tab_id,
