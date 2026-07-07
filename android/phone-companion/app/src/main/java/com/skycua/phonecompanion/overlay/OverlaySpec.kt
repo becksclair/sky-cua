@@ -5,7 +5,7 @@ package com.skycua.phonecompanion.overlay
  * Source: resources/overlay/agent_overlay_spec.toml
  * Schema version: 1
  * Generator: scripts/generate_overlay_spec.py
- * Generator hash: dfecd9eee8cf1fd8
+ * Generator hash: d0bc5ab850e68ac4
  * GENERATED FILE - DO NOT EDIT
  * Run `uv run python scripts/generate_overlay_spec.py` to regenerate.
  */

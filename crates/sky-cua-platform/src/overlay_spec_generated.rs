@@ -2,7 +2,7 @@
 // Source: resources/overlay/agent_overlay_spec.toml
 // Schema version: 1
 // Generator: scripts/generate_overlay_spec.py
-// Generator hash: dfecd9eee8cf1fd8
+// Generator hash: d0bc5ab850e68ac4
 
 #![allow(missing_docs)]
 
@@ -326,9 +326,6 @@ pub mod overlay_spec {
         /// `enabled` from `[sound]`.
         pub const ENABLED: bool = false;
         /// `no_no_sound_asset` from `[sound]`.
-        // Regenerated verbatim by scripts/generate_overlay_spec.py (Python, out of
-        // scope for this lint pass); allow rather than hand-edit generated output.
-        #[allow(clippy::redundant_static_lifetimes)]
-        pub const NO_NO_SOUND_ASSET: &'static str = "";
+        pub const NO_NO_SOUND_ASSET: &str = "";
     }
 }
