@@ -75,6 +75,54 @@ pub enum PhoneResponse {
     App(PhoneAppResponse),
 }
 
+impl PhoneRequest {
+    /// Whether this request converges to the same state on repetition and is
+    /// therefore safe for the client to retry after an ambiguous failure.
+    ///
+    /// Reads/listings (`Observe`, `Status`, `ListDevices`, `Screenshot`,
+    /// `CompanionStatus`, `AccessibilityTree`, `Notifications`, `AppCurrent`,
+    /// `AppList`) are idempotent, as are `RefreshCapabilities` (a silent
+    /// re-probe of cached capability state) and `Connect`/`Disconnect` (the
+    /// manager reconciles to one session per serial rather than duplicating,
+    /// and disconnecting an already-gone session is a documented no-op).
+    /// `PairWireless` carries a one-time pairing code that is consumed on
+    /// first use, so a blind retry cannot safely repeat it. Every gesture,
+    /// text/key input, notification action, app-management action, and
+    /// companion install compounds on repetition and is non-idempotent.
+    #[must_use]
+    pub fn is_idempotent(&self) -> bool {
+        match self {
+            Self::Observe(_)
+            | Self::Status(_)
+            | Self::ListDevices(_)
+            | Self::RefreshCapabilities(_)
+            | Self::Connect(_)
+            | Self::Disconnect(_)
+            | Self::Screenshot(_)
+            | Self::CompanionStatus(_)
+            | Self::AccessibilityTree(_)
+            | Self::Notifications(_)
+            | Self::AppCurrent(_)
+            | Self::AppList(_) => true,
+            Self::PairWireless(_)
+            | Self::Tap(_)
+            | Self::Swipe(_)
+            | Self::TypeText(_)
+            | Self::PressKey(_)
+            | Self::InstallCompanion(_)
+            | Self::NotificationOpen(_)
+            | Self::NotificationDismiss(_)
+            | Self::NotificationAction(_)
+            | Self::NotificationReply(_)
+            | Self::AppLaunch(_)
+            | Self::AppOpenIntent(_)
+            | Self::AppForceStop(_)
+            | Self::AppInstall(_)
+            | Self::OpenSettings(_) => false,
+        }
+    }
+}
+
 // ===========================================================================
 // Image payload
 // ===========================================================================

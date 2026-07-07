@@ -116,6 +116,36 @@ pub enum BrowserResponse {
     Eval { response: BrowserEvalResponse },
 }
 
+impl BrowserRequest {
+    /// Whether this request converges to the same state on repetition and is
+    /// therefore safe for the client to retry after an ambiguous failure.
+    ///
+    /// Reads (`Status`, `ListTabs`, `Snapshot`, `Screenshot`) and `MoveMouse`
+    /// (an absolute cursor-position set, analogous to `ActivateWindow`'s
+    /// focus-set convergence) are idempotent. Tab creation/claiming,
+    /// navigation, and every input action (click, type, key, scroll) compound
+    /// on repetition, as does arbitrary `Eval` script execution, whose side
+    /// effects cannot be assumed safe to repeat.
+    #[must_use]
+    pub fn is_idempotent(&self) -> bool {
+        match self {
+            Self::Status
+            | Self::ListTabs { .. }
+            | Self::Snapshot { .. }
+            | Self::Screenshot { .. }
+            | Self::MoveMouse { .. } => true,
+            Self::Open { .. }
+            | Self::ClaimTab { .. }
+            | Self::Navigate { .. }
+            | Self::Click { .. }
+            | Self::TypeText { .. }
+            | Self::PressKey { .. }
+            | Self::Scroll { .. }
+            | Self::Eval { .. } => false,
+        }
+    }
+}
+
 fn default_wait_for_arrival() -> bool {
     true
 }
@@ -336,6 +366,89 @@ pub fn normalize_browser_open_url(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::normalize_browser_open_url;
+    use super::{BrowserRequest, BrowserTargetKind};
+
+    #[test]
+    fn browser_request_idempotency_matches_the_classification_table() {
+        let idempotent = [
+            BrowserRequest::Status,
+            BrowserRequest::ListTabs { target: None },
+            BrowserRequest::Snapshot {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                text_limit: None,
+                element_offset: None,
+                element_limit: None,
+                element_query: None,
+            },
+            BrowserRequest::Screenshot {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                include_image_data: true,
+            },
+            BrowserRequest::MoveMouse {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                x: 10.0,
+                y: 10.0,
+                wait_for_arrival: true,
+            },
+        ];
+        for request in idempotent {
+            assert!(request.is_idempotent(), "expected idempotent: {request:?}");
+        }
+
+        let non_idempotent = [
+            BrowserRequest::Open {
+                target: Some(BrowserTargetKind::UserChrome),
+                url: Some("https://example.test/".to_string()),
+            },
+            BrowserRequest::ClaimTab {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+            },
+            BrowserRequest::Navigate {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                url: "https://example.test/".to_string(),
+            },
+            BrowserRequest::Click {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                x: 10.0,
+                y: 10.0,
+            },
+            BrowserRequest::TypeText {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                text: "hello".to_string(),
+            },
+            BrowserRequest::PressKey {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                key: "Enter".to_string(),
+            },
+            BrowserRequest::Scroll {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                delta_x: 0.0,
+                delta_y: 100.0,
+                x: None,
+                y: None,
+            },
+            BrowserRequest::Eval {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "123".to_string(),
+                expression: "1 + 1".to_string(),
+            },
+        ];
+        for request in non_idempotent {
+            assert!(
+                !request.is_idempotent(),
+                "expected non-idempotent: {request:?}"
+            );
+        }
+    }
 
     #[test]
     fn browser_open_url_allows_only_http_https_and_about_blank() {

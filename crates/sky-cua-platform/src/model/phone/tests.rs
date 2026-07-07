@@ -563,3 +563,109 @@ fn companion_absent_helper_reports_uninstalled() {
     assert!(!companion.gesture_dispatch);
     assert_eq!(companion.package_name, "com.skycua.phonecompanion");
 }
+
+#[test]
+fn phone_request_idempotency_matches_the_classification_table() {
+    let idempotent = [
+        PhoneRequest::Observe(PhoneObserveRequest::default()),
+        PhoneRequest::Status(PhoneStatusRequest::default()),
+        PhoneRequest::ListDevices(PhoneListDevicesRequest::default()),
+        PhoneRequest::RefreshCapabilities(PhoneRefreshCapabilitiesRequest::default()),
+        PhoneRequest::Connect(PhoneConnectRequest::default()),
+        PhoneRequest::Disconnect(PhoneDisconnectRequest::default()),
+        PhoneRequest::Screenshot(PhoneScreenshotRequest::default()),
+        PhoneRequest::CompanionStatus(PhoneCompanionStatusRequest::default()),
+        PhoneRequest::AccessibilityTree(PhoneAccessibilityTreeRequest::default()),
+        PhoneRequest::Notifications(PhoneNotificationsRequest::default()),
+        PhoneRequest::AppCurrent(PhoneAppCurrentRequest::default()),
+        PhoneRequest::AppList(PhoneAppListRequest::default()),
+    ];
+    for request in idempotent {
+        assert!(request.is_idempotent(), "expected idempotent: {request:?}");
+    }
+
+    let non_idempotent = [
+        PhoneRequest::PairWireless(PhonePairWirelessRequest {
+            host_port: "10.0.0.5:5555".to_string(),
+            pairing_code: "123456".to_string(),
+        }),
+        PhoneRequest::Tap(PhoneTapRequest {
+            session: PhoneSessionSelector::default(),
+            phone_snapshot_id: None,
+            x: 10.0,
+            y: 10.0,
+            use_device_coordinates: false,
+        }),
+        PhoneRequest::Swipe(PhoneSwipeRequest {
+            session: PhoneSessionSelector::default(),
+            phone_snapshot_id: None,
+            start_x: 0.0,
+            start_y: 0.0,
+            end_x: 10.0,
+            end_y: 10.0,
+            duration_ms: None,
+            use_device_coordinates: false,
+        }),
+        PhoneRequest::TypeText(PhoneTypeTextRequest {
+            session: PhoneSessionSelector::default(),
+            text: "hello".to_string(),
+        }),
+        PhoneRequest::PressKey(PhonePressKeyRequest {
+            session: PhoneSessionSelector::default(),
+            key: "KEYCODE_BACK".to_string(),
+        }),
+        PhoneRequest::InstallCompanion(PhoneInstallCompanionRequest::default()),
+        PhoneRequest::NotificationOpen(PhoneNotificationOpenRequest {
+            session: PhoneSessionSelector::default(),
+            event_id: "evt-1".to_string(),
+        }),
+        PhoneRequest::NotificationDismiss(PhoneNotificationDismissRequest {
+            session: PhoneSessionSelector::default(),
+            event_id: "evt-1".to_string(),
+        }),
+        PhoneRequest::NotificationAction(PhoneNotificationActionRequest {
+            session: PhoneSessionSelector::default(),
+            event_id: "evt-1".to_string(),
+            action_id: "act-1".to_string(),
+        }),
+        PhoneRequest::NotificationReply(PhoneNotificationReplyRequest {
+            session: PhoneSessionSelector::default(),
+            event_id: "evt-1".to_string(),
+            action_id: "act-1".to_string(),
+            text: "ok".to_string(),
+        }),
+        PhoneRequest::AppLaunch(PhoneAppLaunchRequest {
+            session: PhoneSessionSelector::default(),
+            package_name: "com.example.app".to_string(),
+        }),
+        PhoneRequest::AppOpenIntent(PhoneAppOpenIntentRequest {
+            session: PhoneSessionSelector::default(),
+            intent_uri: "myapp://open".to_string(),
+            package_name: None,
+        }),
+        PhoneRequest::AppForceStop(PhoneAppForceStopRequest {
+            session: PhoneSessionSelector::default(),
+            package_name: "com.example.app".to_string(),
+        }),
+        PhoneRequest::AppInstall(PhoneAppInstallRequest {
+            session: PhoneSessionSelector::default(),
+            apk_paths: vec!["/tmp/app.apk".to_string()],
+            mode: PhoneAppInstallMode::Single,
+            reinstall: false,
+            allow_downgrade: false,
+            allow_test_apk: false,
+            grant_runtime_permissions: false,
+        }),
+        PhoneRequest::OpenSettings(PhoneOpenSettingsRequest {
+            session: PhoneSessionSelector::default(),
+            screen: PhoneSettingsScreen::Accessibility,
+            package_name: None,
+        }),
+    ];
+    for request in non_idempotent {
+        assert!(
+            !request.is_idempotent(),
+            "expected non-idempotent: {request:?}"
+        );
+    }
+}

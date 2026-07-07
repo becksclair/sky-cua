@@ -69,6 +69,46 @@ fn is_default_capture_screen(mode: &CaptureScreenMode) -> bool {
     *mode == CaptureScreenMode::default()
 }
 
+impl ServiceRequest {
+    /// Whether re-sending this exact request after an ambiguous failure (one
+    /// where the daemon may already have received and executed it) is safe.
+    ///
+    /// Idempotent requests converge to the same observable state no matter how
+    /// many times they run (reads, status/listing, focus-set, cursor-set,
+    /// setup convergence). Non-idempotent requests perform an action whose
+    /// effect compounds on repetition (a click, a keystroke, launching a
+    /// process) — retrying those blind after a lost response can double-execute
+    /// them. New variants are forced through this match at compile time so an
+    /// addition can never silently default to "safe to retry".
+    #[must_use]
+    pub fn is_idempotent(&self) -> bool {
+        match self {
+            Self::Health
+            | Self::Doctor
+            | Self::ListApps
+            | Self::ListWindows
+            | Self::FocusedWindow
+            | Self::GetAppState { .. }
+            | Self::Screenshot { .. }
+            | Self::AgentCursorStatus
+            | Self::SetAgentCursor { .. }
+            | Self::HideAgentCursor { .. }
+            | Self::ShowAgentCursor
+            | Self::SetupAccessibility
+            | Self::SetupWindowTargeting
+            // Focus-set converges: activating the same window twice ends in
+            // the same focused state as activating it once.
+            | Self::ActivateWindow { .. } => true,
+            Self::LaunchApplication { .. }
+            | Self::ResetPortalTokens
+            | Self::SessionPresence { .. }
+            | Self::ExecuteAction { .. } => false,
+            Self::Browser { request } => request.is_idempotent(),
+            Self::Phone { request } => request.is_idempotent(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServiceResponse {
@@ -186,9 +226,96 @@ mod tests {
         BrowserMoveMouseResponse, BrowserOpenResponse, BrowserRequest, BrowserResponse,
         BrowserStatusReport, BrowserTab, BrowserTargetAvailability, BrowserTargetKind,
         PhoneBackendKind, PhoneListDevicesRequest, PhoneListDevicesResponse, PhoneRequest,
-        PhoneResponse, PhoneStatusReport, PhoneStatusRequest, WindowTargetingSetupReport,
+        PhoneResponse, PhoneSessionSelector, PhoneStatusReport, PhoneStatusRequest,
+        PhoneTapRequest, WindowTargetingSetupReport,
     };
     use serde_json::json;
+
+    #[test]
+    fn service_request_idempotency_matches_the_classification_table() {
+        let idempotent = [
+            ServiceRequest::Health,
+            ServiceRequest::Doctor,
+            ServiceRequest::SetupAccessibility,
+            ServiceRequest::SetupWindowTargeting,
+            ServiceRequest::ListApps,
+            ServiceRequest::ListWindows,
+            ServiceRequest::FocusedWindow,
+            ServiceRequest::ActivateWindow {
+                target: WindowTarget::default(),
+            },
+            ServiceRequest::GetAppState {
+                selector: None,
+                capture_screen: CaptureScreenMode::default(),
+            },
+            ServiceRequest::Screenshot {
+                target: None,
+                display_target: None,
+            },
+            ServiceRequest::AgentCursorStatus,
+            ServiceRequest::SetAgentCursor {
+                state: cursor_state(),
+            },
+            ServiceRequest::HideAgentCursor { reason: None },
+            ServiceRequest::ShowAgentCursor,
+            ServiceRequest::Browser {
+                request: BrowserRequest::Status,
+            },
+            ServiceRequest::Phone {
+                request: PhoneRequest::Status(PhoneStatusRequest::default()),
+            },
+        ];
+        for request in idempotent {
+            assert!(request.is_idempotent(), "expected idempotent: {request:?}");
+        }
+
+        let non_idempotent = [
+            ServiceRequest::LaunchApplication {
+                command: "kcalc".to_string(),
+                args: Vec::new(),
+            },
+            ServiceRequest::ResetPortalTokens,
+            ServiceRequest::SessionPresence {
+                action: SessionPresenceAction::Status,
+            },
+            ServiceRequest::ExecuteAction {
+                request: Box::new(ActionRequest {
+                    action: ActionName::Click,
+                    snapshot_id: None,
+                    element_index: None,
+                    arguments: json!({}),
+                    resolved_element: None,
+                    resolved_target_element: None,
+                    resolved_capture: None,
+                    resolved_focused_app: None,
+                    environment: None,
+                }),
+            },
+            ServiceRequest::Browser {
+                request: BrowserRequest::Click {
+                    target: Some(BrowserTargetKind::UserChrome),
+                    tab_id: "123".to_string(),
+                    x: 10.0,
+                    y: 10.0,
+                },
+            },
+            ServiceRequest::Phone {
+                request: PhoneRequest::Tap(PhoneTapRequest {
+                    session: PhoneSessionSelector::default(),
+                    phone_snapshot_id: None,
+                    x: 10.0,
+                    y: 10.0,
+                    use_device_coordinates: false,
+                }),
+            },
+        ];
+        for request in non_idempotent {
+            assert!(
+                !request.is_idempotent(),
+                "expected non-idempotent: {request:?}"
+            );
+        }
+    }
 
     #[test]
     fn service_request_variants_preserve_type_tags() {
