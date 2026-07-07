@@ -437,7 +437,14 @@ impl RemoteDesktopSessionManager {
         if state.session.is_none() {
             state.pending_events.extend(started.lifecycle_events);
             state.set_session(started.session);
+            return Ok(());
         }
+        drop(state);
+        // Another task already established a session while we were waiting
+        // on the portal handshake; close the losing session instead of
+        // dropping it, or the compositor-side session (and its PipeWire fd)
+        // leaks.
+        close_session(&started.session).await;
         Ok(())
     }
 
