@@ -463,14 +463,23 @@ impl ServiceClient {
         self.clear_cached_stream();
 
         let service_path = service_path();
+        let log_stem = self.endpoint.daemon_log_stem();
         let mut command = Command::new(&service_path);
         command
             .arg("daemon")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(crate::daemon_log::daemon_stderr_destination(
-                &self.endpoint.daemon_log_stem(),
-            ));
+            .stderr(crate::daemon_log::daemon_stderr_destination(&log_stem));
+
+        // Tell the daemon where its per-endpoint log lives so it can size-cap
+        // and rotate its own tracing output at runtime, instead of appending
+        // without bound until its next launch. The inherited stderr above still
+        // captures pre-tracing-init output and panics into the same file; the
+        // daemon routes steady-state tracing to this path via its self-rotating
+        // writer. Absent this var, the daemon falls back to plain stderr.
+        if let Some(log_path) = crate::daemon_log::daemon_log_path(&log_stem) {
+            command.env(sky_cua_platform::DAEMON_LOG_PATH_ENV, log_path);
+        }
 
         configure_launch_environment_env(&mut command, launch_environment);
 

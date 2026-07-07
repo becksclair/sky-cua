@@ -50,6 +50,13 @@ pub const CLIENT_SESSION_ENV_REPAIRS_ENV: &str = "SKY_CUA_CLIENT_SESSION_ENV_REP
 /// JSON-encoded graphical session keys intentionally removed by the MCP client
 /// before spawning the daemon from a detached or remote launch environment.
 pub const CLIENT_CLEARED_SESSION_ENV_KEYS_ENV: &str = "SKY_CUA_CLIENT_CLEARED_SESSION_ENV_KEYS";
+/// Absolute path of the per-endpoint daemon log, set by the MCP client for the
+/// service child it spawns so the long-lived daemon can size-cap and rotate its
+/// own tracing output at runtime instead of appending unbounded until its next
+/// launch. Set programmatically by `spawn_service`, never operator-tuned; when
+/// absent (e.g. an operator running `sky-cua-service daemon` by hand) the daemon
+/// falls back to plain stderr.
+pub const DAEMON_LOG_PATH_ENV: &str = "SKY_CUA_DAEMON_LOG_PATH";
 
 pub use app_instructions::{
     AppInstructionEntry, AppInstructionIndex, SetValueFallbackMode, SetValueRouting,

@@ -104,6 +104,7 @@ KNOWN_NOT_FORWARDED: dict[str, str] = {
     "SKY_CUA_COSMIC_CURSOR_BRIDGE": "internal IPC path between overlay-host and sky-cua-cosmic-helper, not operator config",
     "SKY_CUA_COSMIC_CURSOR_READY": "internal IPC path between overlay-host and sky-cua-cosmic-helper, not operator config",
     "SKY_CUA_COSMIC_CURSOR_STATE": "internal IPC path between overlay-host and sky-cua-cosmic-helper, not operator config",
+    "SKY_CUA_DAEMON_LOG_PATH": "set by the client for its own spawned service child (resolved per-endpoint log path); never sourced externally",
     "SKY_CUA_FORCE_PIPEWIRE_CAPTURE_FAILURE": "test-only fault injection (portal/pipewire.rs)",
     "SKY_CUA_INPUT_HELPER_SOCKET_MODE": "input-helper systemd socket permission, set once at install time alongside SKY_CUA_INPUT_HELPER_SOCKET_GROUP into /etc/sky-cua/input-helper.env; the privileged sky-cua-input-helper.service never inherits from the MCP-launched process tree, so forwarding it through the per-invocation env_vars allowlist would be a no-op, not a real gap",
     "SKY_CUA_PHONE_COMMAND_TIMEOUT_MS": "internal phone-backend command timeout tuning, not a documented operator override",

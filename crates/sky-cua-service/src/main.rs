@@ -10,6 +10,7 @@ mod daemon;
 mod diagnostics;
 mod element_resolver;
 mod ipc_server;
+mod log_writer;
 mod overlay;
 #[cfg(unix)]
 mod phone;
@@ -34,12 +35,7 @@ fn main() -> Result<()> {
 }
 
 async fn async_main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    init_tracing();
 
     let mut args = std::env::args().skip(1);
     let arg = args.next().unwrap_or_else(|| "daemon".to_string());
@@ -51,6 +47,28 @@ async fn async_main() -> Result<()> {
         "setup-window-targeting" => run_setup_window_targeting().await,
         "session-presence" => run_session_presence(rest).await,
         other => anyhow::bail!("unsupported sky-cua-service mode: {other}"),
+    }
+}
+
+/// Route tracing to a self-rotating per-endpoint log file when the client passed
+/// `DAEMON_LOG_PATH_ENV`, so the long-lived daemon size-caps its own output at
+/// runtime instead of appending unbounded until its next launch. When the var is
+/// absent (an operator running `sky-cua-service daemon` by hand, or a one-shot
+/// subcommand) tracing goes to plain stderr as before. Client-side stderr
+/// capture is unchanged: it still catches pre-init output and panics.
+fn init_tracing() {
+    let filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    match std::env::var_os(sky_cua_platform::DAEMON_LOG_PATH_ENV) {
+        Some(path) if !path.is_empty() => {
+            builder
+                .with_writer(log_writer::RotatingLog::new(path.into()))
+                .init();
+        }
+        _ => {
+            builder.with_writer(std::io::stderr).init();
+        }
     }
 }
 

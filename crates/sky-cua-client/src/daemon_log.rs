@@ -6,14 +6,18 @@
 //! block a daemon launch: any failure falls back to discarding stderr.
 
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use sky_cua_platform::sky_cua_state_dir;
 
-/// Rotate the log once it grows past this size at daemon launch; one rotated
-/// generation (`.log.old`) is kept. The bound applies per spawn — a long-lived
-/// daemon appends without a runtime cap until its next launch.
+/// Rotate the log once it grows past this size; one rotated generation
+/// (`.log.old`) is kept. This client-side rotation runs at daemon launch (when
+/// the stderr destination is opened); the daemon itself applies the same cap to
+/// its own tracing writer at runtime (see `sky-cua-service`'s `log_writer`), so
+/// a long-lived daemon in a warn/error loop no longer appends without bound
+/// until its next launch. Both rotators target the same path and use the same
+/// advisory-lock + re-check guard so neither can clobber the other's fresh log.
 const DAEMON_LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Stderr destination for a daemon spawn. `stem` names the per-endpoint log
@@ -30,6 +34,15 @@ fn open_daemon_log(stem: &str) -> std::io::Result<File> {
     let dir = sky_cua_state_dir()?;
     std::fs::create_dir_all(&dir)?;
     open_rotating_log(&dir, stem)
+}
+
+/// Absolute path of the log file the daemon spawned for `stem` writes to
+/// (`<state-dir>/<stem>.log`). Handed to the daemon via `DAEMON_LOG_PATH_ENV` so
+/// it can self-rotate at runtime. `None` when the per-user state dir cannot be
+/// resolved, in which case the daemon falls back to plain stderr.
+pub(crate) fn daemon_log_path(stem: &str) -> Option<PathBuf> {
+    let dir = sky_cua_state_dir().ok()?;
+    Some(dir.join(format!("{stem}.log")))
 }
 
 fn open_rotating_log(dir: &Path, stem: &str) -> std::io::Result<File> {
