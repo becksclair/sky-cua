@@ -222,7 +222,8 @@ notifications) and optional scrcpy acceleration.
 
 - [x] Model screenshot size and format tuning — [`docs/features/image-size-performance.md`](docs/features/image-size-performance.md)
 - [x] Deep performance review backlog closed (criticals through lows fixed or
-      explicitly skipped with validation notes) — [`TODO_PERFORMANCE.md`](TODO_PERFORMANCE.md)
+      explicitly skipped with validation notes) — tracked in `TODO_PERFORMANCE.md`
+      (retired; closed by commit `ab63385`)
 
 ## Phase: Diagnostics and operator UX
 
