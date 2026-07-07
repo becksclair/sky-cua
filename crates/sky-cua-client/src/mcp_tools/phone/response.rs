@@ -438,6 +438,256 @@ fn strip_inline_image_base64(structured: &mut Value) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use sky_cua_platform::model::{PhoneConnectionKind, PhoneDevice, PhoneDeviceState};
+
+    use super::*;
+
+    fn diagnostic(code: &str) -> DiagnosticEntry {
+        DiagnosticEntry {
+            code: code.to_string(),
+            message: format!("diagnostic {code}"),
+            details: None,
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // phone_diagnostic_is_error_code
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn known_error_codes_classify_as_error() {
+        for code in [
+            "PhoneNotImplemented",
+            "PhoneCommandSpawnFailed",
+            "PhoneSnapshotStale",
+            "PhoneMappingOutOfBounds",
+            "PhoneCompanionUnreachable",
+            "CompanionConnectRefused",
+            "unauthorized",
+            "secure_window",
+        ] {
+            assert!(
+                phone_diagnostic_is_error_code(code),
+                "expected {code} to classify as error"
+            );
+        }
+    }
+
+    #[test]
+    fn known_non_error_codes_classify_as_informational() {
+        for code in [
+            "disabled_service",
+            "SomeUnknownFutureCode",
+            "",
+            "PhoneSuccess",
+            "companion_fallback_used",
+        ] {
+            assert!(
+                !phone_diagnostic_is_error_code(code),
+                "expected {code} to classify as non-error"
+            );
+        }
+    }
+
+    /// Completeness guard (the plan's "durable payoff"): diagnostic codes here
+    /// are plain strings emitted ad hoc across `sky-cua-service`'s phone lanes,
+    /// not a Rust enum, so no compiler-enforced exhaustiveness check is
+    /// possible. This table pins the full known set's classification so that
+    /// removing or flipping an entry fails a test. When a new `Phone*` (or
+    /// companion transport/protocol) diagnostic code is introduced in
+    /// `sky-cua-service`, it MUST be added to `phone_diagnostic_is_error_code`
+    /// (see the doc comment above that function for the emission sites to
+    /// check) AND to one of the two tables below, or this guard's coverage
+    /// silently goes stale.
+    #[test]
+    fn every_documented_code_is_classified_deliberately() {
+        let error_codes = [
+            "PhoneNotImplemented",
+            "PhoneAdbNotImplemented",
+            "PhoneSnapshotNotImplemented",
+            "PhoneCompanionNotImplemented",
+            "PhoneCommandNotImplemented",
+            "PhoneCommandSpawnFailed",
+            "PhoneCommandTimedOut",
+            "PhoneUnsupportedPlatform",
+            "PhoneUseDisabled",
+            "PhoneSessionNotFound",
+            "PhoneDeviceUnavailable",
+            "PhoneBackendUnavailable",
+            "PhoneSnapshotRequired",
+            "PhoneSnapshotUnknown",
+            "PhoneSnapshotStale",
+            "PhoneSnapshotSessionMismatch",
+            "PhoneSnapshotSerialMismatch",
+            "PhoneSnapshotOrientationMismatch",
+            "PhoneSnapshotResolutionMismatch",
+            "PhoneActionRejected",
+            "PhoneMappingNonFinite",
+            "PhoneMappingOutOfBounds",
+            "PhoneMappingDegenerateRect",
+            "PhoneMappingNoHostSurface",
+            "PhoneMappingUnsupportedRotation",
+            "PhoneAdbCommandFailed",
+            "PhoneForegroundUnknown",
+            "PhoneInstallNoApk",
+            "PhoneInstallFailed",
+            "PhoneAppActionFailed",
+            "PhonePairFailed",
+            "PhoneConnectFailed",
+            "PhoneScrcpyLaunchFailed",
+            "PhoneNoSession",
+            "PhoneCompanionForwardFailed",
+            "PhoneCompanionUnreachable",
+            "PhoneCompanionRequired",
+            "PhoneCompanionScreenshotDecode",
+            "PhoneCompanionInstallFailed",
+            "PhoneCompanionSetupIntentFailed",
+            "CompanionSignatureMismatch",
+            "CompanionSignatureUnverified",
+            "PhoneNotificationOpRejected",
+            "PhoneCursorSessionMismatch",
+            "PhoneCursorSerialMismatch",
+            "PhoneCursorSyntheticOutOfBounds",
+            "PhoneCursorSyntheticFailed",
+            "PhoneScreencapDecodeFailed",
+            "CompanionConnectRefused",
+            "CompanionTimeout",
+            "CompanionIo",
+            "CompanionHttpStatus",
+            "CompanionMalformedResponse",
+            "CompanionVersionMismatch",
+            "CompanionProtocolViolation",
+            "unauthorized",
+            "version_mismatch",
+            "secure_window",
+            "unsupported_api",
+            "oem_policy",
+            "throttled",
+            "transient",
+            "gone",
+            "redacted",
+            "pending_intent_missing",
+            "canceled",
+            "expired",
+            "immutable",
+            "reply_unavailable",
+            "oem_filtered",
+        ];
+        for code in error_codes {
+            assert!(
+                phone_diagnostic_is_error_code(code),
+                "{code} must classify as error; if it was intentionally moved to \
+                 informational, move it to the non_error_codes table instead"
+            );
+        }
+
+        // Deliberately informational: `disabled_service` can ride along on a
+        // successful ADB-fallback screenshot/observe (see the doc comment on
+        // `phone_diagnostic_is_error_code`).
+        let non_error_codes = ["disabled_service"];
+        for code in non_error_codes {
+            assert!(
+                !phone_diagnostic_is_error_code(code),
+                "{code} must stay informational; if it should now be an error, \
+                 move it to the error_codes table instead"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // phone_diagnostics_are_error
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn diagnostics_are_error_false_on_empty_slice() {
+        assert!(!phone_diagnostics_are_error(&[]));
+    }
+
+    #[test]
+    fn diagnostics_are_error_true_on_mixed_error_and_info() {
+        let diagnostics = vec![diagnostic("disabled_service"), diagnostic("PhoneNoSession")];
+        assert!(phone_diagnostics_are_error(&diagnostics));
+    }
+
+    #[test]
+    fn diagnostics_are_error_false_on_info_only() {
+        let diagnostics = vec![
+            diagnostic("disabled_service"),
+            diagnostic("throttled_unknown"),
+        ];
+        assert!(!phone_diagnostics_are_error(&diagnostics));
+    }
+
+    // -----------------------------------------------------------------
+    // phone_status_summary
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn status_summary_enabled_with_devices_and_default_serial() {
+        let report = PhoneStatusReport {
+            enabled: true,
+            adb_available: true,
+            adb_path: None,
+            adb_version: None,
+            adb_server_running: None,
+            scrcpy_available: false,
+            scrcpy_path: None,
+            scrcpy_version: None,
+            companion_enabled: true,
+            mdns_available: false,
+            default_serial: Some("R5CT30ABCDE".to_string()),
+            default_backend: PhoneBackendKind::None,
+            sessions: Vec::new(),
+            devices: vec![PhoneDevice {
+                serial: "R5CT30ABCDE".to_string(),
+                state: PhoneDeviceState::Device,
+                connection_kind: PhoneConnectionKind::Usb,
+                model: None,
+                product: None,
+                device: None,
+                transport_id: None,
+                primary: true,
+            }],
+            diagnostics: Vec::new(),
+        };
+        let summary = phone_status_summary(&report);
+        assert_eq!(
+            summary,
+            "Phone Use tools are enabled. adb=available scrcpy=unavailable companion=enabled \
+             sessions=0 devices=1. Default serial: R5CT30ABCDE."
+        );
+    }
+
+    #[test]
+    fn status_summary_disabled_with_diagnostic() {
+        let report = PhoneStatusReport {
+            enabled: false,
+            adb_available: false,
+            adb_path: None,
+            adb_version: None,
+            adb_server_running: None,
+            scrcpy_available: false,
+            scrcpy_path: None,
+            scrcpy_version: None,
+            companion_enabled: false,
+            mdns_available: false,
+            default_serial: None,
+            default_backend: PhoneBackendKind::None,
+            sessions: Vec::new(),
+            devices: Vec::new(),
+            diagnostics: vec![diagnostic("PhoneUseDisabled")],
+        };
+        let summary = phone_status_summary(&report);
+        assert_eq!(
+            summary,
+            "Phone Use tools are disabled. adb=unavailable scrcpy=unavailable \
+             companion=disabled sessions=0 devices=0. Diagnostic: diagnostic PhoneUseDisabled"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // action / companion / accessibility / notifications / app
 // ---------------------------------------------------------------------------
