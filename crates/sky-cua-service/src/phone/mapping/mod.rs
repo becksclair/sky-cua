@@ -155,7 +155,11 @@ pub(super) fn identity_mapping(
 /// Build a validated mapping from capture metadata. Rejects unsupported
 /// rotations and degenerate (zero/negative) device or screenshot extents so a
 /// mapping can never be constructed in a state that would later divide by zero.
-#[cfg_attr(not(test), expect(dead_code))]
+///
+/// This is the constructor a downscaled model-image delivery must use instead
+/// of [`identity_mapping`]: `screenshot_size` may differ from `device_size`
+/// (e.g. a model-bounded capture), and [`screenshot_to_device`] scales through
+/// the ratio between them.
 pub(super) fn build_mapping(
     build: &MappingBuild<'_>,
 ) -> Result<PhoneCoordinateMapping, MappingError> {
