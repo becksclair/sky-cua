@@ -298,15 +298,17 @@ fn string_contains_embedded_argument_fields(value: &str) -> bool {
 
 pub(crate) fn mcp_process_config_from_env() -> McpProcessConfig {
     let mut diagnostics = Vec::new();
+    // Enabled by default; only an explicit off/0/false disables it. An invalid
+    // value is reported and falls back to the enabled default.
     let browser_eval_enabled = match std::env::var(BROWSER_EVAL_ENV) {
         Ok(value) => match parse_browser_eval_runtime(&value) {
             Some(value) => value,
             None => {
                 diagnostics.push(McpConfigDiagnostic::InvalidBrowserEval { value });
-                false
+                true
             }
         },
-        Err(_) => false,
+        Err(_) => true,
     };
     let model_supports_images_override = match std::env::var("SKY_CUA_MODEL_SUPPORTS_IMAGES") {
         Ok(value) => match parse_bool_runtime(&value) {

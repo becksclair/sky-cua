@@ -705,7 +705,8 @@ fn mcp_runtime_config_invalid_values_fallback() {
         std::env::remove_var("SKY_CUA_BROWSER_EVAL");
         std::env::remove_var("SKY_CUA_MODEL_SUPPORTS_IMAGES");
     }
-    assert!(!config.browser_eval_enabled);
+    // An invalid value is reported and falls back to the enabled default.
+    assert!(config.browser_eval_enabled);
     assert_eq!(config.model_supports_images_override, None);
     assert_eq!(
         config.diagnostics,
@@ -721,10 +722,10 @@ fn mcp_runtime_config_invalid_values_fallback() {
 }
 
 #[test]
-fn browser_eval_runtime_config_matches_service_truthy_values() {
+fn browser_eval_runtime_config_matches_service_falsy_values() {
     let _guard = ENV_LOCK.lock().expect("env lock poisoned");
     unsafe {
-        std::env::set_var("SKY_CUA_BROWSER_EVAL", "enabled");
+        std::env::set_var("SKY_CUA_BROWSER_EVAL", "off");
         std::env::remove_var("SKY_CUA_MODEL_SUPPORTS_IMAGES");
     }
     let config = mcp_process_config_from_env();
@@ -733,11 +734,9 @@ fn browser_eval_runtime_config_matches_service_truthy_values() {
     }
     assert!(
         !config.browser_eval_enabled,
-        "browser eval advertisement must use the same on/1/true truthy values as service execution"
+        "browser eval advertisement must use the same off/0/false disabling values as service execution"
     );
-    assert!(config.diagnostics.iter().any(|diagnostic| {
-        matches!(diagnostic, McpConfigDiagnostic::InvalidBrowserEval { value } if value == "enabled")
-    }));
+    assert!(config.diagnostics.is_empty());
 }
 
 #[test]

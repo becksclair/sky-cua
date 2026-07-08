@@ -1377,7 +1377,7 @@ fn browser_snapshot_offset_near_service_cap_clamps_requested_window() {
 }
 
 #[test]
-fn browser_eval_tool_is_gated_behind_explicit_opt_in() {
+fn browser_eval_tool_visibility_follows_the_enabled_flag() {
     let disabled = build_tool_definitions(false, false);
     assert!(
         !disabled
@@ -1398,12 +1398,19 @@ fn browser_eval_tool_is_gated_behind_explicit_opt_in() {
 }
 
 #[test]
-fn browser_eval_rejected_when_not_opted_in() {
+fn browser_eval_enabled_by_default_routes_to_service() {
     let _guard = EVAL_ENV_LOCK.lock().unwrap();
     let previous = std::env::var_os(BROWSER_EVAL_ENV);
     unsafe { std::env::remove_var(BROWSER_EVAL_ENV) };
 
-    let service = FakeService::default();
+    let service = FakeService::with_response(browser_service_response!(Eval {
+        response: BrowserEvalResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".to_string(),
+            value: Some(json!({"ok": true})),
+            diagnostics: Vec::new(),
+        },
+    }));
     let result = handle_tool_call(
         &service,
         &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
@@ -1415,6 +1422,30 @@ fn browser_eval_rejected_when_not_opted_in() {
 
     if let Some(value) = previous {
         unsafe { std::env::set_var(BROWSER_EVAL_ENV, value) };
+    }
+    assert_eq!(result["isError"], false);
+    assert!(!service.take_requests().is_empty());
+}
+
+#[test]
+fn browser_eval_rejected_when_explicitly_disabled() {
+    let _guard = EVAL_ENV_LOCK.lock().unwrap();
+    let previous = std::env::var_os(BROWSER_EVAL_ENV);
+    unsafe { std::env::set_var(BROWSER_EVAL_ENV, "off") };
+
+    let service = FakeService::default();
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_eval",
+        json!({"tab_id": "tab-1", "expression": "1"}),
+    )
+    .unwrap();
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var(BROWSER_EVAL_ENV, value) },
+        None => unsafe { std::env::remove_var(BROWSER_EVAL_ENV) },
     }
     assert_eq!(result["isError"], true);
     assert!(result.to_string().contains("SKY_CUA_BROWSER_EVAL"));

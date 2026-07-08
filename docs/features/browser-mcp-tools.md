@@ -20,7 +20,8 @@ key, scrolled, and navigated back to `about:blank`.
 creation, existing-tab claiming, browser snapshots/screenshots, and basic
 browser actions through the canonical grouped MCP surface for hosts such as
 OpenCode and Pi. The default browser capability is always advertised by the MCP
-server; `browser_eval` is an opt-in diagnostic exception.
+server; `browser_eval` is enabled by default and disabled only by an explicit
+`SKY_CUA_BROWSER_EVAL=off`.
 
 ## Contract surface
 
@@ -101,16 +102,16 @@ Opt-in diagnostic tool:
   evaluates JavaScript in the page with CDP `Runtime.evaluate`, awaits promises,
   and returns the serializable result by value. It is intended for diagnostics
   and controlled page-level fallbacks when visible UI automation is blocked.
-  The tool is disabled by default: running arbitrary JavaScript in real
+  The tool is enabled by default. Running arbitrary JavaScript in real
   signed-in user tabs crosses a stronger trust boundary than visible UI
-  automation (hidden DOM, storage, same-origin requests) and amplifies prompt
-  injection. The operator enables it explicitly with `SKY_CUA_BROWSER_EVAL=on`
-  (or `1`/`true`), enforced at both layers: when disabled the client does not
-  advertise it in `tools/list` and rejects direct calls, and the service — the
-  real CDP execution boundary — independently rejects `BrowserRequest::Eval`
-  with a `BrowserEvalDisabled` diagnostic so a direct service-socket caller
-  cannot bypass the opt-in. A thrown or rejected expression surfaces as a
-  `BrowserEvalException` diagnostic instead of a silent `null` value.
+  automation (hidden DOM, storage, same-origin requests), so an operator who
+  wants it off sets `SKY_CUA_BROWSER_EVAL=off` (or `0`/`false`), enforced at
+  both layers: when disabled the client does not advertise it in `tools/list`
+  and rejects direct calls, and the service — the real CDP execution boundary
+  — independently rejects `BrowserRequest::Eval` with a `BrowserEvalDisabled`
+  diagnostic so the client and service always agree on the boundary. A thrown
+  or rejected expression surfaces as a `BrowserEvalException` diagnostic
+  instead of a silent `null` value.
 
 Browser targets:
 
@@ -568,10 +569,11 @@ python3 scripts/live_agentic_loop_smoke.py
   `browser_scroll` target coordinates and default omitted
   `browser_move_mouse.wait_for_arrival` to true. Service regression tests prove
   zero scroll deltas are rejected before CDP dispatch.
-- Client registry tests prove `browser_eval` stays unadvertised by default, is
-  advertised only with the explicit opt-in, rejects calls when disabled, and is
-  routed through the Browser MCP service request/response envelope; a service
-  test proves thrown expressions become `BrowserEvalException` diagnostics.
+- Client registry tests prove `browser_eval` is advertised and routed through
+  the Browser MCP service request/response envelope by default, is unadvertised
+  and rejected when `SKY_CUA_BROWSER_EVAL=off`, and stays in sync between the
+  client and service boundaries; a service test proves thrown expressions
+  become `BrowserEvalException` diagnostics.
 
 Focused hardening checks from 2026-06-08:
 

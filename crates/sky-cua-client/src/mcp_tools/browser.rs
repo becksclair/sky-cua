@@ -425,9 +425,8 @@ pub(super) fn handle_tool_call(
             if !browser_eval_enabled_policy.unwrap_or_else(browser_eval_enabled) {
                 return tool_error(
                     "BrowserEvalDisabled",
-                    "browser_eval is disabled by default because it runs arbitrary \
-                     JavaScript in real user tabs. The operator can enable it with \
-                     SKY_CUA_BROWSER_EVAL=on, 1, or true.",
+                    "browser_eval is disabled via SKY_CUA_BROWSER_EVAL. Remove the \
+                     override, or set it to on, 1, or true, to re-enable it.",
                 );
             }
             let target = match parse_browser_target(&arguments) {

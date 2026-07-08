@@ -281,14 +281,16 @@ pub const BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT: usize = 5_000;
 /// boundaries.
 pub const BROWSER_SNAPSHOT_MAX_TEXT_LIMIT: usize = 20_000;
 
-/// Whether the operator has opted in to `browser_eval` page-JavaScript
-/// execution. Off unless `SKY_CUA_BROWSER_EVAL` is `on`, `1`, or `true`.
+/// Whether `browser_eval` page-JavaScript execution is enabled. Enabled by
+/// default; the operator turns it off with `SKY_CUA_BROWSER_EVAL` set to
+/// `off`, `0`, or `false`. This is a security boundary the MCP client and the
+/// service must agree on, so the check lives here and is shared by both.
 pub fn browser_eval_enabled() -> bool {
-    matches!(
+    !matches!(
         std::env::var(BROWSER_EVAL_ENV)
             .map(|value| value.trim().to_ascii_lowercase())
             .as_deref(),
-        Ok("on" | "1" | "true")
+        Ok("off" | "0" | "false")
     )
 }
 

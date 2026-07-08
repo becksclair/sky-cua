@@ -623,9 +623,10 @@ async fn eval_returns_runtime_value() {
 }
 
 #[tokio::test]
-async fn eval_disabled_without_opt_in_returns_diagnostic() {
-    // env_lock() already cleared BROWSER_EVAL_ENV, so eval is off here.
+async fn eval_disabled_only_when_explicitly_turned_off() {
+    // eval is enabled by default; only an explicit off/0/false disables it.
     let _env_guard = env_lock().await;
+    unsafe { std::env::set_var(BROWSER_EVAL_ENV, "off") };
     let response = eval(
         Some(BrowserTargetKind::UserChrome),
         "515".to_string(),
