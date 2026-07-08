@@ -245,18 +245,34 @@ impl BrowserSessionBinding<'_> {
         operation: BoundTabOperation<'_>,
     ) -> Result<BoundTabResult, DiagnosticEntry> {
         let tab_id = tab_id_value(self.tab_id);
+        let mut mutated = false;
         let result = operation
-            .run(&mut stream, socket, &tab_id, self.executor.deadline)
+            .run(
+                &mut stream,
+                socket,
+                &tab_id,
+                self.executor.deadline,
+                &mut mutated,
+            )
             .await;
         match result {
             Ok(result) => Ok(result),
             Err(diagnostic) if session::is_recoverable_cdp_session_diagnostic(&diagnostic) => {
+                let wake = session::is_cdp_command_timeout_diagnostic(&diagnostic);
+                let replayable = operation.replay_safe() || !mutated;
+                tracing::info!(
+                    tab_id = %self.tab_id,
+                    error = %diagnostic.message,
+                    wake,
+                    replayable,
+                    "recovering wedged browser debugger session"
+                );
                 session::recover_cdp_session_until(
                     &mut stream,
                     socket,
                     &tab_id,
                     self.executor.deadline,
-                    session::is_cdp_command_timeout_diagnostic(&diagnostic),
+                    wake,
                 )
                 .await?;
                 // A recoverable failure can arrive part-way through a
@@ -272,7 +288,12 @@ impl BrowserSessionBinding<'_> {
                 // every mutating class is surfaced as reset-not-replayed no
                 // matter which recoverable error tripped it — the earlier
                 // timeout-only gate let a mid-sequence detach double-apply.
-                if !operation.replay_safe() {
+                // Replay after the reset when it provably cannot double-apply:
+                // read-only/absolute operations always, and mutating operations
+                // whose compounding sub-commands all failed up front (the
+                // extension rejected them unexecuted — the post-idle-detach
+                // signature an agent otherwise eats as a spurious input error).
+                if !replayable {
                     return Err(DiagnosticEntry {
                         details: Some(
                             "The tab's debugger session was reset, but the command was not \
@@ -284,8 +305,15 @@ impl BrowserSessionBinding<'_> {
                         ..diagnostic
                     });
                 }
+                let mut replay_mutated = false;
                 operation
-                    .run(&mut stream, socket, &tab_id, self.executor.deadline)
+                    .run(
+                        &mut stream,
+                        socket,
+                        &tab_id,
+                        self.executor.deadline,
+                        &mut replay_mutated,
+                    )
                     .await
             }
             Err(diagnostic) => Err(diagnostic),
@@ -407,6 +435,7 @@ impl BoundTabOperation<'_> {
         socket: &Path,
         tab_id: &serde_json::Value,
         deadline: TokioInstant,
+        mutated: &mut bool,
     ) -> Result<BoundTabResult, DiagnosticEntry> {
         if deadline <= TokioInstant::now() {
             return Err(browser_open_timeout_diagnostic());
@@ -414,7 +443,7 @@ impl BoundTabOperation<'_> {
 
         match self {
             BoundTabOperation::Cdp { action } => {
-                cdp::cdp_action_on_stream(stream, socket, tab_id, action, deadline)
+                cdp::cdp_action_on_stream(stream, socket, tab_id, action, deadline, mutated)
                     .await
                     .map(BoundTabResult::Cdp)
             }

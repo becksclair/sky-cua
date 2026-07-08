@@ -339,16 +339,23 @@ this recovery path because the extension abandons a timed-out CDP command
 without cancelling it; the stuck command wedges every later command on that
 tab's debugger session, and only a detach/attach cycle clears it. After the
 reset, the original action is retried once — but only when replaying it cannot
-mutate the page twice. Actions that mutate the page (click, type, key, navigate,
-eval, scroll) are never auto-replayed after any recovered failure, because a
+mutate the page twice. Snapshot, screenshot, and absolute cursor moves are
+always replayed. Mutating actions (click, type, key, navigate, eval, scroll)
+are replayed only when none of their compounding sub-commands took effect:
+each such sub-command (input dispatch, evaluated scroll/eval, navigation)
+raises a mutation flag before dispatch and lowers it only when the extension
+rejected the command up front with `Debugger unattached` — its session
+bookkeeping refused the target before executing, so the command provably never
+ran. That is the post-idle-detach signature (see the keepalive section), and
+those operations now recover and replay transparently instead of surfacing a
+spurious input error. Once any compounding sub-command has landed — or failed
+in a way that cannot prove non-execution (a command timeout, a
+`Detached while handling command`) — the operation is not replayed, because a
 click/press dispatches several CDP commands on one stream (mouseMoved →
-mousePressed → mouseReleased), so an earlier sub-command may already have landed
-before the failing one — whether the trip was a command timeout, a
-`Debugger is not attached`, or a `Detached while handling command`. Replaying
-the whole operation would re-dispatch the committed sub-commands and double the
-input, so those calls surface the failure diagnostic (with a note that the
-session was reset and steering toward desktop-control tools) instead; snapshot,
-screenshot, and absolute cursor moves are replayed. Failures after the retry are
+mousePressed → mouseReleased) and replaying would re-dispatch committed
+sub-commands and double the input; those calls surface the failure diagnostic
+(with a note that the session was reset and steering toward desktop-control
+tools). Failures after the retry are
 surfaced as diagnostics rather than looping indefinitely.
 
 **Discarded (asleep) tabs.** A tab the browser has discarded (Brave marks these
@@ -387,7 +394,14 @@ handling command" wedge. `browser/keepalive.rs` closes this: on first
 browser-bridge use the daemon starts one persistent connection registered as the
 *primary* client whose only job is to answer the heartbeat `pong`, keeping the
 debugger attached for the whole session; it reconnects across native-host
-restarts. Tradeoff: sky-cua becomes the primary browser client, so a concurrent
+restarts. Because the keepalive dies with the daemon, the daemon's 5-minute
+idle exit must not fire mid-browser-session: any browser bridge request keeps
+the daemon (and so the keepalive, and so every tab's debugger attachment)
+alive for 30 minutes past the last one (`browser/activity.rs`) — agent
+think-time between actions routinely exceeds the idle timeout, and every
+idle exit otherwise detached all tabs ~30s later (live incident, 2026-07-08).
+Keepalive connects/disconnects and every session recovery are traced to the
+daemon log. Tradeoff: sky-cua becomes the primary browser client, so a concurrent
 Codex desktop app driving the same browser and sky-cua evict each other. Each `executeCdp` request
 carries a `timeoutMs` derived from the remaining call deadline (capped at the
 extension's 10-second default, and shrunk below the 250 ms floor when the

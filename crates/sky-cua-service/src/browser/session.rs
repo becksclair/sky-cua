@@ -463,6 +463,19 @@ fn debugger_unattached_message(message: &str) -> bool {
         || message.contains("Detached while handling command")
 }
 
+/// An unattached failure the extension raised *before* executing the command:
+/// its session bookkeeping rejected the target up front, so the command
+/// provably never ran. "Detached while handling command" is excluded — that
+/// one detached mid-execution and the command may have taken effect.
+pub(super) fn is_upfront_unattached_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
+    diagnostic.code == "BrowserBridgeRequestFailed"
+        && (diagnostic.message.contains("Debugger is not attached")
+            || diagnostic.message.contains("Debugger unattached"))
+        && !diagnostic
+            .message
+            .contains("Detached while handling command")
+}
+
 /// `wake_tab` is true when the triggering failure was a CDP command timeout
 /// (`is_cdp_command_timeout_diagnostic`) — the signature of a discarded
 /// (asleep) tab whose renderer is gone — so the wake precedes the re-enable.

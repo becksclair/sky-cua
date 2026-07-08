@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::BrowserTargetKind;
 use tokio::net::UnixListener;
 
-use crate::browser::bridge::{claim_tab, click, screenshot, snapshot};
+use crate::browser::bridge::{claim_tab, click, press_key, screenshot, snapshot};
 use crate::browser::protocol::{read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
 
@@ -1017,4 +1017,99 @@ async fn recovery_wakes_a_discarded_tab_discovered_by_its_enable_timeout() {
         response.diagnostics
     );
     assert_eq!(response.title.as_deref(), Some("Awake Tab"));
+}
+
+#[tokio::test]
+async fn input_rejected_upfront_as_unattached_is_replayed_after_recovery() {
+    // The post-idle-detach signature: the daemon idle-exited, its keepalive
+    // died, the extension detached every tab, and the next input operation's
+    // FIRST compounding command is rejected up front with "Debugger
+    // unattached" — provably unexecuted. After the session reset the whole
+    // operation must be replayed transparently instead of surfacing an error
+    // the agent has to hand-retry (live incident, 2026-07-08).
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-replay-pristine-input");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut stream, focus) = accept_until_non_info_request(&listener).await;
+        ack_focus_emulation_frame(&mut stream, &focus).await;
+
+        let key_down = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(key_down["params"]["method"], "Input.dispatchKeyEvent");
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": key_down["id"],
+                "error": {"code": 1, "message": "Debugger unattached"}
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Recovery: claim, reset, enable (no wake — not a timeout trigger).
+        let claim = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(
+            claim.get("method").and_then(Value::as_str),
+            Some("claimUserTab")
+        );
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": claim["id"],
+                "result": {
+                    "id": 818,
+                    "title": "Reattached Tab",
+                    "url": "https://example.test/reattached",
+                    "active": true
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        reply_to_detach(&mut stream, 818).await;
+        reply_to_attach_and_enable(&mut stream, 818).await;
+
+        // The operation is replayed transparently: focus emulation, then both
+        // key events succeed this time.
+        let focus_retry = read_frame(&mut stream).await.unwrap().unwrap();
+        ack_focus_emulation_frame(&mut stream, &focus_retry).await;
+        let key_down_retry = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(key_down_retry["params"]["method"], "Input.dispatchKeyEvent");
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": key_down_retry["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+        let key_up = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(key_up["params"]["method"], "Input.dispatchKeyEvent");
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc": "2.0", "id": key_up["id"], "result": {}}),
+        )
+        .await
+        .unwrap();
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    let response = press_key(
+        Some(BrowserTargetKind::UserChrome),
+        "818".to_string(),
+        "Enter".to_string(),
+    )
+    .await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    assert!(
+        response.diagnostics.is_empty(),
+        "a pristine unattached input must recover and replay cleanly, got {:?}",
+        response.diagnostics
+    );
 }

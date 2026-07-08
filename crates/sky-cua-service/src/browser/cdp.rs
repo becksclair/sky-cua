@@ -11,6 +11,7 @@ use super::protocol::{
     FOCUS_EMULATION_REQUEST_ID, KEY_DOWN_REQUEST_ID, KEY_UP_REQUEST_ID, NAVIGATE_REQUEST_ID,
     SCREENSHOT_REQUEST_ID, SCROLL_REQUEST_ID, SNAPSHOT_REQUEST_ID, TYPE_TEXT_REQUEST_ID,
 };
+use super::session;
 use super::snapshot;
 use super::transport::execute_cdp_until;
 
@@ -67,16 +68,60 @@ pub(super) enum BrowserCdpResult {
     Action,
 }
 
+/// Dispatch a CDP command whose double-apply harms the page (input dispatch,
+/// evaluated scroll/eval, navigation). `mutated` is raised before the dispatch
+/// and lowered again only when the extension provably rejected the command
+/// without executing it (an upfront "Debugger unattached" — its session
+/// bookkeeping refused the target before dispatch). A timeout or mid-execution
+/// detach leaves `mutated` raised: the command may have taken effect, so the
+/// executor must not replay the operation. Read-only or absolute sub-commands
+/// (mouseMoved, focus emulation, metrics) go through plain `execute_cdp_until`
+/// and never touch the flag.
+#[allow(clippy::too_many_arguments)]
+async fn execute_compounding_cdp_until(
+    stream: &mut UnixStream,
+    socket: &Path,
+    request_id: &'static str,
+    tab_id_value: &Value,
+    method: &'static str,
+    command_params: Value,
+    deadline: TokioInstant,
+    mutated: &mut bool,
+) -> Result<Value, DiagnosticEntry> {
+    let previously_mutated = *mutated;
+    *mutated = true;
+    match execute_cdp_until(
+        stream,
+        socket,
+        request_id,
+        tab_id_value,
+        method,
+        command_params,
+        deadline,
+    )
+    .await
+    {
+        Ok(response) => Ok(response),
+        Err(diagnostic) => {
+            if !previously_mutated && session::is_upfront_unattached_diagnostic(&diagnostic) {
+                *mutated = false;
+            }
+            Err(diagnostic)
+        }
+    }
+}
+
 pub(super) async fn cdp_action_on_stream(
     stream: &mut UnixStream,
     socket: &Path,
     tab_id_value: &Value,
     action: &BrowserCdpAction,
     deadline: TokioInstant,
+    mutated: &mut bool,
 ) -> Result<BrowserCdpResult, DiagnosticEntry> {
     match action {
         BrowserCdpAction::Navigate { url } => {
-            let response = execute_cdp_until(
+            let response = execute_compounding_cdp_until(
                 stream,
                 socket,
                 NAVIGATE_REQUEST_ID,
@@ -84,6 +129,7 @@ pub(super) async fn cdp_action_on_stream(
                 "Page.navigate",
                 json!({ "url": url }),
                 deadline,
+                mutated,
             )
             .await?;
             if let Some(error_text) = response
@@ -190,7 +236,7 @@ pub(super) async fn cdp_action_on_stream(
                 deadline,
             )
             .await?;
-            execute_cdp_until(
+            execute_compounding_cdp_until(
                 stream,
                 socket,
                 CLICK_DOWN_REQUEST_ID,
@@ -198,9 +244,10 @@ pub(super) async fn cdp_action_on_stream(
                 "Input.dispatchMouseEvent",
                 json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1 }),
                 deadline,
+                mutated,
             )
             .await?;
-            execute_cdp_until(
+            execute_compounding_cdp_until(
                 stream,
                 socket,
                 CLICK_UP_REQUEST_ID,
@@ -208,13 +255,14 @@ pub(super) async fn cdp_action_on_stream(
                 "Input.dispatchMouseEvent",
                 json!({ "type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1 }),
                 deadline,
+                mutated,
             )
             .await?;
             Ok(BrowserCdpResult::Action)
         }
         BrowserCdpAction::TypeText { text } => {
             ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
-            execute_cdp_until(
+            execute_compounding_cdp_until(
                 stream,
                 socket,
                 TYPE_TEXT_REQUEST_ID,
@@ -222,6 +270,7 @@ pub(super) async fn cdp_action_on_stream(
                 "Input.insertText",
                 json!({ "text": text }),
                 deadline,
+                mutated,
             )
             .await?;
             Ok(BrowserCdpResult::Action)
@@ -229,7 +278,7 @@ pub(super) async fn cdp_action_on_stream(
         BrowserCdpAction::PressKey { key } => {
             ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
             let key = BrowserKeyStroke::parse(key);
-            execute_cdp_until(
+            execute_compounding_cdp_until(
                 stream,
                 socket,
                 KEY_DOWN_REQUEST_ID,
@@ -237,9 +286,10 @@ pub(super) async fn cdp_action_on_stream(
                 "Input.dispatchKeyEvent",
                 key.event_params(key.key_down_type()),
                 deadline,
+                mutated,
             )
             .await?;
-            execute_cdp_until(
+            execute_compounding_cdp_until(
                 stream,
                 socket,
                 KEY_UP_REQUEST_ID,
@@ -247,12 +297,13 @@ pub(super) async fn cdp_action_on_stream(
                 "Input.dispatchKeyEvent",
                 key.event_params("keyUp"),
                 deadline,
+                mutated,
             )
             .await?;
             Ok(BrowserCdpResult::Action)
         }
         BrowserCdpAction::Eval { expression } => {
-            let response = execute_cdp_until(
+            let response = execute_compounding_cdp_until(
                 stream,
                 socket,
                 EVAL_REQUEST_ID,
@@ -264,6 +315,7 @@ pub(super) async fn cdp_action_on_stream(
                     "returnByValue": true,
                 }),
                 deadline,
+                mutated,
             )
             .await?;
             if let Some(exception) = response
@@ -319,7 +371,7 @@ pub(super) async fn cdp_action_on_stream(
 "#
                 ),
             };
-            execute_cdp_until(
+            execute_compounding_cdp_until(
                 stream,
                 socket,
                 SCROLL_REQUEST_ID,
@@ -331,6 +383,7 @@ pub(super) async fn cdp_action_on_stream(
                     "returnByValue": true,
                 }),
                 deadline,
+                mutated,
             )
             .await?;
             Ok(BrowserCdpResult::Action)
