@@ -67,9 +67,6 @@ use super::transport::execute_cdp_until;
 /// the same coordinate space as browser click coordinates and screenshot
 /// pixels, so the center feeds the existing `Input.dispatchMouseEvent` path
 /// with no scaling conversion.
-// Fields are read by the Stream 1B dispatch (and by tests); until 1B lands they
-// are unread in the binary build. The allow is removed when 1B consumes them.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(super) struct ResolvedElementCenter {
     pub x: f64,
@@ -95,12 +92,6 @@ struct DecodedRef {
 /// to the Milestone 0 stub — `execute_cdp_until` needs the tab id per call and
 /// the resolver has no other source for it. See the report accompanying Stream
 /// 1A.
-// The service input path (Stream 1B) is the only non-test caller; until it
-// lands, this entry point and everything it reaches are unused in the binary
-// build (the resolver is exercised by tests). Allowing dead code on this root
-// keeps its whole call-chain reachable; Stream 1B removes the allow when it
-// wires the element-targeted click/type dispatch.
-#[allow(dead_code)]
 pub(super) async fn resolve_element_center(
     stream: &mut UnixStream,
     socket: &Path,

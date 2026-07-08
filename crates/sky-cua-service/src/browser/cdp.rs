@@ -248,9 +248,14 @@ pub(super) async fn cdp_action_on_stream(
             // BrowserElementUnresolved / BrowserElementNotActionable via `?`
             // before any input is dispatched, so the agent gets a clean
             // "re-observe" signal and the page is untouched.
-            let center =
-                super::resolve::resolve_element_center(stream, socket, element_ref, deadline)
-                    .await?;
+            let center = super::resolve::resolve_element_center(
+                stream,
+                socket,
+                tab_id_value,
+                element_ref,
+                deadline,
+            )
+            .await?;
             dispatch_click_at(
                 stream,
                 socket,
@@ -281,9 +286,14 @@ pub(super) async fn cdp_action_on_stream(
         BrowserCdpAction::TypeTextElement { element_ref, text } => {
             // Resolve first (see ClickElement): an unresolved / not-actionable
             // ref propagates via `?` before any focus click or text insert.
-            let center =
-                super::resolve::resolve_element_center(stream, socket, element_ref, deadline)
-                    .await?;
+            let center = super::resolve::resolve_element_center(
+                stream,
+                socket,
+                tab_id_value,
+                element_ref,
+                deadline,
+            )
+            .await?;
             // Focus the field with a real click at its live center, then insert
             // the text. dispatch_click_at runs ensure_focus_emulation, so the
             // insert lands even on a background/unfocused tab.
