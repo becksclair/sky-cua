@@ -46,15 +46,17 @@ content in a claimed or opened tab.
 - Screenshots show only the visible viewport. Scroll, then re-capture, for
   off-screen targets.
 - Coordinates are valid for the observation/capture moment. Any scroll, resize,
-  navigation, or tab switch invalidates previous bounds.
+  navigation, or tab switch invalidates previous bounds. An element `ref` does
+  not go stale this way — the service re-resolves it live — so it is the safer
+  target after the page may have moved.
 - Desktop coordinates are a different space. Never reuse desktop screenshot or
   `observe(surface="desktop")` coordinates here.
 
 ## State
 
 - Prefer `observe(surface="browser", tab_id=...)` for title, URL, viewport,
-  visible text, and actionable element bounds. Defaults are compact enough for
-  most pages.
+  visible text, actionable element bounds, and a per-element `ref` for targeting
+  clicks and typing. Defaults are compact enough for most pages.
 - On dense pages, use element query/offset/limit controls. Use `text_limit: 0`
   for controls-only snapshots, and raise text limits only when page text is the
   task.
@@ -70,12 +72,28 @@ content in a claimed or opened tab.
 - `browser_input(operation="click")` moves the visible browser agent cursor
   before clicking. Call `browser_move_mouse` first only for hover or cursor
   placement without click.
+- Prefer a `ref` from the latest `observe(surface="browser")` over `x`/`y` when
+  clicking or typing on an actionable control, especially on dynamic pages.
+  `browser_input(operation="click", ref=...)` and
+  `browser_input(operation="type_text", ref=..., text=...)` re-resolve the
+  element's live position at action time (re-find, scroll into view, hit-test)
+  and dispatch a real trusted click at its current center, so they do not miss
+  when a re-render or scroll has moved the target since you observed it. `ref` is
+  opaque; pass it verbatim, never parse or build one. Reserve `x`/`y` for pixel
+  targets with no discrete element, such as a canvas or a map region.
+- Typing by `ref` focuses the field and types in one step, so no separate
+  focus click is needed. `type_text` with `ref` still requires non-empty `text`.
+- On a `BrowserElementUnresolved` (the page changed; the ref matches nothing) or
+  `BrowserElementNotActionable` (found but hidden, off-screen, or covered)
+  diagnostic, re-observe to get fresh refs and retry. Do not pixel-guess the
+  target or use `browser_eval` to find and click elements.
 - `browser_scroll` requires non-zero `delta_x` or `delta_y`. Omit x/y for
   viewport scroll; provide both x/y to move the cursor there and scroll the
   browser-selected container, falling back to the viewport. This is scripted DOM
   scrolling, not a real wheel event.
 - `browser_input(operation="type_text")` inserts literal text into the focused
-  control; focus it first.
+  control; without a `ref`, focus it first (see the `ref` bullets above to focus
+  and type in one step).
 - `browser_input(operation="press_key")` handles focused controls and page
   shortcuts. Use literal key strings such as `Enter`, `Escape`, `Tab`,
   `Ctrl+K`, and `Ctrl+L`. To replace field contents, focus it, press `Ctrl+A`,
