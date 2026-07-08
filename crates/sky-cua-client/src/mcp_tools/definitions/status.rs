@@ -69,8 +69,8 @@ pub(super) fn list_resources_constraints() -> Value {
     let properties = list_resources_properties();
     json!({
         "oneOf": [
-            exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "apps")], &[], &["surface", "resource"]),
-            exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "windows")], &[], &["surface", "resource"]),
+            exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "apps")], &[], &["surface", "resource", "limit"]),
+            exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "windows")], &[], &["surface", "resource", "limit"]),
             exact_branch_schema(&properties, &[("surface", "desktop"), ("resource", "focused_window")], &[], &["surface", "resource"]),
             exact_branch_schema(&properties, &[("surface", "browser"), ("resource", "tabs")], &[], &["surface", "resource", "target", "url_contains", "title_contains", "limit"]),
             exact_branch_schema(&properties, &[("surface", "phone"), ("resource", "devices")], &[], &["surface", "resource", "include_mdns"]),

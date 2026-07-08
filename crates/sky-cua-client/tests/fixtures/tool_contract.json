@@ -449,6 +449,17 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "limit": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "resource": {
                     "const": "apps"
                   },
@@ -465,6 +476,17 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "limit": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "resource": {
                     "const": "windows"
                   },

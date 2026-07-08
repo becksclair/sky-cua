@@ -506,14 +506,22 @@ fn handle_tool_call_with_browser_eval_policy(
         "list_apps" => match service.call(&ServiceRequest::ListApps)? {
             ServiceResponse::ListApps {
                 environment,
-                apps,
+                mut apps,
                 diagnostics,
             } => {
+                let limit = parse_optional_usize(&arguments, "limit", "list_resources")?;
+                let total = apps.len();
+                if let Some(limit) = limit {
+                    apps.truncate(limit);
+                }
                 let runtime_error = list_apps_error_diagnostic(&diagnostics);
                 let is_error = runtime_error.is_some();
-                let summary = runtime_error
+                let mut summary = runtime_error
                     .map(|diagnostic| diagnostic.message.clone())
                     .unwrap_or_else(|| list_apps_summary(&apps));
+                if !is_error && apps.len() < total {
+                    summary.push_str(&format!(" Showing first {} of {total} apps.", apps.len()));
+                }
                 Ok(json!({
                     "content": [{
                         "type": "text",
@@ -533,14 +541,25 @@ fn handle_tool_call_with_browser_eval_policy(
         "list_windows" => match service.call(&ServiceRequest::ListWindows)? {
             ServiceResponse::ListWindows {
                 environment,
-                windows,
+                mut windows,
                 diagnostics,
             } => {
+                let limit = parse_optional_usize(&arguments, "limit", "list_resources")?;
+                let total = windows.len();
+                if let Some(limit) = limit {
+                    windows.truncate(limit);
+                }
                 let runtime_error = diagnostics.first();
                 let is_error = runtime_error.is_some();
-                let summary = runtime_error
+                let mut summary = runtime_error
                     .map(|diagnostic| diagnostic.message.clone())
                     .unwrap_or_else(|| list_windows_summary(&windows));
+                if !is_error && windows.len() < total {
+                    summary.push_str(&format!(
+                        " Showing first {} of {total} windows.",
+                        windows.len()
+                    ));
+                }
                 Ok(json!({
                     "content": [{
                         "type": "text",
