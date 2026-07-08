@@ -28,6 +28,15 @@ content in a claimed or opened tab.
   only internal tabs exist, open a fresh tab instead.
 - The runtime retries stale session/debugger attachment once per action; later
   failures are real.
+- Password-manager overlays block attach on login pages. Chrome refuses
+  debugger access while the tab hosts another extension's frame — Bitwarden's
+  inline autofill menu on a credential form is the common case, surfacing as
+  `Cannot access a chrome-extension:// URL of different extension`. Claim and
+  attach the tab BEFORE navigating it into a login flow (an attached session
+  survives the overlay appearing). If attach is refused on a page already
+  showing a login form, dismiss the overlay first — press Escape or click a
+  neutral spot via desktop input — then retry the browser action once; if the
+  refusal persists, drive that step with desktop input.
 
 ## Coordinates
 

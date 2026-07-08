@@ -381,11 +381,13 @@ fn is_foreign_extension_page_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
 fn with_foreign_extension_page_details(diagnostic: DiagnosticEntry) -> DiagnosticEntry {
     DiagnosticEntry {
         details: Some(
-            "Chrome refuses debugger access while the tab shows another extension's \
-             page or frame — common during login when a password manager overlays \
-             the form, or while a redirect hops through an extension page. This is \
-             a browser security boundary, not a bridge fault: use desktop input for \
-             this step, or retry once the page returns to regular web content."
+            "Chrome refuses debugger access while the tab hosts another extension's \
+             page or frame — typically a password manager's autofill overlay (e.g. \
+             Bitwarden) on a login form, or a redirect hopping through an extension \
+             page. This is a browser security boundary, not a bridge fault. Dismiss \
+             the overlay first (press Escape or click a neutral spot via desktop \
+             input), then retry the browser action; if the refusal persists, drive \
+             this step with desktop input."
                 .to_string(),
         ),
         ..diagnostic
