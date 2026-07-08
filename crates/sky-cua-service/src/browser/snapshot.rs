@@ -38,17 +38,41 @@ pub(super) const BROWSER_SNAPSHOT_EXPRESSION_TEMPLATE: &str = r#"
     if (!('value' in el) || sensitiveField(el)) return null;
     return String(el.value).slice(0, 500);
   };
+  // Encode a JS string as URL-safe base64 with no padding, matching the Rust
+  // resolver's decoder (base64url, no '='). TextEncoder first so non-Latin1
+  // accessible names survive btoa's Latin1-only input.
+  const refEncode = (str) => {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  };
   const elementFor = (el, index) => {
     const rect = el.getBoundingClientRect();
+    const tag = el.tagName.toLowerCase();
+    const role = el.getAttribute('role') || null;
+    const name = el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent?.trim()?.slice(0, 200) || null;
+    const href = el.href || null;
+    // Self-contained re-find recipe (see resolve.rs). Version 1: selector base,
+    // the element's index within that selector query, its identifying signature,
+    // and its current CSS-pixel bounds for disambiguating a multi-match re-query.
+    const ref = refEncode(JSON.stringify({
+      v: 1,
+      sel: selector,
+      i: index,
+      sig: { tag, role, name, href },
+      b: { x: rect.x, y: rect.y, w: rect.width, h: rect.height }
+    }));
     return {
       index,
-      tag: el.tagName.toLowerCase(),
-      role: el.getAttribute('role') || null,
-      name: el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent?.trim()?.slice(0, 200) || null,
+      tag,
+      role,
+      name,
       value: safeValue(el),
-      href: el.href || null,
+      href,
       disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'),
-      bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+      bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      ref
     };
   };
   const elementName = (el) => el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent?.trim()?.slice(0, 200) || '';
