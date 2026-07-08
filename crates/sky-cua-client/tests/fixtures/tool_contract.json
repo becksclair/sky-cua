@@ -7722,6 +7722,11 @@
             ],
             "type": "string"
           },
+          "ref": {
+            "description": "An opaque element reference from observe(surface=browser). Prefer it over x/y for reliable clicks on dynamic pages; the service re-resolves the element's live position. Do not construct or parse it.",
+            "minLength": 1,
+            "type": "string"
+          },
           "tab_id": {
             "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
             "minLength": 1,
@@ -7776,9 +7781,34 @@
             "oneOf": [
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "x": {},
+                      "y": {}
+                    },
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "ref": {}
+                    },
+                    "required": [
+                      "ref"
+                    ]
+                  }
+                ],
                 "properties": {
                   "operation": {
                     "const": "click"
+                  },
+                  "ref": {
+                    "description": "An opaque element reference from observe(surface=browser). Prefer it over x/y for reliable clicks on dynamic pages; the service re-resolves the element's live position. Do not construct or parse it.",
+                    "minLength": 1,
+                    "type": "string"
                   },
                   "tab_id": {
                     "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
@@ -7817,9 +7847,7 @@
                 },
                 "required": [
                   "operation",
-                  "tab_id",
-                  "x",
-                  "y"
+                  "tab_id"
                 ],
                 "type": "object"
               },
@@ -7828,6 +7856,11 @@
                 "properties": {
                   "operation": {
                     "const": "type_text"
+                  },
+                  "ref": {
+                    "description": "An opaque element reference from observe(surface=browser). Prefer it over x/y for reliable clicks on dynamic pages; the service re-resolves the element's live position. Do not construct or parse it.",
+                    "minLength": 1,
+                    "type": "string"
                   },
                   "tab_id": {
                     "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
@@ -7923,6 +7956,11 @@
               "type_text",
               "press_key"
             ],
+            "type": "string"
+          },
+          "ref": {
+            "description": "An opaque element reference from observe(surface=browser). Prefer it over x/y for reliable clicks on dynamic pages; the service re-resolves the element's live position. Do not construct or parse it.",
+            "minLength": 1,
             "type": "string"
           },
           "tab_id": {

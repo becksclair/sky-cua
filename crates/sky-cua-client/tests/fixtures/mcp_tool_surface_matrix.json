@@ -6,7 +6,7 @@
       "can_receive_images": false,
       "description_bytes": 4791,
       "largest_schema_bytes": 2116,
-      "serialized_bytes": 41918,
+      "serialized_bytes": 42171,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -2207,6 +2207,11 @@
                   ],
                   "type": "string"
                 },
+                "ref": {
+                  "description": "An opaque element reference from observe(surface=browser). Prefer it over x/y for reliable clicks on dynamic pages; the service re-resolves the element's live position. Do not construct or parse it.",
+                  "minLength": 1,
+                  "type": "string"
+                },
                 "tab_id": {
                   "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
                   "minLength": 1,
@@ -2624,7 +2629,7 @@
       "can_receive_images": false,
       "description_bytes": 4894,
       "largest_schema_bytes": 2116,
-      "serialized_bytes": 42711,
+      "serialized_bytes": 42964,
       "surface": "grouped",
       "tool_count": 36,
       "tools_list": {
@@ -4823,6 +4828,11 @@
                     "type_text",
                     "press_key"
                   ],
+                  "type": "string"
+                },
+                "ref": {
+                  "description": "An opaque element reference from observe(surface=browser). Prefer it over x/y for reliable clicks on dynamic pages; the service re-resolves the element's live position. Do not construct or parse it.",
+                  "minLength": 1,
                   "type": "string"
                 },
                 "tab_id": {
@@ -5290,7 +5300,7 @@
       "can_receive_images": true,
       "description_bytes": 4791,
       "largest_schema_bytes": 2489,
-      "serialized_bytes": 42574,
+      "serialized_bytes": 42827,
       "surface": "grouped",
       "tool_count": 35,
       "tools_list": {
@@ -7538,6 +7548,11 @@
                   ],
                   "type": "string"
                 },
+                "ref": {
+                  "description": "An opaque element reference from observe(surface=browser). Prefer it over x/y for reliable clicks on dynamic pages; the service re-resolves the element's live position. Do not construct or parse it.",
+                  "minLength": 1,
+                  "type": "string"
+                },
                 "tab_id": {
                   "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
                   "minLength": 1,
@@ -7955,7 +7970,7 @@
       "can_receive_images": true,
       "description_bytes": 4894,
       "largest_schema_bytes": 2489,
-      "serialized_bytes": 43367,
+      "serialized_bytes": 43620,
       "surface": "grouped",
       "tool_count": 36,
       "tools_list": {
@@ -10201,6 +10216,11 @@
                     "type_text",
                     "press_key"
                   ],
+                  "type": "string"
+                },
+                "ref": {
+                  "description": "An opaque element reference from observe(surface=browser). Prefer it over x/y for reliable clicks on dynamic pages; the service re-resolves the element's live position. Do not construct or parse it.",
+                  "minLength": 1,
                   "type": "string"
                 },
                 "tab_id": {
