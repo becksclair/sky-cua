@@ -149,6 +149,18 @@ impl ServiceDaemon {
                     },
                 }
             }
+            BrowserRequest::ClickElement {
+                target,
+                tab_id,
+                element_ref,
+            } => {
+                debug!(?target, ?tab_id, "handling browser_click element request");
+                ServiceResponse::Browser {
+                    response: BrowserResponse::Click {
+                        response: crate::browser::click_element(target, tab_id, element_ref).await,
+                    },
+                }
+            }
             BrowserRequest::TypeText {
                 target,
                 tab_id,
@@ -158,6 +170,29 @@ impl ServiceDaemon {
                 ServiceResponse::Browser {
                     response: BrowserResponse::TypeText {
                         response: crate::browser::type_text(target, tab_id, text).await,
+                    },
+                }
+            }
+            BrowserRequest::TypeTextElement {
+                target,
+                tab_id,
+                element_ref,
+                text,
+            } => {
+                debug!(
+                    ?target,
+                    ?tab_id,
+                    "handling browser_type_text element request"
+                );
+                ServiceResponse::Browser {
+                    response: BrowserResponse::TypeText {
+                        response: crate::browser::type_text_element(
+                            target,
+                            tab_id,
+                            element_ref,
+                            text,
+                        )
+                        .await,
                     },
                 }
             }

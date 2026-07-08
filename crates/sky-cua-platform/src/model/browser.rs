@@ -67,10 +67,30 @@ pub enum BrowserRequest {
         x: f64,
         y: f64,
     },
+    /// Click an element by an opaque reference obtained from a browser
+    /// snapshot, rather than by CSS-pixel coordinates. The service re-resolves
+    /// the element's live position at click time; see the browser `resolve`
+    /// module. `element_ref` is the opaque token the snapshot emitted; the
+    /// client never parses it.
+    ClickElement {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<BrowserTargetKind>,
+        tab_id: String,
+        element_ref: String,
+    },
     TypeText {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<BrowserTargetKind>,
         tab_id: String,
+        text: String,
+    },
+    /// Focus an element by an opaque snapshot reference and type into it in one
+    /// step (see [`BrowserRequest::ClickElement`] for the reference contract).
+    TypeTextElement {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<BrowserTargetKind>,
+        tab_id: String,
+        element_ref: String,
         text: String,
     },
     PressKey {
@@ -138,7 +158,9 @@ impl BrowserRequest {
             | Self::ClaimTab { .. }
             | Self::Navigate { .. }
             | Self::Click { .. }
+            | Self::ClickElement { .. }
             | Self::TypeText { .. }
+            | Self::TypeTextElement { .. }
             | Self::PressKey { .. }
             | Self::Scroll { .. }
             | Self::Eval { .. } => false,
@@ -311,6 +333,8 @@ pub fn browser_diagnostic_is_error_code(code: &str) -> bool {
             | "BrowserNavigationFailed"
             | "BrowserOpenPartial"
             | "BrowserClaimPartial"
+            | "BrowserElementUnresolved"
+            | "BrowserElementNotActionable"
             | "BrowserEvalException"
             | "BrowserEvalDisabled"
     )
@@ -469,5 +493,49 @@ mod tests {
         assert_eq!(normalize_browser_open_url(""), None);
         assert_eq!(normalize_browser_open_url("file:///etc/passwd"), None);
         assert_eq!(normalize_browser_open_url("javascript:alert(1)"), None);
+    }
+
+    #[test]
+    fn click_element_request_round_trips_without_coordinates() {
+        let request = BrowserRequest::ClickElement {
+            target: Some(BrowserTargetKind::UserChrome),
+            tab_id: "42".to_string(),
+            element_ref: "opaque-token".to_string(),
+        };
+        let json = serde_json::to_string(&request).expect("serialize");
+        assert!(
+            json.contains("click_element"),
+            "tag should be snake_case: {json}"
+        );
+        assert!(json.contains("opaque-token"));
+        assert!(
+            !json.contains("\"x\""),
+            "must not carry coordinates: {json}"
+        );
+        let back: BrowserRequest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, request);
+    }
+
+    #[test]
+    fn type_text_element_request_round_trips() {
+        let request = BrowserRequest::TypeTextElement {
+            target: None,
+            tab_id: "7".to_string(),
+            element_ref: "tok".to_string(),
+            text: "hello".to_string(),
+        };
+        let json = serde_json::to_string(&request).expect("serialize");
+        let back: BrowserRequest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, request);
+    }
+
+    #[test]
+    fn element_diagnostic_codes_are_terminal_errors() {
+        assert!(super::browser_diagnostic_is_error_code(
+            "BrowserElementUnresolved"
+        ));
+        assert!(super::browser_diagnostic_is_error_code(
+            "BrowserElementNotActionable"
+        ));
     }
 }

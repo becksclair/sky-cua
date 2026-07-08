@@ -15,7 +15,10 @@ pub(super) use args::{
     parse_browser_target, parse_required_browser_url, parse_required_literal_string,
     parse_required_string,
 };
-use args::{parse_browser_snapshot_options, parse_browser_tab_filter, parse_optional_bool};
+use args::{
+    parse_browser_snapshot_options, parse_browser_tab_filter, parse_optional_bool,
+    parse_optional_element_ref,
+};
 #[cfg(test)]
 pub(super) use response::browser_list_tabs_summary;
 #[cfg(test)]
@@ -321,16 +324,29 @@ pub(super) fn handle_tool_call(
                 Ok(tab_id) => tab_id,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
-            let (x, y) = match parse_browser_point(&arguments, "browser_click") {
-                Ok(point) => point,
-                Err(error) => return invalid_request_tool_error(error.to_string()),
+            // Element-target clicking: when the caller passes an opaque `ref`
+            // from observe(surface=browser), click by element identity (the
+            // service re-resolves its live position) instead of by coordinates.
+            let request = match parse_optional_element_ref(&arguments) {
+                Some(element_ref) => BrowserRequest::ClickElement {
+                    target,
+                    tab_id,
+                    element_ref,
+                },
+                None => {
+                    let (x, y) = match parse_browser_point(&arguments, "browser_click") {
+                        Ok(point) => point,
+                        Err(error) => return invalid_request_tool_error(error.to_string()),
+                    };
+                    BrowserRequest::Click {
+                        target,
+                        tab_id,
+                        x,
+                        y,
+                    }
+                }
             };
-            match service.call(&browser_service_request(BrowserRequest::Click {
-                target,
-                tab_id,
-                x,
-                y,
-            }))? {
+            match service.call(&browser_service_request(request))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::Click { response },
                 } => browser_action_result(response),
@@ -352,11 +368,20 @@ pub(super) fn handle_tool_call(
                     Ok(text) => text,
                     Err(error) => return invalid_request_tool_error(error.to_string()),
                 };
-            match service.call(&browser_service_request(BrowserRequest::TypeText {
-                target,
-                tab_id,
-                text,
-            }))? {
+            let request = match parse_optional_element_ref(&arguments) {
+                Some(element_ref) => BrowserRequest::TypeTextElement {
+                    target,
+                    tab_id,
+                    element_ref,
+                    text,
+                },
+                None => BrowserRequest::TypeText {
+                    target,
+                    tab_id,
+                    text,
+                },
+            };
+            match service.call(&browser_service_request(request))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::TypeText { response },
                 } => browser_action_result(response),

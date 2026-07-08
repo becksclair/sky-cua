@@ -110,6 +110,16 @@ pub(crate) fn parse_browser_point(arguments: &Value, label: &str) -> Result<(f64
     Ok((x, y))
 }
 
+/// An opaque element reference from observe(surface=browser), if the caller
+/// passed one. Present means click/type by element identity; absent means fall
+/// back to coordinates. The token is opaque and never parsed here.
+pub(crate) fn parse_optional_element_ref(arguments: &Value) -> Option<String> {
+    arguments
+        .get("ref")
+        .and_then(Value::as_str)
+        .and_then(optional_non_empty_string)
+}
+
 pub(crate) fn parse_browser_scroll(
     arguments: &Value,
 ) -> Result<(f64, f64, Option<f64>, Option<f64>)> {
