@@ -322,16 +322,31 @@ def stop_windows_cache_processes(cache_root: Path) -> None:
     subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True)
 
 
-def stop_unix_runtime_processes(search_roots: list[Path], proc_root: Path = Path("/proc")) -> None:
+def stop_unix_runtime_processes(
+    search_roots: list[Path],
+    proc_root: Path = Path("/proc"),
+    *,
+    match_all_paths: bool = False,
+) -> None:
+    """Terminate sky-cua runtime processes so hosts respawn fresh binaries.
+
+    By default only processes running from one of `search_roots` are stopped.
+    With `match_all_paths`, every sky-cua stack process owned by the current
+    user is stopped regardless of path — this reaps zombie processes left by
+    an earlier dev build or a stale install (e.g. an overlay host still bound
+    to the cursor socket from `target/release/`), which a path-scoped match
+    silently misses and which then fight the freshly deployed stack.
+    """
     if sys.platform == "win32":
         return
     root_prefixes = [
         _normalize_process_path(root.resolve()) + "/" for root in search_roots if root.exists()
     ]
-    if not root_prefixes or not proc_root.exists():
+    if not proc_root.exists() or (not root_prefixes and not match_all_paths):
         return
 
     current_pid = os.getpid()
+    current_uid = os.getuid()
     matches: list[int] = []
     for entry in proc_root.iterdir():
         if not entry.name.isdigit():
@@ -342,11 +357,44 @@ def stop_unix_runtime_processes(search_roots: list[Path], proc_root: Path = Path
         exe = _read_process_link(entry / "exe")
         cwd = _read_process_link(entry / "cwd")
         cmdline = _read_process_cmdline(entry / "cmdline")
-        if _is_sky_cua_runtime_process(exe, cwd, cmdline, root_prefixes):
+        if match_all_paths:
+            # Name-only match, but only for processes this user owns so a
+            # deploy never signals another user's sky-cua stack.
+            if _process_uid(entry) == current_uid and _is_sky_cua_runtime_binary(exe, cmdline):
+                matches.append(pid)
+        elif _is_sky_cua_runtime_process(exe, cwd, cmdline, root_prefixes):
             matches.append(pid)
 
     for pid in matches:
         _terminate_process(pid)
+
+
+def _process_uid(entry: Path) -> int | None:
+    try:
+        return entry.stat().st_uid
+    except OSError:
+        return None
+
+
+SKY_CUA_RUNTIME_BINARIES = frozenset(
+    {
+        "sky-cua-client",
+        "sky-cua-overlay-host",
+        "sky-cua-service",
+        "sky-cua-chrome-host",
+        "sky-cua-cosmic-helper",
+        "sky-cua-input-helper",
+    }
+)
+
+
+def _is_sky_cua_runtime_binary(exe: str | None, cmdline: str) -> bool:
+    if Path(exe or "").name in SKY_CUA_RUNTIME_BINARIES:
+        return True
+    # A process re-exec'd through a wrapper (bin/../target/release/...) may
+    # report the wrapper as exe; fall back to the argv0 binary name.
+    argv0 = cmdline.split(" ", 1)[0] if cmdline else ""
+    return Path(argv0).name in SKY_CUA_RUNTIME_BINARIES
 
 
 def _normalize_process_path(path: Path) -> str:
@@ -376,15 +424,7 @@ def _is_sky_cua_runtime_process(
     cmdline: str,
     root_prefixes: list[str],
 ) -> bool:
-    process_name = Path(exe or "").name
-    if process_name not in {
-        "sky-cua-client",
-        "sky-cua-overlay-host",
-        "sky-cua-service",
-        "sky-cua-chrome-host",
-        "sky-cua-cosmic-helper",
-        "sky-cua-input-helper",
-    }:
+    if Path(exe or "").name not in SKY_CUA_RUNTIME_BINARIES:
         return False
     candidates = [candidate for candidate in [exe, cwd, cmdline] if candidate]
     return any(prefix in candidate for prefix in root_prefixes for candidate in candidates)

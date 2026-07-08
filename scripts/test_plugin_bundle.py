@@ -213,6 +213,51 @@ def test_stop_unix_runtime_processes_targets_deleted_cache_process(
     assert all(pid != 456 for pid, _signal in calls)
 
 
+def test_stop_unix_runtime_processes_match_all_reaps_off_path_zombies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Unix process cleanup is not used on Windows")
+
+    proc_root = tmp_path / "proc"
+
+    # A stale overlay host from a dev build outside any install root — exactly
+    # the zombie a path-scoped stop misses and match_all must reap.
+    zombie_exe = "/home/dev/projects/sky-cua/target/release/sky-cua-overlay-host"
+    zombie = proc_root / "111"
+    zombie.mkdir(parents=True)
+    (zombie / "cmdline").write_bytes(zombie_exe.encode() + b"\0serve")
+    (zombie / "exe").symlink_to(zombie_exe)
+    (zombie / "cwd").symlink_to("/home/dev/projects/sky-cua")
+
+    # A non-sky-cua process must never be signalled.
+    other = proc_root / "222"
+    other.mkdir()
+    (other / "cmdline").write_bytes(b"/usr/bin/firefox\0")
+    (other / "exe").symlink_to("/usr/bin/firefox")
+    (other / "cwd").symlink_to("/usr/bin")
+
+    calls: list[tuple[int, int]] = []
+    terminated: set[int] = set()
+
+    def fake_kill(pid: int, signal: int) -> None:
+        calls.append((pid, signal))
+        if signal == plugin_bundle.SIGTERM:
+            terminated.add(pid)
+        if signal == 0 and pid in terminated:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(plugin_bundle.os, "kill", fake_kill)
+    # The fake /proc entries are owned by the test user, matching getuid().
+    monkeypatch.setattr(plugin_bundle.os, "getuid", lambda: zombie.stat().st_uid)
+
+    # No search roots at all: only match_all can find the off-path zombie.
+    stop_unix_runtime_processes([], proc_root=proc_root, match_all_paths=True)
+
+    assert (111, plugin_bundle.SIGTERM) in calls
+    assert all(pid != 222 for pid, _signal in calls)
+
+
 def test_stop_windows_cache_processes_uses_powershell_string_escaping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

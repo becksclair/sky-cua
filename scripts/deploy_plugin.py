@@ -146,6 +146,7 @@ def fast_deploy(args: argparse.Namespace) -> int:
         refresh_accessibility=False,
         browser_eval=getattr(args, "browser_eval", None),
         model_supports_images=getattr(args, "model_supports_images", None),
+        reap_all_runtime=True,
     )
 
     # Stamp the deployed client with the runtime-source fingerprint it was built

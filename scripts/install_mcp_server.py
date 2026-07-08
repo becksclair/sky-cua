@@ -770,14 +770,25 @@ def link_current_platform_binaries(target_dir: Path, bin_dir: Path) -> None:
             print(f"Copied {src} -> {dst}")
 
 
-def restart_runtime_processes(target_dir: Path, *, refresh_accessibility: bool = False) -> None:
-    """Stop installed sky-cua runtime processes so hosts respawn fresh binaries."""
+def restart_runtime_processes(
+    target_dir: Path,
+    *,
+    refresh_accessibility: bool = False,
+    reap_all: bool = False,
+) -> None:
+    """Stop installed sky-cua runtime processes so hosts respawn fresh binaries.
+
+    With ``reap_all`` every sky-cua stack process owned by the current user is
+    stopped regardless of path — used by the deploy to guarantee a clean slate
+    (no zombie overlay hosts or daemons from an earlier dev build racing the
+    freshly deployed binaries).
+    """
     if refresh_accessibility:
         refresh_accessibility_bus()
     if sys.platform == "win32":
         stop_windows_cache_processes(target_dir)
     else:
-        stop_unix_runtime_processes([target_dir])
+        stop_unix_runtime_processes([target_dir], match_all_paths=reap_all)
 
 
 def install_input_helper_service(
@@ -929,6 +940,7 @@ def install_local_mcp_server(
     browser_eval: str | None = None,
     model_supports_images: str | None = None,
     presence_enabled: str | None = None,
+    reap_all_runtime: bool = False,
 ) -> tuple[Path, Path]:
     """Install runtime binaries and host config; optionally restart installed runtimes.
 
@@ -985,8 +997,17 @@ def install_local_mcp_server(
     write_mcp_launch_policy_state(target_dir, launch_policy)
 
     if restart_runtime:
-        restart_runtime_processes(target_dir, refresh_accessibility=refresh_accessibility)
-        print(f"Stopped installed sky-cua runtime processes rooted under: {target_dir}")
+        restart_runtime_processes(
+            target_dir,
+            refresh_accessibility=refresh_accessibility,
+            reap_all=reap_all_runtime,
+        )
+        scope = (
+            "all sky-cua stack processes"
+            if reap_all_runtime
+            else f"processes rooted under: {target_dir}"
+        )
+        print(f"Stopped {scope}")
 
     if install_input_helper:
         install_input_helper_service(target_dir, socket_group=input_helper_group)

@@ -254,11 +254,13 @@ def test_generic_mcp_restart_runtime_stops_installed_processes(
 ) -> None:
     target_dir = tmp_path / "installed"
     target_dir.mkdir()
-    calls: list[list[Path]] = []
+    calls: list[tuple[list[Path], bool]] = []
     atspi_refreshes = 0
 
-    def fake_stop_unix_runtime_processes(search_roots: list[Path]) -> None:
-        calls.append(search_roots)
+    def fake_stop_unix_runtime_processes(
+        search_roots: list[Path], *, match_all_paths: bool = False
+    ) -> None:
+        calls.append((search_roots, match_all_paths))
 
     def fake_refresh_accessibility_bus() -> None:
         nonlocal atspi_refreshes
@@ -281,13 +283,17 @@ def test_generic_mcp_restart_runtime_stops_installed_processes(
     # The AT-SPI registry reset is opt-in: a plain restart must not wipe running
     # apps' accessibility registrations.
     assert atspi_refreshes == 0
-    assert calls == [[target_dir]]
+    assert calls == [([target_dir], False)]
 
     install_mcp_server.restart_runtime_processes(target_dir, refresh_accessibility=True)
 
     # Explicitly requested, the reset runs.
     assert atspi_refreshes == 1
-    assert calls == [[target_dir], [target_dir]]
+    assert calls == [([target_dir], False), ([target_dir], False)]
+
+    # reap_all reaps the whole stack regardless of path.
+    install_mcp_server.restart_runtime_processes(target_dir, reap_all=True)
+    assert calls[-1] == ([target_dir], True)
 
 
 def test_refresh_accessibility_bus_restarts_user_atspi(

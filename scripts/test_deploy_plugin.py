@@ -159,6 +159,7 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
         refresh_accessibility: bool = True,
         browser_eval: str | None = None,
         model_supports_images: str | None = None,
+        reap_all_runtime: bool = False,
     ) -> tuple[Path, Path]:
         calls["restart_runtime"] = restart_runtime
         calls["host"] = host
@@ -166,6 +167,7 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
         calls["refresh_accessibility"] = refresh_accessibility
         calls["browser_eval"] = browser_eval
         calls["model_supports_images"] = model_supports_images
+        calls["reap_all_runtime"] = reap_all_runtime
         return target / "bin" / "sky-cua-client", target / "claude_code_mcp.json"
 
     monkeypatch.setattr(deploy_plugin, "install_local_mcp_server", fake_install_local)
@@ -196,6 +198,9 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     assert calls["restart_runtime"] is True
     assert calls["refresh_accessibility"] is False
     assert calls["host"] == "claude-code"
+    # The deploy reaps the whole sky-cua stack so zombie dev-build processes
+    # cannot survive to race the freshly deployed binaries.
+    assert calls["reap_all_runtime"] is True
 
 
 def test_fast_deploy_returns_failure_when_kwin_live_reload_fails(
