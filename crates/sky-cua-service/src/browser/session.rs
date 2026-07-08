@@ -332,6 +332,73 @@ async fn attach_tab_until(
     tab_id: &Value,
     deadline: TokioInstant,
 ) -> Result<(), DiagnosticEntry> {
+    match attach_tab_once(stream, socket, request_id, tab_id, deadline).await {
+        Ok(()) => Ok(()),
+        Err(diagnostic) if is_foreign_extension_page_diagnostic(&diagnostic) => {
+            // A login redirect can hop through — or overlay — another
+            // extension's page for a moment (password-manager frames on
+            // credential forms are the live-observed case, 2026-07-08).
+            // Chrome refuses debugger access to a different extension's
+            // content, so retry once after the page settles; a persistent
+            // refusal gets the actionable details instead of raw Chrome
+            // internals.
+            let retry_at = TokioInstant::now() + FOREIGN_PAGE_RETRY_DELAY;
+            if retry_at < deadline {
+                tokio::time::sleep_until(retry_at).await;
+                return attach_tab_once(stream, socket, request_id, tab_id, deadline)
+                    .await
+                    .map_err(|diagnostic| {
+                        if is_foreign_extension_page_diagnostic(&diagnostic) {
+                            with_foreign_extension_page_details(diagnostic)
+                        } else {
+                            diagnostic
+                        }
+                    });
+            }
+            Err(with_foreign_extension_page_details(diagnostic))
+        }
+        Err(diagnostic) => Err(diagnostic),
+    }
+}
+
+/// One settle delay before retrying an attach that Chrome refused because the
+/// tab showed another extension's page; long enough for a redirect hop to
+/// land, short enough to not matter when the refusal is persistent.
+const FOREIGN_PAGE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(750);
+
+/// Chrome refuses `chrome.debugger` access to another extension's pages and
+/// to `chrome://` pages, full stop. This surfaces mid-login when a password
+/// manager overlays the form with its own extension frame, or when a redirect
+/// hops through an extension page.
+fn is_foreign_extension_page_diagnostic(diagnostic: &DiagnosticEntry) -> bool {
+    diagnostic.code == "BrowserBridgeRequestFailed"
+        && (diagnostic
+            .message
+            .contains("Cannot access a chrome-extension://")
+            || diagnostic.message.contains("Cannot access a chrome://"))
+}
+
+fn with_foreign_extension_page_details(diagnostic: DiagnosticEntry) -> DiagnosticEntry {
+    DiagnosticEntry {
+        details: Some(
+            "Chrome refuses debugger access while the tab shows another extension's \
+             page or frame — common during login when a password manager overlays \
+             the form, or while a redirect hops through an extension page. This is \
+             a browser security boundary, not a bridge fault: use desktop input for \
+             this step, or retry once the page returns to regular web content."
+                .to_string(),
+        ),
+        ..diagnostic
+    }
+}
+
+async fn attach_tab_once(
+    stream: &mut UnixStream,
+    socket: &Path,
+    request_id: &'static str,
+    tab_id: &Value,
+    deadline: TokioInstant,
+) -> Result<(), DiagnosticEntry> {
     send_bridge_request_until(
         stream,
         socket,

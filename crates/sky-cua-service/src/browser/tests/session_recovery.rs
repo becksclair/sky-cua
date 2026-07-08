@@ -1113,3 +1113,81 @@ async fn input_rejected_upfront_as_unattached_is_replayed_after_recovery() {
         response.diagnostics
     );
 }
+
+#[tokio::test]
+async fn foreign_extension_page_attach_is_retried_once_then_explained() {
+    // Chrome refuses chrome.debugger access to another extension's page —
+    // live-observed mid-login when a password manager overlaid the credential
+    // form (2026-07-08). The attach is retried once after a settle delay (a
+    // redirect can hop through the page transiently); a persistent refusal
+    // must carry the actionable security-boundary details, not raw Chrome
+    // internals.
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-foreign-ext-page");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut stream, claim) = accept_until_non_info_request(&listener).await;
+        assert_eq!(
+            claim.get("method").and_then(Value::as_str),
+            Some("claimUserTab")
+        );
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": claim["id"],
+                "result": {
+                    "id": 919,
+                    "title": "Login",
+                    "url": "https://iam.example.test/login",
+                    "active": true
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        for _ in 0..2 {
+            let attach = read_frame(&mut stream).await.unwrap().unwrap();
+            assert_eq!(attach.get("method").and_then(Value::as_str), Some("attach"));
+            write_frame(
+                &mut stream,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": attach["id"],
+                    "error": {
+                        "code": 1,
+                        "message": "Cannot access a chrome-extension:// URL of different extension"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        }
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    let response = claim_tab(Some(BrowserTargetKind::UserChrome), "919".to_string()).await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    // The claim itself succeeded (partial response), and the attach failure
+    // explains the browser security boundary with a desktop-input remedy.
+    assert!(response.tab.is_some(), "claim should still return the tab");
+    let diagnostic = response
+        .diagnostics
+        .first()
+        .expect("attach failure must surface a diagnostic");
+    assert!(
+        diagnostic
+            .details
+            .as_deref()
+            .is_some_and(|details| details.contains("desktop input")),
+        "diagnostic must steer to desktop input, got {:?}",
+        diagnostic.details
+    );
+}
