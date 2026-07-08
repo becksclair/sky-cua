@@ -2,6 +2,10 @@ use super::*;
 
 impl ServiceDaemon {
     pub(super) async fn handle_browser_request(&self, request: BrowserRequest) -> ServiceResponse {
+        // Any browser request marks the session active so the daemon's idle
+        // exit cannot kill the heartbeat keepalive (and with it every tab's
+        // debugger attachment) between an agent's browser actions.
+        crate::browser::mark_bridge_activity();
         match request {
             BrowserRequest::ListTabs { target } => {
                 debug!(?target, "handling browser_list_tabs request");

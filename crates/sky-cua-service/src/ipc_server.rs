@@ -338,7 +338,12 @@ pub async fn run_service() -> Result<()> {
 }
 
 async fn service_idle_timed_out(daemon: &ServiceDaemon, connections: &ConnectionTracker) -> bool {
-    connections.is_idle().await && daemon.idle_for().await >= IDLE_TIMEOUT
+    connections.is_idle().await
+        && daemon.idle_for().await >= IDLE_TIMEOUT
+        // An idle exit kills the browser heartbeat keepalive, and the
+        // extension then detaches the debugger from every tab; stay alive
+        // while a browser session lingers (see browser/activity.rs).
+        && !crate::browser::browser_session_lingering()
 }
 
 #[cfg(test)]

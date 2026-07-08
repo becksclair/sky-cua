@@ -7,6 +7,12 @@ use sky_cua_platform::model::{
     BrowserTargetAvailability, BrowserTargetKind, DiagnosticEntry,
 };
 
+pub(crate) fn mark_bridge_activity() {}
+
+pub(crate) fn browser_session_lingering() -> bool {
+    false
+}
+
 pub(crate) async fn list_tabs(target: Option<BrowserTargetKind>) -> BrowserListTabsResponse {
     BrowserListTabsResponse {
         target: Some(target.unwrap_or(BrowserTargetKind::UserChrome)),

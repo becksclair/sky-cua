@@ -78,17 +78,31 @@ async fn keepalive_loop() {
 /// drops or goes idle-stale, then return so the loop can reconnect.
 async fn serve_socket(socket: &Path) {
     let Ok(stream) = UnixStream::connect(socket).await else {
+        tracing::debug!(socket = %socket.display(), "browser keepalive could not connect");
         return;
     };
-    serve_stream(stream).await;
+    tracing::info!(
+        socket = %socket.display(),
+        "browser keepalive connected; answering the extension heartbeat as primary"
+    );
+    let exit = serve_stream(stream).await;
+    // Every exit here is a window in which a 30s heartbeat tick can go
+    // unanswered and the extension detaches chrome.debugger from every tab —
+    // agent-visible as "Debugger unattached". Keep this at info so incidents
+    // are attributable from the daemon log alone.
+    tracing::info!(
+        socket = %socket.display(),
+        exit,
+        "browser keepalive disconnected; reconnecting"
+    );
 }
 
-async fn serve_stream(mut stream: UnixStream) {
+async fn serve_stream(mut stream: UnixStream) -> &'static str {
     // Register as the driving (primary) client. The non-`sky-cua-mcp` session id
     // is what makes the host classify this connection as primary — the role the
     // extension routes the heartbeat ping to.
     if write_frame(&mut stream, &hello_frame()).await.is_err() {
-        return;
+        return "hello-write-failed";
     }
 
     loop {
@@ -97,15 +111,18 @@ async fn serve_stream(mut stream: UnixStream) {
                 if is_ping_request(&message) {
                     let id = message.get("id").cloned().unwrap_or(Value::Null);
                     if write_frame(&mut stream, &pong_frame(id)).await.is_err() {
-                        return;
+                        return "pong-write-failed";
                     }
+                    tracing::debug!("browser keepalive answered heartbeat ping");
                 }
                 // Every other routed frame (the getInfo reply, CDP-event and
                 // download notifications) needs no response from the keepalive.
             }
-            // EOF, read/parse error, or idle-stale: drop and let the loop
-            // reconnect against the current host socket.
-            _ => return,
+            // EOF (host restart or a competing primary evicted us), read/parse
+            // error, or idle-stale: drop and let the loop reconnect.
+            Ok(Ok(None)) => return "eof",
+            Ok(Err(_)) => return "read-error",
+            Err(_) => return "idle-stale",
         }
     }
 }
