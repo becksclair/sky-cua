@@ -186,6 +186,85 @@ fn browser_action_schemas_explain_simple_control_contract() {
 }
 
 #[test]
+fn browser_input_schema_accepts_element_ref_alternative() {
+    use super::definitions::{schema_accepts, validation_tool_definitions};
+
+    let advertised = build_tool_definitions(false, false);
+    let advertised_input = advertised
+        .as_array()
+        .expect("tools should be an array")
+        .iter()
+        .find(|tool| tool["name"] == "browser_input")
+        .expect("browser_input tool is advertised");
+
+    // The per-branch either/or constraints live on the rich validation schema;
+    // the advertised (flattened) schema drops the root oneOf.
+    let validation = validation_tool_definitions(false, false);
+    let input_tool = validation
+        .as_array()
+        .expect("validation tools should be an array")
+        .iter()
+        .find(|tool| tool["name"] == "browser_input")
+        .expect("browser_input validation schema present");
+    let schema = &input_tool["inputSchema"];
+
+    // The opaque `ref` property is advertised with its guidance description.
+    let ref_property = &advertised_input["inputSchema"]["properties"]["ref"];
+    assert_eq!(ref_property["type"], "string");
+    assert!(
+        ref_property["description"]
+            .as_str()
+            .expect("ref description")
+            .contains("opaque element reference from observe(surface=browser)")
+    );
+
+    // click accepts either coordinates or a ref.
+    assert!(
+        schema_accepts(
+            schema,
+            &json!({"operation": "click", "tab_id": "tab-1", "ref": "opaque-token"})
+        ),
+        "click by ref must be accepted"
+    );
+    assert!(
+        schema_accepts(
+            schema,
+            &json!({"operation": "click", "tab_id": "tab-1", "x": 1, "y": 1})
+        ),
+        "click by coordinates must remain accepted"
+    );
+
+    // type_text accepts an optional ref alongside the required text.
+    assert!(
+        schema_accepts(
+            schema,
+            &json!({"operation": "type_text", "tab_id": "tab-1", "text": "hi", "ref": "opaque-token"})
+        ),
+        "type_text with a ref must be accepted"
+    );
+    assert!(
+        schema_accepts(
+            schema,
+            &json!({"operation": "type_text", "tab_id": "tab-1", "text": "hi"})
+        ),
+        "type_text without a ref must remain accepted"
+    );
+
+    // click must supply exactly one of {x, y} or {ref}: neither and both are rejected.
+    assert!(
+        !schema_accepts(schema, &json!({"operation": "click", "tab_id": "tab-1"})),
+        "click with neither coordinates nor a ref must be rejected"
+    );
+    assert!(
+        !schema_accepts(
+            schema,
+            &json!({"operation": "click", "tab_id": "tab-1", "x": 1, "y": 1, "ref": "opaque-token"})
+        ),
+        "click with both coordinates and a ref must be rejected"
+    );
+}
+
+#[test]
 fn browser_snapshot_schema_advertises_element_filtering() {
     let definitions = build_tool_definitions(false, false);
     let observe_tool = definitions

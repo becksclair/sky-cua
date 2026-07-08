@@ -77,39 +77,62 @@ pub(super) fn browser_optional_xy_properties() -> Value {
     )
 }
 
+pub(super) fn browser_element_ref_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 1,
+        "description": "An opaque element reference from observe(surface=browser). Prefer it over x/y for reliable clicks on dynamic pages; the service re-resolves the element's live position. Do not construct or parse it."
+    })
+}
+
 pub(super) fn browser_input_properties() -> Value {
     merge_properties(
         browser_xy_properties(),
         json!({
             "operation": {"type": "string", "enum": ["click", "type_text", "press_key"]},
             "text": non_empty_string_schema(),
-            "key": non_blank_string_schema()
+            "key": non_blank_string_schema(),
+            "ref": browser_element_ref_schema()
         }),
     )
 }
 
 pub(super) fn browser_input_constraints() -> Value {
-    exact_branch_constraints(
-        &browser_input_properties(),
-        "operation",
-        &[
-            (
-                "click",
-                &["tab_id", "x", "y"][..],
-                &["operation", "target", "tab_id", "x", "y"][..],
-            ),
-            (
-                "type_text",
-                &["tab_id", "text"][..],
-                &["operation", "target", "tab_id", "text"][..],
-            ),
-            (
-                "press_key",
-                &["tab_id", "key"][..],
-                &["operation", "target", "tab_id", "key"][..],
-            ),
-        ],
-    )
+    let properties = browser_input_properties();
+    json!({
+        "allOf": [exact_branch_one_of(
+            &properties,
+            &[
+                // click targets either coordinates ({x, y}) or an element ref
+                // ({ref}); exactly one of the two is required.
+                (
+                    vec![("operation", "click")],
+                    &["tab_id"][..],
+                    &["operation", "target", "tab_id", "x", "y", "ref"][..],
+                    Some(json!({
+                        "oneOf": [
+                            {"required": ["x", "y"]},
+                            {"required": ["ref"]}
+                        ]
+                    })),
+                ),
+                // type_text always requires text; ref is optional (present =>
+                // type into that element, absent => the current focus).
+                (
+                    vec![("operation", "type_text")],
+                    &["tab_id", "text"][..],
+                    &["operation", "target", "tab_id", "text", "ref"][..],
+                    None,
+                ),
+                (
+                    vec![("operation", "press_key")],
+                    &["tab_id", "key"][..],
+                    &["operation", "target", "tab_id", "key"][..],
+                    None,
+                ),
+            ],
+        )]
+    })
 }
 
 pub(super) fn browser_scroll_properties() -> Value {
