@@ -5,7 +5,8 @@ use sky_cua_platform::model::{BROWSER_EVAL_ENV, BrowserTargetKind};
 use tokio::net::UnixListener;
 
 use crate::browser::bridge::{
-    eval, eval_with_policy, list_tabs, move_mouse, navigate, open_tab, press_key,
+    click_element, eval, eval_with_policy, list_tabs, move_mouse, navigate, open_tab, press_key,
+    type_text_element,
 };
 use crate::browser::protocol::{LIST_TABS_REQUEST_ID, read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
@@ -558,6 +559,80 @@ async fn press_key_dispatches_modifier_chord() {
 
     assert!(response.diagnostics.is_empty());
     assert_eq!(response.action, "press_key");
+}
+
+#[tokio::test]
+async fn click_element_surfaces_unresolved_and_dispatches_no_input() {
+    // In this stream's worktree the resolver is the Milestone 0 stub that
+    // reports unresolved without sending any bridge request, so this exercises
+    // the failure path end to end: the diagnostic must surface and NOT a single
+    // mouse event may be dispatched. The real resolve->dispatch success path is
+    // integration-verified once Stream 1A lands the live resolver.
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-click-element-unresolved");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let mut stream = accept_after_info(&listener).await;
+        // The resolver fails before writing any CDP frame; the connection must
+        // close with nothing further read, proving no input was dispatched.
+        assert!(
+            read_frame(&mut stream).await.unwrap().is_none(),
+            "no input may be dispatched when element resolution fails"
+        );
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    let response = click_element(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        "opaque-ref-token".to_string(),
+    )
+    .await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    assert_eq!(response.action, "click");
+    assert_eq!(response.diagnostics.len(), 1);
+    assert_eq!(response.diagnostics[0].code, "BrowserElementUnresolved");
+}
+
+#[tokio::test]
+async fn type_text_element_surfaces_unresolved_and_dispatches_no_input() {
+    // Mirror of the click case: an unresolved ref must surface the diagnostic
+    // and dispatch neither a focus click nor the text insert.
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-type-element-unresolved");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let mut stream = accept_after_info(&listener).await;
+        assert!(
+            read_frame(&mut stream).await.unwrap().is_none(),
+            "no input may be dispatched when element resolution fails"
+        );
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    let response = type_text_element(
+        Some(BrowserTargetKind::UserChrome),
+        "515".to_string(),
+        "opaque-ref-token".to_string(),
+        "hello".to_string(),
+    )
+    .await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    assert_eq!(response.action, "type_text");
+    assert_eq!(response.diagnostics.len(), 1);
+    assert_eq!(response.diagnostics[0].code, "BrowserElementUnresolved");
 }
 
 #[tokio::test]
