@@ -31,15 +31,15 @@ Term definitions used throughout, in plain language:
 
 ## Progress
 
-- [ ] Milestone 0 — Shared contract and the JavaScript/Rust resolution boundary (blocks everything else).
-- [ ] Milestone 1 — Option 1 element targeting (re-resolve by signature), the primary deliverable.
-  - [ ] Stream 1A — Snapshot emits a `ref` per element; a stateless resolver JavaScript payload re-finds an element and reports its live center and hit-test status.
-  - [ ] Stream 1B — Service input path gains element-targeted click and type that call the resolver, reuse the existing trusted-input dispatch, and surface unresolved/occluded diagnostics.
-  - [ ] Stream 1C — Client MCP schema and dispatch accept a `ref` on `click` and `type_text`; contract fixture regenerated.
-  - [ ] Stream 1D — Feature doc and browser-use skill document element targeting and when to prefer it.
-  - [ ] Milestone 1 integration — merge streams, full suite green, live-smoke the observe→click-by-ref flow on a dynamic page.
-- [ ] Milestone 2 — Option 2 element targeting (resolve by `backendNodeId` via the DOM domain), promoted only if Option 1 proves fragile.
-- [ ] Retirement — feature doc + roadmap update per `plans/AGENTS.md`, delete this plan.
+- [x] (2026-07-08) Milestone 0 — Shared contract and the JavaScript/Rust resolution boundary. Committed as `9779a9c`: `ClickElement`/`TypeTextElement` wire variants carrying an opaque `element_ref`, the `BrowserElementUnresolved`/`BrowserElementNotActionable` diagnostic codes, the `resolve` module with the `resolve_element_center` signature, bridge stubs, daemon routing, client dispatch, protocol ids, and the wire round-trip test.
+- [x] (2026-07-08) Milestone 1 — Option 1 element targeting (re-resolve by signature), the primary deliverable. Built as four parallel Opus streams in isolated worktrees, then integrated on main (`3d5b377`).
+  - [x] Stream 1A — Snapshot emits a base64url `ref` per element; the stateless resolver `Runtime.evaluate` re-finds an element by signature, scrolls it into view, hit-tests, and returns its live center with a `reason`. (`ef02717`; widened `resolve_element_center` with a `tab_id_value` param, reconciled at integration.)
+  - [x] Stream 1B — Service input path gains `BrowserCdpAction::ClickElement`/`TypeTextElement` that resolve then dispatch through the shared `dispatch_click_at` trusted-click helper, surfacing the unresolved/not-actionable diagnostics before any input. (`7390189`)
+  - [x] Stream 1C — Client `browser_input` schema accepts a `ref` as a mutually-exclusive alternative to `x`/`y` on `click` (oneOf) and optionally on `type_text`; both golden fixtures regenerated. (`c6bc2b0`)
+  - [x] Stream 1D — Feature doc and browser-use skill document element targeting and when to prefer it. (`1e6fb2b`)
+  - [x] Milestone 1 integration — all four branches merged cleanly (disjoint files); the one semantic seam (resolver signature) reconciled; full gate green (1075 Rust + 690 Python tests, clippy/fmt clean); deployed; live-smoked on real pages (see Outcomes).
+- [ ] Milestone 2 — Option 2 element targeting (resolve by `backendNodeId` via the DOM domain), promoted only if Option 1 proves fragile in live use. Not started; Option 1 is live and working, so this is deferred pending observed fragility.
+- [ ] Retirement — feature doc + roadmap update per `plans/AGENTS.md`, delete this plan. Deferred until Milestone 2 is decided (promote or drop).
 
 
 ## Surprises & Discoveries
@@ -79,7 +79,23 @@ Term definitions used throughout, in plain language:
 
 ## Outcomes & Retrospective
 
-To be written at Milestone 1 completion and again at plan retirement. Compare the delivered behavior against the Purpose: can an agent click and type by `ref`, does it land reliably on a dynamic page where coordinate clicking previously missed, and did `browser_eval` usage for element discovery drop.
+Milestone 1 (2026-07-08): delivered and live-proven. An agent can now click and type by element identity. Live smoke against the deployed runtime and a real Chrome-family browser:
+
+    observe(surface=browser) on example.com returned an element with a 387-char opaque `ref`.
+    browser_input(operation=click, tab_id, ref) on the "Learn more" link -> no error, no diagnostics;
+      the page navigated example.com -> iana.org, proving the click landed on the referenced element
+      (not coordinates).
+    Reusing the now-stale ref after navigation -> isError=true, diagnostic code BrowserElementUnresolved
+      (clean "re-observe" signal, not a silent miss).
+    browser_input(operation=type_text, tab_id, ref, text) into DuckDuckGo's search field ->
+      "sky-cua element targeting" landed in that field with no separate focus click (confirmed by reading
+      the element value back via a second observe).
+
+This matches the Purpose: element-by-identity targeting works, it re-resolves the live position at action time (so it does not suffer the stale-coordinate miss), and failures are structured rather than silent. Whether `browser_eval`-for-element-discovery usage actually drops is a behavioral outcome to observe in future agent sessions.
+
+Process note: the four streams were partitioned by file so parallel agents never collided; the single planned seam (Stream 1B calling Stream 1A's resolver) surfaced exactly as anticipated when 1A widened the resolver signature with a `tab_id_value` parameter, and integration was a one-line reconcile per call site plus removing two now-obsolete `#[allow(dead_code)]` markers. The opaque-`ref` decision held: nothing agent-facing depends on the internal encoding, so Milestone 2 remains a pure internal swap.
+
+Remaining: Milestone 2 (backendNodeId via the DOM domain) is deferred; promote it only if live use shows the signature matcher returning `not_found`/`ambiguous` too often on real pages.
 
 
 ## Context and Orientation
