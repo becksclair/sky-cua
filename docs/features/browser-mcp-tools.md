@@ -64,7 +64,12 @@ Current MCP browser entrypoints:
   dumping every unrelated element. The MCP tool requests only the projected
   default slice, so the structured `elements` array defaults to at most 200;
   `snapshot.elementCount` always reports the full total, and `element_limit`
-  raises or lowers the cap up to the service maximum of 5000.
+  raises or lowers the cap up to the service maximum of 5000. Each returned
+  element carries an opaque `ref` — an element reference the agent passes back
+  to `browser_input(operation="click"|"type_text")` to target the element by
+  identity instead of coordinates. The agent never parses the `ref`; it is a
+  self-contained token the service re-resolves against the live page at action
+  time.
 - `capture_screen(surface="browser")` accepts `target=user_chrome` and `tab_id`, then captures
   the visible viewport, normalizes the image to CSS-pixel dimensions, and
   re-encodes it with the shared model-screenshot knobs (WebP by default, JPEG
@@ -75,12 +80,27 @@ Current MCP browser entrypoints:
   `width`/`height` only. The base64 payload is never repeated inside
   `structuredContent`.
 - `browser_input(operation="click")` accepts `target=user_chrome`, `tab_id`,
-  `x`, and `y` in CSS pixels, matching browser capture pixels and browser
-  observation element bounds. Before dispatching the CDP click, the service
-  moves the browser agent cursor to the same point and waits for arrival.
+  and either `x`/`y` in CSS pixels or an opaque `ref` — mutually exclusive
+  targeting. Coordinates match browser capture pixels and browser observation
+  element bounds. Before dispatching the CDP click, the service moves the
+  browser agent cursor to the target point and waits for arrival. When `ref` is
+  supplied, it is an element reference obtained from an
+  `observe(surface="browser")` element; the service re-resolves that element's
+  live position at action time (re-finding it by signature, scrolling it into
+  view when needed, and hit-testing that nothing covers it), then dispatches the
+  same trusted click at the element's current center. It never falls back to a
+  synthetic `element.click()`. Because resolution is fresh at action time, `ref`
+  avoids the stale-coordinate miss that a re-rendered or reflowed page produces
+  between observation and click. If the ref cannot be resolved, the call returns
+  a `BrowserElementUnresolved` or `BrowserElementNotActionable` diagnostic (see
+  below) and dispatches no input.
 - `browser_input(operation="type_text")` accepts `target=user_chrome`,
-  `tab_id`, and non-empty `text`, then inserts text into the focused page
-  control.
+  `tab_id`, non-empty `text`, and optionally a `ref`. Without `ref` it inserts
+  text into the already-focused page control. With `ref` it focuses the
+  referenced field and types into it in one step — the same live re-resolution
+  as `click`, so a separate focus click is unnecessary — and returns the same
+  `BrowserElementUnresolved`/`BrowserElementNotActionable` diagnostics on a
+  resolution failure.
 - `browser_input(operation="press_key")` accepts `target=user_chrome`,
   `tab_id`, and non-empty `key`, then dispatches the key to the page. Single
   CDP key names and modifier chords such as `Ctrl+K`, `Ctrl+L`, `Shift+Tab`,
@@ -136,7 +156,11 @@ high-DPI captures to CSS-pixel dimensions at capture time, so agents never
 divide by `window.devicePixelRatio` and the center of a returned snapshot
 element can be passed directly to `browser_input(operation="click")`.
 Screenshots cover the currently visible viewport only; scroll and re-capture
-when the target is off-screen.
+when the target is off-screen. Coordinate targeting stays valid and is the
+right tool when the agent genuinely has a pixel target with no discrete
+element — a canvas or a map region; for actionable DOM controls on a dynamic
+page, prefer the `ref` path, which re-resolves the live position and cannot go
+stale between observation and action.
 
 Recommended agent flow:
 
@@ -147,11 +171,14 @@ Recommended agent flow:
   `url_contains` or `title_contains` to make the text response list relevant tab
   ids instead of only a count.
 - Use `observe(surface="browser")` to inspect page title, URL, viewport, visible text,
-  and common actionable element summaries with click-ready CSS-pixel bounds. Pass `element_query: "update"` or an `element_offset`/`element_limit`
+  and common actionable element summaries with click-ready CSS-pixel bounds and
+  a per-element `ref`. Pass `element_query: "update"` or an `element_offset`/`element_limit`
   window when a page contains many controls. Its MCP text summary also includes
   these details for text-only hosts.
 - Use `browser_input`, `browser_scroll`, and `browser_move_mouse` against the
-  tab returned by `browser_open` or `browser_claim_tab`. The service
+  tab returned by `browser_open` or `browser_claim_tab`. Prefer a `ref` from the
+  latest `observe` when clicking or typing on an actionable control; reserve
+  `x`/`y` for pixel targets without a discrete element. The service
   self-recovers once when the native-host bridge reports that the tab fell out
   of `sky-cua-mcp` session ownership or that the debugger is no longer attached.
 - Use `capture_screen(surface="browser")` when visual proof is needed; the image arrives as an
@@ -179,7 +206,10 @@ Service IPC variants:
   `Snapshot { target, tab_id, text_limit, element_offset, element_limit,
   element_query }`,
   `Screenshot { target, tab_id, include_image_data }`,
-  `Click { target, tab_id, x, y }`, `TypeText { target, tab_id, text }`,
+  `Click { target, tab_id, x, y }`,
+  `ClickElement { target, tab_id, element_ref }`,
+  `TypeText { target, tab_id, text }`,
+  `TypeTextElement { target, tab_id, element_ref, text }`,
   `PressKey { target, tab_id, key }`,
   `Scroll { target, tab_id, delta_x, delta_y, x: Option, y: Option }`, and
   `Eval { target, tab_id, expression }`.
@@ -328,6 +358,24 @@ programmatically — Blink requires the activation and caret a real click
 establishes — so key-driven editing still expects a preceding click, the normal
 focus-then-edit flow. The enabled `browser_eval` path uses `Runtime.evaluate`
 with `awaitPromise=true` and `returnByValue=true`.
+
+Element-targeted click and type (`ref`) resolve the element against the live
+page immediately before acting. Each snapshot element carries an opaque `ref`
+that self-contains how to re-find the element; at action time the service
+re-locates it by signature, scrolls it into view when it is outside the
+viewport, and hit-tests its center so a covered control is not clicked blindly.
+On success it dispatches exactly the coordinate path's trusted input at the
+element's freshly resolved center — the agent-cursor move, focus emulation, and
+`Input.dispatchMouseEvent` sequence for a click, or focus plus `Input.insertText`
+for a type — never a synthetic `element.click()`. Resolution is stateless and
+side-effect-free apart from the intended scroll and the click/type, so a failed
+resolution dispatches no input and leaves no residue. Two structured diagnostics
+report failure: `BrowserElementUnresolved` when the `ref` matches no element on
+the current page (the page changed since it was observed), and
+`BrowserElementNotActionable` when the element is found but is zero-sized,
+off-screen after a scroll attempt, or covered by another element. Both carry the
+remedy of re-observing with `observe(surface="browser")` to obtain fresh refs
+and retrying, rather than pixel-guessing the target.
 Snapshot element values are suppressed for password/hidden/token/API-key/auth/
 credential/session/code/PIN-like fields; use desktop computer-use or explicit
 user-directed workflows for sensitive form inspection instead of relying on raw
