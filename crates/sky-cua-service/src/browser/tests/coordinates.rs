@@ -260,6 +260,84 @@ async fn scroll_without_coordinates_scrolls_viewport_without_cursor_move() {
 }
 
 #[tokio::test]
+async fn dispatch_click_at_emits_focus_then_trusted_mouse_sequence() {
+    // dispatch_click_at is the single code path both the coordinate click and
+    // the element-targeted click/type arms use. Drive it directly on a
+    // connected stream and assert the exact trusted sequence at the given
+    // point: focus emulation, then mouseMoved / mousePressed / mouseReleased.
+    // This is the resolve->dispatch success path minus the resolver, which is
+    // integration-verified end to end once Stream 1A's live resolver lands.
+    use std::time::Duration;
+
+    use tokio::net::UnixStream;
+    use tokio::time::Instant;
+
+    use crate::browser::cdp::dispatch_click_at;
+    use crate::browser::tabs::tab_id_value;
+
+    let socket_dir = unique_test_dir("sky-cua-browser-dispatch-click-at");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let socket_path = socket_dir.join("extension-123-test.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_and_ack_focus_emulation(&mut stream).await;
+        for (expected_type, expected_button) in [
+            ("mouseMoved", None),
+            ("mousePressed", Some("left")),
+            ("mouseReleased", Some("left")),
+        ] {
+            let event = read_frame(&mut stream).await.unwrap().unwrap();
+            assert_eq!(
+                event.get("method").and_then(Value::as_str),
+                Some("executeCdp")
+            );
+            assert_eq!(event["params"]["method"], "Input.dispatchMouseEvent");
+            let command = &event["params"]["commandParams"];
+            assert_eq!(command["type"], expected_type);
+            assert_eq!(command["x"], 128.0);
+            assert_eq!(command["y"], 96.0);
+            if let Some(button) = expected_button {
+                assert_eq!(command["button"], button);
+                assert_eq!(command["clickCount"], 1);
+            }
+            write_frame(
+                &mut stream,
+                &json!({"jsonrpc": "2.0", "id": event["id"], "result": {}}),
+            )
+            .await
+            .unwrap();
+        }
+    });
+
+    let mut client = UnixStream::connect(&socket_path).await.unwrap();
+    let tab_id = tab_id_value("515");
+    let mut mutated = false;
+    dispatch_click_at(
+        &mut client,
+        &socket_path,
+        &tab_id,
+        128.0,
+        96.0,
+        Instant::now() + Duration::from_secs(2),
+        &mut mutated,
+    )
+    .await
+    .expect("dispatch_click_at should succeed against the fake bridge");
+
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    // The compounding press/release raise the mutated flag so the executor
+    // treats a click as not-replay-safe.
+    assert!(
+        mutated,
+        "click press/release must mark the operation mutating"
+    );
+}
+
+#[tokio::test]
 async fn scroll_rejects_zero_deltas_before_cdp_dispatch() {
     let _env_guard = env_lock().await;
 

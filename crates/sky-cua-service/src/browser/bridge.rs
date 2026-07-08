@@ -410,43 +410,47 @@ pub(crate) async fn type_text(
     .await
 }
 
-/// Click an element by its opaque snapshot reference. Milestone 0 stub: returns
-/// the not-yet-implemented diagnostic. Stream 1B replaces the body to resolve
-/// the element's live center (via `super::resolve`) and dispatch the existing
-/// trusted click at that point.
+/// Click an element by its opaque snapshot reference. Routes through the same
+/// executor path as the coordinate [`click`] (session recovery, replay
+/// classification, diagnostics); the live center is resolved and dispatched
+/// inside the `ClickElement` CDP arm. There is no pre-action cursor point
+/// because the target center is unknown until resolution, so `None` is passed
+/// for `cursor_before_action`.
 pub(crate) async fn click_element(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     element_ref: String,
 ) -> BrowserActionResponse {
-    let _ = element_ref;
-    BrowserActionResponse {
-        target: target.unwrap_or(BrowserTargetKind::UserChrome),
+    browser_action_response(
+        target,
         tab_id,
-        action: "click".to_string(),
-        diagnostics: vec![super::resolve::element_unresolved_diagnostic(
-            "browser element click is not yet implemented",
-        )],
-    }
+        "click",
+        Ok(()),
+        None,
+        BrowserCdpAction::ClickElement { element_ref },
+    )
+    .await
 }
 
-/// Type into an element by its opaque snapshot reference (focus then insert).
-/// Milestone 0 stub; Stream 1B replaces the body.
+/// Type into an element by its opaque snapshot reference. Focuses the element by
+/// clicking its resolved live center, then inserts `text`, all on the shared
+/// executor path used by [`type_text`]. As with [`click_element`], the center
+/// is unknown until resolution, so no pre-action cursor point is supplied.
 pub(crate) async fn type_text_element(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     element_ref: String,
     text: String,
 ) -> BrowserActionResponse {
-    let _ = (element_ref, text);
-    BrowserActionResponse {
-        target: target.unwrap_or(BrowserTargetKind::UserChrome),
+    browser_action_response(
+        target,
         tab_id,
-        action: "type_text".to_string(),
-        diagnostics: vec![super::resolve::element_unresolved_diagnostic(
-            "browser element type_text is not yet implemented",
-        )],
-    }
+        "type_text",
+        Ok(()),
+        None,
+        BrowserCdpAction::TypeTextElement { element_ref, text },
+    )
+    .await
 }
 
 pub(crate) async fn press_key(

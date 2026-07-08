@@ -31,7 +31,22 @@ pub(super) enum BrowserCdpAction {
         x: f64,
         y: f64,
     },
+    /// Click the element named by an opaque snapshot `element_ref`. The live
+    /// center is resolved over the bridge at dispatch time, then the same
+    /// trusted mouse sequence as [`BrowserCdpAction::Click`] is dispatched at
+    /// that center.
+    ClickElement {
+        element_ref: String,
+    },
     TypeText {
+        text: String,
+    },
+    /// Focus the element named by an opaque snapshot `element_ref` (by clicking
+    /// its resolved center) and insert `text`, mirroring
+    /// [`BrowserCdpAction::TypeText`] but aimed by identity instead of relying
+    /// on ambient focus.
+    TypeTextElement {
+        element_ref: String,
         text: String,
     },
     PressKey {
@@ -225,35 +240,23 @@ pub(super) async fn cdp_action_on_stream(
             })
         }
         BrowserCdpAction::Click { x, y } => {
-            ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
-            execute_cdp_until(
+            dispatch_click_at(stream, socket, tab_id_value, *x, *y, deadline, mutated).await?;
+            Ok(BrowserCdpResult::Action)
+        }
+        BrowserCdpAction::ClickElement { element_ref } => {
+            // Resolve first: a failed resolution surfaces
+            // BrowserElementUnresolved / BrowserElementNotActionable via `?`
+            // before any input is dispatched, so the agent gets a clean
+            // "re-observe" signal and the page is untouched.
+            let center =
+                super::resolve::resolve_element_center(stream, socket, element_ref, deadline)
+                    .await?;
+            dispatch_click_at(
                 stream,
                 socket,
-                CLICK_MOVE_REQUEST_ID,
                 tab_id_value,
-                "Input.dispatchMouseEvent",
-                json!({ "type": "mouseMoved", "x": x, "y": y }),
-                deadline,
-            )
-            .await?;
-            execute_compounding_cdp_until(
-                stream,
-                socket,
-                CLICK_DOWN_REQUEST_ID,
-                tab_id_value,
-                "Input.dispatchMouseEvent",
-                json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1 }),
-                deadline,
-                mutated,
-            )
-            .await?;
-            execute_compounding_cdp_until(
-                stream,
-                socket,
-                CLICK_UP_REQUEST_ID,
-                tab_id_value,
-                "Input.dispatchMouseEvent",
-                json!({ "type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1 }),
+                center.x,
+                center.y,
                 deadline,
                 mutated,
             )
@@ -262,6 +265,38 @@ pub(super) async fn cdp_action_on_stream(
         }
         BrowserCdpAction::TypeText { text } => {
             ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
+            execute_compounding_cdp_until(
+                stream,
+                socket,
+                TYPE_TEXT_REQUEST_ID,
+                tab_id_value,
+                "Input.insertText",
+                json!({ "text": text }),
+                deadline,
+                mutated,
+            )
+            .await?;
+            Ok(BrowserCdpResult::Action)
+        }
+        BrowserCdpAction::TypeTextElement { element_ref, text } => {
+            // Resolve first (see ClickElement): an unresolved / not-actionable
+            // ref propagates via `?` before any focus click or text insert.
+            let center =
+                super::resolve::resolve_element_center(stream, socket, element_ref, deadline)
+                    .await?;
+            // Focus the field with a real click at its live center, then insert
+            // the text. dispatch_click_at runs ensure_focus_emulation, so the
+            // insert lands even on a background/unfocused tab.
+            dispatch_click_at(
+                stream,
+                socket,
+                tab_id_value,
+                center.x,
+                center.y,
+                deadline,
+                mutated,
+            )
+            .await?;
             execute_compounding_cdp_until(
                 stream,
                 socket,
@@ -389,6 +424,60 @@ pub(super) async fn cdp_action_on_stream(
             Ok(BrowserCdpResult::Action)
         }
     }
+}
+
+/// Dispatch one trusted left click at the CSS-pixel point `(x, y)`: enable
+/// focus emulation, then `Input.dispatchMouseEvent` `mouseMoved` /
+/// `mousePressed` / `mouseReleased`. This is the single code path shared by the
+/// coordinate [`BrowserCdpAction::Click`] and the element-targeted
+/// [`BrowserCdpAction::ClickElement`] / [`BrowserCdpAction::TypeTextElement`]
+/// arms, so an aim-by-identity click is byte-for-byte the same trusted gesture
+/// as an aim-by-pixel one. `mouseMoved` is absolute and read-only-ish so it
+/// goes through plain `execute_cdp_until`; press/release compound on replay and
+/// therefore raise `mutated` via `execute_compounding_cdp_until`.
+pub(super) async fn dispatch_click_at(
+    stream: &mut UnixStream,
+    socket: &Path,
+    tab_id_value: &Value,
+    x: f64,
+    y: f64,
+    deadline: TokioInstant,
+    mutated: &mut bool,
+) -> Result<(), DiagnosticEntry> {
+    ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
+    execute_cdp_until(
+        stream,
+        socket,
+        CLICK_MOVE_REQUEST_ID,
+        tab_id_value,
+        "Input.dispatchMouseEvent",
+        json!({ "type": "mouseMoved", "x": x, "y": y }),
+        deadline,
+    )
+    .await?;
+    execute_compounding_cdp_until(
+        stream,
+        socket,
+        CLICK_DOWN_REQUEST_ID,
+        tab_id_value,
+        "Input.dispatchMouseEvent",
+        json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1 }),
+        deadline,
+        mutated,
+    )
+    .await?;
+    execute_compounding_cdp_until(
+        stream,
+        socket,
+        CLICK_UP_REQUEST_ID,
+        tab_id_value,
+        "Input.dispatchMouseEvent",
+        json!({ "type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1 }),
+        deadline,
+        mutated,
+    )
+    .await?;
+    Ok(())
 }
 
 /// Force the tab's renderer to treat itself as focused before an input action.
