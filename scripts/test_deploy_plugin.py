@@ -143,6 +143,8 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     monkeypatch.setattr(deploy_plugin, "stop_unix_runtime_processes", lambda _roots: None)
     monkeypatch.setattr(deploy_plugin, "stop_windows_cache_processes", lambda _root: None)
     monkeypatch.setattr(deploy_plugin, "compat_plugin_targets_payload", lambda _home, _dest: False)
+    # No KWin effect installed, so the effect step is skipped without touching DBus.
+    monkeypatch.setattr(deploy_plugin, "installed_effect_ids", lambda: [])
 
     def fake_refresh_accessibility_bus() -> None:
         nonlocal atspi_refreshes
@@ -181,6 +183,7 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
         no_build=True,
         symlink=False,
         kwin_effect=False,
+        no_kwin_effect=False,
         no_companion=False,
         force_companion=False,
         local_install_dir=tmp_path / "local-install",
@@ -250,6 +253,7 @@ def test_fast_deploy_returns_failure_when_kwin_live_reload_fails(
         no_build=True,
         symlink=False,
         kwin_effect=True,
+        no_kwin_effect=False,
         no_companion=True,
         force_companion=False,
         local_install_dir=tmp_path / "local-install",
@@ -257,4 +261,4 @@ def test_fast_deploy_returns_failure_when_kwin_live_reload_fails(
     )
 
     assert deploy_plugin.fast_deploy(args) == 1
-    assert "did not converge" in capsys.readouterr().err
+    assert "did not load" in capsys.readouterr().err

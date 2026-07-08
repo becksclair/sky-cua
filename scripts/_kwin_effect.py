@@ -435,6 +435,20 @@ def kwin_effect_supported(
     return status.stdout.strip().lower() == "true"
 
 
+def kwin_effect_up_to_date(*, runner: Runner = default_runner) -> bool:
+    """True when a sky-cua effect is loaded and its BuildId matches the source.
+
+    Lets a routine deploy skip the sudo rebuild when the installed effect is
+    already the current source built against the running KWin. Any ABI break
+    (KWin update) unloads the effect, so a not-loaded effect reads as stale and
+    triggers a rebuild.
+    """
+    loaded = [id_ for id_ in loaded_effect_ids(runner=runner) if is_sky_cua_effect_id(id_)]
+    if not loaded:
+        return False
+    return running_effect_build_id(runner=runner) == compute_effect_build_id()
+
+
 def running_effect_build_id(*, runner: Runner = default_runner) -> str:
     """BuildId reported by the loaded effect; "unknown" for legacy/unreachable."""
     result = runner(

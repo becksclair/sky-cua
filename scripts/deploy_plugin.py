@@ -26,7 +26,9 @@ from _companion import (
 from _install_shared import DEFAULT_LOCAL_INSTALL_DIR, MCP_HOST_CHOICES
 from _kwin_effect import (
     deploy_kwin_effect,
+    installed_effect_ids,
     kwin_effect_deploy_failed,
+    kwin_effect_up_to_date,
     print_kwin_effect_deploy_outcome,
 )
 from _plugin_bundle import (
@@ -155,16 +157,27 @@ def fast_deploy(args: argparse.Namespace) -> int:
     stamp_path = write_build_stamp(client_path, deployed_at_ms=int(time.time() * 1000))
     print(f"deploy_stamp={stamp_path}")
 
-    if args.kwin_effect:
-        outcome = deploy_kwin_effect(build_dir=destination.parent / "kwin-effect-build")
-        print_kwin_effect_deploy_outcome(outcome)
-        if kwin_effect_deploy_failed(outcome):
-            print(
-                f"KWin effect {outcome.effect_id} did not converge; "
-                f"restored {outcome.rollback_effect_id or 'no previous effect'}",
-                file=sys.stderr,
-            )
-            return 1
+    # Keep the KWin agent-cursor effect ABI-fresh and actually loaded. Run when
+    # forced with --kwin-effect, or automatically when the effect is already
+    # installed (the operator opted in before, so a deploy must not leave it
+    # broken after a KWin update silently unloads a stale-ABI build). The
+    # up-to-date fast path avoids a gratuitous sudo prompt when the loaded
+    # effect already matches the current source.
+    want_effect = not args.no_kwin_effect and (args.kwin_effect or bool(installed_effect_ids()))
+    if want_effect:
+        if not args.kwin_effect and kwin_effect_up_to_date():
+            print("kwin-effect: already loaded and up to date; skipping rebuild")
+        else:
+            outcome = deploy_kwin_effect(build_dir=destination.parent / "kwin-effect-build")
+            print_kwin_effect_deploy_outcome(outcome)
+            if kwin_effect_deploy_failed(outcome):
+                print(
+                    f"KWin effect {outcome.effect_id} did not load; "
+                    f"restored {outcome.rollback_effect_id or 'no previous effect'}. "
+                    "The agent cursor will not hide the system cursor until this is fixed.",
+                    file=sys.stderr,
+                )
+                return 1
 
     print(f"installed_path={destination}")
     print(f"config_path={config_path}")
@@ -208,9 +221,15 @@ def main(argv: list[str] | None = None) -> int:
         "--kwin-effect",
         action="store_true",
         help=(
-            "Also build, install (sudo cmake --install), and reload the sky-cua "
-            "KWin agent-cursor effect (Linux/KDE only)."
+            "Force build, install (sudo cmake --install), and reload the sky-cua "
+            "KWin agent-cursor effect (Linux/KDE only). Runs automatically when "
+            "the effect is already installed; this forces it on first install."
         ),
+    )
+    parser.add_argument(
+        "--no-kwin-effect",
+        action="store_true",
+        help="Skip the KWin agent-cursor effect step even if it is already installed.",
     )
     parser.add_argument(
         "--no-companion",
