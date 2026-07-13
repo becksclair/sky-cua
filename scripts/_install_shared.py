@@ -11,11 +11,10 @@ import sys
 import tomllib
 from pathlib import Path
 
-from _plugin_bundle import remove_path
+from _plugin_bundle import SKY_CUA_SKILLS, remove_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BROWSER_SELECTION_ENV = "SKY_CUA_BROWSER"
-SKY_CUA_SKILLS = ("computer-use", "browser-use", "phone-use")
 DEFAULT_LOCAL_INSTALL_DIR = Path.home() / ".local" / "share" / "sky-cua"
 MCP_HOST_CHOICES = ("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw")
 GATEWAY_AUTH_ENV_KEYS = ("OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD")

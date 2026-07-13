@@ -24,6 +24,9 @@ PLUGIN_ID = f"{PLUGIN_NAME}@{PLUGIN_CHANNEL}"
 # active payload is selected by retargeting the compat plugin root's .mcp.json
 # at the local cache payload (see docs/operations/plugin-release.md).
 COMPUTER_USE_COMPAT_PLUGIN_ID = "computer-use@openai-bundled"
+SKY_CUA_SKILLS = ("computer-use", "browser-use", "phone-use")
+SHARED_AGENT_SKILL_OVERRIDES_BEGIN = "# BEGIN sky-cua managed shared-agent skill overrides"
+SHARED_AGENT_SKILL_OVERRIDES_END = "# END sky-cua managed shared-agent skill overrides"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DIST_PLUGIN_ROOT = REPO_ROOT / "dist" / "plugin" / PLUGIN_NAME
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
@@ -452,9 +455,7 @@ def ensure_bundle_structure(root: Path) -> None:
         root / ".claude-plugin" / "marketplace.json",
         root / ".codex-plugin" / "plugin.json",
         root / ".mcp.json",
-        root / "skills" / "computer-use" / "SKILL.md",
-        root / "skills" / "browser-use" / "SKILL.md",
-        root / "skills" / "phone-use" / "SKILL.md",
+        *(root / "skills" / skill_name / "SKILL.md" for skill_name in SKY_CUA_SKILLS),
         root / "docs" / "operations" / "testing-vm-desktop-smokes.md",
         root / "resources" / "app-instructions" / "index.json",
     ]
@@ -629,6 +630,44 @@ def disable_retired_channels(config_text: str) -> str:
     return config_text
 
 
+def apply_shared_agent_skill_deduplication(config_text: str, skills_root: Path) -> str:
+    """Disable shared sky-cua skill copies inside Codex only.
+
+    sky-cua keeps canonical symlinks under ``~/.agents/skills`` so generic
+    agents can discover the same skills. Codex also loads the copies bundled in
+    the active plugin, however, which otherwise exposes every sky-cua skill
+    twice. Codex canonicalizes path selectors before applying ``skills.config``
+    rules, so selectors written against the stable symlink paths continue to
+    follow whichever checkout ``sync_agent_skills.py`` currently targets while
+    leaving the plugin-namespaced copies enabled.
+    """
+    managed_block_re = re.compile(
+        rf"(?ms)^{re.escape(SHARED_AGENT_SKILL_OVERRIDES_BEGIN)}\r?\n"
+        rf".*?^{re.escape(SHARED_AGENT_SKILL_OVERRIDES_END)}(?:\r?\n)?"
+    )
+    config_text = managed_block_re.sub("", config_text).rstrip()
+
+    skills_root = skills_root.expanduser()
+    lines = [
+        SHARED_AGENT_SKILL_OVERRIDES_BEGIN,
+        "# Shared copies stay available to non-Codex agents; plugin skills are canonical in Codex.",
+    ]
+    for skill_name in SKY_CUA_SKILLS:
+        lines.extend(
+            [
+                "[[skills.config]]",
+                f"path = {json.dumps(str(skills_root / skill_name / 'SKILL.md'))}",
+                "enabled = false",
+                "",
+            ]
+        )
+    lines.append(SHARED_AGENT_SKILL_OVERRIDES_END)
+    managed_block = "\n".join(lines)
+    if not config_text:
+        return f"{managed_block}\n"
+    return f"{config_text}\n\n{managed_block}\n"
+
+
 def update_codex_config(
     config_path: Path,
     *,
@@ -637,6 +676,7 @@ def update_codex_config(
     plugin_id: str = PLUGIN_ID,
     plugin_enabled: bool = True,
     compat_enablement: bool = False,
+    shared_agent_skills_root: Path | None = None,
 ) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -669,4 +709,8 @@ def update_codex_config(
     # exactly one enabled computer-use plugin id, even on an in-place upgrade of a
     # box left in the old debug/Heliasar-enabled state.
     config_text = disable_retired_channels(config_text)
+    config_text = apply_shared_agent_skill_deduplication(
+        config_text,
+        shared_agent_skills_root or (Path.home() / ".agents" / "skills"),
+    )
     config_path.write_text(config_text, encoding="utf-8")

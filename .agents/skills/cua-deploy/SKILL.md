@@ -41,9 +41,13 @@ python3 scripts/sync_agent_skills.py
 ```
 
 Only the sky-cua-owned skill links above are replaced; unrelated skills in
-`~/.agents/skills` are never touched. (The former OpenClaw workspace-skills
-copy into `~/.openclaw/workspace/skills` was retired 2026-07-03 — OpenClaw no
-longer reads bundled copies from there.)
+`~/.agents/skills` are never touched. Codex also discovers the same skills from
+the active plugin, so every Codex config update maintains a managed
+`[[skills.config]]` block that disables the shared-link copies only inside
+Codex; the plugin-namespaced copies remain enabled. Do not remove those global
+links to solve Codex duplication because other agents rely on them. (The former
+OpenClaw workspace-skills copy into `~/.openclaw/workspace/skills` was retired
+2026-07-03 — OpenClaw no longer reads bundled copies from there.)
 
 ## Lanes
 

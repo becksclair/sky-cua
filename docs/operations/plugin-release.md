@@ -27,6 +27,16 @@ Fallback: when a bundle ships without the openai-bundled resources (no compat
 root can be materialized - minimal test bundles, non-Linux), the deploy falls
 back to enabling `sky-cua@local` directly.
 
+Keep exactly one enabled copy of each bundled sky-cua skill in Codex as well.
+The canonical shared links under
+`~/.agents/skills/{computer-use,browser-use,phone-use}` remain available to
+other agents, while `update_codex_config` writes path-scoped
+`[[skills.config]]` rules that disable those shared copies inside Codex. Codex
+canonicalizes the configured paths, so the rules follow the symlinks when
+`scripts/sync_agent_skills.py` repoints them to another checkout. The active
+Codex copies are the plugin-namespaced skills from the enabled compat or local
+plugin.
+
 ## Local Iteration
 
 When changing Rust code, scripts, app guidance, skills, plugin metadata, or
@@ -123,6 +133,20 @@ enabled = true
 
 [plugins."sky-cua@local"]
 enabled = false
+
+# BEGIN sky-cua managed shared-agent skill overrides
+[[skills.config]]
+path = "/home/<user>/.agents/skills/computer-use/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/<user>/.agents/skills/browser-use/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/<user>/.agents/skills/phone-use/SKILL.md"
+enabled = false
+# END sky-cua managed shared-agent skill overrides
 ```
 
 After cleanup, rerun `python3 scripts/deploy_plugin.py`. The cheap

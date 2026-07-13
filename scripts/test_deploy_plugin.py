@@ -11,6 +11,8 @@ import deploy_plugin
 from _plugin_bundle import (
     COMPUTER_USE_COMPAT_PLUGIN_ID,
     PLUGIN_ID,
+    SHARED_AGENT_SKILL_OVERRIDES_BEGIN,
+    SKY_CUA_SKILLS,
     update_codex_config,
 )
 from deploy_plugin import drop_retired_channel_caches
@@ -42,6 +44,43 @@ def test_update_codex_config_enables_compat_id_when_available(tmp_path: Path) ->
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert parsed["plugins"][COMPUTER_USE_COMPAT_PLUGIN_ID]["enabled"] is True
     assert parsed["plugins"][PLUGIN_ID]["enabled"] is False
+
+
+def test_update_codex_config_disables_shared_agent_skill_copies(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    skills_root = tmp_path / ".agents" / "skills"
+    config_path.write_text(
+        '[[skills.config]]\nname = "unrelated-skill"\nenabled = true\n',
+        encoding="utf-8",
+    )
+
+    update_codex_config(
+        config_path,
+        compat_enablement=True,
+        shared_agent_skills_root=skills_root,
+    )
+    first_write = config_path.read_text(encoding="utf-8")
+    update_codex_config(
+        config_path,
+        compat_enablement=True,
+        shared_agent_skills_root=skills_root,
+    )
+
+    config_text = config_path.read_text(encoding="utf-8")
+    parsed = tomllib.loads(config_text)
+    assert config_text == first_write
+    assert config_text.count(SHARED_AGENT_SKILL_OVERRIDES_BEGIN) == 1
+    assert parsed["skills"]["config"][0] == {
+        "name": "unrelated-skill",
+        "enabled": True,
+    }
+    assert parsed["skills"]["config"][1:] == [
+        {
+            "path": str(skills_root / skill_name / "SKILL.md"),
+            "enabled": False,
+        }
+        for skill_name in SKY_CUA_SKILLS
+    ]
 
 
 def test_update_codex_config_disables_retired_channels(tmp_path: Path) -> None:
