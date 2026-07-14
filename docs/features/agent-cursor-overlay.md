@@ -195,10 +195,13 @@ path.
 
 The WGPU pass draws a full-screen analytic shader into a premultiplied-alpha
 surface. TOML color channels are authored as sRGB 0..255 values and normalized
-before upload. The surface policy prefers sRGB swapchain formats
-(`Bgra8UnormSrgb`, then `Rgba8UnormSrgb`, then any sRGB format), and the shader
-returns premultiplied color so transparent composition remains correct with
-`CompositeAlphaMode::PreMultiplied` when available.
+before upload. The surface policy requires a non-sRGB 8-bit swapchain format
+(`Bgra8Unorm`, then `Rgba8Unorm`) and fails closed when neither is advertised;
+the shader
+returns premultiplied color for `CompositeAlphaMode::PreMultiplied`. Avoiding an
+sRGB swapchain here is deliberate: transfer-encoding RGB after premultiplication
+can make stored color channels exceed alpha, causing the Wayland compositor to
+produce pale or white fringes around translucent edge and cursor smoke.
 
 The analytic effect math is kept in parity with the Android companion's
 `OverlayMath`: the shared spec drives identical timing, easing, and amplitude
@@ -271,6 +274,9 @@ On the desktop the edge glow is a drifting, domain-warped value-noise (fbm)
 field rather than the stroked/blurred band the Android companion draws: a bright
 rim hugs the very edge (~0.8mm), a fuller smoke layer banks against the border
 and breaks into wisps further in, and the whole effect crawls over time. It is
+saturated toward the light-pink palette even in low-density haze, while rim and
+body alpha combine as overlapping translucent layers instead of an additive
+sum. This keeps the lavender-pink appearance without opaque hot spots. It is
 sized in physical units — the host packs each output's logical-pixels-per-
 millimetre (derived from the `wl_output` physical size and logical size) into
 `surface_size_px.z`, so the rim width and the ~2.5cm containment depth read the
@@ -317,7 +323,8 @@ feathered to nothing so the cloud dissolves with no visible edge. The aura's
 size is the `AGENT_CURSOR_SMOKE_MARGIN` band, its density is the noise
 threshold, and it is sampled at a small up-left uv offset so the cloud centres
 on the hotspot rather than the glyph centroid (the arrow body sits down-right
-of the tip).
+of the tip). It uses the same bounded rim/body alpha union and lifted haze tint
+as the edge smoke, so the two effects retain one visual identity.
 
 The grounding shadow is its **own pass rendered under the smoke** (`cursor_shadow`
 before `cursor_smoke` in `render_pixel`), sampled from the same SDF at a blurred

@@ -9,7 +9,7 @@ use crate::renderer::{
     },
     scene::SurfaceDrawRequest,
     shaders::{create_effect_bind_group_layout, create_effect_pipeline},
-    surface::{SurfaceGuard, supports_transparent_alpha_mode},
+    surface::{SurfaceGuard, choose_surface_format, supports_transparent_alpha_mode},
 };
 use anyhow::{Context, Result, bail};
 
@@ -124,6 +124,12 @@ impl WgpuOverlayRenderer {
             let capabilities = guard.capabilities(&adapter);
             if capabilities.formats.is_empty() {
                 bail!("wgpu surface {index} has no compatible texture formats");
+            }
+            if choose_surface_format(&capabilities.formats).is_none() {
+                bail!(
+                    "wgpu surface {index} has no compatible premultiplied display-space format; expected Bgra8Unorm or Rgba8Unorm, advertised {:?}",
+                    capabilities.formats
+                );
             }
             if capabilities.present_modes.is_empty() {
                 bail!("wgpu surface {index} has no compatible present modes");

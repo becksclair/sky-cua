@@ -54,7 +54,8 @@ impl SurfaceGuard {
         height: u32,
     ) -> ::wgpu::SurfaceConfiguration {
         let capabilities = self.capabilities(adapter);
-        let format = choose_surface_format(&capabilities.formats);
+        let format = choose_surface_format(&capabilities.formats)
+            .expect("renderer initialization must reject incompatible surface formats");
         let present_mode = choose_present_mode(&capabilities.present_modes);
         let alpha_mode = choose_alpha_mode(&capabilities.alpha_modes);
         let config = ::wgpu::SurfaceConfiguration {
@@ -123,20 +124,19 @@ pub enum SurfaceAcquisitionResult {
     Validation,
 }
 
-fn choose_surface_format(formats: &[::wgpu::TextureFormat]) -> ::wgpu::TextureFormat {
+pub(crate) fn choose_surface_format(
+    formats: &[::wgpu::TextureFormat],
+) -> Option<::wgpu::TextureFormat> {
     formats
         .iter()
         .copied()
-        .find(|format| *format == ::wgpu::TextureFormat::Bgra8UnormSrgb)
+        .find(|format| *format == ::wgpu::TextureFormat::Bgra8Unorm)
         .or_else(|| {
             formats
                 .iter()
                 .copied()
-                .find(|format| *format == ::wgpu::TextureFormat::Rgba8UnormSrgb)
+                .find(|format| *format == ::wgpu::TextureFormat::Rgba8Unorm)
         })
-        .or_else(|| formats.iter().copied().find(::wgpu::TextureFormat::is_srgb))
-        .or_else(|| formats.first().copied())
-        .unwrap_or(::wgpu::TextureFormat::Bgra8UnormSrgb)
 }
 
 fn choose_present_mode(present_modes: &[::wgpu::PresentMode]) -> ::wgpu::PresentMode {
@@ -177,22 +177,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format_choice_prefers_bgra_srgb() {
+    fn format_choice_prefers_non_srgb_bgra_for_premultiplied_output() {
         assert_eq!(
             choose_surface_format(&[
                 ::wgpu::TextureFormat::Rgba8Unorm,
                 ::wgpu::TextureFormat::Bgra8UnormSrgb,
+                ::wgpu::TextureFormat::Bgra8Unorm,
                 ::wgpu::TextureFormat::Rgba8UnormSrgb,
             ]),
-            ::wgpu::TextureFormat::Bgra8UnormSrgb
+            Some(::wgpu::TextureFormat::Bgra8Unorm)
         );
     }
 
     #[test]
-    fn format_choice_falls_back_to_first() {
+    fn format_choice_uses_non_srgb_rgba_before_srgb_formats() {
         assert_eq!(
-            choose_surface_format(&[::wgpu::TextureFormat::Rgba16Float]),
-            ::wgpu::TextureFormat::Rgba16Float
+            choose_surface_format(&[
+                ::wgpu::TextureFormat::Bgra8UnormSrgb,
+                ::wgpu::TextureFormat::Rgba8Unorm,
+            ]),
+            Some(::wgpu::TextureFormat::Rgba8Unorm)
+        );
+    }
+
+    #[test]
+    fn format_choice_rejects_formats_outside_display_space_contract() {
+        assert_eq!(
+            choose_surface_format(&[
+                ::wgpu::TextureFormat::Bgra8UnormSrgb,
+                ::wgpu::TextureFormat::Rgba16Float,
+                ::wgpu::TextureFormat::Rgb10a2Unorm,
+            ]),
+            None
         );
     }
 

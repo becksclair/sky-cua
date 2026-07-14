@@ -1,9 +1,9 @@
 //! WGSL shader source and pipeline factory for GPU-rendered overlay effects.
 //!
-//! The shader treats generated TOML color channels as normalized sRGB values
-//! and outputs premultiplied alpha. The current surface policy prefers sRGB
-//! swapchain formats, so texture sampling and presentation use WGPU's sRGB
-//! conversions while analytic effect colors stay in the authored visual space.
+//! The shader treats generated TOML color channels as normalized display-space
+//! values and outputs premultiplied alpha. The surface policy prefers non-sRGB
+//! swapchain formats so WGPU does not transfer-encode already-premultiplied RGB
+//! before the compositor consumes it.
 
 pub const EFFECT_SHADER: &str = r#"
 const PI: f32 = 3.141592653589793;
@@ -164,6 +164,15 @@ fn premul(color: vec3<f32>, alpha: f32) -> vec4<f32> {
     return vec4<f32>(color * a, a);
 }
 
+// Rim and body are overlapping translucent layers, not additive light. Their
+// alpha union preserves the soft lavender haze without letting dense overlap
+// clamp into the hot-magenta wall produced by a straight sum.
+fn smoke_coverage(rim: f32, body: f32, rim_gain: f32, body_gain: f32) -> f32 {
+    let rim_alpha = saturate(rim * rim_gain);
+    let body_alpha = saturate(body * body_gain);
+    return 1.0 - (1.0 - rim_alpha) * (1.0 - body_alpha);
+}
+
 fn over(src: vec4<f32>, dst: vec4<f32>) -> vec4<f32> {
     return src + dst * (1.0 - src.a);
 }
@@ -270,9 +279,9 @@ fn edge_glow(pixel: vec2<f32>) -> vec4<f32> {
     let tint = mix(
         frame.color_agent_pink.xyz,
         frame.color_agent_pink_light.xyz,
-        max(density, rim * 0.6),
+        max(0.35, max(density, rim * 0.6)),
     );
-    let alpha = base_alpha * (rim * 0.9 + body * 0.62) * contain;
+    let alpha = base_alpha * smoke_coverage(rim, body, 0.82, 0.42) * contain;
     return premul(tint, alpha);
 }
 
@@ -361,9 +370,13 @@ fn cursor_smoke(pixel: vec2<f32>, cursor_pos: vec2<f32>) -> vec4<f32> {
     let tint = mix(
         frame.color_agent_pink.xyz,
         frame.color_agent_pink_light.xyz,
-        max(density, rim * 0.6),
+        max(0.35, max(density, rim * 0.6)),
     );
-    let alpha = base_alpha * (rim * 0.72 + body * 0.48) * outside * edge_fade * frame.halo.w;
+    let alpha = base_alpha
+        * smoke_coverage(rim, body, 0.78, 0.44)
+        * outside
+        * edge_fade
+        * frame.halo.w;
     return premul(tint, alpha);
 }
 
@@ -686,6 +699,7 @@ mod tests {
             "fn edge_glow",
             "fn inward_waves",
             "fn cursor_smoke",
+            "fn smoke_coverage",
             "fn ripple",
             "fn trail",
             "fn no_no_mark",
@@ -701,6 +715,11 @@ mod tests {
         assert!(
             !EFFECT_SHADER.contains("fn animated_cursor_position"),
             "the in-shader drag lerp is retired; the CPU motion driver owns the glyph position"
+        );
+        assert_eq!(
+            EFFECT_SHADER.matches("smoke_coverage(rim, body").count(),
+            2,
+            "edge and cursor smoke must share the bounded translucent response"
         );
     }
 
@@ -743,7 +762,9 @@ mod tests {
         );
         assert!(
             (values[12 + 3] - expected["edge_glow_alpha"].as_f64().unwrap() as f32).abs() < 0.02,
-            "edge glow rim lights at the screen edge when the agent is in control"
+            "edge glow rim lights at the screen edge when the agent is in control: actual={} expected={}",
+            values[12 + 3],
+            expected["edge_glow_alpha"]
         );
         assert!(
             (values[20 + 3] - expected["trail_probe_alpha"].as_f64().unwrap() as f32).abs() < 0.001,

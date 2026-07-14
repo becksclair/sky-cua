@@ -17,7 +17,7 @@
         "ripple_alpha": 0.5,
         "cursor": { "x": 50.0, "y": 60.0 },
         "cursor_scale": 1.076789,
-        "edge_glow_alpha": 0.483,
+        "edge_glow_alpha": 0.364,
         "trail_probe_alpha": 0.0
       }
     },
