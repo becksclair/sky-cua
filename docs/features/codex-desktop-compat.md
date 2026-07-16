@@ -108,10 +108,13 @@ Preflight (`resources/chrome_preflight.py`,
   `computer-use@openai-bundled` compat plugin (compat-first enablement).
 
 The Linux native messaging host (`crates/sky-cua-chrome-host`) bridges
-the official Codex Chrome extension and the sky-cua runtime: it
-round-trips `getInfo` and `getTabs`, forwards extension heartbeat
-`ping` messages, and emits `turnEnded` from a task-complete session
-log so the extension's session lifecycle is honored.
+the upstream ChatGPT Chrome extension and the sky-cua runtime. It handles
+`codexRuntime/hello`, `codexRuntime/ensure`, and `codexRuntime/restart`, selects
+a compatible local Codex app-server entry, and owns the loopback WebSocket
+proxy that validates the extension origin. The legacy `ensureCodexAppServer`
+response remains compatible. The host also round-trips `getInfo` and `getTabs`,
+forwards extension heartbeat `ping` messages, and emits `turnEnded` from a
+task-complete session log so the extension's session lifecycle is honored.
 
 ## Source paths
 
@@ -128,8 +131,10 @@ log so the extension's session lifecycle is honored.
 - `resources/chrome_preflight.py` - preflight that syncs bundled
   cache, writes native-host manifests, enables companion plugins.
 - `crates/sky-cua-chrome-host/` — Linux native messaging host.
-- `resources/chrome-extension/codex/1.1.5_0/` — extracted upstream
-  Codex Chrome extension fallback payload.
+- `resources/chrome-extension/codex/1.2.27203.26575_0/` — extracted upstream
+  ChatGPT Chrome extension fallback payload. Local extraction keeps upstream
+  source maps and Chrome `_metadata`; plugin staging excludes both because they
+  are not runtime assets.
 - `bin/sky-cua-browser-preflight` — preflight wrapper.
 - `.codex-plugin/plugin.json`, `.mcp.json` — plugin manifest and MCP
   server config.
@@ -143,7 +148,7 @@ uv run ruff format --check resources/chrome_preflight.py scripts/test_plugin_bun
 uv run ruff check resources/chrome_preflight.py scripts/test_plugin_bundle.py
 uv run basedpyright resources/chrome_preflight.py scripts/test_plugin_bundle.py
 uv run pytest scripts/test_plugin_bundle.py -k 'browser_preflight or update_codex_config'
-cargo test -p sky-cua-chrome-host
+cargo nextest run -p sky-cua-chrome-host
 ```
 
 Live host smoke:
@@ -183,8 +188,8 @@ Latest accepted artifacts:
   documented in
   [`docs/runtime/compat-plugin-contract.md`](../runtime/compat-plugin-contract.md).
 - **No standalone Chrome extension smoke fixture.** The current
-  fallback is the extracted upstream Codex extension under
-  `resources/chrome-extension/codex/1.1.5_0/`. A
+  fallback is the extracted upstream ChatGPT extension under
+  `resources/chrome-extension/codex/1.2.27203.26575_0/`. A
   `scripts/install_chrome_extension.py` automated temporary-profile
   loader does not exist yet.
 - **Codex Desktop UI proof requires a fresh re-run after upstream

@@ -723,7 +723,13 @@ def fallback_extension_path(source_root: Path) -> Path | None:
             data = json.loads(manifest.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             continue
-        if data.get("name") == "Codex" and data.get("key"):
+        version = data.get("version")
+        if (
+            data.get("name") in {"Codex", "ChatGPT"}
+            and data.get("key")
+            and isinstance(version, str)
+            and candidate.name == f"{version}_0"
+        ):
             return candidate
     return None
 

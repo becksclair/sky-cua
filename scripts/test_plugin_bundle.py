@@ -449,6 +449,35 @@ def test_copy_worktree_bundle_dirs_includes_kwin_effect_resources(
     )
 
 
+def test_copy_worktree_bundle_dirs_excludes_chrome_maps_and_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    extension_dir = repo_root / "resources" / "chrome-extension" / "codex" / "1.2.0_0"
+    assets_dir = extension_dir / "assets"
+    metadata_dir = extension_dir / "_metadata"
+    assets_dir.mkdir(parents=True)
+    metadata_dir.mkdir()
+    (extension_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    (assets_dir / "sidepanel.js").write_text("runtime", encoding="utf-8")
+    (assets_dir / "sidepanel.js.map").write_text("source map", encoding="utf-8")
+    (metadata_dir / "verified_contents.json").write_text("{}", encoding="utf-8")
+    bundle_root = tmp_path / "bundle"
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", repo_root)
+
+    build_plugin.copy_worktree_bundle_dirs(bundle_root)
+
+    bundled_extension = bundle_root / extension_dir.relative_to(repo_root)
+    assert (bundled_extension / "manifest.json").exists()
+    assert (bundled_extension / "assets" / "sidepanel.js").exists()
+    assert not (bundled_extension / "assets" / "sidepanel.js.map").exists()
+    assert not (bundled_extension / "_metadata").exists()
+    assert (assets_dir / "sidepanel.js.map").exists()
+    assert metadata_dir.exists()
+
+
 def test_stage_bundle_preserves_existing_other_platform_binaries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -821,6 +850,26 @@ def test_browser_preflight_rejects_uppercase_native_host_name(tmp_path: Path) ->
         chrome_preflight.read_chrome_extension_metadata(plugin_root)
 
 
+def test_browser_preflight_selects_latest_keyed_chatgpt_fallback(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight()
+    source_root = tmp_path / "resources" / "plugins" / "openai-bundled"
+    source_root.mkdir(parents=True)
+    fallback_root = tmp_path / "resources" / "chrome-extension" / "codex"
+
+    manifests = {
+        "1.1.5_0": {"name": "Codex", "version": "1.1.5", "key": "old-key"},
+        "1.2.0_0": {"name": "ChatGPT", "version": "1.2.0", "key": "new-key"},
+        "9.0.0_0": {"name": "Unrelated", "version": "9.0.0", "key": "foreign-key"},
+        "9.1.0_0": {"name": "ChatGPT", "version": "9.1.1", "key": "mismatched"},
+    }
+    for directory, manifest in manifests.items():
+        candidate = fallback_root / directory
+        candidate.mkdir(parents=True)
+        (candidate / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert chrome_preflight.fallback_extension_path(source_root) == fallback_root / "1.2.0_0"
+
+
 def test_browser_preflight_computer_use_compat_plugin_preserves_env_allowlist(
     tmp_path: Path,
 ) -> None:
@@ -1133,6 +1182,7 @@ def test_bundled_chrome_extension_cursor_overlay_contract() -> None:
     content_script = (extension_dir / "content-scripts" / "codex.js").read_text(encoding="utf-8")
     background = (extension_dir / "background.js").read_text(encoding="utf-8")
 
+    assert extension_dir.name == f"{manifest['version']}_0"
     assert (extension_dir / "images" / "cursor-chat.png").exists()
     native_cursor_asset = (
         plugin_bundle.REPO_ROOT / "crates" / "sky-cua-overlay-host" / "assets" / "cursor-chat.png"

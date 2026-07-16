@@ -1,4 +1,6 @@
-use crate::app_server::AppServerManager;
+#[cfg(test)]
+use crate::app_server::AppServerControlError;
+use crate::app_server::{AppServerControlResult, AppServerManager};
 use crate::frame::{read_frame, write_frame};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -892,13 +894,29 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
         return;
     }
 
-    if message.get("method").and_then(Value::as_str) == Some("ensureCodexAppServer") {
+    let app_server_method = message.get("method").and_then(Value::as_str);
+    if matches!(
+        app_server_method,
+        Some(
+            "ensureCodexAppServer"
+                | "codexRuntime/hello"
+                | "codexRuntime/ensure"
+                | "codexRuntime/restart"
+        )
+    ) {
         let (manager, stdout, host_name) = {
             let state = state.lock().expect("host state mutex poisoned");
             let (stdout, host_name) = state.chrome_writer();
             (Arc::clone(&state.app_server_manager), stdout, host_name)
         };
-        let response = app_server_control_response(&message, || manager.ensure());
+        let params = message.get("params");
+        let response = app_server_control_response(&message, || match app_server_method {
+            Some("codexRuntime/hello") => manager.hello(params),
+            Some("codexRuntime/restart") => manager.restart(params),
+            Some("codexRuntime/ensure") => manager.ensure(params),
+            Some("ensureCodexAppServer") => manager.ensure_legacy(),
+            _ => unreachable!("app-server method was filtered above"),
+        });
         write_chrome_frame(&stdout, &host_name, &response);
         return;
     }
@@ -960,15 +978,20 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
     }
 }
 
-fn app_server_control_response(message: &Value, ensure: impl FnOnce() -> Result<Value>) -> Value {
+fn app_server_control_response(
+    message: &Value,
+    ensure: impl FnOnce() -> AppServerControlResult,
+) -> Value {
     let id = message.get("id").cloned().unwrap_or(Value::Null);
     match ensure() {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-        Err(error) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": { "code": -32000, "message": error.to_string() }
-        }),
+        Err(error) => {
+            let mut payload = json!({ "code": -32000, "message": error.to_string() });
+            if let Some(error_type) = error.error_type() {
+                payload["data"] = json!({ "type": error_type });
+            }
+            json!({ "jsonrpc": "2.0", "id": id, "error": payload })
+        }
     }
 }
 
@@ -1216,6 +1239,25 @@ mod tests {
             response["result"]["localAppServerUrl"],
             json!("http://127.0.0.1:46287")
         );
+    }
+
+    #[test]
+    fn app_server_control_error_preserves_the_extension_error_type() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "native-host:2",
+            "method": "codexRuntime/hello"
+        });
+        let response = app_server_control_response(&request, || {
+            Err(AppServerControlError::typed(
+                "version_mismatch",
+                anyhow::anyhow!("runtime protocols are incompatible"),
+            ))
+        });
+
+        assert_eq!(response["id"], json!("native-host:2"));
+        assert_eq!(response["error"]["code"], json!(-32000));
+        assert_eq!(response["error"]["data"]["type"], json!("version_mismatch"));
     }
 
     #[test]

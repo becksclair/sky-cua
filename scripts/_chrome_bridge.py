@@ -27,7 +27,7 @@ from typing import NamedTuple, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXTENSION_ID = "hehggadaopoacecdllhhajmbjkdcmajg"
-DEFAULT_EXTENSION_VERSION_DIR = "1.1.5_0"
+DEFAULT_EXTENSION_VERSION_DIR = "1.2.27203.26575_0"
 DEFAULT_EXTENSION_DIR = (
     Path.home()
     / ".config/google-chrome/Default/Extensions"

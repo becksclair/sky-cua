@@ -20,3 +20,8 @@ __pycache__/
 # Android Gradle lane; bundled into dist by build_plugin.py when present).
 /resources/android/phone-companion.apk
 /resources/android/phone-companion.json
+
+# Keep upstream Chrome debugging/integrity artifacts available in local
+# extractions without shipping or committing them.
+/resources/chrome-extension/**/*.map
+/resources/chrome-extension/**/_metadata/

@@ -54,8 +54,9 @@ WORKTREE_BUNDLE_FILES = (
     Path("docs") / "features" / "phone-use.md",
     Path("docs") / "runtime" / "phone-companion-protocol.md",
 )
+CHROME_EXTENSION_BUNDLE_DIR = Path("resources") / "chrome-extension"
 WORKTREE_BUNDLE_DIRS = (
-    Path("resources") / "chrome-extension",
+    CHROME_EXTENSION_BUNDLE_DIR,
     Path("resources") / "cosmic",
     Path("resources") / "kwin",
     Path("skills") / "computer-use",
@@ -254,6 +255,11 @@ def copy_worktree_bundle_files(temp_root: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def chrome_extension_bundle_ignore(_directory: str, names: list[str]) -> set[str]:
+    """Keep local extraction metadata and source maps out of staged bundles."""
+    return {name for name in names if name == "_metadata" or name.endswith(".map")}
+
+
 def copy_worktree_bundle_dirs(temp_root: Path) -> None:
     for relative_path in WORKTREE_BUNDLE_DIRS:
         source = REPO_ROOT / relative_path
@@ -263,7 +269,10 @@ def copy_worktree_bundle_dirs(temp_root: Path) -> None:
         if destination.exists():
             shutil.rmtree(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, destination)
+        ignore = (
+            chrome_extension_bundle_ignore if relative_path == CHROME_EXTENSION_BUNDLE_DIR else None
+        )
+        shutil.copytree(source, destination, ignore=ignore)
 
 
 def copy_companion_apk_if_present(temp_root: Path) -> None:
