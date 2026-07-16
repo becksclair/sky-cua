@@ -2144,6 +2144,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sky-cua-platform",
+ "url",
 ]
 
 [[package]]

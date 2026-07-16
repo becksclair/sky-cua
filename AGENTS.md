@@ -114,8 +114,11 @@ parallel structures (`goals/`, `specs/`, `prds/`, `rfcs/`, or similar).
 - State any live-smoke gates not run, especially desktop/portal/KDE/COSMIC/
   Hyprland/GNOME flows.
 - When the user says "run all the smoke tests", run the `all` profile
-  (`python3 scripts/run_gui_testing_vm_smoke.py --profile all`) — every
-  desktop environment and agent harness in sequence, not a subset.
+  (`python3 scripts/run_gui_testing_vm_smoke.py --profile all`) — the routine
+  full VM smoke gate covering direct CUA/screenshot lanes, Codex Desktop,
+  OpenCode/Pi, the deterministic `codex-cua` gate, and KWin. Headed legacy
+  compositor profiles run only when `HOST_WAYLAND_DISPLAY` is set; real-session
+  per-desktop acceptance remains separate.
 - For shipped features, update or create `docs/features/<slug>.md` and the
   matching `ROADMAP.md` entry. For retired ExecPlans, follow
   `plans/AGENTS.md`.

@@ -1,4 +1,4 @@
 interface:
   display_name: "Computer Use"
-  short_description: "Hybrid tree-plus-vision desktop control"
-  default_prompt: "Use the installed sky-cua computer-use runtime with a hybrid tree-plus-vision workflow to operate the desktop app safely and verify the result."
+  short_description: "Desktop apps, browser chrome, and OS-dialog control"
+  default_prompt: "Use sky-cua desktop tools for native apps, windows, OS dialogs, and physical browser chrome; use browser tools for page content or explicit browser-surface operations, and phone tools for Android."

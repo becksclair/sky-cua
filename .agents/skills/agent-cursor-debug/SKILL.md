@@ -1,116 +1,115 @@
 ---
 name: agent-cursor-debug
-description: Use when building, tuning, or visually debugging the DESKTOP agent cursor — the wgpu layer-shell overlay's pointer glyph, its glyph-anchored smoke aura, its grounding shadow, and its vehicle-steering MOTION (glide/rotation/arrival-gated feedback/trail) (NOT the phone overlay, which is overlay-pointer-animations). Covers the capture.py stills harness, the motion-capture video harness (scripts/overlay_motion_animations.py via the KDE ScreenCast portal), the offline gesture/motion frame dumps (SKY_CUA_CAPTURE_GESTURES / SKY_CUA_CAPTURE_MOTION), the renderer's and motion driver's tunable constants, and the hard-won live-capture pitfalls (pkill-kills-the-shell, the 2s host startup budget, snapshot_id + live timestamp, spectacle-not-grim).
+description: "Use for visual debugging of the desktop Rust/wgpu agent-cursor overlay: glyph, smoke aura, shadow, or glide/rotation/arrival/trail motion. Covers KDE captures and deterministic dumps. Not for the phone companion overlay; use overlay-pointer-animations."
 ---
 
 # Agent Cursor Debug (desktop)
 
-Use this skill to **visually** iterate on the desktop agent cursor: the wgpu
-layer-shell overlay's pointer glyph, the smoke aura that wreathes it, and the
-shadow that grounds it. Quality is judged by eye against a real screenshot, so
-the harness places the cursor on the operator's KDE Wayland desktop and captures
-it — it is a visual harness, not a pass/fail smoke.
+This skill is only for the desktop `sky-cua-overlay-host` cursor: its pointer
+glyph, glyph-anchored smoke aura, grounding shadow, and motion behavior. The
+phone companion overlay belongs to `overlay-pointer-animations`.
 
-This is the **desktop** overlay (Rust/wgpu, `sky-cua-overlay-host`). For the
-**phone** overlay (Kotlin companion app) use `overlay-pointer-animations`.
+## Mandatory plan contract
 
-## Where the cursor is rendered
+- Still proof must name `cargo build --release -p sky-cua-overlay-host` and `python3 .agents/skills/agent-cursor-debug/capture.py <FX> <FY>`, the private `/tmp/agent-cursor-debug/svc.sock` isolated-service lifecycle, and inspection of `/tmp/agent-cursor-debug/cursor_native7x.png` plus `cursor_context.png`. Report FX/FY, changed constants, and separate glyph, outline, tint, smoke placement/density, and light-background shadow verdicts.
+- Motion proof for redirect plus arrival feedback must name `uv run python scripts/overlay_motion_animations.py --scenario redirect --scenario tap_settle`, inspect the MP4/contact sheets under `artifacts/overlay-motion-animations/`, judge bowed momentum/eased nose/trail in `redirect`, and judge ripple/squash only after arrival in `tap_settle`. If live capture is unavailable, use exactly `SKY_CUA_CAPTURE_MOTION=1 cargo nextest run --release -p sky-cua-overlay-host -E 'test(capture_motion_frames_when_requested)'`, inspect `/tmp/overlay-demo/motion/manifest.txt` and its frames, and state that KDE composition was not proved.
+- Minimum general acceptance is one `capture.py` still over light/text-heavy content plus the exact `redirect` and `tap_settle` scenarios; do not invent scenario names, output flags, or artifact paths.
+- For a source-only missing-cursor diagnosis, separately inspect `snapshot_id` plus near-now `updated_at_ms` freshness and the two-second `HOST_START_TIMEOUT`. The deterministic gesture dump can prove renderer health only; it cannot simulate or prove stale-state rejection or delayed host startup. Keep those source-backed hypotheses explicit unless an existing focused test exercises them.
+- Never claim artifacts not produced by the documented command. Keep live captures under `/tmp` or ignored `artifacts/`, never commit them, and report every live gate not run.
 
-All in `crates/sky-cua-overlay-host/`:
+## Choose the proof path
 
-- `src/renderer/mod.rs` — `render_vector_cursor` bakes the glyph into a texture:
-  a Chaikin-rounded path turned into a **signed distance field** (R channel), a
-  chamfer-transform **smoke anchor** (G channel), plus B/A for the CPU-blit
-  fallback. Also the mip-chain generator and `CursorImage::load`.
-- `src/renderer/shaders.rs` — the WGSL. `cursor_sample` reconstructs the glyph
-  from the SDF with `fwidth` anti-aliasing and tints it; `cursor_smoke` billows
-  the edge-glow recipe off the G-channel anchor; `cursor_shadow` is a separate
-  pass drawn UNDER the smoke. `render_pixel` is the composite order.
-- `src/renderer/wgpu.rs` — cursor texture upload (mip levels, trilinear sampler,
-  linear `Rgba8Unorm` format).
+Identify the requested proof before reading detail. Load only the referenced
+catalog or pitfall note that the path needs.
 
-The architecture and the *why* behind each piece live in
-`docs/features/agent-cursor-overlay.md` ("Cursor glyph, smoke aura, and shadow").
+1. **Source-only inspection** — trace ownership or tunables without touching a
+   desktop. Read [`references/source-and-tunables.md`](references/source-and-tunables.md).
+2. **Still capture** — judge glyph, outline, tint, smoke, or shadow. Use the
+   `capture.py` still harness and inspect its native/context artifacts.
+3. **Motion capture** — judge glide, redirect, heading rotation, arrival
+   feedback, or trail. Prefer the live redirect video; use the offline motion
+   dump when the KDE portal is unavailable.
+4. **Offline dump** — inspect renderer channels, gesture frames, or the real
+   motion driver without KDE or a live overlay.
 
-## Tunable constants
+For every selected path, plans and reports must name the exact documented
+command and expected artifact files; do not replace the harness with an ad-hoc
+capture, a VM profile, or an unrelated test filter.
 
-Change these, rebuild, recapture:
+For a general visual-acceptance request, the minimum representative proof is
+one still over light/text-heavy content plus one motion invocation selecting
+both `redirect` and `tap_settle`.
+If live composition is unavailable, pair the still (if possible) with
+deterministic motion evidence and label the live gate as unrun.
+Rust tests and VM smokes are supplemental and never replace this still-plus-
+motion visual matrix.
 
-- **Size / aura band** — `src/lib.rs` `cursor_asset`:
-  `AGENT_CURSOR_DESKTOP_WIDTH/HEIGHT` + `_HOTSPOT_X/Y` (on-screen glyph size; the
-  source path is 46×48 and is scaled down), and `AGENT_CURSOR_SMOKE_MARGIN` (how
-  far the smoke reaches — bigger = larger cloud).
-- **Glyph** — `src/renderer/mod.rs`: `CURSOR_STROKE_EDGE` (outline ring width,
-  normalized SDF units — **also change the matching WGSL const**, guarded by
-  `stroke_edge_matches_shader_constant`), `CURSOR_CORNER_ROUNDING` (Chaikin
-  iterations), `SDF_RANGE_TEXELS` (distance the field encodes; widen it to give
-  the shadow more room, and halve `CURSOR_STROKE_EDGE` to keep the outline width).
-- **Tint / smoke / shadow** — `src/renderer/shaders.rs`: the `fill`/`edge` tint
-  in `cursor_sample`; the `density` threshold and `alpha` multipliers and
-  `CURSOR_SMOKE_OFFSET_*` (up-left shift so the cloud centres on the hotspot) in
-  `cursor_smoke`; the `CURSOR_SHADOW_*` constants (offset, blur LOD, reach,
-  falloff, strength).
+## Hard stops and platform boundary
 
-## Capture and inspect
+- Do not use blanket `pkill` for overlay hosts or `sky-cua-service`. Run
+  `capture.py` as one lifecycle, or use
+  `_overlay_host.terminate_leftover_hosts("/tmp/agent-cursor-debug/agent-cursor.sock")`; pass the private host socket, not the service IPC socket `/tmp/agent-cursor-debug/svc.sock`. It is socket
+  scoped and must not touch the operator's service-owned host.
+- A live cursor state needs both `snapshot_id` and a near-now
+  `updated_at_ms`. A zero or stale timestamp makes the cursor decay away.
+- For a missing-cursor diagnosis, check `snapshot_id`, `updated_at_ms`, and the
+  two-second `HOST_START_TIMEOUT` path before proposing source or harness
+  changes; source-only inspection must remain read-only.
+- On KDE/KWin use `spectacle -b -n -f -o <path>` for the whole desktop. Do not
+  substitute `grim`; KWin has no `wlr-screencopy` path.
+- The live service must use a private socket and freshly built release
+  binaries. Screenshots and recordings show the operator's desktop: keep them
+  under `/tmp` or ignored `artifacts/` and never commit them.
+
+For the shell, startup, timestamp, and compositor failure signatures behind
+these stops, read [`references/live-capture-pitfalls.md`](references/live-capture-pitfalls.md).
+
+## Still appearance proof
+
+Build and run from the repository root:
 
 ```bash
 cargo build --release -p sky-cua-overlay-host
 python3 .agents/skills/agent-cursor-debug/capture.py 0.4 0.45
 ```
 
-`capture.py` starts an isolated service on a private socket, places the cursor at
-that fraction of the screen, captures with spectacle, and writes to
+`FX FY` are fractions of the primary capture. Choose a light or text-heavy
+background when shadow contrast matters. The isolated harness writes to
 `/tmp/agent-cursor-debug/`:
 
-- `capture.png` — the full virtual-desktop screenshot.
-- `cursor_native7x.png` — the glyph at **true native resolution**, 7× nearest.
-- `cursor_context.png` — the cursor in context.
+- `capture.png` — full virtual-desktop evidence.
+- `cursor_native7x.png` — true native-resolution glyph, nearest-neighbour 7×.
+- `cursor_context.png` — cursor in context.
 
-Then **read** those PNGs and judge. Place over light content (a higher `FY`, or
-a spot with text) to see the shadow; the glyph and smoke read on any background.
+Read `cursor_native7x.png` and `cursor_context.png`. Spectacle is 2× logical
+desktop resolution; judging a zoomed raw `capture.png` invents stair-stepping.
+Report the fraction, artifact directory, and changed constants.
 
-> Run the Bash call with the sandbox disabled — the service needs the KDE portal.
+## Motion behavior proof
 
-### Inspect at the right zoom
-
-Judge `cursor_native7x.png` (downsampled to native, then nearest-zoomed), **not**
-a high zoom of the raw `capture.png`. Spectacle captures at 2× the logical
-desktop, so zooming the raw capture fakes stair-stepping that is not on screen.
-`capture.py` already does the 2× downsample.
-
-## Motion capture (video)
-
-The cursor's movement behavior — the Mover2D glide with momentum curves,
-eased heading rotation, arrival-gated ripple/squash, and the resampled trail
-(`src/motion.rs` + `src/cursor_motion.rs`, constants from the shared spec's
-`[shared.motion]`) — is judged from video, not stills:
+Build first, then use the KDE ScreenCast portal for live evidence:
 
 ```bash
 cargo build --release -p sky-cua-overlay-host
-uv run python scripts/overlay_motion_animations.py            # default scenarios
-uv run python scripts/overlay_motion_animations.py --scenario redirect
-uv run python scripts/overlay_motion_animations.py --offline  # deterministic frames, no desktop
+uv run python scripts/overlay_motion_animations.py \
+  --scenario redirect --scenario tap_settle
 ```
 
-It drives the overlay host directly on a private socket (no service, no real
-input), records via the KDE ScreenCast portal (first run shows one share
-dialog; the restore token is persisted under the gitignored artifacts dir) with
-a ~2 fps spectacle-stills fallback, and writes the MP4 + montage contact sheets
-to `artifacts/overlay-motion-animations/`. Trace the glyph across frames:
-redirects must bow the path (momentum), the nose must ease into the travel
-heading, the ripple must wait until the glyph lands (`tap_settle`), and the
-trail must ramp tail→head. Recordings capture the live desktop — sensitive,
-never commit.
+The MP4 and montage contact sheets land in
+`artifacts/overlay-motion-animations/`. Inspect the redirect trace for a bowed
+momentum path, an eased nose into the travel heading, and a trail that ramps
+tail to head; inspect `tap_settle` for ripple/squash only after arrival. The harness uses a
+private socket and owns its overlay lifecycle; the recording is sensitive live
+desktop evidence. The structured, non-visual glide check is:
 
-A structured pass/fail glide check (no eyeballs) is
-`python3 scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-motion-glide`,
-built on the `motion` reply echo.
+```bash
+python3 scripts/live_agent_cursor_kde_smoke.py --mode layer-shell-motion-glide
+```
 
-## Offline renderer / texture dump (no live overlay)
+## Offline renderer and motion proof
 
-To inspect the cursor texture, a gesture scene, or the stateful motion
-scenarios straight from the GPU renderer (useful when the live overlay
-misbehaves, or on a headless box):
+Use these when the portal is unavailable, a headless machine is involved, or
+the question is renderer/driver behavior rather than KDE composition:
 
 ```bash
 SKY_CUA_CAPTURE_GESTURES=1 cargo nextest run --release -p sky-cua-overlay-host \
@@ -119,67 +118,38 @@ SKY_CUA_CAPTURE_MOTION=1 cargo nextest run --release -p sky-cua-overlay-host \
   -E 'test(capture_motion_frames_when_requested)'
 ```
 
-The gesture dump writes RGBA frames + `cursor_texture.rgba` (+ `cursor_dims.txt`)
-to `/tmp/overlay-demo/gestures/`; split the texture's channels to see R = SDF,
-G = smoke anchor, A = coverage independently. The motion dump steps the REAL
-`CursorMotionDriver` at a fixed 1/60 s dt through corner-glide / redirect /
-swipe-chase / arrival-gated-tap scenarios and writes dense frames + a manifest
-to `/tmp/overlay-demo/motion/` — fully deterministic, no wall clock.
+Gesture evidence is under `/tmp/overlay-demo/gestures/` (`cursor_texture.rgba`,
+`cursor_dims.txt`, and RGBA frames). Inspect R=SDF, G=smoke anchor, and
+A=coverage independently. Motion evidence is under
+`/tmp/overlay-demo/motion/` with dense frames and a manifest for deterministic
+corner-glide, redirect, swipe-chase, and arrival-gated-tap scenarios. Offline
+evidence proves renderer/driver behavior, not KDE desktop composition.
 
-## Pitfalls (these cost real time — heed them)
+## Visual quality dimensions
 
-- **Never blanket-kill overlay hosts by name.** `pkill -f sky-cua-overlay-host`
-  matches the shell's own argv/env and kills the script; `pkill -x sky-cua-overlay`
-  is shell-safe but kills the operator's *live* service-owned host too. Clear a
-  leftover host by SOCKET SCOPE instead: `_overlay_host.terminate_leftover_hosts(sock)`
-  SIGTERMs only a host bound to your private socket (matched by an exact
-  `--socket <path>` argv), never one on a different socket. The isolated
-  service derives its host socket from its own IPC socket dir, so capture.py's
-  host lives at `<artifact_dir>/agent-cursor.sock`, distinct from the operator's
-  `$XDG_RUNTIME_DIR/sky-cua/agent-cursor.sock`.
-- **Do not blanket-kill `sky-cua-service`** — that also kills the operator's
-  installed daemon. Kill the smoke service by PID (capture.py does).
-- **The Bash tool waits on lingering background daemons.** Do start + capture +
-  teardown in ONE process (capture.py owns the whole lifecycle), or the call
-  hangs.
-- **The shell profile runs `set -e`.** A `pkill` that matches nothing returns
-  non-zero and aborts the whole script — guard ad-hoc shell with `|| true`.
-- **2-second startup budget.** `CursorImage::load` runs at process start; if it
-  exceeds the host's `HOST_START_TIMEOUT` (2 s) the service kills the overlay
-  host and only the standalone KWin effect's edge glow survives — it *looks* like
-  the overlay works but the cursor is missing. Keep load fast (it is ~hundreds of
-  ms). The overlay host's stderr is discarded (`Stdio::null`), so a startup crash
-  is silent — use the offline dump above to confirm the renderer itself is fine.
-- **The cursor only renders with `snapshot_id` AND a ~now `updated_at_ms`.** A
-  zero/stale timestamp reads as a decayed cursor and draws nothing.
-- **Use spectacle, not grim.** KWin has no `wlr-screencopy`; grim fails.
-  `spectacle -b -n -f -o <path>` captures the whole virtual desktop.
-- **The overlay surface is fullscreen per output**, so there is no per-cursor
-  damage rect to widen when the glyph/aura grows.
+Use separate verdicts; do not collapse them into “looks good.”
 
-## Verify the Rust side
+- **Still:** glyph crispness at native resolution; outline/stroke consistency;
+  fill/edge tint and contrast; smoke shape, density, and hotspot position; and
+  shadow offset, blur, reach, and readability over light content.
+- **Motion:** momentum bow on redirect; eased heading rotation; arrival-gated
+  ripple/squash; and trail direction/ramp from tail to head.
+
+## Validation, stopping, and reporting
+
+When renderer or motion code changed, run the narrow Rust checks:
 
 ```bash
 cargo fmt --check && cargo nextest run -p sky-cua-overlay-host
 ```
 
-Covers the SDF/anchor/transparency invariants, the WGSL compute conformance,
-`stroke_edge_matches_shader_constant` (Rust↔WGSL stroke-width guard), the
-Mover2D behavioral tests + cross-language motion fixtures (`motion::tests`),
-and the driver's arrival-gate/rotation/cloud state machine
-(`cursor_motion::tests`).
+Stop after the selected proof produces the expected artifact, the artifact has
+been inspected, each applicable quality dimension has a verdict, and live vs
+offline evidence is explicit. If a portal or desktop gate is unavailable,
+stop after the documented offline fallback and state that limitation; do not
+invent a screenshot result or keep mutating the operator's processes.
 
-## Safety
-
-- Uses an **isolated** service on `/tmp/agent-cursor-debug/svc.sock` with the
-  freshly built `target/release` binaries; it never touches the operator's
-  installed daemon, and tears itself down.
-- `capture.png` is a screenshot of the operator's live desktop — treat it as
-  sensitive, keep it under `/tmp`, and never commit it.
-
-## Reporting
-
-Report the cursor fraction captured, the artifact directory, which constants you
-changed, and a one-line visual verdict per dimension (glyph crispness, outline,
-tint, smoke shape/density/position, shadow). Note that live KDE-desktop capture
-is the only proof run unless you also ran the VM smokes.
+Report: proof path; cursor fraction when applicable; artifact directory and
+files actually inspected; source files/constants changed; per-dimension
+verdicts; validation commands; and any live gate not run. For ownership and
+the complete tunable map, read [`references/source-and-tunables.md`](references/source-and-tunables.md).

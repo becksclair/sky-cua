@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Use sky-cua desktop tools to open the native Calculator app and calculate 17 times 23.",
+    "should_trigger": true
+  },
+  {
+    "query": "Inspect the native desktop windows and tell me which application currently has focus.",
+    "should_trigger": true
+  },
+  {
+    "query": "Use a desktop screenshot to click Save in the native dialog and verify that the dialog closes.",
+    "should_trigger": true
+  },
+  {
+    "query": "Drag the slider in the desktop audio app to 70 percent and read back its value.",
+    "should_trigger": true
+  },
+  {
+    "query": "Dismiss the location-permission popup shown by Chrome using the host desktop UI.",
+    "should_trigger": true
+  },
+  {
+    "query": "Choose report.csv in the native file picker and return to the desktop editor.",
+    "should_trigger": true
+  },
+  {
+    "query": "Use the desktop accessibility tree to focus the native text field, replace its contents, and verify the new value.",
+    "should_trigger": true
+  },
+  {
+    "query": "The desktop tree does not expose a semantic click for the visible button. Use the current desktop capture to activate it and confirm the result.",
+    "should_trigger": true
+  },
+  {
+    "query": "On the Windows desktop, activate the open editor window and type the requested text.",
+    "should_trigger": true
+  },
+  {
+    "query": "Check whether the desktop backend and capture are available, then take a screenshot of the active native window.",
+    "should_trigger": true
+  },
+  {
+    "query": "Read the article text from an open webpage using browser page snapshots.",
+    "should_trigger": false
+  },
+  {
+    "query": "Fill a website form by clicking its page element reference and report the confirmation page.",
+    "should_trigger": false
+  },
+  {
+    "query": "Scroll a webpage and click the next link with browser CSS-pixel coordinates.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use the Android phone companion to tap a button in a native app.",
+    "should_trigger": false
+  },
+  {
+    "query": "Read an Android notification and invoke its action id.",
+    "should_trigger": false
+  },
+  {
+    "query": "Open Chrome on Android and type a URL into the browser.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use browser_input to press Ctrl+L in Chrome's address bar and enter a new URL.",
+    "should_trigger": false
+  },
+  {
+    "query": "Inspect the current browser tab with observe(surface=browser) and summarize the visible page.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use a browser screenshot to click the canvas marker and report its label.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use the Android companion to open the phone camera and take a photo.",
+    "should_trigger": false
+  }
+]

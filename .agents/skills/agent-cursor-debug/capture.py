@@ -129,7 +129,9 @@ def main() -> None:
         deadline = time.time() + 20.0
         while time.time() < deadline and not connectable():
             if service.poll() is not None:
-                fail(f"service exited at startup (rc={service.returncode}); see {ART / 'service.log'}")
+                fail(
+                    f"service exited at startup (rc={service.returncode}); see {ART / 'service.log'}"
+                )
             time.sleep(0.2)
         if not connectable():
             fail("service never accepted connections")
@@ -166,9 +168,7 @@ def main() -> None:
             client.call({"type": "set_agent_cursor", "state": state}, timeout=TIMEOUT)
             time.sleep(0.4)
             full = ART / "capture.png"
-            subprocess.run(
-                ["spectacle", "-b", "-n", "-f", "-o", str(full)], check=True, timeout=25
-            )
+            subprocess.run(["spectacle", "-b", "-n", "-f", "-o", str(full)], check=True, timeout=25)
             time.sleep(0.3)
         print(f"captured {full}  native={native_point}")
         crop_native(full, native_point)

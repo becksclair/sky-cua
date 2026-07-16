@@ -1,0 +1,60 @@
+{
+  "skill_name": "browser-use",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use sky-cua browser tools to open https://example.com in a suitable existing tab, or open one if none is usable. Report the final URL and the page's main heading after the navigation completes.",
+      "expected_output": "The response reports the final example.com URL and the page heading 'Example Domain', based on the resulting page state.",
+      "expectations": [
+        "The execution uses the browser surface and keeps a concrete tab_id on browser operations instead of switching to desktop or phone tools.",
+        "The execution reuses a suitable existing session tab when one is available and does not claim or navigate a privileged internal browser page.",
+        "The reported URL and heading come from a fresh browser observation after navigation, and the final state is the requested example.com page.",
+        "Browser operation fields such as tab_id and operation remain separate top-level values in the tool calls."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "A test web page is open with a visible Save button. Activate it and report the success banner. If the page re-renders and the first target is no longer usable, recover from the current page state and finish the save.",
+      "expected_output": "The response confirms the Save action only after the page visibly shows its success banner.",
+      "expectations": [
+        "The agent observes the page before acting and targets the Save control using the current page element reference when one is available.",
+        "If the page reports that the target is unresolved or not actionable, the agent obtains a fresh observation and uses a newly resolved target rather than guessing a pixel location.",
+        "The agent obtains a fresh post-action observation and reports the success banner, rather than treating input dispatch alone as completion.",
+        "The agent does not invoke browser-page actions against browser chrome or substitute desktop coordinates for browser coordinates."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "On a browser page with a canvas map, click the visible marker at the requested location and report its label. Use the browser screenshot for the pixel target; if you scroll or resize before clicking, capture the new viewport first.",
+      "expected_output": "The response names the marker that was actually selected and identifies the resulting page state.",
+      "expectations": [
+        "The click coordinates are taken from the same current browser capture that supplies the visual target and are passed in browser CSS-pixel space.",
+        "The agent does not divide coordinates by devicePixelRatio and does not reuse coordinates from a desktop screenshot or a stale viewport.",
+        "After the click, the agent re-observes or captures the page and confirms the marker label or selection state before reporting success.",
+        "Any scroll, resize, or navigation that occurs before the click causes the agent to refresh the visual provenance rather than reuse expired coordinates."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Complete this browser workflow: allow the site's location request, choose a local CSV in the native file picker, then confirm that the page shows the uploaded filename. Use the appropriate surface for each part of the workflow.",
+      "expected_output": "The response confirms the native permission/file-selection steps and the browser page's uploaded filename, with each step handled on its owning surface.",
+      "expectations": [
+        "The page content and upload-result verification use browser tools, while the location prompt and native file picker use desktop tools.",
+        "The agent does not attempt to click the browser toolbar, permission chrome, or native file picker with browser page coordinates or refs.",
+        "After returning from the native UI, the agent obtains a fresh browser observation and confirms the uploaded filename on the page.",
+        "Coordinates are not transferred between desktop screenshots and browser captures."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Submit the search form on the current web page for 'lunar eclipse'. A successful tool response may only mean that input was dispatched, so keep working until the page URL and result list confirm the query. Report the final URL and first result title.",
+      "expected_output": "The response reports the final search URL and first result title only after a fresh page state confirms that the search completed.",
+      "expectations": [
+        "The agent keeps tab_id, operation, text, and any target reference as distinct browser tool fields and uses the current page state to choose the form control.",
+        "The agent treats an input-dispatched response as intermediate evidence and obtains a fresh observation or screenshot to check the URL and results.",
+        "If submission did not change the page, the agent uses the refreshed state to correct the interaction and retries only as needed.",
+        "The final report includes evidence from the resulting URL and result list rather than claiming success from prose or a dispatch acknowledgement."
+      ]
+    }
+  ]
+}

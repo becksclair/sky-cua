@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Rebuild the current sky-cua checkout and deploy it into my local Codex environment so the installed MCP runtime uses these changes.",
+    "should_trigger": true
+  },
+  {
+    "query": "Deploy the plugin bundle locally for an unreleased development iteration; do not make a release tarball.",
+    "should_trigger": true
+  },
+  {
+    "query": "Build a self-contained sky-cua release tarball for a clean machine and tell me how to install it there.",
+    "should_trigger": true
+  },
+  {
+    "query": "Install the existing sky-cua dist/release bundle on another machine in bundle mode without rebuilding it.",
+    "should_trigger": true
+  },
+  {
+    "query": "The MCP configuration changed; refresh the local sky-cua MCP server install and restart the runtime, without a full plugin rebuild.",
+    "should_trigger": true
+  },
+  {
+    "query": "Deploy the current changes on KDE with the KWin agent-cursor effect rebuilt and reloaded.",
+    "should_trigger": true
+  },
+  {
+    "query": "Rebuild and deploy sky-cua, then sync the repo-local computer-use, browser-use, and phone-use skills into the global agent skill root.",
+    "should_trigger": true
+  },
+  {
+    "query": "Commit the staged sky-cua changes with a semantic message and push the current branch to origin. Do not deploy anything.",
+    "should_trigger": true
+  },
+  {
+    "query": "Deploy these sky-cua changes, and after a successful deploy commit the relevant diff and push the branch to origin.",
+    "should_trigger": true
+  },
+  {
+    "query": "Ship this unreleased sky-cua branch: build the plugin, deploy it locally, sync skills, create the semantic commit, and push it.",
+    "should_trigger": true
+  },
+  {
+    "query": "Run scripts/run_gui_testing_vm_smoke.py --profile all against testing-vm and report the VM artifacts; this is a VM smoke request, not a local deploy.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run the curated pre-merge GUI profile set on the Arch testing VM and report which desktop-session checks passed.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run the local live desktop smoke against the already-built binaries; do not install, deploy, package, commit, or push anything.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run cargo nextest and the Python lint/type checks for sky-cua, but do not deploy or restart any runtime.",
+    "should_trigger": false
+  },
+  {
+    "query": "Review scripts/deploy_plugin.py for correctness and propose a patch, but do not execute the deploy workflow.",
+    "should_trigger": false
+  },
+  {
+    "query": "Fix the Rust overlay behavior in crates/sky-cua-linux and leave deployment for a later task.",
+    "should_trigger": false
+  },
+  {
+    "query": "Provision a fresh Arch testing-vm guest and select its Plasma session; do not run any sky-cua smoke or deployment.",
+    "should_trigger": false
+  },
+  {
+    "query": "Update the documentation describing the sky-cua release process without building, installing, or deploying anything.",
+    "should_trigger": false
+  },
+  {
+    "query": "Build only the Android phone companion APK with Gradle for a mobile test; do not build or deploy the sky-cua plugin bundle.",
+    "should_trigger": false
+  },
+  {
+    "query": "Compare the sizes and checksums of the existing files under dist/release and write a report; do not build, install, restart, commit, or push.",
+    "should_trigger": false
+  }
+]

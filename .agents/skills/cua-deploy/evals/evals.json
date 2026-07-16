@@ -1,0 +1,50 @@
+{
+  "skill_name": "cua-deploy",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Deploy the current sky-cua checkout locally so I can test it. Build and install the local bundle and refresh the repo-owned agent skill links as needed. This is deploy-only: do not package a release, commit, push, or run broad test suites. Preserve any unrelated working-tree changes and report the deployment result plus checks or live-smoke gates not run.",
+      "expected_output": "The current checkout is deployed to the local sky-cua runtime and the owned global skill links are refreshed. The response reports the exact result and skipped validation, and no commit or push is performed or implied.",
+      "expectations": [
+        "Runs the local deploy lane with scripts/deploy_plugin.py and, after a successful deploy, runs scripts/sync_agent_skills.py.",
+        "Does not invoke git commit or git push, and does not treat deploy-only wording as authorization for either operation.",
+        "Does not substitute release packaging or a broad root test suite for the requested local deployment.",
+        "Reports deployment success or failure, relevant command outcomes, and live-smoke or validation gates that were not run.",
+        "Leaves unrelated pre-existing working-tree changes unstaged and unmodified."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Deploy the current sky-cua changes locally, then commit all relevant changes with a semantic message and push the current branch to origin. I explicitly authorize the commit and push after the deploy succeeds. Keep unrelated working-tree changes out of the commit and report the deployed runtime and commit identifier.",
+      "expected_output": "The deploy completes first, the relevant diff is committed with a semantic message, and that commit is pushed to the current branch. Unrelated changes are not included, and the response names the runtime result and commit.",
+      "expectations": [
+        "Completes the requested deploy lane before attempting commit or push and refreshes the repo-owned agent skill links after deploy success.",
+        "Uses the explicit authorization to create a semantic commit containing only changes relevant to this request, without staging unrelated work.",
+        "Pushes the requested commit to the current branch only after the deploy and commit succeed, and reports the commit identifier and push result.",
+        "If deployment fails, does not proceed as though commit and push were authorized independently of the requested successful deploy sequence."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Build a self-contained sky-cua release package for a clean machine. Use the repository's release packaging lane, inspect the resulting tarball shape, and report the target-side install command. Do not install it locally, deploy the local runtime, commit, or push.",
+      "expected_output": "A release tarball is built under dist/release, its basic contents are checked, and the response gives the bundle-mode target installation command without changing the local runtime or git history.",
+      "expectations": [
+        "Uses scripts/package.py for the release lane and produces or verifies the expected dist/release tarball rather than calling the local deploy script.",
+        "Inspects the staged package enough to confirm it contains the self-contained installer/runtime shape needed by a clean target.",
+        "Reports the target extraction and python3 install.py command, including that the target install uses the existing bundle without Cargo.",
+        "Does not install the package locally, run scripts/sync_agent_skills.py, mutate global skill links, commit, or push."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "After a sky-cua MCP configuration change, refresh the local MCP server installation for Claude Code and restart the runtime. This is a standalone restart request: do not rebuild the full plugin, package a release, sync unrelated skills, commit, or push.",
+      "expected_output": "The Claude Code MCP install is refreshed and the runtime is restarted through the standalone command, with no full deploy or git operation performed.",
+      "expectations": [
+        "Runs scripts/install_mcp_server.py with the Claude Code host and --restart-runtime rather than the full deploy_plugin.py lane.",
+        "Does not rebuild or package the plugin and does not run sync_agent_skills.py for this standalone restart request.",
+        "Does not commit or push and reports the restart result plus any accessibility refresh decision.",
+        "Explains any skipped validation or live-smoke coverage without claiming a full deployment occurred."
+      ]
+    }
+  ]
+}

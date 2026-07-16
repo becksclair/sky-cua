@@ -2,6 +2,7 @@ use std::{collections::VecDeque, path::Path};
 
 use sky_cua_overlay_host::{
     OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
+    OverlayMotionStatus,
 };
 use sky_cua_platform::model::{
     ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
@@ -19,6 +20,8 @@ mod cursor_geometry;
 mod gesture;
 mod host;
 mod synthetic_cursor;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use cursor_geometry::{
     cursor_moving_action, pre_dispatch_state_from_action_request, state_from_action_request,
@@ -49,6 +52,8 @@ pub struct OverlayController {
     /// restarts mid-session.
     recent_gesture_ids: VecDeque<String>,
     prepared_action_sequence: Option<u64>,
+    prepared_gesture_sequence: Option<u64>,
+    last_motion: Option<OverlayMotionStatus>,
 }
 
 impl Default for OverlayController {
@@ -72,6 +77,8 @@ impl OverlayController {
             host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
             recent_gesture_ids: VecDeque::new(),
             prepared_action_sequence: None,
+            prepared_gesture_sequence: None,
+            last_motion: None,
         }
     }
 
@@ -88,6 +95,8 @@ impl OverlayController {
             host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
             recent_gesture_ids: VecDeque::new(),
             prepared_action_sequence: None,
+            prepared_gesture_sequence: None,
+            last_motion: None,
         }
     }
 
@@ -104,6 +113,8 @@ impl OverlayController {
             host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
             recent_gesture_ids: VecDeque::new(),
             prepared_action_sequence: None,
+            prepared_gesture_sequence: None,
+            last_motion: None,
         }
     }
 
@@ -123,6 +134,8 @@ impl OverlayController {
             host_lifecycle_state: AgentOverlayHostLifecycleState::ProcessUnavailable,
             recent_gesture_ids: VecDeque::new(),
             prepared_action_sequence: None,
+            prepared_gesture_sequence: None,
+            last_motion: None,
         }
     }
 
@@ -157,6 +170,7 @@ impl OverlayController {
 
     pub fn set_state(&mut self, state: AgentCursorState) -> AgentCursorStatus {
         self.prepared_action_sequence = None;
+        self.prepared_gesture_sequence = None;
         if self.agent_cursor_mode == CursorMode::Never {
             self.state = None;
             return self.status_with_diagnostic(diagnostic(
@@ -217,6 +231,7 @@ impl OverlayController {
         outcome: &mut ActionOutcome,
     ) -> Vec<DiagnosticEntry> {
         let prepared_action_sequence = self.prepared_action_sequence.take();
+        let prepared_gesture_sequence = self.prepared_gesture_sequence.take();
         if self.agent_cursor_mode == CursorMode::Never {
             return Vec::new();
         }
@@ -264,7 +279,9 @@ impl OverlayController {
             (status.diagnostics, status.state)
         };
         outcome.agent_cursor = state;
-        if let Some(gesture) = gesture_from_action_request(request, self.allocate_sequence()) {
+        if prepared_gesture_sequence.is_none()
+            && let Some(gesture) = gesture_from_action_request(request, self.allocate_sequence())
+        {
             diagnostics.extend(self.send_gesture_event(gesture));
         }
         diagnostics
@@ -303,23 +320,67 @@ impl OverlayController {
     }
 
     /// Begin the visual part of a pointer action before backend input dispatch.
-    /// This starts the cursor glide without delaying input dispatch.
-    pub fn prepare_action_visual(&mut self, request: &ActionRequest) -> Vec<DiagnosticEntry> {
+    /// The caller waits for [`Self::poll_action_visual_arrival`] when
+    /// `wait_for_arrival` is true, so physical input cannot overtake the glyph.
+    pub fn prepare_action_visual(&mut self, request: &ActionRequest) -> ActionVisualPreparation {
         if self.agent_cursor_mode == CursorMode::Never {
-            return Vec::new();
+            return ActionVisualPreparation::default();
         }
         if !cursor_moving_action(&request.action) {
-            return Vec::new();
+            return ActionVisualPreparation::default();
         }
         let Some(state) = pre_dispatch_state_from_action_request(request) else {
-            return Vec::new();
+            return ActionVisualPreparation::default();
         };
         let status = self.set_state(state);
         self.prepared_action_sequence = status
             .host_delivered
             .then(|| status.state.as_ref().map(|state| state.sequence))
             .flatten();
-        status.diagnostics
+        let mut diagnostics = status.diagnostics;
+
+        if status.host_delivered
+            && status.capabilities.visible_overlay
+            && let Some(gesture) = gesture_from_action_request(request, self.allocate_sequence())
+        {
+            self.prepared_gesture_sequence = Some(gesture.sequence);
+            diagnostics.extend(self.send_gesture_event(gesture));
+        }
+
+        ActionVisualPreparation {
+            diagnostics,
+            wait_for_arrival: self.action_visual_arrival_pending(),
+        }
+    }
+
+    /// Refresh the host's structured motion echo and report whether the
+    /// prepared pointer gesture has reached its dispatch point.
+    pub fn poll_action_visual_arrival(&mut self) -> ActionVisualArrival {
+        let diagnostics = self
+            .send_host_message(OverlayHostMessageKind::Capabilities, None, None, None)
+            .diagnostics;
+        ActionVisualArrival {
+            arrived: !self.action_visual_arrival_pending(),
+            diagnostics,
+        }
+    }
+
+    fn action_visual_arrival_pending(&self) -> bool {
+        if !self
+            .host_capabilities
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.visible_overlay)
+        {
+            return false;
+        }
+        let Some(motion) = self.last_motion else {
+            return false;
+        };
+        if self.prepared_gesture_sequence.is_some() {
+            motion.pending_gesture_feedback
+        } else {
+            !motion.settled
+        }
     }
 
     pub fn prepare_for_capture(&mut self) -> OverlayCaptureGuard {
@@ -346,6 +407,7 @@ impl OverlayController {
                     diagnostics.extend(self.apply_host_reply(reply));
                 }
                 Err(diagnostic) => {
+                    self.last_motion = None;
                     if diagnostic.code == "AgentCursorHostUnavailable" {
                         self.host_capabilities = None;
                         self.host_lifecycle_state =
@@ -522,6 +584,7 @@ impl OverlayController {
         match self.host.send(message) {
             Ok(reply) => self.apply_host_reply(reply),
             Err(diagnostic) => {
+                self.last_motion = None;
                 if diagnostic.code == "AgentCursorHostUnavailable" {
                     self.host_capabilities = None;
                     self.host_lifecycle_state = AgentOverlayHostLifecycleState::ProcessUnavailable;
@@ -532,6 +595,7 @@ impl OverlayController {
     }
 
     fn apply_host_reply(&mut self, reply: OverlayHostReply) -> Vec<DiagnosticEntry> {
+        self.last_motion = reply.motion;
         let mut diagnostics = reply.diagnostics;
         if reply.version != OVERLAY_HOST_PROTOCOL_VERSION {
             self.host_capabilities = None;
@@ -658,6 +722,18 @@ pub struct AgentCursorStatus {
 }
 
 #[derive(Debug, Default)]
+pub struct ActionVisualPreparation {
+    pub diagnostics: Vec<DiagnosticEntry>,
+    pub wait_for_arrival: bool,
+}
+
+#[derive(Debug)]
+pub struct ActionVisualArrival {
+    pub arrived: bool,
+    pub diagnostics: Vec<DiagnosticEntry>,
+}
+
+#[derive(Debug, Default)]
 pub struct OverlayCaptureGuard {
     restore_visible_overlay: bool,
     pub diagnostics: Vec<DiagnosticEntry>,
@@ -698,6 +774,8 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::test_support::write_fake_overlay_host;
     use super::{
         OVERLAY_IDLE_CLEANUP_MS, OverlayController, gesture_from_action_request, now_ms,
         state_from_action_request,
@@ -708,8 +786,6 @@ mod tests {
         ActionName, ActionOutcome, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope,
         CoordinateSpace, ElementNode, ModelImageFormat, PixelSize, RectF,
     };
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::process::Command;
 
@@ -800,6 +876,52 @@ mod tests {
                 .visible
         );
 
+        drop(controller);
+        assert!(!socket_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_pointer_action_waits_for_host_arrival_and_does_not_replay_gesture() {
+        if Command::new("python3").arg("--version").status().is_err() {
+            return;
+        }
+
+        let dir = unique_temp_dir("host-action-arrival");
+        let host_path = dir.join("fake-overlay-host.py");
+        let socket_path = dir.join("agent-cursor.sock");
+        write_fake_overlay_host(&host_path);
+        let mut controller =
+            OverlayController::new_for_tests_with_host(host_path, socket_path.clone());
+        let request = action_request(ActionName::Click, serde_json::json!({"x": 12.0, "y": 34.0}));
+
+        let preparation = controller.prepare_action_visual(&request);
+
+        assert!(preparation.diagnostics.is_empty());
+        assert!(preparation.wait_for_arrival);
+        assert_eq!(
+            controller.recent_gesture_ids.front().map(String::as_str),
+            Some("click-2")
+        );
+
+        let in_flight = controller.poll_action_visual_arrival();
+        assert!(!in_flight.arrived);
+        assert!(in_flight.diagnostics.is_empty());
+        let arrived = controller.poll_action_visual_arrival();
+        assert!(arrived.arrived);
+        assert!(arrived.diagnostics.is_empty());
+
+        let mut outcome = ActionOutcome {
+            success: true,
+            message: "ok".to_string(),
+            code: "Ok".to_string(),
+            diagnostics: Vec::new(),
+            agent_cursor: None,
+        };
+        let diagnostics = controller.update_from_action(&request, &mut outcome);
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(controller.recent_gesture_ids.len(), 1);
         drop(controller);
         assert!(!socket_path.exists());
     }
@@ -1209,10 +1331,82 @@ mod tests {
         assert_eq!(gesture.points[0].y, 50.0);
         assert_eq!(gesture.points[1].x, 200.0);
         assert_eq!(gesture.points[1].y, 150.0);
+        assert_eq!(gesture.coordinate_space, CoordinateSpace::DesktopLogical);
+        assert_eq!(gesture.mapping_id.as_deref(), Some("mapping"));
         assert_eq!(
             gesture.duration_ms,
             sky_cua_platform::overlay_spec::shared::timing::MIN_GESTURE_DURATION_MS
         );
+    }
+
+    #[test]
+    fn gesture_preserves_native_coordinate_space_and_mapping() {
+        let mut request = action_request(ActionName::Click, serde_json::json!({}));
+        request.resolved_element = Some(element_with_bounds(RectF {
+            x: 10.0,
+            y: 15.0,
+            width: 20.0,
+            height: 10.0,
+            space: CoordinateSpace::StreamLogical,
+        }));
+        request.resolved_capture = Some(capture_with_rect_and_scale(
+            RectF {
+                x: 100.0,
+                y: 50.0,
+                width: 200.0,
+                height: 100.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            Some(2.0),
+        ));
+
+        let gesture = gesture_from_action_request(&request, 8).expect("gesture");
+
+        assert_eq!(gesture.coordinate_space, CoordinateSpace::DesktopLogical);
+        assert_eq!(gesture.mapping_id.as_deref(), Some("mapping"));
+        assert_eq!(gesture.points[0].x, 120.0);
+        assert_eq!(gesture.points[0].y, 70.0);
+    }
+
+    #[test]
+    fn gesture_preserves_stream_logical_coordinate_space() {
+        let mut request = action_request(ActionName::Click, serde_json::json!({}));
+        request.resolved_element = Some(element_with_bounds(RectF {
+            x: 10.0,
+            y: 15.0,
+            width: 20.0,
+            height: 10.0,
+            space: CoordinateSpace::StreamLogical,
+        }));
+        request.resolved_capture = None;
+
+        let gesture = gesture_from_action_request(&request, 9).expect("gesture");
+
+        assert_eq!(gesture.coordinate_space, CoordinateSpace::StreamLogical);
+        assert_eq!(gesture.mapping_id, None);
+        assert_eq!(gesture.points[0].x, 20.0);
+        assert_eq!(gesture.points[0].y, 20.0);
+    }
+
+    #[test]
+    fn drag_gesture_rejects_incompatible_coordinate_mappings() {
+        let mut request = action_request(ActionName::Drag, serde_json::json!({}));
+        request.resolved_element = Some(element_with_bounds(RectF {
+            x: 10.0,
+            y: 15.0,
+            width: 20.0,
+            height: 10.0,
+            space: CoordinateSpace::StreamLogical,
+        }));
+        request.resolved_target_element = Some(element_with_bounds(RectF {
+            x: 150.0,
+            y: 70.0,
+            width: 20.0,
+            height: 10.0,
+            space: CoordinateSpace::DesktopLogical,
+        }));
+
+        assert!(gesture_from_action_request(&request, 10).is_none());
     }
 
     #[test]
@@ -1226,9 +1420,10 @@ mod tests {
         let mut controller = OverlayController::new_for_tests();
         let request = action_request(ActionName::Click, serde_json::json!({"x": 12.0, "y": 34.0}));
 
-        let diagnostics = controller.prepare_action_visual(&request);
+        let preparation = controller.prepare_action_visual(&request);
 
-        assert!(diagnostics.is_empty());
+        assert!(preparation.diagnostics.is_empty());
+        assert!(!preparation.wait_for_arrival);
         let state = controller.state().expect("pre-dispatch cursor state");
         assert_eq!(state.sequence, 1);
         assert_eq!(state.native_point.as_ref().expect("native").x, 12.0);
@@ -1248,9 +1443,10 @@ mod tests {
             }),
         );
 
-        let diagnostics = controller.prepare_action_visual(&request);
+        let preparation = controller.prepare_action_visual(&request);
 
-        assert!(diagnostics.is_empty());
+        assert!(preparation.diagnostics.is_empty());
+        assert!(!preparation.wait_for_arrival);
         let state = controller.state().expect("pre-dispatch drag state");
         assert_eq!(state.native_point.as_ref().expect("native").x, 40.0);
         assert_eq!(state.native_point.as_ref().expect("native").y, 50.0);
@@ -1449,9 +1645,10 @@ mod tests {
             agent_cursor: None,
         };
 
-        let prepare_diagnostics = controller.prepare_action_visual(&request);
+        let preparation = controller.prepare_action_visual(&request);
         assert!(
-            prepare_diagnostics
+            preparation
+                .diagnostics
                 .iter()
                 .any(|entry| entry.code == "AgentCursorHostRequestFailed")
         );
@@ -1920,96 +2117,5 @@ mod tests {
             press_key: available.clone(),
             set_value: available,
         }
-    }
-
-    #[cfg(unix)]
-    fn write_fake_overlay_host(path: &std::path::Path) {
-        let script = format!(
-            r#"#!/usr/bin/env python3
-import json
-import os
-import socket
-import sys
-
-if len(sys.argv) != 4 or sys.argv[1:3] != ["serve", "--socket"]:
-    raise SystemExit(f"unexpected argv: {{sys.argv!r}}")
-
-socket_path = sys.argv[3]
-try:
-    os.unlink(socket_path)
-except FileNotFoundError:
-    pass
-
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(socket_path)
-server.listen(8)
-state = None
-capabilities = {{
-    "backend": "wayland_layer_shell",
-    "visible_overlay": True,
-    "screenshot_synthetic_cursor": False,
-    "click_through": True,
-    "capture_exclusion": False,
-    "needs_user_install": False,
-    "reason": "fake host",
-}}
-
-while True:
-    conn, _ = server.accept()
-    with conn:
-        data = b""
-        while not data.endswith(b"\n"):
-            chunk = conn.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-        if not data.strip():
-            continue
-        message = json.loads(data.decode("utf-8"))
-        kind = message["kind"]
-        diagnostics = []
-        applied_sequence = None
-        if kind == "set_cursor":
-            state = message.get("state")
-        elif kind == "hide":
-            if state is not None:
-                state["visible"] = False
-            applied_sequence = message.get("sequence")
-            if message.get("reason"):
-                diagnostics.append({{
-                    "code": "OverlayCursorHidden",
-                    "message": "Overlay host hid the cursor.",
-                    "details": message["reason"],
-                }})
-        elif kind == "show":
-            if state is not None:
-                state["visible"] = True
-        reply = {{
-            "version": {version},
-            "ok": True,
-            "capabilities": capabilities,
-            "lifecycle_state": "backend_ready",
-            "applied_sequence": applied_sequence,
-            "state": state,
-            "diagnostics": diagnostics,
-        }}
-        conn.sendall(json.dumps(reply).encode("utf-8") + b"\n")
-        if kind == "shutdown":
-            break
-
-server.close()
-try:
-    os.unlink(socket_path)
-except FileNotFoundError:
-    pass
-"#,
-            version = OVERLAY_HOST_PROTOCOL_VERSION
-        );
-        std::fs::write(path, script).expect("write fake overlay host");
-        let mut permissions = std::fs::metadata(path)
-            .expect("fake host metadata")
-            .permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(path, permissions).expect("chmod fake overlay host");
     }
 }

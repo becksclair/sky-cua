@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Use phone tools to discover an authorized Android device, connect to it, and report the current app.",
+    "should_trigger": true
+  },
+  {
+    "query": "Open the Android Settings package, toggle the requested setting, and verify the resulting state.",
+    "should_trigger": true
+  },
+  {
+    "query": "Use the latest phone observation to tap the native Continue button and report the next screen.",
+    "should_trigger": true
+  },
+  {
+    "query": "Focus the Android text field, replace its contents, press Enter, and verify the new screen.",
+    "should_trigger": true
+  },
+  {
+    "query": "List the Android notifications, open the one that can be opened, and report where it lands.",
+    "should_trigger": true
+  },
+  {
+    "query": "Invoke the custom action on the Android notification using the matching notification action id.",
+    "should_trigger": true
+  },
+  {
+    "query": "Inspect the phone capability profile and use only an action currently listed as available to capture the device state.",
+    "should_trigger": true
+  },
+  {
+    "query": "Tap the link inside Android Chrome's WebView and report the resulting page; use the phone screen because the page is not exposed as native elements.",
+    "should_trigger": true
+  },
+  {
+    "query": "The phone companion is unavailable for a requested drag. Diagnose the gate and report whether the gesture can run without pretending it succeeded.",
+    "should_trigger": true
+  },
+  {
+    "query": "Disconnect the Android session while retaining the wireless connection, reconnect with the same serial, and verify the new session.",
+    "should_trigger": true
+  },
+  {
+    "query": "Use desktop tools to open the native Calculator app and calculate 17 times 23.",
+    "should_trigger": false
+  },
+  {
+    "query": "Read the article text from a webpage on my laptop with browser page tools.",
+    "should_trigger": false
+  },
+  {
+    "query": "Click Chrome's address bar on the desktop and type a URL.",
+    "should_trigger": false
+  },
+  {
+    "query": "Choose a file in the host operating system's native file picker.",
+    "should_trigger": false
+  },
+  {
+    "query": "Move the desktop browser window to the second monitor and resize it.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use browser page tools to inspect the page currently open in a desktop Chrome tab.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use browser CSS-pixel coordinates to click a canvas marker in a web app on the laptop.",
+    "should_trigger": false
+  },
+  {
+    "query": "Review this Android app's Kotlin source for an accessibility bug without connecting to a device.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use computer-use to click the Android emulator window on the desktop, not the device session.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use browser tools to fetch and summarize a website that is open on the host computer.",
+    "should_trigger": false
+  }
+]

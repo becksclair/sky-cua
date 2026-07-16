@@ -1,0 +1,60 @@
+{
+  "skill_name": "phone-use",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Discover an authorized Android device, connect to the requested serial, open Android Settings using its exact package name, and report the current app after a fresh phone observation.",
+      "expected_output": "The response identifies the connected device/session and reports Android Settings as the observed current app.",
+      "expectations": [
+        "The agent checks phone status/device resources before connecting and connects before making any device-bound observation or action.",
+        "The exact session_id returned by connect is carried on every subsequent device-bound call, while the raw serial is not used as a session substitute.",
+        "The app action uses the exact package name and the app-management result is checked using its structured success boolean.",
+        "A fresh phone observation verifies the current app before the agent reports the goal complete."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "The connected Android app shows a native Continue button. Tap it and report the next screen. Use the latest phone screenshot or native accessibility bounds; if the device rotates or rejects the snapshot as stale, recover with a fresh observation before retrying.",
+      "expected_output": "The response confirms the Continue action and names the next screen from a fresh device state.",
+      "expectations": [
+        "A coordinate tap carries the exact fresh phone_snapshot_id that produced the screenshot target, or uses current accessibility bounds with explicit device coordinates.",
+        "The agent does not pre-scale screenshot coordinates, reuse a snapshot across rotation/session changes, or use desktop/browser coordinates.",
+        "After a stale-snapshot, rotation, or display-size failure, the agent re-observes and uses the new provenance rather than retrying the rejected id.",
+        "A fresh phone observation verifies the next screen before the agent reports success."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Inspect the current phone capability profile and open the requested screen only if the required action is listed in available_actions. If it is listed in unavailable_actions or a tool reports backend=none, report the structured gate instead of claiming that anything ran.",
+      "expected_output": "The response either completes the requested screen transition or clearly reports the structured unavailable-action/backend gate with no false success claim.",
+      "expectations": [
+        "The agent reads available_actions and unavailable_actions as the authoritative capability contract and does not invoke an action that is explicitly unavailable.",
+        "For observe, screenshot, pointer, text, key, or notification operations, backend=none is treated as no dispatch rather than a successful fallback.",
+        "The agent treats a stale profile as unproven and refreshes or re-observes before relying on companion-gated availability.",
+        "The final response distinguishes a completed transition from a structured refusal and includes the relevant returned state."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "The companion gesture path is unavailable, but an Android text field can still receive input through the supported text/key path. Focus the field using the phone UI, enter 'hello sky', press Enter, and report the result without attempting a raw shell tap.",
+      "expected_output": "The response reports the text-entry result, or the structured focus/input failure, and never claims that a companion-required gesture ran when it did not.",
+      "expectations": [
+        "The agent does not use a coordinate tap or swipe when the companion gesture capability is not proven and does not substitute adb shell input for a gesture.",
+        "The agent uses the supported phone text/key route after the field is focused, preserving the requested non-empty text and key operation.",
+        "The agent reads structured backend/diagnostic fields to distinguish dispatched input from a rejected action.",
+        "A fresh phone observation verifies the resulting screen or field state before reporting completion."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "From a fresh Android notification list, open the notification that permits opening and invoke its custom action if one is available. Use the event id and matching action id from the current list, then verify the resulting app or notification state.",
+      "expected_output": "The response confirms the permitted notification operation and the resulting state, or reports why the current notification cannot be acted on.",
+      "expectations": [
+        "The agent obtains a fresh notification list or observe result, checks can_open and available custom actions before opening or acting, and checks can_dismiss whenever a dismiss operation is requested.",
+        "A custom action uses the exact current event id plus its matching action id; the agent does not invent or reuse stale identifiers.",
+        "The notification operation's structured result/backend is checked, with backend=none treated as no operation.",
+        "The agent re-observes the phone or notification list and reports the resulting app/notification state rather than treating dispatch as completion."
+      ]
+    }
+  ]
+}

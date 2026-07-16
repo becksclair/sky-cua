@@ -1,3 +1,4 @@
+use crate::app_server::AppServerManager;
 use crate::frame::{read_frame, write_frame};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -88,13 +89,29 @@ struct HostState {
     next_client_id: usize,
     next_chrome_id: u64,
     next_client_request_id: u64,
+    app_server_manager: Arc<AppServerManager>,
 }
 
 impl HostState {
+    #[cfg(test)]
     fn new(
         host_name: impl Into<String>,
         stdout: Arc<Mutex<io::Stdout>>,
         rollout_tracker: RolloutTracker,
+    ) -> Self {
+        Self::with_app_server_manager(
+            host_name,
+            stdout,
+            rollout_tracker,
+            Arc::new(AppServerManager::new(None, None)),
+        )
+    }
+
+    fn with_app_server_manager(
+        host_name: impl Into<String>,
+        stdout: Arc<Mutex<io::Stdout>>,
+        rollout_tracker: RolloutTracker,
+        app_server_manager: Arc<AppServerManager>,
     ) -> Self {
         Self {
             host_name: host_name.into(),
@@ -106,6 +123,7 @@ impl HostState {
             next_client_id: 1,
             next_chrome_id: 1,
             next_client_request_id: 1,
+            app_server_manager,
         }
     }
 
@@ -467,7 +485,7 @@ impl RolloutTracker {
     }
 }
 
-pub fn serve(host_name: String) -> Result<()> {
+pub fn serve(host_name: String, extension_id: Option<String>) -> Result<()> {
     let socket_dir = socket_dir();
     prepare_socket_dir(&socket_dir)?;
     let socket_path = socket_path(&socket_dir);
@@ -488,10 +506,12 @@ pub fn serve(host_name: String) -> Result<()> {
     );
     let stdout = Arc::new(Mutex::new(io::stdout()));
     let rollout_tracker = RolloutTracker::new(host_name.clone(), Arc::clone(&stdout));
-    let state = Arc::new(Mutex::new(HostState::new(
+    let app_server_manager = Arc::new(AppServerManager::new(Some(host_name.clone()), extension_id));
+    let state = Arc::new(Mutex::new(HostState::with_app_server_manager(
         host_name,
         stdout,
         rollout_tracker,
+        app_server_manager,
     )));
     {
         let state = Arc::clone(&state);
@@ -872,6 +892,17 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
         return;
     }
 
+    if message.get("method").and_then(Value::as_str) == Some("ensureCodexAppServer") {
+        let (manager, stdout, host_name) = {
+            let state = state.lock().expect("host state mutex poisoned");
+            let (stdout, host_name) = state.chrome_writer();
+            (Arc::clone(&state.app_server_manager), stdout, host_name)
+        };
+        let response = app_server_control_response(&message, || manager.ensure());
+        write_chrome_frame(&stdout, &host_name, &response);
+        return;
+    }
+
     let chrome_request_id = message.get("id").cloned().unwrap_or(Value::Null);
 
     enum ChromeRoute {
@@ -926,6 +957,18 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
         ChromeRoute::RouteError(stdout, outbound) => {
             write_chrome_frame(&stdout, &host_name, &outbound)
         }
+    }
+}
+
+fn app_server_control_response(message: &Value, ensure: impl FnOnce() -> Result<Value>) -> Value {
+    let id = message.get("id").cloned().unwrap_or(Value::Null);
+    match ensure() {
+        Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+        Err(error) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": -32000, "message": error.to_string() }
+        }),
     }
 }
 
@@ -1154,6 +1197,24 @@ mod tests {
         assert_eq!(
             with_id(message, Value::String("linux-1-1".to_string())),
             json!({ "jsonrpc": "2.0", "id": "linux-1-1", "method": "getTabs" })
+        );
+    }
+
+    #[test]
+    fn app_server_control_request_is_answered_without_a_browser_client() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "native-host:1",
+            "method": "ensureCodexAppServer"
+        });
+        let response = app_server_control_response(&request, || {
+            Ok(json!({ "localAppServerUrl": "http://127.0.0.1:46287" }))
+        });
+
+        assert_eq!(response["id"], json!("native-host:1"));
+        assert_eq!(
+            response["result"]["localAppServerUrl"],
+            json!("http://127.0.0.1:46287")
         );
     }
 

@@ -1,0 +1,82 @@
+[
+  {
+    "query": "I'm tuning the desktop agent cursor on KDE: the glyph, smoke aura, and grounding shadow all need a visual check. Which still capture should I run and which artifact should I inspect?",
+    "should_trigger": true
+  },
+  {
+    "query": "The desktop agent cursor is missing in a live capture even though an edge glow remains. Help me check the overlay host's startup budget, snapshot_id, and updated_at_ms, then tell me what proof would confirm the cause.",
+    "should_trigger": true
+  },
+  {
+    "query": "Record the Rust desktop cursor moving corner-to-corner and redirecting mid-flight so I can judge momentum, heading rotation, arrival feedback, and the trail from video.",
+    "should_trigger": true
+  },
+  {
+    "query": "I have no usable live desktop capture. Show me the deterministic gesture-frame dump path for inspecting the desktop cursor texture's SDF, smoke-anchor, and coverage channels.",
+    "should_trigger": true
+  },
+  {
+    "query": "I need offline motion evidence for the desktop overlay's real CursorMotionDriver, including corner-glide, redirect, swipe-chase, and arrival-gated tap frames, without touching the live desktop.",
+    "should_trigger": true
+  },
+  {
+    "query": "I changed the desktop cursor stroke width and the glyph now looks wrong. Help me compare the Rust constant with the matching WGSL constant and inspect the native-resolution still rather than judging a zoomed raw screenshot.",
+    "should_trigger": true
+  },
+  {
+    "query": "The desktop cursor shadow disappears on white content. Run the appropriate isolated capture, place the cursor over a light/text-heavy area, and explain how to judge the glyph, outline, tint, smoke, and shadow artifacts.",
+    "should_trigger": true
+  },
+  {
+    "query": "A desktop cursor redirect snaps into a straight line and the ripple appears before arrival. Help me capture the motion and diagnose the momentum curve, eased nose, tap_settle gate, and tail-to-head trail.",
+    "should_trigger": true
+  },
+  {
+    "query": "What is the minimum representative visual pass for a desktop agent-cursor change: one still for appearance plus one motion scenario for behavior? Give me the exact commands, artifacts, and limitations.",
+    "should_trigger": true
+  },
+  {
+    "query": "Please verify a desktop cursor tweak while the operator's installed daemon is running. Use an isolated private socket and leave the operator service and real input untouched; report the resulting visual evidence.",
+    "should_trigger": true
+  },
+  {
+    "query": "The phone companion's pink screen-edge glow and inward wave look wrong during a redirect. Capture the Android overlay and inspect its contact sheets.",
+    "should_trigger": false
+  },
+  {
+    "query": "On the Android companion, the pointer should curve, rotate into travel, ripple on arrival, and leave a trail. Which phone scenario gives the best evidence?",
+    "should_trigger": false
+  },
+  {
+    "query": "Rebuild the phone APK and run the overlay_pointer_animations.py harness on a connected device, then review the screen-recording montage.",
+    "should_trigger": false
+  },
+  {
+    "query": "Fix the Linux virtual-input backend so mouse events reach applications; do not change or visually inspect the agent cursor renderer.",
+    "should_trigger": false
+  },
+  {
+    "query": "Help me choose a KDE screenshot utility for capturing the entire desktop; this is a generic screen-capture question and does not involve the agent cursor overlay.",
+    "should_trigger": false
+  },
+  {
+    "query": "Review the Android phone companion's OverlayMath unit tests for a bad turn-rate calculation. This is source review only and is not about the Rust desktop overlay.",
+    "should_trigger": false
+  },
+  {
+    "query": "Make the regular KDE mouse pointer theme use a sharper arrow and a softer drop shadow; the Codex agent cursor is not involved.",
+    "should_trigger": false
+  },
+  {
+    "query": "Record a desktop browser demo where a CSS cursor changes on hover, and produce a video showing the page interaction.",
+    "should_trigger": false
+  },
+  {
+    "query": "Explain the phone overlay RPC payloads and service manager routing without running a device capture or judging any pixels.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use the Android emulator to test a login form's accessibility labels and back navigation; no pointer overlay or visual animation is under test.",
+    "should_trigger": false
+  }
+]

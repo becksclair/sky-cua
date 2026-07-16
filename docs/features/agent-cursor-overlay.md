@@ -166,15 +166,15 @@ frames on every active surface, and capture waits for the matching applied
 barrier before reading the desktop. The synthetic screenshot cursor is
 composited regardless.
 
-The visible overlay is explanatory feedback, not an input-dispatch clock.
-Coordinate pointer actions start a real glide when accepted: the service sends
-the target before input dispatch (`prepare_action_visual`), and the host's
-CPU motion driver sails the glyph toward it with vehicle-steering physics.
-Backend input dispatch follows the existing action contract and is not delayed
-waiting for animation completion — the click lands immediately while the glyph
-may still be in flight. Gesture visual feedback (ripple, press squash, trail)
-is arrival-gated to match the phone: it starts when the glyph settles at the
-gesture point, not when the event arrives. Failed dispatch cancels pending
+The visible overlay is the input-dispatch clock for coordinate pointer actions.
+When an action is accepted, the service sends both its target and gesture before
+dispatch (`prepare_action_visual`). The host's CPU motion driver sails the glyph
+toward the gesture start with vehicle-steering physics, and the service polls the
+structured `motion.pending_gesture_feedback` state. Physical input is released
+only after the host promotes the arrival-gated feedback, so a click or drag
+cannot overtake the visible cursor. Unsupported or unavailable visible overlays
+do not add delay; an eight-second fault-containment timeout releases input with
+an `AgentCursorArrivalTimeout` diagnostic. Failed dispatch cancels pending
 visual feedback.
 
 The host lifecycle states are `Hidden`, `VisibleIdle`, `AgentAnimating`,

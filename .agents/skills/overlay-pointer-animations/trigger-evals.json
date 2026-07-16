@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Run the phone companion overlay capture on a connected device and review the edge glow, pointer glide, curves, rotation, ripple, and trail in the recording and contact sheets.",
+    "should_trigger": true
+  },
+  {
+    "query": "The Android overlay's pink screen-edge glow and inward wave are too faint. Get a composited still with the overlay visible and tell me which artifact to inspect.",
+    "should_trigger": true
+  },
+  {
+    "query": "The phone pointer is redirected before it settles and its path should bow with momentum. Capture the redirect scenario and verify the video evidence.",
+    "should_trigger": true
+  },
+  {
+    "query": "Check the Android overlay on diagonal and horizontal swipes: the pointer should sail along the path and the trail should follow rather than snap.",
+    "should_trigger": true
+  },
+  {
+    "query": "Inspect the Android phone-companion OverlayMath and AgentOverlayController source only to explain pointer motion and screenshot hide/restore; do not use a device or claim pixel proof.",
+    "should_trigger": true
+  },
+  {
+    "query": "I tuned OverlayMath's speed and turn-rate constants. Run the companion unit tests and then pick the smallest device capture that proves the motion change visually.",
+    "should_trigger": true
+  },
+  {
+    "query": "The companion's model screenshot hides the accessibility overlay. Help me capture the real composited phone pixels with adb screencap or screenrecord and verify hide/restore behavior.",
+    "should_trigger": true
+  },
+  {
+    "query": "Verify the phone pointer animation while the operator's installed daemon is active. Use the isolated release daemon/private socket and only GridTestActivity so no real app or operator state is disturbed.",
+    "should_trigger": true
+  },
+  {
+    "query": "What is the minimum representative Android overlay pass? Select the fewest scenarios that cover long glides, a mid-flight redirect, and trail behavior, and name the proof artifacts.",
+    "should_trigger": true
+  },
+  {
+    "query": "Review a phone overlay contact sheet and report one visual verdict each for edge glow, inward wave, pointer glide/curve/rotation, ripple timing, and trail direction, including the device serial and build status.",
+    "should_trigger": true
+  },
+  {
+    "query": "Tune the Rust/wgpu desktop cursor's smoke aura and grounding shadow, then inspect its native-resolution capture on KDE.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use the desktop agent-cursor capture.py script and spectacle to produce a screenshot of the layer-shell pointer.",
+    "should_trigger": false
+  },
+  {
+    "query": "The desktop cursor's Mover2D redirect has an abrupt heading change and an early ripple; diagnose the Rust motion driver.",
+    "should_trigger": false
+  },
+  {
+    "query": "Fix the Android companion's login button accessibility label and verify TalkBack focus order; no overlay animation is involved.",
+    "should_trigger": false
+  },
+  {
+    "query": "The Android system mouse pointer is offset after rotation. Fix the platform pointer calibration, not the Codex companion overlay.",
+    "should_trigger": false
+  },
+  {
+    "query": "Explain the phone overlay_active and overlay_gesture RPC payloads and manager routing from source only; do not use a device or inspect pixels.",
+    "should_trigger": false
+  },
+  {
+    "query": "Reproduce an Android emulator login crash with adb and collect logcat; the static grid and pointer overlay are not part of the bug.",
+    "should_trigger": false
+  },
+  {
+    "query": "Record the phone app's splash-screen transition and make a montage of its branding animation; there is no agent pointer or edge glow to verify.",
+    "should_trigger": false
+  },
+  {
+    "query": "Choose a KDE Wayland screen-capture command for the whole desktop; this is unrelated to the phone companion overlay.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run a generic Android UI screenshot regression for a settings screen and compare pixels; do not launch GridTestActivity or the agent overlay.",
+    "should_trigger": false
+  }
+]

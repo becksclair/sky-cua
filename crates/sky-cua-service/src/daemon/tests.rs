@@ -22,7 +22,7 @@ use sky_cua_platform::model::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
 
@@ -49,6 +49,13 @@ struct BlockingBackend {
     first_execute_started: Arc<Notify>,
     second_execute_started: Arc<Notify>,
     release_first_execute: Arc<Notify>,
+}
+
+#[derive(Debug, Clone)]
+struct ArrivalCheckingBackend {
+    snapshot: AppStateSnapshot,
+    arrival_marker: PathBuf,
+    dispatched_after_arrival: Arc<AtomicBool>,
 }
 
 #[async_trait::async_trait]
@@ -137,6 +144,31 @@ impl DesktopBackend for BlockingBackend {
             self.second_execute_started.notify_one();
         }
         Ok(self.outcome.clone())
+    }
+}
+
+#[async_trait::async_trait]
+impl DesktopBackend for ArrivalCheckingBackend {
+    async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+        Ok(self.snapshot.environment.clone())
+    }
+
+    async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_app_state(
+        &self,
+        _selector: Option<AppSelector>,
+        _capture_screen: CaptureScreenMode,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        Ok(self.snapshot.clone())
+    }
+
+    async fn execute_action(&self, _request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        self.dispatched_after_arrival
+            .store(self.arrival_marker.exists(), Ordering::SeqCst);
+        Ok(success_outcome())
     }
 }
 
@@ -607,6 +639,51 @@ async fn execute_action_updates_cursor_state_for_explicit_click() {
         } => assert_eq!(state.sequence, 1),
         other => panic!("unexpected response: {other:?}"),
     }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_action_waits_for_cursor_arrival_before_backend_dispatch() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .status()
+        .is_err()
+    {
+        return;
+    }
+
+    let dir = unique_temp_dir("action-visual-arrival");
+    let host_path = dir.join("fake-overlay-host.py");
+    let socket_path = dir.join("agent-cursor.sock");
+    let arrival_marker = PathBuf::from(format!("{}.arrived", socket_path.display()));
+    crate::overlay::test_support::write_fake_overlay_host(&host_path);
+    let dispatched_after_arrival = Arc::new(AtomicBool::new(false));
+    let backend = ArrivalCheckingBackend {
+        snapshot: snapshot(None, Vec::new()),
+        arrival_marker,
+        dispatched_after_arrival: dispatched_after_arrival.clone(),
+    };
+    let daemon = daemon_with_backend_and_overlay(
+        Box::new(backend),
+        OverlayController::new_for_tests_with_host(host_path, socket_path),
+    );
+    let click = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
+
+    let outcome = match daemon
+        .handle(ServiceRequest::ExecuteAction {
+            request: Box::new(click),
+        })
+        .await
+    {
+        ServiceResponse::ExecuteAction { outcome } => outcome,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert!(outcome.success);
+    assert!(
+        dispatched_after_arrival.load(Ordering::SeqCst),
+        "backend input dispatch must not run before the overlay reports arrival; diagnostics={:?}",
+        outcome.diagnostics
+    );
 }
 
 #[tokio::test]
@@ -1184,6 +1261,18 @@ fn daemon_with_backend(backend: Box<dyn DesktopBackend>) -> ServiceDaemon {
     daemon_with_backend_and_presence_config(backend, SessionPresenceConfig::disabled())
 }
 
+fn daemon_with_backend_and_overlay(
+    backend: Box<dyn DesktopBackend>,
+    overlay: OverlayController,
+) -> ServiceDaemon {
+    daemon_with_phone_and_overlay(
+        backend,
+        SessionPresenceConfig::disabled(),
+        test_phone_manager(),
+        overlay,
+    )
+}
+
 fn daemon_with_backend_and_presence_config(
     backend: Box<dyn DesktopBackend>,
     session_presence_config: SessionPresenceConfig,
@@ -1196,11 +1285,25 @@ fn daemon_with_phone(
     session_presence_config: SessionPresenceConfig,
     phone: crate::phone::PhoneManager,
 ) -> ServiceDaemon {
+    daemon_with_phone_and_overlay(
+        backend,
+        session_presence_config,
+        phone,
+        OverlayController::new_for_tests(),
+    )
+}
+
+fn daemon_with_phone_and_overlay(
+    backend: Box<dyn DesktopBackend>,
+    session_presence_config: SessionPresenceConfig,
+    phone: crate::phone::PhoneManager,
+    overlay: OverlayController,
+) -> ServiceDaemon {
     ServiceDaemon {
         backend,
         sessions: SessionStore::new(),
         snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
-        overlay: tokio::sync::Mutex::new(OverlayController::new_for_tests()),
+        overlay: tokio::sync::Mutex::new(overlay),
         phone: tokio::sync::Mutex::new(phone),
         session_presence_config,
         session_presence_held: tokio::sync::Mutex::new(false),

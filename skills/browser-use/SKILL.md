@@ -1,101 +1,69 @@
 ---
 name: browser-use
-description: "Use for sky-cua browser MCP tools: tab control, page snapshots, screenshots, clicks, typing, keys, and scrolling."
+description: "Use sky-cua browser MCP tools for page content in a claimed/open desktop Chrome-family tab, including tab control, snapshots, screenshots, clicks, typing, keys, and scrolling; do not use for browser chrome/toolbars, extension pages, browser permission popups, OS/native UI, desktop windows, or Android/phone browser tasks."
 ---
 
 # Browser Use
 
-For browser chrome, native file pickers, OS dialogs, extension permission UI,
-or desktop windows, use `computer-use` instead. Browser tools only reach page
-content in a claimed or opened tab.
+Use browser tools only for page content in a claimed or opened desktop
+Chrome-family tab. Use `computer-use` for browser chrome or toolbars, Chrome
+internal pages, extension pages or permission UI, native file pickers, OS
+dialogs, and desktop windows. Use `phone-use` for Android or phone-browser UI.
 
 ## Ownership
 
-- Browser tab listing is `list_resources(surface="browser", resource="tabs")`;
-  page state is `observe(surface="browser", tab_id=...)`; screenshots are
-  `capture_screen(surface="browser", tab_id=...)`; page input is
-  `browser_input`.
-- `user_chrome` is the user's running Chrome-family browser and the only
-  target. Pin a browser with `SKY_CUA_BROWSER=brave` (or chrome/chromium).
-- Prefer reusing a tab. `browser_open` creates a new session-owned tab on every
-  call, so repeated opens leave a pile of Codex tabs in the user's browser.
-  List tabs, claim a relevant existing tab such as active/about:blank, navigate
-  it, then keep reusing that `tab_id`. Open a fresh tab only when no existing
-  tab can serve.
-- Never claim or drive privileged internal pages: `chrome://*`,
-  `devtools://*`, `view-source:*`, or the extensions page. They are not CDP
-  page targets; claim/navigate can hang and wedge the debugger transport. If
-  only internal tabs exist, open a fresh tab instead.
-- The runtime retries stale session/debugger attachment once per action; later
-  failures are real.
-- Password-manager overlays block attach on login pages. Chrome refuses
-  debugger access while the tab hosts another extension's frame — Bitwarden's
-  inline autofill menu on a credential form is the common case, surfacing as
-  `Cannot access a chrome-extension:// URL of different extension`. Claim and
-  attach the tab BEFORE navigating it into a login flow (an attached session
-  survives the overlay appearing). If attach is refused on a page already
-  showing a login form, dismiss the overlay first — press Escape or click a
-  neutral spot via desktop input — then retry the browser action once; if the
-  refusal persists, drive that step with desktop input.
+- List browser tabs with `list_resources(surface="browser", resource="tabs")`.
+- Read page state with `observe(surface="browser", tab_id=...)`.
+- Capture browser screenshots with `capture_screen(surface="browser", tab_id=...)`.
+- Send page input with `browser_input`.
+- Target only `user_chrome`, the user's running Chrome-family browser.
+- Pin a browser with `SKY_CUA_BROWSER=brave`, `chrome`, or `chromium`.
+- Prefer reusing an existing tab.
+- `browser_open` creates a new session-owned tab on every call, so repeated opens leave a pile of Codex tabs in the user's browser.
+- List tabs before opening a new tab.
+- Claim a relevant existing tab such as active/about:blank.
+- Navigate the claimed tab and keep reusing its `tab_id`.
+- Open a fresh tab only when no existing tab can serve.
+- Never claim or drive privileged internal pages such as `chrome://*`, `devtools://*`, `view-source:*`, or the extensions page.
+- Privileged internal pages are not CDP page targets, and claiming or navigating them can hang and wedge the debugger transport.
+- Open a fresh tab when only internal tabs exist.
+- The runtime retries stale session/debugger attachment once per action; treat later attachment failures as real.
+- On the exact `Cannot access a chrome-extension:// URL of different extension` attach diagnostic, read [foreign-extension-attach.md](references/foreign-extension-attach.md) and follow its conditional recovery.
 
 ## Coordinates
 
-- Browser coordinates are CSS pixels. Browser screenshot pixels, browser
-  observation bounds, and browser action coordinates line up one-to-one. Never
-  divide by `devicePixelRatio`; captures are already normalized.
-- Screenshots show only the visible viewport. Scroll, then re-capture, for
-  off-screen targets.
-- Coordinates are valid for the observation/capture moment. Any scroll, resize,
-  navigation, or tab switch invalidates previous bounds. An element `ref` does
-  not go stale this way — the service re-resolves it live — so it is the safer
-  target after the page may have moved.
-- Desktop coordinates are a different space. Never reuse desktop screenshot or
-  `observe(surface="desktop")` coordinates here.
+- Treat browser coordinates as normalized CSS pixels: screenshot pixels, observation bounds, and action coordinates line up one-to-one, so never divide them by `devicePixelRatio`.
+- Screenshots show only the visible viewport; scroll and re-capture for off-screen targets.
+- Any scroll, resize, navigation, or tab switch invalidates coordinates from the prior observation or capture.
+- An element `ref` does not go stale from page movement because the service re-resolves it live; prefer it after a re-render or scroll.
+- Desktop coordinates are a different space; never reuse desktop screenshot or `observe(surface="desktop")` coordinates in browser actions.
 
-## State
+## Observe and finish
 
-- Prefer `observe(surface="browser", tab_id=...)` for title, URL, viewport,
-  visible text, actionable element bounds, and a per-element `ref` for targeting
-  clicks and typing. Defaults are compact enough for most pages.
-- On dense pages, use element query/offset/limit controls. Use `text_limit: 0`
-  for controls-only snapshots, and raise text limits only when page text is the
-  task.
-- Use `capture_screen(surface="browser", tab_id=...)` for visual layout or
-  pixel targeting. Browser `observe` does not return an image.
-- Tool success means input was dispatched, not that the page changed as
-  intended. Verify consequential changes with a fresh observation or screenshot.
+- Prefer `observe(surface="browser", tab_id=...)` for title, URL, viewport, visible text, actionable bounds, and per-element `ref` values.
+- Defaults are compact; on dense pages use element query, offset, and limit controls, use `text_limit: 0` for controls-only snapshots, and raise text limits only when page text is the task.
+- Use `capture_screen(surface="browser", tab_id=...)` for visual layout or pixel targeting because browser `observe` does not return an image.
+- Tool success means only that input was dispatched, so verify consequential changes with a fresh observation or screenshot.
+- If fresh evidence shows no intended change, re-observe, correct the current field or target state, and retry the action once; if it is still unchanged, stop and report the failure.
+- Stop only after fresh browser evidence confirms the requested page state, and report URL, text, or visual state from that evidence.
 
 ## Actions
 
-- Keep `tab_id`, `operation`, coordinates, deltas, and text as top-level tool
-  fields. Never pack JSON or action fields into an id string.
-- `browser_input(operation="click")` moves the visible browser agent cursor
-  before clicking. Call `browser_move_mouse` first only for hover or cursor
-  placement without click.
-- Prefer a `ref` from the latest `observe(surface="browser")` over `x`/`y` when
-  clicking or typing on an actionable control, especially on dynamic pages.
-  `browser_input(operation="click", ref=...)` and
-  `browser_input(operation="type_text", ref=..., text=...)` re-resolve the
-  element's live position at action time (re-find, scroll into view, hit-test)
-  and dispatch a real trusted click at its current center, so they do not miss
-  when a re-render or scroll has moved the target since you observed it. `ref` is
-  opaque; pass it verbatim, never parse or build one. Reserve `x`/`y` for pixel
-  targets with no discrete element, such as a canvas or a map region.
-- Typing by `ref` focuses the field and types in one step, so no separate
-  focus click is needed. `type_text` with `ref` still requires non-empty `text`.
-- On a `BrowserElementUnresolved` (the page changed; the ref matches nothing) or
-  `BrowserElementNotActionable` (found but hidden, off-screen, or covered)
-  diagnostic, re-observe to get fresh refs and retry. Do not pixel-guess the
-  target or use `browser_eval` to find and click elements.
-- `browser_scroll` requires non-zero `delta_x` or `delta_y`. Omit x/y for
-  viewport scroll; provide both x/y to move the cursor there and scroll the
-  browser-selected container, falling back to the viewport. This is scripted DOM
-  scrolling, not a real wheel event.
-- `browser_input(operation="type_text")` inserts literal text into the focused
-  control; without a `ref`, focus it first (see the `ref` bullets above to focus
-  and type in one step).
-- `browser_input(operation="press_key")` handles focused controls and page
-  shortcuts. Use literal key strings such as `Enter`, `Escape`, `Tab`,
-  `Ctrl+K`, and `Ctrl+L`. To replace field contents, focus it, press `Ctrl+A`,
-  then type or press `Backspace`.
+- Keep `tab_id`, `operation`, coordinates, deltas, and text as top-level tool fields; never pack JSON or action fields into an id string.
+- `browser_input(operation="click")` moves the visible browser agent cursor before clicking; call `browser_move_mouse` first only for hover or cursor placement without a click.
+- Prefer a `ref` from the latest `observe(surface="browser")` over `x`/`y` for actionable controls.
+- `browser_input(operation="click", ref=...)` re-finds, scrolls into view, hit-tests, and dispatches a real trusted click at the element's current center.
+- `browser_input(operation="type_text", ref=..., text=...)` re-finds, scrolls into view, hit-tests, and types into the element at its current position.
+- A `ref` is opaque and must be passed verbatim; never parse or build one.
+- Reserve `x`/`y` for pixel targets with no discrete element, such as a canvas or map region.
+- Typing by `ref` focuses the field and types in one step, and `type_text` with `ref` requires non-empty `text`.
+- On `BrowserElementUnresolved` or `BrowserElementNotActionable`, re-observe for fresh refs and retry.
+- Do not discard a `ref` merely because a re-render may have moved it; the service re-resolves it live. Re-observe only when the diagnostic says it is unresolved or non-actionable.
+- `BrowserElementUnresolved` means the page changed and the ref matches nothing; `BrowserElementNotActionable` means the element is hidden, off-screen, or covered.
+- Do not pixel-guess an unresolved or non-actionable target, and do not use `browser_eval` to find and click elements.
+- `browser_scroll` requires non-zero `delta_x` or `delta_y`; omit x/y for viewport scroll, or provide both to move the cursor there and scroll the browser-selected container with viewport fallback.
+- `browser_scroll` is scripted DOM scrolling, not a real wheel event.
+- `browser_input(operation="type_text")` inserts literal text into the focused control; without a `ref`, focus the control first.
+- `browser_input(operation="press_key")` handles focused controls and page shortcuts; use literal keys such as `Enter`, `Escape`, `Tab`, `Ctrl+K`, and `Ctrl+L`.
+- To replace field contents, focus the field and press `Ctrl+A` before typing or pressing `Backspace`.
 - Browser URLs must be HTTP(S) or exactly `about:blank`.

@@ -1,4 +1,4 @@
 interface:
   display_name: "VM Tests"
-  short_description: "Run sky-cua testing VM smoke profiles"
-  default_prompt: "Use $vm-tests to run the right sky-cua testing VM smoke profile and report the artifact evidence."
+  short_description: "Run and verify sky-cua testing VM smoke profiles"
+  default_prompt: "Use $vm-tests for a testing-vm smoke task: select or run the right profile, verify the guest session, and report exact artifact evidence."

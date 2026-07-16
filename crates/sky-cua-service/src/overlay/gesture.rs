@@ -7,7 +7,7 @@
 
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AgentCursorPoint, AgentOverlayGestureEvent, AgentOverlayGestureKind,
-    CoordinateSpace, Point2,
+    Point2,
 };
 
 use super::cursor_geometry::{
@@ -23,21 +23,32 @@ pub(super) fn gesture_from_action_request(
         MAX_GESTURE_DURATION_MS, MIN_GESTURE_DURATION_MS,
     };
 
-    let (kind, points) = match request.action {
+    let (kind, source_points) = match request.action {
         ActionName::Click | ActionName::PerformSecondaryAction => {
             let point = native_point_for_action(request)?;
-            (AgentOverlayGestureKind::Tap, vec![point_to_point2(point)])
+            (AgentOverlayGestureKind::Tap, vec![point])
         }
         ActionName::Drag => {
             let start = native_drag_start_point(request)?;
             let end = native_drag_target_point(request)?;
-            (
-                AgentOverlayGestureKind::Drag,
-                vec![point_to_point2(start), point_to_point2(end)],
-            )
+            (AgentOverlayGestureKind::Drag, vec![start, end])
         }
         _ => return None,
     };
+
+    let first = source_points.first()?;
+    let coordinate_space = first.coordinate_space.clone();
+    let mapping_id = first.mapping_id.clone();
+    if source_points
+        .iter()
+        .any(|point| point.coordinate_space != coordinate_space || point.mapping_id != mapping_id)
+    {
+        return None;
+    }
+    let points = source_points
+        .into_iter()
+        .map(point_to_point2)
+        .collect::<Vec<_>>();
 
     if points.len() > MAX_GESTURE_POINTS as usize {
         return None;
@@ -63,8 +74,8 @@ pub(super) fn gesture_from_action_request(
         event_id: format!("{}-{}", action_name_str(&request.action), sequence),
         sequence,
         kind,
-        coordinate_space: CoordinateSpace::DesktopLogical,
-        mapping_id: None,
+        coordinate_space,
+        mapping_id,
         points,
         duration_ms,
         source_action: Some(request.action.clone()),

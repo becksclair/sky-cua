@@ -1,3 +1,4 @@
+mod app_server;
 mod frame;
 #[cfg(unix)]
 mod host;
@@ -16,7 +17,9 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("install-manifest") => install_manifest(&args[1..]),
         Some("serve") => host_serve(&args[1..]),
-        Some(origin) if origin.starts_with("chrome-extension://") => host_serve(&[]),
+        Some(origin) if origin.starts_with("chrome-extension://") => {
+            host_serve_with_origin(&[], Some(origin))
+        }
         Some("--help") | Some("-h") => {
             print_help();
             Ok(())
@@ -122,13 +125,32 @@ fn parse_value(args: &[String], index: &mut usize, flag: &str) -> Result<String>
 
 #[cfg(unix)]
 fn host_serve(args: &[String]) -> Result<()> {
+    host_serve_with_origin(args, None)
+}
+
+#[cfg(unix)]
+fn host_serve_with_origin(args: &[String], origin: Option<&str>) -> Result<()> {
     let host_name = parse_host_name_args(args)?;
-    host::serve(host_name)
+    host::serve(host_name, extension_id_from_origin(origin))
 }
 
 #[cfg(not(unix))]
 fn host_serve(_args: &[String]) -> Result<()> {
     bail!("serve mode is only available on Unix platforms")
+}
+
+#[cfg(not(unix))]
+fn host_serve_with_origin(_args: &[String], _origin: Option<&str>) -> Result<()> {
+    bail!("serve mode is only available on Unix platforms")
+}
+
+fn extension_id_from_origin(origin: Option<&str>) -> Option<String> {
+    let origin = origin?;
+    origin
+        .strip_prefix("chrome-extension://")
+        .and_then(|value| value.strip_suffix('/'))
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+        .map(str::to_string)
 }
 
 fn print_help() {
@@ -166,5 +188,18 @@ mod tests {
         assert!(truthy("on"));
         assert!(!truthy("false"));
         assert!(!truthy(""));
+    }
+
+    #[test]
+    fn extracts_extension_id_from_native_messaging_origin() {
+        assert_eq!(
+            extension_id_from_origin(Some("chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/")),
+            Some("hehggadaopoacecdllhhajmbjkdcmajg".to_string())
+        );
+        assert_eq!(extension_id_from_origin(None), None);
+        assert_eq!(
+            extension_id_from_origin(Some("chrome-extension://bad/path/")),
+            None
+        );
     }
 }

@@ -1,0 +1,59 @@
+{
+  "skill_name": "overlay-pointer-animations",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I need a phone-side visual acceptance run for the companion overlay. Use the isolated daemon and GridTestActivity, capture long corner glides, a redirect, and swipes, then return the artifacts, device/build details, and visual verdicts.",
+      "expected_output": "A completed phone overlay capture using the documented harness and isolated runtime, with representative scenarios, contact-sheet/video evidence, device serial, rebuild status, artifact directory, and verdicts for glow, wave, pointer motion, ripple, and trail.",
+      "expectations": [
+        "Uses overlay_pointer_animations.py with a connected serial and the isolated release daemon/private socket, not the operator's installed daemon or a real application.",
+        "Runs scenarios that cover long glide/settle, mid-flight redirect, and trail behavior (the default corners + redirect + swipes set or an equivalent explicit selection).",
+        "Inspects the composited MP4 and contact sheets for edge-to-edge pink glow including the status bar, pointer nose/curve/rotation, clean arrival without spring-back, ripple timing, and trail direction.",
+        "Reports device serial, scenarios, whether APK/daemon were rebuilt, artifact directory, one verdict per required visual dimension, and any live gate not run."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "After lowering the phone cursor turn rate and changing its glow breathing band, verify the change. Do the pure math checks first, then use the smallest visual scenario that can expose a redirected curve and the glow/wave appearance.",
+      "expected_output": "A phone-specific verification that runs the companion unit tests, selects redirect plus a composited glow still or suitable capture, and explains the observed curve, rotation, glow, and wave behavior with concrete artifacts.",
+      "expectations": [
+        "Runs the documented offline Android OverlayMath unit-test command and/or the harness pure scenario tests before relying on device evidence.",
+        "Selects redirect for turn-rate/momentum-curve evidence and a real adb screencap or screenrecord/contact-sheet artifact for glow/wave; it does not use phone_screenshot as proof of the visible overlay.",
+        "Checks that the pointer noses into travel, curves on a direction change, eases to a clean stop, and that glow/wave changes remain visually legible on the test canvas.",
+        "Reports whether APK and daemon rebuilds occurred and identifies the device/artifact limitations if a live device gate is unavailable."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The phone overlay is absent from the model screenshot even though the app is running. Diagnose the evidence path and give me a source-plus-capture validation that distinguishes overlay hide/restore from a rendering failure, without touching any real app.",
+      "expected_output": "A diagnosis that identifies the companion's screenshot hide/restore behavior, uses composited adb screencap/screenrecord evidence and source where needed, confines execution to GridTestActivity, and clearly separates source-only evidence from live pixels.",
+      "expectations": [
+        "Explains that phone_screenshot/model screenshots can hide the accessibility overlay and selects adb screencap or screenrecord as the composited proof path.",
+        "Uses source inspection of AgentOverlayController's hide/restore state only to explain the behavior, then validates with an actual or explicitly unavailable composited artifact.",
+        "Keeps the run on GridTestActivity with the isolated daemon/private socket and does not drive or capture a real operator application.",
+        "Does not claim visual success from source alone; reports the device serial, artifact path, and any missing live gate."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Give me the minimum representative scenario selection for an Android overlay change, with exact harness flags and proof criteria. I want coverage of long movement, a hard redirect, and the trail without running every available scenario.",
+      "expected_output": "A concise scenario plan using corners, redirect, and swipes (or an equivalent minimal trio), explaining each coverage target, the contact-sheet/video proof, and the isolation/reporting requirements.",
+      "expectations": [
+        "Chooses corners for long glide/settle and heading rotation, redirect for mid-flight momentum/curve and ripple timing, and swipes for trail behavior; it does not claim fan is required for this minimum set.",
+        "Names the overlay-pointer-animations MP4/contact-sheet artifacts and says to inspect consecutive frames rather than a single model screenshot.",
+        "Includes phone-specific checks for edge-to-edge glow including the status bar, inward wave, pointer orientation, clean stop/reset, ripple, and tail-following trail.",
+        "Includes the isolated daemon, GridTestActivity-only scope, device serial, build/rebuild status, and explicit live-gate reporting."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Inspect the Android phone-companion overlay source only. Explain which file owns motion math, which owns drawing, which owns screenshot hide/restore, and whether source or offline tests can prove visible pixels. Do not use a device.",
+      "expected_output": "A source-only phone-overlay diagnosis that loads the source map, preserves ownership boundaries, runs relevant offline math tests when appropriate, explicitly denies pixel proof, and stops without a device capture.",
+      "expectations": [
+        "Routes source-only phone-companion overlay questions to the source map rather than the desktop Rust/wgpu cursor skill or a live capture.",
+        "Identifies OverlayMath as pure math/CaptureState, AgentOverlayView as drawing, AgentOverlayController as lifecycle and hide/restore, and GridTestActivity as the neutral test canvas.",
+        "States that source and offline tests can establish logic but cannot prove composited overlay pixels, and reports the live device gate as intentionally unrun."
+      ]
+    }
+  ]
+}

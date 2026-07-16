@@ -1,0 +1,51 @@
+{
+  "skill_name": "vm-tests",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Run the full testing-vm sequence through scripts/run_gui_testing_vm_smoke.py --profile all using the 127.0.0.1:22222 SSH port forward, user skycua, and the known_hosts options in the repository docs. Keep the default host build and checkout sync. Sync OpenCode and Pi settings because their profiles are in the sequence. Report the exact command, selected guest session and display, the artifact directory, which sequence members ran or were conditionally skipped, and distinguish the VM-local codex-cua deterministic gate from its host-side performance judge.",
+      "expected_output": "The runner executes --profile all with the documented port-forward and settings-sync options. The report reflects the all.sh order, records any conditional nested-session skips, and correctly says that all runs codex-cua's VM gate but does not run the host performance judge or provide complete cross-desktop coverage.",
+      "expectations": [
+        "Uses scripts/run_gui_testing_vm_smoke.py --profile all rather than substituting --profile curated or manually claiming that a subset is the all run.",
+        "Preserves the runner's default host build and checkout sync, and passes --sync-opencode-settings and --sync-pi-settings for the OpenCode and Pi lanes.",
+        "Tracks the current all.sh sequence: isolated-xpra, wayland-pointer, targeted-screenshot, display-screenshot, session-env, text-readback, codex-desktop, opencode-mcp, pi-mcp, codex-cua, and kde-kwin-effect, with the headed kde-plasma/gnome/cosmic/hyprland additions only when HOST_WAYLAND_DISPLAY is set.",
+        "Does not claim that --profile all runs the host-side codex-cua performance judge or that it is complete cross-desktop coverage.",
+        "Reports the selected guest session and display, exact command, build/sync choices, artifact location, and per-profile outcome or conditional skip."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Run the trimmed pre-merge profile set on testing-vm with --profile curated using the current real desktop session. Keep host build and checkout sync enabled. Report the four member outcomes, the session/display, the artifact path, and why this is not the full desktop matrix.",
+      "expected_output": "The runner executes curated and reports codex-desktop, wayland-pointer, session-env, and text-readback in registry order, with per-profile outcomes and artifacts. It explains that curated is session-agnostic pre-merge coverage, not the all sequence or complete cross-desktop matrix.",
+      "expectations": [
+        "Uses --profile curated and identifies exactly codex-desktop, wayland-pointer, session-env, and text-readback as its current registry members.",
+        "Does not conflate curated with --profile all and does not include desktop-smoke, host framebuffer proofs, wayland-pointer-scaled, or i3 as curated members.",
+        "Keeps the default host build and checkout sync unless a concrete artifact-identity reason is reported for skipping either one.",
+        "Reports the selected real guest session/display, per-member result, artifact or host summary path, and the aggregate failure status.",
+        "Explains that the curated runner preauthorizes required portals once, resets guest sky-cua processes between members, and runs the sequence as the current session-agnostic pre-merge set."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The VM is booted into Hyprland, but the last smoke used the wrong Wayland socket. Select the Hyprland guest session with the repository helper, confirm the compositor process and /run/user/1000/wayland-* sockets over the 127.0.0.1:22222 port forward, then run wayland-layer-shell-overlay with --desktop-env Hyprland and --wayland-display wayland-1. Preserve and report the resulting artifacts.",
+      "expected_output": "The session is selected and verified before the smoke; the overlay profile runs against Hyprland wayland-1 with the documented SSH options, and the report includes the exact command, session/display, result, and artifact directory.",
+      "expectations": [
+        "Uses scripts/testing-vm/select-session.sh hyprland before rerunning the profile and verifies the active Hyprland compositor and Wayland socket state.",
+        "Runs scripts/run_gui_testing_vm_smoke.py --profile wayland-layer-shell-overlay with the port-forward SSH options, --desktop-env Hyprland, and --wayland-display wayland-1.",
+        "Treats a stale compositor or socket as a session-selection problem and does not paper over it by switching to nested Docker/Xvfb guidance.",
+        "Reports the exact runner command, selected desktop/display, profile result, artifact directory, and any live gates not exercised."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Run the VM-only production package-path proof for the KWin effect on testing-vm. Use --profile kde-kwin-effect-system-install with --vm-name testing-vm and --libvirt-uri qemu:///session, against Plasma wayland-0 over the documented port forward. Verify that the installed effect and the active cleanup targets are removed, then report the host framebuffer summary and any residue.",
+      "expected_output": "The KWin system-install profile runs with the required VM/libvirt/session arguments, the host captures and reports its framebuffer proof, and cleanup is verified against the current sky-cua-overlay-host, service.sock, and agent-cursor.sock targets without treating historical sky-cua-overlay names as current residue.",
+      "expectations": [
+        "Uses --profile kde-kwin-effect-system-install with --vm-name testing-vm and --libvirt-uri qemu:///session, plus the documented port-forward and Plasma wayland-0 session settings.",
+        "Reports the host-side framebuffer proof or host-summary.json artifact rather than treating remote stdout alone as pixel evidence.",
+        "Verifies cleanup of the current sky-cua-overlay-host effect plus service.sock and agent-cursor.sock, and distinguishes stale sky-cua-overlay references as historical.",
+        "Reports the exact command, selected desktop/display, profile result, artifact path, and any cleanup residue or unrun live-smoke gate."
+      ]
+    }
+  ]
+}

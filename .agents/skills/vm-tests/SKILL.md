@@ -1,175 +1,81 @@
 ---
 name: vm-tests
-description: Use when running, selecting, debugging, or reporting sky-cua Arch testing-vm smoke profiles through scripts/run_gui_testing_vm_smoke.py, including KDE/Plasma, GNOME, COSMIC, Hyprland, i3/X11, KWin effect, layer-shell overlay, pointer/input, Codex Desktop, OpenCode prep, and VM artifact evidence.
+description: Use when running, selecting, debugging, or reporting an Arch testing-vm smoke through scripts/run_gui_testing_vm_smoke.py, including profile choice, guest-session/socket verification, and artifact evidence. Do not trigger for config or credential sync, provisioning, viewer control, local smokes, or unit tests unless a smoke operation is also requested.
 ---
 
 # VM Tests
 
-Use this skill for the Arch `testing-vm` smoke lane. It is for real guest desktop sessions, not local-only live smokes and not the retired nested Docker/Xvfb path.
+Operate the real Arch `testing-vm` smoke lane through
+`scripts/run_gui_testing_vm_smoke.py`. This skill is not for local-only smokes,
+the retired nested Docker/Xvfb path, or a configuration-sync task by itself.
 
-## Read First
+## Mandatory plan contract
 
-Before running or interpreting a VM profile, read the current project sources of truth:
+- Every plan/report must show the fully expanded runner command, exact profile membership/order, selected guest session/display, sync choices, artifact path, every outcome/conditional skip, and live-smoke gates not run.
+- `all` is exactly `isolated-xpra`, `wayland-pointer`, `targeted-screenshot`, `display-screenshot`, `session-env`, `text-readback`, `codex-desktop`, `opencode-mcp`, `pi-mcp`, `codex-cua`, `kde-kwin-effect`; add `kde-plasma`, `gnome`, `cosmic`, `hyprland` in that order only when `HOST_WAYLAND_DISPLAY` is set. The VM-local `codex-cua` gate is not the host performance judge or real-session cross-desktop acceptance.
+- `curated` is the session-agnostic sequence `codex-desktop`, `wayland-pointer`, `session-env`, `text-readback`; preauthorize portals once and reset guest sky-cua processes between members.
+- The exact port-forwarded runner prefix is `uv run python scripts/run_gui_testing_vm_smoke.py --host 127.0.0.1 --port 22222 --user skycua --ssh-option StrictHostKeyChecking=no --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts`; copy it literally and do not substitute `/dev/null` or invent transport flags. A Hyprland overlay run appends `--profile wayland-layer-shell-overlay --desktop-env Hyprland --wayland-display wayland-1` after selecting and verifying the real Hyprland session/socket.
+- KWin production proof must name `--profile kde-kwin-effect-system-install --vm-name testing-vm --libvirt-uri qemu:///session --desktop-env KDE --wayland-display wayland-0`, require host framebuffer/`host-summary.json`, verify cleanup of `sky-cua-overlay-host`, `service.sock`, and `agent-cursor.sock`, and classify `sky-cua-overlay` as historical residue only.
 
-- `docs/operations/gui-desktop-test-harness.md` for provisioning, runner behavior, profiles, session switching, current proof status, and artifact expectations.
-- `docs/operations/testing-vm-desktop-smokes.md` for the current SSH port-forward form, session/display names, known-good commands, and false trails.
-- `scripts/run_gui_testing_vm_smoke.py --help` or the script source when adding flags, choosing a profile, or investigating runner behavior.
+## Route
 
-Treat those files as authoritative over this skill if they drift.
+Use the compact router below for known lanes. Consult
+`docs/operations/gui-desktop-test-harness.md`,
+`docs/operations/testing-vm-desktop-smokes.md`, and the runner's `--help` or
+source only when adding flags, diagnosing drift/failure, or resolving a
+router mismatch; those sources are authoritative. Load the linked references
+only when the lane needs their catalog, command, or troubleshooting.
 
-## Core Rules
+| Task | Profile or action | Guest session | Evidence to preserve |
+| --- | --- | --- | --- |
+| Routine full gate | `--profile all` | Current visible session; headed legacy additions need host `HOST_WAYLAND_DISPLAY` | Exact command, fixed sequence, conditional skips, artifacts; VM-local `codex-cua` gate only, not the host judge |
+| Trimmed pre-merge gate | `--profile curated` | Current real session | `codex-desktop`, `wayland-pointer`, `session-env`, `text-readback` outcomes in order, artifacts, aggregate status |
+| Real-session desktop acceptance | Select target, then run its real-session lane | KDE `wayland-0`; GNOME `wayland-0`; COSMIC/Hyprland `wayland-1`; i3 derives X11 | Explicit target session/display, profile result, artifacts; never count `all`'s nested debug lanes as acceptance |
+| Pointer/input | `wayland-pointer` | Target real desktop/display | Profile result, session/display, artifact directory |
+| Layer-shell overlay | `wayland-layer-shell-overlay` | Usually Hyprland `wayland-1`; use the selected real socket | Profile result, session/display, overlay/screenshot artifacts |
+| Screenshot/readback | `targeted-screenshot`, `display-screenshot`, `text-readback` | Target real session | Exact profile, session/display, capture/readback artifacts |
+| COSMIC helper or scaled cursor | `cosmic-helper`, `wayland-pointer-scaled` | COSMIC `wayland-1` | Helper replies or scaled-pointer evidence plus artifacts |
+| KWin production package path | `kde-kwin-effect-system-install`, with `--vm-name testing-vm --libvirt-uri qemu:///session` | Plasma/KDE `wayland-0` | Host framebuffer/`host-summary.json`, exact cleanup result; current targets are `sky-cua-overlay-host`, `service.sock`, and `agent-cursor.sock` |
+| Agent harness | `codex-desktop`, `opencode-mcp`, or `pi-mcp` | Current visible session | Tool/launch result, artifact path, and whether settings were explicitly synced |
+| Profile inventory or selection | `--list-profiles` | None | Current registry and the selected lane; do not imply a smoke ran |
 
-- Use `scripts/run_gui_testing_vm_smoke.py` as the accepted VM matrix runner.
-- Run profiles against the visible VM desktop session. A nested compositor, Docker GUI image, or old nested-Xvfb smoke is historical evidence, not acceptance proof.
-- Let the runner build and sync by default. Use `--skip-host-build` or `--skip-sync` only when you have confirmed the VM already has the exact artifacts under test.
-- Select or confirm the guest session before real-session profiles. Stale compositors and Wayland sockets produce misleading failures.
-- Use the port-forward SSH form when `testing-vm` does not resolve:
+For the complete `all`/`curated` order and lane catalog, read
+`references/profile-matrix.md` before planning, running, or reporting either
+aggregate profile. Before writing or running any SSH/runner command, read
+`references/commands.md` and copy its flag names; never invent transport
+flags. For a failed or misleading run, read
+`references/troubleshooting.md`.
 
-```bash
---host 127.0.0.1 --port 22222 --user skycua \
---ssh-option StrictHostKeyChecking=no \
---ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts
-```
+## Execution boundaries
 
-- Do not copy Codex credentials into the VM unless the profile needs an authenticated Codex lane; when needed, use the runner's `--sync-codex-settings` flag and say so.
-- If a run touches portal, input, or overlay behavior, report the selected desktop, `WAYLAND_DISPLAY` or X11 display, profile, command, and artifact directory.
+1. For a real-session lane, select or confirm the guest session first, then
+   verify the compositor and `/run/user/1000/wayland-*` sockets (or the X11
+   display). The runner does not select a compositor session; use the helper
+   only when the task explicitly requires changing it. Do not paper over a
+   stale socket with nested Docker/Xvfb guidance.
+2. Use the runner's default host build and checkout sync. Pass
+   `--skip-host-build` or `--skip-sync` only after confirming that the exact
+   artifacts under test are already present in the VM.
+3. If `testing-vm` does not resolve, use the documented `127.0.0.1:22222`
+   port-forward and known-hosts options. This changes transport, not the
+   profile or acceptance target.
+4. Settings and credentials sync is opt-in: use `--sync-codex-settings`,
+   `--sync-opencode-settings`, or `--sync-pi-settings` only when the requested
+   authenticated lane needs it. Do not copy credentials merely to prepare a
+   later run.
 
-## Session Selection
+## Stop and report
 
-Switch sessions with the guest helper, then confirm the actual compositor/socket state:
-
-```bash
-ssh -p 22222 \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
-  skycua@127.0.0.1 'cd /workspace && sudo scripts/testing-vm/select-session.sh plasma'
-
-ssh -p 22222 \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=artifacts/testing-vm/known_hosts \
-  skycua@127.0.0.1 'pgrep -a "kwin_wayland|gnome-shell|Hyprland|cosmic-session|cosmic-comp|i3|Xorg"; ls -l /run/user/1000/wayland-* 2>/dev/null || true'
-```
-
-Known real-session display defaults:
-
-- Plasma/KWin: `--desktop-env KDE --wayland-display wayland-0`
-- GNOME: `--desktop-env GNOME --wayland-display wayland-0`
-- COSMIC: `--desktop-env COSMIC --wayland-display wayland-1`
-- Hyprland: `--desktop-env Hyprland --wayland-display wayland-1`
-- i3/X11: `--desktop-env i3`
-
-## Profile Selection
-
-- Use `computer-use` or `wayland-pointer` for visible real-session pointer/input proof.
-- Use `kde-kwin-effect-system-install` for VM-only KWin production package-path proof. Include `--vm-name testing-vm --libvirt-uri qemu:///session` and confirm cleanup state.
-- Use `wayland-layer-shell-overlay` for Hyprland or other layer-shell cursor overlay proof.
-- Use `cosmic-helper` for the COSMIC protocol helper lane.
-- Use `cosmic-patched-cursor-host-proof` or `cosmic-transparent-xcursor-host-proof` only when the VM was booted into the matching COSMIC mode described in the docs.
-- Use `codex-desktop` for Codex Desktop launch smoke. Add `--sync-codex-settings` only when the test needs authenticated Codex state.
-- Use `opencode-mcp` for OpenCode MCP smoke tests. Add `--sync-opencode-settings` to copy host config/auth and update to latest.
-- Use `pi-mcp` for Pi MCP smoke tests. Add `--sync-pi-settings` to copy host config and update to latest.
-- Use `all` only for the fast non-session-specific set; do not report it as complete cross-desktop coverage.
-
-## Command Templates
-
-Prefer `uv run python` when the Python environment matters; raw `python3` is acceptable for scripts that already run that way in the docs.
-
-Plasma pointer/input proof:
-
-```bash
-uv run python scripts/run_gui_testing_vm_smoke.py \
-  --host 127.0.0.1 --port 22222 --user skycua \
-  --ssh-option StrictHostKeyChecking=no \
-  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
-  --profile wayland-pointer \
-  --desktop-env KDE --wayland-display wayland-0
-```
-
-Hyprland layer-shell proof:
-
-```bash
-uv run python scripts/run_gui_testing_vm_smoke.py \
-  --host 127.0.0.1 --port 22222 --user skycua \
-  --ssh-option StrictHostKeyChecking=no \
-  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
-  --profile wayland-layer-shell-overlay \
-  --desktop-env Hyprland --wayland-display wayland-1
-```
-
-KWin system-install proof:
-
-```bash
-uv run python scripts/run_gui_testing_vm_smoke.py \
-  --host 127.0.0.1 --port 22222 --user skycua \
-  --ssh-option StrictHostKeyChecking=no \
-  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
-  --profile kde-kwin-effect-system-install \
-  --vm-name testing-vm --libvirt-uri qemu:///session \
-  --desktop-env KDE --wayland-display wayland-0
-```
-
-COSMIC scaled pointer proof:
-
-```bash
-uv run python scripts/run_gui_testing_vm_smoke.py \
-  --host 127.0.0.1 --port 22222 --user skycua \
-  --ssh-option StrictHostKeyChecking=no \
-  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
-  --profile wayland-pointer-scaled \
-  --desktop-env COSMIC --wayland-display wayland-1
-```
-
-OpenCode MCP smoke:
-
-```bash
-uv run python scripts/run_gui_testing_vm_smoke.py \
-  --host 127.0.0.1 --port 22222 --user skycua \
-  --ssh-option StrictHostKeyChecking=no \
-  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
-  --profile opencode-mcp \
-  --sync-opencode-settings
-```
-
-Pi MCP smoke:
-
-```bash
-uv run python scripts/run_gui_testing_vm_smoke.py \
-  --host 127.0.0.1 --port 22222 --user skycua \
-  --ssh-option StrictHostKeyChecking=no \
-  --ssh-option UserKnownHostsFile=artifacts/testing-vm/known_hosts \
-  --profile pi-mcp \
-  --sync-pi-settings
-```
-
-## Failure Triage
-
-- If SSH says `Could not resolve hostname testing-vm`, rerun with the `127.0.0.1:22222` port-forward form.
-- If a profile fails on the wrong Wayland socket, switch the guest session with `scripts/testing-vm/select-session.sh`, then confirm compositor processes and `/run/user/1000/wayland-*`.
-- If portal behavior looks wrong after switching desktops, rerun without `--skip-sync`; the runner refreshes the user portal stack and imports the requested desktop environment.
-- If cleanup looks contaminated, remember the active cleanup target is `sky-cua-overlay-host` plus `service.sock` and `agent-cursor.sock`; stale `sky-cua-overlay` references are historical.
-- If a local smoke points at nested X11/Xvfb, Docker GUI, or retired TIDAL flows, treat it as stale guidance unless the user explicitly asks for historical archaeology.
-
-## VM Viewer
-
-For a persistent background viewer that auto-restarts:
-
-```bash
-cp scripts/testing-vm/virt-viewer-testing-vm.service \
-  ~/.config/systemd/user/virt-viewer-testing-vm.service
-systemctl --user daemon-reload
-systemctl --user enable virt-viewer-testing-vm.service
-systemctl --user start virt-viewer-testing-vm.service
-```
-
-Control later with `systemctl --user {start,stop,status} virt-viewer-testing-vm.service`.
-
-## Reporting
-
-For a useful closure note, include:
-
-- the selected guest session and display, such as Plasma `wayland-0` or Hyprland `wayland-1`
-- the exact runner command and whether build, sync, or Codex/OpenCode/Pi settings sync was skipped
-- the profile name
-- the artifact directory or host summary path
-- any cleanup residue, especially for KWin system-install proof
-- any live-smoke gates not run, including whether OpenCode or Pi smokes were exercised
+Stop when the requested profile or sequence returns, including an intentional
+conditional skip, or at the first concrete preflight blocker after preserving
+its logs and artifact paths. Do not continue into unrelated lanes or invent a
+fallback acceptance path. Report the exact runner command; selected guest
+session and display; profile and per-member outcomes or conditional skips;
+host/checkout/settings sync choices; artifact directory or host summary;
+cleanup residue (especially KWin system-install); and live-smoke gates not
+run. For KWin system-install, name the current cleanup targets
+`sky-cua-overlay-host`, `service.sock`, and `agent-cursor.sock`, and classify
+`sky-cua-overlay` as historical. For `all`, explicitly state that the VM-local deterministic `codex-cua`
+gate ran while the host performance judge did not, that headed legacy
+compositor lanes were conditional, and that real-session per-desktop
+acceptance remains separate.

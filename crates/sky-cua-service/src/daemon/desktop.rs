@@ -3,6 +3,9 @@ use super::capture_reuse::reuse_unchanged_capture;
 use super::session_presence::session_presence_disabled_response;
 use super::*;
 
+const ACTION_VISUAL_ARRIVAL_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const ACTION_VISUAL_ARRIVAL_TIMEOUT: Duration = Duration::from_secs(8);
+
 impl ServiceDaemon {
     pub(super) async fn handle_desktop_request(&self, request: ServiceRequest) -> ServiceResponse {
         match request {
@@ -328,13 +331,37 @@ impl ServiceDaemon {
                     Ok(request) => request,
                     Err((code, message)) => return error_response(code, message),
                 };
-                // Visual feedback (cursor glide) begins when the action is
-                // accepted, but input dispatch follows the existing backend
-                // contract and is not delayed waiting for the visual cursor.
-                let pre_dispatch_diagnostics = {
+                // Publish the target and gesture first, then hold physical
+                // input until the host confirms that arrival-gated feedback
+                // has begun. This keeps the real click/drag from overtaking
+                // the visible agent cursor.
+                let preparation = {
                     let mut overlay = self.overlay.lock().await;
                     overlay.prepare_action_visual(&request)
                 };
+                let mut pre_dispatch_diagnostics = preparation.diagnostics;
+                if preparation.wait_for_arrival {
+                    let started_at = tokio::time::Instant::now();
+                    loop {
+                        tokio::time::sleep(ACTION_VISUAL_ARRIVAL_POLL_INTERVAL).await;
+                        let arrival = self.overlay.lock().await.poll_action_visual_arrival();
+                        pre_dispatch_diagnostics.extend(arrival.diagnostics);
+                        if arrival.arrived {
+                            break;
+                        }
+                        if started_at.elapsed() >= ACTION_VISUAL_ARRIVAL_TIMEOUT {
+                            pre_dispatch_diagnostics.push(DiagnosticEntry {
+                                code: "AgentCursorArrivalTimeout".to_string(),
+                                message: "Agent cursor did not reach the action target before the visual arrival timeout; input dispatch continued.".to_string(),
+                                details: Some(format!(
+                                    "timeout_ms={}",
+                                    ACTION_VISUAL_ARRIVAL_TIMEOUT.as_millis()
+                                )),
+                            });
+                            break;
+                        }
+                    }
+                }
                 let mut outcome = route_action(self.backend.as_ref(), request.clone()).await;
                 outcome.diagnostics.extend(pre_dispatch_diagnostics);
                 let cursor_diagnostics = self

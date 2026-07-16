@@ -1,0 +1,60 @@
+{
+  "skill_name": "computer-use",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use sky-cua desktop tools to open or focus the native Calculator app, calculate 17 times 23, and report the displayed result after the calculation is complete.",
+      "expected_output": "The response reports 391 and identifies it as the value read from the calculator's resulting UI state.",
+      "expectations": [
+        "The execution uses desktop discovery/observation and desktop input tools rather than browser or phone tools.",
+        "The agent targets the intended calculator window and uses semantic controls when the current desktop tool surface advertises them.",
+        "The result 391 is read back from a fresh desktop observation after the calculation, not inferred from the requested expression alone.",
+        "The final response states completion only after the calculator UI visibly contains the requested result."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "A native drawing app is open on a secondary display with a Save button in a targeted window crop. Save the document using a pixel click and verify the saved indicator. If the targeted capture lacks authoritative geometry, refresh desktop state and recapture before acting.",
+      "expected_output": "The response confirms that the document is saved, using a click tied to the exact current capture and a fresh post-click state.",
+      "expectations": [
+        "The agent identifies the target window/display and uses the snapshot_id from the exact capture that produced the button image.",
+        "The click does not assume the primary monitor and does not use coordinates from an unrelated desktop observation or crop.",
+        "If capture geometry is unavailable, the agent refreshes topology/window state and obtains a new authoritative capture instead of widening scope or guessing.",
+        "After the click, the agent refreshes desktop state and reports the saved indicator only when the UI confirms it."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Toggle the Wi-Fi switch in the native desktop settings app and report whether it is on. The tool response may contain grouped structuredContent.result, structuredContent.error, or isError; base the outcome on those fields and on a fresh readback.",
+      "expected_output": "The response reports the switch's actual final state and distinguishes a structured action error from a successful state change.",
+      "expectations": [
+        "The agent reads structuredContent.result for a successful grouped action and does not treat structuredContent.error or isError as success.",
+        "The agent uses the structured switch state/readback as authoritative rather than inferring state from a prose diagnostic.",
+        "The agent re-observes the settings UI after the toggle and reports the final switch state from that readback.",
+        "If the structured action fails, the final response reports the failure and does not claim that Wi-Fi changed."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "In a native desktop app whose accessibility tree exposes only blunt fallback bounds, activate the visible Export item. If a semantic action is advertised, use it; otherwise use a fresh desktop capture for the physical click. After a menu or popup appears, continue to the export confirmation.",
+      "expected_output": "The response confirms the Export action and resulting confirmation using the appropriate semantic or visual fallback path.",
+      "expectations": [
+        "The agent treats fallback-tree bounds as anchors and checks the current screenshot when tree semantics are insufficient or disagree.",
+        "The agent uses physical input only when the required semantic primitive is unavailable, and the click comes from a current capture.",
+        "The agent obtains a new observation or capture after the menu/popup transition instead of reusing expired coordinates.",
+        "The final report is based on the export confirmation state and does not route this native UI through browser or phone tools."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Complete a web upload whose current browser page is ready, but whose permission prompt and file chooser are native desktop UI: allow the prompt, choose report.csv, return to the page, and verify the uploaded filename.",
+      "expected_output": "The response confirms the native prompt/file selection and the browser page's uploaded filename, with host UI actions handled through desktop tools.",
+      "expectations": [
+        "The agent uses computer-use for the browser permission chrome and native file chooser rather than attempting page-level browser actions against them.",
+        "The agent returns to the intended browser window and uses the page surface only for page content and upload-result verification.",
+        "The final filename is read from a fresh resulting UI state, not inferred from the selected local path alone.",
+        "Desktop coordinates are not reused as browser CSS-pixel coordinates across the surface boundary."
+      ]
+    }
+  ]
+}

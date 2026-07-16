@@ -1,0 +1,49 @@
+{
+  "skill_name": "agent-cursor-debug",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I changed the desktop cursor's smoke margin and shadow offset. Run the smallest useful visual check on the live KDE desktop, keeping the operator's daemon and input untouched, and hand back the evidence and a visual verdict.",
+      "expected_output": "A completed desktop still-capture pass with the isolated service, the cursor fraction, artifact directory, inspected native/context images, changed constants, and concise verdicts for glyph crispness, outline, tint, smoke shape/density/position, and shadow.",
+      "expectations": [
+        "Uses the desktop capture.py still harness for an appearance-only change rather than selecting the motion-video harness as the primary proof.",
+        "Runs the capture against a private socket and isolated service, and does not blanket-kill sky-cua-overlay-host or sky-cua-service.",
+        "Inspects cursor_native7x.png at true native-resolution nearest zoom and cursor_context.png, rather than claiming that a raw capture zoom is the visual proof.",
+        "Reports the cursor fraction, artifact location, changed constants, and separate visual verdicts for glyph, outline, tint, smoke, and shadow."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "The desktop cursor's redirect currently snaps straight, rotates abruptly, and shows its ripple before it settles. Capture enough motion evidence to diagnose and verify the behavior, using offline evidence if the KDE portal is unavailable.",
+      "expected_output": "A motion-focused desktop verification that chooses redirect plus tap_settle, produces or inspects the MP4/montage or deterministic motion frames, checks momentum bow, eased heading, arrival-gated feedback, and tail-to-head trail, and clearly states whether live proof ran.",
+      "expectations": [
+        "Selects overlay_motion_animations.py --scenario redirect --scenario tap_settle for live motion or the documented SKY_CUA_CAPTURE_MOTION nextest path when live capture is unavailable; does not substitute a still-only capture.",
+        "Evaluates redirect for a bowed momentum path, eased heading rotation, and a trail that ramps from tail toward head, and evaluates tap_settle for ripple only after arrival.",
+        "Uses the motion MP4/contact sheet or /tmp/overlay-demo/motion manifest and frames as concrete evidence, and distinguishes live desktop proof from offline deterministic evidence.",
+        "Preserves operator state by using the private socket/lifecycle and reports any unrun live gate instead of implying that offline frames prove KDE composition."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "There is no KDE portal available. Source and deterministic artifacts only: determine whether a desktop cursor disappearance could come from stale cursor state or host startup timing, and give me a reproducible validation path without pretending a live screenshot exists.",
+      "expected_output": "A source/offline diagnosis that checks snapshot_id plus a current updated_at_ms, the two-second host-start concern, and uses the offline renderer or motion dump to separate renderer health from live composition; it explicitly marks the live gate as unrun.",
+      "expectations": [
+        "Uses source inspection and/or the documented offline gesture or motion dump rather than inventing a live capture result.",
+        "Checks the snapshot_id and near-now updated_at_ms requirement and the HOST_START_TIMEOUT startup path as distinct hypotheses.",
+        "Uses deterministic artifact output to establish renderer or motion behavior while stating that it cannot prove KDE desktop composition without live capture.",
+        "Keeps the investigation read-only with respect to the operator's daemon and reports the missing portal/live gate as a limitation."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Give me the minimum representative acceptance pass for a desktop agent-cursor visual change. I want the fewest scenarios that cover appearance and motion, the exact commands, the artifacts to inspect, and the operator-state isolation guarantees.",
+      "expected_output": "A compact but complete plan consisting of one desktop still appearance capture and one motion run selecting redirect plus tap_settle, with an offline fallback, artifact inspection rules, and isolation/caveat reporting.",
+      "expectations": [
+        "Chooses one capture.py still at a useful screen fraction/background and one motion invocation selecting redirect plus tap_settle as the minimum complete matrix, explaining what each covers.",
+        "Names the native-resolution still/context artifacts and the motion MP4/contact sheet or offline motion manifest as the proof artifacts.",
+        "Includes the desktop-specific visual checks: crisp glyph/outline/tint, smoke placement/density, shadow on light content, bowed redirect, eased nose, arrival-gated ripple, and trail direction.",
+        "Includes private-socket isolation, no blanket process kills, sensitive live-capture handling, and an explicit distinction between live KDE proof and offline fallback."
+      ]
+    }
+  ]
+}

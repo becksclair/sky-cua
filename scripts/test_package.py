@@ -8,6 +8,7 @@ import pytest
 
 import package
 from _plugin_bundle import (
+    SKY_CUA_SKILLS,
     current_runtime_platform,
     platform_runtime_binary_base_names,
     runtime_binary_path,
@@ -23,8 +24,8 @@ def _minimal_bundle(root: Path, version: str = "9.9.9") -> Path:
     (root / ".claude-plugin" / "plugin.json").write_text(
         f'{{"version": "{version}"}}', encoding="utf-8"
     )
-    for skill in ("computer-use", "browser-use"):
-        skill_dir = root / "skills" / skill
+    for skill_name in SKY_CUA_SKILLS:
+        skill_dir = root / "skills" / skill_name
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
     platform_id = current_runtime_platform()
@@ -104,8 +105,8 @@ def test_stage_package_layout_and_install_shim(tmp_path: Path) -> None:
         assert (pkg / "scripts" / name).exists()
 
     # Skills mirrored at the package root for _install_shared.install_sky_cua_skills.
-    assert (pkg / "skills" / "computer-use" / "SKILL.md").exists()
-    assert (pkg / "skills" / "browser-use" / "SKILL.md").exists()
+    for skill_name in SKY_CUA_SKILLS:
+        assert (pkg / "skills" / skill_name / "SKILL.md").exists()
 
 
 def test_write_tarball_is_atomic_on_failure(

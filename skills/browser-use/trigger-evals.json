@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Use the browser tools to open https://example.com in a suitable existing tab and tell me the page's main heading.",
+    "should_trigger": true
+  },
+  {
+    "query": "On the open web app page, click the page's Save button and confirm the success message.",
+    "should_trigger": true
+  },
+  {
+    "query": "Scroll the browser page to the pricing section and report the visible plan names.",
+    "should_trigger": true
+  },
+  {
+    "query": "Fill the email field on this web form, submit it, and report the confirmation URL.",
+    "should_trigger": true
+  },
+  {
+    "query": "Inspect the current browser tabs, use the relevant tab, and read the visible article title.",
+    "should_trigger": true
+  },
+  {
+    "query": "Use a browser screenshot to click a marker on the page's canvas map, then tell me the marker label.",
+    "should_trigger": true
+  },
+  {
+    "query": "On the HTTP page, find the link to the next chapter and open it.",
+    "should_trigger": true
+  },
+  {
+    "query": "Focus the search box on the web page, enter 'lunar eclipse', submit it, and verify the results page.",
+    "should_trigger": true
+  },
+  {
+    "query": "The checkout button is below the fold on the current page. Scroll to it, click it, and verify the order summary.",
+    "should_trigger": true
+  },
+  {
+    "query": "A dynamic web page re-rendered after filtering. Select the Open item from the current page state and report the panel text.",
+    "should_trigger": true
+  },
+  {
+    "query": "Open Chrome's extensions page and disable the password-manager extension.",
+    "should_trigger": false
+  },
+  {
+    "query": "Click Chrome's toolbar downloads icon and open the newest downloaded file.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use the desktop UI to choose a local file in the native file picker for a browser upload.",
+    "should_trigger": false
+  },
+  {
+    "query": "Dismiss the browser's location-permission popup and allow access.",
+    "should_trigger": false
+  },
+  {
+    "query": "Resize the Chrome window and move it to the second monitor.",
+    "should_trigger": false
+  },
+  {
+    "query": "On my Android phone, open Chrome and tap the link labeled Continue.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use the Android browser screenshot to type a URL and navigate to it.",
+    "should_trigger": false
+  },
+  {
+    "query": "Read the current page inside the Android app's WebView and tap its native toolbar.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use curl from a terminal to fetch the HTML for a website and summarize its headings.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use the desktop screenshot to click Chrome's address bar and type a URL.",
+    "should_trigger": false
+  }
+]

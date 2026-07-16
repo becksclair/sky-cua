@@ -1,220 +1,125 @@
 ---
 name: cua-deploy
 description: >-
-  Use when asked to rebuild, deploy, package, install, restart, or push sky-cua
-  changes - any combination of: build the plugin bundle, install it into the
-  local Codex payload, build a release tarball, install on a clean machine,
-  restart the MCP runtime, commit staged/unstaged changes semantically, and
-  push. Also use when someone says "deploy it", "rebuild and push", "ship it",
-  or equivalent shorthand.
+  Use for sky-cua operational requests in one of four lanes: local plugin
+  deploy/rebuild/install, release package build or target bundle install,
+  standalone MCP runtime restart, or explicitly requested git commit and/or
+  push closeout. Deploy/build/package/install/restart never authorize git
+  actions; commit and push each require explicit wording, and push is an
+  external write. Do not use for Gradle-only Android companion builds,
+  config/skill-sync-only tasks, tests or smokes, reviews, docs, or code changes
+  outside these lanes.
 ---
 
 # cua-deploy
 
-Automates the sky-cua change-to-ship pipeline: build -> deploy/package -> sync agent skills -> commit -> push.
-Determine the appropriate lane from context and task scope; never run more pipeline than was asked.
+Route the request into the smallest requested sky-cua operational lane. A bare
+“deploy” means local deploy; choose release packaging only when a clean target,
+tarball, or bundle install is requested.
 
-There is no marketplace and no publish flow. The two distribution lanes are:
+## Mandatory plan contract
 
-- Local deploy (`scripts/deploy_plugin.py`): updates *what runs locally, immediately* - installs
-  the built bundle as `sky-cua@local`, retargets the computer-use compat plugin at it, and
-  refreshes the installed MCP runtime (no separate restart step). Does not touch git.
-- Build + install a release package (`scripts/package.py`, then `python3 install.py` on the
-  target): builds a self-contained tarball under `dist/release/`, which a clean machine extracts
-  and installs in bundle mode (no build, no cargo). Materializes the compat plugin from the
-  bundled preflight.
+Every plan and report must copy the selected lane's exact commands, order, and stop dependency rather than paraphrasing them:
 
-## Agent skills sync
+- Local: `python3 scripts/deploy_plugin.py`, then only on success `python3 scripts/sync_agent_skills.py`. The first command already builds, bundles, installs, and refreshes the runtime; never split it.
+- Release: `python3 scripts/package.py`, inspect the tarball; target handoff is `tar xzf sky-cua-<version>-<platform>.tar.gz`, `cd sky-cua-<version>`, `python3 install.py`, using the bundled runtime without Cargo. Do not mutate the local runtime or global skill links.
+- Standalone restart: exactly `python3 scripts/install_mcp_server.py --host claude-code --restart-runtime`, without build/deploy/package/sync. Do not add `--refresh-accessibility` unless AT-SPI is proven wedged; report that decision.
+- Git: only when explicitly requested, with explicit pathspecs; stop before git writes when the prerequisite lane fails, and never push after a failed deploy or commit.
 
-For any deploy or publish lane, also link the repo-local sky-cua skills into
-the global agent skill root:
-`~/.agents/skills/{computer-use,browser-use,phone-use}` -> `skills/*`. This
-keeps opencode/oracle/worker-style agents on the current repo skill text,
-including `phone-use`. The links point at the checkout the sync ran from — a
-deploy from a worktree leaves them at the worktree path, so rerun from the
-main checkout to repoint them.
+Always report each exact command's result, unrelated-work preservation, skipped validation/live-smoke gates, and whether commit or push was intentionally not authorized.
 
-Run after the deploy/publish command succeeds:
+## Contract
 
-```bash
-python3 scripts/sync_agent_skills.py
-```
+- Deploy, build, package, install, and restart are local operational actions.
+  None authorizes `git commit` or `git push`.
+- `git commit` requires an explicit request to commit. `git push` requires an
+  explicit request to push. If both are explicitly named, commit first and push
+  only after it succeeds; push is an external write. Never infer either action
+  from “ship”, “release”, “deploy”, or similar wording, and never add automatic
+  git behavior.
+- Preserve unrelated worktree changes. The repository has no marketplace or
+  publish flow.
 
-Only the sky-cua-owned skill links above are replaced; unrelated skills in
-`~/.agents/skills` are never touched. Codex also discovers the same skills from
-the active plugin, so every Codex config update maintains a managed
-`[[skills.config]]` block that disables the shared-link copies only inside
-Codex; the plugin-namespaced copies remain enabled. Do not remove those global
-links to solve Codex duplication because other agents rely on them. (The former
-OpenClaw workspace-skills copy into `~/.openclaw/workspace/skills` was retired
-2026-07-03 — OpenClaw no longer reads bundled copies from there.)
+## Lane router
 
-## Lanes
+### Local deploy
 
-### Local deploy (default)
-
-Use when iterating on unreleased changes locally. Installs as `sky-cua@local` and refreshes the
-MCP runtime in one command. Resetting the user AT-SPI accessibility bus is
-opt-in (`--refresh-accessibility`): the reset wipes every running app's
-accessibility registration, and while Chromium apps re-register lazily, GTK apps
-register eagerly at startup and go dark until relaunched — so an always-on reset
-silently breaks semantic targeting of any GTK app running across the deploy.
-sky-cua self-heals a wedged AT-SPI connection on reconnect, so pass the flag only
-when the registry is genuinely wedged (and relaunch target GTK apps afterward).
-Does not touch the marketplace.
-
-A build-bearing deploy also rebuilds and stages the Android phone-companion APK
-automatically (toolchain-gated, change-detected — see "Android phone companion"
-below), so the bundled companion stays current without a manual Gradle step.
+For unreleased local iteration, the mandatory sequence is:
 
 ```bash
-# Build + deploy locally (also refreshes the installed MCP runtime, and rebuilds
-# the phone-companion APK when its sources changed and the Android toolchain is present)
+# Step 1
 python3 scripts/deploy_plugin.py
-python3 scripts/sync_agent_skills.py
-
-# Also rebuild and reload the KWin agent-cursor effect (Linux/KDE only)
-python3 scripts/deploy_plugin.py --kwin-effect
-python3 scripts/sync_agent_skills.py
-
-# Force a companion rebuild, or skip it entirely
-python3 scripts/deploy_plugin.py --force-companion
-python3 scripts/deploy_plugin.py --no-companion
-
-# Install existing bundle without rebuilding (skips the companion lane too)
-python3 scripts/deploy_plugin.py --no-build
+# Step 2, only when step 1 exits successfully
 python3 scripts/sync_agent_skills.py
 ```
 
-### Android phone companion
+This order is normative: `deploy_plugin.py` is the build, bundle, install, and
+runtime-refresh entrypoint. Do not split it into `build_plugin.py` plus a
+manual installer. No build, install, or sync command may precede step 1, and
+step 2 must never run before it succeeds. Plans and reports must name both
+exact commands in this order. The sync only replaces the sky-cua-owned global
+skill links. Load
+`references/local-deploy.md` for link ownership, worktree caveats, or local
+deploy behavior; load `references/command-and-flag-catalog.md` for variants;
+load `references/android-phone-companion.md` when the deploy reports companion
+status; load `references/rare-operations.md` for KWin, AT-SPI, freshness, or
+live-smoke details.
 
-A build-bearing `deploy_plugin.py` runs the companion build/stage lane before
-bundling. It rebuilds the APK with Gradle only when the companion sources
-changed since the last staged APK (so a pure-Rust deploy is not slowed), stages
-it to `resources/android/phone-companion.{apk,json}`, and lets `build_plugin.py`
-bundle it. The lane is graceful: on a host without JDK 21 + the Android SDK it
-logs a note and skips, reusing any previously staged APK (ADB-baseline phone-use
-is unaffected). `--force-companion` forces a rebuild; `--no-companion` skips the
-lane. Override the toolchain with `SKY_CUA_COMPANION_JAVA_HOME` /
-`SKY_CUA_COMPANION_ANDROID_SDK_ROOT` when it is not auto-detected.
+### Release package
 
-Installing the companion onto a device and enabling its required services is a
-*runtime* concern, not a deploy-script one: `phone_install_companion` (and
-`phone_connect` under auto-install) install the staged APK over ADB and enable
-the accessibility + notification-listener services automatically. See
-`docs/features/phone-use.md`.
-
-To keep that handoff explicit rather than silent, a build-bearing deploy prints
-a `[companion]` device-setup status: the staged version and the currently
-connected adb devices. When you (the agent) see it after a deploy and a
-companion is bundled, finish setup through the runtime tools — do not push the
-APK from the shell (a raw `adb install` bypasses the service-enable logic, which
-lives in the Rust tool path):
-
-1. If devices are listed, ask the user which one(s) to set up (do not assume; do
-   not auto-install on every connected device).
-2. For each chosen device: `phone_connect(serial=…)` then
-   `phone_install_companion`. That installs the staged APK and auto-enables the
-   accessibility + notification-listener services; confirm with
-   `phone_companion_status` (it reports installed-vs-expected version and the
-   permission grants).
-
-### Build + install a release package
-
-Use when shipping to a machine without a checkout or toolchain. Builds a self-contained tarball;
-the target extracts it and installs in bundle mode.
+For a clean machine, use this exact order:
 
 ```bash
-# Build the release tarball under dist/release/
 python3 scripts/package.py
-
-# Use the existing bundle (no Cargo rebuild)
-python3 scripts/package.py --no-build
-
-# On the target machine: extract and install (no build, no cargo)
+# On the target:
 tar xzf sky-cua-<version>-<platform>.tar.gz
 cd sky-cua-<version>
 python3 install.py
 ```
 
-`package.py` flags: `--no-build`, `--platform`, `--version-from-tag [TAG]`,
-`--release-dir`. The packaged `install.py` accepts the installer flags
-(`--agents`, `--mode`, `--bundle-root`, `--target-dir`, `--kwin-effect`,
-`--skip-system-deps`, `--dry-run`). See
-`docs/features/release-package.md`.
+Inspect the tarball before target handoff. The target install uses the
+bundled runtime and does not run Cargo. Load
+`references/release-package.md` for package evidence and target install;
+`references/command-and-flag-catalog.md` for flags.
 
-## MCP runtime restart (standalone)
+### Standalone MCP restart
 
-Refresh the local MCP server install and bounce the runtime without a full deploy. Resetting
-the user AT-SPI accessibility bus is opt-in (`--refresh-accessibility`) for the
-same reason as the deploy lane — it de-registers running GTK apps' trees until
-they are relaunched:
+For an MCP configuration refresh without a full deploy, run:
 
 ```bash
 python3 scripts/install_mcp_server.py --host claude-code --restart-runtime
-# add --refresh-accessibility only when the AT-SPI registry is wedged
 ```
 
-For OpenClaw, reload after config changes:
+This combined command is the standalone lane; do not replace it with a full
+deploy or split it into unrelated helpers. Do not run skill sync. Load
+`references/command-and-flag-catalog.md` for host/flag variants and
+`references/rare-operations.md` for AT-SPI or OpenClaw reload cases.
 
-```bash
-openclaw mcp reload
-```
+### Explicit git closeout
 
-## Commit and push
+Use this lane only for explicitly requested commit and/or push work, either
+alone or after a named operational lane. Respect any user-stated dependency
+such as “after deploy succeeds”. Stop if deploy or commit fails; never push
+after a failed prerequisite. Load `references/git-closeout.md`.
 
-After the deploy succeeds, commit all relevant staged and unstaged changes with a semantic message and push. Use the `committer` subagent for this step - it writes diff-grounded commit messages and handles staging precisely.
+## Stop and evidence
 
-Follow the commit, branch, and pre-push conventions in the repo root
-[`AGENTS.md`](../../../AGENTS.md).
+Execute only the selected lane and its required local substeps. If a required
+step fails, stop dependent steps and report the exact failed command; do not
+claim downstream success. Load `references/troubleshooting.md` for a lane
+failure or unexpected result. After success, capture the lane’s concrete evidence:
+installed runtime/result and skill-sync result for local deploy, tarball path
+and shape for release packaging, restart result for MCP refresh, or commit ID
+and push result for git closeout. For restart, report whether accessibility
+refresh was used and which live-smoke gates were not run. Run only narrow checks relevant to the
+request, and state skipped checks and live-smoke gates. Before any live test,
+prove the deployed binary is fresh; load `references/rare-operations.md`.
 
-## Decision tree
+## Relevant checks
 
-1. **Local dev iteration / unreleased changes?** -> local deploy lane -> commit + push.
-2. **Shipping to a clean machine?** -> build + install a release package (`package.py`, then `install.py` on the target) -> commit + push.
-3. **Only need to restart the runtime?** -> standalone MCP restart, no deploy.
-
-## Checks before pushing
-
-Run the narrowest relevant check set. Only run root checks when shared contracts changed.
-
-```bash
-# Rust
-cargo fmt --check && cargo nextest run
-
-# Python
-uv run ruff format --check scripts && uv run ruff check scripts && uv run basedpyright && uv run pytest
-```
-
-State any live-smoke gates not run (desktop/portal/KDE/COSMIC/Hyprland/GNOME).
-
-## Deploy before live tests
-
-Live tests must run against current binaries, not a stale build. Always deploy
-before a live smoke or an agent-driven device test. The harnesses enforce this
-at the shared launch choke points: `deploy_freshness.py` fingerprints the Rust
-runtime source, every build/deploy stamps the client binary it produced, and
-every sky-cua MCP spawn (`_mcp_stdio.McpClient`) and agent launch
-(`_agent_mcp_smoke.run_agent`) aborts with a redeploy hint when the binary it —
-or the agent it drives — would use was not built from the current source. This
-covers all `live_*_smoke.py` harnesses automatically.
-
-```bash
-# Standalone preflight (exits nonzero when the deployed runtime is stale):
-python3 scripts/deploy_freshness.py            # checks the locally-deployed client
-python3 scripts/deploy_freshness.py --client bin/sky-cua-client  # a specific binary
-
-# Refresh, then test:
-python3 scripts/deploy_plugin.py
-```
-
-Set `SKY_CUA_ALLOW_STALE_DEPLOY=1` only to intentionally bypass the gate.
-
-## Common flags summary
-
-| Script | Key flags |
-|---|---|
-| `deploy_plugin.py` | `--no-build`, `--symlink`, `--kwin-effect`, `--no-companion`, `--force-companion`, `--refresh-accessibility`, `--local-install-host` |
-| `package.py` | `--no-build`, `--platform`, `--version-from-tag [TAG]`, `--release-dir` |
-| `install.py` | `--agents`, `--mode {auto,repo,bundle}`, `--bundle-root`, `--target-dir`, `--kwin-effect`, `--skip-system-deps`, `--dry-run` |
-| `install_mcp_server.py` | `--host`, `--restart-runtime`, `--refresh-accessibility`, `--kwin-effect` |
+Select only checks relevant to the changed seam: Rust `cargo fmt --check &&
+cargo nextest run`; Python `uv run ruff format --check scripts && uv run ruff
+check scripts && uv run basedpyright && uv run pytest`. A standalone restart
+does not imply source checks. Run broader checks only when shared contracts
+changed or the user asks for them. Packaging also requires inspecting the
+staged bundle shape.

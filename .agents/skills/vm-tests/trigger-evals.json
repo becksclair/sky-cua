@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Run the sky-cua Arch testing-vm smoke suite with scripts/run_gui_testing_vm_smoke.py --profile all over the SSH port forward and report the artifacts.",
+    "should_trigger": true
+  },
+  {
+    "query": "Run the trimmed pre-merge GUI smoke set with --profile curated against whichever real desktop session testing-vm is currently using.",
+    "should_trigger": true
+  },
+  {
+    "query": "Use the 127.0.0.1:22222 testing-vm port-forward to run the visible Plasma pointer/input proof on KDE wayland-0 and report the profile evidence.",
+    "should_trigger": true
+  },
+  {
+    "query": "Switch testing-vm to its Hyprland session, confirm wayland-1 is the active socket, and run the wayland-layer-shell-overlay smoke.",
+    "should_trigger": true
+  },
+  {
+    "query": "Run the KWin system-install VM proof with --profile kde-kwin-effect-system-install, --vm-name testing-vm, and --libvirt-uri qemu:///session; verify cleanup afterward.",
+    "should_trigger": true
+  },
+  {
+    "query": "Exercise the OpenCode MCP smoke on the Arch testing VM and sync the host OpenCode settings with --sync-opencode-settings.",
+    "should_trigger": true
+  },
+  {
+    "query": "Run the Pi MCP wiring smoke in testing-vm, including the host Pi settings sync, and report whether the read-only tool call worked.",
+    "should_trigger": true
+  },
+  {
+    "query": "Run the COSMIC scaled pointer proof using --desktop-env COSMIC and --wayland-display wayland-1, and preserve the VM artifact evidence.",
+    "should_trigger": true
+  },
+  {
+    "query": "List the current testing-vm profile registry with --list-profiles and recommend the correct profile for a real-session cursor overlay proof.",
+    "should_trigger": true
+  },
+  {
+    "query": "Debug a failing VM smoke that is using the wrong Wayland socket: select the guest session with scripts/testing-vm/select-session.sh, confirm the compositor and sockets, then rerun the matching profile.",
+    "should_trigger": true
+  },
+  {
+    "query": "Run scripts/live_desktop_smoke.py locally against my current desktop; do not connect to testing-vm or use a VM profile.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run cargo nextest for the sky-cua workspace and report Rust test failures; there is no GUI or testing-vm smoke involved.",
+    "should_trigger": false
+  },
+  {
+    "query": "Provision a fresh Arch testing-vm from the shell and install its desktop packages, but stop before running any sky-cua smoke profile.",
+    "should_trigger": false
+  },
+  {
+    "query": "Set up the persistent virt-viewer-testing-vm systemd user service and only report its status; do not run a smoke profile.",
+    "should_trigger": false
+  },
+  {
+    "query": "Sync my OpenCode configuration to the VM for later use, but do not launch opencode-mcp or any GUI test.",
+    "should_trigger": false
+  },
+  {
+    "query": "Reproduce the old sky-cua GUI issue in the retired nested Docker/Xvfb harness instead of the visible Arch testing VM.",
+    "should_trigger": false
+  },
+  {
+    "query": "Deploy the current sky-cua checkout locally and run its local live smokes; do not connect to testing-vm or run scripts/run_gui_testing_vm_smoke.py.",
+    "should_trigger": false
+  },
+  {
+    "query": "Use Playwright to test the browser UI at localhost and save screenshots; this is a web-app browser test, not a desktop VM smoke.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run the complete Python and Rust unit-test suite with the word all in the report; do not run any testing-vm profile.",
+    "should_trigger": false
+  },
+  {
+    "query": "Capture a screenshot of my current local Wayland desktop with grim and inspect the pixels; no guest VM or sky-cua smoke runner is needed.",
+    "should_trigger": false
+  }
+]
