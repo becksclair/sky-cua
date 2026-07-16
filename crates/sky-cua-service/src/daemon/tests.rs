@@ -656,6 +656,7 @@ async fn execute_action_waits_for_cursor_arrival_before_backend_dispatch() {
     let host_path = dir.join("fake-overlay-host.py");
     let socket_path = dir.join("agent-cursor.sock");
     let arrival_marker = PathBuf::from(format!("{}.arrived", socket_path.display()));
+    let request_log = PathBuf::from(format!("{}.requests", socket_path.display()));
     crate::overlay::test_support::write_fake_overlay_host(&host_path);
     let dispatched_after_arrival = Arc::new(AtomicBool::new(false));
     let backend = ArrivalCheckingBackend {
@@ -683,6 +684,72 @@ async fn execute_action_waits_for_cursor_arrival_before_backend_dispatch() {
         dispatched_after_arrival.load(Ordering::SeqCst),
         "backend input dispatch must not run before the overlay reports arrival; diagnostics={:?}",
         outcome.diagnostics
+    );
+    assert_eq!(
+        std::fs::read_to_string(request_log)
+            .expect("arrival request log")
+            .lines()
+            .collect::<Vec<_>>(),
+        vec!["set_cursor", "animate_gesture", "wait_for_arrival"]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stalled_arrival_wait_fails_open_within_absolute_deadline() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .status()
+        .is_err()
+    {
+        return;
+    }
+
+    let dir = unique_temp_dir("action-visual-arrival-stalled");
+    let host_path = dir.join("stalled-overlay-host.py");
+    let socket_path = dir.join("agent-cursor.sock");
+    let request_log = PathBuf::from(format!("{}.requests", socket_path.display()));
+    crate::overlay::test_support::write_stalled_overlay_host(&host_path);
+    let backend = FakeBackend {
+        snapshot: snapshot(None, Vec::new()),
+        outcome: success_outcome(),
+        presence: None,
+    };
+    let daemon = daemon_with_backend_and_overlay(
+        Box::new(backend),
+        OverlayController::new_for_tests_with_host(host_path, socket_path),
+    );
+    let click = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
+
+    let started = tokio::time::Instant::now();
+    let outcome = match daemon
+        .handle(ServiceRequest::ExecuteAction {
+            request: Box::new(click),
+        })
+        .await
+    {
+        ServiceResponse::ExecuteAction { outcome } => outcome,
+        other => panic!("unexpected response: {other:?}"),
+    };
+
+    assert!(outcome.success);
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "arrival wait exceeded bounded fail-open latency: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        outcome
+            .diagnostics
+            .iter()
+            .any(|entry| entry.code == "AgentCursorArrivalTimeout")
+    );
+    assert_eq!(
+        std::fs::read_to_string(request_log)
+            .expect("stalled arrival request log")
+            .lines()
+            .collect::<Vec<_>>(),
+        vec!["set_cursor", "animate_gesture", "wait_for_arrival"]
     );
 }
 

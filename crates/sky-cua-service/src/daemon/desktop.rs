@@ -2,9 +2,16 @@ use super::agent_cursor::{AgentCursorResponseKind, agent_cursor_status_response}
 use super::capture_reuse::reuse_unchanged_capture;
 use super::session_presence::session_presence_disabled_response;
 use super::*;
+use sky_cua_overlay_host::OverlayArrivalOutcome;
 
-const ACTION_VISUAL_ARRIVAL_POLL_INTERVAL: Duration = Duration::from_millis(16);
+#[cfg(not(test))]
 const ACTION_VISUAL_ARRIVAL_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(test)]
+const ACTION_VISUAL_ARRIVAL_TIMEOUT: Duration = Duration::from_millis(250);
+#[cfg(not(test))]
+const ACTION_VISUAL_REPLY_GRACE: Duration = Duration::from_millis(50);
+#[cfg(test)]
+const ACTION_VISUAL_REPLY_GRACE: Duration = Duration::from_millis(25);
 
 impl ServiceDaemon {
     pub(super) async fn handle_desktop_request(&self, request: ServiceRequest) -> ServiceResponse {
@@ -327,6 +334,7 @@ impl ServiceDaemon {
                 }
             }
             ServiceRequest::ExecuteAction { request } => {
+                let arrival_deadline = tokio::time::Instant::now() + ACTION_VISUAL_ARRIVAL_TIMEOUT;
                 let request = match self.enrich_action_request(*request).await {
                     Ok(request) => request,
                     Err((code, message)) => return error_response(code, message),
@@ -341,24 +349,63 @@ impl ServiceDaemon {
                 };
                 let mut pre_dispatch_diagnostics = preparation.diagnostics;
                 if preparation.wait_for_arrival {
-                    let started_at = tokio::time::Instant::now();
-                    loop {
-                        tokio::time::sleep(ACTION_VISUAL_ARRIVAL_POLL_INTERVAL).await;
-                        let arrival = self.overlay.lock().await.poll_action_visual_arrival();
-                        pre_dispatch_diagnostics.extend(arrival.diagnostics);
-                        if arrival.arrived {
-                            break;
+                    let remaining =
+                        arrival_deadline.saturating_duration_since(tokio::time::Instant::now());
+                    let host_timeout = remaining.saturating_sub(ACTION_VISUAL_REPLY_GRACE);
+                    let arrival = if host_timeout.is_zero() {
+                        None
+                    } else {
+                        Some(
+                            tokio::time::timeout_at(arrival_deadline, async {
+                                self.overlay
+                                    .lock()
+                                    .await
+                                    .wait_for_action_visual_arrival(host_timeout)
+                                    .await
+                            })
+                            .await,
+                        )
+                    };
+                    match arrival {
+                        Some(Ok(arrival)) => {
+                            pre_dispatch_diagnostics.extend(arrival.diagnostics);
+                            match arrival.outcome {
+                                OverlayArrivalOutcome::Arrived => {}
+                                OverlayArrivalOutcome::DeadlineElapsed => {
+                                    pre_dispatch_diagnostics.push(DiagnosticEntry {
+                                        code: "AgentCursorArrivalTimeout".to_string(),
+                                        message: "Agent cursor did not reach the action target before the visual arrival timeout; input dispatch continued.".to_string(),
+                                        details: Some(format!(
+                                            "timeout_ms={} source=host_deadline",
+                                            ACTION_VISUAL_ARRIVAL_TIMEOUT.as_millis()
+                                        )),
+                                    });
+                                }
+                                OverlayArrivalOutcome::Superseded => {
+                                    pre_dispatch_diagnostics.push(DiagnosticEntry {
+                                        code: "AgentCursorArrivalSuperseded".to_string(),
+                                        message: "Agent cursor arrival wait was superseded; input dispatch continued.".to_string(),
+                                        details: None,
+                                    });
+                                }
+                                OverlayArrivalOutcome::Unavailable => {
+                                    pre_dispatch_diagnostics.push(DiagnosticEntry {
+                                        code: "AgentCursorArrivalUnavailable".to_string(),
+                                        message: "Agent cursor arrival could not be confirmed; input dispatch continued.".to_string(),
+                                        details: None,
+                                    });
+                                }
+                            }
                         }
-                        if started_at.elapsed() >= ACTION_VISUAL_ARRIVAL_TIMEOUT {
+                        Some(Err(_)) | None => {
                             pre_dispatch_diagnostics.push(DiagnosticEntry {
                                 code: "AgentCursorArrivalTimeout".to_string(),
                                 message: "Agent cursor did not reach the action target before the visual arrival timeout; input dispatch continued.".to_string(),
                                 details: Some(format!(
-                                    "timeout_ms={}",
+                                    "timeout_ms={} source=service_deadline",
                                     ACTION_VISUAL_ARRIVAL_TIMEOUT.as_millis()
                                 )),
                             });
-                            break;
                         }
                     }
                 }

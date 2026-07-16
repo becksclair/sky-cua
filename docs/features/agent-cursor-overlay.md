@@ -52,8 +52,8 @@ MCP tools.
 
 Overlay-host JSON-lines protocol on
 `$XDG_RUNTIME_DIR/sky-cua/agent-cursor.sock` with versioned messages
-`hello`, `capabilities`, `set_cursor`, `animate_gesture`, `hide`, `show`,
-`ping`, `shutdown`. `animate_gesture` carries `AgentOverlayGestureEvent`
+`hello`, `capabilities`, `set_cursor`, `animate_gesture`, `wait_for_arrival`,
+`hide`, `show`, `ping`, `shutdown`. `animate_gesture` carries `AgentOverlayGestureEvent`
 for one-shot tap, drag, swipe, and no-no render effects.
 
 `set_cursor` is persistent state. `animate_gesture` is one-shot event intent
@@ -66,8 +66,9 @@ Every layer-shell reply (including `ping`) carries an optional structured
 `motion` field — `{ x, y, heading_deg, speed, settled,
 pending_gesture_feedback }` — echoing where the vehicle-steered glyph
 actually is, in the mover's coordinate space. `state` remains the target;
-`motion` is the drawn pose. The field is serde-optional (absent from older
-hosts and the noop backend), so no protocol version bump.
+`motion` is the drawn pose. Protocol v3 adds one sequence-aware
+`wait_for_arrival` request with `arrived`, `deadline_elapsed`, `superseded`, or
+`unavailable` as its structured outcome.
 
 Environment variables (allowlisted in `resources/chrome_preflight.py`):
 
@@ -169,13 +170,15 @@ composited regardless.
 The visible overlay is the input-dispatch clock for coordinate pointer actions.
 When an action is accepted, the service sends both its target and gesture before
 dispatch (`prepare_action_visual`). The host's CPU motion driver sails the glyph
-toward the gesture start with vehicle-steering physics, and the service polls the
-structured `motion.pending_gesture_feedback` state. Physical input is released
-only after the host promotes the arrival-gated feedback, so a click or drag
-cannot overtake the visible cursor. Unsupported or unavailable visible overlays
-do not add delay; an eight-second fault-containment timeout releases input with
-an `AgentCursorArrivalTimeout` diagnostic. Failed dispatch cancels pending
-visual feedback.
+toward the gesture start with vehicle-steering physics. The service opens one
+asynchronous `wait_for_arrival` exchange; while that connection is held, the
+host continues its existing frame-paced `tick()` until the matching gesture
+feedback starts or the matching state settles. Physical input is released only
+after that structured outcome, so a click or drag cannot overtake the visible
+cursor. One absolute eight-second service deadline includes preparation,
+connect, host motion, and reply latency; timeout or host failure releases input
+with an honest fail-open diagnostic. Unsupported visible overlays add no delay,
+and failed dispatch cancels pending visual feedback.
 
 The host lifecycle states are `Hidden`, `VisibleIdle`, `AgentAnimating`,
 `CaptureHidden`, `NoNoFeedbackRenderOnly`, and `FailedOrUnsupported`.

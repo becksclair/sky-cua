@@ -118,6 +118,7 @@ impl OverlayHostConnection {
                         lifecycle_state: None,
                         applied_sequence: None,
                         state: None,
+                        arrival_wait: None,
                         diagnostics: Vec::new(),
                     })
                 }
@@ -125,6 +126,41 @@ impl OverlayHostConnection {
             #[cfg(test)]
             Self::Failing { diagnostic } => Err(diagnostic.clone()),
             Self::Transport(transport) => transport.send(message),
+        }
+    }
+
+    pub(super) async fn send_arrival_wait(
+        &mut self,
+        message: OverlayHostMessage,
+    ) -> Result<OverlayHostReply, DiagnosticEntry> {
+        match self {
+            Self::Disabled {
+                reason,
+                report_diagnostic,
+            } => {
+                if *report_diagnostic {
+                    Err(diagnostic(
+                        "AgentCursorHostUnavailable",
+                        "Overlay host is not available for arrival wait.",
+                        Some(reason.clone()),
+                    ))
+                } else {
+                    Ok(OverlayHostReply {
+                        motion: None,
+                        arrival_wait: None,
+                        version: OVERLAY_HOST_PROTOCOL_VERSION,
+                        ok: true,
+                        capabilities: None,
+                        lifecycle_state: None,
+                        applied_sequence: None,
+                        state: None,
+                        diagnostics: Vec::new(),
+                    })
+                }
+            }
+            #[cfg(test)]
+            Self::Failing { diagnostic } => Err(diagnostic.clone()),
+            Self::Transport(transport) => transport.send_arrival_wait(message).await,
         }
     }
 
@@ -331,6 +367,7 @@ mod tests {
             gesture: None,
             sequence: None,
             reason: None,
+            arrival_wait: None,
         }
     }
 

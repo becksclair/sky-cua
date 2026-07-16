@@ -71,6 +71,7 @@ fn set_cursor_from_args(args: Vec<String>) -> Result<()> {
         gesture: None,
         sequence: None,
         reason: None,
+        arrival_wait: None,
     });
     print_reply(&reply)
 }
@@ -479,6 +480,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(set.state.as_ref().expect("state").visible);
@@ -497,6 +499,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(
@@ -513,6 +516,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(shutdown.ok);
@@ -540,6 +544,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(set.ok);
@@ -554,6 +559,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: Some("capture".to_string()),
+                arrival_wait: None,
             },
         );
         assert!(!hidden.state.as_ref().expect("state").visible);
@@ -573,6 +579,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(shutdown.ok);
@@ -602,6 +609,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(set.ok);
@@ -616,6 +624,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(shutdown.ok);
@@ -646,6 +655,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(set.ok);
@@ -660,6 +670,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(shutdown.ok);
@@ -691,6 +702,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(set.ok);
@@ -705,6 +717,7 @@ mod tests {
                 gesture: None,
                 sequence: None,
                 reason: None,
+                arrival_wait: None,
             },
         );
         assert!(shutdown.ok);

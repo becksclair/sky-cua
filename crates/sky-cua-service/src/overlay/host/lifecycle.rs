@@ -18,6 +18,9 @@ use sky_cua_overlay_host::{
     OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
 };
 use sky_cua_platform::model::DiagnosticEntry;
+use tokio::io::{
+    AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader as AsyncBufReader,
+};
 
 const HOST_START_TIMEOUT: Duration = Duration::from_secs(2);
 const HOST_CONNECT_INTERVAL: Duration = Duration::from_millis(25);
@@ -110,6 +113,45 @@ impl<E: OverlayHostEndpoint> ManagedOverlayHost<E> {
             .unwrap_or_else(|| "native visible overlay host has not reported yet".to_string())
     }
 
+    fn ensure_already_running(&mut self) -> Result<(), String> {
+        let Some(child) = self.child.as_mut() else {
+            return Err("overlay host is not running for arrival wait".to_string());
+        };
+        match child.try_wait() {
+            Ok(None) => Ok(()),
+            Ok(Some(status)) => {
+                self.child = None;
+                self.endpoint.cleanup();
+                Err(format!(
+                    "overlay host exited before arrival wait with {status}"
+                ))
+            }
+            Err(error) => Err(format!(
+                "failed to inspect overlay host before arrival wait: {error}"
+            )),
+        }
+    }
+
+    fn finish_arrival_wait(
+        &mut self,
+        result: Result<OverlayHostReply, String>,
+    ) -> Result<OverlayHostReply, DiagnosticEntry> {
+        match result {
+            Ok(reply) => {
+                self.last_error = None;
+                Ok(reply)
+            }
+            Err(error) => {
+                self.last_error = Some(error.clone());
+                Err(diagnostic(
+                    "AgentCursorHostRequestFailed",
+                    "Overlay host arrival wait failed.",
+                    Some(client_error_detail(&error)),
+                ))
+            }
+        }
+    }
+
     fn ensure_running(&mut self) -> Result<(), String> {
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
@@ -194,6 +236,48 @@ impl<E: OverlayHostEndpoint> ManagedOverlayHost<E> {
     }
 }
 
+#[cfg(unix)]
+impl ManagedOverlayHost<UnixSocketEndpoint> {
+    pub(in crate::overlay) async fn send_arrival_wait(
+        &mut self,
+        message: OverlayHostMessage,
+    ) -> Result<OverlayHostReply, DiagnosticEntry> {
+        if let Err(error) = self.ensure_already_running() {
+            return self.finish_arrival_wait(Err(error));
+        }
+        let result = async {
+            let stream = tokio::net::UnixStream::connect(&self.endpoint.socket_path)
+                .await
+                .map_err(|error| format!("failed to connect to overlay host socket: {error}"))?;
+            send_overlay_host_message_async(stream, &message).await
+        }
+        .await;
+        self.finish_arrival_wait(result)
+    }
+}
+
+#[cfg(not(unix))]
+impl ManagedOverlayHost<TcpEndpoint> {
+    pub(in crate::overlay) async fn send_arrival_wait(
+        &mut self,
+        message: OverlayHostMessage,
+    ) -> Result<OverlayHostReply, DiagnosticEntry> {
+        if let Err(error) = self.ensure_already_running() {
+            return self.finish_arrival_wait(Err(error));
+        }
+        let result = async {
+            let stream = tokio::net::TcpStream::connect(&self.endpoint.addr)
+                .await
+                .map_err(|error| {
+                    format!("failed to connect to overlay host TCP listener: {error}")
+                })?;
+            send_overlay_host_message_async(stream, &message).await
+        }
+        .await;
+        self.finish_arrival_wait(result)
+    }
+}
+
 impl<E: OverlayHostEndpoint> Drop for ManagedOverlayHost<E> {
     fn drop(&mut self) {
         let Some(mut child) = self.child.take() else {
@@ -206,6 +290,7 @@ impl<E: OverlayHostEndpoint> Drop for ManagedOverlayHost<E> {
             gesture: None,
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
         let deadline = Instant::now() + HOST_STOP_TIMEOUT;
         while Instant::now() < deadline {
@@ -418,6 +503,37 @@ fn send_overlay_host_message(
     let mut line = String::new();
     reader
         .read_line(&mut line)
+        .map_err(|error| format!("failed to read overlay host reply: {error}"))?;
+    if line.trim().is_empty() {
+        return Err("overlay host returned an empty reply".to_string());
+    }
+    serde_json::from_str(line.trim_end())
+        .map_err(|error| format!("invalid overlay host reply JSON: {error}"))
+}
+
+async fn send_overlay_host_message_async(
+    mut stream: impl AsyncRead + AsyncWrite + Unpin,
+    message: &OverlayHostMessage,
+) -> Result<OverlayHostReply, String> {
+    let payload = serde_json::to_vec(message)
+        .map_err(|error| format!("failed to serialize overlay host request: {error}"))?;
+    stream
+        .write_all(&payload)
+        .await
+        .map_err(|error| format!("failed to write overlay host request: {error}"))?;
+    stream
+        .write_all(b"\n")
+        .await
+        .map_err(|error| format!("failed to write overlay host request newline: {error}"))?;
+    stream
+        .flush()
+        .await
+        .map_err(|error| format!("failed to flush overlay host request: {error}"))?;
+    let mut reader = AsyncBufReader::new(stream);
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .await
         .map_err(|error| format!("failed to read overlay host reply: {error}"))?;
     if line.trim().is_empty() {
         return Err("overlay host returned an empty reply".to_string());

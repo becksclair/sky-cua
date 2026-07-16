@@ -185,6 +185,32 @@ def test_project_skill_prompt_assets_are_valid(skill_root: Path, skill_name: str
         )
 
 
+def test_vm_tests_aggregate_membership_has_one_authoritative_source() -> None:
+    skill_text = (LOCAL_SKILLS_ROOT / "vm-tests" / "SKILL.md").read_text(encoding="utf-8")
+    matrix_text = (LOCAL_SKILLS_ROOT / "vm-tests" / "references" / "profile-matrix.md").read_text(
+        encoding="utf-8"
+    )
+
+    all_contract = (
+        "`all` is exactly `isolated-xpra`, `wayland-pointer`, `targeted-screenshot`, "
+        "`display-screenshot`, `session-env`, `text-readback`, `codex-desktop`, "
+        "`opencode-mcp`, `pi-mcp`, `codex-cua`, `kde-kwin-effect`; add `kde-plasma`, "
+        "`gnome`, `cosmic`, `hyprland` in that order only when `HOST_WAYLAND_DISPLAY` "
+        "is set."
+    )
+    curated_contract = (
+        "`curated` is the session-agnostic sequence `codex-desktop`, "
+        "`wayland-pointer`, `session-env`, `text-readback`;"
+    )
+
+    assert all_contract in skill_text
+    assert curated_contract in skill_text
+    assert "owns the exact current `all` and\n`curated` membership/order" in matrix_text
+    assert "## `--profile all`" not in matrix_text
+    assert "## `--profile curated`" not in matrix_text
+    assert "`codex-desktop` -> `wayland-pointer`" not in matrix_text
+
+
 def test_app_instruction_projections_are_in_sync() -> None:
     resource_index = json.loads((APP_INSTRUCTIONS_ROOT / "index.json").read_text(encoding="utf-8"))
     reference_index = json.loads((APP_REFERENCES_ROOT / "index.json").read_text(encoding="utf-8"))

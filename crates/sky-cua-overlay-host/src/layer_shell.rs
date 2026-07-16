@@ -29,8 +29,9 @@ use wayland_client::{
 };
 
 use crate::{
-    GestureEventTracker, OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind,
-    OverlayHostReply, OverlayMotionStatus, cursor_asset,
+    GestureEventTracker, OVERLAY_HOST_PROTOCOL_VERSION, OverlayArrivalCondition,
+    OverlayArrivalOutcome, OverlayArrivalWaitReply, OverlayArrivalWaitRequest, OverlayHostMessage,
+    OverlayHostMessageKind, OverlayHostReply, OverlayMotionStatus, cursor_asset,
     cursor_motion::{
         CursorMotionDriver, MotionBounds, MotionFrame, MotionGesture, MotionStepInput,
     },
@@ -205,6 +206,7 @@ impl LayerShellOverlayBackend {
                 }
                 self.reply(ok, diagnostics)
             }
+            OverlayHostMessageKind::WaitForArrival => self.wait_for_arrival(message.arrival_wait),
             OverlayHostMessageKind::Shutdown => {
                 let _ = self.hide_visible_cursor();
                 self.reply(true, Vec::new())
@@ -251,6 +253,121 @@ impl LayerShellOverlayBackend {
                 }
                 self.app.clear_capture_barrier();
                 self.render_reply()
+            }
+        }
+    }
+
+    fn wait_for_arrival(&mut self, wait: Option<OverlayArrivalWaitRequest>) -> OverlayHostReply {
+        const MAX_WAIT_MS: u64 = 8_000;
+
+        let Some(wait) = wait else {
+            return self.reply(
+                false,
+                vec![diagnostic(
+                    "OverlayArrivalWaitMissing",
+                    "WaitForArrival message did not include an arrival wait request.",
+                    None,
+                )],
+            );
+        };
+        if wait.timeout_ms == 0 || wait.timeout_ms > MAX_WAIT_MS {
+            return self.reply(
+                false,
+                vec![diagnostic(
+                    "OverlayArrivalWaitInvalid",
+                    "WaitForArrival timeout must be within the supported range.",
+                    Some(format!(
+                        "sequence={} timeout_ms={} max_ms={MAX_WAIT_MS}",
+                        wait.sequence, wait.timeout_ms
+                    )),
+                )],
+            );
+        }
+
+        let deadline = Instant::now() + std::time::Duration::from_millis(wait.timeout_ms);
+        let outcome = loop {
+            match self.arrival_status(wait) {
+                ArrivalStatus::Complete(outcome) => break outcome,
+                ArrivalStatus::Pending => {}
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                break OverlayArrivalOutcome::DeadlineElapsed;
+            }
+            self.tick();
+            if let ArrivalStatus::Complete(outcome) = self.arrival_status(wait) {
+                break outcome;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break OverlayArrivalOutcome::DeadlineElapsed;
+            }
+            std::thread::sleep(self.pointer_tick_interval().min(remaining));
+        };
+
+        let mut diagnostics = Vec::new();
+        match outcome {
+            OverlayArrivalOutcome::Arrived => {}
+            OverlayArrivalOutcome::DeadlineElapsed => diagnostics.push(diagnostic(
+                "OverlayArrivalDeadlineElapsed",
+                "Overlay host did not reach the requested arrival condition before its deadline.",
+                Some(format!("sequence={}", wait.sequence)),
+            )),
+            OverlayArrivalOutcome::Superseded => diagnostics.push(diagnostic(
+                "OverlayArrivalSuperseded",
+                "Overlay arrival wait was superseded by a newer cursor action.",
+                Some(format!("sequence={}", wait.sequence)),
+            )),
+            OverlayArrivalOutcome::Unavailable => diagnostics.push(diagnostic(
+                "OverlayArrivalUnavailable",
+                "Overlay host could not prove the requested arrival condition.",
+                Some(format!("sequence={}", wait.sequence)),
+            )),
+        }
+        let mut reply = self.reply(true, diagnostics);
+        reply.arrival_wait = Some(OverlayArrivalWaitReply {
+            sequence: wait.sequence,
+            outcome,
+        });
+        reply
+    }
+
+    fn arrival_status(&self, wait: OverlayArrivalWaitRequest) -> ArrivalStatus {
+        if !self.app.visible_overlay_supported()
+            || !self.app.state.as_ref().is_some_and(|state| state.visible)
+        {
+            return ArrivalStatus::Complete(OverlayArrivalOutcome::Unavailable);
+        }
+        match wait.condition {
+            OverlayArrivalCondition::GestureFeedbackStarted => {
+                let highest = self.app.gesture_tracker.highest_sequence;
+                if highest > wait.sequence {
+                    ArrivalStatus::Complete(OverlayArrivalOutcome::Superseded)
+                } else if highest < wait.sequence {
+                    ArrivalStatus::Complete(OverlayArrivalOutcome::Unavailable)
+                } else if self.app.motion.pending_gesture_feedback() {
+                    ArrivalStatus::Pending
+                } else {
+                    ArrivalStatus::Complete(OverlayArrivalOutcome::Arrived)
+                }
+            }
+            OverlayArrivalCondition::MotionSettled => {
+                let Some(state) = self.app.state.as_ref() else {
+                    return ArrivalStatus::Complete(OverlayArrivalOutcome::Unavailable);
+                };
+                if state.sequence > wait.sequence {
+                    ArrivalStatus::Complete(OverlayArrivalOutcome::Superseded)
+                } else if state.sequence < wait.sequence {
+                    ArrivalStatus::Complete(OverlayArrivalOutcome::Unavailable)
+                } else if self
+                    .app
+                    .motion_status()
+                    .is_some_and(|motion| motion.settled)
+                {
+                    ArrivalStatus::Complete(OverlayArrivalOutcome::Arrived)
+                } else {
+                    ArrivalStatus::Pending
+                }
             }
         }
     }
@@ -377,9 +494,16 @@ impl LayerShellOverlayBackend {
             applied_sequence: self.app.applied_sequence(),
             state: self.app.state.clone(),
             motion: self.app.motion_status(),
+            arrival_wait: None,
             diagnostics,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ArrivalStatus {
+    Pending,
+    Complete(OverlayArrivalOutcome),
 }
 
 #[derive(Debug)]

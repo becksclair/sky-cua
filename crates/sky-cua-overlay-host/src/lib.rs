@@ -20,7 +20,7 @@ mod pointer_tracking;
 mod renderer;
 mod system_cursor;
 
-pub const OVERLAY_HOST_PROTOCOL_VERSION: u32 = 2;
+pub const OVERLAY_HOST_PROTOCOL_VERSION: u32 = 3;
 
 /// Run the interactive desktop pointer playground (Wayland layer-shell only).
 #[cfg(target_os = "linux")]
@@ -87,6 +87,8 @@ pub struct OverlayHostMessage {
     pub sequence: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival_wait: Option<OverlayArrivalWaitRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,6 +102,7 @@ pub enum OverlayHostMessageKind {
     Ping,
     Shutdown,
     AnimateGesture,
+    WaitForArrival,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -125,8 +128,39 @@ pub struct OverlayHostReply {
     /// structured fields instead of prose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<OverlayMotionStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival_wait: Option<OverlayArrivalWaitReply>,
     #[serde(default)]
     pub diagnostics: Vec<DiagnosticEntry>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OverlayArrivalWaitRequest {
+    pub sequence: u64,
+    pub condition: OverlayArrivalCondition,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayArrivalCondition {
+    GestureFeedbackStarted,
+    MotionSettled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OverlayArrivalWaitReply {
+    pub sequence: u64,
+    pub outcome: OverlayArrivalOutcome,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayArrivalOutcome {
+    Arrived,
+    DeadlineElapsed,
+    Superseded,
+    Unavailable,
 }
 
 /// Structured echo of the motion driver's latest frame. Coordinates are in
@@ -217,6 +251,19 @@ impl NoopOverlayBackend {
             | OverlayHostMessageKind::Ping
             | OverlayHostMessageKind::Shutdown
             | OverlayHostMessageKind::Capabilities => self.reply(true, Vec::new()),
+            OverlayHostMessageKind::WaitForArrival => {
+                let Some(wait) = message.arrival_wait else {
+                    return self.reply(
+                        false,
+                        vec![diagnostic(
+                            "OverlayArrivalWaitMissing",
+                            "WaitForArrival message did not include an arrival wait request.",
+                            None,
+                        )],
+                    );
+                };
+                self.arrival_reply(wait.sequence, OverlayArrivalOutcome::Unavailable)
+            }
             OverlayHostMessageKind::SetCursor => {
                 self.state = message.state;
                 self.reply(true, Vec::new())
@@ -279,6 +326,7 @@ impl NoopOverlayBackend {
     ) -> OverlayHostReply {
         OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok,
             capabilities: Some(self.capabilities()),
@@ -287,6 +335,12 @@ impl NoopOverlayBackend {
             state: self.state.clone(),
             diagnostics,
         }
+    }
+
+    fn arrival_reply(&self, sequence: u64, outcome: OverlayArrivalOutcome) -> OverlayHostReply {
+        let mut reply = self.reply(true, Vec::new());
+        reply.arrival_wait = Some(OverlayArrivalWaitReply { sequence, outcome });
+        reply
     }
 }
 
@@ -591,6 +645,7 @@ pub fn probe_environment_reply() -> OverlayHostReply {
         gesture: None,
         sequence: None,
         reason: None,
+        arrival_wait: None,
     })
 }
 
@@ -598,6 +653,7 @@ pub fn probe_environment_reply() -> OverlayHostReply {
 fn noop_probe_reply(capabilities: AgentCursorCapabilities) -> OverlayHostReply {
     OverlayHostReply {
         motion: None,
+        arrival_wait: None,
         version: OVERLAY_HOST_PROTOCOL_VERSION,
         ok: true,
         capabilities: Some(capabilities),
@@ -611,6 +667,7 @@ fn noop_probe_reply(capabilities: AgentCursorCapabilities) -> OverlayHostReply {
 fn error_reply(code: &str, message: &str, details: Option<String>) -> OverlayHostReply {
     OverlayHostReply {
         motion: None,
+        arrival_wait: None,
         version: OVERLAY_HOST_PROTOCOL_VERSION,
         ok: false,
         capabilities: Some(NoopOverlayBackend::default_capabilities()),
@@ -632,7 +689,8 @@ pub(crate) fn diagnostic(code: &str, message: &str, details: Option<String>) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        NoopOverlayBackend, OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage,
+        NoopOverlayBackend, OVERLAY_HOST_PROTOCOL_VERSION, OverlayArrivalCondition,
+        OverlayArrivalOutcome, OverlayArrivalWaitRequest, OverlayHostMessage,
         OverlayHostMessageKind, cursor_asset, probe_reply,
     };
     use image::GenericImageView;
@@ -650,6 +708,7 @@ mod tests {
             gesture: None,
             sequence: None,
             reason: None,
+            arrival_wait: None,
         };
 
         let rendered = serde_json::to_value(message).expect("serialize message");
@@ -660,6 +719,31 @@ mod tests {
             rendered["state"]["model_point"]["coordinate_space"],
             "stream_pixels"
         );
+    }
+
+    #[test]
+    fn arrival_wait_protocol_round_trips_structured_outcome() {
+        let mut backend = NoopOverlayBackend::default();
+        let reply = backend.handle_message(OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::WaitForArrival,
+            state: None,
+            gesture: None,
+            sequence: None,
+            reason: None,
+            arrival_wait: Some(OverlayArrivalWaitRequest {
+                sequence: 42,
+                condition: OverlayArrivalCondition::GestureFeedbackStarted,
+                timeout_ms: 100,
+            }),
+        });
+
+        assert!(reply.ok);
+        let wait = reply.arrival_wait.expect("arrival wait reply");
+        assert_eq!(wait.sequence, 42);
+        assert_eq!(wait.outcome, OverlayArrivalOutcome::Unavailable);
+        let rendered = serde_json::to_value(&reply).expect("serialize arrival wait reply");
+        assert_eq!(rendered["arrival_wait"]["outcome"], "unavailable");
     }
 
     #[test]
@@ -679,6 +763,7 @@ mod tests {
                 settled: false,
                 pending_gesture_feedback: true,
             }),
+            arrival_wait: None,
             diagnostics: Vec::new(),
         };
         let rendered = serde_json::to_value(&with_motion).expect("serialize reply");
@@ -712,6 +797,7 @@ mod tests {
             gesture: None,
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
         assert!(set.ok);
         assert!(set.state.as_ref().expect("state").visible);
@@ -723,6 +809,7 @@ mod tests {
             gesture: None,
             sequence: None,
             reason: Some("capture".to_string()),
+            arrival_wait: None,
         });
         assert!(!hidden.state.as_ref().expect("state").visible);
         assert!(
@@ -739,6 +826,7 @@ mod tests {
             gesture: None,
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
         assert!(shown.state.expect("state").visible);
 
@@ -749,6 +837,7 @@ mod tests {
             gesture: None,
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
         assert!(cleared.state.is_none());
     }
@@ -764,6 +853,7 @@ mod tests {
             gesture: None,
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
 
         assert!(!reply.ok);
@@ -784,6 +874,7 @@ mod tests {
             gesture: None,
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
 
         assert!(!reply.ok);
@@ -811,6 +902,7 @@ mod tests {
             }),
             sequence: None,
             reason: None,
+            arrival_wait: None,
         };
         let rendered = serde_json::to_value(&message).expect("serialize animate gesture");
         assert_eq!(rendered["kind"], "animate_gesture");
@@ -843,6 +935,7 @@ mod tests {
             gesture: Some(tap_gesture("evt-1", 1)),
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
         assert!(reply.ok);
         assert!(
@@ -863,6 +956,7 @@ mod tests {
             gesture: Some(tap_gesture("evt-dup", 1)),
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
         assert!(first.ok);
 
@@ -873,6 +967,7 @@ mod tests {
             gesture: Some(tap_gesture("evt-dup", 2)),
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
 
         assert!(duplicate.ok);
@@ -894,6 +989,7 @@ mod tests {
             gesture: Some(tap_gesture("evt-new", 4)),
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
         assert!(first.ok);
 
@@ -904,6 +1000,7 @@ mod tests {
             gesture: Some(tap_gesture("evt-old", 3)),
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
 
         assert!(!stale.ok);
@@ -928,6 +1025,7 @@ mod tests {
             gesture: Some(gesture),
             sequence: None,
             reason: None,
+            arrival_wait: None,
         });
 
         assert!(!reply.ok);
@@ -950,6 +1048,7 @@ mod tests {
             gesture: None,
             sequence: Some(42),
             reason: Some("capture".to_string()),
+            arrival_wait: None,
         });
 
         assert!(reply.ok);
@@ -999,6 +1098,7 @@ mod tests {
                     gesture: None,
                     sequence: None,
                     reason: None,
+                    arrival_wait: None,
                 })
             }
             #[cfg(target_os = "linux")]
@@ -1033,6 +1133,7 @@ mod tests {
                         gesture: None,
                         sequence: None,
                         reason: None,
+                        arrival_wait: None,
                     })
                 }
                 #[cfg(target_os = "linux")]

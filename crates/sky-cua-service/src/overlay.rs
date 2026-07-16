@@ -1,7 +1,8 @@
 use std::{collections::VecDeque, path::Path};
 
 use sky_cua_overlay_host::{
-    OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
+    OVERLAY_HOST_PROTOCOL_VERSION, OverlayArrivalCondition, OverlayArrivalOutcome,
+    OverlayArrivalWaitRequest, OverlayHostMessage, OverlayHostMessageKind, OverlayHostReply,
     OverlayMotionStatus,
 };
 use sky_cua_platform::model::{
@@ -320,7 +321,7 @@ impl OverlayController {
     }
 
     /// Begin the visual part of a pointer action before backend input dispatch.
-    /// The caller waits for [`Self::poll_action_visual_arrival`] when
+    /// The caller waits for [`Self::wait_for_action_visual_arrival`] when
     /// `wait_for_arrival` is true, so physical input cannot overtake the glyph.
     pub fn prepare_action_visual(&mut self, request: &ActionRequest) -> ActionVisualPreparation {
         if self.agent_cursor_mode == CursorMode::Never {
@@ -353,15 +354,72 @@ impl OverlayController {
         }
     }
 
-    /// Refresh the host's structured motion echo and report whether the
-    /// prepared pointer gesture has reached its dispatch point.
-    pub fn poll_action_visual_arrival(&mut self) -> ActionVisualArrival {
-        let diagnostics = self
-            .send_host_message(OverlayHostMessageKind::Capabilities, None, None, None)
-            .diagnostics;
-        ActionVisualArrival {
-            arrived: !self.action_visual_arrival_pending(),
-            diagnostics,
+    /// Wait once on the host's frame-paced arrival barrier. Socket I/O is
+    /// asynchronous, and the caller supplies a budget inside its absolute
+    /// dispatch deadline.
+    pub async fn wait_for_action_visual_arrival(
+        &mut self,
+        host_timeout: std::time::Duration,
+    ) -> ActionVisualArrival {
+        let (sequence, condition) = if let Some(sequence) = self.prepared_gesture_sequence {
+            (sequence, OverlayArrivalCondition::GestureFeedbackStarted)
+        } else if let Some(sequence) = self.prepared_action_sequence {
+            (sequence, OverlayArrivalCondition::MotionSettled)
+        } else {
+            return ActionVisualArrival {
+                outcome: OverlayArrivalOutcome::Unavailable,
+                diagnostics: vec![diagnostic(
+                    "AgentCursorArrivalUnavailable",
+                    "No prepared cursor sequence was available for arrival wait.",
+                    None,
+                )],
+            };
+        };
+        let timeout_ms = host_timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+        if timeout_ms == 0 {
+            return ActionVisualArrival {
+                outcome: OverlayArrivalOutcome::DeadlineElapsed,
+                diagnostics: Vec::new(),
+            };
+        }
+        let message = OverlayHostMessage {
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            kind: OverlayHostMessageKind::WaitForArrival,
+            state: None,
+            gesture: None,
+            sequence: None,
+            reason: None,
+            arrival_wait: Some(OverlayArrivalWaitRequest {
+                sequence,
+                condition,
+                timeout_ms,
+            }),
+        };
+        match self.host.send_arrival_wait(message).await {
+            Ok(reply) => {
+                let wait_reply = reply.arrival_wait;
+                let mut diagnostics = self.apply_host_reply(reply);
+                let outcome = wait_reply
+                    .filter(|wait_reply| wait_reply.sequence == sequence)
+                    .map_or(OverlayArrivalOutcome::Unavailable, |wait_reply| {
+                        wait_reply.outcome
+                    });
+                if wait_reply.is_none_or(|wait_reply| wait_reply.sequence != sequence) {
+                    diagnostics.push(diagnostic(
+                        "AgentCursorArrivalUnavailable",
+                        "Overlay host reply did not identify the prepared cursor sequence.",
+                        Some(format!("sequence={sequence}")),
+                    ));
+                }
+                ActionVisualArrival {
+                    outcome,
+                    diagnostics,
+                }
+            }
+            Err(diagnostic) => ActionVisualArrival {
+                outcome: OverlayArrivalOutcome::Unavailable,
+                diagnostics: vec![diagnostic],
+            },
         }
     }
 
@@ -400,6 +458,7 @@ impl OverlayController {
                 gesture: None,
                 sequence: Some(sequence),
                 reason: None,
+                arrival_wait: None,
             };
             match self.host.send(message) {
                 Ok(reply) => {
@@ -523,6 +582,7 @@ impl OverlayController {
                 gesture: None,
                 sequence,
                 reason,
+                arrival_wait: None,
             };
             match self.host.send(message) {
                 Ok(reply) => {
@@ -580,6 +640,7 @@ impl OverlayController {
             gesture: Some(gesture),
             sequence: None,
             reason: None,
+            arrival_wait: None,
         };
         match self.host.send(message) {
             Ok(reply) => self.apply_host_reply(reply),
@@ -729,7 +790,7 @@ pub struct ActionVisualPreparation {
 
 #[derive(Debug)]
 pub struct ActionVisualArrival {
-    pub arrived: bool,
+    pub outcome: OverlayArrivalOutcome,
     pub diagnostics: Vec<DiagnosticEntry>,
 }
 
@@ -781,7 +842,9 @@ mod tests {
         state_from_action_request,
     };
     use image::{ImageBuffer, Rgba};
-    use sky_cua_overlay_host::{OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostReply};
+    use sky_cua_overlay_host::{
+        OVERLAY_HOST_PROTOCOL_VERSION, OverlayArrivalOutcome, OverlayHostReply,
+    };
     use sky_cua_platform::model::{
         ActionName, ActionOutcome, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope,
         CoordinateSpace, ElementNode, ModelImageFormat, PixelSize, RectF,
@@ -881,8 +944,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn prepared_pointer_action_waits_for_host_arrival_and_does_not_replay_gesture() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn prepared_pointer_action_waits_for_host_arrival_and_does_not_replay_gesture() {
         if Command::new("python3").arg("--version").status().is_err() {
             return;
         }
@@ -904,12 +967,18 @@ mod tests {
             Some("click-2")
         );
 
-        let in_flight = controller.poll_action_visual_arrival();
-        assert!(!in_flight.arrived);
-        assert!(in_flight.diagnostics.is_empty());
-        let arrived = controller.poll_action_visual_arrival();
-        assert!(arrived.arrived);
+        let arrived = controller
+            .wait_for_action_visual_arrival(std::time::Duration::from_millis(200))
+            .await;
+        assert_eq!(arrived.outcome, OverlayArrivalOutcome::Arrived);
         assert!(arrived.diagnostics.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(format!("{}.requests", socket_path.display()))
+                .expect("arrival request log")
+                .lines()
+                .collect::<Vec<_>>(),
+            vec!["set_cursor", "animate_gesture", "wait_for_arrival"]
+        );
 
         let mut outcome = ActionOutcome {
             success: true,
@@ -955,6 +1024,7 @@ mod tests {
         let mut controller = OverlayController::new_for_tests_with_host(host_path, socket_path);
         controller.apply_host_reply(OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -983,6 +1053,7 @@ mod tests {
             OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
         controller.apply_host_reply(OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -1010,6 +1081,7 @@ mod tests {
             OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
         controller.apply_host_reply(OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -1051,6 +1123,7 @@ mod tests {
         let mut controller = OverlayController::new_for_tests();
         let diagnostics = controller.apply_host_reply(OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
             ok: true,
             capabilities: None,
@@ -1072,6 +1145,7 @@ mod tests {
         let mut controller = OverlayController::new_for_tests();
         controller.apply_host_reply(OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
             ok: true,
             capabilities: Some(sky_cua_platform::model::AgentCursorCapabilities {
@@ -1112,6 +1186,7 @@ mod tests {
         let mut controller = OverlayController::new_for_tests();
         controller.apply_host_reply(OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -1124,6 +1199,7 @@ mod tests {
 
         controller.apply_host_reply(OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION + 1,
             ok: true,
             capabilities: None,
@@ -1717,6 +1793,7 @@ mod tests {
         let mut controller = OverlayController::new_for_tests();
         controller.apply_host_reply(OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),
@@ -1745,6 +1822,7 @@ mod tests {
             OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
         controller.apply_host_reply(OverlayHostReply {
             motion: None,
+            arrival_wait: None,
             version: OVERLAY_HOST_PROTOCOL_VERSION,
             ok: true,
             capabilities: Some(visible_overlay_capabilities("healthy host")),

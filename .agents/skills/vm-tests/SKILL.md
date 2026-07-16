@@ -39,8 +39,8 @@ only when the lane needs their catalog, command, or troubleshooting.
 | Agent harness | `codex-desktop`, `opencode-mcp`, or `pi-mcp` | Current visible session | Tool/launch result, artifact path, and whether settings were explicitly synced |
 | Profile inventory or selection | `--list-profiles` | None | Current registry and the selected lane; do not imply a smoke ran |
 
-For the complete `all`/`curated` order and lane catalog, read
-`references/profile-matrix.md` before planning, running, or reporting either
+For supplemental `all`/`curated` semantics and the lane catalog, read
+`references/profile-matrix.md` when planning, running, or reporting either
 aggregate profile. Before writing or running any SSH/runner command, read
 `references/commands.md` and copy its flag names; never invent transport
 flags. For a failed or misleading run, read

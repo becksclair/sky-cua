@@ -2,6 +2,16 @@
 
 #[cfg(unix)]
 pub(crate) fn write_fake_overlay_host(path: &std::path::Path) {
+    write_overlay_host(path, 0.02, true);
+}
+
+#[cfg(unix)]
+pub(crate) fn write_stalled_overlay_host(path: &std::path::Path) {
+    write_overlay_host(path, 0.35, false);
+}
+
+#[cfg(unix)]
+fn write_overlay_host(path: &std::path::Path, wait_delay_seconds: f64, reply_to_wait: bool) {
     use sky_cua_overlay_host::OVERLAY_HOST_PROTOCOL_VERSION;
     use std::os::unix::fs::PermissionsExt;
 
@@ -11,6 +21,7 @@ import json
 import os
 import socket
 import sys
+import time
 
 if len(sys.argv) != 4 or sys.argv[1:3] != ["serve", "--socket"]:
     raise SystemExit(f"unexpected argv: {{sys.argv!r}}")
@@ -26,7 +37,6 @@ server.bind(socket_path)
 server.listen(8)
 state = None
 motion = None
-arrival_polls = 0
 capabilities = {{
     "backend": "wayland_layer_shell",
     "visible_overlay": True,
@@ -50,8 +60,11 @@ while True:
             continue
         message = json.loads(data.decode("utf-8"))
         kind = message["kind"]
+        with open(socket_path + ".requests", "a") as request_log:
+            request_log.write(kind + "\n")
         diagnostics = []
         applied_sequence = None
+        arrival_wait = None
         if kind == "set_cursor":
             state = message.get("state")
             if state is not None and state.get("native_point") is not None:
@@ -65,17 +78,28 @@ while True:
                     "pending_gesture_feedback": False,
                 }}
         elif kind == "animate_gesture":
-            arrival_polls = 0
             if motion is not None:
                 motion["settled"] = False
                 motion["pending_gesture_feedback"] = True
-        elif kind == "capabilities" and motion is not None and motion["pending_gesture_feedback"]:
-            arrival_polls += 1
-            if arrival_polls >= 2:
+        elif kind == "wait_for_arrival":
+            wait = message.get("arrival_wait")
+            if wait is not None:
+                time.sleep({wait_delay_seconds})
+                if not {reply_to_wait}:
+                    continue
+                if motion is not None:
+                    motion["speed"] = 0.0
+                    motion["settled"] = True
+                    motion["pending_gesture_feedback"] = False
+                arrival_wait = {{
+                    "sequence": wait["sequence"],
+                    "outcome": "arrived",
+                }}
+                open(socket_path + ".arrived", "w").close()
+            elif motion is not None:
                 motion["speed"] = 0.0
                 motion["settled"] = True
                 motion["pending_gesture_feedback"] = False
-                open(socket_path + ".arrived", "w").close()
         elif kind == "hide":
             if state is not None:
                 state["visible"] = False
@@ -97,6 +121,7 @@ while True:
             "applied_sequence": applied_sequence,
             "state": state,
             "motion": motion,
+            "arrival_wait": arrival_wait,
             "diagnostics": diagnostics,
         }}
         conn.sendall(json.dumps(reply).encode("utf-8") + b"\n")
@@ -109,7 +134,9 @@ try:
 except FileNotFoundError:
     pass
 "#,
-        version = OVERLAY_HOST_PROTOCOL_VERSION
+        version = OVERLAY_HOST_PROTOCOL_VERSION,
+        wait_delay_seconds = wait_delay_seconds,
+        reply_to_wait = if reply_to_wait { "True" } else { "False" },
     );
     std::fs::write(path, script).expect("write fake overlay host");
     let mut permissions = std::fs::metadata(path)
