@@ -173,11 +173,22 @@ fn parse_root_window_list(output: &str) -> (Vec<String>, Option<String>) {
                 }
             }
         } else if line.contains("_NET_ACTIVE_WINDOW") {
-            active_window_id = parse_window_ids_from_line(line).into_iter().next();
+            active_window_id = parse_active_window_id(line);
         }
     }
 
     (window_ids, active_window_id)
+}
+
+fn parse_active_window_id(line: &str) -> Option<String> {
+    if let Some(window_id) = parse_window_ids_from_line(line).into_iter().next() {
+        return Some(window_id);
+    }
+
+    let (_, value) = line.split_once('=')?;
+    let value = value.trim().trim_end_matches(',');
+    let window_id = value.parse::<u64>().ok()?;
+    (window_id != 0).then(|| format!("0x{window_id:x}"))
 }
 
 fn parse_window_ids_from_line(line: &str) -> Vec<String> {
@@ -541,6 +552,16 @@ _NET_ACTIVE_WINDOW(WINDOW): window id # 0x3800030\n";
             vec!["0x2400006".to_string(), "0x3800030".to_string()]
         );
         assert_eq!(active_window_id.as_deref(), Some("0x3800030"));
+    }
+
+    #[test]
+    fn parses_xpra_cardinal_active_window() {
+        let output = "\
+_NET_CLIENT_LIST(WINDOW): window id # 0x400004\n\
+_NET_ACTIVE_WINDOW(CARDINAL) = 4194308\n";
+        let (window_ids, active_window_id) = parse_root_window_list(output);
+        assert_eq!(window_ids, vec!["0x400004".to_string()]);
+        assert_eq!(active_window_id.as_deref(), Some("0x400004"));
     }
 
     #[test]
