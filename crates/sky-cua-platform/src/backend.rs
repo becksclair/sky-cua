@@ -3,10 +3,11 @@ use async_trait::async_trait;
 use crate::diagnostics::{BackendError, BackendErrorCode};
 use crate::model::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
-    CaptureBackendKind, CaptureScreenMode, DiagnosticEntry, DisplayInfo, DisplayTarget,
-    DoctorCheck, DoctorReadiness, DoctorReport, EnvironmentInfo, HeuristicMatch, InputBackendKind,
-    LaunchedApplication, PortalTokenResetOutcome, SemanticBackendKind, SessionPresenceIntent,
-    SessionPresenceStatus, WindowInfo, WindowTarget, WindowTargetingSetupReport,
+    CaptureBackendKind, CaptureScreenMode, CuaActionRequest, CuaBackendResponse, CuaCancellation,
+    DiagnosticEntry, DisplayInfo, DisplayTarget, DoctorCheck, DoctorReadiness, DoctorReport,
+    EnvironmentInfo, HeuristicMatch, InputBackendKind, LaunchedApplication,
+    PortalTokenResetOutcome, SemanticBackendKind, SessionPresenceIntent, SessionPresenceStatus,
+    WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
 
 #[async_trait]
@@ -160,6 +161,16 @@ pub trait DesktopBackend: Send + Sync {
         self.get_app_state(None, CaptureScreenMode::Always).await
     }
     async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError>;
+    async fn execute_cua_action(
+        &self,
+        _request: CuaActionRequest,
+        _cancellation: CuaCancellation,
+    ) -> Result<CuaBackendResponse, BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            "the CUA action surface is not available for this backend",
+        ))
+    }
     async fn reset_portal_tokens(&self) -> Result<PortalTokenResetOutcome, BackendError> {
         Err(BackendError::new(
             BackendErrorCode::ActionUnsupportedForEnvironment,

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use ashpd::desktop::remote_desktop::{ConnectToEISOptions, KeyState};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::model::CuaCancellation;
 use tracing::{debug, warn};
 
 use crate::portal::eis_input::{
@@ -52,10 +53,49 @@ impl RemoteDesktopSessionManager {
         .await;
     }
 
+    pub async fn move_pointer_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
+        if !eis_pointer_input_enabled() {
+            self.push_eis_pointer_disabled_event("move").await;
+            return self.legacy_pointer_move_absolute(x, y).await;
+        }
+        match self
+            .run_eis_action_with_retry(EisAction::Move { x, y })
+            .await
+        {
+            Ok(details) => {
+                self.push_lifecycle_event(PortalLifecycleEvent {
+                    code: PORTAL_EIS_INPUT_USED,
+                    message: "Injected absolute pointer motion through RemoteDesktop EIS."
+                        .to_string(),
+                    details: Some(details),
+                })
+                .await;
+                Ok(())
+            }
+            Err(failure) => {
+                if !should_fallback_to_legacy(&failure) {
+                    return Err(failure.error);
+                }
+                if should_reset_session_before_legacy_fallback(&failure) {
+                    self.reset_session().await;
+                }
+                self.push_lifecycle_event(PortalLifecycleEvent {
+                    code: PORTAL_EIS_INPUT_FALLBACK,
+                    message:
+                        "RemoteDesktop EIS pointer move failed; fell back to legacy portal input."
+                            .to_string(),
+                    details: Some(eis_fallback_details(&failure)),
+                })
+                .await;
+                self.legacy_pointer_move_absolute(x, y).await
+            }
+        }
+    }
+
     pub async fn click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
         if !eis_pointer_input_enabled() {
             self.push_eis_pointer_disabled_event("click").await;
-            self.pointer_move_absolute(x, y).await?;
+            self.legacy_pointer_move_absolute(x, y).await?;
             return self.click(button).await;
         }
         let action = EisAction::Click { x, y, button };
@@ -88,7 +128,7 @@ impl RemoteDesktopSessionManager {
                     details: Some(eis_fallback_details(&failure)),
                 })
                 .await;
-                self.pointer_move_absolute(x, y).await?;
+                self.legacy_pointer_move_absolute(x, y).await?;
                 self.click(button).await
             }
         }
@@ -98,14 +138,19 @@ impl RemoteDesktopSessionManager {
         &self,
         waypoints: &[(f64, f64)],
         step_delay: Duration,
+        cancellation: Option<&CuaCancellation>,
     ) -> Result<(), BackendError> {
+        if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+            return Err(cua_drag_cancelled(false));
+        }
         if !eis_pointer_input_enabled() {
             self.push_eis_pointer_disabled_event("drag").await;
-            return self.legacy_drag(waypoints, step_delay).await;
+            return self.legacy_drag(waypoints, step_delay, cancellation).await;
         }
         let action = EisAction::Drag {
             waypoints: Arc::from(waypoints),
             step_delay,
+            cancellation: cancellation.cloned(),
         };
         match self.run_eis_action_with_retry(action).await {
             Ok(details) => {
@@ -136,7 +181,7 @@ impl RemoteDesktopSessionManager {
                     details: Some(eis_fallback_details(&failure)),
                 })
                 .await;
-                self.legacy_drag(waypoints, step_delay).await
+                self.legacy_drag(waypoints, step_delay, cancellation).await
             }
         }
     }
@@ -145,16 +190,20 @@ impl RemoteDesktopSessionManager {
         &self,
         waypoints: &[(f64, f64)],
         step_delay: Duration,
+        cancellation: Option<&CuaCancellation>,
     ) -> Result<(), BackendError> {
         let Some((first, rest)) = waypoints.split_first() else {
             return Ok(());
         };
-        self.pointer_move_absolute(first.0, first.1).await?;
+        self.legacy_pointer_move_absolute(first.0, first.1).await?;
         self.pointer_button(MouseButton::Left, true).await?;
         tokio::time::sleep(Duration::from_millis(20)).await;
         let result = async {
             for &(x, y) in rest {
-                self.pointer_move_absolute(x, y).await?;
+                if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+                    return Err(cua_drag_cancelled(true));
+                }
+                self.legacy_pointer_move_absolute(x, y).await?;
                 tokio::time::sleep(step_delay).await;
             }
             self.pointer_button(MouseButton::Left, false).await
@@ -175,7 +224,7 @@ impl RemoteDesktopSessionManager {
     ) -> Result<(), BackendError> {
         if !eis_pointer_input_enabled() {
             self.push_eis_pointer_disabled_event("scroll").await;
-            self.pointer_move_absolute(x, y).await?;
+            self.legacy_pointer_move_absolute(x, y).await?;
             return if let Some(delta_y) = delta_y {
                 self.scroll_vertical_smooth(delta_y).await
             } else {
@@ -217,7 +266,7 @@ impl RemoteDesktopSessionManager {
                     details: Some(eis_fallback_details(&failure)),
                 })
                 .await;
-                self.pointer_move_absolute(x, y).await?;
+                self.legacy_pointer_move_absolute(x, y).await?;
                 if let Some(delta_y) = delta_y {
                     self.scroll_vertical_smooth(delta_y).await
                 } else {
@@ -589,6 +638,20 @@ impl RemoteDesktopSessionManager {
         }
         session.eis_worker = Some(worker.clone());
         Ok(worker)
+    }
+}
+
+fn cua_drag_cancelled(after_press: bool) -> BackendError {
+    if after_press {
+        BackendError::new(
+            BackendErrorCode::CuaActionOutcomeUnknown,
+            "the CUA drag was cancelled after pointer-down; pointer release completed",
+        )
+    } else {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "the CUA turn was cancelled",
+        )
     }
 }
 

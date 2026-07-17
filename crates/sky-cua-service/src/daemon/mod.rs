@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -8,10 +8,12 @@ use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
-    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, CaptureInfo,
-    CaptureScreenMode, DiagnosticEntry, DisplayTarget, PhoneBackendKind, PhoneRequest,
-    ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent, WindowInfo,
-    WindowTarget, browser_eval_enabled,
+    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, BrowserSessionIdentity,
+    CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX, CaptureInfo, CaptureScreenMode, CoordinateSpace,
+    CuaActionRequest, CuaBackendResponse, CuaCancelStatus, CuaCancellation, CuaRequestContext,
+    CuaScreenshot, DiagnosticEntry, DisplayTarget, EnvironmentInfo, PhoneBackendKind, PhoneRequest,
+    RectF, ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent,
+    WindowInfo, WindowTarget, browser_eval_enabled,
 };
 
 use crate::action_router::route_action;
@@ -63,6 +65,24 @@ pub struct ServiceDaemon {
     desktop_lane: tokio::sync::Mutex<()>,
     browser_eval_enabled: bool,
     socket_path: PathBuf,
+    cua_cancellations: std::sync::Mutex<HashMap<(String, String), CuaCancellation>>,
+    cua_screenshot_planes: std::sync::Mutex<HashMap<String, CuaScreenshotCoordinatePlane>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CuaScreenshotCoordinatePlane {
+    desktop_rect: RectF,
+    width: u32,
+    height: u32,
+}
+
+impl CuaScreenshotCoordinatePlane {
+    fn to_desktop(&self, x: f64, y: f64) -> (f64, f64) {
+        (
+            self.desktop_rect.x + (x * self.desktop_rect.width / f64::from(self.width)),
+            self.desktop_rect.y + (y * self.desktop_rect.height / f64::from(self.height)),
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +127,8 @@ impl ServiceDaemon {
             desktop_lane: tokio::sync::Mutex::new(()),
             browser_eval_enabled: browser_eval_enabled(),
             socket_path,
+            cua_cancellations: std::sync::Mutex::new(HashMap::new()),
+            cua_screenshot_planes: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -221,6 +243,8 @@ impl ServiceDaemon {
             desktop_lane: tokio::sync::Mutex::new(()),
             browser_eval_enabled: false,
             socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
+            cua_cancellations: std::sync::Mutex::new(HashMap::new()),
+            cua_screenshot_planes: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -228,18 +252,524 @@ impl ServiceDaemon {
         self.sessions.touch().await;
         self.ensure_session_presence_for_request(&request).await;
         match request {
-            ServiceRequest::Health => ServiceResponse::Health {
-                ok: true,
-                service_socket: self.socket_path.display().to_string(),
-                desktop_env: desktop_env_values_present(),
-                browser_env: crate::browser::browser_env_values_present(),
-            },
-            ServiceRequest::Browser { request } => self.handle_browser_request(request).await,
+            ServiceRequest::Health => {
+                let capabilities = self
+                    .backend
+                    .probe_environment()
+                    .await
+                    .map(|environment| {
+                        sky_cua_platform::model::cua_service_capabilities_for_input_backend(
+                            &environment.input_backend,
+                        )
+                    })
+                    .unwrap_or_else(|_| {
+                        sky_cua_platform::model::cua_service_capabilities_for_input_backend(
+                            &sky_cua_platform::model::InputBackendKind::None,
+                        )
+                    });
+                ServiceResponse::Health {
+                    ok: true,
+                    service_socket: self.socket_path.display().to_string(),
+                    protocol_version: sky_cua_platform::model::CUA_SERVICE_PROTOCOL_VERSION,
+                    service_version: sky_cua_platform::model::CUA_SERVICE_VERSION.to_string(),
+                    capabilities,
+                    desktop_env: desktop_env_values_present(),
+                    browser_env: crate::browser::browser_env_values_present(),
+                }
+            }
+            ServiceRequest::Click {
+                context,
+                x,
+                y,
+                mouse_button,
+                click_count,
+                key,
+                post_action_sleep_ms,
+            } => {
+                self.handle_cua_action(CuaActionRequest::Click {
+                    context,
+                    x,
+                    y,
+                    mouse_button,
+                    click_count,
+                    key,
+                    post_action_sleep_ms,
+                })
+                .await
+            }
+            ServiceRequest::Drag {
+                context,
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                key,
+                post_action_sleep_ms,
+            } => {
+                self.handle_cua_action(CuaActionRequest::Drag {
+                    context,
+                    from_x,
+                    from_y,
+                    to_x,
+                    to_y,
+                    key,
+                    post_action_sleep_ms,
+                })
+                .await
+            }
+            ServiceRequest::GetScreenshot {
+                context,
+                mouse_size_px,
+            } => self.handle_cua_screenshot(context, mouse_size_px).await,
+            ServiceRequest::Move {
+                context,
+                x,
+                y,
+                key,
+                post_action_sleep_ms,
+            } => {
+                self.handle_cua_action(CuaActionRequest::Move {
+                    context,
+                    x,
+                    y,
+                    key,
+                    post_action_sleep_ms,
+                })
+                .await
+            }
+            ServiceRequest::PressKey {
+                context,
+                key,
+                post_action_sleep_ms,
+            } => {
+                self.handle_cua_action(CuaActionRequest::PressKey {
+                    context,
+                    key,
+                    post_action_sleep_ms,
+                })
+                .await
+            }
+            ServiceRequest::Scroll {
+                context,
+                direction,
+                pixels,
+                x,
+                y,
+                key,
+                post_action_sleep_ms,
+            } => {
+                self.handle_cua_action(CuaActionRequest::Scroll {
+                    context,
+                    direction,
+                    pixels,
+                    x,
+                    y,
+                    key,
+                    post_action_sleep_ms,
+                })
+                .await
+            }
+            ServiceRequest::TypeText {
+                context,
+                text,
+                post_action_sleep_ms,
+            } => {
+                self.handle_cua_action(CuaActionRequest::TypeText {
+                    context,
+                    text,
+                    post_action_sleep_ms,
+                })
+                .await
+            }
+            ServiceRequest::CancelTurn {
+                session_id,
+                turn_id,
+                reason,
+            } => self.handle_cua_cancel(session_id, turn_id, reason),
+            ServiceRequest::Browser { request, identity } => {
+                self.handle_browser_request(request, identity).await
+            }
             ServiceRequest::Phone { request } => self.handle_phone_request(request).await,
             request => {
                 let _desktop_lane = self.desktop_lane.lock().await;
                 self.handle_desktop_request(request).await
             }
+        }
+    }
+
+    async fn handle_cua_action(&self, action: CuaActionRequest) -> ServiceResponse {
+        let action = self.action_in_desktop_plane(action);
+        let context = action.context().clone();
+        if let Err(message) = context.validate() {
+            return cua_error_response(
+                "SKY_CUA_INVALID_CONTEXT",
+                message,
+                Some(&context),
+                Some("never"),
+            );
+        }
+        if let Err(message) = validate_cua_action(&action) {
+            return cua_error_response(
+                "SKY_CUA_INVALID_ARGUMENT",
+                message,
+                Some(&context),
+                Some("never"),
+            );
+        }
+        let deadline_at =
+            tokio::time::Instant::now() + Duration::from_millis(u64::from(context.deadline_ms()));
+
+        let turn_key = context.turn_key();
+        let cancellation = {
+            let mut cancellations = self
+                .cua_cancellations
+                .lock()
+                .expect("CUA cancellation registry should not be poisoned");
+            if cancellations.contains_key(&turn_key) {
+                return cua_error_response(
+                    "SKY_CUA_DUPLICATE_ACTIVE_TURN",
+                    "an action with this session_id and turn_id is already active",
+                    Some(&context),
+                    Some("never"),
+                );
+            }
+            let cancellation = CuaCancellation::new();
+            cancellations.insert(turn_key.clone(), cancellation.clone());
+            cancellation
+        };
+        debug!(
+            session_id = %context.session_id,
+            turn_id = %context.turn_id,
+            deadline_ms = context.deadline_ms(),
+            "cua action started"
+        );
+
+        let desktop_lane = tokio::select! {
+            lane = self.desktop_lane.lock() => lane,
+            () = tokio::time::sleep_until(deadline_at) => {
+                cancellation.cancel();
+                self.cua_cancellations
+                    .lock()
+                    .expect("CUA cancellation registry should not be poisoned")
+                    .remove(&turn_key);
+                return cua_error_response(
+                    "SKY_CUA_DEADLINE_EXCEEDED",
+                    "the CUA action deadline elapsed while waiting for the desktop lane",
+                    Some(&context),
+                    Some("never"),
+                );
+            }
+        };
+        let backend_future = self
+            .backend
+            .execute_cua_action(action.clone(), cancellation.clone());
+        tokio::pin!(backend_future);
+        let deadline = tokio::time::sleep_until(deadline_at);
+        tokio::pin!(deadline);
+        let (result, deadline_elapsed) = tokio::select! {
+            result = &mut backend_future => (result, false),
+            () = &mut deadline => {
+                cancellation.cancel();
+                debug!(
+                    session_id = %context.session_id,
+                    turn_id = %context.turn_id,
+                    "cua action deadline elapsed; waiting for backend cleanup"
+                );
+                (backend_future.await, true)
+            }
+        };
+        drop(desktop_lane);
+        let response = match result {
+            Err(error) => {
+                if error.code == "CuaActionOutcomeUnknown" {
+                    cua_error_response(
+                        "SKY_CUA_ACTION_OUTCOME_UNKNOWN",
+                        error.message,
+                        Some(&context),
+                        Some("never"),
+                    )
+                } else if deadline_elapsed {
+                    cua_error_response(
+                        "SKY_CUA_DEADLINE_EXCEEDED",
+                        "the CUA action deadline elapsed; backend cleanup completed",
+                        Some(&context),
+                        Some("never"),
+                    )
+                } else if cancellation.is_cancelled() {
+                    cua_error_response(
+                        "SKY_CUA_TURN_CANCELLED",
+                        "the CUA turn was cancelled before the action completed",
+                        Some(&context),
+                        Some("never"),
+                    )
+                } else {
+                    cua_error_response(
+                        cua_error_code(&error),
+                        error.message,
+                        Some(&context),
+                        Some("never"),
+                    )
+                }
+            }
+            Ok(CuaBackendResponse::Screenshots(screenshots)) => ServiceResponse::GetScreenshot {
+                ok: true,
+                screenshots,
+            },
+            Ok(CuaBackendResponse::Action)
+                if (deadline_elapsed || cancellation.is_cancelled())
+                    && !cua_action_is_idempotent(&action) =>
+            {
+                debug!(
+                    session_id = %context.session_id,
+                    turn_id = %context.turn_id,
+                    "cua action cancellation arrived after backend completion"
+                );
+                cua_error_response(
+                    "SKY_CUA_ACTION_OUTCOME_UNKNOWN",
+                    "the action may have completed before cancellation was observed",
+                    Some(&context),
+                    Some("never"),
+                )
+            }
+            Ok(CuaBackendResponse::Action) if deadline_elapsed => cua_error_response(
+                "SKY_CUA_DEADLINE_EXCEEDED",
+                "the CUA action deadline elapsed; backend cleanup completed",
+                Some(&context),
+                Some("never"),
+            ),
+            Ok(CuaBackendResponse::Action) => cua_action_response(&action),
+        };
+        self.cua_cancellations
+            .lock()
+            .expect("CUA cancellation registry should not be poisoned")
+            .remove(&turn_key);
+        debug!(
+            session_id = %context.session_id,
+            turn_id = %context.turn_id,
+            cancelled = cancellation.is_cancelled(),
+            "cua action finished"
+        );
+        response
+    }
+
+    async fn handle_cua_screenshot(
+        &self,
+        context: Option<CuaRequestContext>,
+        mouse_size_px: Option<u32>,
+    ) -> ServiceResponse {
+        if let Some(context) = context.as_ref()
+            && let Err(message) = context.validate()
+        {
+            return cua_error_response(
+                "SKY_CUA_INVALID_CONTEXT",
+                message,
+                Some(context),
+                Some("never"),
+            );
+        }
+        if mouse_size_px.is_some_and(|size| size > 128) {
+            return cua_error_response(
+                "SKY_CUA_INVALID_ARGUMENT",
+                "mouse_size_px must be between 0 and 128",
+                context.as_ref(),
+                Some("never"),
+            );
+        }
+        let plane_key = context
+            .as_ref()
+            .map(|context| context.session_id.clone())
+            .unwrap_or_default();
+        self.cua_screenshot_planes
+            .lock()
+            .expect("CUA screenshot planes should not be poisoned")
+            .remove(&plane_key);
+        let deadline_ms = context
+            .as_ref()
+            .map(CuaRequestContext::deadline_ms)
+            .unwrap_or(sky_cua_platform::model::CUA_SERVICE_MAX_DEADLINE_MS);
+        let deadline_at =
+            tokio::time::Instant::now() + Duration::from_millis(u64::from(deadline_ms));
+        let capture_guard = match tokio::time::timeout_at(deadline_at, self.overlay.lock()).await {
+            Ok(mut overlay) => overlay.prepare_for_capture(),
+            Err(_) => {
+                return cua_error_response(
+                    "SKY_CUA_DEADLINE_EXCEEDED",
+                    "the screenshot deadline elapsed while waiting for overlay capture state",
+                    context.as_ref(),
+                    Some("never"),
+                );
+            }
+        };
+        let desktop_lane =
+            match tokio::time::timeout_at(deadline_at, self.desktop_lane.lock()).await {
+                Ok(lane) => lane,
+                Err(_) => {
+                    let _ = self
+                        .overlay
+                        .lock()
+                        .await
+                        .restore_after_capture(capture_guard);
+                    return cua_error_response(
+                        "SKY_CUA_DEADLINE_EXCEEDED",
+                        "the screenshot deadline elapsed while waiting for the desktop lane",
+                        context.as_ref(),
+                        Some("never"),
+                    );
+                }
+            };
+        let result =
+            tokio::time::timeout_at(deadline_at, self.backend.screenshot(None, None)).await;
+        drop(desktop_lane);
+        match result {
+            Err(_) => {
+                let _ = self
+                    .overlay
+                    .lock()
+                    .await
+                    .restore_after_capture(capture_guard);
+                cua_error_response(
+                    "SKY_CUA_DEADLINE_EXCEEDED",
+                    "the screenshot deadline elapsed",
+                    context.as_ref(),
+                    Some("never"),
+                )
+            }
+            Ok(Err(error)) => {
+                let _ = self
+                    .overlay
+                    .lock()
+                    .await
+                    .restore_after_capture(capture_guard);
+                cua_error_response(
+                    cua_error_code(&error),
+                    error.message,
+                    context.as_ref(),
+                    Some("never"),
+                )
+            }
+            Ok(Ok(mut snapshot)) => {
+                {
+                    let mut overlay = self.overlay.lock().await;
+                    overlay.apply_to_snapshot_with_cursor_size(
+                        &mut snapshot,
+                        Some(mouse_size_px.unwrap_or(CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX)),
+                    );
+                    snapshot
+                        .diagnostics
+                        .extend(overlay.restore_after_capture(capture_guard));
+                }
+                match screenshot_from_snapshot(snapshot) {
+                    Ok((screenshot, plane)) => {
+                        if let Some(plane) = plane {
+                            self.cua_screenshot_planes
+                                .lock()
+                                .expect("CUA screenshot planes should not be poisoned")
+                                .insert(plane_key, plane);
+                        }
+                        ServiceResponse::GetScreenshot {
+                            ok: true,
+                            screenshots: vec![screenshot],
+                        }
+                    }
+                    Err(error) => cua_error_response(
+                        "SKY_CUA_INTERNAL",
+                        error,
+                        context.as_ref(),
+                        Some("never"),
+                    ),
+                }
+            }
+        }
+    }
+
+    fn action_in_desktop_plane(&self, mut action: CuaActionRequest) -> CuaActionRequest {
+        let session_id = &action.context().session_id;
+        let planes = self
+            .cua_screenshot_planes
+            .lock()
+            .expect("CUA screenshot planes should not be poisoned");
+        let plane = planes.get(session_id).or_else(|| planes.get("")).cloned();
+        drop(planes);
+        let Some(plane) = plane else {
+            return action;
+        };
+        let map = |x: &mut f64, y: &mut f64| {
+            (*x, *y) = plane.to_desktop(*x, *y);
+        };
+        match &mut action {
+            CuaActionRequest::Click { x, y, .. } | CuaActionRequest::Move { x, y, .. } => {
+                map(x, y);
+            }
+            CuaActionRequest::Drag {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                ..
+            } => {
+                map(from_x, from_y);
+                map(to_x, to_y);
+            }
+            CuaActionRequest::Scroll { x, y, .. } => {
+                if let (Some(x), Some(y)) = (x.as_mut(), y.as_mut()) {
+                    map(x, y);
+                }
+            }
+            CuaActionRequest::PressKey { .. } | CuaActionRequest::TypeText { .. } => {}
+        }
+        action
+    }
+
+    fn handle_cua_cancel(
+        &self,
+        session_id: String,
+        turn_id: String,
+        reason: String,
+    ) -> ServiceResponse {
+        if session_id.trim().is_empty() || turn_id.trim().is_empty() {
+            return cua_error_response_parts(
+                "SKY_CUA_CANCEL_TURN_INVALID_CONTEXT",
+                "session_id and turn_id must be non-empty",
+                Some(session_id),
+                Some(turn_id),
+                Some("never"),
+            );
+        }
+        if reason.trim().is_empty() || reason.chars().count() > 256 {
+            return cua_error_response_parts(
+                "SKY_CUA_CANCEL_TURN_INVALID_REASON",
+                "reason must be between 1 and 256 characters",
+                Some(session_id),
+                Some(turn_id),
+                Some("never"),
+            );
+        }
+        let key = (session_id.clone(), turn_id.clone());
+        let status = self
+            .cua_cancellations
+            .lock()
+            .expect("CUA cancellation registry should not be poisoned")
+            .get(&key)
+            .map(|cancellation| {
+                if cancellation.is_cancelled() {
+                    CuaCancelStatus::AlreadyCancelled
+                } else {
+                    cancellation.cancel();
+                    CuaCancelStatus::CancelRequested
+                }
+            })
+            .unwrap_or(CuaCancelStatus::NotFound);
+        debug!(
+            session_id = %session_id,
+            turn_id = %turn_id,
+            ?status,
+            "cua turn cancellation requested"
+        );
+        ServiceResponse::CancelTurn {
+            ok: true,
+            session_id,
+            turn_id,
+            status,
         }
     }
 
@@ -314,4 +844,302 @@ fn desktop_env_values_present() -> BTreeMap<String, String> {
                 .map(|value| (key.to_string(), value))
         })
         .collect()
+}
+
+fn validate_cua_action(action: &CuaActionRequest) -> Result<(), &'static str> {
+    let sleep_ms = action.post_action_sleep_ms();
+    if sleep_ms.is_some_and(|value| value > 30_000) {
+        return Err("post_action_sleep_ms must be between 0 and 30000");
+    }
+    let finite = |value: f64| value.is_finite();
+    match action {
+        CuaActionRequest::Click {
+            x,
+            y,
+            click_count,
+            key,
+            ..
+        } => {
+            if !finite(*x) || !finite(*y) {
+                return Err("coordinates must be finite numbers");
+            }
+            if click_count.is_some_and(|count| !(1..=100).contains(&count)) {
+                return Err("click_count must be between 1 and 100");
+            }
+            if key.as_deref().is_some_and(|key| key.trim().is_empty()) {
+                return Err("key must be non-empty when provided");
+            }
+        }
+        CuaActionRequest::Drag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            key,
+            ..
+        } => {
+            if !finite(*from_x) || !finite(*from_y) || !finite(*to_x) || !finite(*to_y) {
+                return Err("coordinates must be finite numbers");
+            }
+            if key.as_deref().is_some_and(|key| key.trim().is_empty()) {
+                return Err("key must be non-empty when provided");
+            }
+        }
+        CuaActionRequest::Move { x, y, key, .. } => {
+            if !finite(*x) || !finite(*y) {
+                return Err("coordinates must be finite numbers");
+            }
+            if key.as_deref().is_some_and(|key| key.trim().is_empty()) {
+                return Err("key must be non-empty when provided");
+            }
+        }
+        CuaActionRequest::PressKey { key, .. } => {
+            if key.trim().is_empty() {
+                return Err("key must be non-empty");
+            }
+        }
+        CuaActionRequest::Scroll {
+            pixels, x, y, key, ..
+        } => {
+            if pixels.is_some_and(|pixels| !(1..=10_000).contains(&pixels)) {
+                return Err("pixels must be between 1 and 10000");
+            }
+            if x.is_some_and(|value| !finite(value)) || y.is_some_and(|value| !finite(value)) {
+                return Err("coordinates must be finite numbers");
+            }
+            if x.is_some() != y.is_some() {
+                return Err("scroll origin requires both x and y");
+            }
+            if key.as_deref().is_some_and(|key| key.trim().is_empty()) {
+                return Err("key must be non-empty when provided");
+            }
+        }
+        CuaActionRequest::TypeText { .. } => {}
+    }
+    Ok(())
+}
+
+fn cua_action_is_idempotent(action: &CuaActionRequest) -> bool {
+    matches!(action, CuaActionRequest::Move { .. })
+}
+
+fn cua_action_response(action: &CuaActionRequest) -> ServiceResponse {
+    let context = action.context();
+    let session_id = context.session_id.clone();
+    let turn_id = context.turn_id.clone();
+    match action {
+        CuaActionRequest::Click { .. } => ServiceResponse::Click {
+            ok: true,
+            session_id,
+            turn_id,
+        },
+        CuaActionRequest::Drag { .. } => ServiceResponse::Drag {
+            ok: true,
+            session_id,
+            turn_id,
+        },
+        CuaActionRequest::Move { .. } => ServiceResponse::Move {
+            ok: true,
+            session_id,
+            turn_id,
+        },
+        CuaActionRequest::PressKey { .. } => ServiceResponse::PressKey {
+            ok: true,
+            session_id,
+            turn_id,
+        },
+        CuaActionRequest::Scroll { .. } => ServiceResponse::Scroll {
+            ok: true,
+            session_id,
+            turn_id,
+        },
+        CuaActionRequest::TypeText { .. } => ServiceResponse::TypeText {
+            ok: true,
+            session_id,
+            turn_id,
+        },
+    }
+}
+
+fn cua_error_code(error: &BackendError) -> &'static str {
+    match error.code {
+        "InvalidRequest" => "SKY_CUA_INVALID_ARGUMENT",
+        "ActionUnsupportedForEnvironment" | "UnsupportedEnvironment" => {
+            "SKY_CUA_TARGET_UNAVAILABLE"
+        }
+        "ServiceUnavailable" => "SKY_CUA_SERVICE_RESTART_REQUIRED",
+        "CuaActionOutcomeUnknown" => "SKY_CUA_ACTION_OUTCOME_UNKNOWN",
+        _ => "SKY_CUA_INTERNAL",
+    }
+}
+
+fn cua_error_response(
+    code: &'static str,
+    message: impl Into<String>,
+    context: Option<&CuaRequestContext>,
+    retry: Option<&'static str>,
+) -> ServiceResponse {
+    cua_error_response_parts(
+        code,
+        message,
+        context.map(|context| context.session_id.clone()),
+        context.map(|context| context.turn_id.clone()),
+        retry,
+    )
+}
+
+fn cua_error_response_parts(
+    code: &'static str,
+    message: impl Into<String>,
+    session_id: Option<String>,
+    turn_id: Option<String>,
+    retry: Option<&'static str>,
+) -> ServiceResponse {
+    let session_id = session_id.filter(|value| !value.trim().is_empty());
+    let turn_id = turn_id.filter(|value| !value.trim().is_empty());
+    ServiceResponse::Error {
+        ok: false,
+        code: code.to_string(),
+        message: message.into(),
+        session_id,
+        turn_id,
+        retry: retry.map(str::to_string),
+    }
+}
+
+fn screenshot_from_snapshot(
+    snapshot: AppStateSnapshot,
+) -> Result<(CuaScreenshot, Option<CuaScreenshotCoordinatePlane>), String> {
+    use base64::Engine;
+    let desktop_rect = screenshot_desktop_rect(&snapshot);
+    let capture = snapshot
+        .capture
+        .ok_or_else(|| "screenshot capture did not produce image metadata".to_string())?;
+    let source_path = capture
+        .screenshot_path
+        .ok_or_else(|| "screenshot capture did not produce a file path".to_string())?;
+    let source_bytes = std::fs::read(&source_path)
+        .map_err(|error| format!("failed to read screenshot capture: {error}"))?;
+    let (output_path, webp_bytes, width, height) =
+        screenshot_bytes_as_webp(std::path::Path::new(&source_path), source_bytes)?;
+    let bytes_base64 = base64::engine::general_purpose::STANDARD.encode(&webp_bytes);
+    let screenshot = CuaScreenshot {
+        filepath: output_path.display().to_string(),
+        bytes_base64,
+        mime_type: "image/webp".to_string(),
+        width,
+        height,
+    };
+    let plane = desktop_rect.and_then(|desktop_rect| {
+        (width > 0 && height > 0).then_some(CuaScreenshotCoordinatePlane {
+            desktop_rect,
+            width,
+            height,
+        })
+    });
+    Ok((screenshot, plane))
+}
+
+fn screenshot_bytes_as_webp(
+    source_path: &std::path::Path,
+    source_bytes: Vec<u8>,
+) -> Result<(std::path::PathBuf, Vec<u8>, u32, u32), String> {
+    let source_format = image::guess_format(&source_bytes)
+        .map_err(|error| format!("failed to identify screenshot capture: {error}"))?;
+    let output_path = source_path.with_extension("webp");
+
+    if source_format == image::ImageFormat::WebP {
+        let (width, height) = image::ImageReader::with_format(
+            std::io::Cursor::new(&source_bytes),
+            image::ImageFormat::WebP,
+        )
+        .into_dimensions()
+        .map_err(|error| format!("failed to read WebP screenshot dimensions: {error}"))?;
+        if output_path != source_path {
+            std::fs::write(&output_path, &source_bytes)
+                .map_err(|error| format!("failed to persist WebP screenshot: {error}"))?;
+        }
+        return Ok((output_path, source_bytes, width, height));
+    }
+
+    let image = image::load_from_memory_with_format(&source_bytes, source_format)
+        .map_err(|error| format!("failed to decode screenshot capture: {error}"))?;
+    let width = image.width();
+    let height = image.height();
+    let rgb = image.to_rgb8();
+    let webp = webp::Encoder::from_rgb(rgb.as_raw(), width, height).encode(85.0);
+    let webp_bytes = webp.to_vec();
+    std::fs::write(&output_path, &webp_bytes)
+        .map_err(|error| format!("failed to persist WebP screenshot: {error}"))?;
+    Ok((output_path, webp_bytes, width, height))
+}
+
+fn screenshot_desktop_rect(snapshot: &AppStateSnapshot) -> Option<RectF> {
+    snapshot
+        .capture
+        .as_ref()
+        .and_then(|capture| {
+            capture
+                .logical_rect
+                .as_ref()
+                .or(capture.source_logical_rect.as_ref())
+        })
+        .filter(|rect| rect.space == CoordinateSpace::DesktopLogical)
+        .cloned()
+        .or_else(|| virtual_desktop_rect(&snapshot.environment))
+}
+
+fn virtual_desktop_rect(environment: &EnvironmentInfo) -> Option<RectF> {
+    let first = environment.displays.first()?;
+    let (mut left, mut top, mut right, mut bottom) = (
+        first.logical_rect.x,
+        first.logical_rect.y,
+        first.logical_rect.right(),
+        first.logical_rect.bottom(),
+    );
+    for display in &environment.displays[1..] {
+        left = left.min(display.logical_rect.x);
+        top = top.min(display.logical_rect.y);
+        right = right.max(display.logical_rect.right());
+        bottom = bottom.max(display.logical_rect.bottom());
+    }
+    Some(RectF {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+        space: CoordinateSpace::DesktopLogical,
+    })
+}
+
+#[cfg(test)]
+mod screenshot_conversion_tests {
+    use super::screenshot_bytes_as_webp;
+
+    fn temporary_path(extension: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after the Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "sky-cua-screenshot-{}-{unique}.{extension}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn existing_webp_is_forwarded_byte_for_byte_without_rewriting() {
+        let path = temporary_path("webp");
+        let pixels = [255_u8, 0, 0, 0, 255, 0];
+        let original = webp::Encoder::from_rgb(&pixels, 2, 1).encode(85.0).to_vec();
+        std::fs::write(&path, &original).expect("test WebP should be written");
+
+        let (output_path, output, width, height) =
+            screenshot_bytes_as_webp(&path, original.clone()).expect("WebP should pass through");
+
+        assert_eq!(output_path, path);
+        assert_eq!(output, original);
+        assert_eq!((width, height), (2, 1));
+        std::fs::remove_file(&path).expect("test WebP should be removed");
+    }
 }

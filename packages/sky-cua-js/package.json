@@ -1,0 +1,33 @@
+{
+  "name": "@heliasar/sky-cua",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private pure-ESM Computer Use compatibility facade for the sky-cua service.",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "benchmark:screenshot": "bun run build && node --expose-gc scripts/benchmark-screenshot.mjs",
+    "benchmark:screenshot:self-test": "bun run build && node --expose-gc scripts/benchmark-screenshot.mjs --self-test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun run build && bun test test",
+    "pack": "bun run pack:deterministic",
+    "pack:deterministic": "bun run build && bun scripts/pack.ts"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

@@ -15,6 +15,7 @@ use sky_cua_input_helper::protocol::{
 use sky_cua_input_helper::uinput::DesktopBounds;
 use sky_cua_platform::config::INPUT_HELPER_SOCKET_ENV as SKY_CUA_INPUT_HELPER_SOCKET;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::model::CuaCancellation;
 use xkbcommon::xkb;
 
 use crate::portal::eis_keymap::{
@@ -262,7 +263,15 @@ impl LinuxVirtualInput {
         }
     }
 
-    pub fn drag(&self, waypoints: &[(f64, f64)], step_delay: Duration) -> Result<(), BackendError> {
+    pub fn drag(
+        &self,
+        waypoints: &[(f64, f64)],
+        step_delay: Duration,
+        cancellation: Option<&CuaCancellation>,
+    ) -> Result<(), BackendError> {
+        if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+            return Err(virtual_drag_cancelled(false));
+        }
         if self.probe.pointer_via_helper {
             // One batch replays the full interpolated path under a single grab.
             // The absolute device has no pointer acceleration so it tracks the
@@ -313,6 +322,10 @@ impl LinuxVirtualInput {
                 self.pointer_button(MouseButton::Left, true)?;
                 thread::sleep(Duration::from_millis(40));
                 for &(x, y) in rest {
+                    if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+                        let _ = self.pointer_button(MouseButton::Left, false);
+                        return Err(virtual_drag_cancelled(true));
+                    }
                     if let Err(error) = self.move_absolute(x, y) {
                         let _ = self.pointer_button(MouseButton::Left, false);
                         return Err(error);
@@ -352,6 +365,26 @@ impl LinuxVirtualInput {
                 self.scroll_vertical(steps)
             }
         }
+    }
+
+    pub fn scroll_horizontal_at(&self, x: f64, y: f64, steps: i32) -> Result<(), BackendError> {
+        if self.probe.pointer_via_helper {
+            return Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                "horizontal scrolling is unavailable on the privileged virtual-input helper",
+            ));
+        }
+        if steps == 0 {
+            return Ok(());
+        }
+        self.move_absolute(x, y)?;
+        let button = if steps > 0 { "6" } else { "7" };
+        self.run_ydotool([
+            "click".to_string(),
+            "--repeat".to_string(),
+            steps.abs().to_string(),
+            button.to_string(),
+        ])
     }
 
     pub fn type_text(&self, text: &str) -> Result<(), BackendError> {
@@ -481,6 +514,48 @@ impl LinuxVirtualInput {
         }
     }
 
+    pub fn key_state(&self, key: &str, pressed: bool) -> Result<(), BackendError> {
+        if let Some(socket_path) = self.probe.helper_socket_path.as_deref()
+            && socket_is_connectable(socket_path)
+        {
+            let mut events =
+                LinuxKeyResolver::from_environment()?.key_sequence_events(&[key.to_string()])?;
+            let event = if pressed {
+                events.first().cloned()
+            } else {
+                events.last().cloned()
+            }
+            .ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::InvalidRequest,
+                    format!("unsupported held modifier key {key:?}"),
+                )
+            })?;
+            events.clear();
+            events.push(event);
+            return run_helper_command(socket_path, HelperCommand::KeyEvents { events });
+        }
+        match self.probe.adapter {
+            VirtualInputAdapterKind::PrivilegedHelper => Err(self.missing_helper_error()),
+            VirtualInputAdapterKind::Ydotool => {
+                self.require_keyboard_adapter()?;
+                let events = key_sequence_events(&[key.to_string()])?;
+                let event = if pressed {
+                    events.first().cloned()
+                } else {
+                    events.last().cloned()
+                }
+                .ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidRequest,
+                        format!("unsupported held modifier key {key:?}"),
+                    )
+                })?;
+                self.run_ydotool(["key".to_string(), event])
+            }
+        }
+    }
+
     fn run_ydotool<I>(&self, args: I) -> Result<(), BackendError>
     where
         I: IntoIterator<Item = String>,
@@ -575,6 +650,20 @@ impl LinuxVirtualInput {
                 "Linux virtual input keyboard actions require the privileged input helper or a usable ydotool daemon.{socket_detail}"
             ),
         ))
+    }
+}
+
+fn virtual_drag_cancelled(after_press: bool) -> BackendError {
+    if after_press {
+        BackendError::new(
+            BackendErrorCode::CuaActionOutcomeUnknown,
+            "the CUA drag was cancelled after pointer-down; virtual pointer release completed",
+        )
+    } else {
+        BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "the CUA turn was cancelled",
+        )
     }
 }
 

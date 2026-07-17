@@ -656,6 +656,29 @@ impl DesktopBackend for LinuxDesktopBackend {
         LinuxActionExecutor::new(self).execute(request).await
     }
 
+    async fn execute_cua_action(
+        &self,
+        mut request: sky_cua_platform::model::CuaActionRequest,
+        cancellation: sky_cua_platform::model::CuaCancellation,
+    ) -> Result<sky_cua_platform::model::CuaBackendResponse, BackendError> {
+        let _ = self.portal.take_lifecycle_events().await;
+        let environment = self.probe_environment().await?;
+        require_supported_environment(&environment)?;
+        if environment.input_backend == InputBackendKind::PortalRemoteDesktop
+            && let Some(stream_rect) = self
+                .portal
+                .primary_stream()
+                .await?
+                .and_then(|stream| stream.logical_rect)
+        {
+            cua_desktop_to_portal_stream(&mut request, &stream_rect);
+        }
+        LinuxActionExecutor::new(self)
+            .execute_cua(request, cancellation, environment)
+            .await
+            .map(|()| sky_cua_platform::model::CuaBackendResponse::Action)
+    }
+
     async fn reset_portal_tokens(
         &self,
     ) -> Result<sky_cua_platform::model::PortalTokenResetOutcome, BackendError> {
@@ -694,6 +717,36 @@ impl DesktopBackend for LinuxDesktopBackend {
         // so an elapsed close is a harmless best-effort cleanup, not a
         // correctness issue.
         let _ = tokio::time::timeout(Duration::from_secs(5), self.portal.reset_session()).await;
+    }
+}
+
+fn cua_desktop_to_portal_stream(
+    request: &mut sky_cua_platform::model::CuaActionRequest,
+    stream_rect: &RectF,
+) {
+    use sky_cua_platform::model::CuaActionRequest;
+    let map = |x: &mut f64, y: &mut f64| {
+        *x -= stream_rect.x;
+        *y -= stream_rect.y;
+    };
+    match request {
+        CuaActionRequest::Click { x, y, .. } | CuaActionRequest::Move { x, y, .. } => map(x, y),
+        CuaActionRequest::Drag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            ..
+        } => {
+            map(from_x, from_y);
+            map(to_x, to_y);
+        }
+        CuaActionRequest::Scroll { x, y, .. } => {
+            if let (Some(x), Some(y)) = (x.as_mut(), y.as_mut()) {
+                map(x, y);
+            }
+        }
+        CuaActionRequest::PressKey { .. } | CuaActionRequest::TypeText { .. } => {}
     }
 }
 
@@ -746,4 +799,49 @@ fn display_probe_details(display_topology: &DoctorDisplayTopologyReport) -> Stri
         .collect::<Vec<_>>()
         .join("; ");
     format!("{}; {probes}", display_topology.detail)
+}
+
+#[cfg(test)]
+mod cua_coordinate_tests {
+    use super::cua_desktop_to_portal_stream;
+    use sky_cua_platform::model::{CoordinateSpace, CuaActionRequest, CuaRequestContext, RectF};
+
+    #[test]
+    fn portal_actions_subtract_nonzero_stream_origin() {
+        let mut request = CuaActionRequest::Drag {
+            context: CuaRequestContext {
+                session_id: "session".to_string(),
+                turn_id: "turn".to_string(),
+                deadline_ms: None,
+            },
+            from_x: -250.0,
+            from_y: 300.0,
+            to_x: 450.0,
+            to_y: 800.0,
+            key: None,
+            post_action_sleep_ms: Some(0),
+        };
+        cua_desktop_to_portal_stream(
+            &mut request,
+            &RectF {
+                x: -320.0,
+                y: 180.0,
+                width: 1706.67,
+                height: 1066.67,
+                space: CoordinateSpace::DesktopLogical,
+            },
+        );
+        let CuaActionRequest::Drag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            ..
+        } = request
+        else {
+            panic!("request should remain a drag");
+        };
+        assert_eq!((from_x, from_y), (70.0, 120.0));
+        assert_eq!((to_x, to_y), (770.0, 620.0));
+    }
 }

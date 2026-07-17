@@ -21,6 +21,7 @@ pub enum BackendErrorCode {
     ActionUnsupportedForEnvironment,
     ServiceUnavailable,
     InvalidRequest,
+    CuaActionOutcomeUnknown,
     NotImplemented,
     Internal,
     /// A desktop request (observe/doctor/list/screenshot) exceeded the
@@ -50,6 +51,7 @@ impl BackendErrorCode {
             Self::ActionUnsupportedForEnvironment => "ActionUnsupportedForEnvironment",
             Self::ServiceUnavailable => "ServiceUnavailable",
             Self::InvalidRequest => "InvalidRequest",
+            Self::CuaActionOutcomeUnknown => "CuaActionOutcomeUnknown",
             Self::NotImplemented => "NotImplemented",
             Self::Internal => "Internal",
             Self::DesktopRequestDeadlineExceeded => "DesktopRequestDeadlineExceeded",

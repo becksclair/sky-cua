@@ -421,17 +421,25 @@ where
 
 fn malformed_request_response(error: &serde_json::Error) -> ServiceResponse {
     ServiceResponse::Error {
-        code: "invalid_request".to_string(),
+        ok: false,
+        code: "SKY_CUA_INVALID_REQUEST".to_string(),
         message: format!("failed to parse sky-cua IPC request as JSON: {error}"),
+        session_id: None,
+        turn_id: None,
+        retry: None,
     }
 }
 
 fn oversized_request_response() -> ServiceResponse {
     ServiceResponse::Error {
-        code: "request_too_large".to_string(),
+        ok: false,
+        code: "SKY_CUA_FRAME_TOO_LARGE".to_string(),
         message: format!(
             "sky-cua IPC request line exceeded {MAX_IPC_LINE_BYTES} bytes without a newline"
         ),
+        session_id: None,
+        turn_id: None,
+        retry: None,
     }
 }
 
@@ -637,7 +645,7 @@ mod tests {
         .expect("parse error response")
         {
             sky_cua_platform::model::ServiceResponse::Error { code, .. } => {
-                assert_eq!(code, "invalid_request");
+                assert_eq!(code, "SKY_CUA_INVALID_REQUEST");
             }
             other => panic!("unexpected response: {other:?}"),
         }
@@ -703,7 +711,7 @@ mod tests {
         .expect("parse error response")
         {
             sky_cua_platform::model::ServiceResponse::Error { code, .. } => {
-                assert_eq!(code, "request_too_large");
+                assert_eq!(code, "SKY_CUA_FRAME_TOO_LARGE");
             }
             other => panic!("unexpected response: {other:?}"),
         }

@@ -10,8 +10,8 @@ use drag_path::drag_waypoints;
 use runtime::{LinuxActionRuntime, SemanticAtspiAction, SemanticSetValueResult};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    ActionName, ActionOutcome, ActionRequest, DiagnosticEntry, EnvironmentInfo, InputBackendKind,
-    SessionKind,
+    ActionName, ActionOutcome, ActionRequest, CuaActionRequest, CuaCancellation, CuaMouseButton,
+    CuaScrollDirection, DiagnosticEntry, EnvironmentInfo, InputBackendKind, SessionKind,
 };
 use sky_cua_platform::{SetValueFallbackMode, SetValueRouting};
 use targeting::{
@@ -116,6 +116,7 @@ where
             ActionName::ExpandElement => self.expand_element(request).await,
             ActionName::CollapseElement => self.collapse_element(request).await,
             ActionName::ToggleElement => self.toggle_element(request).await,
+            ActionName::Move => self.move_action(request).await,
             ActionName::Click => self.click(request).await,
             ActionName::PerformAction => self.perform_action(request).await,
             ActionName::PerformSecondaryAction => self.secondary_click(request).await,
@@ -124,6 +125,203 @@ where
             ActionName::TypeText => self.type_text(request).await,
             ActionName::PressKey => self.press_key(request).await,
             ActionName::SetValue => self.set_value(request).await,
+        }
+    }
+
+    pub(crate) async fn execute_cua(
+        &self,
+        action: CuaActionRequest,
+        cancellation: CuaCancellation,
+        environment: EnvironmentInfo,
+    ) -> Result<(), BackendError> {
+        if cancellation.is_cancelled() {
+            return Err(cua_cancelled_error());
+        }
+        let sleep_ms = action.post_action_sleep_ms().unwrap_or(100);
+        let held_key = cua_held_key(&action);
+        let request = action_request_from_cua(&action, environment.clone());
+        let held_keys = self
+            .hold_key(held_key, &environment, Some(&cancellation))
+            .await?;
+        if cancellation.is_cancelled() {
+            let _ = self.release_key(&held_keys, &environment).await;
+            return Err(cua_cancelled_error());
+        }
+        let result = match request.action {
+            ActionName::Click => {
+                self.click_with_cancellation(request, Some(&cancellation))
+                    .await
+            }
+            ActionName::Drag => {
+                self.drag_with_cancellation(request, Some(&cancellation))
+                    .await
+            }
+            _ => self.execute(request).await,
+        };
+        let result = match result {
+            Ok(_)
+                if cancellation.is_cancelled()
+                    && !matches!(action, CuaActionRequest::Move { .. }) =>
+            {
+                Err(cua_action_outcome_unknown_error())
+            }
+            result => result,
+        };
+        let release = self.release_key(&held_keys, &environment).await;
+        if let Err(release_error) = release {
+            let emergency_errors = self.emergency_release_modifiers(&environment).await;
+            let action_detail = result
+                .as_ref()
+                .err()
+                .map(|error| format!("; action_error={}: {}", error.code, error.message))
+                .unwrap_or_default();
+            let cleanup_detail = if emergency_errors.is_empty() {
+                "emergency modifier release completed".to_string()
+            } else {
+                format!(
+                    "emergency modifier release failures: {}",
+                    emergency_errors.join("; ")
+                )
+            };
+            return Err(BackendError::new(
+                BackendErrorCode::CuaActionOutcomeUnknown,
+                format!(
+                    "held modifier release failed after input dispatch: {}{action_detail}; {cleanup_detail}",
+                    release_error.message
+                ),
+            ));
+        }
+        result?;
+        if sleep_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(u64::from(sleep_ms))).await;
+        }
+        Ok(())
+    }
+
+    async fn hold_key(
+        &self,
+        key: Option<&str>,
+        environment: &EnvironmentInfo,
+        cancellation: Option<&CuaCancellation>,
+    ) -> Result<Vec<String>, BackendError> {
+        let Some(key) = key else {
+            return Ok(Vec::new());
+        };
+        let keys = parse_key_sequence(&serde_json::json!({ "key": key })).ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                "held key must contain at least one supported key",
+            )
+        })?;
+        let mut held = Vec::with_capacity(keys.len());
+        for key in &keys {
+            if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+                let _ = self.release_key(&held, environment).await;
+                return Err(cua_cancelled_error());
+            }
+            if let Err(error) = self.key_state(key, true, environment).await {
+                let _ = self.release_key(&held, environment).await;
+                return Err(error);
+            }
+            held.push(key.clone());
+        }
+        Ok(held)
+    }
+
+    async fn drag_with_cancellation(
+        &self,
+        request: ActionRequest,
+        cancellation: Option<&CuaCancellation>,
+    ) -> Result<ActionOutcome, BackendError> {
+        if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+            return Err(cua_cancelled_error());
+        }
+        let result = self.drag_inner(request, cancellation).await;
+        if result.is_ok() && cancellation.is_some_and(CuaCancellation::is_cancelled) {
+            return Err(cua_action_outcome_unknown_error());
+        }
+        result
+    }
+
+    async fn release_key(
+        &self,
+        keys: &[String],
+        environment: &EnvironmentInfo,
+    ) -> Result<(), BackendError> {
+        let mut first_error = None;
+        for key in keys.iter().rev() {
+            if let Err(error) = self.key_state(key, false, environment).await
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    async fn emergency_release_modifiers(&self, environment: &EnvironmentInfo) -> Vec<String> {
+        let mut errors = Vec::new();
+        for key in ["Ctrl", "Alt", "Shift", "Meta"] {
+            if let Err(error) = self.key_state(key, false, environment).await {
+                errors.push(format!("{key}: {}", error.message));
+            }
+        }
+        errors
+    }
+
+    async fn key_state(
+        &self,
+        key: &str,
+        pressed: bool,
+        environment: &EnvironmentInfo,
+    ) -> Result<(), BackendError> {
+        match environment.input_backend {
+            InputBackendKind::PortalRemoteDesktop => {
+                self.runtime.portal_key_state(key, pressed).await
+            }
+            InputBackendKind::XTest => self.runtime.xtest_key_state(key, pressed),
+            InputBackendKind::LinuxVirtualInput => self.runtime.virtual_key_state(key, pressed),
+            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                Err(windows_input_backend_error("held key"))
+            }
+            InputBackendKind::None => Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                "no physical input backend is available for held key",
+            )),
+        }
+    }
+
+    async fn move_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        let backend = effective_pointer_input_backend_for_target(&request);
+        let (x, y) = action_point_for_backend(&request, backend.clone())?;
+        match backend {
+            InputBackendKind::PortalRemoteDesktop => {
+                self.runtime.portal_pointer_move_absolute(x, y).await?;
+                Ok(success_with_diagnostics(
+                    "Moved the pointer through the RemoteDesktop portal.",
+                    self.runtime.portal_take_lifecycle_diagnostics().await,
+                ))
+            }
+            InputBackendKind::XTest => {
+                self.runtime.xtest_pointer_move_absolute(x, y)?;
+                Ok(success("Moved the pointer through the X11 input fallback."))
+            }
+            InputBackendKind::LinuxVirtualInput => {
+                let point = self.linux_virtual_dispatch_point(&request, (x, y));
+                self.runtime
+                    .virtual_pointer_move_absolute(point.x, point.y)?;
+                Ok(success_with_diagnostics(
+                    "Moved the pointer through the Linux virtual input fallback.",
+                    point.diagnostics(),
+                ))
+            }
+            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                Err(windows_input_backend_error("move"))
+            }
+            InputBackendKind::None => Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                "no physical input backend is available for move",
+            )),
         }
     }
 
@@ -213,6 +411,14 @@ where
     }
 
     async fn click(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        self.click_with_cancellation(request, None).await
+    }
+
+    async fn click_with_cancellation(
+        &self,
+        request: ActionRequest,
+        cancellation: Option<&CuaCancellation>,
+    ) -> Result<ActionOutcome, BackendError> {
         if let Some(element) = request.resolved_element.as_ref()
             && let Some(backend_ref) = element.backend_ref.as_deref()
             && self
@@ -223,15 +429,51 @@ where
         {
             return Ok(success("Invoked the element semantically through AT-SPI."));
         }
-        self.execute_pointer_click(
-            &request,
-            MouseButton::Left,
-            "Clicked the target through the RemoteDesktop portal.",
-            "Clicked the target through the X11 input fallback.",
-            "Clicked the target through the Linux virtual input fallback.",
-            "click fallback",
-        )
-        .await
+        let button = request
+            .arguments
+            .get("mouse_button")
+            .and_then(serde_json::Value::as_str)
+            .and_then(parse_mouse_button)
+            .unwrap_or(MouseButton::Left);
+        let click_count = request
+            .arguments
+            .get("click_count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| u32::try_from(count).ok())
+            .unwrap_or(1);
+        let mut outcome = None;
+        for index in 0..click_count {
+            if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+                return Err(if outcome.is_some() {
+                    cua_action_outcome_unknown_error()
+                } else {
+                    cua_cancelled_error()
+                });
+            }
+            let next = self
+                .execute_pointer_click(
+                    &request,
+                    button,
+                    "Clicked the target through the RemoteDesktop portal.",
+                    "Clicked the target through the X11 input fallback.",
+                    "Clicked the target through the Linux virtual input fallback.",
+                    "click fallback",
+                )
+                .await?;
+            outcome = Some(next);
+            if index + 1 < click_count {
+                tokio::time::sleep(Duration::from_millis(15)).await;
+                if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+                    return Err(cua_action_outcome_unknown_error());
+                }
+            }
+        }
+        outcome.ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                "click_count must be at least one",
+            )
+        })
     }
 
     async fn perform_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
@@ -360,13 +602,34 @@ where
             }
         }
 
+        if let Some(direction @ ("left" | "l" | "right" | "r")) = request
+            .arguments
+            .get("direction")
+            .and_then(serde_json::Value::as_str)
+        {
+            let pixels = request
+                .arguments
+                .get("pixels")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(100.0);
+            let delta_x = if matches!(direction, "right" | "r") {
+                pixels
+            } else {
+                -pixels
+            };
+            let steps = ((pixels / 120.0).ceil() as i32).max(1) * delta_x.signum() as i32;
+            return self
+                .scroll_horizontal(&request, input_backend, target_point, delta_x, steps)
+                .await;
+        }
+
         let delta_y = scroll_delta_y(&request.arguments)?;
         let steps = request
             .arguments
             .get("steps")
             .and_then(serde_json::Value::as_i64)
             .and_then(|value| i32::try_from(value).ok())
-            .or_else(|| virtual_scroll_steps_from_delta(delta_y))
+            .or_else(|| delta_y.map(|delta| ((delta.abs() / 120.0).ceil() as i32).max(1)))
             .unwrap_or(-1);
 
         match input_backend {
@@ -406,6 +669,7 @@ where
                 Ok(success("Scrolled through the X11 input fallback."))
             }
             InputBackendKind::LinuxVirtualInput => {
+                let virtual_steps = virtual_scroll_steps_from_delta(delta_y).unwrap_or(steps);
                 let mut diagnostics = Vec::new();
                 if let Some((x, y)) = target_point {
                     let dispatch_point = self.linux_virtual_dispatch_point(&request, (x, y));
@@ -415,7 +679,7 @@ where
                             x,
                             y,
                             delta_y,
-                            steps,
+                            virtual_steps,
                             request.resolved_focused_app.as_ref(),
                         )
                         .await
@@ -429,10 +693,10 @@ where
                     self.runtime.virtual_scroll_vertical_at(
                         dispatch_point.x,
                         dispatch_point.y,
-                        steps,
+                        virtual_steps,
                     )?;
                 } else {
-                    self.runtime.virtual_scroll_vertical(steps)?;
+                    self.runtime.virtual_scroll_vertical(virtual_steps)?;
                 }
                 Ok(success_with_diagnostics(
                     "Scrolled through the Linux virtual input fallback.",
@@ -449,6 +713,62 @@ where
         }
     }
 
+    async fn scroll_horizontal(
+        &self,
+        request: &ActionRequest,
+        input_backend: InputBackendKind,
+        target_point: Option<(f64, f64)>,
+        delta_x: f64,
+        steps: i32,
+    ) -> Result<ActionOutcome, BackendError> {
+        match input_backend {
+            InputBackendKind::PortalRemoteDesktop => {
+                if let Some((x, y)) = target_point {
+                    self.runtime
+                        .portal_scroll_horizontal_at(x, y, Some(delta_x), steps)
+                        .await?;
+                } else {
+                    self.runtime
+                        .portal_scroll_horizontal_smooth(delta_x)
+                        .await?;
+                }
+                Ok(success_with_diagnostics(
+                    "Scrolled horizontally through the RemoteDesktop portal.",
+                    self.runtime.portal_take_lifecycle_diagnostics().await,
+                ))
+            }
+            InputBackendKind::XTest => {
+                self.runtime
+                    .xtest_scroll_horizontal(Some(delta_x), Some(steps))?;
+                Ok(success(
+                    "Scrolled horizontally through the X11 input fallback.",
+                ))
+            }
+            InputBackendKind::LinuxVirtualInput => {
+                let (x, y) = target_point.ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidRequest,
+                        "horizontal scroll requires an origin on Linux virtual input",
+                    )
+                })?;
+                let point = self.linux_virtual_dispatch_point(request, (x, y));
+                self.runtime
+                    .virtual_scroll_horizontal_at(point.x, point.y, steps)?;
+                Ok(success_with_diagnostics(
+                    "Scrolled horizontally through the Linux virtual input fallback.",
+                    point.diagnostics(),
+                ))
+            }
+            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
+                Err(windows_input_backend_error("horizontal scroll"))
+            }
+            InputBackendKind::None => Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                "no physical input backend is available for horizontal scroll",
+            )),
+        }
+    }
+
     async fn linux_virtual_targeted_scroll_fallback(
         &self,
         request: &ActionRequest,
@@ -456,6 +776,7 @@ where
         steps: i32,
         portal_error: &BackendError,
     ) -> Result<ActionOutcome, BackendError> {
+        let steps = virtual_scroll_steps_from_delta(delta_y).unwrap_or(steps);
         let mut virtual_request = request.clone();
         if let Some(environment) = virtual_request.environment.as_mut() {
             environment.input_backend = InputBackendKind::LinuxVirtualInput;
@@ -491,6 +812,14 @@ where
     }
 
     async fn drag(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        self.drag_inner(request, None).await
+    }
+
+    async fn drag_inner(
+        &self,
+        request: ActionRequest,
+        cancellation: Option<&CuaCancellation>,
+    ) -> Result<ActionOutcome, BackendError> {
         let input_backend = effective_pointer_input_backend_for_target(&request);
         let from = drag_from_point(&request, input_backend.clone())?;
         let to = if let Some(element) = request.resolved_target_element.as_ref() {
@@ -521,7 +850,7 @@ where
         match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
                 self.runtime
-                    .portal_drag(&path.points, path.per_step_delay)
+                    .portal_drag(&path.points, path.per_step_delay, cancellation)
                     .await?;
                 Ok(success_with_diagnostics(
                     "Dragged through the RemoteDesktop portal.",
@@ -538,13 +867,21 @@ where
                 self.runtime.xtest_pointer_move_absolute(first.0, first.1)?;
                 self.runtime.xtest_pointer_button(MouseButton::Left, true)?;
                 tokio::time::sleep(Duration::from_millis(40)).await;
-                for &(x, y) in rest {
-                    self.runtime.xtest_pointer_move_absolute(x, y)?;
+                let result = async {
+                    for &(x, y) in rest {
+                        if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+                            return Err(cua_action_outcome_unknown_error());
+                        }
+                        self.runtime.xtest_pointer_move_absolute(x, y)?;
+                        tokio::time::sleep(path.per_step_delay).await;
+                    }
                     tokio::time::sleep(path.per_step_delay).await;
+                    Ok(())
                 }
-                tokio::time::sleep(Duration::from_millis(40)).await;
-                self.runtime
-                    .xtest_pointer_button(MouseButton::Left, false)?;
+                .await;
+                let release = self.runtime.xtest_pointer_button(MouseButton::Left, false);
+                result?;
+                release?;
                 Ok(success("Dragged through the X11 input fallback."))
             }
             InputBackendKind::LinuxVirtualInput => {
@@ -562,7 +899,7 @@ where
                     .collect();
                 let runtime = self.runtime;
                 tokio::task::block_in_place(|| {
-                    runtime.virtual_drag(&dispatch_points, path.per_step_delay)
+                    runtime.virtual_drag(&dispatch_points, path.per_step_delay, cancellation)
                 })?;
                 Ok(success_with_diagnostics(
                     "Dragged through the Linux virtual input fallback.",
@@ -1128,6 +1465,21 @@ fn scroll_delta_y(arguments: &serde_json::Value) -> Result<Option<f64>, BackendE
         return Ok(Some(delta_y));
     }
 
+    if let Some(pixels) = arguments.get("pixels").and_then(serde_json::Value::as_f64) {
+        let direction = arguments
+            .get("direction")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("down");
+        return match direction {
+            "up" | "u" => Ok(Some(pixels)),
+            "down" | "d" => Ok(Some(-pixels)),
+            _ => Err(BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                format!("unsupported vertical scroll direction: {direction}"),
+            )),
+        };
+    }
+
     let pages = arguments
         .get("pages")
         .and_then(serde_json::Value::as_f64)
@@ -1137,8 +1489,8 @@ fn scroll_delta_y(arguments: &serde_json::Value) -> Result<Option<f64>, BackendE
         .get("direction")
         .and_then(serde_json::Value::as_str)
     {
-        Some("up") => 120.0 * pages,
-        Some("down") | None => -120.0 * pages,
+        Some("up" | "u") => 120.0 * pages,
+        Some("down" | "d") | None => -120.0 * pages,
         Some(direction) => {
             return Err(BackendError::new(
                 BackendErrorCode::InvalidRequest,
@@ -1147,6 +1499,149 @@ fn scroll_delta_y(arguments: &serde_json::Value) -> Result<Option<f64>, BackendE
         }
     };
     Ok(Some(delta_y))
+}
+
+fn parse_mouse_button(value: &str) -> Option<MouseButton> {
+    match value {
+        "left" | "l" => Some(MouseButton::Left),
+        "middle" | "m" => Some(MouseButton::Middle),
+        "right" | "r" => Some(MouseButton::Right),
+        _ => None,
+    }
+}
+
+fn cua_mouse_button_name(button: CuaMouseButton) -> &'static str {
+    match button.canonical() {
+        CuaMouseButton::Left => "left",
+        CuaMouseButton::Middle => "middle",
+        CuaMouseButton::Right => "right",
+        CuaMouseButton::L | CuaMouseButton::R | CuaMouseButton::M => unreachable!(),
+    }
+}
+
+fn cua_held_key(action: &CuaActionRequest) -> Option<&str> {
+    match action {
+        CuaActionRequest::Click { key, .. }
+        | CuaActionRequest::Drag { key, .. }
+        | CuaActionRequest::Move { key, .. }
+        | CuaActionRequest::Scroll { key, .. } => key.as_deref(),
+        CuaActionRequest::PressKey { .. } | CuaActionRequest::TypeText { .. } => None,
+    }
+}
+
+fn action_request_from_cua(
+    action: &CuaActionRequest,
+    environment: EnvironmentInfo,
+) -> ActionRequest {
+    let (action_name, arguments) = match action {
+        CuaActionRequest::Click {
+            x,
+            y,
+            mouse_button,
+            click_count,
+            key,
+            ..
+        } => (
+            ActionName::Click,
+            serde_json::json!({
+                "x": x,
+                "y": y,
+                "mouse_button": mouse_button.map(cua_mouse_button_name),
+                "click_count": click_count,
+                "key": key,
+            }),
+        ),
+        CuaActionRequest::Drag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            key,
+            ..
+        } => (
+            ActionName::Drag,
+            serde_json::json!({
+                "from_x": from_x,
+                "from_y": from_y,
+                "to_x": to_x,
+                "to_y": to_y,
+                "key": key,
+            }),
+        ),
+        CuaActionRequest::Move { x, y, key, .. } => (
+            ActionName::Move,
+            serde_json::json!({ "x": x, "y": y, "key": key }),
+        ),
+        CuaActionRequest::PressKey { key, .. } => {
+            (ActionName::PressKey, serde_json::json!({ "key": key }))
+        }
+        CuaActionRequest::Scroll {
+            direction,
+            pixels,
+            x,
+            y,
+            key,
+            ..
+        } => (
+            ActionName::Scroll,
+            serde_json::json!({
+                "direction": cua_scroll_direction_name(*direction),
+                "pixels": pixels.unwrap_or(100),
+                "x": x,
+                "y": y,
+                "key": key,
+            }),
+        ),
+        CuaActionRequest::TypeText { text, .. } => {
+            (ActionName::TypeText, serde_json::json!({ "text": text }))
+        }
+    };
+    action_request_for_environment(action_name, arguments, &environment)
+}
+
+fn cua_scroll_direction_name(direction: CuaScrollDirection) -> &'static str {
+    match direction.canonical() {
+        CuaScrollDirection::Up => "up",
+        CuaScrollDirection::Down => "down",
+        CuaScrollDirection::Left => "left",
+        CuaScrollDirection::Right => "right",
+        CuaScrollDirection::U
+        | CuaScrollDirection::D
+        | CuaScrollDirection::L
+        | CuaScrollDirection::R => unreachable!(),
+    }
+}
+
+fn action_request_for_environment(
+    action: ActionName,
+    arguments: serde_json::Value,
+    environment: &EnvironmentInfo,
+) -> ActionRequest {
+    ActionRequest {
+        action,
+        snapshot_id: None,
+        element_index: None,
+        arguments,
+        resolved_element: None,
+        resolved_target_element: None,
+        resolved_capture: None,
+        resolved_focused_app: None,
+        environment: Some(environment.clone()),
+    }
+}
+
+fn cua_cancelled_error() -> BackendError {
+    BackendError::new(
+        BackendErrorCode::InvalidRequest,
+        "the CUA turn was cancelled",
+    )
+}
+
+fn cua_action_outcome_unknown_error() -> BackendError {
+    BackendError::new(
+        BackendErrorCode::CuaActionOutcomeUnknown,
+        "the CUA action may have completed before cancellation was observed",
+    )
 }
 
 const WL_COPY_STARTUP_GRACE_MS: u64 = 50;
@@ -1400,8 +1895,9 @@ async fn kde_klipper_proxy(connection: &zbus::Connection) -> Result<Proxy<'_>, S
 mod tests {
     use super::{
         KdeClipboardPasteError, LinuxActionExecutor, SET_VALUE_PHYSICAL_FALLBACK_MESSAGE,
-        action_name_matches, clipboard_mime_types_are_plain_text_only,
-        should_prefer_kde_clipboard_text_backend, wl_paste_reports_empty_clipboard,
+        action_name_matches, action_request_for_environment,
+        clipboard_mime_types_are_plain_text_only, should_prefer_kde_clipboard_text_backend,
+        wl_paste_reports_empty_clipboard,
     };
     use crate::actions::runtime::{
         LinuxActionRuntime, SemanticActionInvocation, SemanticAtspiAction, SemanticSetValueResult,
@@ -1416,6 +1912,7 @@ mod tests {
     use sky_cua_platform::model::test_support::wayland_pipewire_environment;
     use sky_cua_platform::model::{
         ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
+        CuaActionRequest, CuaCancellation, CuaMouseButton, CuaRequestContext, CuaScrollDirection,
         DiagnosticEntry, DisplayInfo, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind,
         PixelSize, RectF,
     };
@@ -1428,6 +1925,8 @@ mod tests {
         semantic_default: bool,
         xtest_available: bool,
         portal_scroll_at_denied: bool,
+        cancel_drag_after_input_down: bool,
+        fail_modifier_release: bool,
         virtual_prefers_absolute: bool,
         policy: Option<ResolvedSetValueFallbackPolicy>,
         events: Mutex<Vec<String>>,
@@ -1545,10 +2044,27 @@ mod tests {
             Ok(())
         }
 
+        async fn portal_pointer_move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
+            self.push_event(format!("portal_move:{x},{y}"));
+            Ok(())
+        }
+
+        async fn portal_key_state(&self, key: &str, pressed: bool) -> Result<(), BackendError> {
+            self.push_event(format!("portal_key_state:{key}:{pressed}"));
+            if !pressed && self.fail_modifier_release {
+                return Err(BackendError::new(
+                    BackendErrorCode::ActionUnsupportedForEnvironment,
+                    format!("synthetic {key} release failure"),
+                ));
+            }
+            Ok(())
+        }
+
         async fn portal_drag(
             &self,
             waypoints: &[(f64, f64)],
             step_delay: Duration,
+            cancellation: Option<&CuaCancellation>,
         ) -> Result<(), BackendError> {
             let first = waypoints.first().copied().unwrap_or((0.0, 0.0));
             let last = waypoints.last().copied().unwrap_or(first);
@@ -1561,6 +2077,17 @@ mod tests {
                 waypoints.len(),
                 step_delay.as_millis()
             ));
+            if self.cancel_drag_after_input_down
+                && let Some(cancellation) = cancellation
+            {
+                self.push_event("portal_drag_button:down");
+                cancellation.cancel();
+                self.push_event("portal_drag_button:up");
+                return Err(BackendError::new(
+                    BackendErrorCode::CuaActionOutcomeUnknown,
+                    "cancelled after input-down; release completed",
+                ));
+            }
             Ok(())
         }
 
@@ -1588,6 +2115,24 @@ mod tests {
 
         async fn portal_scroll_vertical_discrete(&self, steps: i32) -> Result<(), BackendError> {
             self.push_event(format!("portal_scroll_discrete:{steps}"));
+            Ok(())
+        }
+
+        async fn portal_scroll_horizontal_at(
+            &self,
+            x: f64,
+            y: f64,
+            delta_x: Option<f64>,
+            steps: i32,
+        ) -> Result<(), BackendError> {
+            self.push_event(format!(
+                "portal_scroll_horizontal:{x},{y}:{delta_x:?}:{steps}"
+            ));
+            Ok(())
+        }
+
+        async fn portal_scroll_horizontal_smooth(&self, delta_x: f64) -> Result<(), BackendError> {
+            self.push_event(format!("portal_scroll_horizontal_smooth:{delta_x}"));
             Ok(())
         }
 
@@ -1643,6 +2188,15 @@ mod tests {
             Ok(())
         }
 
+        fn xtest_scroll_horizontal(
+            &self,
+            delta_x: Option<f64>,
+            steps: Option<i32>,
+        ) -> Result<(), BackendError> {
+            self.push_event(format!("xtest_scroll_horizontal:{delta_x:?}:{steps:?}"));
+            Ok(())
+        }
+
         fn xtest_send_text_to_target(
             &self,
             _window_id: Option<&str>,
@@ -1663,6 +2217,11 @@ mod tests {
 
         fn virtual_pointer_prefers_absolute(&self) -> bool {
             self.virtual_prefers_absolute
+        }
+
+        fn virtual_pointer_move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
+            self.push_event(format!("virtual_move:{x},{y}"));
+            Ok(())
         }
 
         fn virtual_click_at(
@@ -1691,6 +2250,7 @@ mod tests {
             &self,
             waypoints: &[(f64, f64)],
             step_delay: Duration,
+            _cancellation: Option<&CuaCancellation>,
         ) -> Result<(), BackendError> {
             let first = waypoints.first().copied().unwrap_or((0.0, 0.0));
             let last = waypoints.last().copied().unwrap_or(first);
@@ -1714,6 +2274,16 @@ mod tests {
             steps: i32,
         ) -> Result<(), BackendError> {
             self.push_event(format!("virtual_scroll_at:{x},{y}:{steps}"));
+            Ok(())
+        }
+
+        fn virtual_scroll_horizontal_at(
+            &self,
+            x: f64,
+            y: f64,
+            steps: i32,
+        ) -> Result<(), BackendError> {
+            self.push_event(format!("virtual_scroll_horizontal:{x},{y}:{steps}"));
             Ok(())
         }
 
@@ -1764,6 +2334,363 @@ mod tests {
             }),
             backend_ref: Some("atspi://button".to_string()),
         }
+    }
+
+    fn cua_context() -> CuaRequestContext {
+        CuaRequestContext {
+            session_id: "session".to_string(),
+            turn_id: "turn".to_string(),
+            deadline_ms: Some(30_000),
+        }
+    }
+
+    #[tokio::test]
+    async fn cua_click_preserves_middle_button_and_click_count() {
+        let runtime = FakeRuntime::default();
+        LinuxActionExecutor::new(&runtime)
+            .execute_cua(
+                CuaActionRequest::Click {
+                    context: cua_context(),
+                    x: 100.0,
+                    y: 120.0,
+                    mouse_button: Some(CuaMouseButton::M),
+                    click_count: Some(2),
+                    key: None,
+                    post_action_sleep_ms: Some(0),
+                },
+                CuaCancellation::new(),
+                wayland_pipewire_environment(),
+            )
+            .await
+            .expect("CUA click should use the existing portal action seam");
+        assert_eq!(
+            runtime.take_events(),
+            vec![
+                "portal_click_at:100,120:Middle",
+                "portal_click_at:100,120:Middle"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cua_pointer_action_holds_and_releases_modifier_atomically() {
+        let runtime = FakeRuntime::default();
+        LinuxActionExecutor::new(&runtime)
+            .execute_cua(
+                CuaActionRequest::Click {
+                    context: cua_context(),
+                    x: 100.0,
+                    y: 120.0,
+                    mouse_button: None,
+                    click_count: None,
+                    key: Some("Ctrl".to_string()),
+                    post_action_sleep_ms: Some(0),
+                },
+                CuaCancellation::new(),
+                wayland_pipewire_environment(),
+            )
+            .await
+            .expect("held modifier click should complete");
+        assert_eq!(
+            runtime.take_events(),
+            vec![
+                "portal_key_state:Ctrl:true",
+                "portal_click_at:100,120:Left",
+                "portal_key_state:Ctrl:false",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cua_move_and_horizontal_scroll_use_explicit_coordinates() {
+        let runtime = FakeRuntime::default();
+        let environment = wayland_pipewire_environment();
+        LinuxActionExecutor::new(&runtime)
+            .execute_cua(
+                CuaActionRequest::Move {
+                    context: cua_context(),
+                    x: 14.0,
+                    y: 28.0,
+                    key: None,
+                    post_action_sleep_ms: Some(0),
+                },
+                CuaCancellation::new(),
+                environment.clone(),
+            )
+            .await
+            .expect("CUA move should dispatch absolute portal motion");
+        LinuxActionExecutor::new(&runtime)
+            .execute_cua(
+                CuaActionRequest::Scroll {
+                    context: cua_context(),
+                    direction: CuaScrollDirection::R,
+                    pixels: Some(240),
+                    x: Some(14.0),
+                    y: Some(28.0),
+                    key: None,
+                    post_action_sleep_ms: Some(0),
+                },
+                CuaCancellation::new(),
+                environment,
+            )
+            .await
+            .expect("CUA horizontal scroll should dispatch through the portal seam");
+        assert_eq!(
+            runtime.take_events(),
+            vec![
+                "portal_move:14,28",
+                "portal_scroll_horizontal:14,28:Some(240.0):2"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cua_move_uses_the_established_action_runtime_path() {
+        let runtime = FakeRuntime::default();
+        let environment = wayland_pipewire_environment();
+        LinuxActionExecutor::new(&runtime)
+            .execute(action_request_for_environment(
+                ActionName::Move,
+                json!({ "x": 14.0, "y": 28.0 }),
+                &environment,
+            ))
+            .await
+            .expect("normal move should dispatch");
+        LinuxActionExecutor::new(&runtime)
+            .execute_cua(
+                CuaActionRequest::Move {
+                    context: cua_context(),
+                    x: 14.0,
+                    y: 28.0,
+                    key: None,
+                    post_action_sleep_ms: Some(0),
+                },
+                CuaCancellation::new(),
+                environment,
+            )
+            .await
+            .expect("CUA move should dispatch");
+        assert_eq!(
+            runtime.take_events(),
+            vec!["portal_move:14,28", "portal_move:14,28"]
+        );
+    }
+
+    #[tokio::test]
+    async fn cua_scroll_pixel_matrix_is_exact_for_portal_and_quantized_elsewhere() {
+        let pixels = [1_u32, 100, 119, 120, 121];
+        for (backend, expected_prefixes) in [
+            (
+                InputBackendKind::PortalRemoteDesktop,
+                vec![
+                    "portal_scroll_smooth:1",
+                    "portal_scroll_smooth:100",
+                    "portal_scroll_smooth:119",
+                    "portal_scroll_smooth:120",
+                    "portal_scroll_smooth:121",
+                ],
+            ),
+            (
+                InputBackendKind::XTest,
+                vec![
+                    "xtest_scroll:Some(1.0):Some(1)",
+                    "xtest_scroll:Some(100.0):Some(1)",
+                    "xtest_scroll:Some(119.0):Some(1)",
+                    "xtest_scroll:Some(120.0):Some(1)",
+                    "xtest_scroll:Some(121.0):Some(2)",
+                ],
+            ),
+            (
+                InputBackendKind::LinuxVirtualInput,
+                vec![
+                    "virtual_scroll:-1",
+                    "virtual_scroll:-1",
+                    "virtual_scroll:-1",
+                    "virtual_scroll:-1",
+                    "virtual_scroll:-2",
+                ],
+            ),
+        ] {
+            let runtime = FakeRuntime {
+                xtest_available: true,
+                ..FakeRuntime::default()
+            };
+            let mut environment = wayland_pipewire_environment();
+            environment.input_backend = backend;
+            for pixels in pixels {
+                LinuxActionExecutor::new(&runtime)
+                    .execute_cua(
+                        CuaActionRequest::Scroll {
+                            context: cua_context(),
+                            direction: CuaScrollDirection::Up,
+                            pixels: Some(pixels),
+                            x: None,
+                            y: None,
+                            key: None,
+                            post_action_sleep_ms: Some(0),
+                        },
+                        CuaCancellation::new(),
+                        environment.clone(),
+                    )
+                    .await
+                    .expect("scroll matrix action should dispatch");
+            }
+            assert_eq!(runtime.take_events(), expected_prefixes);
+        }
+    }
+
+    #[tokio::test]
+    async fn portal_scroll_is_originless_and_exact_in_all_four_directions() {
+        let runtime = FakeRuntime::default();
+        let environment = wayland_pipewire_environment();
+        for direction in [
+            CuaScrollDirection::Up,
+            CuaScrollDirection::Down,
+            CuaScrollDirection::Left,
+            CuaScrollDirection::Right,
+        ] {
+            LinuxActionExecutor::new(&runtime)
+                .execute_cua(
+                    CuaActionRequest::Scroll {
+                        context: cua_context(),
+                        direction,
+                        pixels: Some(119),
+                        x: None,
+                        y: None,
+                        key: None,
+                        post_action_sleep_ms: Some(0),
+                    },
+                    CuaCancellation::new(),
+                    environment.clone(),
+                )
+                .await
+                .expect("originless portal scroll should dispatch");
+        }
+        assert_eq!(
+            runtime.take_events(),
+            vec![
+                "portal_scroll_smooth:119",
+                "portal_scroll_smooth:-119",
+                "portal_scroll_horizontal_smooth:-119",
+                "portal_scroll_horizontal_smooth:119",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cua_drag_cancellation_releases_pointer_and_held_modifier() {
+        let runtime = FakeRuntime {
+            cancel_drag_after_input_down: true,
+            ..FakeRuntime::default()
+        };
+        let error = LinuxActionExecutor::new(&runtime)
+            .execute_cua(
+                CuaActionRequest::Drag {
+                    context: cua_context(),
+                    from_x: 10.0,
+                    from_y: 20.0,
+                    to_x: 30.0,
+                    to_y: 40.0,
+                    key: Some("Ctrl".to_string()),
+                    post_action_sleep_ms: Some(0),
+                },
+                CuaCancellation::new(),
+                wayland_pipewire_environment(),
+            )
+            .await
+            .expect_err("mid-drag cancellation should have unknown outcome");
+        assert_eq!(
+            error.code,
+            BackendErrorCode::CuaActionOutcomeUnknown.as_str()
+        );
+        let events = runtime.take_events();
+        assert_eq!(
+            events.first().map(String::as_str),
+            Some("portal_key_state:Ctrl:true")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event == "portal_drag_button:down")
+        );
+        assert!(events.iter().any(|event| event == "portal_drag_button:up"));
+        assert_eq!(
+            events.last().map(String::as_str),
+            Some("portal_key_state:Ctrl:false")
+        );
+    }
+
+    #[tokio::test]
+    async fn cua_modifier_release_failure_is_unknown_and_attempts_emergency_cleanup() {
+        let runtime = FakeRuntime {
+            fail_modifier_release: true,
+            ..FakeRuntime::default()
+        };
+        let error = LinuxActionExecutor::new(&runtime)
+            .execute_cua(
+                CuaActionRequest::Click {
+                    context: cua_context(),
+                    x: 10.0,
+                    y: 20.0,
+                    mouse_button: None,
+                    click_count: None,
+                    key: Some("Ctrl".to_string()),
+                    post_action_sleep_ms: Some(0),
+                },
+                CuaCancellation::new(),
+                wayland_pipewire_environment(),
+            )
+            .await
+            .expect_err("failed post-click modifier release must be unknown");
+        assert_eq!(
+            error.code,
+            BackendErrorCode::CuaActionOutcomeUnknown.as_str()
+        );
+        assert!(
+            error
+                .message
+                .contains("emergency modifier release failures")
+        );
+        let events = runtime.take_events();
+        assert!(
+            events
+                .iter()
+                .filter(|event| *event == "portal_key_state:Ctrl:false")
+                .count()
+                >= 2
+        );
+        for key in ["Alt", "Shift", "Meta"] {
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event == &format!("portal_key_state:{key}:false"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cua_cancellation_is_checked_before_any_input_side_effect() {
+        let runtime = FakeRuntime::default();
+        let cancellation = CuaCancellation::new();
+        cancellation.cancel();
+        let error = LinuxActionExecutor::new(&runtime)
+            .execute_cua(
+                CuaActionRequest::Click {
+                    context: cua_context(),
+                    x: 1.0,
+                    y: 2.0,
+                    mouse_button: None,
+                    click_count: None,
+                    key: None,
+                    post_action_sleep_ms: Some(0),
+                },
+                cancellation,
+                wayland_pipewire_environment(),
+            )
+            .await
+            .expect_err("cancelled CUA action should not dispatch input");
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(runtime.take_events().is_empty());
     }
 
     #[tokio::test]

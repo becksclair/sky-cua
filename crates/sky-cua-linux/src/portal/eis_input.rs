@@ -10,6 +10,7 @@ use enumflags2::BitFlags;
 use reis::ei;
 use reis::event::{DeviceCapability, EiEvent, EiEventConverter};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::model::CuaCancellation;
 use tracing::warn;
 use xkbcommon::xkb;
 
@@ -70,6 +71,10 @@ impl fmt::Debug for EisWorkerHandle {
 
 #[derive(Debug, Clone)]
 pub(crate) enum EisAction {
+    Move {
+        x: f64,
+        y: f64,
+    },
     Click {
         x: f64,
         y: f64,
@@ -78,6 +83,7 @@ pub(crate) enum EisAction {
     Drag {
         waypoints: std::sync::Arc<[(f64, f64)]>,
         step_delay: Duration,
+        cancellation: Option<CuaCancellation>,
     },
     ScrollVertical {
         x: f64,
@@ -326,11 +332,13 @@ impl EisWorker {
 
     fn execute(&mut self, action: EisAction) -> Result<String, BackendError> {
         match action {
+            EisAction::Move { x, y } => self.move_pointer_absolute(x, y),
             EisAction::Click { x, y, button } => self.click_at(x, y, button),
             EisAction::Drag {
                 waypoints,
                 step_delay,
-            } => self.drag(waypoints.as_ref(), step_delay),
+                cancellation,
+            } => self.drag(waypoints.as_ref(), step_delay, cancellation.as_ref()),
             EisAction::ScrollVertical {
                 x,
                 y,
@@ -458,10 +466,24 @@ impl EisWorker {
         Ok(format_action_result(&details, &emulation.detail, None))
     }
 
+    fn move_pointer_absolute(&mut self, x: f64, y: f64) -> Result<String, BackendError> {
+        let device = self.pointer_device()?;
+        validate_eis_absolute_point(&device.device, x, y)?;
+        let details = device.description.clone();
+        let emulation = self.ensure_emulating(&device.device)?;
+        let serial = self.input.last_serial();
+        device.pointer_absolute.motion_absolute(x as f32, y as f32);
+        device.device.device().frame(serial, monotonic_micros());
+        self.input.flush()?;
+        thread::sleep(EIS_FINAL_FLUSH_DELAY);
+        Ok(format_action_result(&details, &emulation.detail, None))
+    }
+
     fn drag(
         &mut self,
         waypoints: &[(f64, f64)],
         step_delay: Duration,
+        cancellation: Option<&CuaCancellation>,
     ) -> Result<String, BackendError> {
         let device = self.pointer_device()?;
         let Some((first, rest)) = waypoints.split_first() else {
@@ -491,9 +513,22 @@ impl EisWorker {
         device.device.device().frame(serial, monotonic_micros());
         device.button.button(evdev, ei::button::ButtonState::Press);
         device.device.device().frame(serial, monotonic_micros());
-        self.input.flush()?;
+        if let Err(error) = self.input.flush() {
+            device
+                .button
+                .button(evdev, ei::button::ButtonState::Released);
+            device.device.device().frame(serial, monotonic_micros());
+            let _ = self.input.flush();
+            return Err(error);
+        }
         thread::sleep(EIS_FRAME_GAP_DELAY);
+        let mut cancelled = cancellation.is_some_and(CuaCancellation::is_cancelled);
+        let mut motion_error = None;
         for &(x, y) in rest {
+            if cancellation.is_some_and(CuaCancellation::is_cancelled) {
+                cancelled = true;
+                break;
+            }
             // Skip any interpolated point outside the advertised regions rather
             // than emit a motion the compositor would drop; the destination
             // (`last`) is validated above so it is always emitted.
@@ -502,15 +537,28 @@ impl EisWorker {
             }
             device.pointer_absolute.motion_absolute(x as f32, y as f32);
             device.device.device().frame(serial, monotonic_micros());
-            self.input.flush()?;
+            if let Err(error) = self.input.flush() {
+                motion_error = Some(error);
+                break;
+            }
             thread::sleep(step_delay);
         }
         device
             .button
             .button(evdev, ei::button::ButtonState::Released);
         device.device.device().frame(serial, monotonic_micros());
-        self.input.flush()?;
+        let release = self.input.flush();
         thread::sleep(EIS_FINAL_FLUSH_DELAY);
+        if let Some(error) = motion_error {
+            return Err(error);
+        }
+        release?;
+        if cancelled {
+            return Err(BackendError::new(
+                BackendErrorCode::CuaActionOutcomeUnknown,
+                "the CUA drag was cancelled after pointer-down; EIS pointer release completed",
+            ));
+        }
         Ok(format_action_result(&details, &emulation.detail, None))
     }
 

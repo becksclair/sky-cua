@@ -2,7 +2,8 @@ use super::capture_reuse::reuse_unchanged_capture;
 use super::desktop::action_requires_snapshot_context;
 use super::session_presence::request_should_hold_presence;
 use super::{
-    OverlayController, ServiceDaemon, SessionPresenceConfig, SessionStore, SnapshotManager,
+    CuaScreenshotCoordinatePlane, OverlayController, ServiceDaemon, SessionPresenceConfig,
+    SessionStore, SnapshotManager,
 };
 use image::{ImageBuffer, Rgba};
 use serde_json::json;
@@ -13,12 +14,13 @@ use sky_cua_platform::model::{
     AppSelector, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
     BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, BrowserTargetKind,
     CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace,
-    DisplayTarget, ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat,
-    PhoneAppListRequest, PhoneAppResponseKind, PhoneConnectRequest, PhoneListDevicesRequest,
-    PhoneRequest, PhoneResponse, PhoneStatusRequest, PhoneTapRequest, PixelSize,
-    PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind,
-    SessionPresenceAction, SessionPresenceIntent, SessionPresenceStatus, ToolAvailability,
-    ToolCapabilities, WindowInfo, WindowTarget,
+    CuaActionRequest, CuaBackendResponse, CuaCancellation, CuaRequestContext, DisplayTarget,
+    ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat, PhoneAppListRequest,
+    PhoneAppResponseKind, PhoneConnectRequest, PhoneListDevicesRequest, PhoneRequest,
+    PhoneResponse, PhoneStatusRequest, PhoneTapRequest, PixelSize, PortalCapabilities, RectF,
+    SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction,
+    SessionPresenceIntent, SessionPresenceStatus, ToolAvailability, ToolCapabilities, WindowInfo,
+    WindowTarget,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -56,6 +58,19 @@ struct ArrivalCheckingBackend {
     snapshot: AppStateSnapshot,
     arrival_marker: PathBuf,
     dispatched_after_arrival: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Clone)]
+struct CuaBlockingBackend {
+    snapshot: AppStateSnapshot,
+    started: Arc<Notify>,
+}
+
+#[derive(Debug, Clone)]
+struct CuaCleanupBackend {
+    snapshot: AppStateSnapshot,
+    input_down: Arc<Notify>,
+    released: Arc<AtomicBool>,
 }
 
 #[async_trait::async_trait]
@@ -114,6 +129,86 @@ impl DesktopBackend for FakeBackend {
             suspend_inhibited: false,
             detail: "fake session presence released".to_string(),
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl DesktopBackend for CuaBlockingBackend {
+    async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+        Ok(self.snapshot.environment.clone())
+    }
+
+    async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_app_state(
+        &self,
+        _selector: Option<AppSelector>,
+        _capture_screen: CaptureScreenMode,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        Ok(self.snapshot.clone())
+    }
+
+    async fn execute_action(&self, _request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        Ok(success_outcome())
+    }
+
+    async fn execute_cua_action(
+        &self,
+        _request: CuaActionRequest,
+        cancellation: CuaCancellation,
+    ) -> Result<CuaBackendResponse, BackendError> {
+        self.started.notify_one();
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(BackendError::new(
+                    BackendErrorCode::InvalidRequest,
+                    "the CUA turn was cancelled",
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl DesktopBackend for CuaCleanupBackend {
+    async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+        Ok(self.snapshot.environment.clone())
+    }
+
+    async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_app_state(
+        &self,
+        _selector: Option<AppSelector>,
+        _capture_screen: CaptureScreenMode,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        Ok(self.snapshot.clone())
+    }
+
+    async fn execute_action(&self, _request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        Ok(success_outcome())
+    }
+
+    async fn execute_cua_action(
+        &self,
+        _request: CuaActionRequest,
+        cancellation: CuaCancellation,
+    ) -> Result<CuaBackendResponse, BackendError> {
+        self.input_down.notify_one();
+        while !cancellation.is_cancelled() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        self.released.store(true, Ordering::SeqCst);
+        Err(BackendError::new(
+            BackendErrorCode::CuaActionOutcomeUnknown,
+            "input was cancelled after pointer-down; release completed",
+        ))
     }
 }
 
@@ -238,8 +333,10 @@ fn only_activity_requests_trigger_automatic_session_presence() {
     ));
     assert!(!request_should_hold_presence(&ServiceRequest::Browser {
         request: BrowserRequest::Status,
+        identity: None,
     }));
     assert!(request_should_hold_presence(&ServiceRequest::Browser {
+        identity: None,
         request: BrowserRequest::Click {
             target: Some(BrowserTargetKind::UserChrome),
             tab_id: "tab".to_string(),
@@ -273,6 +370,314 @@ fn only_activity_requests_trigger_automatic_session_presence() {
             use_device_coordinates: true,
         }),
     }));
+}
+
+#[tokio::test]
+async fn cua_cancel_turn_interrupts_an_action_over_the_control_path() {
+    let started = Arc::new(Notify::new());
+    let daemon = Arc::new(daemon_with_backend(Box::new(CuaBlockingBackend {
+        snapshot: snapshot(None, Vec::new()),
+        started: started.clone(),
+    })));
+    let context = CuaRequestContext {
+        session_id: "session-cancel".to_string(),
+        turn_id: "turn-cancel".to_string(),
+        deadline_ms: Some(30_000),
+    };
+    let action_daemon = daemon.clone();
+    let action = tokio::spawn(async move {
+        action_daemon
+            .handle(ServiceRequest::Click {
+                context,
+                x: 10.0,
+                y: 20.0,
+                mouse_button: None,
+                click_count: None,
+                key: None,
+                post_action_sleep_ms: Some(0),
+            })
+            .await
+    });
+    started.notified().await;
+
+    let cancel = daemon
+        .handle(ServiceRequest::CancelTurn {
+            session_id: "session-cancel".to_string(),
+            turn_id: "turn-cancel".to_string(),
+            reason: "caller stopped the turn".to_string(),
+        })
+        .await;
+    assert!(matches!(
+        cancel,
+        ServiceResponse::CancelTurn {
+            status: sky_cua_platform::model::CuaCancelStatus::CancelRequested,
+            ..
+        }
+    ));
+
+    let response = tokio::time::timeout(Duration::from_secs(1), action)
+        .await
+        .expect("cancelled CUA action should finish")
+        .expect("CUA action task should not panic");
+    assert!(matches!(
+        response,
+        ServiceResponse::Error { ref code, .. } if code == "SKY_CUA_TURN_CANCELLED"
+    ));
+
+    let repeat = daemon
+        .handle(ServiceRequest::CancelTurn {
+            session_id: "session-cancel".to_string(),
+            turn_id: "turn-cancel".to_string(),
+            reason: "repeat".to_string(),
+        })
+        .await;
+    assert!(matches!(
+        repeat,
+        ServiceResponse::CancelTurn {
+            status: sky_cua_platform::model::CuaCancelStatus::NotFound,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn cua_duplicate_active_turn_is_rejected_without_sharing_cancellation() {
+    let started = Arc::new(Notify::new());
+    let daemon = Arc::new(daemon_with_backend(Box::new(CuaBlockingBackend {
+        snapshot: snapshot(None, Vec::new()),
+        started: started.clone(),
+    })));
+    let context = CuaRequestContext {
+        session_id: "duplicate-session".to_string(),
+        turn_id: "duplicate-turn".to_string(),
+        deadline_ms: Some(30_000),
+    };
+    let action_daemon = daemon.clone();
+    let first_context = context.clone();
+    let first = tokio::spawn(async move {
+        action_daemon
+            .handle(ServiceRequest::Move {
+                context: first_context,
+                x: 1.0,
+                y: 2.0,
+                key: None,
+                post_action_sleep_ms: Some(0),
+            })
+            .await
+    });
+    started.notified().await;
+    let duplicate = daemon
+        .handle(ServiceRequest::Move {
+            context,
+            x: 3.0,
+            y: 4.0,
+            key: None,
+            post_action_sleep_ms: Some(0),
+        })
+        .await;
+    assert!(matches!(
+        duplicate,
+        ServiceResponse::Error { ref code, .. } if code == "SKY_CUA_DUPLICATE_ACTIVE_TURN"
+    ));
+    daemon
+        .handle(ServiceRequest::CancelTurn {
+            session_id: "duplicate-session".to_string(),
+            turn_id: "duplicate-turn".to_string(),
+            reason: "finish test".to_string(),
+        })
+        .await;
+    let _ = first.await.expect("first action should finish");
+}
+
+#[tokio::test]
+async fn cua_action_and_screenshot_deadlines_include_desktop_queue_wait() {
+    let backend = BlockingBackend {
+        snapshot: snapshot(None, Vec::new()),
+        outcome: success_outcome(),
+        execute_calls: Arc::new(AtomicUsize::new(0)),
+        first_execute_started: Arc::new(Notify::new()),
+        second_execute_started: Arc::new(Notify::new()),
+        release_first_execute: Arc::new(Notify::new()),
+    };
+    let started = backend.first_execute_started.clone();
+    let release = backend.release_first_execute.clone();
+    let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+    let blocking_daemon = daemon.clone();
+    let blocker = tokio::spawn(async move {
+        blocking_daemon
+            .handle(ServiceRequest::ExecuteAction {
+                request: Box::new(request(ActionName::Click, json!({"x": 1.0, "y": 2.0}))),
+            })
+            .await
+    });
+    started.notified().await;
+
+    let action = daemon
+        .handle(ServiceRequest::Move {
+            context: CuaRequestContext {
+                session_id: "queued-action".to_string(),
+                turn_id: "turn".to_string(),
+                deadline_ms: Some(5),
+            },
+            x: 1.0,
+            y: 2.0,
+            key: None,
+            post_action_sleep_ms: Some(0),
+        })
+        .await;
+    assert!(matches!(
+        action,
+        ServiceResponse::Error { ref code, .. } if code == "SKY_CUA_DEADLINE_EXCEEDED"
+    ));
+
+    let screenshot = daemon
+        .handle(ServiceRequest::GetScreenshot {
+            context: Some(CuaRequestContext {
+                session_id: "queued-shot".to_string(),
+                turn_id: "turn".to_string(),
+                deadline_ms: Some(5),
+            }),
+            mouse_size_px: Some(0),
+        })
+        .await;
+    assert!(matches!(
+        screenshot,
+        ServiceResponse::Error { ref code, .. } if code == "SKY_CUA_DEADLINE_EXCEEDED"
+    ));
+
+    release.notify_one();
+    let _ = blocker.await.expect("blocking action should finish");
+}
+
+#[tokio::test]
+async fn cua_cancel_waits_for_backend_release_after_input_down() {
+    let input_down = Arc::new(Notify::new());
+    let released = Arc::new(AtomicBool::new(false));
+    let daemon = Arc::new(daemon_with_backend(Box::new(CuaCleanupBackend {
+        snapshot: snapshot(None, Vec::new()),
+        input_down: input_down.clone(),
+        released: released.clone(),
+    })));
+    let action_daemon = daemon.clone();
+    let action = tokio::spawn(async move {
+        action_daemon
+            .handle(ServiceRequest::Drag {
+                context: CuaRequestContext {
+                    session_id: "cleanup-session".to_string(),
+                    turn_id: "cleanup-turn".to_string(),
+                    deadline_ms: Some(30_000),
+                },
+                from_x: 1.0,
+                from_y: 2.0,
+                to_x: 3.0,
+                to_y: 4.0,
+                key: Some("Ctrl".to_string()),
+                post_action_sleep_ms: Some(0),
+            })
+            .await
+    });
+    input_down.notified().await;
+    daemon
+        .handle(ServiceRequest::CancelTurn {
+            session_id: "cleanup-session".to_string(),
+            turn_id: "cleanup-turn".to_string(),
+            reason: "test cleanup".to_string(),
+        })
+        .await;
+    let response = action.await.expect("action task should finish");
+    assert!(released.load(Ordering::SeqCst));
+    assert!(matches!(
+        response,
+        ServiceResponse::Error { ref code, .. } if code == "SKY_CUA_ACTION_OUTCOME_UNKNOWN"
+    ));
+}
+
+#[tokio::test]
+async fn cua_deadline_waits_for_backend_release_after_input_down() {
+    let released = Arc::new(AtomicBool::new(false));
+    let daemon = daemon_with_backend(Box::new(CuaCleanupBackend {
+        snapshot: snapshot(None, Vec::new()),
+        input_down: Arc::new(Notify::new()),
+        released: released.clone(),
+    }));
+    let response = daemon
+        .handle(ServiceRequest::Click {
+            context: CuaRequestContext {
+                session_id: "deadline-session".to_string(),
+                turn_id: "deadline-turn".to_string(),
+                deadline_ms: Some(1),
+            },
+            x: 1.0,
+            y: 2.0,
+            mouse_button: None,
+            click_count: None,
+            key: None,
+            post_action_sleep_ms: Some(0),
+        })
+        .await;
+    assert!(released.load(Ordering::SeqCst));
+    assert!(matches!(
+        response,
+        ServiceResponse::Error { ref code, .. } if code == "SKY_CUA_ACTION_OUTCOME_UNKNOWN"
+    ));
+}
+
+#[test]
+fn cua_screenshot_pixels_map_to_fractional_wayland_desktop_geometry() {
+    let plane = CuaScreenshotCoordinatePlane {
+        desktop_rect: RectF {
+            x: -320.0,
+            y: 180.0,
+            width: 1706.67,
+            height: 1066.67,
+            space: CoordinateSpace::DesktopLogical,
+        },
+        width: 1440,
+        height: 900,
+    };
+
+    assert_eq!(plane.to_desktop(0.0, 0.0), (-320.0, 180.0));
+    let center = plane.to_desktop(720.0, 450.0);
+    assert!((center.0 - 533.335).abs() < 0.000_001);
+    assert!((center.1 - 713.335).abs() < 0.000_001);
+    let far_corner = plane.to_desktop(1440.0, 900.0);
+    assert!((far_corner.0 - 1386.67).abs() < 0.000_001);
+    assert!((far_corner.1 - 1246.67).abs() < 0.000_001);
+}
+
+#[tokio::test]
+async fn cua_invalid_empty_context_is_omitted_from_error_serialization() {
+    let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
+    let response = daemon
+        .handle(ServiceRequest::Click {
+            context: CuaRequestContext {
+                session_id: "  ".to_string(),
+                turn_id: String::new(),
+                deadline_ms: None,
+            },
+            x: 1.0,
+            y: 2.0,
+            mouse_button: None,
+            click_count: None,
+            key: None,
+            post_action_sleep_ms: None,
+        })
+        .await;
+    let json = serde_json::to_value(response).expect("error response should serialize");
+    assert_eq!(json["code"], "SKY_CUA_INVALID_CONTEXT");
+    assert!(json.get("session_id").is_none());
+    assert!(json.get("turn_id").is_none());
+
+    let cancel = daemon
+        .handle(ServiceRequest::CancelTurn {
+            session_id: String::new(),
+            turn_id: " ".to_string(),
+            reason: "cancel".to_string(),
+        })
+        .await;
+    let cancel_json = serde_json::to_value(cancel).expect("cancel error should serialize");
+    assert!(cancel_json.get("session_id").is_none());
+    assert!(cancel_json.get("turn_id").is_none());
 }
 
 #[tokio::test]
@@ -388,7 +793,7 @@ async fn screenshot_rejects_mixed_selectors_at_service_boundary() {
         })
         .await
     {
-        ServiceResponse::Error { code, message } => {
+        ServiceResponse::Error { code, message, .. } => {
             assert_eq!(code, "InvalidRequest");
             assert!(message.contains("exactly one capture selector"));
         }
@@ -707,7 +1112,7 @@ async fn stalled_arrival_wait_fails_open_within_absolute_deadline() {
 
     let dir = unique_temp_dir("action-visual-arrival-stalled");
     let host_path = dir.join("stalled-overlay-host.py");
-    let socket_path = dir.join("agent-cursor.sock");
+    let socket_path = dir.join("a.sock");
     let request_log = PathBuf::from(format!("{}.requests", socket_path.display()));
     crate::overlay::test_support::write_stalled_overlay_host(&host_path);
     let backend = FakeBackend {
@@ -808,6 +1213,7 @@ async fn service_runtime_browser_open_bypasses_blocked_desktop_request() {
     let browser_open = tokio::time::timeout(Duration::from_millis(100), async {
         daemon
             .handle(ServiceRequest::Browser {
+                identity: None,
                 request: BrowserRequest::Open {
                     target: Some(BrowserTargetKind::UserChrome),
                     url: Some("file:///etc/passwd".to_string()),
@@ -862,6 +1268,7 @@ async fn service_runtime_browser_status_bypasses_blocked_desktop_request() {
         daemon
             .handle(ServiceRequest::Browser {
                 request: BrowserRequest::Status,
+                identity: None,
             })
             .await
     })
@@ -903,6 +1310,7 @@ async fn browser_snapshot_rejects_oversized_text_limit_at_service_boundary() {
 
     match daemon
         .handle(ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Snapshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "tab-1".to_string(),
@@ -914,7 +1322,7 @@ async fn browser_snapshot_rejects_oversized_text_limit_at_service_boundary() {
         })
         .await
     {
-        ServiceResponse::Error { code, message } => {
+        ServiceResponse::Error { code, message, .. } => {
             assert_eq!(code, "InvalidRequest");
             assert!(message.contains(&BROWSER_SNAPSHOT_MAX_TEXT_LIMIT.to_string()));
         }
@@ -931,6 +1339,7 @@ async fn browser_snapshot_rejects_oversized_element_limit_at_service_boundary() 
 
     match daemon
         .handle(ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Snapshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "tab-1".to_string(),
@@ -942,7 +1351,7 @@ async fn browser_snapshot_rejects_oversized_element_limit_at_service_boundary() 
         })
         .await
     {
-        ServiceResponse::Error { code, message } => {
+        ServiceResponse::Error { code, message, .. } => {
             assert_eq!(code, "InvalidRequest");
             assert!(message.contains(&BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT.to_string()));
         }
@@ -1377,6 +1786,8 @@ fn daemon_with_phone_and_overlay(
         desktop_lane: tokio::sync::Mutex::new(()),
         browser_eval_enabled: false,
         socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
+        cua_cancellations: std::sync::Mutex::new(std::collections::HashMap::new()),
+        cua_screenshot_planes: std::sync::Mutex::new(std::collections::HashMap::new()),
     }
 }
 

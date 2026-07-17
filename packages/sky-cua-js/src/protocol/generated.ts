@@ -1,0 +1,1172 @@
+/**
+ * Generated from crates/sky-cua-platform/tests/fixtures/service-protocol-cua-js.json.
+ *
+ * Keep this file data-only: the package facade owns transport and validation,
+ * while this module is the versioned wire contract consumed by both lanes S
+ * and J.
+ */
+
+export const PROTOCOL_VERSION = 1 as const;
+export const SUPPORTED_PROTOCOL_VERSION_MIN = 1 as const;
+export const SUPPORTED_PROTOCOL_VERSION_MAX = 1 as const;
+export const SERVICE_VERSION = "0.1.0" as const;
+export const DEFAULT_DEADLINE_MS = 30_000 as const;
+export const MAX_FRAME_BYTES = 67_108_864 as const;
+export const MAX_JSON_BYTES = 67_108_863 as const;
+export const DEFAULT_POST_ACTION_SLEEP_MS = 100 as const;
+export const DEFAULT_MOUSE_SIZE_PX = 12 as const;
+
+export type RequestContext = {
+  session_id: string;
+  turn_id: string;
+  deadline_ms?: number;
+};
+
+export type MouseButton = "left" | "right" | "middle" | "l" | "r" | "m";
+export type ScrollDirection =
+  | "up"
+  | "down"
+  | "left"
+  | "right"
+  | "u"
+  | "d"
+  | "l"
+  | "r";
+
+export type ActionType =
+  | "click"
+  | "drag"
+  | "move"
+  | "press_key"
+  | "scroll"
+  | "type_text";
+
+export type HealthRequest = {
+  type: "health";
+};
+
+export type ClickRequest = {
+  type: "click";
+  context: RequestContext;
+  x: number;
+  y: number;
+  mouse_button?: MouseButton;
+  click_count?: number;
+  key?: string;
+  post_action_sleep_ms?: number;
+};
+
+export type DragRequest = {
+  type: "drag";
+  context: RequestContext;
+  from_x: number;
+  from_y: number;
+  to_x: number;
+  to_y: number;
+  key?: string;
+  post_action_sleep_ms?: number;
+};
+
+export type GetScreenshotRequest = {
+  type: "get_screenshot";
+  context?: RequestContext;
+  mouse_size_px?: number;
+};
+
+export type MoveRequest = {
+  type: "move";
+  context: RequestContext;
+  x: number;
+  y: number;
+  key?: string;
+  post_action_sleep_ms?: number;
+};
+
+export type PressKeyRequest = {
+  type: "press_key";
+  context: RequestContext;
+  key: string;
+  post_action_sleep_ms?: number;
+};
+
+export type ScrollRequest = {
+  type: "scroll";
+  context: RequestContext;
+  direction: ScrollDirection;
+  pixels?: number;
+  x?: number;
+  y?: number;
+  key?: string;
+  post_action_sleep_ms?: number;
+};
+
+export type TypeTextRequest = {
+  type: "type_text";
+  context: RequestContext;
+  text: string;
+  post_action_sleep_ms?: number;
+};
+
+export type CancelTurnRequest = {
+  type: "cancel_turn";
+  session_id: string;
+  turn_id: string;
+  reason: string;
+};
+
+export type ServiceRequest =
+  | HealthRequest
+  | ClickRequest
+  | DragRequest
+  | GetScreenshotRequest
+  | MoveRequest
+  | PressKeyRequest
+  | ScrollRequest
+  | TypeTextRequest
+  | CancelTurnRequest;
+
+export type CuaJsCapability =
+  | "action.held_key"
+  | "action.post_action_sleep_ms"
+  | "linux.click"
+  | "linux.click.button"
+  | "linux.click.count"
+  | "linux.drag"
+  | "linux.get_screenshot"
+  | "linux.move"
+  | "linux.press_key"
+  | "linux.scroll"
+  | "linux.scroll.direction"
+  | "linux.scroll.origin"
+  | "linux.scroll.pixels"
+  | "linux.type_text"
+  | "screen.cursor_size"
+  | "screenshot.webp"
+  | "transport.max_frame_64_mib"
+  | "transport.ndjson"
+  | "turn.cancel";
+
+export type HealthResponse = {
+  type: "health";
+  ok: boolean;
+  protocol_version: 1;
+  service_version: "0.1.0";
+  capabilities: CuaJsCapability[];
+  service_socket: string;
+  desktop_env?: Record<string, string>;
+  browser_env?: Record<string, string>;
+};
+
+export type ActionResponse = {
+  type: ActionType;
+  ok: true;
+  session_id: string;
+  turn_id: string;
+};
+
+export type WireScreenshot = {
+  filepath: string;
+  bytes_base64: string;
+  /** Legacy duplicated field accepted during the protocol transition. */
+  data_url?: `data:image/webp;base64,${string}`;
+  mime_type: "image/webp";
+  width: number;
+  height: number;
+};
+
+export type GetScreenshotResponse = {
+  type: "get_screenshot";
+  ok: true;
+  screenshots: WireScreenshot[];
+};
+
+export type CancelTurnStatus =
+  | "cancel_requested"
+  | "already_cancelled"
+  | "not_found";
+
+export type CancelTurnResponse = {
+  type: "cancel_turn";
+  ok: true;
+  session_id: string;
+  turn_id: string;
+  status: CancelTurnStatus;
+};
+
+export type ServiceErrorCode =
+  | "SKY_CUA_SERVICE_RESTART_REQUIRED"
+  | "SKY_CUA_SERVICE_DISCONNECTED"
+  | "SKY_CUA_PROTOCOL_UNSUPPORTED"
+  | "SKY_CUA_CAPABILITY_MISSING"
+  | "SKY_CUA_INVALID_REQUEST"
+  | "SKY_CUA_INVALID_CONTEXT"
+  | "SKY_CUA_INVALID_ARGUMENT"
+  | "SKY_CUA_FRAME_TOO_LARGE"
+  | "SKY_CUA_ACTION_OUTCOME_UNKNOWN"
+  | "SKY_CUA_DEADLINE_EXCEEDED"
+  | "SKY_CUA_TURN_CANCELLED"
+  | "SKY_CUA_CANCEL_TURN_INVALID_CONTEXT"
+  | "SKY_CUA_CANCEL_TURN_INVALID_REASON"
+  | "SKY_CUA_TARGET_UNAVAILABLE"
+  | "SKY_CUA_INTERNAL";
+
+export type ServiceErrorRetry =
+  | "never"
+  | "safe_after_reconnect"
+  | "caller_must_restart_service";
+
+export type ServiceError = {
+  type: "error";
+  ok: false;
+  code: ServiceErrorCode;
+  message: string;
+  session_id?: string;
+  turn_id?: string;
+  retry?: ServiceErrorRetry;
+};
+
+export type ServiceResponse =
+  | HealthResponse
+  | ActionResponse
+  | GetScreenshotResponse
+  | CancelTurnResponse
+  | ServiceError;
+
+export type ScreenshotResult = {
+  filepath: string;
+  bytes: Uint8Array;
+  data_url: `data:image/webp;base64,${string}`;
+};
+
+export type IdempotencyClass =
+  | "idempotent_read"
+  | "idempotent_set"
+  | "idempotent_control"
+  | "non_idempotent_mutation"
+  | "not_applicable";
+
+export const REQUEST_IDEMPOTENCY: Readonly<Record<
+  "health" | ActionType | "get_screenshot" | "cancel_turn" | "error",
+  IdempotencyClass
+>> = {
+  health: "idempotent_read",
+  click: "non_idempotent_mutation",
+  drag: "non_idempotent_mutation",
+  get_screenshot: "idempotent_read",
+  move: "idempotent_set",
+  press_key: "non_idempotent_mutation",
+  scroll: "non_idempotent_mutation",
+  type_text: "non_idempotent_mutation",
+  cancel_turn: "idempotent_control",
+  error: "not_applicable"
+};
+
+export const HEALTH_CAPABILITIES: readonly CuaJsCapability[] = [
+  "action.held_key",
+  "action.post_action_sleep_ms",
+  "linux.click",
+  "linux.click.button",
+  "linux.click.count",
+  "linux.drag",
+  "linux.get_screenshot",
+  "linux.move",
+  "linux.press_key",
+  "linux.scroll",
+  "linux.scroll.direction",
+  "linux.scroll.origin",
+  "linux.scroll.pixels",
+  "linux.type_text",
+  "screen.cursor_size",
+  "screenshot.webp",
+  "transport.max_frame_64_mib",
+  "transport.ndjson",
+  "turn.cancel"
+];
+
+export const SERVICE_PROTOCOL = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "sky-cua-service-cua-js",
+  "schema_version": 1,
+  "wire": {
+    "encoding": "ndjson",
+    "newline": "\\n",
+    "max_frame_bytes": 67108864,
+    "max_frame_mib": 64,
+    "frame_includes_newline": true,
+    "max_json_bytes": 67108863,
+    "request_ids": false,
+    "max_in_flight_requests_per_connection": 1,
+    "connections": {
+      "action": "persistent",
+      "control": "on_demand",
+      "cancel_turn": "control"
+    },
+    "oversized_frame_error_code": "SKY_CUA_FRAME_TOO_LARGE",
+    "malformed_request_error_code": "SKY_CUA_INVALID_REQUEST"
+  },
+  "protocol": {
+    "version": 1,
+    "supported_version_min": 1,
+    "supported_version_max": 1,
+    "semantic_breaks_increment_version": true,
+    "additive_fields_are_ignored_by_older_readers": true
+  },
+  "health": {
+    "request": {
+      "type": "health"
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "type",
+        "ok",
+        "protocol_version",
+        "service_version",
+        "capabilities",
+        "service_socket"
+      ],
+      "properties": {
+        "type": {
+          "const": "health"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "protocol_version": {
+          "const": 1
+        },
+        "service_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "action.held_key",
+              "action.post_action_sleep_ms",
+              "linux.click",
+              "linux.click.button",
+              "linux.click.count",
+              "linux.drag",
+              "linux.get_screenshot",
+              "linux.move",
+              "linux.press_key",
+              "linux.scroll",
+              "linux.scroll.direction",
+              "linux.scroll.origin",
+              "linux.scroll.pixels",
+              "linux.type_text",
+              "screen.cursor_size",
+              "screenshot.webp",
+              "transport.max_frame_64_mib",
+              "transport.ndjson",
+              "turn.cancel"
+            ]
+          },
+          "uniqueItems": true,
+          "sorted": "lexicographic"
+        },
+        "service_socket": {
+          "type": "string",
+          "minLength": 1
+        },
+        "desktop_env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "compatibility": "legacy_optional"
+        },
+        "browser_env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "compatibility": "legacy_optional"
+        }
+      },
+      "additionalProperties": false
+    },
+    "example": {
+      "type": "health",
+      "ok": true,
+      "protocol_version": 1,
+      "service_version": "0.1.0",
+      "capabilities": [
+        "action.held_key",
+        "action.post_action_sleep_ms",
+        "linux.click",
+        "linux.click.button",
+        "linux.click.count",
+        "linux.drag",
+        "linux.get_screenshot",
+        "linux.move",
+        "linux.press_key",
+        "linux.scroll",
+        "linux.scroll.direction",
+        "linux.scroll.origin",
+        "linux.scroll.pixels",
+        "linux.type_text",
+        "screen.cursor_size",
+        "screenshot.webp",
+        "transport.max_frame_64_mib",
+        "transport.ndjson",
+        "turn.cancel"
+      ],
+      "service_socket": "/run/user/1000/sky-cua/service.sock"
+    }
+  },
+  "context": {
+    "request_context": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "turn_id"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deadline_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000,
+          "default": 30000
+        }
+      },
+      "additionalProperties": false,
+      "deadline": {
+        "default_ms": 30000,
+        "maximum_ms": 30000,
+        "representation": "integer_milliseconds",
+        "omitted_means_default": true
+      }
+    },
+    "rules": {
+      "required_for": [
+        "click",
+        "drag",
+        "move",
+        "press_key",
+        "scroll",
+        "type_text"
+      ],
+      "optional_for": [
+        "get_screenshot"
+      ],
+      "forbidden_for": [
+        "health"
+      ],
+      "cancel_turn_fields_are_context_equivalent": true,
+      "session_id_and_turn_id_must_be_non_empty": true,
+      "turn_key": [
+        "session_id",
+        "turn_id"
+      ]
+    }
+  },
+  "definitions": {
+    "post_action_sleep_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 30000,
+      "default": 100,
+      "zero_disables": true
+    },
+    "mouse_size_px": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 128,
+      "default": 12,
+      "zero_disables": true
+    },
+    "coordinate": {
+      "type": "number",
+      "finite": true
+    },
+    "mouse_button": {
+      "type": "string",
+      "enum": [
+        "left",
+        "right",
+        "middle",
+        "l",
+        "r",
+        "m"
+      ],
+      "canonical": {
+        "l": "left",
+        "r": "right",
+        "m": "middle"
+      },
+      "default": "left"
+    },
+    "click_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 1
+    },
+    "held_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A single X keysym-style modifier or modifier chord held for the action."
+    },
+    "scroll_direction": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down",
+        "left",
+        "right",
+        "u",
+        "d",
+        "l",
+        "r"
+      ],
+      "canonical": {
+        "u": "up",
+        "d": "down",
+        "l": "left",
+        "r": "right"
+      }
+    },
+    "scroll_pixels": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000,
+      "default": 100
+    },
+    "screenshot": {
+      "type": "object",
+      "required": [
+        "filepath",
+        "bytes_base64",
+        "mime_type",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "filepath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bytes_base64": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 1
+        },
+        "mime_type": {
+          "const": "image/webp"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "bytes_decode_to": "Uint8Array",
+      "extension": ".webp"
+    }
+  },
+  "requests": {
+    "health": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "health"
+        }
+      },
+      "additionalProperties": false
+    },
+    "click": {
+      "type": "object",
+      "required": [
+        "type",
+        "context",
+        "x",
+        "y"
+      ],
+      "properties": {
+        "type": {
+          "const": "click"
+        },
+        "context": {
+          "$ref": "#/context/request_context"
+        },
+        "x": {
+          "$ref": "#/definitions/coordinate"
+        },
+        "y": {
+          "$ref": "#/definitions/coordinate"
+        },
+        "mouse_button": {
+          "$ref": "#/definitions/mouse_button"
+        },
+        "click_count": {
+          "$ref": "#/definitions/click_count"
+        },
+        "key": {
+          "$ref": "#/definitions/held_key"
+        },
+        "post_action_sleep_ms": {
+          "$ref": "#/definitions/post_action_sleep_ms"
+        }
+      },
+      "additionalProperties": false
+    },
+    "drag": {
+      "type": "object",
+      "required": [
+        "type",
+        "context",
+        "from_x",
+        "from_y",
+        "to_x",
+        "to_y"
+      ],
+      "properties": {
+        "type": {
+          "const": "drag"
+        },
+        "context": {
+          "$ref": "#/context/request_context"
+        },
+        "from_x": {
+          "$ref": "#/definitions/coordinate"
+        },
+        "from_y": {
+          "$ref": "#/definitions/coordinate"
+        },
+        "to_x": {
+          "$ref": "#/definitions/coordinate"
+        },
+        "to_y": {
+          "$ref": "#/definitions/coordinate"
+        },
+        "key": {
+          "$ref": "#/definitions/held_key"
+        },
+        "post_action_sleep_ms": {
+          "$ref": "#/definitions/post_action_sleep_ms"
+        }
+      },
+      "additionalProperties": false
+    },
+    "get_screenshot": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "get_screenshot"
+        },
+        "context": {
+          "$ref": "#/context/request_context",
+          "required": false
+        },
+        "mouse_size_px": {
+          "$ref": "#/definitions/mouse_size_px"
+        }
+      },
+      "additionalProperties": false
+    },
+    "move": {
+      "type": "object",
+      "required": [
+        "type",
+        "context",
+        "x",
+        "y"
+      ],
+      "properties": {
+        "type": {
+          "const": "move"
+        },
+        "context": {
+          "$ref": "#/context/request_context"
+        },
+        "x": {
+          "$ref": "#/definitions/coordinate"
+        },
+        "y": {
+          "$ref": "#/definitions/coordinate"
+        },
+        "key": {
+          "$ref": "#/definitions/held_key"
+        },
+        "post_action_sleep_ms": {
+          "$ref": "#/definitions/post_action_sleep_ms"
+        }
+      },
+      "additionalProperties": false
+    },
+    "press_key": {
+      "type": "object",
+      "required": [
+        "type",
+        "context",
+        "key"
+      ],
+      "properties": {
+        "type": {
+          "const": "press_key"
+        },
+        "context": {
+          "$ref": "#/context/request_context"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "post_action_sleep_ms": {
+          "$ref": "#/definitions/post_action_sleep_ms"
+        }
+      },
+      "additionalProperties": false
+    },
+    "scroll": {
+      "type": "object",
+      "required": [
+        "type",
+        "context",
+        "direction"
+      ],
+      "properties": {
+        "type": {
+          "const": "scroll"
+        },
+        "context": {
+          "$ref": "#/context/request_context"
+        },
+        "direction": {
+          "$ref": "#/definitions/scroll_direction"
+        },
+        "pixels": {
+          "$ref": "#/definitions/scroll_pixels"
+        },
+        "x": {
+          "$ref": "#/definitions/coordinate",
+          "optional": true
+        },
+        "y": {
+          "$ref": "#/definitions/coordinate",
+          "optional": true
+        },
+        "key": {
+          "$ref": "#/definitions/held_key"
+        },
+        "post_action_sleep_ms": {
+          "$ref": "#/definitions/post_action_sleep_ms"
+        }
+      },
+      "origin": {
+        "both_x_and_y_required": true,
+        "partial_origin_is_invalid": true
+      },
+      "additionalProperties": false
+    },
+    "type_text": {
+      "type": "object",
+      "required": [
+        "type",
+        "context",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "type_text"
+        },
+        "context": {
+          "$ref": "#/context/request_context"
+        },
+        "text": {
+          "type": "string"
+        },
+        "post_action_sleep_ms": {
+          "$ref": "#/definitions/post_action_sleep_ms"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cancel_turn": {
+      "type": "object",
+      "required": [
+        "type",
+        "session_id",
+        "turn_id",
+        "reason"
+      ],
+      "properties": {
+        "type": {
+          "const": "cancel_turn"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "responses": {
+    "action": {
+      "type": "object",
+      "required": [
+        "type",
+        "ok",
+        "session_id",
+        "turn_id"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "click",
+            "drag",
+            "move",
+            "press_key",
+            "scroll",
+            "type_text"
+          ]
+        },
+        "ok": {
+          "const": true
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "get_screenshot": {
+      "type": "object",
+      "required": [
+        "type",
+        "ok",
+        "screenshots"
+      ],
+      "properties": {
+        "type": {
+          "const": "get_screenshot"
+        },
+        "ok": {
+          "const": true
+        },
+        "screenshots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/screenshot"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "implicit_emit_image": false
+    },
+    "cancel_turn": {
+      "type": "object",
+      "required": [
+        "type",
+        "ok",
+        "session_id",
+        "turn_id",
+        "status"
+      ],
+      "properties": {
+        "type": {
+          "const": "cancel_turn"
+        },
+        "ok": {
+          "const": true
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "cancel_requested",
+            "already_cancelled",
+            "not_found"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "repeatable": true,
+      "convergent": true
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "type",
+        "ok",
+        "code",
+        "message"
+      ],
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "ok": {
+          "const": false
+        },
+        "code": {
+          "enum": [
+            "SKY_CUA_SERVICE_RESTART_REQUIRED",
+            "SKY_CUA_SERVICE_DISCONNECTED",
+            "SKY_CUA_PROTOCOL_UNSUPPORTED",
+            "SKY_CUA_CAPABILITY_MISSING",
+            "SKY_CUA_INVALID_REQUEST",
+            "SKY_CUA_INVALID_CONTEXT",
+            "SKY_CUA_INVALID_ARGUMENT",
+            "SKY_CUA_FRAME_TOO_LARGE",
+            "SKY_CUA_ACTION_OUTCOME_UNKNOWN",
+            "SKY_CUA_DEADLINE_EXCEEDED",
+            "SKY_CUA_TURN_CANCELLED",
+            "SKY_CUA_CANCEL_TURN_INVALID_CONTEXT",
+            "SKY_CUA_CANCEL_TURN_INVALID_REASON",
+            "SKY_CUA_TARGET_UNAVAILABLE",
+            "SKY_CUA_INTERNAL"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "optional": true
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1,
+          "optional": true
+        },
+        "retry": {
+          "enum": [
+            "never",
+            "safe_after_reconnect",
+            "caller_must_restart_service"
+          ],
+          "optional": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "cancel_turn": {
+    "request_type": "cancel_turn",
+    "response_statuses": [
+      "cancel_requested",
+      "already_cancelled",
+      "not_found"
+    ],
+    "error_codes": [
+      "SKY_CUA_CANCEL_TURN_INVALID_CONTEXT",
+      "SKY_CUA_CANCEL_TURN_INVALID_REASON",
+      "SKY_CUA_SERVICE_RESTART_REQUIRED",
+      "SKY_CUA_SERVICE_DISCONNECTED"
+    ],
+    "control_connection_required": true,
+    "does_not_share_action_connection": true,
+    "wins_over_deadline": true,
+    "repeatable": true,
+    "convergent": true
+  },
+  "errors": {
+    "codes": [
+      "SKY_CUA_SERVICE_RESTART_REQUIRED",
+      "SKY_CUA_SERVICE_DISCONNECTED",
+      "SKY_CUA_PROTOCOL_UNSUPPORTED",
+      "SKY_CUA_CAPABILITY_MISSING",
+      "SKY_CUA_INVALID_REQUEST",
+      "SKY_CUA_INVALID_CONTEXT",
+      "SKY_CUA_INVALID_ARGUMENT",
+      "SKY_CUA_FRAME_TOO_LARGE",
+      "SKY_CUA_ACTION_OUTCOME_UNKNOWN",
+      "SKY_CUA_DEADLINE_EXCEEDED",
+      "SKY_CUA_TURN_CANCELLED",
+      "SKY_CUA_CANCEL_TURN_INVALID_CONTEXT",
+      "SKY_CUA_CANCEL_TURN_INVALID_REASON",
+      "SKY_CUA_TARGET_UNAVAILABLE",
+      "SKY_CUA_INTERNAL"
+    ],
+    "semantics": {
+      "SKY_CUA_SERVICE_RESTART_REQUIRED": {
+        "meaning": "The service socket is absent or health could not be established; the host-owned service lifecycle must restart it.",
+        "retry": "caller_must_restart_service"
+      },
+      "SKY_CUA_SERVICE_DISCONNECTED": {
+        "meaning": "An established service connection closed before a response was complete.",
+        "retry": "safe_after_reconnect"
+      },
+      "SKY_CUA_PROTOCOL_UNSUPPORTED": {
+        "meaning": "Health reported a protocol version outside the inclusive generated range.",
+        "retry": "never"
+      },
+      "SKY_CUA_CAPABILITY_MISSING": {
+        "meaning": "Health did not advertise the method or edge capability required by the request.",
+        "retry": "never"
+      },
+      "SKY_CUA_INVALID_REQUEST": {
+        "meaning": "The NDJSON line is malformed JSON or violates the discriminated request shape.",
+        "retry": "never"
+      },
+      "SKY_CUA_INVALID_CONTEXT": {
+        "meaning": "A mutation did not provide non-empty session_id and turn_id.",
+        "retry": "never"
+      },
+      "SKY_CUA_INVALID_ARGUMENT": {
+        "meaning": "An action field, alias, range, or paired origin is invalid.",
+        "retry": "never"
+      },
+      "SKY_CUA_FRAME_TOO_LARGE": {
+        "meaning": "The JSON payload plus its newline exceeds the 64 MiB frame limit.",
+        "retry": "never"
+      },
+      "SKY_CUA_ACTION_OUTCOME_UNKNOWN": {
+        "meaning": "A non-idempotent mutation may have reached the daemon but its response was lost.",
+        "retry": "never"
+      },
+      "SKY_CUA_DEADLINE_EXCEEDED": {
+        "meaning": "The 30 second action deadline elapsed after the cancellation request completed.",
+        "retry": "never"
+      },
+      "SKY_CUA_TURN_CANCELLED": {
+        "meaning": "Cancellation won before the action completed and the daemon stopped the turn.",
+        "retry": "never"
+      },
+      "SKY_CUA_CANCEL_TURN_INVALID_CONTEXT": {
+        "meaning": "CancelTurn did not provide non-empty session_id and turn_id.",
+        "retry": "never"
+      },
+      "SKY_CUA_CANCEL_TURN_INVALID_REASON": {
+        "meaning": "CancelTurn reason was empty or longer than 256 characters.",
+        "retry": "never"
+      },
+      "SKY_CUA_TARGET_UNAVAILABLE": {
+        "meaning": "The requested compatibility target is intentionally unavailable on this platform.",
+        "retry": "never"
+      },
+      "SKY_CUA_INTERNAL": {
+        "meaning": "The service failed without a more specific stable contract error.",
+        "retry": "never"
+      }
+    },
+    "disconnect_mapping": {
+      "before_write": "SKY_CUA_SERVICE_DISCONNECTED",
+      "after_write_idempotent": "retry_once_after_reconnect",
+      "after_write_mutation": "SKY_CUA_ACTION_OUTCOME_UNKNOWN",
+      "missing_socket_or_health_failure": "SKY_CUA_SERVICE_RESTART_REQUIRED"
+    },
+    "deadline_mapping": {
+      "deadline_ms": 30000,
+      "cancel_request": "cancel_turn",
+      "cancel_wins": true,
+      "cancelled": "SKY_CUA_TURN_CANCELLED",
+      "expired": "SKY_CUA_DEADLINE_EXCEEDED"
+    }
+  },
+  "idempotency": {
+    "exhaustive": true,
+    "classification": {
+      "health": "idempotent_read",
+      "click": "non_idempotent_mutation",
+      "drag": "non_idempotent_mutation",
+      "get_screenshot": "idempotent_read",
+      "move": "idempotent_set",
+      "press_key": "non_idempotent_mutation",
+      "scroll": "non_idempotent_mutation",
+      "type_text": "non_idempotent_mutation",
+      "cancel_turn": "idempotent_control",
+      "error": "not_applicable"
+    },
+    "retry_policy": {
+      "known_pre_write_failure": "reconnect_and_retry_once_if_idempotent",
+      "completed_idempotent_request": "retry_once_only_after_daemon_classification",
+      "ambiguous_mutation": "never_retry_return_action_outcome_unknown",
+      "deadline": "send_cancel_turn_then_return_deadline_or_cancel_error",
+      "service_unavailable": "return_service_restart_required"
+    }
+  },
+  "screenshot": {
+    "wire_mime_type": "image/webp",
+    "wire_extension": ".webp",
+    "bytes_field": "bytes_base64",
+    "canonical_base64_only": true,
+    "decoded_bytes_type": "Uint8Array",
+    "data_url_prefix": "data:image/webp;base64,",
+    "implicit_emit_image": false,
+    "array_result": true,
+    "cursor_size_default_px": 12,
+    "cursor_size_zero_disables": true
+  },
+  "compatibility": {
+    "linux_methods": [
+      "click",
+      "drag",
+      "get_screenshot",
+      "move",
+      "press_key",
+      "scroll",
+      "type_text"
+    ],
+    "mac_placeholder_methods": [
+      "click",
+      "drag",
+      "get_app_state",
+      "list_apps",
+      "perform_secondary_action",
+      "press_key",
+      "scroll",
+      "select_text",
+      "set_value",
+      "type_text"
+    ],
+    "mac_placeholder_error_code": "SKY_CUA_TARGET_UNAVAILABLE",
+    "root_export": "sky",
+    "import_is_lazy": true,
+    "service_lifecycle_owner": "sky_cua_client_mcp",
+    "js_facade_may_start_or_restart_service": false
+  }
+} as const;
+
+export type ProtocolFixture = typeof SERVICE_PROTOCOL;
+
+export const SERVICE_ERROR_CODES = SERVICE_PROTOCOL.errors.codes as readonly ServiceErrorCode[];
+export const CANCEL_TURN_ERROR_CODES = SERVICE_PROTOCOL.cancel_turn.error_codes as
+  readonly ServiceErrorCode[];
+export const CANCEL_TURN_STATUSES = SERVICE_PROTOCOL.cancel_turn.response_statuses as
+  readonly CancelTurnStatus[];

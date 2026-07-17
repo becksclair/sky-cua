@@ -4,9 +4,9 @@ use super::elements::{
     x11_window_elements,
 };
 use super::{
-    AppInfo, AppSelector, DISPLAY_TOPOLOGY_CACHE_TTL, DisplayTopologyCache, LinuxDesktopBackend,
-    cached_display_topology, merge_session_env_reports, reject_unactionable_targeted_capture,
-    require_screenshot_image,
+    AppInfo, AppSelector, DISPLAY_TOPOLOGY_CACHE_TTL, DisplayTopologyCache, ENVIRONMENT_CACHE_TTL,
+    LinuxDesktopBackend, SessionEnvCache, cached_display_topology, merge_session_env_reports,
+    reject_unactionable_targeted_capture, require_screenshot_image,
 };
 use crate::app_match::{
     app_from_linux_window, best_x11_window_match, matches_selector, select_x11_window,
@@ -25,6 +25,56 @@ use sky_cua_platform::model::{
 };
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
+
+#[test]
+fn multi_action_cached_path_does_not_rerun_proc_or_systemctl_hydration() {
+    let now = Instant::now();
+    let backend = LinuxDesktopBackend {
+        session_env: Arc::new(StdMutex::new(SessionEnvCache {
+            report: DoctorSessionEnvReport::default(),
+            hydrated_at: now,
+        })),
+        ..LinuxDesktopBackend::new()
+    };
+    let mut hydration_runs = 0;
+
+    for action_offset in [
+        Duration::ZERO,
+        Duration::from_millis(100),
+        Duration::from_millis(200),
+    ] {
+        backend.refresh_session_env_if_stale_with(now + action_offset, || {
+            hydration_runs += 1;
+            panic!("cached CUA actions must not walk /proc or invoke systemctl")
+        });
+    }
+
+    assert_eq!(hydration_runs, 0);
+}
+
+#[test]
+fn expired_environment_cache_rehydrates_before_backend_reselection() {
+    let now = Instant::now();
+    let backend = LinuxDesktopBackend {
+        session_env: Arc::new(StdMutex::new(SessionEnvCache {
+            report: DoctorSessionEnvReport::default(),
+            hydrated_at: now - ENVIRONMENT_CACHE_TTL,
+        })),
+        ..LinuxDesktopBackend::new()
+    };
+    let mut hydration_runs = 0;
+
+    let report = backend.refresh_session_env_if_stale_with(now, || {
+        hydration_runs += 1;
+        DoctorSessionEnvReport {
+            notes: vec!["fresh /proc and systemctl hydration".to_string()],
+            ..DoctorSessionEnvReport::default()
+        }
+    });
+
+    assert_eq!(hydration_runs, 1);
+    assert_eq!(report.notes, ["fresh /proc and systemctl hydration"]);
+}
 
 #[test]
 fn screenshot_no_image_preserves_portal_error() {

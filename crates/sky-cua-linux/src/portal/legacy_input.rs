@@ -99,6 +99,48 @@ pub(crate) async fn scroll_vertical_smooth(
         })
 }
 
+pub(crate) async fn scroll_horizontal_discrete(
+    remote_desktop: &RemoteDesktop,
+    session: &ashpd::desktop::Session<RemoteDesktop>,
+    steps: i32,
+) -> Result<(), BackendError> {
+    remote_desktop
+        .notify_pointer_axis_discrete(
+            session,
+            Axis::Horizontal,
+            steps,
+            NotifyPointerAxisDiscreteOptions::default(),
+        )
+        .await
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                format!("failed to inject horizontal scroll through the portal: {error}"),
+            )
+        })
+}
+
+pub(crate) async fn scroll_horizontal_smooth(
+    remote_desktop: &RemoteDesktop,
+    session: &ashpd::desktop::Session<RemoteDesktop>,
+    delta_x: f64,
+) -> Result<(), BackendError> {
+    remote_desktop
+        .notify_pointer_axis(
+            session,
+            delta_x,
+            0.0,
+            NotifyPointerAxisOptions::default().set_finish(true),
+        )
+        .await
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                format!("failed to inject horizontal scroll through the portal: {error}"),
+            )
+        })
+}
+
 pub(crate) async fn send_keysym_raw(
     remote_desktop: &RemoteDesktop,
     session: &ashpd::desktop::Session<RemoteDesktop>,

@@ -94,6 +94,20 @@ pub(crate) trait LinuxActionRuntime {
         button: MouseButton,
     ) -> Result<(), BackendError>;
 
+    async fn portal_pointer_move_absolute(&self, _x: f64, _y: f64) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            sky_cua_platform::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "absolute pointer movement is unavailable for this runtime",
+        ))
+    }
+
+    async fn portal_key_state(&self, _key: &str, _pressed: bool) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            sky_cua_platform::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "held keyboard modifiers are unavailable for this runtime",
+        ))
+    }
+
     /// Drag along `waypoints` (origin first, destination last), sleeping
     /// `step_delay` between successive motion events. The whole press-move-release
     /// stays inside one button grab.
@@ -101,6 +115,7 @@ pub(crate) trait LinuxActionRuntime {
         &self,
         waypoints: &[(f64, f64)],
         step_delay: Duration,
+        cancellation: Option<&sky_cua_platform::model::CuaCancellation>,
     ) -> Result<(), BackendError>;
 
     async fn portal_scroll_vertical_at(
@@ -114,6 +129,26 @@ pub(crate) trait LinuxActionRuntime {
     async fn portal_scroll_vertical_smooth(&self, delta_y: f64) -> Result<(), BackendError>;
 
     async fn portal_scroll_vertical_discrete(&self, steps: i32) -> Result<(), BackendError>;
+
+    async fn portal_scroll_horizontal_at(
+        &self,
+        _x: f64,
+        _y: f64,
+        _delta_x: Option<f64>,
+        _steps: i32,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            sky_cua_platform::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "horizontal scrolling is unavailable for this runtime",
+        ))
+    }
+
+    async fn portal_scroll_horizontal_smooth(&self, _delta_x: f64) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            sky_cua_platform::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "originless horizontal scrolling is unavailable for this runtime",
+        ))
+    }
 
     async fn portal_send_text(&self, text: &str) -> Result<(), BackendError>;
 
@@ -140,6 +175,24 @@ pub(crate) trait LinuxActionRuntime {
         steps: Option<i32>,
     ) -> Result<(), BackendError>;
 
+    fn xtest_scroll_horizontal(
+        &self,
+        _delta_x: Option<f64>,
+        _steps: Option<i32>,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            sky_cua_platform::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "horizontal scrolling is unavailable for this runtime",
+        ))
+    }
+
+    fn xtest_key_state(&self, _key: &str, _pressed: bool) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            sky_cua_platform::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "held keyboard modifiers are unavailable for this runtime",
+        ))
+    }
+
     fn xtest_send_text_to_target(
         &self,
         window_id: Option<&str>,
@@ -158,6 +211,20 @@ pub(crate) trait LinuxActionRuntime {
     /// layer must pass raw points and skip the ydotool acceleration fudge.
     fn virtual_pointer_prefers_absolute(&self) -> bool;
 
+    fn virtual_pointer_move_absolute(&self, _x: f64, _y: f64) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            sky_cua_platform::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "absolute pointer movement is unavailable for this runtime",
+        ))
+    }
+
+    fn virtual_key_state(&self, _key: &str, _pressed: bool) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            sky_cua_platform::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "held keyboard modifiers are unavailable for this runtime",
+        ))
+    }
+
     fn virtual_click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError>;
 
     fn virtual_pointer_mapping_diagnostic(
@@ -172,11 +239,24 @@ pub(crate) trait LinuxActionRuntime {
         &self,
         waypoints: &[(f64, f64)],
         step_delay: Duration,
+        cancellation: Option<&sky_cua_platform::model::CuaCancellation>,
     ) -> Result<(), BackendError>;
 
     fn virtual_scroll_vertical(&self, steps: i32) -> Result<(), BackendError>;
 
     fn virtual_scroll_vertical_at(&self, x: f64, y: f64, steps: i32) -> Result<(), BackendError>;
+
+    fn virtual_scroll_horizontal_at(
+        &self,
+        _x: f64,
+        _y: f64,
+        _steps: i32,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            sky_cua_platform::diagnostics::BackendErrorCode::ActionUnsupportedForEnvironment,
+            "horizontal scrolling is unavailable for this runtime",
+        ))
+    }
 
     fn virtual_type_text(&self, text: &str) -> Result<(), BackendError>;
 

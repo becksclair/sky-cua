@@ -1,4 +1,5 @@
 use super::*;
+use sky_cua_platform::model::CuaCancellation;
 
 #[async_trait::async_trait]
 impl LinuxActionRuntime for LinuxDesktopBackend {
@@ -153,12 +154,21 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
         self.portal.click_at(x, y, button).await
     }
 
+    async fn portal_pointer_move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
+        self.portal.move_pointer_absolute(x, y).await
+    }
+
+    async fn portal_key_state(&self, key: &str, pressed: bool) -> Result<(), BackendError> {
+        self.portal.key_state(key, pressed).await
+    }
+
     async fn portal_drag(
         &self,
         waypoints: &[(f64, f64)],
         step_delay: Duration,
+        cancellation: Option<&CuaCancellation>,
     ) -> Result<(), BackendError> {
-        self.portal.drag(waypoints, step_delay).await
+        self.portal.drag(waypoints, step_delay, cancellation).await
     }
 
     async fn portal_scroll_vertical_at(
@@ -177,6 +187,20 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
 
     async fn portal_scroll_vertical_discrete(&self, steps: i32) -> Result<(), BackendError> {
         self.portal.scroll_vertical_discrete(steps).await
+    }
+
+    async fn portal_scroll_horizontal_at(
+        &self,
+        x: f64,
+        y: f64,
+        delta_x: Option<f64>,
+        steps: i32,
+    ) -> Result<(), BackendError> {
+        self.portal.scroll_horizontal_at(x, y, delta_x, steps).await
+    }
+
+    async fn portal_scroll_horizontal_smooth(&self, delta_x: f64) -> Result<(), BackendError> {
+        self.portal.scroll_horizontal_smooth(delta_x).await
     }
 
     async fn portal_send_text(&self, text: &str) -> Result<(), BackendError> {
@@ -223,6 +247,18 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
         input_xtest::scroll_vertical(delta_y, steps)
     }
 
+    fn xtest_scroll_horizontal(
+        &self,
+        delta_x: Option<f64>,
+        steps: Option<i32>,
+    ) -> Result<(), BackendError> {
+        input_xtest::scroll_horizontal(delta_x, steps)
+    }
+
+    fn xtest_key_state(&self, key: &str, pressed: bool) -> Result<(), BackendError> {
+        input_xtest::key_state(key, pressed)
+    }
+
     fn xtest_send_text_to_target(
         &self,
         window_id: Option<&str>,
@@ -243,6 +279,14 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
         self.cached_virtual_input()
             .map(|virtual_input| virtual_input.pointer_via_helper())
             .unwrap_or(false)
+    }
+
+    fn virtual_pointer_move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
+        self.cached_virtual_input()?.move_absolute(x, y)
+    }
+
+    fn virtual_key_state(&self, key: &str, pressed: bool) -> Result<(), BackendError> {
+        self.cached_virtual_input()?.key_state(key, pressed)
     }
 
     fn virtual_click_at(&self, x: f64, y: f64, button: MouseButton) -> Result<(), BackendError> {
@@ -266,8 +310,10 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
         &self,
         waypoints: &[(f64, f64)],
         step_delay: Duration,
+        cancellation: Option<&CuaCancellation>,
     ) -> Result<(), BackendError> {
-        self.cached_virtual_input()?.drag(waypoints, step_delay)
+        self.cached_virtual_input()?
+            .drag(waypoints, step_delay, cancellation)
     }
 
     fn virtual_scroll_vertical(&self, steps: i32) -> Result<(), BackendError> {
@@ -276,6 +322,11 @@ impl LinuxActionRuntime for LinuxDesktopBackend {
 
     fn virtual_scroll_vertical_at(&self, x: f64, y: f64, steps: i32) -> Result<(), BackendError> {
         self.cached_virtual_input()?.scroll_vertical_at(x, y, steps)
+    }
+
+    fn virtual_scroll_horizontal_at(&self, x: f64, y: f64, steps: i32) -> Result<(), BackendError> {
+        self.cached_virtual_input()?
+            .scroll_horizontal_at(x, y, steps)
     }
 
     fn virtual_type_text(&self, text: &str) -> Result<(), BackendError> {

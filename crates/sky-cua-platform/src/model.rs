@@ -10,9 +10,9 @@ pub use browser::{
     BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse,
     BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
     BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse, BrowserRequest,
-    BrowserResponse, BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport,
-    BrowserTab, BrowserTargetAvailability, BrowserTargetKind, browser_diagnostic_is_error_code,
-    browser_eval_enabled, normalize_browser_open_url,
+    BrowserResponse, BrowserScreenshotResponse, BrowserSessionIdentity, BrowserSnapshotResponse,
+    BrowserStatusReport, BrowserTab, BrowserTargetAvailability, BrowserTargetKind,
+    browser_diagnostic_is_error_code, browser_eval_enabled, normalize_browser_open_url,
 };
 pub use phone::{
     PhoneAccessibilityNode, PhoneAccessibilitySummary, PhoneAccessibilityTreeRequest,
@@ -36,7 +36,13 @@ pub use phone::{
     PhoneSwipeRequest, PhoneTapRequest, PhoneTargetDeviceKind, PhoneTypeTextRequest,
     PhoneUnavailableAction,
 };
-pub use service::{ServiceRequest, ServiceResponse, SessionPresenceAction};
+pub use service::{
+    CUA_SERVICE_CAPABILITIES, CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX, CUA_SERVICE_MAX_DEADLINE_MS,
+    CUA_SERVICE_PROTOCOL_VERSION, CUA_SERVICE_VERSION, CuaActionRequest, CuaBackendResponse,
+    CuaCancelStatus, CuaCancellation, CuaMouseButton, CuaRequestContext, CuaScreenshot,
+    CuaScrollDirection, ServiceRequest, ServiceResponse, SessionPresenceAction,
+    cua_service_capabilities, cua_service_capabilities_for_input_backend,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1226,6 +1232,7 @@ pub enum ActionName {
     ExpandElement,
     CollapseElement,
     ToggleElement,
+    Move,
     Click,
     PerformAction,
     PerformSecondaryAction,

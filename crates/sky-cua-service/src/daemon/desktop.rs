@@ -17,6 +17,16 @@ impl ServiceDaemon {
     pub(super) async fn handle_desktop_request(&self, request: ServiceRequest) -> ServiceResponse {
         match request {
             ServiceRequest::Health => unreachable!("health bypasses the desktop request lane"),
+            ServiceRequest::Click { .. }
+            | ServiceRequest::Drag { .. }
+            | ServiceRequest::GetScreenshot { .. }
+            | ServiceRequest::Move { .. }
+            | ServiceRequest::PressKey { .. }
+            | ServiceRequest::Scroll { .. }
+            | ServiceRequest::TypeText { .. }
+            | ServiceRequest::CancelTurn { .. } => {
+                unreachable!("CUA requests bypass the legacy desktop request lane")
+            }
             ServiceRequest::Browser { .. } => {
                 unreachable!("browser requests bypass the desktop request lane")
             }

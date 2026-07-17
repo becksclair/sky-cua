@@ -37,6 +37,11 @@ pub fn click(button: X11MouseButton) -> Result<(), BackendError> {
     run_xdotool(["click", xdotool_button(button)])
 }
 
+pub fn key_state(key: &str, pressed: bool) -> Result<(), BackendError> {
+    let action = if pressed { "keydown" } else { "keyup" };
+    run_xdotool([action, &normalize_key_name(key)])
+}
+
 pub fn window_activate(window_id: &str) -> Result<(), BackendError> {
     run_xdotool(["windowactivate", "--sync", window_id])
 }
@@ -62,6 +67,30 @@ pub fn scroll_vertical(delta_y: Option<f64>, steps: Option<i32>) -> Result<(), B
     }
 
     let button = if signed_steps > 0 { "4" } else { "5" };
+    run_xdotool(["click", "--repeat", &signed_steps.abs().to_string(), button])
+}
+
+pub fn scroll_horizontal(delta_x: Option<f64>, steps: Option<i32>) -> Result<(), BackendError> {
+    let signed_steps = if let Some(delta_x) = delta_x {
+        if delta_x == 0.0 {
+            0
+        } else {
+            let magnitude = (delta_x.abs() / 120.0).ceil().max(1.0) as i32;
+            if delta_x.is_sign_positive() {
+                magnitude
+            } else {
+                -magnitude
+            }
+        }
+    } else {
+        steps.unwrap_or(-1)
+    };
+
+    if signed_steps == 0 {
+        return Ok(());
+    }
+
+    let button = if signed_steps > 0 { "6" } else { "7" };
     run_xdotool(["click", "--repeat", &signed_steps.abs().to_string(), button])
 }
 

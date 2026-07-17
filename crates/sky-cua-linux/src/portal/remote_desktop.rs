@@ -324,7 +324,11 @@ impl RemoteDesktopSessionManager {
         preauthorize_with_timeout(self.token_store.as_ref()).await;
     }
 
-    pub async fn pointer_move_absolute(&self, x: f64, y: f64) -> Result<(), BackendError> {
+    pub(crate) async fn legacy_pointer_move_absolute(
+        &self,
+        x: f64,
+        y: f64,
+    ) -> Result<(), BackendError> {
         self.ensure_session_started().await?;
         let state = self.inner.read().await;
         let session = state.session.as_ref().ok_or_else(|| {
@@ -392,6 +396,51 @@ impl RemoteDesktopSessionManager {
             .await
     }
 
+    pub async fn scroll_horizontal_at(
+        &self,
+        x: f64,
+        y: f64,
+        delta_x: Option<f64>,
+        steps: i32,
+    ) -> Result<(), BackendError> {
+        self.move_pointer_absolute(x, y).await?;
+        let state = self.inner.read().await;
+        let session = state.session.as_ref().ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                "portal session was reset concurrently",
+            )
+        })?;
+        if let Some(delta_x) = delta_x {
+            legacy_input::scroll_horizontal_smooth(
+                &session.remote_desktop,
+                &session.session,
+                delta_x,
+            )
+            .await
+        } else {
+            legacy_input::scroll_horizontal_discrete(
+                &session.remote_desktop,
+                &session.session,
+                steps,
+            )
+            .await
+        }
+    }
+
+    pub async fn scroll_horizontal_smooth(&self, delta_x: f64) -> Result<(), BackendError> {
+        self.ensure_session_started().await?;
+        let state = self.inner.read().await;
+        let session = state.session.as_ref().ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                "portal session was reset concurrently",
+            )
+        })?;
+        legacy_input::scroll_horizontal_smooth(&session.remote_desktop, &session.session, delta_x)
+            .await
+    }
+
     pub(crate) async fn send_keysym_raw(&self, keysym: i32) -> Result<(), BackendError> {
         self.ensure_session_started().await?;
         let state = self.inner.read().await;
@@ -419,6 +468,24 @@ impl RemoteDesktopSessionManager {
         })?;
         legacy_input::send_keysym_state(&session.remote_desktop, &session.session, keysym, state)
             .await
+    }
+
+    pub(crate) async fn key_state(&self, key: &str, pressed: bool) -> Result<(), BackendError> {
+        let keysym = keysym_for_key_name(key).ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                format!("unsupported held modifier key {key:?}"),
+            )
+        })?;
+        self.send_keysym_state(
+            keysym,
+            if pressed {
+                ashpd::desktop::remote_desktop::KeyState::Pressed
+            } else {
+                ashpd::desktop::remote_desktop::KeyState::Released
+            },
+        )
+        .await
     }
 
     /// Fast-path session check: tries a read lock first; only upgrades to a

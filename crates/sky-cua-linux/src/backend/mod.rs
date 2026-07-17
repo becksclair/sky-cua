@@ -40,6 +40,7 @@ use tokio::sync::Mutex;
 use tracing::warn;
 
 const DISPLAY_TOPOLOGY_CACHE_TTL: Duration = Duration::from_secs(10);
+const ENVIRONMENT_CACHE_TTL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 struct DisplayTopologyCache {
@@ -49,11 +50,17 @@ struct DisplayTopologyCache {
 }
 
 #[derive(Debug, Clone)]
+struct SessionEnvCache {
+    report: DoctorSessionEnvReport,
+    hydrated_at: Instant,
+}
+
+#[derive(Debug, Clone)]
 pub struct LinuxDesktopBackend {
     portal: RemoteDesktopSessionManager,
     atspi: Arc<Mutex<Option<AccessibilityConnection>>>,
     app_policies: AppActionPolicies,
-    session_env: Arc<StdMutex<DoctorSessionEnvReport>>,
+    session_env: Arc<StdMutex<SessionEnvCache>>,
     session_presence: SessionPresenceManager,
     virtual_input: Arc<OnceLock<LinuxVirtualInput>>,
     display_topology: Arc<StdMutex<Option<DisplayTopologyCache>>>,
@@ -70,6 +77,7 @@ impl LinuxDesktopBackend {
     #[must_use]
     pub fn new() -> Self {
         let session_env_report = session_env::hydrate_session_env();
+        let session_env_hydrated_at = Instant::now();
         // Warm the KWin scripting-reachability cache on a plain thread at
         // construction so even callers that supply a pre-built environment
         // (bypassing probe_environment's awaited warmup) find the cache
@@ -93,7 +101,10 @@ impl LinuxDesktopBackend {
                 );
                 AppActionPolicies::default()
             }),
-            session_env: Arc::new(StdMutex::new(session_env_report)),
+            session_env: Arc::new(StdMutex::new(SessionEnvCache {
+                report: session_env_report,
+                hydrated_at: session_env_hydrated_at,
+            })),
             session_presence: SessionPresenceManager::new(),
             virtual_input: Arc::new(OnceLock::new()),
             display_topology: Arc::new(StdMutex::new(None)),
@@ -124,14 +135,13 @@ impl LinuxDesktopBackend {
     }
 
     async fn probe_environment_base(&self) -> Result<EnvironmentInfo, BackendError> {
-        self.refresh_session_env();
-        const ENVIRONMENT_CACHE_TTL: Duration = Duration::from_secs(10);
         let now = Instant::now();
         if let Some((cached, cached_at)) = self.environment_cache.lock().unwrap().as_ref()
             && now.duration_since(*cached_at) < ENVIRONMENT_CACHE_TTL
         {
             return Ok(cached.clone());
         }
+        self.refresh_session_env_if_stale(now);
         let mut environment = probe_environment().await?;
         environment.semantic_backend = if require_supported_environment(&environment).is_ok()
             && self.accessibility_connection().await.is_ok()
@@ -182,17 +192,32 @@ impl LinuxDesktopBackend {
     fn session_env_report(&self) -> DoctorSessionEnvReport {
         self.session_env
             .lock()
-            .map(|report| report.clone())
+            .map(|cache| cache.report.clone())
             .unwrap_or_default()
     }
 
-    fn refresh_session_env(&self) -> DoctorSessionEnvReport {
-        let latest = session_env::hydrate_session_env();
-        if let Ok(mut report) = self.session_env.lock() {
-            merge_session_env_reports(&mut report, latest);
-            return report.clone();
+    fn refresh_session_env_if_stale(&self, now: Instant) -> DoctorSessionEnvReport {
+        self.refresh_session_env_if_stale_with(now, session_env::hydrate_session_env)
+    }
+
+    fn refresh_session_env_if_stale_with(
+        &self,
+        now: Instant,
+        hydrate: impl FnOnce() -> DoctorSessionEnvReport,
+    ) -> DoctorSessionEnvReport {
+        if let Ok(mut cache) = self.session_env.lock() {
+            if now
+                .checked_duration_since(cache.hydrated_at)
+                .is_some_and(|age| age < ENVIRONMENT_CACHE_TTL)
+            {
+                return cache.report.clone();
+            }
+            let latest = hydrate();
+            merge_session_env_reports(&mut cache.report, latest);
+            cache.hydrated_at = now;
+            return cache.report.clone();
         }
-        latest
+        hydrate()
     }
 
     async fn accessibility_connection(&self) -> Result<AccessibilityConnection, BackendError> {
