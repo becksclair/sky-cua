@@ -1,7 +1,7 @@
 //! CSS-pixel coordinate dispatch tests for pointer and scroll actions.
 
 use serde_json::{Value, json};
-use sky_cua_platform::model::BrowserTargetKind;
+use sky_cua_platform::model::{BrowserSessionIdentity, BrowserTargetKind};
 use tokio::net::UnixListener;
 
 use crate::browser::bridge::{click, scroll};
@@ -322,6 +322,11 @@ async fn dispatch_click_at_emits_focus_then_trusted_mouse_sequence() {
         96.0,
         Instant::now() + Duration::from_secs(2),
         &mut mutated,
+        &BrowserSessionIdentity {
+            session_id: "sky-cua-mcp".to_string(),
+            turn_id: "browser-test".to_string(),
+            thread_id: None,
+        },
     )
     .await
     .expect("dispatch_click_at should succeed against the fake bridge");

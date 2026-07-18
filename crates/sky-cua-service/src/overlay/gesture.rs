@@ -90,6 +90,7 @@ fn action_name_str(action: &ActionName) -> &'static str {
         ActionName::ExpandElement => "expand",
         ActionName::CollapseElement => "collapse",
         ActionName::ToggleElement => "toggle",
+        ActionName::Move => "move",
         ActionName::Click => "click",
         ActionName::PerformAction => "perform",
         ActionName::PerformSecondaryAction => "secondary",

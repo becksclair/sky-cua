@@ -1293,6 +1293,7 @@ mod tests {
     #[test]
     fn browser_click_is_non_idempotent_but_browser_status_is_idempotent() {
         let click = ServiceRequest::Browser {
+            identity: None,
             request: sky_cua_platform::BrowserRequest::Click {
                 target: Some(sky_cua_platform::BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -1302,6 +1303,7 @@ mod tests {
         };
         let status = ServiceRequest::Browser {
             request: sky_cua_platform::BrowserRequest::Status,
+            identity: None,
         };
         let after_write = CallFailure::AfterWrite(anyhow!("boom"));
 

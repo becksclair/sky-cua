@@ -106,7 +106,7 @@ pub(super) fn handle_get_app_state(
                 "isError": false
             }))
         }
-        ServiceResponse::Error { code, message } => tool_error(code, message),
+        ServiceResponse::Error { code, message, .. } => tool_error(code, message),
         other => Err(anyhow!("unexpected response for get_app_state: {other:?}")),
     }
 }

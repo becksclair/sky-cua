@@ -857,8 +857,12 @@ fn phone_screenshot_text_only_omits_image_block() {
 #[test]
 fn phone_service_error_becomes_tool_error() {
     let service = FakeService::with_response(ServiceResponse::Error {
+        ok: false,
         code: "PhoneServiceFailure".to_string(),
         message: "service exploded".to_string(),
+        session_id: None,
+        turn_id: None,
+        retry: None,
     });
     let result = call(&service, &image_model(), "phone_status", json!({}));
     assert_eq!(result["isError"], true);

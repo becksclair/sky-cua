@@ -29,7 +29,9 @@ use cursor_geometry::{
 };
 use gesture::gesture_from_action_request;
 use host::OverlayHostConnection;
-use synthetic_cursor::{compose_synthetic_cursor, remove_synthetic_cursor};
+use synthetic_cursor::{
+    compose_synthetic_cursor, compose_synthetic_cursor_with_size, remove_synthetic_cursor,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CursorMode {
@@ -499,9 +501,17 @@ impl OverlayController {
     }
 
     pub fn apply_to_snapshot(&mut self, snapshot: &mut AppStateSnapshot) {
+        self.apply_to_snapshot_with_cursor_size(snapshot, None);
+    }
+
+    pub fn apply_to_snapshot_with_cursor_size(
+        &mut self,
+        snapshot: &mut AppStateSnapshot,
+        cursor_size_px: Option<u32>,
+    ) {
         snapshot.diagnostics.extend(self.hide_idle_overlay());
         snapshot.agent_cursor = self.state();
-        if !self.should_synthesize_cursor() {
+        if !self.should_synthesize_cursor() || cursor_size_px == Some(0) {
             remove_synthetic_cursor_from_snapshot(snapshot);
             return;
         }
@@ -518,7 +528,11 @@ impl OverlayController {
             return;
         };
 
-        match compose_synthetic_cursor(capture, model_point) {
+        let result = match cursor_size_px {
+            Some(size) => compose_synthetic_cursor_with_size(capture, model_point, Some(size)),
+            None => compose_synthetic_cursor(capture, model_point),
+        };
+        match result {
             Ok(Some(updated_capture)) => snapshot.capture = Some(updated_capture),
             Ok(None) => {}
             Err(diagnostic) => snapshot.diagnostics.push(diagnostic),

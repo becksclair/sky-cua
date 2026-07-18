@@ -795,6 +795,9 @@ mod tests {
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env,
             browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
         };
         let desktop_vars = vec![(
             "PATH".to_string(),
@@ -811,6 +814,9 @@ mod tests {
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env: BTreeMap::from([("DISPLAY".to_string(), ":0".to_string())]),
             browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
         };
         let desktop_vars = vec![
             ("DISPLAY".to_string(), ":0".to_string()),
@@ -841,6 +847,9 @@ mod tests {
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env: BTreeMap::from([("DISPLAY".to_string(), ":0".to_string())]),
             browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
         };
         let desktop_vars = vec![("DISPLAY".to_string(), ":0".to_string())];
 
@@ -876,6 +885,9 @@ mod tests {
                 "/run/user/1000".to_string(),
             )]),
             browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
         };
         let desktop_vars = vec![("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string())];
 
@@ -1080,6 +1092,9 @@ mod tests {
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env: BTreeMap::new(),
             browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
         };
 
         let result = ensure_health_satisfies_desktop_env(&response, &[], true);
@@ -1104,6 +1119,9 @@ mod tests {
                 "/run/user/9999".to_string(),
             )]),
             browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
         };
 
         let result = ensure_health_satisfies_desktop_env(&response, &[], true);
@@ -1125,6 +1143,9 @@ mod tests {
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env: BTreeMap::new(),
             browser_env: BTreeMap::from([("SKY_CUA_BROWSER".to_string(), "chrome".to_string())]),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
         };
 
         let result = ensure_health_satisfies_browser_env(&response);
@@ -1150,6 +1171,9 @@ mod tests {
             service_socket: "/tmp/sky-cua/service.sock".to_string(),
             desktop_env: BTreeMap::new(),
             browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
         };
 
         let result = ensure_health_satisfies_browser_env(&response);
@@ -1178,6 +1202,9 @@ mod tests {
                     "/tmp/old-browser-use".to_string(),
                 ),
             ]),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
         };
 
         let result = ensure_health_satisfies_browser_env(&response);

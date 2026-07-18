@@ -1,7 +1,11 @@
 use super::*;
 
 impl ServiceDaemon {
-    pub(super) async fn handle_browser_request(&self, request: BrowserRequest) -> ServiceResponse {
+    pub(super) async fn handle_browser_request(
+        &self,
+        request: BrowserRequest,
+        identity: Option<BrowserSessionIdentity>,
+    ) -> ServiceResponse {
         // Any browser request marks the session active so the daemon's idle
         // exit cannot kill the heartbeat keepalive (and with it every tab's
         // debugger attachment) between an agent's browser actions.
@@ -11,7 +15,7 @@ impl ServiceDaemon {
                 debug!(?target, "handling browser_list_tabs request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::ListTabs {
-                        response: crate::browser::list_tabs(target).await,
+                        response: crate::browser::list_tabs_with_identity(target, identity).await,
                     },
                 }
             }
@@ -19,7 +23,8 @@ impl ServiceDaemon {
                 debug!(?target, ?url, "handling browser_open request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::Open {
-                        response: crate::browser::open_tab(target, url).await,
+                        response: crate::browser::open_tab_with_identity(target, url, identity)
+                            .await,
                     },
                 }
             }
@@ -27,7 +32,8 @@ impl ServiceDaemon {
                 debug!(?target, ?tab_id, "handling browser_claim_tab request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::ClaimTab {
-                        response: crate::browser::claim_tab(target, tab_id).await,
+                        response: crate::browser::claim_tab_with_identity(target, tab_id, identity)
+                            .await,
                     },
                 }
             }
@@ -48,12 +54,13 @@ impl ServiceDaemon {
                 );
                 ServiceResponse::Browser {
                     response: BrowserResponse::MoveMouse {
-                        response: crate::browser::move_mouse(
+                        response: crate::browser::move_mouse_with_identity(
                             target,
                             tab_id,
                             x,
                             y,
                             wait_for_arrival,
+                            identity,
                         )
                         .await,
                     },
@@ -67,7 +74,10 @@ impl ServiceDaemon {
                 debug!(?target, ?tab_id, ?url, "handling browser_navigate request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::Navigate {
-                        response: crate::browser::navigate(target, tab_id, url).await,
+                        response: crate::browser::navigate_with_identity(
+                            target, tab_id, url, identity,
+                        )
+                        .await,
                     },
                 }
             }
@@ -81,18 +91,26 @@ impl ServiceDaemon {
             } => {
                 if text_limit.is_some_and(|value| value > BROWSER_SNAPSHOT_MAX_TEXT_LIMIT) {
                     return ServiceResponse::Error {
+                        ok: false,
                         code: "InvalidRequest".to_string(),
                         message: format!(
                             "browser_snapshot text_limit must be at most {BROWSER_SNAPSHOT_MAX_TEXT_LIMIT}"
                         ),
+                        session_id: None,
+                        turn_id: None,
+                        retry: None,
                     };
                 }
                 if element_limit.is_some_and(|value| value > BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT) {
                     return ServiceResponse::Error {
+                        ok: false,
                         code: "InvalidRequest".to_string(),
                         message: format!(
                             "browser_snapshot element_limit must be at most {BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT}"
                         ),
+                        session_id: None,
+                        turn_id: None,
+                        retry: None,
                     };
                 }
                 debug!(
@@ -106,13 +124,14 @@ impl ServiceDaemon {
                 );
                 ServiceResponse::Browser {
                     response: BrowserResponse::Snapshot {
-                        response: crate::browser::snapshot(
+                        response: crate::browser::snapshot_with_identity(
                             target,
                             tab_id,
                             text_limit,
                             element_offset,
                             element_limit,
                             element_query,
+                            identity,
                         )
                         .await,
                     },
@@ -131,8 +150,13 @@ impl ServiceDaemon {
                 );
                 ServiceResponse::Browser {
                     response: BrowserResponse::Screenshot {
-                        response: crate::browser::screenshot(target, tab_id, include_image_data)
-                            .await,
+                        response: crate::browser::screenshot_with_identity(
+                            target,
+                            tab_id,
+                            include_image_data,
+                            identity,
+                        )
+                        .await,
                     },
                 }
             }
@@ -145,7 +169,10 @@ impl ServiceDaemon {
                 debug!(?target, ?tab_id, x, y, "handling browser_click request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::Click {
-                        response: crate::browser::click(target, tab_id, x, y).await,
+                        response: crate::browser::click_with_identity(
+                            target, tab_id, x, y, identity,
+                        )
+                        .await,
                     },
                 }
             }
@@ -157,7 +184,13 @@ impl ServiceDaemon {
                 debug!(?target, ?tab_id, "handling browser_click element request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::Click {
-                        response: crate::browser::click_element(target, tab_id, element_ref).await,
+                        response: crate::browser::click_element_with_identity(
+                            target,
+                            tab_id,
+                            element_ref,
+                            identity,
+                        )
+                        .await,
                     },
                 }
             }
@@ -169,7 +202,10 @@ impl ServiceDaemon {
                 debug!(?target, ?tab_id, "handling browser_type_text request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::TypeText {
-                        response: crate::browser::type_text(target, tab_id, text).await,
+                        response: crate::browser::type_text_with_identity(
+                            target, tab_id, text, identity,
+                        )
+                        .await,
                     },
                 }
             }
@@ -186,11 +222,12 @@ impl ServiceDaemon {
                 );
                 ServiceResponse::Browser {
                     response: BrowserResponse::TypeText {
-                        response: crate::browser::type_text_element(
+                        response: crate::browser::type_text_element_with_identity(
                             target,
                             tab_id,
                             element_ref,
                             text,
+                            identity,
                         )
                         .await,
                     },
@@ -204,7 +241,10 @@ impl ServiceDaemon {
                 debug!(?target, ?tab_id, ?key, "handling browser_press_key request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::PressKey {
-                        response: crate::browser::press_key(target, tab_id, key).await,
+                        response: crate::browser::press_key_with_identity(
+                            target, tab_id, key, identity,
+                        )
+                        .await,
                     },
                 }
             }
@@ -227,8 +267,10 @@ impl ServiceDaemon {
                 );
                 ServiceResponse::Browser {
                     response: BrowserResponse::Scroll {
-                        response: crate::browser::scroll(target, tab_id, delta_x, delta_y, x, y)
-                            .await,
+                        response: crate::browser::scroll_with_identity(
+                            target, tab_id, delta_x, delta_y, x, y, identity,
+                        )
+                        .await,
                     },
                 }
             }
@@ -240,11 +282,12 @@ impl ServiceDaemon {
                 debug!(?target, ?tab_id, "handling browser_eval request");
                 ServiceResponse::Browser {
                     response: BrowserResponse::Eval {
-                        response: crate::browser::eval_with_policy(
+                        response: crate::browser::eval_with_policy_and_identity(
                             target,
                             tab_id,
                             expression,
                             self.browser_eval_enabled,
+                            identity,
                         )
                         .await,
                     },

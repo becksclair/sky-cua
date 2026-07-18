@@ -63,7 +63,9 @@ pub(super) fn handle_tool_call(
     arguments: Value,
     model: &crate::mcp_server::ModelSessionInfo,
     browser_eval_enabled_policy: Option<bool>,
+    browser_identity: Option<&sky_cua_platform::BrowserSessionIdentity>,
 ) -> Result<Value> {
+    let browser_service_request = |request| browser_service_request(request, browser_identity);
     match tool_name {
         "browser_status" => match service.call(&browser_service_request(BrowserRequest::Status))? {
             ServiceResponse::Browser {
@@ -76,7 +78,7 @@ pub(super) fn handle_tool_call(
                 "structuredContent": report,
                 "isError": false
             })),
-            ServiceResponse::Error { code, message } => tool_error(code, message),
+            ServiceResponse::Error { code, message, .. } => tool_error(code, message),
             other => Err(anyhow!("unexpected response for browser_status: {other:?}")),
         },
         "browser_list_tabs" => {
@@ -122,7 +124,7 @@ pub(super) fn handle_tool_call(
                         "isError": is_error
                     }))
                 }
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_list_tabs: {other:?}"
                 )),
@@ -151,7 +153,7 @@ pub(super) fn handle_tool_call(
                     "structuredContent": response,
                     "isError": browser_open_is_error(&response)
                 })),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for browser_open: {other:?}")),
             }
         }
@@ -178,7 +180,7 @@ pub(super) fn handle_tool_call(
                     "structuredContent": response,
                     "isError": browser_claim_tab_is_error(&response)
                 })),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_claim_tab: {other:?}"
                 )),
@@ -218,7 +220,7 @@ pub(super) fn handle_tool_call(
                     "structuredContent": response,
                     "isError": browser_move_mouse_is_error(&response)
                 })),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_move_mouse: {other:?}"
                 )),
@@ -245,7 +247,7 @@ pub(super) fn handle_tool_call(
                 ServiceResponse::Browser {
                     response: BrowserResponse::Navigate { response },
                 } => browser_navigate_result(response),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_navigate: {other:?}"
                 )),
@@ -285,7 +287,7 @@ pub(super) fn handle_tool_call(
                     snapshot_options.element_query.as_deref(),
                     snapshot_options.text_limit,
                 )),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_snapshot: {other:?}"
                 )),
@@ -309,7 +311,7 @@ pub(super) fn handle_tool_call(
                 ServiceResponse::Browser {
                     response: BrowserResponse::Screenshot { response },
                 } => browser_screenshot_result(response, model.can_receive_images()),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_screenshot: {other:?}"
                 )),
@@ -350,7 +352,7 @@ pub(super) fn handle_tool_call(
                 ServiceResponse::Browser {
                     response: BrowserResponse::Click { response },
                 } => browser_action_result(response),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for browser_click: {other:?}")),
             }
         }
@@ -385,7 +387,7 @@ pub(super) fn handle_tool_call(
                 ServiceResponse::Browser {
                     response: BrowserResponse::TypeText { response },
                 } => browser_action_result(response),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_type_text: {other:?}"
                 )),
@@ -412,7 +414,7 @@ pub(super) fn handle_tool_call(
                 ServiceResponse::Browser {
                     response: BrowserResponse::PressKey { response },
                 } => browser_action_result(response),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_press_key: {other:?}"
                 )),
@@ -442,7 +444,7 @@ pub(super) fn handle_tool_call(
                 ServiceResponse::Browser {
                     response: BrowserResponse::Scroll { response },
                 } => browser_action_result(response),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for browser_scroll: {other:?}")),
             }
         }
@@ -478,7 +480,7 @@ pub(super) fn handle_tool_call(
                 ServiceResponse::Browser {
                     response: BrowserResponse::Eval { response },
                 } => browser_eval_result(response),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for browser_eval: {other:?}")),
             }
         }
@@ -486,8 +488,14 @@ pub(super) fn handle_tool_call(
     }
 }
 
-fn browser_service_request(request: BrowserRequest) -> ServiceRequest {
-    ServiceRequest::Browser { request }
+fn browser_service_request(
+    request: BrowserRequest,
+    identity: Option<&sky_cua_platform::BrowserSessionIdentity>,
+) -> ServiceRequest {
+    ServiceRequest::Browser {
+        request,
+        identity: identity.cloned(),
+    }
 }
 
 fn service_snapshot_element_window(

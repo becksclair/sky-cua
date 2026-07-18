@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use serde_json::{Value, json};
+use sky_cua_platform::BrowserSessionIdentity;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 
@@ -12,6 +13,14 @@ use crate::browser::transport::{
 };
 
 use super::helpers::env_lock;
+
+fn test_identity() -> BrowserSessionIdentity {
+    BrowserSessionIdentity {
+        session_id: "sky-cua-mcp".to_string(),
+        turn_id: "browser-test".to_string(),
+        thread_id: None,
+    }
+}
 
 #[tokio::test]
 async fn bridge_request_times_out_when_peer_only_sends_pings() {
@@ -49,7 +58,7 @@ async fn bridge_request_times_out_when_peer_only_sends_pings() {
         Path::new("/tmp/sky-cua-browser-timeout.sock"),
         BRIDGE_INFO_REQUEST_ID,
         "getInfo",
-        browser_session_params(),
+        browser_session_params(&test_identity()),
     )
     .await
     .unwrap_err();
@@ -101,7 +110,7 @@ async fn send_bridge_request_skips_belated_reply_to_prior_own_request() {
         Path::new("/tmp/sky-cua-browser-stale.sock"),
         BRIDGE_INFO_REQUEST_ID,
         "getInfo",
-        browser_session_params(),
+        browser_session_params(&test_identity()),
     )
     .await
     .unwrap();
@@ -143,7 +152,7 @@ async fn send_bridge_request_rejects_foreign_response() {
         Path::new("/tmp/sky-cua-browser-foreign.sock"),
         BRIDGE_INFO_REQUEST_ID,
         "getInfo",
-        browser_session_params(),
+        browser_session_params(&test_identity()),
     )
     .await
     .unwrap_err();

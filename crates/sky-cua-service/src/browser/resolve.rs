@@ -55,7 +55,7 @@ use std::path::Path;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::{Value, json};
-use sky_cua_platform::model::DiagnosticEntry;
+use sky_cua_platform::model::{BrowserSessionIdentity, DiagnosticEntry};
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
@@ -92,12 +92,13 @@ struct DecodedRef {
 /// to the Milestone 0 stub — `execute_cdp_until` needs the tab id per call and
 /// the resolver has no other source for it. See the report accompanying Stream
 /// 1A.
-pub(super) async fn resolve_element_center(
+pub(super) async fn resolve_element_center_with_identity(
     stream: &mut UnixStream,
     socket: &Path,
     tab_id_value: &Value,
     element_ref: &str,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<ResolvedElementCenter, DiagnosticEntry> {
     let decoded = decode_ref(element_ref)?;
     let expression = resolver_expression(&decoded);
@@ -113,6 +114,7 @@ pub(super) async fn resolve_element_center(
             "returnByValue": true,
         }),
         deadline,
+        identity,
     )
     .await?;
 
@@ -135,6 +137,29 @@ pub(super) async fn resolve_element_center(
         element_unresolved_diagnostic("browser element resolution returned no value from the page")
     })?;
     interpret_resolver_value(&value)
+}
+
+#[cfg(test)]
+pub(super) async fn resolve_element_center(
+    stream: &mut UnixStream,
+    socket: &Path,
+    tab_id_value: &Value,
+    element_ref: &str,
+    deadline: TokioInstant,
+) -> Result<ResolvedElementCenter, DiagnosticEntry> {
+    resolve_element_center_with_identity(
+        stream,
+        socket,
+        tab_id_value,
+        element_ref,
+        deadline,
+        &BrowserSessionIdentity {
+            session_id: "sky-cua-mcp".to_string(),
+            turn_id: "browser-test".to_string(),
+            thread_id: None,
+        },
+    )
+    .await
 }
 
 /// Turn the resolver's `{found, center, reason, scrolled}` payload into a

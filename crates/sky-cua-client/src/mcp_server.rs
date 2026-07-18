@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use sky_cua_platform::BrowserSessionIdentity;
 use std::sync::Arc;
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
@@ -216,13 +217,15 @@ fn handle_message(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let result = crate::mcp_tools::handle_session_tool_call(
+            let browser_identity = browser_session_identity_from_tool_call(&body);
+            let result = crate::mcp_tools::handle_session_tool_call_with_browser_identity(
                 service,
                 heuristics,
                 &config.model,
                 &config.registry,
                 tool_name,
                 arguments,
+                browser_identity.as_ref(),
             )?;
             Ok(Some(json!({
                 "jsonrpc": "2.0",
@@ -240,6 +243,32 @@ fn handle_message(
             }
         }))),
     }
+}
+
+fn browser_session_identity_from_tool_call(body: &Value) -> Option<BrowserSessionIdentity> {
+    let metadata = body.pointer("/params/_meta/x-codex-turn-metadata")?;
+    let parsed;
+    let metadata = match metadata {
+        Value::Object(map) => map,
+        Value::String(raw) => {
+            parsed = serde_json::from_str::<Map<String, Value>>(raw).ok()?;
+            &parsed
+        }
+        _ => return None,
+    };
+    let non_empty = |key: &str| {
+        metadata
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    Some(BrowserSessionIdentity {
+        session_id: non_empty("session_id")?,
+        turn_id: non_empty("turn_id")?,
+        thread_id: non_empty("thread_id"),
+    })
 }
 
 fn already_initialized(id: Value) -> Value {
@@ -460,7 +489,63 @@ mod tests {
 
     use crate::mcp_tools::tool_definitions;
 
-    use super::{MessageFraming, parse_model_session_info, read_message, write_message};
+    use super::{
+        MessageFraming, browser_session_identity_from_tool_call, parse_model_session_info,
+        read_message, write_message,
+    };
+
+    #[test]
+    fn extracts_codex_browser_identity_from_string_metadata() {
+        let identity = browser_session_identity_from_tool_call(&json!({
+            "params": {
+                "_meta": {
+                    "x-codex-turn-metadata": serde_json::to_string(&json!({
+                        "session_id": "session-uuid",
+                        "thread_id": "thread-uuid",
+                        "turn_id": "turn-uuid"
+                    })).unwrap()
+                }
+            }
+        }))
+        .expect("identity");
+
+        assert_eq!(identity.session_id, "session-uuid");
+        assert_eq!(identity.turn_id, "turn-uuid");
+        assert_eq!(identity.thread_id.as_deref(), Some("thread-uuid"));
+    }
+
+    #[test]
+    fn extracts_codex_browser_identity_from_object_metadata() {
+        let identity = browser_session_identity_from_tool_call(&json!({
+            "params": {
+                "_meta": {
+                    "x-codex-turn-metadata": {
+                        "session_id": "session-uuid",
+                        "turn_id": "turn-uuid"
+                    }
+                }
+            }
+        }))
+        .expect("identity");
+
+        assert_eq!(identity.session_id, "session-uuid");
+        assert_eq!(identity.turn_id, "turn-uuid");
+        assert_eq!(identity.thread_id, None);
+    }
+
+    #[test]
+    fn incomplete_codex_metadata_uses_non_codex_fallback() {
+        assert!(
+            browser_session_identity_from_tool_call(&json!({
+                "params": {
+                    "_meta": {
+                        "x-codex-turn-metadata": { "session_id": "session-only" }
+                    }
+                }
+            }))
+            .is_none()
+        );
+    }
 
     #[test]
     fn initialize_model_capabilities_gate_capture_schema() {

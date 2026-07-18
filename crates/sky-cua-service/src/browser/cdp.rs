@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use serde_json::{Value, json};
-use sky_cua_platform::model::DiagnosticEntry;
+use sky_cua_platform::model::{BrowserSessionIdentity, DiagnosticEntry};
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
@@ -102,6 +102,7 @@ async fn execute_compounding_cdp_until(
     command_params: Value,
     deadline: TokioInstant,
     mutated: &mut bool,
+    identity: &BrowserSessionIdentity,
 ) -> Result<Value, DiagnosticEntry> {
     let previously_mutated = *mutated;
     *mutated = true;
@@ -113,6 +114,7 @@ async fn execute_compounding_cdp_until(
         method,
         command_params,
         deadline,
+        identity,
     )
     .await
     {
@@ -133,6 +135,7 @@ pub(super) async fn cdp_action_on_stream(
     action: &BrowserCdpAction,
     deadline: TokioInstant,
     mutated: &mut bool,
+    identity: &BrowserSessionIdentity,
 ) -> Result<BrowserCdpResult, DiagnosticEntry> {
     match action {
         BrowserCdpAction::Navigate { url } => {
@@ -145,6 +148,7 @@ pub(super) async fn cdp_action_on_stream(
                 json!({ "url": url }),
                 deadline,
                 mutated,
+                identity,
             )
             .await?;
             if let Some(error_text) = response
@@ -180,6 +184,7 @@ pub(super) async fn cdp_action_on_stream(
                     element_query.as_deref(),
                 ),
                 deadline,
+                identity,
             )
             .await?;
             let (title, url, snapshot) = snapshot::snapshot_from_cdp_response(&response)?;
@@ -196,7 +201,8 @@ pub(super) async fn cdp_action_on_stream(
             // in page coordinates. The image is normalized to CSS-pixel
             // dimensions afterwards so screenshot pixels, snapshot element
             // bounds, and pointer coordinates share one space.
-            let metrics = viewport_metrics_until(stream, socket, tab_id_value, deadline).await?;
+            let metrics =
+                viewport_metrics_until(stream, socket, tab_id_value, deadline, identity).await?;
             let mut params = json!({
                 "format": "png",
                 "fromSurface": true,
@@ -219,6 +225,7 @@ pub(super) async fn cdp_action_on_stream(
                 "Page.captureScreenshot",
                 params,
                 deadline,
+                identity,
             )
             .await?;
             let data_base64 = response
@@ -240,7 +247,17 @@ pub(super) async fn cdp_action_on_stream(
             })
         }
         BrowserCdpAction::Click { x, y } => {
-            dispatch_click_at(stream, socket, tab_id_value, *x, *y, deadline, mutated).await?;
+            dispatch_click_at(
+                stream,
+                socket,
+                tab_id_value,
+                *x,
+                *y,
+                deadline,
+                mutated,
+                identity,
+            )
+            .await?;
             Ok(BrowserCdpResult::Action)
         }
         BrowserCdpAction::ClickElement { element_ref } => {
@@ -248,12 +265,13 @@ pub(super) async fn cdp_action_on_stream(
             // BrowserElementUnresolved / BrowserElementNotActionable via `?`
             // before any input is dispatched, so the agent gets a clean
             // "re-observe" signal and the page is untouched.
-            let center = super::resolve::resolve_element_center(
+            let center = super::resolve::resolve_element_center_with_identity(
                 stream,
                 socket,
                 tab_id_value,
                 element_ref,
                 deadline,
+                identity,
             )
             .await?;
             dispatch_click_at(
@@ -264,12 +282,13 @@ pub(super) async fn cdp_action_on_stream(
                 center.y,
                 deadline,
                 mutated,
+                identity,
             )
             .await?;
             Ok(BrowserCdpResult::Action)
         }
         BrowserCdpAction::TypeText { text } => {
-            ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
+            ensure_focus_emulation(stream, socket, tab_id_value, deadline, identity).await;
             execute_compounding_cdp_until(
                 stream,
                 socket,
@@ -279,6 +298,7 @@ pub(super) async fn cdp_action_on_stream(
                 json!({ "text": text }),
                 deadline,
                 mutated,
+                identity,
             )
             .await?;
             Ok(BrowserCdpResult::Action)
@@ -286,12 +306,13 @@ pub(super) async fn cdp_action_on_stream(
         BrowserCdpAction::TypeTextElement { element_ref, text } => {
             // Resolve first (see ClickElement): an unresolved / not-actionable
             // ref propagates via `?` before any focus click or text insert.
-            let center = super::resolve::resolve_element_center(
+            let center = super::resolve::resolve_element_center_with_identity(
                 stream,
                 socket,
                 tab_id_value,
                 element_ref,
                 deadline,
+                identity,
             )
             .await?;
             // Focus the field with a real click at its live center, then insert
@@ -305,6 +326,7 @@ pub(super) async fn cdp_action_on_stream(
                 center.y,
                 deadline,
                 mutated,
+                identity,
             )
             .await?;
             execute_compounding_cdp_until(
@@ -316,12 +338,13 @@ pub(super) async fn cdp_action_on_stream(
                 json!({ "text": text }),
                 deadline,
                 mutated,
+                identity,
             )
             .await?;
             Ok(BrowserCdpResult::Action)
         }
         BrowserCdpAction::PressKey { key } => {
-            ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
+            ensure_focus_emulation(stream, socket, tab_id_value, deadline, identity).await;
             let key = BrowserKeyStroke::parse(key);
             execute_compounding_cdp_until(
                 stream,
@@ -332,6 +355,7 @@ pub(super) async fn cdp_action_on_stream(
                 key.event_params(key.key_down_type()),
                 deadline,
                 mutated,
+                identity,
             )
             .await?;
             execute_compounding_cdp_until(
@@ -343,6 +367,7 @@ pub(super) async fn cdp_action_on_stream(
                 key.event_params("keyUp"),
                 deadline,
                 mutated,
+                identity,
             )
             .await?;
             Ok(BrowserCdpResult::Action)
@@ -361,6 +386,7 @@ pub(super) async fn cdp_action_on_stream(
                 }),
                 deadline,
                 mutated,
+                identity,
             )
             .await?;
             if let Some(exception) = response
@@ -429,6 +455,7 @@ pub(super) async fn cdp_action_on_stream(
                 }),
                 deadline,
                 mutated,
+                identity,
             )
             .await?;
             Ok(BrowserCdpResult::Action)
@@ -445,6 +472,7 @@ pub(super) async fn cdp_action_on_stream(
 /// as an aim-by-pixel one. `mouseMoved` is absolute and read-only-ish so it
 /// goes through plain `execute_cdp_until`; press/release compound on replay and
 /// therefore raise `mutated` via `execute_compounding_cdp_until`.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn dispatch_click_at(
     stream: &mut UnixStream,
     socket: &Path,
@@ -453,8 +481,9 @@ pub(super) async fn dispatch_click_at(
     y: f64,
     deadline: TokioInstant,
     mutated: &mut bool,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
-    ensure_focus_emulation(stream, socket, tab_id_value, deadline).await;
+    ensure_focus_emulation(stream, socket, tab_id_value, deadline, identity).await;
     execute_cdp_until(
         stream,
         socket,
@@ -463,6 +492,7 @@ pub(super) async fn dispatch_click_at(
         "Input.dispatchMouseEvent",
         json!({ "type": "mouseMoved", "x": x, "y": y }),
         deadline,
+        identity,
     )
     .await?;
     execute_compounding_cdp_until(
@@ -474,6 +504,7 @@ pub(super) async fn dispatch_click_at(
         json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1 }),
         deadline,
         mutated,
+        identity,
     )
     .await?;
     execute_compounding_cdp_until(
@@ -485,6 +516,7 @@ pub(super) async fn dispatch_click_at(
         json!({ "type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1 }),
         deadline,
         mutated,
+        identity,
     )
     .await?;
     Ok(())
@@ -516,6 +548,7 @@ async fn ensure_focus_emulation(
     socket: &Path,
     tab_id_value: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) {
     let _ = execute_cdp_until(
         stream,
@@ -525,6 +558,7 @@ async fn ensure_focus_emulation(
         "Emulation.setFocusEmulationEnabled",
         json!({ "enabled": true }),
         deadline,
+        identity,
     )
     .await;
 }

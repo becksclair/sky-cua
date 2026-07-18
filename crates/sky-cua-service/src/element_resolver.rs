@@ -202,6 +202,7 @@ fn node_matches_action(node: &ElementNode, action: &ActionName) -> bool {
         ActionName::PerformSecondaryAction => "showmenu",
         ActionName::Click => "activate",
         ActionName::PerformAction
+        | ActionName::Move
         | ActionName::Scroll
         | ActionName::Drag
         | ActionName::TypeText

@@ -140,8 +140,9 @@ pub(super) fn request_should_hold_presence(request: &ServiceRequest) -> bool {
         ServiceRequest::Health
         | ServiceRequest::Doctor
         | ServiceRequest::AgentCursorStatus
-        | ServiceRequest::SessionPresence { .. } => false,
-        ServiceRequest::Browser { request } => !matches!(
+        | ServiceRequest::SessionPresence { .. }
+        | ServiceRequest::CancelTurn { .. } => false,
+        ServiceRequest::Browser { request, .. } => !matches!(
             request,
             BrowserRequest::Status | BrowserRequest::ListTabs { .. }
         ),
@@ -152,5 +153,20 @@ pub(super) fn request_should_hold_presence(request: &ServiceRequest) -> bool {
         // observe, screenshot, capability/companion queries) does not.
         ServiceRequest::Phone { request } => phone_request_is_write(request),
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cua_screenshot_acquires_automatic_session_presence() {
+        assert!(request_should_hold_presence(
+            &ServiceRequest::GetScreenshot {
+                context: None,
+                mouse_size_px: None,
+            }
+        ));
     }
 }

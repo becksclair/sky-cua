@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use sky_cua_platform::model::DiagnosticEntry;
+use sky_cua_platform::model::{BrowserSessionIdentity, DiagnosticEntry};
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
@@ -156,6 +156,7 @@ pub(super) async fn send_bridge_request_until(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_cdp_until(
     stream: &mut UnixStream,
     socket: &Path,
@@ -164,6 +165,7 @@ pub(super) async fn execute_cdp_until(
     method: &'static str,
     command_params: Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<Value, DiagnosticEntry> {
     execute_cdp_capped_until(
         stream,
@@ -174,6 +176,7 @@ pub(super) async fn execute_cdp_until(
         command_params,
         deadline,
         u64::MAX,
+        identity,
     )
     .await
 }
@@ -193,6 +196,7 @@ pub(super) async fn execute_cdp_capped_until(
     command_params: Value,
     deadline: TokioInstant,
     max_timeout_ms: u64,
+    identity: &BrowserSessionIdentity,
 ) -> Result<Value, DiagnosticEntry> {
     let timeout_ms = cdp_command_timeout_ms(deadline, TokioInstant::now()).min(max_timeout_ms);
     send_bridge_request_until(
@@ -201,7 +205,7 @@ pub(super) async fn execute_cdp_capped_until(
         request_id,
         "executeCdp",
         merge_json(
-            browser_session_params(),
+            browser_session_params(identity),
             json!({
                 "target": { "tabId": tab_id.clone() },
                 "method": method,
@@ -299,10 +303,13 @@ pub(super) fn list_tabs_method() -> &'static str {
     "getUserTabs"
 }
 
-pub(super) fn browser_session_params() -> Value {
+pub(super) fn browser_session_params(identity: &BrowserSessionIdentity) -> Value {
     json!({
-        "session_id": "sky-cua-mcp",
-        "turn_id": "browser-list-tabs",
+        "session_id": identity.session_id,
+        "turn_id": identity.turn_id,
+        "thread_id": identity.thread_id,
+        "_sky_cua_client_role": "ephemeral",
+        "_sky_cua_observe_turns": identity.session_id != "sky-cua-mcp",
     })
 }
 

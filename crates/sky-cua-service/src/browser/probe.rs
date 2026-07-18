@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use sky_cua_platform::model::{BrowserTab, BrowserTargetKind, DiagnosticEntry};
+use sky_cua_platform::model::{
+    BrowserSessionIdentity, BrowserTab, BrowserTargetKind, DiagnosticEntry,
+};
 use tokio::net::UnixStream;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -22,14 +24,16 @@ type BridgeProbeTaskResult = (usize, PathBuf, BridgeProbeResult);
 pub(super) async fn list_tabs_from_sockets(
     sockets: Vec<PathBuf>,
     target: Option<BrowserTargetKind>,
+    identity: &BrowserSessionIdentity,
 ) -> Vec<(PathBuf, Result<Vec<BrowserTab>, DiagnosticEntry>)> {
     let mut tasks = JoinSet::new();
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_BRIDGE_SOCKET_PROBES));
     for (index, socket) in sockets.into_iter().enumerate() {
         let semaphore = Arc::clone(&semaphore);
+        let identity = identity.clone();
         tasks.spawn(async move {
             let _permit = semaphore.acquire_owned().await.expect("semaphore is open");
-            let result = list_tabs_from_socket(&socket, target).await;
+            let result = list_tabs_from_socket(&socket, target, &identity).await;
             (index, socket, result)
         });
     }
@@ -159,12 +163,17 @@ fn spawn_bridge_probe_tasks(sockets: Vec<PathBuf>) -> JoinSet<BridgeProbeTaskRes
 
 async fn probe_bridge_socket(socket: &Path) -> Result<UnixStream, DiagnosticEntry> {
     let mut stream = connect_bridge_socket(socket).await?;
+    let identity = BrowserSessionIdentity {
+        session_id: "sky-cua-mcp".to_string(),
+        turn_id: "browser-probe".to_string(),
+        thread_id: None,
+    };
     send_bridge_request(
         &mut stream,
         socket,
         BRIDGE_INFO_REQUEST_ID,
         "getInfo",
-        browser_session_params(),
+        browser_session_params(&identity),
     )
     .await?;
     Ok(stream)
@@ -173,6 +182,7 @@ async fn probe_bridge_socket(socket: &Path) -> Result<UnixStream, DiagnosticEntr
 async fn list_tabs_from_socket(
     socket: &Path,
     target: Option<BrowserTargetKind>,
+    identity: &BrowserSessionIdentity,
 ) -> Result<Vec<BrowserTab>, DiagnosticEntry> {
     let mut stream = connect_bridge_socket(socket).await?;
     let response = send_bridge_request(
@@ -180,7 +190,7 @@ async fn list_tabs_from_socket(
         socket,
         LIST_TABS_REQUEST_ID,
         list_tabs_method(),
-        browser_session_params(),
+        browser_session_params(identity),
     )
     .await?;
     parse_list_tabs_response(response.get("result"), target)

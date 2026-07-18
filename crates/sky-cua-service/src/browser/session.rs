@@ -2,7 +2,8 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    BrowserClaimTabResponse, BrowserOpenResponse, BrowserTab, BrowserTargetKind, DiagnosticEntry,
+    BrowserClaimTabResponse, BrowserOpenResponse, BrowserSessionIdentity, BrowserTab,
+    BrowserTargetKind, DiagnosticEntry,
 };
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
@@ -27,13 +28,14 @@ pub(super) async fn open_tab_from_socket(
     url: Option<&str>,
     deadline: TokioInstant,
     mut stream: UnixStream,
+    identity: &BrowserSessionIdentity,
 ) -> Result<BrowserOpenResponse, DiagnosticEntry> {
     let created = send_bridge_request_until(
         &mut stream,
         socket,
         OPEN_TAB_REQUEST_ID,
         "createTab",
-        browser_session_params(),
+        browser_session_params(identity),
         deadline,
     )
     .await?;
@@ -49,7 +51,8 @@ pub(super) async fn open_tab_from_socket(
     let tab_id_value = tab_id_value(&tab_id);
 
     if let Err((failed_step, diagnostic)) =
-        attach_and_enable_open_tab_until(&mut stream, socket, &tab_id_value, deadline).await
+        attach_and_enable_open_tab_until(&mut stream, socket, &tab_id_value, deadline, identity)
+            .await
     {
         return Ok(partial_open_response(target, tab, failed_step, diagnostic));
     }
@@ -63,6 +66,7 @@ pub(super) async fn open_tab_from_socket(
             "Page.navigate",
             json!({ "url": url }),
             deadline,
+            identity,
         )
         .await
         {
@@ -104,6 +108,7 @@ pub(super) async fn claim_tab_from_socket(
     tab_id: &str,
     deadline: TokioInstant,
     mut stream: UnixStream,
+    identity: &BrowserSessionIdentity,
 ) -> Result<BrowserClaimTabResponse, DiagnosticEntry> {
     let requested_tab_id_value = tab_id_value(tab_id);
     let claimed = claim_user_tab_with_stale_sky_cua_reclaim_until(
@@ -113,6 +118,7 @@ pub(super) async fn claim_tab_from_socket(
         CLAIM_TAB_RETRY_REQUEST_ID,
         requested_tab_id_value.clone(),
         deadline,
+        identity,
     )
     .await?;
     let Some(tab) = parse_single_tab(claimed.get("result"), target) else {
@@ -126,7 +132,7 @@ pub(super) async fn claim_tab_from_socket(
     let tab_id_value = tab_id_value(&tab.tab_id);
 
     if let Err(diagnostic) =
-        attach_and_enable_tab_until(&mut stream, socket, &tab_id_value, deadline).await
+        attach_and_enable_tab_until(&mut stream, socket, &tab_id_value, deadline, identity).await
     {
         return Ok(partial_claim_response(target, tab, diagnostic));
     }
@@ -144,6 +150,7 @@ async fn claim_user_tab_until(
     request_id: &'static str,
     tab_id: Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<Value, DiagnosticEntry> {
     send_bridge_request_until(
         stream,
@@ -151,7 +158,7 @@ async fn claim_user_tab_until(
         request_id,
         "claimUserTab",
         merge_json(
-            browser_session_params(),
+            browser_session_params(identity),
             json!({
                 "tabId": tab_id,
             }),
@@ -168,8 +175,18 @@ async fn claim_user_tab_with_stale_sky_cua_reclaim_until(
     retry_request_id: &'static str,
     tab_id: Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<Value, DiagnosticEntry> {
-    match claim_user_tab_until(stream, socket, request_id, tab_id.clone(), deadline).await {
+    match claim_user_tab_until(
+        stream,
+        socket,
+        request_id,
+        tab_id.clone(),
+        deadline,
+        identity,
+    )
+    .await
+    {
         Ok(claimed) => Ok(claimed),
         Err(diagnostic) => {
             let Some(stale_session_id) = stale_sky_cua_owner_session_from_claim_error(&diagnostic)
@@ -178,7 +195,7 @@ async fn claim_user_tab_with_stale_sky_cua_reclaim_until(
             };
             finalize_stale_sky_cua_session_until(stream, socket, &stale_session_id, deadline)
                 .await?;
-            claim_user_tab_until(stream, socket, retry_request_id, tab_id, deadline).await
+            claim_user_tab_until(stream, socket, retry_request_id, tab_id, deadline, identity).await
         }
     }
 }
@@ -210,15 +227,33 @@ async fn attach_and_enable_tab_until(
     socket: &Path,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
-    attach_tab_until(stream, socket, ATTACH_TAB_REQUEST_ID, tab_id, deadline).await?;
+    attach_tab_until(
+        stream,
+        socket,
+        ATTACH_TAB_REQUEST_ID,
+        tab_id,
+        deadline,
+        identity,
+    )
+    .await?;
     // The first enable is capped too: an existing user tab can be discarded, and
     // burning the extension's full 10s default on its hang would starve the
     // wake retry below (the same budget asymmetry the executor recovery path
     // avoids). Safe for slow relays: the extension's timeoutMs measures
     // browser-side execution, not relay latency, and a live tab answers
     // Page.enable in milliseconds.
-    match enable_page_capped_until(stream, socket, ENABLE_PAGE_REQUEST_ID, tab_id, deadline).await {
+    match enable_page_capped_until(
+        stream,
+        socket,
+        ENABLE_PAGE_REQUEST_ID,
+        tab_id,
+        deadline,
+        identity,
+    )
+    .await
+    {
         Ok(()) => Ok(()),
         Err(diagnostic)
             if is_debugger_unattached_diagnostic(&diagnostic)
@@ -236,6 +271,7 @@ async fn attach_and_enable_tab_until(
                 wake_first,
                 WAKE_TAB_REQUEST_ID,
                 ENABLE_PAGE_RETRY_REQUEST_ID,
+                identity,
             )
             .await
         }
@@ -257,6 +293,7 @@ async fn reset_tab_session_until(
     socket: &Path,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
     let _ = detach_tab_until(
         stream,
@@ -264,6 +301,7 @@ async fn reset_tab_session_until(
         DETACH_TAB_FOR_RETRY_REQUEST_ID,
         tab_id,
         deadline,
+        identity,
     )
     .await;
     attach_tab_until(
@@ -272,6 +310,7 @@ async fn reset_tab_session_until(
         ATTACH_TAB_RETRY_REQUEST_ID,
         tab_id,
         deadline,
+        identity,
     )
     .await
 }
@@ -282,6 +321,7 @@ async fn reset_tab_session_until(
 /// precedes the enable. Otherwise the wake happens lazily: if the capped
 /// enable itself times out, that timeout wedges the fresh session, so the
 /// session is reset once more, the tab woken, and the enable retried.
+#[allow(clippy::too_many_arguments)]
 async fn reset_wake_and_enable_until(
     stream: &mut UnixStream,
     socket: &Path,
@@ -290,19 +330,37 @@ async fn reset_wake_and_enable_until(
     wake_first: bool,
     wake_request_id: &'static str,
     enable_request_id: &'static str,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
-    reset_tab_session_until(stream, socket, tab_id, deadline).await?;
+    reset_tab_session_until(stream, socket, tab_id, deadline, identity).await?;
     if wake_first {
-        let _ = wake_tab_until(stream, socket, wake_request_id, tab_id, deadline).await;
+        let _ = wake_tab_until(stream, socket, wake_request_id, tab_id, deadline, identity).await;
     }
-    match enable_page_capped_until(stream, socket, enable_request_id, tab_id, deadline).await {
+    match enable_page_capped_until(
+        stream,
+        socket,
+        enable_request_id,
+        tab_id,
+        deadline,
+        identity,
+    )
+    .await
+    {
         Ok(()) => Ok(()),
         Err(diagnostic) if !wake_first && is_cdp_command_timeout_diagnostic(&diagnostic) => {
-            reset_tab_session_until(stream, socket, tab_id, deadline).await?;
-            let _ = wake_tab_until(stream, socket, wake_request_id, tab_id, deadline).await;
-            enable_page_capped_until(stream, socket, enable_request_id, tab_id, deadline)
-                .await
-                .map_err(with_sleeping_tab_details)
+            reset_tab_session_until(stream, socket, tab_id, deadline, identity).await?;
+            let _ =
+                wake_tab_until(stream, socket, wake_request_id, tab_id, deadline, identity).await;
+            enable_page_capped_until(
+                stream,
+                socket,
+                enable_request_id,
+                tab_id,
+                deadline,
+                identity,
+            )
+            .await
+            .map_err(with_sleeping_tab_details)
         }
         Err(diagnostic) if wake_first && is_cdp_command_timeout_diagnostic(&diagnostic) => {
             Err(with_sleeping_tab_details(diagnostic))
@@ -316,13 +374,28 @@ async fn attach_and_enable_open_tab_until(
     socket: &Path,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), (&'static str, DiagnosticEntry)> {
-    attach_tab_until(stream, socket, ATTACH_TAB_REQUEST_ID, tab_id, deadline)
-        .await
-        .map_err(|diagnostic| ("attach", diagnostic))?;
-    enable_page_until(stream, socket, ENABLE_PAGE_REQUEST_ID, tab_id, deadline)
-        .await
-        .map_err(|diagnostic| ("enable page", diagnostic))
+    attach_tab_until(
+        stream,
+        socket,
+        ATTACH_TAB_REQUEST_ID,
+        tab_id,
+        deadline,
+        identity,
+    )
+    .await
+    .map_err(|diagnostic| ("attach", diagnostic))?;
+    enable_page_until(
+        stream,
+        socket,
+        ENABLE_PAGE_REQUEST_ID,
+        tab_id,
+        deadline,
+        identity,
+    )
+    .await
+    .map_err(|diagnostic| ("enable page", diagnostic))
 }
 
 async fn attach_tab_until(
@@ -331,8 +404,9 @@ async fn attach_tab_until(
     request_id: &'static str,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
-    match attach_tab_once(stream, socket, request_id, tab_id, deadline).await {
+    match attach_tab_once(stream, socket, request_id, tab_id, deadline, identity).await {
         Ok(()) => Ok(()),
         Err(diagnostic) if is_foreign_extension_page_diagnostic(&diagnostic) => {
             // A login redirect can hop through — or overlay — another
@@ -345,7 +419,7 @@ async fn attach_tab_until(
             let retry_at = TokioInstant::now() + FOREIGN_PAGE_RETRY_DELAY;
             if retry_at < deadline {
                 tokio::time::sleep_until(retry_at).await;
-                return attach_tab_once(stream, socket, request_id, tab_id, deadline)
+                return attach_tab_once(stream, socket, request_id, tab_id, deadline, identity)
                     .await
                     .map_err(|diagnostic| {
                         if is_foreign_extension_page_diagnostic(&diagnostic) {
@@ -400,6 +474,7 @@ async fn attach_tab_once(
     request_id: &'static str,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
     send_bridge_request_until(
         stream,
@@ -407,7 +482,7 @@ async fn attach_tab_once(
         request_id,
         "attach",
         merge_json(
-            browser_session_params(),
+            browser_session_params(identity),
             json!({
                 "tabId": tab_id.clone(),
             }),
@@ -424,6 +499,7 @@ async fn detach_tab_until(
     request_id: &'static str,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
     send_bridge_request_until(
         stream,
@@ -431,7 +507,7 @@ async fn detach_tab_until(
         request_id,
         "detach",
         merge_json(
-            browser_session_params(),
+            browser_session_params(identity),
             json!({
                 "tabId": tab_id.clone(),
             }),
@@ -448,6 +524,7 @@ async fn enable_page_until(
     request_id: &'static str,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
     execute_cdp_until(
         stream,
@@ -457,6 +534,7 @@ async fn enable_page_until(
         "Page.enable",
         json!({}),
         deadline,
+        identity,
     )
     .await?;
     Ok(())
@@ -470,6 +548,7 @@ async fn enable_page_capped_until(
     request_id: &'static str,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
     execute_cdp_capped_until(
         stream,
@@ -480,6 +559,7 @@ async fn enable_page_capped_until(
         json!({}),
         deadline,
         RECOVERY_ENABLE_TIMEOUT_CAP_MS,
+        identity,
     )
     .await?;
     Ok(())
@@ -559,6 +639,7 @@ pub(super) async fn recover_cdp_session_until(
     tab_id: &Value,
     deadline: TokioInstant,
     wake_tab: bool,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
     claim_user_tab_with_stale_sky_cua_reclaim_until(
         stream,
@@ -567,6 +648,7 @@ pub(super) async fn recover_cdp_session_until(
         RECOVER_CLAIM_TAB_RETRY_REQUEST_ID,
         tab_id.clone(),
         deadline,
+        identity,
     )
     .await?;
     reset_wake_and_enable_until(
@@ -577,6 +659,7 @@ pub(super) async fn recover_cdp_session_until(
         wake_tab,
         RECOVER_WAKE_TAB_REQUEST_ID,
         RECOVER_ENABLE_PAGE_REQUEST_ID,
+        identity,
     )
     .await
 }
@@ -595,6 +678,7 @@ async fn wake_tab_until(
     request_id: &'static str,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
     // Capped tightly: a healthy browser answers Page.bringToFront in
     // milliseconds (browser-process-side, no renderer involved), and the wake
@@ -612,6 +696,7 @@ async fn wake_tab_until(
         json!({}),
         deadline,
         WAKE_TIMEOUT_CAP_MS,
+        identity,
     )
     .await?;
     Ok(())
@@ -629,6 +714,7 @@ fn with_sleeping_tab_details(diagnostic: DiagnosticEntry) -> DiagnosticEntry {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn move_mouse_on_stream(
     stream: &mut UnixStream,
     socket: &Path,
@@ -637,6 +723,7 @@ pub(super) async fn move_mouse_on_stream(
     y: f64,
     wait_for_arrival: bool,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<(), DiagnosticEntry> {
     send_bridge_request_until(
         stream,
@@ -644,7 +731,7 @@ pub(super) async fn move_mouse_on_stream(
         MOVE_MOUSE_REQUEST_ID,
         "moveMouse",
         merge_json(
-            browser_session_params(),
+            browser_session_params(identity),
             json!({
                 "tabId": tab_id_value.clone(),
                 "x": x,

@@ -3,8 +3,8 @@ use std::time::Duration;
 use sky_cua_platform::model::{
     BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
     BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
-    BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserTargetKind, DiagnosticEntry,
-    normalize_browser_open_url,
+    BrowserScreenshotResponse, BrowserSessionIdentity, BrowserSnapshotResponse, BrowserTargetKind,
+    DiagnosticEntry, normalize_browser_open_url,
 };
 use tokio::time::Instant as TokioInstant;
 
@@ -36,10 +36,153 @@ pub(super) fn browser_open_timeout() -> Duration {
     Duration::from_secs(2)
 }
 
+#[cfg(test)]
 pub(crate) async fn list_tabs(target: Option<BrowserTargetKind>) -> BrowserListTabsResponse {
+    list_tabs_with_identity(target, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn open_tab(
+    target: Option<BrowserTargetKind>,
+    url: Option<String>,
+) -> BrowserOpenResponse {
+    open_tab_with_identity(target, url, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn claim_tab(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+) -> BrowserClaimTabResponse {
+    claim_tab_with_identity(target, tab_id, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn move_mouse(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    x: f64,
+    y: f64,
+    wait_for_arrival: bool,
+) -> BrowserMoveMouseResponse {
+    move_mouse_with_identity(target, tab_id, x, y, wait_for_arrival, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn navigate(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    url: String,
+) -> BrowserNavigateResponse {
+    navigate_with_identity(target, tab_id, url, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn snapshot(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    text_limit: Option<usize>,
+    element_offset: Option<usize>,
+    element_limit: Option<usize>,
+    element_query: Option<String>,
+) -> BrowserSnapshotResponse {
+    snapshot_with_identity(
+        target,
+        tab_id,
+        text_limit,
+        element_offset,
+        element_limit,
+        element_query,
+        None,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn screenshot(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    include_image_data: bool,
+) -> BrowserScreenshotResponse {
+    screenshot_with_identity(target, tab_id, include_image_data, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn click(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    x: f64,
+    y: f64,
+) -> BrowserActionResponse {
+    click_with_identity(target, tab_id, x, y, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn type_text(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    text: String,
+) -> BrowserActionResponse {
+    type_text_with_identity(target, tab_id, text, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn click_element(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    element_ref: String,
+) -> BrowserActionResponse {
+    click_element_with_identity(target, tab_id, element_ref, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn type_text_element(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    element_ref: String,
+    text: String,
+) -> BrowserActionResponse {
+    type_text_element_with_identity(target, tab_id, element_ref, text, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn press_key(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    key: String,
+) -> BrowserActionResponse {
+    press_key_with_identity(target, tab_id, key, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn eval_with_policy(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    expression: String,
+    browser_eval_enabled: bool,
+) -> BrowserEvalResponse {
+    eval_with_policy_and_identity(target, tab_id, expression, browser_eval_enabled, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn scroll(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    delta_x: f64,
+    delta_y: f64,
+    x: Option<f64>,
+    y: Option<f64>,
+) -> BrowserActionResponse {
+    scroll_with_identity(target, tab_id, delta_x, delta_y, x, y, None).await
+}
+
+pub(crate) async fn list_tabs_with_identity(
+    target: Option<BrowserTargetKind>,
+    identity: Option<BrowserSessionIdentity>,
+) -> BrowserListTabsResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
 
-    match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
+    match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout(), identity) {
         Ok(executor) => executor.list_tabs(Some(resolved_target)).await,
         Err(diagnostic) => BrowserListTabsResponse {
             target: Some(resolved_target),
@@ -49,9 +192,10 @@ pub(crate) async fn list_tabs(target: Option<BrowserTargetKind>) -> BrowserListT
     }
 }
 
-pub(crate) async fn open_tab(
+pub(crate) async fn open_tab_with_identity(
     target: Option<BrowserTargetKind>,
     url: Option<String>,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserOpenResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
 
@@ -66,17 +210,19 @@ pub(crate) async fn open_tab(
         }
     };
 
-    let executor =
-        match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
-            Ok(executor) => executor,
-            Err(diagnostic) => {
-                return BrowserOpenResponse {
-                    target: resolved_target,
-                    tab: None,
-                    diagnostics: vec![diagnostic],
-                };
-            }
-        };
+    let executor = match BrowserBridgeExecutor::from_env(
+        TokioInstant::now() + browser_open_timeout(),
+        identity,
+    ) {
+        Ok(executor) => executor,
+        Err(diagnostic) => {
+            return BrowserOpenResponse {
+                target: resolved_target,
+                tab: None,
+                diagnostics: vec![diagnostic],
+            };
+        }
+    };
 
     match executor.open_tab(resolved_target, url.as_deref()).await {
         Ok(response) => response,
@@ -88,9 +234,10 @@ pub(crate) async fn open_tab(
     }
 }
 
-pub(crate) async fn claim_tab(
+pub(crate) async fn claim_tab_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserClaimTabResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
 
@@ -105,17 +252,19 @@ pub(crate) async fn claim_tab(
         }
     };
 
-    let executor =
-        match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
-            Ok(executor) => executor,
-            Err(diagnostic) => {
-                return BrowserClaimTabResponse {
-                    target: resolved_target,
-                    tab: None,
-                    diagnostics: vec![diagnostic],
-                };
-            }
-        };
+    let executor = match BrowserBridgeExecutor::from_env(
+        TokioInstant::now() + browser_open_timeout(),
+        identity,
+    ) {
+        Ok(executor) => executor,
+        Err(diagnostic) => {
+            return BrowserClaimTabResponse {
+                target: resolved_target,
+                tab: None,
+                diagnostics: vec![diagnostic],
+            };
+        }
+    };
 
     match executor.claim_tab(resolved_target, &tab_id).await {
         Ok(response) => response,
@@ -127,12 +276,13 @@ pub(crate) async fn claim_tab(
     }
 }
 
-pub(crate) async fn move_mouse(
+pub(crate) async fn move_mouse_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     x: f64,
     y: f64,
     wait_for_arrival: bool,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserMoveMouseResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let (normalized_tab_id, mut diagnostics) = normalize_action_tab_id(tab_id);
@@ -150,20 +300,22 @@ pub(crate) async fn move_mouse(
         };
     }
 
-    let executor =
-        match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
-            Ok(executor) => executor,
-            Err(diagnostic) => {
-                return BrowserMoveMouseResponse {
-                    target: resolved_target,
-                    tab_id: normalized_tab_id,
-                    x,
-                    y,
-                    wait_for_arrival,
-                    diagnostics: vec![diagnostic],
-                };
-            }
-        };
+    let executor = match BrowserBridgeExecutor::from_env(
+        TokioInstant::now() + browser_open_timeout(),
+        identity,
+    ) {
+        Ok(executor) => executor,
+        Err(diagnostic) => {
+            return BrowserMoveMouseResponse {
+                target: resolved_target,
+                tab_id: normalized_tab_id,
+                x,
+                y,
+                wait_for_arrival,
+                diagnostics: vec![diagnostic],
+            };
+        }
+    };
 
     match executor
         .bind_tab(resolved_target, &normalized_tab_id)
@@ -182,10 +334,11 @@ pub(crate) async fn move_mouse(
     }
 }
 
-pub(crate) async fn navigate(
+pub(crate) async fn navigate_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     url: String,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserNavigateResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let (normalized_tab_id, mut diagnostics) = normalize_action_tab_id(tab_id);
@@ -208,6 +361,7 @@ pub(crate) async fn navigate(
         BrowserCdpAction::Navigate {
             url: normalized_url.clone(),
         },
+        identity,
     )
     .await
     {
@@ -227,13 +381,14 @@ pub(crate) async fn navigate(
     }
 }
 
-pub(crate) async fn snapshot(
+pub(crate) async fn snapshot_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     text_limit: Option<usize>,
     element_offset: Option<usize>,
     element_limit: Option<usize>,
     element_query: Option<String>,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserSnapshotResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let (normalized_tab_id, diagnostics) = normalize_action_tab_id(tab_id);
@@ -257,6 +412,7 @@ pub(crate) async fn snapshot(
             element_limit,
             element_query,
         },
+        identity,
     )
     .await
     {
@@ -284,10 +440,11 @@ pub(crate) async fn snapshot(
     }
 }
 
-pub(crate) async fn screenshot(
+pub(crate) async fn screenshot_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     include_image_data: bool,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserScreenshotResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let (normalized_tab_id, diagnostics) = normalize_action_tab_id(tab_id);
@@ -308,6 +465,7 @@ pub(crate) async fn screenshot(
         resolved_target,
         &normalized_tab_id,
         BrowserCdpAction::Screenshot,
+        identity,
     )
     .await
     {
@@ -374,11 +532,12 @@ pub(crate) async fn screenshot(
     }
 }
 
-pub(crate) async fn click(
+pub(crate) async fn click_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     x: f64,
     y: f64,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserActionResponse {
     browser_action_response(
         target,
@@ -387,14 +546,16 @@ pub(crate) async fn click(
         validate_point(x, y),
         Some((x, y)),
         BrowserCdpAction::Click { x, y },
+        identity,
     )
     .await
 }
 
-pub(crate) async fn type_text(
+pub(crate) async fn type_text_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     text: String,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserActionResponse {
     let validation = (!text.is_empty())
         .then_some(())
@@ -406,6 +567,7 @@ pub(crate) async fn type_text(
         validation,
         None,
         BrowserCdpAction::TypeText { text },
+        identity,
     )
     .await
 }
@@ -416,10 +578,11 @@ pub(crate) async fn type_text(
 /// inside the `ClickElement` CDP arm. There is no pre-action cursor point
 /// because the target center is unknown until resolution, so `None` is passed
 /// for `cursor_before_action`.
-pub(crate) async fn click_element(
+pub(crate) async fn click_element_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     element_ref: String,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserActionResponse {
     browser_action_response(
         target,
@@ -428,6 +591,7 @@ pub(crate) async fn click_element(
         Ok(()),
         None,
         BrowserCdpAction::ClickElement { element_ref },
+        identity,
     )
     .await
 }
@@ -436,11 +600,12 @@ pub(crate) async fn click_element(
 /// clicking its resolved live center, then inserts `text`, all on the shared
 /// executor path used by [`type_text`]. As with [`click_element`], the center
 /// is unknown until resolution, so no pre-action cursor point is supplied.
-pub(crate) async fn type_text_element(
+pub(crate) async fn type_text_element_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     element_ref: String,
     text: String,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserActionResponse {
     browser_action_response(
         target,
@@ -449,14 +614,16 @@ pub(crate) async fn type_text_element(
         Ok(()),
         None,
         BrowserCdpAction::TypeTextElement { element_ref, text },
+        identity,
     )
     .await
 }
 
-pub(crate) async fn press_key(
+pub(crate) async fn press_key_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     key: String,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserActionResponse {
     let key = key.trim().to_string();
     let validation = (!key.is_empty())
@@ -469,6 +636,7 @@ pub(crate) async fn press_key(
         validation,
         None,
         BrowserCdpAction::PressKey { key },
+        identity,
     )
     .await
 }
@@ -488,11 +656,12 @@ pub(crate) async fn eval(
     .await
 }
 
-pub(crate) async fn eval_with_policy(
+pub(crate) async fn eval_with_policy_and_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     expression: String,
     browser_eval_enabled: bool,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserEvalResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let (normalized_tab_id, mut diagnostics) = normalize_action_tab_id(tab_id);
@@ -527,6 +696,7 @@ pub(crate) async fn eval_with_policy(
         resolved_target,
         &normalized_tab_id,
         BrowserCdpAction::Eval { expression },
+        identity,
     )
     .await
     {
@@ -546,13 +716,14 @@ pub(crate) async fn eval_with_policy(
     }
 }
 
-pub(crate) async fn scroll(
+pub(crate) async fn scroll_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     delta_x: f64,
     delta_y: f64,
     x: Option<f64>,
     y: Option<f64>,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserActionResponse {
     let coordinates = match (x, y) {
         (Some(x), Some(y)) if x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 => {
@@ -586,6 +757,7 @@ pub(crate) async fn scroll(
             x,
             y,
         },
+        identity,
     )
     .await
 }
@@ -597,6 +769,7 @@ async fn browser_action_response(
     action_validation: Result<(), DiagnosticEntry>,
     cursor_before_action: Option<(f64, f64)>,
     action: BrowserCdpAction,
+    identity: Option<BrowserSessionIdentity>,
 ) -> BrowserActionResponse {
     let resolved_target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let (normalized_tab_id, mut diagnostics) = normalize_action_tab_id(tab_id);
@@ -612,18 +785,20 @@ async fn browser_action_response(
         };
     }
 
-    let executor =
-        match BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout()) {
-            Ok(executor) => executor,
-            Err(diagnostic) => {
-                return BrowserActionResponse {
-                    target: resolved_target,
-                    tab_id: normalized_tab_id,
-                    action: action_name.to_string(),
-                    diagnostics: vec![diagnostic],
-                };
-            }
-        };
+    let executor = match BrowserBridgeExecutor::from_env(
+        TokioInstant::now() + browser_open_timeout(),
+        identity,
+    ) {
+        Ok(executor) => executor,
+        Err(diagnostic) => {
+            return BrowserActionResponse {
+                target: resolved_target,
+                tab_id: normalized_tab_id,
+                action: action_name.to_string(),
+                diagnostics: vec![diagnostic],
+            };
+        }
+    };
     let binding = executor.bind_tab(resolved_target, &normalized_tab_id);
 
     if let Some((x, y)) = cursor_before_action
@@ -681,7 +856,9 @@ async fn run_cdp_action(
     target: BrowserTargetKind,
     tab_id: &str,
     action: BrowserCdpAction,
+    identity: Option<BrowserSessionIdentity>,
 ) -> Result<BrowserCdpResult, DiagnosticEntry> {
-    let executor = BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout())?;
+    let executor =
+        BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout(), identity)?;
     executor.bind_tab(target, tab_id).run_cdp(action).await
 }

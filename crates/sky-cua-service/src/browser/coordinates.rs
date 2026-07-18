@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use serde_json::{Value, json};
-use sky_cua_platform::model::DiagnosticEntry;
+use sky_cua_platform::model::{BrowserSessionIdentity, DiagnosticEntry};
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
@@ -26,6 +26,7 @@ pub(super) async fn viewport_metrics_until(
     socket: &Path,
     tab_id: &Value,
     deadline: TokioInstant,
+    identity: &BrowserSessionIdentity,
 ) -> Result<ViewportMetrics, DiagnosticEntry> {
     let response = execute_cdp_until(
         stream,
@@ -39,6 +40,7 @@ pub(super) async fn viewport_metrics_until(
             "returnByValue": true,
         }),
         deadline,
+        identity,
     )
     .await?;
     let value = snapshot::cdp_runtime_value(&response);

@@ -425,6 +425,7 @@ fn browser_type_text_preserves_literal_text() {
     assert_eq!(
         service.take_requests()[0],
         ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::TypeText {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -469,6 +470,7 @@ fn browser_claim_tab_routes_to_service_and_returns_tab() {
     assert_eq!(
         service.take_requests()[0],
         ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::ClaimTab {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -509,6 +511,7 @@ fn browser_move_mouse_routes_to_service_and_returns_coordinates() {
     assert_eq!(
         service.take_requests()[0],
         ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::MoveMouse {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -586,6 +589,7 @@ fn browser_open_routes_to_service_and_returns_tab() {
     assert_eq!(
         requests[0],
         ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Open {
                 target: Some(BrowserTargetKind::UserChrome),
                 url: Some("https://example.test/".to_string()),
@@ -1047,6 +1051,7 @@ fn browser_snapshot_limits_visible_text_by_default_and_preserves_metadata() {
     assert_eq!(
         service.take_requests()[0],
         ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1107,6 +1112,7 @@ fn browser_snapshot_accepts_zero_text_limit_to_omit_visible_text() {
     assert_eq!(
         service.take_requests()[0],
         ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1227,6 +1233,7 @@ fn browser_snapshot_filters_structured_elements_for_deep_sidebar_controls() {
     assert_eq!(
         service.take_requests(),
         vec![ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1284,6 +1291,7 @@ fn browser_snapshot_sends_offset_to_service_without_double_skipping_results() {
     assert_eq!(
         service.take_requests(),
         vec![ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1338,6 +1346,7 @@ fn browser_snapshot_accepts_zero_element_limit_to_omit_elements() {
     assert_eq!(
         service.take_requests(),
         vec![ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1382,6 +1391,7 @@ fn browser_snapshot_offset_past_service_cap_requests_no_elements() {
     assert_eq!(
         service.take_requests(),
         vec![ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1443,6 +1453,7 @@ fn browser_snapshot_offset_near_service_cap_clamps_requested_window() {
     assert_eq!(
         service.take_requests(),
         vec![ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1563,6 +1574,7 @@ fn browser_eval_routes_expression_to_service() {
     assert_eq!(
         service.take_requests(),
         vec![ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Eval {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1674,6 +1686,7 @@ fn browser_screenshot_attaches_image_block_and_strips_base64() {
     assert_eq!(
         service.take_requests()[0],
         ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Screenshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -1716,6 +1729,7 @@ fn browser_screenshot_for_text_only_model_omits_image_block() {
     assert_eq!(
         service.take_requests()[0],
         ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Screenshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -1801,6 +1815,7 @@ fn browser_screenshot_text_only_rejects_base64_without_path() {
     assert_eq!(
         service.take_requests()[0],
         ServiceRequest::Browser {
+            identity: None,
             request: BrowserRequest::Screenshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),

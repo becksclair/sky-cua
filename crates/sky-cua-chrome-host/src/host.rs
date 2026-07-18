@@ -32,6 +32,8 @@ const ROLLOUT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const OBSERVED_TURN_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const ROLLOUT_SEARCH_MAX_DEPTH: usize = 5;
 const SKY_CUA_MCP_SESSION_ID: &str = "sky-cua-mcp";
+const SKY_CUA_CLIENT_ROLE_PARAM: &str = "_sky_cua_client_role";
+const SKY_CUA_OBSERVE_TURNS_PARAM: &str = "_sky_cua_observe_turns";
 const MAX_NON_PRIMARY_CLIENTS: usize = 16;
 
 type SharedState = Arc<Mutex<HostState>>;
@@ -48,6 +50,7 @@ struct Client {
 enum ClientRole {
     Unknown,
     Primary,
+    Heartbeat,
     Ephemeral,
 }
 
@@ -160,7 +163,7 @@ impl HostState {
 
         let role = client_role_for_message(message);
         match (client.role, role) {
-            (ClientRole::Primary | ClientRole::Ephemeral, _) => Vec::new(),
+            (ClientRole::Primary | ClientRole::Heartbeat | ClientRole::Ephemeral, _) => Vec::new(),
             (ClientRole::Unknown, ClientRole::Ephemeral) => {
                 self.clients
                     .get_mut(&client_id)
@@ -169,6 +172,13 @@ impl HostState {
                 Vec::new()
             }
             (ClientRole::Unknown, ClientRole::Primary) => self.promote_primary_client(client_id),
+            (ClientRole::Unknown, ClientRole::Heartbeat) => {
+                self.clients
+                    .get_mut(&client_id)
+                    .expect("client exists")
+                    .role = ClientRole::Heartbeat;
+                Vec::new()
+            }
             (ClientRole::Unknown, ClientRole::Unknown) => Vec::new(),
         }
     }
@@ -212,14 +222,14 @@ impl HostState {
         while self
             .clients
             .values()
-            .filter(|client| client.role != ClientRole::Primary)
+            .filter(|client| client_role_is_prunable(client.role))
             .count()
             > MAX_NON_PRIMARY_CLIENTS
         {
             let Some(oldest_id) = self
                 .clients
                 .iter()
-                .filter(|(_, client)| client.role != ClientRole::Primary)
+                .filter(|(_, client)| client_role_is_prunable(client.role))
                 .min_by_key(|(id, client)| (client.connected_at, *id))
                 .map(|(id, _)| *id)
             else {
@@ -293,6 +303,10 @@ impl HostState {
             .map(|client| Arc::clone(&client.writer))
             .collect()
     }
+}
+
+fn client_role_is_prunable(role: ClientRole) -> bool {
+    matches!(role, ClientRole::Unknown | ClientRole::Ephemeral)
 }
 
 /// Write a frame to the Chrome native-messaging pipe. Must be called WITHOUT the
@@ -822,7 +836,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         };
         (
             state.rollout_tracker.clone(),
-            client_observes_rollout_turns(client.role),
+            client_observes_rollout_turns(client.role, &message),
         )
     };
     if observes_rollout_turns && let Some((session_id, turn_id)) = observed_turn {
@@ -1013,11 +1027,20 @@ fn select_primary_client_id(
                 unknown_count += 1;
                 unknown_client_id = Some(*id);
             }
+            ClientRole::Heartbeat => {}
             ClientRole::Ephemeral => {}
         }
     }
     if let Some(primary_client_id) = primary_client_id {
         return Ok(primary_client_id);
+    }
+    let heartbeat_client_id = clients
+        .iter()
+        .filter(|(_, client)| client.role == ClientRole::Heartbeat)
+        .max_by_key(|(id, client)| (client.connected_at, *id))
+        .map(|(id, _)| *id);
+    if let Some(heartbeat_client_id) = heartbeat_client_id {
+        return Ok(heartbeat_client_id);
     }
     if unknown_count > 1 {
         return Err(ChromeClientRouteError::MultipleClients);
@@ -1026,6 +1049,14 @@ fn select_primary_client_id(
 }
 
 fn client_role_for_message(message: &Value) -> ClientRole {
+    match message
+        .pointer(&format!("/params/{SKY_CUA_CLIENT_ROLE_PARAM}"))
+        .and_then(Value::as_str)
+    {
+        Some("ephemeral") => return ClientRole::Ephemeral,
+        Some("heartbeat") => return ClientRole::Heartbeat,
+        _ => {}
+    }
     if session_id_from_message(message) == Some(SKY_CUA_MCP_SESSION_ID) {
         ClientRole::Ephemeral
     } else {
@@ -1033,8 +1064,12 @@ fn client_role_for_message(message: &Value) -> ClientRole {
     }
 }
 
-fn client_observes_rollout_turns(role: ClientRole) -> bool {
+fn client_observes_rollout_turns(role: ClientRole, message: &Value) -> bool {
     role == ClientRole::Primary
+        || message
+            .pointer(&format!("/params/{SKY_CUA_OBSERVE_TURNS_PARAM}"))
+            .and_then(Value::as_bool)
+            == Some(true)
 }
 
 fn session_id_from_message(message: &Value) -> Option<&str> {
@@ -1532,6 +1567,130 @@ mod tests {
     }
 
     #[test]
+    fn propagated_codex_identity_stays_ephemeral_with_explicit_provenance() {
+        let mut state = test_host_state();
+        let primary_client_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            primary_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getInfo",
+                "params": { "session_id": "browser-use-session", "turn_id": "turn-1" }
+            }),
+        );
+
+        let sky_cua_client_id = state.add_client(test_client().writer.clone());
+        let evicted = state.update_client_role_for_message(
+            sky_cua_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "sky-cua-browser-info",
+                "method": "getInfo",
+                "params": {
+                    "session_id": "browser-use-session",
+                    "turn_id": "turn-1",
+                    "_sky_cua_client_role": "ephemeral",
+                    "_sky_cua_observe_turns": true
+                }
+            }),
+        );
+
+        assert!(evicted.is_empty());
+        assert_eq!(state.clients[&primary_client_id].role, ClientRole::Primary);
+        assert_eq!(
+            state.clients[&sky_cua_client_id].role,
+            ClientRole::Ephemeral
+        );
+        assert_eq!(
+            select_primary_client_id(&state.clients),
+            Ok(primary_client_id)
+        );
+        assert!(client_observes_rollout_turns(
+            state.clients[&sky_cua_client_id].role,
+            &json!({
+                "params": {
+                    "_sky_cua_observe_turns": true
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn heartbeat_is_fallback_without_evicting_or_overriding_primary() {
+        let mut state = test_host_state();
+        let heartbeat_client_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            heartbeat_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "heartbeat",
+                "method": "getInfo",
+                "params": {
+                    "session_id": "sky-cua-heartbeat-keepalive",
+                    "turn_id": "heartbeat",
+                    "_sky_cua_client_role": "heartbeat"
+                }
+            }),
+        );
+        assert_eq!(
+            state.clients[&heartbeat_client_id].role,
+            ClientRole::Heartbeat
+        );
+        assert_eq!(
+            select_primary_client_id(&state.clients),
+            Ok(heartbeat_client_id)
+        );
+
+        let primary_client_id = state.add_client(test_client().writer.clone());
+        let evicted = state.update_client_role_for_message(
+            primary_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getInfo",
+                "params": { "session_id": "browser-use-session", "turn_id": "turn-1" }
+            }),
+        );
+
+        assert!(evicted.is_empty());
+        assert!(state.clients.contains_key(&heartbeat_client_id));
+        assert_eq!(
+            select_primary_client_id(&state.clients),
+            Ok(primary_client_id)
+        );
+    }
+
+    #[test]
+    fn newest_heartbeat_is_selected_during_daemon_handoff() {
+        let mut state = test_host_state();
+        let first_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            first_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "first-heartbeat",
+                "method": "getInfo",
+                "params": { "_sky_cua_client_role": "heartbeat" }
+            }),
+        );
+        let second_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            second_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "second-heartbeat",
+                "method": "getInfo",
+                "params": { "_sky_cua_client_role": "heartbeat" }
+            }),
+        );
+
+        assert!(state.clients.contains_key(&first_id));
+        assert!(state.clients.contains_key(&second_id));
+        assert_eq!(select_primary_client_id(&state.clients), Ok(second_id));
+    }
+
+    #[test]
     fn sky_cua_mcp_client_does_not_observe_rollout_turns() {
         let mut state = test_host_state();
         let mcp_client_id = state.add_client(test_client().writer.clone());
@@ -1547,9 +1706,20 @@ mod tests {
 
         assert_eq!(state.clients[&mcp_client_id].role, ClientRole::Ephemeral);
         assert!(!client_observes_rollout_turns(
-            state.clients[&mcp_client_id].role
+            state.clients[&mcp_client_id].role,
+            &json!({
+                "params": {
+                    "session_id": "sky-cua-mcp",
+                    "turn_id": "browser-list-tabs",
+                    "_sky_cua_client_role": "ephemeral",
+                    "_sky_cua_observe_turns": false
+                }
+            })
         ));
-        assert!(client_observes_rollout_turns(ClientRole::Primary));
+        assert!(client_observes_rollout_turns(
+            ClientRole::Primary,
+            &json!({})
+        ));
     }
 
     #[test]
@@ -1633,6 +1803,54 @@ mod tests {
         assert_eq!(
             select_primary_client_id(&state.clients),
             Ok(primary_client_id)
+        );
+    }
+
+    #[test]
+    fn accept_client_churn_does_not_evict_heartbeat_fallback() {
+        let mut state = test_host_state();
+        let heartbeat_client_id = state.add_client(test_client().writer.clone());
+        state.update_client_role_for_message(
+            heartbeat_client_id,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": "heartbeat",
+                "method": "getInfo",
+                "params": {
+                    "session_id": "sky-cua-heartbeat-keepalive",
+                    "turn_id": "heartbeat",
+                    "_sky_cua_client_role": "heartbeat"
+                }
+            }),
+        );
+
+        let mut evicted_clients = Vec::new();
+        for _ in 0..(MAX_NON_PRIMARY_CLIENTS + 2) {
+            let (_client_id, evicted) = state.accept_client(test_client().writer.clone());
+            evicted_clients.extend(evicted);
+        }
+
+        assert_eq!(
+            state.clients[&heartbeat_client_id].role,
+            ClientRole::Heartbeat
+        );
+        assert_eq!(evicted_clients.len(), 2);
+        assert!(
+            evicted_clients
+                .iter()
+                .all(|(_, client)| client.role != ClientRole::Heartbeat)
+        );
+        assert_eq!(
+            state
+                .clients
+                .values()
+                .filter(|client| client_role_is_prunable(client.role))
+                .count(),
+            MAX_NON_PRIMARY_CLIENTS
+        );
+        assert_eq!(
+            select_primary_client_id(&state.clients),
+            Ok(heartbeat_client_id)
         );
     }
 

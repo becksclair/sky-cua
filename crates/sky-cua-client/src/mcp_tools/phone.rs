@@ -95,7 +95,7 @@ pub(super) fn handle_tool_call(
     let request = parse_or_invalid!(build_phone_request(tool_name, &arguments, model));
     let response = match service.call(&phone_service_request(request))? {
         ServiceResponse::Phone { response } => response,
-        ServiceResponse::Error { code, message } => return tool_error(code, message),
+        ServiceResponse::Error { code, message, .. } => return tool_error(code, message),
         other => return Err(anyhow!("unexpected response for {tool_name}: {other:?}")),
     };
     shape_phone_response(tool_name, response, model)

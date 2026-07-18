@@ -42,7 +42,18 @@ pub(super) fn compose_synthetic_cursor(
     capture: &CaptureInfo,
     point: &AgentCursorPoint,
 ) -> Result<Option<CaptureInfo>, DiagnosticEntry> {
+    compose_synthetic_cursor_with_size(capture, point, None)
+}
+
+pub(super) fn compose_synthetic_cursor_with_size(
+    capture: &CaptureInfo,
+    point: &AgentCursorPoint,
+    cursor_size_px: Option<u32>,
+) -> Result<Option<CaptureInfo>, DiagnosticEntry> {
     if point.coordinate_space != CoordinateSpace::StreamPixels {
+        return Ok(None);
+    }
+    if cursor_size_px == Some(0) {
         return Ok(None);
     }
 
@@ -68,7 +79,28 @@ pub(super) fn compose_synthetic_cursor(
             Some(error),
         )
     })?;
-    if !draw_cursor_image(&mut rgba, cursor, point.x, point.y) {
+    let resized_cursor = cursor_size_px.map(|size| {
+        let width = ((f64::from(cursor.width()) * f64::from(size) / f64::from(cursor.height()))
+            .round() as u32)
+            .max(1);
+        image::imageops::resize(cursor, width, size.max(1), FilterType::Lanczos3)
+    });
+    let (hotspot_x, hotspot_y) = match cursor_size_px {
+        Some(size) => (
+            (f64::from(cursor_asset::AGENT_CURSOR_HOTSPOT_X) * f64::from(size)
+                / f64::from(cursor.height()))
+            .round() as i32,
+            (f64::from(cursor_asset::AGENT_CURSOR_HOTSPOT_Y) * f64::from(size)
+                / f64::from(cursor.height()))
+            .round() as i32,
+        ),
+        None => (
+            cursor_asset::AGENT_CURSOR_HOTSPOT_X,
+            cursor_asset::AGENT_CURSOR_HOTSPOT_Y,
+        ),
+    };
+    let cursor = resized_cursor.as_ref().unwrap_or(cursor);
+    if !draw_cursor_image(&mut rgba, cursor, point.x, point.y, hotspot_x, hotspot_y) {
         return Err(diagnostic(
             "AgentCursorSyntheticOutOfBounds",
             "Agent cursor point did not overlap the screenshot.",
@@ -221,13 +253,20 @@ fn agent_cursor_image() -> Result<&'static RgbaImage, String> {
     }
 }
 
-fn draw_cursor_image(destination: &mut RgbaImage, cursor: &RgbaImage, x: f64, y: f64) -> bool {
+fn draw_cursor_image(
+    destination: &mut RgbaImage,
+    cursor: &RgbaImage,
+    x: f64,
+    y: f64,
+    hotspot_x: i32,
+    hotspot_y: i32,
+) -> bool {
     if !x.is_finite() || !y.is_finite() {
         return false;
     }
 
-    let left = x.round() as i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_X;
-    let top = y.round() as i32 - cursor_asset::AGENT_CURSOR_HOTSPOT_Y;
+    let left = x.round() as i32 - hotspot_x;
+    let top = y.round() as i32 - hotspot_y;
     let width = i32::try_from(destination.width()).unwrap_or(i32::MAX);
     let height = i32::try_from(destination.height()).unwrap_or(i32::MAX);
     let mut changed = false;
@@ -273,7 +312,7 @@ fn diagnostic(code: &str, message: &str, details: Option<String>) -> DiagnosticE
 
 #[cfg(test)]
 mod tests {
-    use super::compose_synthetic_cursor;
+    use super::{compose_synthetic_cursor, compose_synthetic_cursor_with_size};
     use image::{ImageBuffer, Rgba};
     use sky_cua_overlay_host::cursor_asset;
     use sky_cua_platform::model::{
@@ -314,6 +353,55 @@ mod tests {
         );
         assert_eq!(rendered.get_pixel(95, 95), &Rgba([240u8, 240, 240, 255]));
         assert!(updated.model_image_bytes.unwrap_or_default() > 0);
+    }
+
+    #[test]
+    fn requested_cursor_size_scales_the_synthetic_cursor_and_zero_disables_it() {
+        let dir = unique_temp_dir("compose-sized");
+        let path = dir.join("capture.png");
+        let image = ImageBuffer::from_pixel(96, 96, Rgba([240u8, 240, 240, 255]));
+        image.save(&path).expect("write source image");
+        let capture = capture_with_path(&path, None);
+        let point = synthetic_point(48.0, 48.0);
+
+        let updated = compose_synthetic_cursor_with_size(&capture, &point, Some(12))
+            .expect("sized composite should succeed")
+            .expect("sized capture should update");
+        let rendered = image::open(updated.screenshot_path.expect("sized path"))
+            .expect("open sized output")
+            .to_rgba8();
+        let changed = rendered
+            .enumerate_pixels()
+            .filter_map(|(x, y, pixel)| (pixel != &Rgba([240u8, 240, 240, 255])).then_some((x, y)));
+        let changed = changed.collect::<Vec<_>>();
+        let min_x = changed
+            .iter()
+            .map(|(x, _)| *x)
+            .min()
+            .expect("cursor pixels");
+        let max_x = changed
+            .iter()
+            .map(|(x, _)| *x)
+            .max()
+            .expect("cursor pixels");
+        let min_y = changed
+            .iter()
+            .map(|(_, y)| *y)
+            .min()
+            .expect("cursor pixels");
+        let max_y = changed
+            .iter()
+            .map(|(_, y)| *y)
+            .max()
+            .expect("cursor pixels");
+        assert!(max_x - min_x < 12);
+        assert!(max_y - min_y < 12);
+
+        assert!(
+            compose_synthetic_cursor_with_size(&capture, &point, Some(0))
+                .expect("zero-sized cursor should be accepted")
+                .is_none()
+        );
     }
 
     #[test]

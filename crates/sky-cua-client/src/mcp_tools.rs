@@ -60,6 +60,7 @@ impl McpService for ServiceClient {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn handle_session_tool_call(
     service: &impl McpService,
     heuristics: &HeuristicsRegistry,
@@ -67,6 +68,20 @@ pub(crate) fn handle_session_tool_call(
     registry: &McpToolRegistry,
     tool_name: &str,
     arguments: Value,
+) -> Result<Value> {
+    handle_session_tool_call_with_browser_identity(
+        service, heuristics, model, registry, tool_name, arguments, None,
+    )
+}
+
+pub(crate) fn handle_session_tool_call_with_browser_identity(
+    service: &impl McpService,
+    heuristics: &HeuristicsRegistry,
+    model: &ModelSessionInfo,
+    registry: &McpToolRegistry,
+    tool_name: &str,
+    arguments: Value,
+    browser_identity: Option<&sky_cua_platform::BrowserSessionIdentity>,
 ) -> Result<Value> {
     if !registry.contains(tool_name) {
         return match registry.inactive_reason(tool_name) {
@@ -77,7 +92,15 @@ pub(crate) fn handle_session_tool_call(
             None => tool_error("UnknownTool", format!("unknown tool: {tool_name}")),
         };
     }
-    handle_grouped_tool_call(service, heuristics, model, registry, tool_name, arguments)
+    handle_grouped_tool_call(
+        service,
+        heuristics,
+        model,
+        registry,
+        tool_name,
+        arguments,
+        browser_identity,
+    )
 }
 
 fn handle_grouped_tool_call(
@@ -87,6 +110,7 @@ fn handle_grouped_tool_call(
     registry: &McpToolRegistry,
     tool_name: &str,
     arguments: Value,
+    browser_identity: Option<&sky_cua_platform::BrowserSessionIdentity>,
 ) -> Result<Value> {
     if let Err(message) = registry.validate_arguments(tool_name, &arguments) {
         return Ok(grouped_invalid_request_result(tool_name, message));
@@ -104,6 +128,7 @@ fn handle_grouped_tool_call(
         call.handler_name,
         call.arguments.clone(),
         Some(registry.browser_eval_enabled),
+        browser_identity,
     )?;
     Ok(grouped_tool_result(tool_name, &call, handler_result))
 }
@@ -379,7 +404,7 @@ fn handle_tool_call(
     arguments: Value,
 ) -> Result<Value> {
     handle_tool_call_with_browser_eval_policy(
-        service, heuristics, model, tool_name, arguments, None,
+        service, heuristics, model, tool_name, arguments, None, None,
     )
 }
 
@@ -390,6 +415,7 @@ fn handle_tool_call_with_browser_eval_policy(
     tool_name: &str,
     arguments: Value,
     browser_eval_enabled: Option<bool>,
+    browser_identity: Option<&sky_cua_platform::BrowserSessionIdentity>,
 ) -> Result<Value> {
     match tool_name {
         "doctor" => match service.call(&ServiceRequest::Doctor)? {
@@ -401,7 +427,7 @@ fn handle_tool_call_with_browser_eval_policy(
                 "structuredContent": report,
                 "isError": false
             })),
-            ServiceResponse::Error { code, message } => tool_error(code, message),
+            ServiceResponse::Error { code, message, .. } => tool_error(code, message),
             other => Err(anyhow!("unexpected response for doctor: {other:?}")),
         },
         "setup_accessibility" => match service.call(&ServiceRequest::SetupAccessibility)? {
@@ -416,7 +442,7 @@ fn handle_tool_call_with_browser_eval_policy(
                     "isError": is_error
                 }))
             }
-            ServiceResponse::Error { code, message } => tool_error(code, message),
+            ServiceResponse::Error { code, message, .. } => tool_error(code, message),
             other => Err(anyhow!(
                 "unexpected response for setup_accessibility: {other:?}"
             )),
@@ -433,7 +459,7 @@ fn handle_tool_call_with_browser_eval_policy(
                     "isError": is_error
                 }))
             }
-            ServiceResponse::Error { code, message } => tool_error(code, message),
+            ServiceResponse::Error { code, message, .. } => tool_error(code, message),
             other => Err(anyhow!(
                 "unexpected response for setup_window_targeting: {other:?}"
             )),
@@ -497,7 +523,7 @@ fn handle_tool_call_with_browser_eval_policy(
                     "structuredContent": { "pid": pid },
                     "isError": false
                 })),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for desktop_launch_app: {other:?}"
                 )),
@@ -535,7 +561,7 @@ fn handle_tool_call_with_browser_eval_policy(
                     "isError": is_error
                 }))
             }
-            ServiceResponse::Error { code, message } => tool_error(code, message),
+            ServiceResponse::Error { code, message, .. } => tool_error(code, message),
             other => Err(anyhow!("unexpected response for list_apps: {other:?}")),
         },
         "list_windows" => match service.call(&ServiceRequest::ListWindows)? {
@@ -573,7 +599,7 @@ fn handle_tool_call_with_browser_eval_policy(
                     "isError": is_error
                 }))
             }
-            ServiceResponse::Error { code, message } => tool_error(code, message),
+            ServiceResponse::Error { code, message, .. } => tool_error(code, message),
             other => Err(anyhow!("unexpected response for list_windows: {other:?}")),
         },
         "focused_window" => match service.call(&ServiceRequest::FocusedWindow)? {
@@ -600,7 +626,7 @@ fn handle_tool_call_with_browser_eval_policy(
                     "isError": is_error
                 }))
             }
-            ServiceResponse::Error { code, message } => tool_error(code, message),
+            ServiceResponse::Error { code, message, .. } => tool_error(code, message),
             other => Err(anyhow!("unexpected response for focused_window: {other:?}")),
         },
         "activate_window" => {
@@ -617,7 +643,7 @@ fn handle_tool_call_with_browser_eval_policy(
                     "structuredContent": outcome,
                     "isError": !outcome.success
                 })),
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for activate_window: {other:?}"
                 )),
@@ -661,14 +687,19 @@ fn handle_tool_call_with_browser_eval_policy(
                         "isError": false
                     }))
                 }
-                ServiceResponse::Error { code, message } => tool_error(code, message),
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for screenshot: {other:?}")),
             }
         }
         "get_app_state" => app_state::handle_get_app_state(service, heuristics, arguments, model),
-        name if browser::is_browser_tool(name) => {
-            browser::handle_tool_call(service, name, arguments, model, browser_eval_enabled)
-        }
+        name if browser::is_browser_tool(name) => browser::handle_tool_call(
+            service,
+            name,
+            arguments,
+            model,
+            browser_eval_enabled,
+            browser_identity,
+        ),
         name if phone::is_phone_tool(name) => {
             phone::handle_tool_call(service, name, arguments, model)
         }
@@ -714,7 +745,7 @@ fn handle_session_presence_call(
             "structuredContent": status,
             "isError": false
         })),
-        ServiceResponse::Error { code, message } => tool_error(code, message),
+        ServiceResponse::Error { code, message, .. } => tool_error(code, message),
         other => Err(anyhow!(
             "unexpected response for session presence call: {other:?}"
         )),
@@ -780,7 +811,7 @@ fn handle_action_call(
             "structuredContent": outcome,
             "isError": !outcome.success
         })),
-        ServiceResponse::Error { code, message } => tool_error(code, message),
+        ServiceResponse::Error { code, message, .. } => tool_error(code, message),
         other => Err(anyhow!("unexpected response for action call: {other:?}")),
     }
 }
@@ -1540,7 +1571,7 @@ mod tests {
         let mut requests = service.take_requests();
         assert_eq!(requests.len(), 1);
         match requests.remove(0) {
-            ServiceRequest::Browser { request } => {
+            ServiceRequest::Browser { request, .. } => {
                 assert!(matches!(
                     request,
                     sky_cua_platform::model::BrowserRequest::Eval { .. }
@@ -1931,8 +1962,12 @@ mod tests {
         let registry = build_tool_registry(&process_config(false), &model);
 
         let phone_status_service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
             code: "StatusProbe".to_string(),
             message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
         });
         let phone_status_result = handle_session_tool_call(
             &phone_status_service,
@@ -1957,8 +1992,12 @@ mod tests {
         }
 
         let companion_status_service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
             code: "StatusProbe".to_string(),
             message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
         });
         let companion_status_result = handle_session_tool_call(
             &companion_status_service,
@@ -1996,8 +2035,12 @@ mod tests {
 
         for arguments in cases {
             let service = FakeService::with_response(ServiceResponse::Error {
+                ok: false,
                 code: "OpenProbe".to_string(),
                 message: "captured".to_string(),
+                session_id: None,
+                turn_id: None,
+                retry: None,
             });
             let result = handle_session_tool_call(
                 &service,
@@ -2021,14 +2064,19 @@ mod tests {
                             target: None,
                             url: None,
                         },
+                    ..
                 } => {}
                 other => panic!("expected blank browser open request: {other:?}"),
             }
         }
 
         let scroll_service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
             code: "ScrollProbe".to_string(),
             message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
         });
         let scroll_result = handle_session_tool_call(
             &scroll_service,
@@ -2060,6 +2108,7 @@ mod tests {
                         y,
                         ..
                     },
+                ..
             } => {
                 assert_eq!(tab_id, "tab-1");
                 assert_eq!(delta_y, 500.0);
@@ -2070,8 +2119,12 @@ mod tests {
         }
 
         let scroll_null_x_service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
             code: "ScrollProbe".to_string(),
             message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
         });
         let scroll_null_x_result = handle_session_tool_call(
             &scroll_null_x_service,
@@ -2125,8 +2178,12 @@ mod tests {
         };
         let image_registry = build_tool_registry(&process_config(false), &image_model);
         let service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
             code: "ObserveProbe".to_string(),
             message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
         });
         let result = handle_session_tool_call(
             &service,
@@ -2198,8 +2255,12 @@ mod tests {
         }
 
         let phone_service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
             code: "InstallProbe".to_string(),
             message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
         });
         let phone_result = handle_session_tool_call(
             &phone_service,
@@ -2240,8 +2301,12 @@ mod tests {
 
         for package_name in [Value::Null, json!("")] {
             let phone_setup_service = FakeService::with_response(ServiceResponse::Error {
+                ok: false,
                 code: "SettingsProbe".to_string(),
                 message: "captured".to_string(),
+                session_id: None,
+                turn_id: None,
+                retry: None,
             });
             let phone_setup_result = handle_session_tool_call(
                 &phone_setup_service,
@@ -2393,8 +2458,12 @@ mod tests {
         }
 
         let notifications_service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
             code: "NotificationsProbe".to_string(),
             message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
         });
         let notifications_result = handle_session_tool_call(
             &notifications_service,
@@ -2419,8 +2488,12 @@ mod tests {
         }
 
         let app_list_service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
             code: "AppListProbe".to_string(),
             message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
         });
         let app_list_result = handle_session_tool_call(
             &app_list_service,
@@ -2454,8 +2527,12 @@ mod tests {
         }
 
         let intent_service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
             code: "IntentProbe".to_string(),
             message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
         });
         let intent_result = handle_session_tool_call(
             &intent_service,
@@ -2489,8 +2566,12 @@ mod tests {
 
         for package_name in [Value::Null, json!("")] {
             let intent_service = FakeService::with_response(ServiceResponse::Error {
+                ok: false,
                 code: "IntentProbe".to_string(),
                 message: "captured".to_string(),
+                session_id: None,
+                turn_id: None,
+                retry: None,
             });
             let intent_result = handle_session_tool_call(
                 &intent_service,

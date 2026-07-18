@@ -16,14 +16,14 @@ use crate::output_shapes::{
 };
 use crate::service_launcher::ServiceClient;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CliMode {
     Mcp,
     ClearPortalTokens,
     Operator(OperatorCommand),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum OperatorCommand {
     Health,
     Doctor,
@@ -34,6 +34,7 @@ pub(crate) enum OperatorCommand {
     FocusedWindow,
     GetAppState(GetAppStateArgs),
     SessionPresence(SessionPresenceAction),
+    CuaRequest(Box<ServiceRequest>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +67,7 @@ impl OperatorCommand {
             Self::SessionPresence(action) => ServiceRequest::SessionPresence {
                 action: action.clone(),
             },
+            Self::CuaRequest(request) => request.as_ref().clone(),
         }
     }
 }
@@ -101,6 +103,9 @@ where
         "session-presence" => Ok(CliMode::Operator(OperatorCommand::SessionPresence(
             parse_session_presence_action(&rest)?,
         ))),
+        "cua-request" => Ok(CliMode::Operator(OperatorCommand::CuaRequest(Box::new(
+            parse_cua_request(&rest)?,
+        )))),
         other => bail!("unsupported sky-cua-client mode: {other}"),
     }
 }
@@ -172,7 +177,31 @@ fn command_name(command: &OperatorCommand) -> &'static str {
         OperatorCommand::FocusedWindow => "focused-window",
         OperatorCommand::GetAppState(_) => "get-app-state",
         OperatorCommand::SessionPresence(_) => "session-presence",
+        OperatorCommand::CuaRequest(_) => "cua-request",
     }
+}
+
+fn parse_cua_request(args: &[String]) -> Result<ServiceRequest> {
+    let [json] = args else {
+        bail!("cua-request requires exactly one JSON ServiceRequest argument");
+    };
+    let request: ServiceRequest =
+        serde_json::from_str(json).map_err(|error| anyhow!("invalid cua-request JSON: {error}"))?;
+    if !matches!(
+        request,
+        ServiceRequest::Health
+            | ServiceRequest::Click { .. }
+            | ServiceRequest::Drag { .. }
+            | ServiceRequest::GetScreenshot { .. }
+            | ServiceRequest::Move { .. }
+            | ServiceRequest::PressKey { .. }
+            | ServiceRequest::Scroll { .. }
+            | ServiceRequest::TypeText { .. }
+            | ServiceRequest::CancelTurn { .. }
+    ) {
+        bail!("cua-request accepts only the frozen CUA service request surface");
+    }
+    Ok(request)
 }
 
 fn parse_get_app_state_args(args: &[String]) -> Result<GetAppStateArgs> {
@@ -391,7 +420,14 @@ fn render_operator_response(
                 exit_code: ExitCode::SUCCESS,
             })
         }
-        (_, ServiceResponse::Error { code, message }) => Ok(RenderedResponse {
+        (OperatorCommand::CuaRequest(_), response) => {
+            let success = !matches!(response, ServiceResponse::Error { .. });
+            Ok(RenderedResponse {
+                payload: serde_json::to_value(response)?,
+                exit_code: exit_code(success),
+            })
+        }
+        (_, ServiceResponse::Error { code, message, .. }) => Ok(RenderedResponse {
             payload: json!({
                 "code": code,
                 "message": message,
@@ -449,6 +485,38 @@ mod tests {
                 detail: AppStateDetail::Full,
                 capture_screen: CaptureScreenMode::IfChanged,
             }))
+        );
+    }
+
+    #[test]
+    fn parses_frozen_cua_request_json_for_live_testing() {
+        let mode = parse_cli_mode(
+            [
+                "cua-request",
+                r#"{"type":"get_screenshot","context":{"session_id":"live","turn_id":"shot"}}"#,
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .expect("CUA request should parse");
+        let CliMode::Operator(OperatorCommand::CuaRequest(request)) = mode else {
+            panic!("mode should be a CUA request");
+        };
+        assert!(matches!(*request, ServiceRequest::GetScreenshot { .. }));
+    }
+
+    #[test]
+    fn cua_request_live_helper_rejects_non_cua_protocol_variants() {
+        let error = parse_cli_mode(
+            ["cua-request", r#"{"type":"doctor"}"#]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .expect_err("non-CUA request should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("frozen CUA service request surface")
         );
     }
 
@@ -842,8 +910,12 @@ mod tests {
         let rendered = render_operator_response(
             &OperatorCommand::Doctor,
             ServiceResponse::Error {
+                ok: false,
                 code: "Boom".to_string(),
                 message: "service failed".to_string(),
+                session_id: None,
+                turn_id: None,
+                retry: None,
             },
             None,
         )
@@ -888,8 +960,12 @@ mod tests {
                 capture_screen: CaptureScreenMode::IfChanged,
             }),
             ServiceResponse::Error {
+                ok: false,
                 code: "ServiceUnavailable".to_string(),
                 message: "backend not ready".to_string(),
+                session_id: None,
+                turn_id: None,
+                retry: None,
             },
             None,
         )

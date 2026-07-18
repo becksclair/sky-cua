@@ -188,8 +188,11 @@ impl BridgeSocketInventory {
 /// must keep re-establishing against the current host socket even if a per-op
 /// probe transiently quarantined it, and the heartbeat is per-host (not scoped
 /// to the operator's browser selection).
-pub(super) fn newest_bridge_socket_path() -> Option<PathBuf> {
-    let mut newest: Option<(SystemTime, PathBuf)> = None;
+/// All live socket filesystem entries, newest first, without the per-operation
+/// stale quarantine. The keepalive uses this to fall back immediately when a
+/// newer orphaned socket path refuses connections.
+pub(super) fn bridge_socket_paths_newest_first() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
     for dir in candidate_socket_dirs() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -209,15 +212,13 @@ pub(super) fn newest_bridge_socket_path() -> Option<PathBuf> {
                 continue;
             }
             let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            if newest
-                .as_ref()
-                .is_none_or(|(newest_modified, _)| modified > *newest_modified)
-            {
-                newest = Some((modified, path));
-            }
+            push_socket_candidate(&mut candidates, SocketCandidate { path, modified });
         }
     }
-    newest.map(|(_, path)| path)
+    candidates
+        .into_iter()
+        .map(|candidate| candidate.path)
+        .collect()
 }
 
 pub(super) fn find_bridge_sockets(selection: BrowserSocketSelection) -> Vec<PathBuf> {

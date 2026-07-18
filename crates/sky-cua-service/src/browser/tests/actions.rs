@@ -1,12 +1,12 @@
 //! Bridge and tab operation tests: listing, opening, navigation, input, and eval.
 
 use serde_json::{Value, json};
-use sky_cua_platform::model::{BROWSER_EVAL_ENV, BrowserTargetKind};
+use sky_cua_platform::model::{BROWSER_EVAL_ENV, BrowserSessionIdentity, BrowserTargetKind};
 use tokio::net::UnixListener;
 
 use crate::browser::bridge::{
-    click_element, eval, eval_with_policy, list_tabs, move_mouse, navigate, open_tab, press_key,
-    type_text_element,
+    click_element, eval, eval_with_policy, list_tabs, list_tabs_with_identity, move_mouse,
+    navigate, open_tab, press_key, type_text_element,
 };
 use crate::browser::protocol::{LIST_TABS_REQUEST_ID, read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
@@ -207,6 +207,52 @@ async fn list_tabs_uses_native_host_socket_get_user_tabs_for_user_chrome() {
         Some("https://example.test/bridge")
     );
     assert!(response.tabs[0].active);
+}
+
+#[tokio::test]
+async fn list_tabs_forwards_codex_identity_without_promoting_the_connection() {
+    let _env_guard = env_lock().await;
+    let socket_dir = unique_test_dir("sky-cua-browser-codex-identity");
+    std::fs::create_dir_all(&socket_dir).unwrap();
+    let listener = UnixListener::bind(socket_dir.join("extension-123-test.sock")).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(request["method"], "getUserTabs");
+        assert_eq!(request["params"]["session_id"], "codex-session-uuid");
+        assert_eq!(request["params"]["turn_id"], "codex-turn-uuid");
+        assert_eq!(request["params"]["thread_id"], "codex-thread-uuid");
+        assert_eq!(request["params"]["_sky_cua_client_role"], "ephemeral");
+        assert_eq!(request["params"]["_sky_cua_observe_turns"], true);
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": LIST_TABS_REQUEST_ID,
+                "result": []
+            }),
+        )
+        .await
+        .unwrap();
+    });
+
+    let previous = std::env::var_os(SKY_CUA_SOCKET_DIR_ENV);
+    unsafe { std::env::set_var(SKY_CUA_SOCKET_DIR_ENV, &socket_dir) };
+    let response = list_tabs_with_identity(
+        Some(BrowserTargetKind::UserChrome),
+        Some(BrowserSessionIdentity {
+            session_id: "codex-session-uuid".to_string(),
+            turn_id: "codex-turn-uuid".to_string(),
+            thread_id: Some("codex-thread-uuid".to_string()),
+        }),
+    )
+    .await;
+    restore_env(SKY_CUA_SOCKET_DIR_ENV, previous);
+    server.await.unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    assert!(response.diagnostics.is_empty());
 }
 
 #[tokio::test]

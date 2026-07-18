@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use sky_cua_platform::model::{
     BrowserClaimTabResponse, BrowserListTabsResponse, BrowserMoveMouseResponse,
-    BrowserOpenResponse, BrowserTab, BrowserTargetKind, DiagnosticEntry,
+    BrowserOpenResponse, BrowserSessionIdentity, BrowserTab, BrowserTargetKind, DiagnosticEntry,
 };
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
@@ -20,38 +20,59 @@ use super::sockets::{
 };
 use super::tabs::tab_id_value;
 
+fn fallback_identity() -> BrowserSessionIdentity {
+    BrowserSessionIdentity {
+        session_id: "sky-cua-mcp".to_string(),
+        turn_id: "browser-list-tabs".to_string(),
+        thread_id: None,
+    }
+}
+
 pub(super) struct BrowserBridgeExecutor {
     sockets: Vec<PathBuf>,
     deadline: TokioInstant,
+    identity: BrowserSessionIdentity,
 }
 
 impl BrowserBridgeExecutor {
-    pub(super) fn from_env(deadline: TokioInstant) -> Result<Self, DiagnosticEntry> {
+    pub(super) fn from_env(
+        deadline: TokioInstant,
+        identity: Option<BrowserSessionIdentity>,
+    ) -> Result<Self, DiagnosticEntry> {
         // Any browser-bridge use starts the heartbeat keepalive (once) so the
         // extension's 30s driver-liveness ping is answered and it stops
         // detaching chrome.debugger from our tabs mid-session.
         super::keepalive::ensure_spawned();
         let selection = browser_socket_selection_from_env()?;
-        Self::from_selection(selection, deadline)
+        Self::from_selection(
+            selection,
+            deadline,
+            identity.unwrap_or_else(fallback_identity),
+        )
     }
 
     fn from_selection(
         selection: BrowserSocketSelection,
         deadline: TokioInstant,
+        identity: BrowserSessionIdentity,
     ) -> Result<Self, DiagnosticEntry> {
         let sockets = find_bridge_sockets(selection);
         if sockets.is_empty() {
             return Err(browser_bridge_disconnected_for_selection(selection));
         }
 
-        Ok(Self { sockets, deadline })
+        Ok(Self {
+            sockets,
+            deadline,
+            identity,
+        })
     }
 
     pub(super) async fn list_tabs(
         &self,
         target: Option<BrowserTargetKind>,
     ) -> BrowserListTabsResponse {
-        let results = list_tabs_from_sockets(self.sockets.clone(), target).await;
+        let results = list_tabs_from_sockets(self.sockets.clone(), target, &self.identity).await;
         record_listed_tab_affinities(&results);
         let mut tabs = Vec::new();
         let mut diagnostics = Vec::new();
@@ -82,8 +103,15 @@ impl BrowserBridgeExecutor {
         url: Option<&str>,
     ) -> Result<BrowserOpenResponse, DiagnosticEntry> {
         self.run_on_responsive_socket(|socket, stream| async move {
-            let response =
-                session::open_tab_from_socket(&socket, target, url, self.deadline, stream).await?;
+            let response = session::open_tab_from_socket(
+                &socket,
+                target,
+                url,
+                self.deadline,
+                stream,
+                &self.identity,
+            )
+            .await?;
             if let Some(tab) = &response.tab {
                 affinity::record_tab_socket(&tab.tab_id, &socket);
             }
@@ -105,9 +133,15 @@ impl BrowserBridgeExecutor {
                 if let Some(diagnostic) = terminal.get() {
                     return Err(diagnostic);
                 }
-                let result =
-                    session::claim_tab_from_socket(&socket, target, tab_id, self.deadline, stream)
-                        .await;
+                let result = session::claim_tab_from_socket(
+                    &socket,
+                    target,
+                    tab_id,
+                    self.deadline,
+                    stream,
+                    &self.identity,
+                )
+                .await;
                 match result {
                     Ok(response) => {
                         if response.tab.is_some() {
@@ -253,6 +287,7 @@ impl BrowserSessionBinding<'_> {
                 &tab_id,
                 self.executor.deadline,
                 &mut mutated,
+                &self.executor.identity,
             )
             .await;
         match result {
@@ -273,6 +308,7 @@ impl BrowserSessionBinding<'_> {
                     &tab_id,
                     self.executor.deadline,
                     wake,
+                    &self.executor.identity,
                 )
                 .await?;
                 // A recoverable failure can arrive part-way through a
@@ -313,6 +349,7 @@ impl BrowserSessionBinding<'_> {
                         &tab_id,
                         self.executor.deadline,
                         &mut replay_mutated,
+                        &self.executor.identity,
                     )
                     .await
             }
@@ -436,17 +473,18 @@ impl BoundTabOperation<'_> {
         tab_id: &serde_json::Value,
         deadline: TokioInstant,
         mutated: &mut bool,
+        identity: &BrowserSessionIdentity,
     ) -> Result<BoundTabResult, DiagnosticEntry> {
         if deadline <= TokioInstant::now() {
             return Err(browser_open_timeout_diagnostic());
         }
 
         match self {
-            BoundTabOperation::Cdp { action } => {
-                cdp::cdp_action_on_stream(stream, socket, tab_id, action, deadline, mutated)
-                    .await
-                    .map(BoundTabResult::Cdp)
-            }
+            BoundTabOperation::Cdp { action } => cdp::cdp_action_on_stream(
+                stream, socket, tab_id, action, deadline, mutated, identity,
+            )
+            .await
+            .map(BoundTabResult::Cdp),
             BoundTabOperation::MoveMouse {
                 x,
                 y,
@@ -459,6 +497,7 @@ impl BoundTabOperation<'_> {
                 y,
                 wait_for_arrival,
                 deadline,
+                identity,
             )
             .await
             .map(|()| BoundTabResult::MoveMouse),
