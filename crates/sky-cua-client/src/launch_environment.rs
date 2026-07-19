@@ -46,12 +46,18 @@ impl LaunchEnvironment {
         self.detached_graphical_env
     }
 
-    pub(crate) fn ensure_startup_health(&self, response: &ServiceResponse) -> Result<()> {
-        ensure_health_satisfies_desktop_env(
-            response,
-            &self.repaired_desktop_vars,
-            !self.detached_graphical_env,
-        )?;
+    pub(crate) fn ensure_startup_health(
+        &self,
+        response: &ServiceResponse,
+        require_desktop_match: bool,
+    ) -> Result<()> {
+        if require_desktop_match {
+            ensure_health_satisfies_desktop_env(
+                response,
+                &self.repaired_desktop_vars,
+                !self.detached_graphical_env,
+            )?;
+        }
         ensure_health_satisfies_browser_env(response)
     }
 
@@ -827,6 +833,26 @@ mod tests {
             .expect_err("stale service env should be rejected");
 
         assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn shared_browser_daemon_health_can_ignore_client_specific_desktop_identity() {
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::from([("DISPLAY".to_string(), ":0".to_string())]),
+            browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
+        };
+        let launch = LaunchEnvironment::from_repaired_desktop_vars_for_tests(vec![(
+            "DISPLAY".to_string(),
+            ":99".to_string(),
+        )]);
+
+        assert!(launch.ensure_startup_health(&response, false).is_ok());
+        assert!(launch.ensure_startup_health(&response, true).is_err());
     }
 
     #[test]

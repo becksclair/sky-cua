@@ -39,10 +39,16 @@ impl BrowserBridgeExecutor {
         deadline: TokioInstant,
         identity: Option<BrowserSessionIdentity>,
     ) -> Result<Self, DiagnosticEntry> {
-        // Any browser-bridge use starts the heartbeat keepalive (once) so the
-        // extension's 30s driver-liveness ping is answered and it stops
-        // detaching chrome.debugger from our tabs mid-session.
-        super::keepalive::ensure_spawned();
+        // Legacy mode still needs the standalone heartbeat fallback. In
+        // hybrid/strict the persistent control-plane actor owns heartbeat on
+        // its sole native-host stream; starting the legacy supervisor here
+        // would create a second competing bridge connection.
+        if matches!(
+            super::transport::browser_control_mode(),
+            Ok(super::transport::BrowserControlMode::Legacy)
+        ) {
+            super::keepalive::ensure_spawned();
+        }
         let selection = browser_socket_selection_from_env()?;
         Self::from_selection(
             selection,

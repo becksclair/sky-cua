@@ -73,6 +73,16 @@ AT_SPI_RESTART_TIMEOUT_SECONDS = 5
 MCP_BROWSER_EVAL_ENV = "SKY_CUA_BROWSER_EVAL"
 MCP_MODEL_SUPPORTS_IMAGES_ENV = "SKY_CUA_MODEL_SUPPORTS_IMAGES"
 MCP_PRESENCE_ENABLED_ENV = "SKY_CUA_PRESENCE_ENABLED"
+MCP_CALLER_PROVENANCE_ENV = "SKY_CUA_MCP_CALLER_PROVENANCE"
+DIRECT_MCP_CALLER_PROVENANCE = "direct_mcp"
+OPENCODE_CALLER_PROVENANCE = "opencode"
+PI_CALLER_PROVENANCE = "pi"
+MCP_BROWSER_CONTROL_MODE_ENV = "SKY_CUA_BROWSER_CONTROL_MODE"
+MCP_CODEX_BROWSER_SOCKET_PATH_ENV = "SKY_CUA_CODEX_BROWSER_SOCKET_PATH"
+OPTIONAL_MCP_RUNTIME_ENV = (
+    MCP_BROWSER_CONTROL_MODE_ENV,
+    MCP_CODEX_BROWSER_SOCKET_PATH_ENV,
+)
 MCP_LAUNCH_POLICY_STATE = "mcp-launch-policy.json"
 RECOGNIZED_MCP_LAUNCH_ENV = (
     MCP_BROWSER_EVAL_ENV,
@@ -98,6 +108,12 @@ class McpLaunchPolicy:
         # per-host with `--presence off` or SKY_CUA_PRESENCE_ENABLED=off.
         env[MCP_PRESENCE_ENABLED_ENV] = "0" if self.presence_enabled == "off" else "1"
         return env
+
+
+def optional_mcp_runtime_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """Return explicitly configured daemon env without inventing defaults."""
+    env = os.environ if environ is None else environ
+    return {name: env[name] for name in OPTIONAL_MCP_RUNTIME_ENV if name in env}
 
 
 def current_platform() -> str:
@@ -366,6 +382,8 @@ def generate_mcp_config(
                 "env": {
                     "SKY_CUA_REPO_ROOT": str(root),
                     **policy.env(),
+                    **optional_mcp_runtime_env(),
+                    MCP_CALLER_PROVENANCE_ENV: DIRECT_MCP_CALLER_PROVENANCE,
                 },
                 # Guarded by scripts/test_env_key_contract.py — new SKY_CUA_*
                 # keys must be added here or exempted there.
@@ -379,6 +397,8 @@ def generate_mcp_config(
                     MCP_BROWSER_EVAL_ENV,
                     "SKY_CUA_AT_SPI_WALK_TIMEOUT_MS",
                     "SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS",
+                    MCP_BROWSER_CONTROL_MODE_ENV,
+                    MCP_CODEX_BROWSER_SOCKET_PATH_ENV,
                     "SKY_CUA_COSMIC_HELPER",
                     "SKY_CUA_DESKTOP_REQUEST_DEADLINE_MS",
                     "SKY_CUA_INPUT_BACKEND",
@@ -459,6 +479,8 @@ def install_opencode(
                 "environment": {
                     "SKY_CUA_REPO_ROOT": str(root),
                     **policy.env(),
+                    **optional_mcp_runtime_env(),
+                    MCP_CALLER_PROVENANCE_ENV: OPENCODE_CALLER_PROVENANCE,
                 },
                 "enabled": True,
                 "timeout": 30000,
@@ -488,6 +510,8 @@ def install_claude_desktop(
                 "env": {
                     "SKY_CUA_REPO_ROOT": str(root),
                     **policy.env(),
+                    **optional_mcp_runtime_env(),
+                    MCP_CALLER_PROVENANCE_ENV: DIRECT_MCP_CALLER_PROVENANCE,
                 },
             }
         }
@@ -519,6 +543,8 @@ def install_claude_code(
         "env": {
             "SKY_CUA_REPO_ROOT": str(root),
             **policy.env(),
+            **optional_mcp_runtime_env(),
+            MCP_CALLER_PROVENANCE_ENV: DIRECT_MCP_CALLER_PROVENANCE,
         },
     }
     # Claude Code reserves the MCP server name "computer-use" for its native
@@ -698,13 +724,15 @@ def install_pi(
     root = runtime_resource_root(resource_root)
     policy = launch_policy or McpLaunchPolicy()
     policy_exports = [
-        f"export {name}={shlex.quote(value)}\n" for name, value in policy.env().items()
+        f"export {name}={shlex.quote(value)}\n"
+        for name, value in {**policy.env(), **optional_mcp_runtime_env()}.items()
     ]
     wrapper_content = "".join(
         [
             "#!/usr/bin/env bash\n",
             f"export SKY_CUA_REPO_ROOT={shlex.quote(str(root))}\n",
             *policy_exports,
+            f"export {MCP_CALLER_PROVENANCE_ENV}={PI_CALLER_PROVENANCE}\n",
             f'exec {shlex.quote(str(client_path))} mcp "$@"\n',
         ]
     )
@@ -989,7 +1017,7 @@ def install_local_mcp_server(
             client_path,
             openclaw_dir=openclaw_dir,
             resource_root=resource_root,
-            launch_env=launch_policy.env(),
+            launch_env={**launch_policy.env(), **optional_mcp_runtime_env()},
         )
     else:
         config = generate_mcp_config(client_path, target_dir, resource_root, launch_policy)

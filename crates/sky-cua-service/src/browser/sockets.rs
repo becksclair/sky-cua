@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex as StdMutex};
@@ -48,12 +49,21 @@ impl BrowserFamily {
 struct SocketCandidate {
     path: PathBuf,
     modified: SystemTime,
+    actor_healthy: bool,
 }
 
 #[derive(Debug, Default)]
 struct BridgeSocketInventory {
     families: HashMap<PathBuf, CachedSocketFamily>,
     recent_failures: HashMap<PathBuf, Instant>,
+    healthy_actors: HashMap<PathBuf, Instant>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct SocketPeerIdentity {
+    pub(crate) pid: u32,
+    pub(crate) start_ticks: u64,
+    pub(crate) boot_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +118,12 @@ impl BridgeSocketInventory {
                 continue;
             }
             let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            let candidate = SocketCandidate { path, modified };
+            let actor_healthy = self.healthy_actors.contains_key(&path);
+            let candidate = SocketCandidate {
+                path,
+                modified,
+                actor_healthy,
+            };
             if self.recently_failed(&candidate.path, now)
                 || !self.matches_selection(&candidate, selection, now)
             {
@@ -180,6 +195,8 @@ impl BridgeSocketInventory {
             .retain(|_, cached| now.duration_since(cached.checked_at) < SOCKET_FAMILY_CACHE_TTL);
         self.recent_failures
             .retain(|_, failed_at| now.duration_since(*failed_at) < STALE_SOCKET_FAILURE_TTL);
+        self.healthy_actors
+            .retain(|_, heartbeat| now.duration_since(*heartbeat) < Duration::from_secs(4));
     }
 }
 
@@ -212,7 +229,15 @@ pub(super) fn bridge_socket_paths_newest_first() -> Vec<PathBuf> {
                 continue;
             }
             let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            push_socket_candidate(&mut candidates, SocketCandidate { path, modified });
+            let actor_healthy = persistent_actor_is_healthy(&path);
+            push_socket_candidate(
+                &mut candidates,
+                SocketCandidate {
+                    path,
+                    modified,
+                    actor_healthy,
+                },
+            );
         }
     }
     candidates
@@ -233,6 +258,27 @@ pub(super) fn record_bridge_socket_result<T>(socket: &Path, result: Result<&T, &
         .lock()
         .expect("browser socket inventory mutex poisoned")
         .record_result(socket, result);
+}
+
+pub(crate) fn record_persistent_actor_health(socket: &Path, healthy: bool) {
+    let mut inventory = BRIDGE_SOCKET_INVENTORY
+        .lock()
+        .expect("browser socket inventory mutex poisoned");
+    if healthy {
+        inventory
+            .healthy_actors
+            .insert(socket.to_path_buf(), Instant::now());
+    } else {
+        inventory.healthy_actors.remove(socket);
+    }
+}
+
+pub(crate) fn persistent_actor_is_healthy(socket: &Path) -> bool {
+    let mut inventory = BRIDGE_SOCKET_INVENTORY
+        .lock()
+        .expect("browser socket inventory mutex poisoned");
+    inventory.prune(Instant::now());
+    inventory.healthy_actors.contains_key(socket)
 }
 
 fn stale_socket_diagnostic(code: &str) -> bool {
@@ -358,9 +404,61 @@ fn push_socket_candidate(candidates: &mut Vec<SocketCandidate>, candidate: Socke
 
 fn compare_socket_candidates(left: &SocketCandidate, right: &SocketCandidate) -> Ordering {
     right
-        .modified
-        .cmp(&left.modified)
+        .actor_healthy
+        .cmp(&left.actor_healthy)
+        .then_with(|| right.modified.cmp(&left.modified))
         .then_with(|| left.path.cmp(&right.path))
+}
+
+pub(crate) fn socket_peer_identity(stream: &tokio::net::UnixStream) -> SocketPeerIdentity {
+    let pid = socket_peer_pid(stream).unwrap_or_default();
+    SocketPeerIdentity {
+        pid,
+        start_ticks: process_start_ticks(pid).unwrap_or_default(),
+        boot_id: std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .map(|value| value.trim().to_owned())
+            .unwrap_or_else(|_| "unavailable".to_owned()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn socket_peer_pid(stream: &tokio::net::UnixStream) -> Option<u32> {
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `credentials` and `length` point to initialized storage of the
+    // exact sizes required by SO_PEERCRED for the duration of the syscall.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut credentials).cast(),
+            &raw mut length,
+        )
+    };
+    (result == 0 && credentials.pid > 0).then_some(credentials.pid as u32)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn socket_peer_pid(_stream: &tokio::net::UnixStream) -> Option<u32> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_ticks(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_name = stat.rsplit_once(") ")?.1;
+    // Field 22 is starttime. `after_name` begins at field 3, so index 19.
+    after_name.split_whitespace().nth(19)?.parse().ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_start_ticks(_pid: u32) -> Option<u64> {
+    None
 }
 
 fn socket_browser_family(socket: &Path) -> Option<BrowserFamily> {

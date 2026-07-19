@@ -2,17 +2,34 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 mod browser;
+mod browser_control;
 mod phone;
 mod service;
 
 pub use browser::{
     BROWSER_EVAL_ENV, BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT, BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT,
     BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse,
-    BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
-    BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse, BrowserRequest,
+    BrowserCallerKind, BrowserCallerProvenance, BrowserClaimTabResponse, BrowserEvalResponse,
+    BrowserListTabsResponse, BrowserLogicalIdentity, BrowserMcpClientInfo,
+    BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
+    BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequest, BrowserRequestContext,
     BrowserResponse, BrowserScreenshotResponse, BrowserSessionIdentity, BrowserSnapshotResponse,
     BrowserStatusReport, BrowserTab, BrowserTargetAvailability, BrowserTargetKind,
     browser_diagnostic_is_error_code, browser_eval_enabled, normalize_browser_open_url,
+};
+pub use browser_control::{
+    BROWSER_CONTROL_CANONICAL_SESSION_ID, BROWSER_CONTROL_CANONICAL_TURN_ID,
+    BROWSER_CONTROL_PROTOCOL_VERSION, BrowserBridgeConnectionIdentity, BrowserBridgeRole,
+    BrowserBridgeState, BrowserCompletionCertainty, BrowserControlActorSnapshot,
+    BrowserControlCancel, BrowserControlClientFrame, BrowserControlClientInfo,
+    BrowserControlClientSummary, BrowserControlDiagnostic, BrowserControlEvent,
+    BrowserControlEventKind, BrowserControlEventWindow, BrowserControlGroupSummary,
+    BrowserControlHello, BrowserControlHelloOk, BrowserControlOperation,
+    BrowserControlOperationSummary, BrowserControlPlaneSnapshot, BrowserControlRequest,
+    BrowserControlResponse, BrowserControlSchedulerSnapshot, BrowserControlServerFrame,
+    BrowserHostHello, BrowserHostHelloOk, BrowserInstanceIdentity, BrowserInstanceStability,
+    BrowserLeaseReference, BrowserLeaseState, BrowserMigrationMode, BrowserOperationClass,
+    BrowserOperationScope, BrowserTabKey,
 };
 pub use phone::{
     PhoneAccessibilityNode, PhoneAccessibilitySummary, PhoneAccessibilityTreeRequest,
@@ -37,10 +54,11 @@ pub use phone::{
     PhoneUnavailableAction,
 };
 pub use service::{
-    CUA_SERVICE_CAPABILITIES, CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX, CUA_SERVICE_MAX_DEADLINE_MS,
-    CUA_SERVICE_PROTOCOL_VERSION, CUA_SERVICE_VERSION, CuaActionRequest, CuaBackendResponse,
-    CuaCancelStatus, CuaCancellation, CuaMouseButton, CuaRequestContext, CuaScreenshot,
-    CuaScrollDirection, ServiceRequest, ServiceResponse, SessionPresenceAction,
+    BROWSER_CONTROL_CAPABILITY_V1, CUA_SERVICE_CAPABILITIES, CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX,
+    CUA_SERVICE_MAX_DEADLINE_MS, CUA_SERVICE_PROTOCOL_VERSION, CUA_SERVICE_VERSION,
+    CuaActionRequest, CuaBackendResponse, CuaCancelStatus, CuaCancellation, CuaMouseButton,
+    CuaRequestContext, CuaScreenshot, CuaScrollDirection, ServiceRequest, ServiceResponse,
+    SessionPresenceAction, browser_control_mode_capability, browser_control_mode_from_capabilities,
     cua_service_capabilities, cua_service_capabilities_for_input_backend,
 };
 

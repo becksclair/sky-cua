@@ -31,6 +31,12 @@ CODEX_TOOLS_APPROVAL_MODE = "approve"
 CODEX_MCP_SERVER_TOML_BEGIN = "# >>> sky-cua mcp_servers (managed by install_mcp_server.py) >>>"
 CODEX_MCP_SERVER_TOML_END = "# <<< sky-cua mcp_servers <<<"
 OPENCLAW_MCP_SET_TIMEOUT_SECONDS = 30
+MCP_CALLER_PROVENANCE_ENV = "SKY_CUA_MCP_CALLER_PROVENANCE"
+OPENCLAW_CALLER_PROVENANCE = "openclaw"
+OPTIONAL_MCP_RUNTIME_ENV = (
+    "SKY_CUA_BROWSER_CONTROL_MODE",
+    "SKY_CUA_CODEX_BROWSER_SOCKET_PATH",
+)
 
 
 def install_openclaw(
@@ -45,7 +51,14 @@ def install_openclaw(
     openclaw_state_dir = (openclaw_dir or DEFAULT_OPENCLAW_DIR).expanduser().resolve()
     openclaw_state_dir.mkdir(parents=True, exist_ok=True)
     root = (resource_root or _install_shared.REPO_ROOT).resolve()
-    policy_env = dict(launch_env or {})
+    runtime_env = {
+        name: os.environ[name] for name in OPTIONAL_MCP_RUNTIME_ENV if name in os.environ
+    }
+    policy_env = {
+        **runtime_env,
+        **dict(launch_env or {}),
+        MCP_CALLER_PROVENANCE_ENV: OPENCLAW_CALLER_PROVENANCE,
+    }
     codex_home_updates = plan_openclaw_agent_codex_mcp_servers(
         openclaw_state_dir, client_path, resource_root=root, launch_env=policy_env
     )
@@ -242,7 +255,11 @@ def codex_mcp_server_toml_block(
     launch_env: dict[str, str] | None = None,
 ) -> str:
     root = (resource_root or _install_shared.REPO_ROOT).resolve()
-    env_values = {"SKY_CUA_REPO_ROOT": str(root), **dict(launch_env or {})}
+    env_values = {
+        "SKY_CUA_REPO_ROOT": str(root),
+        **dict(launch_env or {}),
+        MCP_CALLER_PROVENANCE_ENV: OPENCLAW_CALLER_PROVENANCE,
+    }
     rendered_env = "\n".join(
         f"{key} = {toml_basic_string(value)}" for key, value in sorted(env_values.items())
     )

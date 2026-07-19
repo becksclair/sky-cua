@@ -26,7 +26,7 @@ use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
 use super::protocol::{read_frame, write_frame};
-use super::sockets::bridge_socket_paths_newest_first;
+use super::sockets::{bridge_socket_paths_newest_first, persistent_actor_is_healthy};
 
 const KEEPALIVE_SESSION_ID: &str = "sky-cua-heartbeat-keepalive";
 const KEEPALIVE_TURN_ID: &str = "heartbeat";
@@ -73,6 +73,12 @@ fn spawn_missing_keepalives(
     initial_response_timeout: Duration,
 ) {
     for socket in sockets {
+        if persistent_actor_is_healthy(&socket) {
+            if let Some(task) = tasks.remove(&socket) {
+                task.abort();
+            }
+            continue;
+        }
         if tasks.contains_key(&socket) {
             continue;
         }

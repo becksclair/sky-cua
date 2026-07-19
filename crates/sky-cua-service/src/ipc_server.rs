@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sky_cua_platform::model::{ServiceRequest, ServiceResponse};
 #[cfg(windows)]
 use sky_cua_platform::service_tcp_addr;
@@ -14,6 +14,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{info, warn};
 
+#[cfg(unix)]
+use crate::codex_browser_compat::{
+    CodexBrowserBackend, CodexBrowserCompatListener, accept_configured as accept_codex_browser,
+};
 use crate::daemon::ServiceDaemon;
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -99,6 +103,49 @@ pub async fn run_service() -> Result<()> {
     let _scrcpy_liveness_watchdog = daemon.spawn_scrcpy_liveness_watchdog();
     let _phone_overlay_idle_watchdog = daemon.spawn_phone_overlay_idle_watchdog();
     let connections = Arc::new(ConnectionTracker::default());
+    let codex_backend: Arc<dyn CodexBrowserBackend> = daemon.codex_browser_backend();
+    let effective_browser_control_mode = daemon.effective_browser_control_mode().ok();
+    let strict_browser_control =
+        effective_browser_control_mode.is_some_and(codex_ingress_bind_failure_is_fatal);
+    let codex_bind =
+        if effective_browser_control_mode == Some(crate::browser::BrowserControlMode::Legacy) {
+            Ok(None)
+        } else {
+            CodexBrowserCompatListener::bind_configured(&socket_path)
+        };
+    let mut codex_browser = match codex_bind {
+        Ok(Some(listener)) => Some(listener),
+        Ok(None) if strict_browser_control => {
+            anyhow::bail!(
+                "strict browser-control mode requires an explicit Codex browser compatibility socket"
+            );
+        }
+        Ok(None) => None,
+        Err(error) => {
+            if strict_browser_control {
+                return Err(error).context(
+                    "strict browser-control mode requires the configured Codex compatibility ingress",
+                );
+            }
+            // Hybrid remains available for ordinary MCP traffic. The runtime
+            // reports the degraded compatibility ingress through browser status.
+            daemon.record_browser_control_startup_diagnostic(
+                sky_cua_platform::model::DiagnosticEntry {
+                    code: "CodexBrowserIngressUnavailable".to_owned(),
+                    message: "Codex browser compatibility ingress failed to bind; ordinary MCP browser control remains available in hybrid mode.".to_owned(),
+                    details: Some(error.to_string()),
+                },
+            );
+            warn!("failed to bind Codex browser compatibility ingress: {error:#}");
+            None
+        }
+    };
+    if let Some(listener) = &codex_browser {
+        info!(
+            "Codex browser compatibility ingress listening on {}",
+            listener.path().display()
+        );
+    }
     info!("sky-cua-service listening on {}", socket_path.display());
 
     loop {
@@ -110,6 +157,21 @@ pub async fn run_service() -> Result<()> {
                     }
                     Err(error) => {
                         warn!("sky-cua IPC accept error: {error}");
+                    }
+                }
+            }
+            accept_result = accept_codex_browser(codex_browser.as_ref()) => {
+                match accept_result {
+                    Ok(stream) => {
+                        spawn_codex_browser_handler(
+                            stream,
+                            &daemon,
+                            &connections,
+                            &codex_backend,
+                        ).await;
+                    }
+                    Err(error) => {
+                        warn!("Codex browser compatibility accept error: {error}");
                     }
                 }
             }
@@ -148,6 +210,19 @@ pub async fn run_service() -> Result<()> {
                     }
                 }
 
+                if let Some(listener) = codex_browser.as_mut() {
+                    match listener.rebind_if_unlinked() {
+                        Ok(true) => warn!(
+                            "Codex browser compatibility socket disappeared at {}; re-bound the listener",
+                            listener.path().display()
+                        ),
+                        Ok(false) => {}
+                        Err(error) => warn!(
+                            "Codex browser compatibility socket disappeared and re-binding failed: {error:#}"
+                        ),
+                    }
+                }
+
                 if service_idle_timed_out(&daemon, &connections).await {
                     info!("sky-cua-service idle timeout reached; exiting");
                     break;
@@ -168,8 +243,35 @@ pub async fn run_service() -> Result<()> {
     // Holding the singleton lock proves this daemon still owns the socket
     // path, so removing it here cannot delete a successor's socket.
     let _ = tokio::fs::remove_file(&socket_path).await;
+    if let Some(listener) = &codex_browser {
+        listener.remove_socket().await;
+    }
     drop(singleton_lock);
     Ok(())
+}
+
+#[cfg(unix)]
+fn codex_ingress_bind_failure_is_fatal(mode: crate::browser::BrowserControlMode) -> bool {
+    mode == crate::browser::BrowserControlMode::Strict
+}
+
+#[cfg(unix)]
+async fn spawn_codex_browser_handler(
+    stream: UnixStream,
+    daemon: &Arc<ServiceDaemon>,
+    connections: &Arc<ConnectionTracker>,
+    backend: &Arc<dyn CodexBrowserBackend>,
+) {
+    let daemon = daemon.clone();
+    let connections = connections.clone();
+    let backend = backend.clone();
+    connections.register().await;
+    tokio::spawn(async move {
+        if let Err(error) = crate::codex_browser_compat::serve_connection(stream, backend).await {
+            warn!("Codex browser compatibility connection error: {error:#}");
+        }
+        connections.unregister_and_cleanup_if_idle(&daemon).await;
+    });
 }
 
 #[cfg(unix)]
@@ -218,7 +320,9 @@ async fn drain_pending_connections(
 /// acquire a fresh lock on the recreated path while the old lock holder still
 /// runs, which is the stomping bug this guard exists to prevent.
 #[cfg(unix)]
-fn acquire_singleton_lock(socket_path: &std::path::Path) -> Result<Option<std::fs::File>> {
+pub(crate) fn acquire_singleton_lock(
+    socket_path: &std::path::Path,
+) -> Result<Option<std::fs::File>> {
     use std::io::Write;
     use std::os::unix::io::AsRawFd;
 
@@ -446,6 +550,20 @@ fn oversized_request_response() -> ServiceResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn strict_mode_requires_codex_ingress_while_hybrid_can_report_degraded() {
+        assert!(codex_ingress_bind_failure_is_fatal(
+            crate::browser::BrowserControlMode::Strict
+        ));
+        assert!(!codex_ingress_bind_failure_is_fatal(
+            crate::browser::BrowserControlMode::Hybrid
+        ));
+        assert!(!codex_ingress_bind_failure_is_fatal(
+            crate::browser::BrowserControlMode::Legacy
+        ));
+    }
 
     #[cfg(unix)]
     #[test]

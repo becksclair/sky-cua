@@ -5,9 +5,11 @@ use serde_json::json;
 use sky_cua_platform::model::{
     BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
     BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse, BrowserClaimTabResponse,
-    BrowserEvalResponse, BrowserListTabsResponse, BrowserMoveMouseResponse, BrowserOpenResponse,
-    BrowserRequest, BrowserResponse, BrowserSnapshotResponse, BrowserStatusReport, BrowserTab,
-    BrowserTargetAvailability, BrowserTargetKind, DiagnosticEntry, ServiceRequest, ServiceResponse,
+    BrowserControlEventWindow, BrowserControlPlaneSnapshot, BrowserControlSchedulerSnapshot,
+    BrowserEvalResponse, BrowserListTabsResponse, BrowserMigrationMode, BrowserMoveMouseResponse,
+    BrowserOpenResponse, BrowserRequest, BrowserResponse, BrowserSnapshotResponse,
+    BrowserStatusReport, BrowserTab, BrowserTargetAvailability, BrowserTargetKind, DiagnosticEntry,
+    ServiceRequest, ServiceResponse,
 };
 
 use crate::heuristics::HeuristicsRegistry;
@@ -426,6 +428,7 @@ fn browser_type_text_preserves_literal_text() {
         service.take_requests()[0],
         ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::TypeText {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -471,6 +474,7 @@ fn browser_claim_tab_routes_to_service_and_returns_tab() {
         service.take_requests()[0],
         ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::ClaimTab {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -512,6 +516,7 @@ fn browser_move_mouse_routes_to_service_and_returns_coordinates() {
         service.take_requests()[0],
         ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::MoveMouse {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -590,6 +595,7 @@ fn browser_open_routes_to_service_and_returns_tab() {
         requests[0],
         ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Open {
                 target: Some(BrowserTargetKind::UserChrome),
                 url: Some("https://example.test/".to_string()),
@@ -668,6 +674,7 @@ fn browser_status_summary_mentions_targets_and_diagnostics() {
         }],
         tabs_known: None,
         browser_integration: None,
+        control_plane: None,
         diagnostics: vec![DiagnosticEntry {
             code: "BrowserBridgeDisconnected".to_string(),
             message: "No browser bridge is connected.".to_string(),
@@ -680,6 +687,50 @@ fn browser_status_summary_mentions_targets_and_diagnostics() {
     assert!(summary.contains("user_chrome=available"));
     assert!(summary.contains("Tabs known: unknown"));
     assert!(summary.contains("No browser bridge is connected"));
+}
+
+#[test]
+fn browser_status_structured_content_preserves_control_plane_snapshot() {
+    let service = FakeService::with_response(browser_service_response!(Status {
+        report: BrowserStatusReport {
+            enabled: true,
+            available_targets: Vec::new(),
+            tabs_known: None,
+            browser_integration: None,
+            control_plane: Some(Box::new(BrowserControlPlaneSnapshot {
+                protocol_version: 1,
+                daemon_generation: "generation-1".to_owned(),
+                migration_mode: BrowserMigrationMode::Strict,
+                ready: false,
+                client_count: 3,
+                clients: Vec::new(),
+                clients_omitted: 0,
+                actors: Vec::new(),
+                actors_omitted: 0,
+                scheduler: BrowserControlSchedulerSnapshot::default(),
+                events: BrowserControlEventWindow::default(),
+            })),
+            diagnostics: Vec::new(),
+        }
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_status",
+        json!({}),
+    )
+    .unwrap();
+
+    assert_eq!(
+        result["structuredContent"]["control_plane"]["daemon_generation"],
+        "generation-1"
+    );
+    assert_eq!(
+        result["structuredContent"]["control_plane"]["client_count"],
+        3
+    );
 }
 
 #[test]
@@ -1052,6 +1103,7 @@ fn browser_snapshot_limits_visible_text_by_default_and_preserves_metadata() {
         service.take_requests()[0],
         ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1113,6 +1165,7 @@ fn browser_snapshot_accepts_zero_text_limit_to_omit_visible_text() {
         service.take_requests()[0],
         ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1234,6 +1287,7 @@ fn browser_snapshot_filters_structured_elements_for_deep_sidebar_controls() {
         service.take_requests(),
         vec![ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1292,6 +1346,7 @@ fn browser_snapshot_sends_offset_to_service_without_double_skipping_results() {
         service.take_requests(),
         vec![ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1347,6 +1402,7 @@ fn browser_snapshot_accepts_zero_element_limit_to_omit_elements() {
         service.take_requests(),
         vec![ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1392,6 +1448,7 @@ fn browser_snapshot_offset_past_service_cap_requests_no_elements() {
         service.take_requests(),
         vec![ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1454,6 +1511,7 @@ fn browser_snapshot_offset_near_service_cap_clamps_requested_window() {
         service.take_requests(),
         vec![ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Snapshot {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1575,6 +1633,7 @@ fn browser_eval_routes_expression_to_service() {
         service.take_requests(),
         vec![ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Eval {
                 target: None,
                 tab_id: "tab-1".to_string(),
@@ -1687,6 +1746,7 @@ fn browser_screenshot_attaches_image_block_and_strips_base64() {
         service.take_requests()[0],
         ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Screenshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -1730,6 +1790,7 @@ fn browser_screenshot_for_text_only_model_omits_image_block() {
         service.take_requests()[0],
         ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Screenshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -1816,6 +1877,7 @@ fn browser_screenshot_text_only_rejects_base64_without_path() {
         service.take_requests()[0],
         ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Screenshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),

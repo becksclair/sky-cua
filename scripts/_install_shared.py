@@ -15,6 +15,15 @@ from _plugin_bundle import SKY_CUA_SKILLS, remove_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BROWSER_SELECTION_ENV = "SKY_CUA_BROWSER"
+BROWSER_CONTROL_MODE_ENV = "SKY_CUA_BROWSER_CONTROL_MODE"
+CODEX_BROWSER_SOCKET_PATH_ENV = "SKY_CUA_CODEX_BROWSER_SOCKET_PATH"
+CANONICAL_BROWSER_SELECTIONS = frozenset({"all", "brave", "chrome", "chromium"})
+BROWSER_CONTROL_MODES = frozenset({"legacy", "hybrid", "strict"})
+LEGACY_BROWSER_SELECTION_ALIASES = {
+    "brave-origin": "brave",
+    "chrome-origin": "chrome",
+    "chromium-origin": "chromium",
+}
 DEFAULT_LOCAL_INSTALL_DIR = Path.home() / ".local" / "share" / "sky-cua"
 MCP_HOST_CHOICES = ("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw")
 GATEWAY_AUTH_ENV_KEYS = ("OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD")
@@ -178,15 +187,59 @@ def machine_config_path() -> Path | None:
     return base / "sky-cua" / "sky-cua.toml"
 
 
-def seed_machine_config_browser(value: str) -> Path | None:
-    """Persist the browser selection into the machine config file.
+def _replace_assignment(text: str, start: int, end: int, key: str, value: str) -> str:
+    section = text[start:end]
+    line = f"{key} = {toml_basic_string(value)}\n"
+    updated, replacements = re.subn(
+        rf"(?m)^{re.escape(key)}[ \t]*=.*(?:\n|$)", line, section, count=1
+    )
+    if replacements != 1:
+        raise ValueError(f"could not locate the {key} assignment to replace")
+    return text[:start] + updated + text[end:]
 
-    Machine-level settings belong in one file the runtime reads directly, not
-    in every host registration's environment. Returns the written path, or
-    None when no config location resolves or the existing file is unsafe to
-    edit (unparseable, or `browser` set by something more complex than a
-    single assignment line).
-    """
+
+def _upsert_top_level_string(text: str, parsed: dict[str, object], key: str, value: str) -> str:
+    first_table = re.search(r"(?m)^\s*\[[^\n]+\]", text)
+    end = first_table.start() if first_table else len(text)
+    if key in parsed:
+        return _replace_assignment(text, 0, end, key, value)
+    separator = "" if end == 0 or text[:end].endswith("\n") else "\n"
+    return text[:end] + separator + f"{key} = {toml_basic_string(value)}\n" + text[end:]
+
+
+def _upsert_table_strings(
+    text: str, parsed: dict[str, object], table: str, values: dict[str, str]
+) -> str:
+    table_value = parsed.get(table)
+    if table_value is not None and not isinstance(table_value, dict):
+        raise ValueError(f"{table} is not a TOML table")
+    header = re.search(rf"(?m)^\[{re.escape(table)}\][ \t]*(?:#.*)?$", text)
+    if header is None:
+        if table_value is not None:
+            raise ValueError(f"could not locate the [{table}] table to update")
+        separator = "" if not text or text.endswith("\n") else "\n"
+        block = f"[{table}]\n" + "".join(
+            f"{key} = {toml_basic_string(value)}\n" for key, value in values.items()
+        )
+        return text + separator + block
+
+    existing = table_value if isinstance(table_value, dict) else {}
+    for key, value in values.items():
+        header = re.search(rf"(?m)^\[{re.escape(table)}\][ \t]*(?:#.*)?$", text)
+        assert header is not None
+        section_start = header.end()
+        next_table = re.search(r"(?m)^\s*\[[^\n]+\]", text[section_start:])
+        section_end = section_start + next_table.start() if next_table else len(text)
+        if key in existing:
+            text = _replace_assignment(text, section_start, section_end, key, value)
+        else:
+            insertion = f"{key} = {toml_basic_string(value)}\n"
+            prefix = "" if text[:section_end].endswith("\n") else "\n"
+            text = text[:section_end] + prefix + insertion + text[section_end:]
+    return text
+
+
+def _seed_machine_config(values: dict[str, str]) -> Path | None:
     path = machine_config_path()
     if path is None:
         return None
@@ -200,21 +253,29 @@ def seed_machine_config_browser(value: str) -> Path | None:
             file=sys.stderr,
         )
         return None
-    if existing.get("browser") == value:
+    new_text = text
+    try:
+        if (browser := values.get("browser")) and existing.get("browser") != browser:
+            new_text = _upsert_top_level_string(new_text, existing, "browser", browser)
+        browser_control = {
+            key: value for key, value in values.items() if key in {"mode", "codex_socket_path"}
+        }
+        existing_control = existing.get("browser_control", {})
+        changed_control = {
+            key: value
+            for key, value in browser_control.items()
+            if not isinstance(existing_control, dict) or existing_control.get(key) != value
+        }
+        if changed_control:
+            new_text = _upsert_table_strings(new_text, existing, "browser_control", changed_control)
+    except ValueError as error:
+        print(
+            f"warning: not updating machine config {path}: {error}; edit it by hand.",
+            file=sys.stderr,
+        )
+        return None
+    if new_text == text:
         return path
-    line = f"browser = {toml_basic_string(value)}\n"
-    if "browser" in existing:
-        new_text, replacements = re.subn(r"(?m)^browser\s*=.*\n?", line, text, count=1)
-        if replacements != 1:
-            print(
-                f"warning: not updating machine config {path}: could not locate the "
-                "browser assignment to replace; edit it by hand.",
-                file=sys.stderr,
-            )
-            return None
-    else:
-        separator = "" if not text or text.endswith("\n") else "\n"
-        new_text = text + separator + line
     try:
         tomllib.loads(new_text)
     except tomllib.TOMLDecodeError as error:
@@ -228,12 +289,53 @@ def seed_machine_config_browser(value: str) -> Path | None:
     return path
 
 
+def seed_machine_config_browser(value: str) -> Path | None:
+    """Persist one already-validated browser selection."""
+    return _seed_machine_config({"browser": value})
+
+
 def seed_machine_config_from_environment() -> Path | None:
-    """Seed machine config from SKY_CUA_BROWSER when set at install time."""
-    value = os.environ.get(BROWSER_SELECTION_ENV, "").strip()
-    if not value:
+    """Persist explicitly supplied machine-owned browser settings atomically."""
+    values: dict[str, str] = {}
+    browser = os.environ.get(BROWSER_SELECTION_ENV, "").strip()
+    if browser:
+        browser = LEGACY_BROWSER_SELECTION_ALIASES.get(browser, browser)
+        if browser not in CANONICAL_BROWSER_SELECTIONS:
+            choices = ", ".join(sorted(CANONICAL_BROWSER_SELECTIONS))
+            print(
+                f"warning: not updating machine config: unsupported {BROWSER_SELECTION_ENV} "
+                f"value {browser!r}; use {choices}.",
+                file=sys.stderr,
+            )
+            return None
+        values["browser"] = browser
+
+    if BROWSER_CONTROL_MODE_ENV in os.environ:
+        mode = os.environ[BROWSER_CONTROL_MODE_ENV].strip()
+        if mode not in BROWSER_CONTROL_MODES:
+            choices = ", ".join(sorted(BROWSER_CONTROL_MODES))
+            print(
+                f"warning: not updating machine config: unsupported {BROWSER_CONTROL_MODE_ENV} "
+                f"value {mode!r}; use {choices}.",
+                file=sys.stderr,
+            )
+            return None
+        values["mode"] = mode
+
+    if CODEX_BROWSER_SOCKET_PATH_ENV in os.environ:
+        socket_path = os.environ[CODEX_BROWSER_SOCKET_PATH_ENV].strip()
+        if not socket_path:
+            print(
+                f"warning: not updating machine config: {CODEX_BROWSER_SOCKET_PATH_ENV} "
+                "must not be empty.",
+                file=sys.stderr,
+            )
+            return None
+        values["codex_socket_path"] = socket_path
+
+    if not values:
         return None
-    return seed_machine_config_browser(value)
+    return _seed_machine_config(values)
 
 
 def install_sky_cua_skills(skills_dir: Path) -> None:

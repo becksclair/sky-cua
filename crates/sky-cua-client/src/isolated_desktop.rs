@@ -26,7 +26,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use sky_cua_platform::config::{Lifecycle, ResolvedIsolatedDesktop, ViewerMode};
+use sky_cua_platform::config::{
+    CODEX_BROWSER_SOCKET_PATH_ENV, Lifecycle, ResolvedIsolatedDesktop, ViewerMode,
+};
 
 // The client-owned sandbox-bus fallback (spawn/persist/recover/reap) lives in its
 // own submodule; the parent drives it from `ensure`/`stop`.
@@ -387,6 +389,7 @@ pub fn stop(cfg: &ResolvedIsolatedDesktop) -> Result<String> {
 /// Build the daemon spawn environment for the given display, sandbox bus, and
 /// isolated socket. Pure so it can be unit-tested without a real xpra.
 fn build_spawn_env(display: &str, dbus_address: &str, socket_path: &Path) -> Vec<(String, String)> {
+    let codex_socket_path = socket_path.with_extension("codex-browser.sock");
     vec![
         ("DISPLAY".to_string(), display.to_string()),
         ("XDG_SESSION_TYPE".to_string(), "x11".to_string()),
@@ -399,6 +402,10 @@ fn build_spawn_env(display: &str, dbus_address: &str, socket_path: &Path) -> Vec
         (
             "SKY_CUA_SERVICE_SOCKET_PATH".to_string(),
             socket_path.to_string_lossy().into_owned(),
+        ),
+        (
+            CODEX_BROWSER_SOCKET_PATH_ENV.to_string(),
+            codex_socket_path.to_string_lossy().into_owned(),
         ),
     ]
 }
@@ -855,6 +862,10 @@ mod tests {
         assert_eq!(
             lookup("SKY_CUA_SERVICE_SOCKET_PATH"),
             Some("/run/user/1000/sky-cua/service-isolated-100.sock")
+        );
+        assert_eq!(
+            lookup(CODEX_BROWSER_SOCKET_PATH_ENV),
+            Some("/run/user/1000/sky-cua/service-isolated-100.codex-browser.sock")
         );
     }
 

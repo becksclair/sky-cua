@@ -6,6 +6,10 @@ use std::sync::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::BrowserControlMode;
+
+use super::browser::BrowserRequestContext;
+
 use super::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AgentCursorCapabilities,
     AgentCursorState, AppInfo, AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse,
@@ -18,6 +22,8 @@ pub const CUA_SERVICE_PROTOCOL_VERSION: u32 = 1;
 pub const CUA_SERVICE_VERSION: &str = "0.1.0";
 pub const CUA_SERVICE_MAX_DEADLINE_MS: u32 = 30_000;
 pub const CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX: u32 = 12;
+pub const BROWSER_CONTROL_CAPABILITY_V1: &str = "browser_control.v1";
+const BROWSER_CONTROL_MODE_CAPABILITY_PREFIX: &str = "browser_control.mode=";
 
 pub const CUA_SERVICE_CAPABILITIES: &[&str] = &[
     "action.held_key",
@@ -68,6 +74,32 @@ pub fn cua_service_capabilities_for_input_backend(backend: &InputBackendKind) ->
         })
         .map(|capability| (*capability).to_string())
         .collect()
+}
+
+#[must_use]
+pub fn browser_control_mode_capability(mode: BrowserControlMode) -> String {
+    format!(
+        "{BROWSER_CONTROL_MODE_CAPABILITY_PREFIX}{}",
+        match mode {
+            BrowserControlMode::Legacy => "legacy",
+            BrowserControlMode::Hybrid => "hybrid",
+            BrowserControlMode::Strict => "strict",
+        }
+    )
+}
+
+#[must_use]
+pub fn browser_control_mode_from_capabilities(
+    capabilities: &[String],
+) -> Option<BrowserControlMode> {
+    capabilities.iter().find_map(|capability| {
+        match capability.strip_prefix(BROWSER_CONTROL_MODE_CAPABILITY_PREFIX)? {
+            "legacy" => Some(BrowserControlMode::Legacy),
+            "hybrid" => Some(BrowserControlMode::Hybrid),
+            "strict" => Some(BrowserControlMode::Strict),
+            _ => None,
+        }
+    })
 }
 
 fn default_cua_protocol_version() -> u32 {
@@ -429,6 +461,17 @@ pub enum ServiceRequest {
         request: BrowserRequest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         identity: Option<BrowserSessionIdentity>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<BrowserRequestContext>,
+    },
+    CancelBrowserOperation {
+        connection_id: String,
+        operation_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    BrowserClientDisconnected {
+        connection_id: String,
     },
     Phone {
         request: PhoneRequest,
@@ -473,6 +516,8 @@ impl ServiceRequest {
             | Self::ShowAgentCursor
             | Self::SetupAccessibility
             | Self::SetupWindowTargeting
+            | Self::CancelBrowserOperation { .. }
+            | Self::BrowserClientDisconnected { .. }
             // Focus-set converges: activating the same window twice ends in
             // the same focused state as activating it once.
             | Self::ActivateWindow { .. } => true,
@@ -672,6 +717,25 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn browser_control_mode_capability_round_trips_and_ignores_legacy_health() {
+        for mode in [
+            BrowserControlMode::Legacy,
+            BrowserControlMode::Hybrid,
+            BrowserControlMode::Strict,
+        ] {
+            let capabilities = vec![
+                BROWSER_CONTROL_CAPABILITY_V1.to_owned(),
+                browser_control_mode_capability(mode),
+            ];
+            assert_eq!(
+                browser_control_mode_from_capabilities(&capabilities),
+                Some(mode)
+            );
+        }
+        assert_eq!(browser_control_mode_from_capabilities(&[]), None);
+    }
+
+    #[test]
     fn service_request_idempotency_matches_the_classification_table() {
         let idempotent = [
             ServiceRequest::Health,
@@ -701,6 +765,7 @@ mod tests {
             ServiceRequest::Browser {
                 request: BrowserRequest::Status,
                 identity: None,
+                context: None,
             },
             ServiceRequest::Phone {
                 request: PhoneRequest::Status(PhoneStatusRequest::default()),
@@ -734,6 +799,7 @@ mod tests {
             },
             ServiceRequest::Browser {
                 identity: None,
+                context: None,
                 request: BrowserRequest::Click {
                     target: Some(BrowserTargetKind::UserChrome),
                     tab_id: "123".to_string(),
@@ -824,12 +890,14 @@ mod tests {
                 ServiceRequest::Browser {
                     request: BrowserRequest::Status,
                     identity: None,
+                    context: None,
                 },
                 "browser",
             ),
             (
                 ServiceRequest::Browser {
                     identity: None,
+                    context: None,
                     request: BrowserRequest::ListTabs {
                         target: Some(BrowserTargetKind::UserChrome),
                     },
@@ -839,6 +907,7 @@ mod tests {
             (
                 ServiceRequest::Browser {
                     identity: None,
+                    context: None,
                     request: BrowserRequest::Open {
                         target: Some(BrowserTargetKind::UserChrome),
                         url: Some("https://example.test/".to_string()),
@@ -849,6 +918,7 @@ mod tests {
             (
                 ServiceRequest::Browser {
                     identity: None,
+                    context: None,
                     request: BrowserRequest::ClaimTab {
                         target: Some(BrowserTargetKind::UserChrome),
                         tab_id: "123".to_string(),
@@ -859,6 +929,7 @@ mod tests {
             (
                 ServiceRequest::Browser {
                     identity: None,
+                    context: None,
                     request: BrowserRequest::MoveMouse {
                         target: Some(BrowserTargetKind::UserChrome),
                         tab_id: "123".to_string(),
@@ -945,6 +1016,7 @@ mod tests {
     fn browser_service_request_uses_nested_type_tag() {
         let rendered = serde_json::to_value(ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Open {
                 target: Some(BrowserTargetKind::UserChrome),
                 url: Some("https://example.test/".to_string()),
@@ -956,6 +1028,132 @@ mod tests {
         assert_eq!(rendered["request"]["type"], "open");
         assert_eq!(rendered["request"]["target"], "user_chrome");
         assert_eq!(rendered["request"]["url"], "https://example.test/");
+    }
+
+    #[test]
+    fn browser_cancellation_and_disconnect_requests_have_stable_wire_shapes() {
+        let cancellation = ServiceRequest::CancelBrowserOperation {
+            connection_id: "mcp-connection".to_string(),
+            operation_id: "op-mcp-connection-0001".to_string(),
+            reason: Some("caller cancelled".to_string()),
+        };
+        let rendered = serde_json::to_value(&cancellation).expect("cancellation serializes");
+        assert_eq!(
+            rendered,
+            json!({
+                "type": "cancel_browser_operation",
+                "connection_id": "mcp-connection",
+                "operation_id": "op-mcp-connection-0001",
+                "reason": "caller cancelled"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<ServiceRequest>(rendered).expect("cancellation round trip"),
+            cancellation
+        );
+
+        let without_reason = serde_json::to_value(ServiceRequest::CancelBrowserOperation {
+            connection_id: "mcp-connection".to_string(),
+            operation_id: "op-mcp-connection-0002".to_string(),
+            reason: None,
+        })
+        .expect("reasonless cancellation serializes");
+        assert!(without_reason.get("reason").is_none());
+
+        let disconnected = ServiceRequest::BrowserClientDisconnected {
+            connection_id: "mcp-connection".to_string(),
+        };
+        let rendered = serde_json::to_value(&disconnected).expect("disconnect serializes");
+        assert_eq!(
+            rendered,
+            json!({
+                "type": "browser_client_disconnected",
+                "connection_id": "mcp-connection"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<ServiceRequest>(rendered).expect("disconnect round trip"),
+            disconnected
+        );
+        assert!(cancellation.is_idempotent());
+        assert!(disconnected.is_idempotent());
+    }
+
+    #[test]
+    fn browser_service_request_context_round_trips_and_legacy_request_stays_readable() {
+        let request = ServiceRequest::Browser {
+            request: BrowserRequest::Status,
+            identity: Some(BrowserSessionIdentity {
+                session_id: "codex-session".to_string(),
+                turn_id: "codex-turn".to_string(),
+                thread_id: Some("codex-thread".to_string()),
+            }),
+            context: Some(BrowserRequestContext {
+                provenance: super::super::browser::BrowserCallerProvenance {
+                    caller: super::super::browser::BrowserCallerKind::CodexDesktop,
+                    source: super::super::browser::BrowserProvenanceSource::InstallerDeclaration,
+                    connection_id: "mcp-connection".to_string(),
+                    declared_caller: Some("codex_desktop".to_string()),
+                    client_info: Some(super::super::browser::BrowserMcpClientInfo {
+                        name: "codex".to_string(),
+                        version: "1.2.3".to_string(),
+                        title: Some("Codex Desktop".to_string()),
+                    }),
+                },
+                logical_identity: super::super::browser::BrowserLogicalIdentity {
+                    session_id: "codex-session".to_string(),
+                    thread_id: Some("codex-thread".to_string()),
+                    turn_id: Some("codex-turn".to_string()),
+                },
+                operation_identity: super::super::browser::BrowserOperationIdentity {
+                    operation_id: "mcp:mcp-connection:abcd".to_string(),
+                    request_id_fingerprint: "abcd".to_string(),
+                },
+            }),
+        };
+
+        let rendered = serde_json::to_value(&request).expect("browser context should serialize");
+        assert_eq!(rendered["identity"]["session_id"], "codex-session");
+        assert_eq!(rendered["context"]["provenance"]["caller"], "codex_desktop");
+        assert_eq!(
+            rendered["context"]["provenance"]["connection_id"],
+            "mcp-connection"
+        );
+        assert!(
+            rendered["context"]["provenance"]
+                .get("mcp_connection_id")
+                .is_none()
+        );
+        assert_eq!(
+            rendered["context"]["provenance"]["client_info"]["title"],
+            "Codex Desktop"
+        );
+        assert_eq!(
+            rendered["context"]["operation_identity"]["operation_id"],
+            "mcp:mcp-connection:abcd"
+        );
+        assert_eq!(
+            serde_json::from_value::<ServiceRequest>(rendered).expect("new request round trip"),
+            request
+        );
+
+        let legacy = serde_json::from_value::<ServiceRequest>(json!({
+            "type": "browser",
+            "request": { "type": "status" },
+            "identity": {
+                "session_id": "legacy-session",
+                "turn_id": "legacy-turn"
+            }
+        }))
+        .expect("legacy browser request should remain readable");
+        assert!(matches!(
+            legacy,
+            ServiceRequest::Browser {
+                context: None,
+                identity: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1565,6 +1763,7 @@ mod tests {
                     }],
                     tabs_known: Some(0),
                     browser_integration: None,
+                    control_plane: None,
                     diagnostics: Vec::new(),
                 },
             },

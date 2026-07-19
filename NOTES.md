@@ -185,39 +185,50 @@ and the idle auto-hide watchdog chain are documented in
 
 ## Smoke harnesses
 
-- Browser-use "Detached"/`Page.enable` wedge — **ROOT CAUSE FOUND & FIXED
-  2026-07-01. The 2026-06 "proprietary relay, unfixable" verdict was WRONG.**
-  It is the Codex extension's own **driver-liveness heartbeat**: every 30s the
-  extension pings its *primary* native-host client and, if no reply in 3s,
-  detaches `chrome.debugger` from every tab (`client-heartbeat-alarm` in
-  `resources/chrome-extension/codex/1.1.5_0/background.js`). sky-cua drove the
-  browser via per-op *ephemeral* connections (`session_id: "sky-cua-mcp"`) that
-  the host never routes the heartbeat to, so nothing answered the ping and the
-  extension kept detaching mid-session → "Detached while handling command."
-  Live-proven on real Brave: pings arrive every 30.0s to a primary client;
-  answering `pong` keeps the debugger attached. This also explains the old
-  clues (raising timeouts made it worse = longer idle gaps; desktop control
-  unaffected = no debugger). Do NOT re-investigate as a relay/idle-death bug.
-  Fix: `crates/sky-cua-service/src/browser/keepalive.rs` — a persistent primary
-  keepalive connection in the daemon that answers the heartbeat, started lazily
-  on first browser use (`BrowserBridgeExecutor::from_env`), reconnects across
-  host restarts. Tradeoff: sky-cua becomes the primary client, so it and a
-  concurrent Codex-desktop browser session evict each other. Full write-up:
+- Browser-use `Detached`/`Page.enable` failures originate in the extension's
+  driver-liveness heartbeat, not a broken CDP relay. The legacy daemon keepalive
+  fixed idle detach but still left lifecycle split. In
+  `SKY_CUA_BROWSER_CONTROL_MODE=hybrid|strict`, the persistent control-plane
+  actor owns heartbeat and browser traffic through one canonical host role;
+  absence still defaults to `legacy`. Full history:
   [`docs/research/2026-06-chrome-debugger-relay-wedge.md`](docs/research/2026-06-chrome-debugger-relay-wedge.md).
-  - Independent robustness hardening also landed 2026-07-01 (an adversarial
-    audit of `crates/sky-cua-service/src/browser/*` + `sky-cua-chrome-host`
-    found real defects that turned a *recoverable* hiccup into corruption or a
-    terminal hang): (1) a mid-sequence detach on a click/press_key no longer
-    replays the whole multi-CDP-command op (was a silent double-submit; guard
-    now `!replay_safe()`); (2) the native host writes frames AFTER dropping the
-    `HostState` lock so a non-reading SW can't freeze every host thread;
-    (3) a belated reply to one of our own prior requests on a reused stream is
-    skipped, not fatal; (4) service frame cap 4 → 64 MiB (large screenshots);
-    (5) probe/IO timeout honors `SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS`.
-  - Deferred deterministic fix (real but multi-browser-only): per-socket
-    sub-budget so a wedged socket cannot eat the whole deadline before a healthy
-    sibling is tried; the safe fix interacts with the cross-socket
-    mutation-safety machinery, so do it deliberately.
+- Browser control-plane identity invariant: canonical extension identity is
+  `sky-cua-control-plane-v1` / `control-plane-lease-v1`; caller provenance,
+  logical session/thread/turn, principal, browser instance, bridge generation,
+  tab key, group lease/fence/revision, and operation ID remain separate daemon
+  records. Never infer host role or tab authority from a caller session, bare
+  tab ID, PID, socket mtime, URL, or title.
+- Browser mutation safety: queued cancellation is definitive; after dispatch,
+  timeout/EOF/reconnect/restart/debugger detach is not proof of non-execution.
+  Do not replay an ambiguous mutation. Its group stays non-transferable until a
+  matching retained completion or exact target/browser loss settles it.
+- Control-plane rollout facts: raw Codex ingress is a distinct owner-only UDS
+  selected by env over `[browser_control].codex_socket_path`; mode resolution is
+  likewise env over machine config over legacy/unset. Raw `getInfo` maps to
+  `type="iab"`, trusted-session `codexSessionId`, and peer-derived
+  `codexAppBuildFlavor` while preserving Codex's exact filter. The persistent
+  authority-free journal restores only suspended, freshly fenced groups and
+  never replays operations. Typed external control frames still have no bound
+  listener. See
+  [`docs/features/unified-browser-bridge-control-plane.md`](docs/features/unified-browser-bridge-control-plane.md).
+- Control-plane identity/reentrancy edges: connection-only browser IDs die at
+  reconnect even if repeated; native-host control-plane role requires hello
+  before dispatch and is immutable afterward; allowlisted raw Fetch
+  continuations may reenter only their in-flight connection/tab parent to avoid
+  event-driven FIFO deadlock. Codex requests mark the same 30-minute browser
+  activity gate as MCP requests, preventing five-minute idle teardown.
+- Installed control-plane acceptance on 2026-07-19 proves exact Codex
+  navigation, click, type, keyboard scroll, screenshots, reset/disconnect, and
+  direct MCP overlap. Three simultaneous installed clients declared as
+  OpenClaw/OpenCode/Pi opened separate tabs. Replacing the native host preserved
+  the daemon PID and both service/Codex socket inodes and recovered raw
+  `getInfo`. Focused VM Codex Desktop/OpenCode/Pi profiles pass; `codex-cua` is
+  blocked before tools by a revoked Codex refresh token, and aggregate `all`
+  still stops at the unrelated Wayland-pointer scroll acknowledgement.
+- Lease ticks must not emit no-op lifecycle events: a one-second timer otherwise
+  erases the useful 256-event diagnostic window. Ambiguous tab claims retain an
+  operation reservation until settlement, and MCP disconnect cleanup waits for
+  already-started calls while rejecting calls that begin after close.
 - The client Unix-socket read timeout must stay generous (60s) for real
   portal approval UX.
 - For `codex exec` plugin tests, validate the JSONL transcript for an actual

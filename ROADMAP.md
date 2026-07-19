@@ -92,6 +92,31 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Real user-tab listing, session-owned tab creation, existing-tab claiming, and Brave/Chrome/Chromium socket selection
   - [x] Page snapshots, screenshots, cursor movement, click, text entry, key dispatch, scroll, and navigation against session-owned or claimed tabs
   - [x] Live Brave MCP smoke and installed OpenCode MCP probe for the full browser tool set
+- [x] Unified daemon-owned browser bridge control plane —
+      [`docs/features/unified-browser-bridge-control-plane.md`](docs/features/unified-browser-bridge-control-plane.md)
+  - [x] Source implementation: protocol-v1 identity model, daemon scheduler and
+        fenced group leases, persistent bridge actors, canonical native-host
+        role, raw Codex UDS, normalized direct MCP/OpenClaw/OpenCode/Pi
+        provenance, persistent authority-free recovery journal, explicit
+        `legacy|hybrid|strict` modes, and bounded browser-status introspection
+  - [x] Persist bounded recovery hints atomically and restore only suspended,
+        freshly fenced groups; unresolved mutations become
+        `recovery_required`, with no authority or operation replay
+  - [ ] Decide whether a dedicated typed control UDS is needed; the v1 typed
+        frame model exists, but production non-Codex callers currently use
+        ordinary service IPC/MCP
+  - [x] Installed Codex control-plane proof: navigate, click, type, scroll,
+        screenshots, and two simultaneous Codex connections
+  - [x] Real Brave overlap: exact installed Codex plus direct MCP, OpenClaw,
+        OpenCode, and Pi on independently owned tabs; native-host replacement
+        recovered without daemon/socket replacement
+  - [x] Focused VM profiles: Codex Desktop, OpenCode MCP, and Pi MCP
+  - [ ] Refresh the VM Codex credential and rerun `codex-cua`; the 2026-07-19
+        run stopped before tools because its refresh token was revoked
+  - [ ] Repair the unrelated Wayland-pointer scroll acknowledgement so the
+        aggregate VM `all` profile can reach its browser members
+  - [ ] Collect optional large-screenshot tail-latency/RSS evidence before
+        changing actor width or transport framing
 - [ ] Codex Desktop compat materialization contract (decided 2026-06-11:
       sky-cua owns behavior; the codex-desktop repo owns impersonation and
       materialization of the OpenAI built-in plugin identities —

@@ -2,12 +2,59 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use sky_cua_platform::config::{
+    BROWSER_CONTROL_MODE_ENV as SKY_CUA_BROWSER_CONTROL_MODE_ENV,
+    BrowserControlMode as MachineBrowserControlMode, resolved_browser_control_config,
+};
 use sky_cua_platform::model::{BrowserSessionIdentity, DiagnosticEntry};
 use tokio::net::UnixStream;
 use tokio::time::Instant as TokioInstant;
 
 use super::diagnostics::{bridge_timeout_diagnostic, unexpected_bridge_response_diagnostic};
 use super::protocol::{read_frame, write_frame};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BrowserControlMode {
+    Legacy,
+    Hybrid,
+    Strict,
+}
+
+impl BrowserControlMode {
+    #[allow(dead_code)] // Forwarded and consumed when WP-04 wires control ingress.
+    pub(crate) fn uses_persistent_actor(self) -> bool {
+        matches!(self, Self::Hybrid | Self::Strict)
+    }
+}
+
+/// Strict selects the persistent actor, but strict legacy-client rejection is
+/// deliberately deferred to WP-05b. Absence keeps the compatibility default.
+#[allow(dead_code)] // Forwarded and consumed when WP-04 wires control ingress.
+pub(crate) fn browser_control_mode() -> Result<BrowserControlMode, DiagnosticEntry> {
+    resolved_browser_control_config()
+        .map(|config| match config.mode {
+            None | Some(MachineBrowserControlMode::Legacy) => BrowserControlMode::Legacy,
+            Some(MachineBrowserControlMode::Hybrid) => BrowserControlMode::Hybrid,
+            Some(MachineBrowserControlMode::Strict) => BrowserControlMode::Strict,
+        })
+        .map_err(browser_control_mode_error)
+}
+
+#[allow(dead_code)] // Forwarded and consumed when WP-04 wires control ingress.
+fn browser_control_mode_error(detail: String) -> DiagnosticEntry {
+    DiagnosticEntry {
+        code: "BrowserControlModeInvalid".to_owned(),
+        message: format!("Invalid browser control configuration: {detail}."),
+        details: Some(
+            json!({
+                "environment_key": SKY_CUA_BROWSER_CONTROL_MODE_ENV,
+                "machine_config_table": "browser_control",
+                "allowed": ["legacy", "hybrid", "strict"],
+            })
+            .to_string(),
+        ),
+    }
+}
 
 #[cfg(not(test))]
 pub(super) fn bridge_request_timeout() -> Duration {
@@ -286,6 +333,16 @@ fn command_budget_ms(remaining_ms: u64, max_command_timeout_ms: u64) -> u64 {
 }
 
 pub(super) async fn connect_bridge_socket(socket: &Path) -> Result<UnixStream, DiagnosticEntry> {
+    if let Some(result) = super::control_plane::connect_persistent_proxy(socket).await {
+        return result.map_err(|error| DiagnosticEntry {
+            code: "BrowserBridgeProxyFailed".to_owned(),
+            message: format!(
+                "Could not create persistent browser bridge proxy for {}: {error}",
+                socket.display()
+            ),
+            details: None,
+        });
+    }
     tokio::time::timeout(bridge_request_timeout(), UnixStream::connect(socket))
         .await
         .map_err(|_| bridge_timeout_diagnostic("connect to", socket))?
@@ -389,7 +446,79 @@ mod cdp_timeout_tests {
 
     use tokio::time::Instant as TokioInstant;
 
-    use super::{cdp_command_timeout_ms, command_budget_ms};
+    use super::{
+        BrowserControlMode, SKY_CUA_BROWSER_CONTROL_MODE_ENV, browser_control_mode,
+        cdp_command_timeout_ms, command_budget_ms,
+    };
+
+    #[test]
+    fn frozen_control_mode_key_selects_legacy_or_persistent_transport() {
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::set_var(SKY_CUA_BROWSER_CONTROL_MODE_ENV, "legacy") };
+        assert_eq!(browser_control_mode().unwrap(), BrowserControlMode::Legacy);
+        assert!(!browser_control_mode().unwrap().uses_persistent_actor());
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::set_var(SKY_CUA_BROWSER_CONTROL_MODE_ENV, "hybrid") };
+        assert!(browser_control_mode().unwrap().uses_persistent_actor());
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::set_var(SKY_CUA_BROWSER_CONTROL_MODE_ENV, "strict") };
+        assert!(browser_control_mode().unwrap().uses_persistent_actor());
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::remove_var(SKY_CUA_BROWSER_CONTROL_MODE_ENV) };
+    }
+
+    #[test]
+    fn unknown_control_mode_is_a_structured_configuration_error() {
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::set_var(SKY_CUA_BROWSER_CONTROL_MODE_ENV, "automatic") };
+        let error = browser_control_mode().unwrap_err();
+        assert_eq!(error.code, "BrowserControlModeInvalid");
+        let details: serde_json::Value =
+            serde_json::from_str(error.details.as_ref().unwrap()).unwrap();
+        assert_eq!(details["environment_key"], SKY_CUA_BROWSER_CONTROL_MODE_ENV);
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::remove_var(SKY_CUA_BROWSER_CONTROL_MODE_ENV) };
+    }
+
+    #[test]
+    fn invalid_machine_control_mode_is_a_structured_configuration_error() {
+        let path = std::env::temp_dir().join(format!(
+            "sky-cua-invalid-browser-control-mode-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, "[browser_control]\nmode = \"automatic\"\n").unwrap();
+        unsafe {
+            std::env::remove_var(SKY_CUA_BROWSER_CONTROL_MODE_ENV);
+            std::env::set_var(sky_cua_platform::config::MACHINE_CONFIG_PATH_ENV, &path);
+        }
+        let error = browser_control_mode().unwrap_err();
+        assert_eq!(error.code, "BrowserControlModeInvalid");
+        let details: serde_json::Value =
+            serde_json::from_str(error.details.as_ref().unwrap()).unwrap();
+        assert_eq!(details["machine_config_table"], "browser_control");
+        assert!(error.message.contains("[browser_control].mode"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_control_mode_is_a_structured_configuration_error() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var(
+                SKY_CUA_BROWSER_CONTROL_MODE_ENV,
+                OsString::from_vec(vec![0xff]),
+            )
+        };
+        let error = browser_control_mode().unwrap_err();
+        assert_eq!(error.code, "BrowserControlModeInvalid");
+        assert!(error.message.contains("not valid UTF-8"));
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::remove_var(SKY_CUA_BROWSER_CONTROL_MODE_ENV) };
+    }
 
     #[test]
     fn sub_minimum_cap_is_floored_instead_of_panicking() {

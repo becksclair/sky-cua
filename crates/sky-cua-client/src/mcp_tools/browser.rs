@@ -495,6 +495,7 @@ fn browser_service_request(
     ServiceRequest::Browser {
         request,
         identity: identity.cloned(),
+        context: crate::mcp_server::current_browser_request_context(),
     }
 }
 
@@ -513,4 +514,67 @@ fn service_snapshot_element_window(
     };
     let offset = (offset > 0).then_some(offset);
     (offset, limit)
+}
+
+#[cfg(test)]
+mod context_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn browser_request_builder_propagates_scoped_context_and_legacy_identity() {
+        let provenance = sky_cua_platform::BrowserCallerProvenance {
+            caller: sky_cua_platform::BrowserCallerKind::CodexDesktop,
+            source: sky_cua_platform::BrowserProvenanceSource::InstallerDeclaration,
+            connection_id: "connection".to_string(),
+            declared_caller: Some("codex_desktop".to_string()),
+            client_info: Some(sky_cua_platform::BrowserMcpClientInfo {
+                name: "codex".to_string(),
+                version: "1.0".to_string(),
+                title: None,
+            }),
+        };
+        let (identity, context) = crate::mcp_server::browser_call_context(
+            &json!({
+                "id": "reused-upstream-id",
+                "params": {
+                    "_meta": {
+                        "x-codex-turn-metadata": {
+                            "session_id": "session",
+                            "thread_id": "thread",
+                            "turn_id": "turn"
+                        }
+                    }
+                }
+            }),
+            &provenance,
+        );
+        let operation_id = context.operation_identity.operation_id.clone();
+
+        let request = crate::mcp_server::with_browser_request_context(context, || {
+            browser_service_request(BrowserRequest::Status, identity.as_ref())
+        });
+        let rendered = serde_json::to_value(&request).expect("service request should serialize");
+        assert_eq!(rendered["identity"]["session_id"], "session");
+        assert_eq!(rendered["context"]["provenance"]["caller"], "codex_desktop");
+        assert_eq!(
+            rendered["context"]["operation_identity"]["operation_id"],
+            operation_id
+        );
+        let rerendered = serde_json::to_value(request)
+            .expect("the same in-flight request should remain serializable");
+        assert_eq!(
+            rerendered["context"]["operation_identity"]["operation_id"],
+            rendered["context"]["operation_identity"]["operation_id"]
+        );
+    }
+
+    #[test]
+    fn browser_request_builder_without_scope_preserves_legacy_shape() {
+        let request = browser_service_request(BrowserRequest::Status, None);
+        let rendered = serde_json::to_value(request).expect("legacy request should serialize");
+        assert!(rendered.get("identity").is_none());
+        assert!(rendered.get("context").is_none());
+    }
 }

@@ -6,6 +6,11 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// reply to one of our own earlier requests on a reused stream, not a foreign
 /// or malformed frame.
 pub(super) const BRIDGE_REQUEST_ID_PREFIX: &str = "sky-cua-browser-";
+pub(super) const CONTROL_PLANE_REQUEST_ID_PREFIX: &str = "sky-cua-control-";
+pub(super) const HOST_HELLO_METHOD: &str = "skyCuaHost/hello";
+pub(super) const HOST_SETTLEMENT_METHOD: &str = "skyCuaHost/settlement";
+pub(super) const HOST_SETTLEMENT_UNKNOWN_METHOD: &str = "skyCuaHost/settlement_unknown";
+pub(super) const HOST_PROTOCOL_VERSION: u64 = 1;
 
 pub(super) const LIST_TABS_REQUEST_ID: &str = "sky-cua-browser-list-tabs";
 pub(super) const BRIDGE_INFO_REQUEST_ID: &str = "sky-cua-browser-info";
@@ -48,7 +53,7 @@ pub(super) const EVAL_REQUEST_ID: &str = "sky-cua-browser-eval";
 // MiB (`sky-cua-chrome-host` `frame::MAX_FRAME_SIZE`), so a low service-side cap was
 // the sole choke point turning a valid large capture into a terminal, non-recoverable
 // bridge failure. Keep this at or below the host cap so the host stays the bound.
-pub(super) const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
+pub(super) const MAX_FRAME_SIZE: usize = 100 * 1024 * 1024;
 
 pub(super) async fn write_frame(
     writer: &mut (impl AsyncWrite + Unpin),

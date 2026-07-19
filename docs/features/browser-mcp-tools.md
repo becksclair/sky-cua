@@ -179,8 +179,10 @@ Recommended agent flow:
   tab returned by `browser_open` or `browser_claim_tab`. Prefer a `ref` from the
   latest `observe` when clicking or typing on an actionable control; reserve
   `x`/`y` for pixel targets without a discrete element. The service
-  self-recovers once when the native-host bridge reports that the tab fell out
-  of `sky-cua-mcp` session ownership or that the debugger is no longer attached.
+  self-recovers once when the native-host bridge reports lost session ownership
+  or a detached debugger. In `legacy` the compatibility session is
+  `sky-cua-mcp`; in `hybrid`/`strict` the daemon uses the canonical control-plane
+  session and applies scheduler/settlement rules.
 - Use `capture_screen(surface="browser")` when visual proof is needed; the image arrives as an
   MCP image content block for image-capable sessions and is also persisted to
   the file named in `structuredContent.screenshot_path`. Text-only agents should
@@ -189,7 +191,13 @@ Recommended agent flow:
 Environment variables:
 
 - `SKY_CUA_BROWSER` restricts real-browser socket selection for `user_chrome`;
-  accepted values are `brave`, `chrome`, `chromium`, and `all`/unset.
+  accepted values are `brave`, `chrome`, `chromium`, and `all`/unset. Runtime
+  and installer machine-config seeding normalize legacy `brave-origin`,
+  `chrome-origin`, and `chromium-origin` aliases to those canonical values.
+- `SKY_CUA_BROWSER_CONTROL_MODE` and
+  `SKY_CUA_CODEX_BROWSER_SOCKET_PATH` override the corresponding
+  `[browser_control]` machine-config fields independently. Resolution is
+  environment, then machine config, then legacy/unset behavior.
 - `SKY_CUA_BROWSER_USE_SOCKET_DIR` and `CODEX_BROWSER_USE_SOCKET_DIR` override
   native-host socket discovery. If either explicit directory is set, the
   default `/tmp/codex-browser-use` fallback is not used.
@@ -290,12 +298,14 @@ shows at most a small bounded set of tabs. `url_contains`/`title_contains` also
 filter `structuredContent.tabs`, so a targeted lookup does not expose hundreds
 of unrelated tab titles and URLs to text-only agents, logs, or transcripts.
 
-The native host treats clients as either a primary Browser Use client or an
-ephemeral sky-cua MCP client. Primary clients receive extension-originated
-requests such as heartbeat pings. MCP browser-tool calls connect as short-lived
-ephemeral clients using `session_id="sky-cua-mcp"`; they can send requests to the
-extension, but they do not evict the primary client and do not become the target
-for extension-originated requests.
+Transport depends on `SKY_CUA_BROWSER_CONTROL_MODE`. In the default `legacy`
+mode, MCP browser-tool calls use short-lived ephemeral clients with
+`session_id="sky-cua-mcp"`, while a separate heartbeat connection receives
+extension-originated pings. In `hybrid` or `strict`, browser-tool calls enter
+the daemon scheduler and use one persistent native-host `control_plane` role
+with canonical extension identity; real MCP caller identity remains private to
+the daemon. See
+[`unified-browser-bridge-control-plane.md`](unified-browser-bridge-control-plane.md).
 
 `browser_open(user_chrome)` uses the same socket discovery and browser-family
 filtering, then sends `createTab`, `attach`, and `executeCdp(Page.enable)` over
@@ -433,29 +443,20 @@ flag, so the hang-then-wake dance is the only detection the extension surface
 allows.
 
 The extension runs a **driver-liveness heartbeat**: every 30 seconds it sends a
-`ping` request to its *primary* native-host client and, if no reply arrives
-within 3 seconds, detaches `chrome.debugger` from every tab (a cleanup so a
-crashed driver does not leave the browser debugged). Because sky-cua's per-op
-connections register as *ephemeral* (`session_id: "sky-cua-mcp"`), the host does
-not route the heartbeat to them, so nothing would answer it and the extension
-would detach the debugger between commands — the historical "Detached while
-handling command" wedge. `browser/keepalive.rs` closes this: on first
-browser-bridge use the daemon starts one persistent connection registered as the
-*primary* client whose only job is to answer the heartbeat `pong`, keeping the
-debugger attached for the whole session; it reconnects across native-host
-restarts. Because the keepalive dies with the daemon, the daemon's 5-minute
-idle exit must not fire mid-browser-session: any browser bridge request keeps
-the daemon (and so the keepalive, and so every tab's debugger attachment)
-alive for 30 minutes past the last one (`browser/activity.rs`) — agent
-think-time between actions routinely exceeds the idle timeout, and every
-idle exit otherwise detached all tabs ~30s later (live incident, 2026-07-08).
-Keepalive connects/disconnects and every session recovery are traced to the
-daemon log. Tradeoff: sky-cua becomes the primary browser client, so a concurrent
-Codex desktop app driving the same browser and sky-cua evict each other. Each `executeCdp` request
-carries a `timeoutMs` derived from the remaining call deadline (capped at the
-extension's 10-second default, and shrunk below the 250 ms floor when the
-deadline is nearly exhausted), so the bridge returns a structured timeout
-before the service abandons the socket read.
+`ping` and detaches every debugger if no reply arrives within 3 seconds. The
+legacy path answers through `browser/keepalive.rs`; browser activity keeps that
+daemon alive for 30 minutes after the latest request. The `hybrid`/`strict`
+path folds heartbeat into the persistent bridge actor, so browser operations
+and liveness share one canonical control connection rather than competing
+primary and ephemeral lifecycles. Ordinary MCP requests and raw Codex requests
+both mark 30-minute browser activity, preventing the daemon's five-minute idle
+exit from tearing down the actor between active browser operations. Installed
+acceptance proves two simultaneous Codex connections; overlap with direct
+MCP/OpenClaw/OpenCode/Pi remains pending. Each `executeCdp` request carries a
+`timeoutMs` derived from the remaining call deadline (capped at the extension's
+10-second default, and shrunk below the 250 ms floor when the deadline is
+nearly exhausted), so the bridge returns a structured timeout before the
+service abandons the socket read.
 
 `browser_scroll` uses `Runtime.evaluate` rather than CDP
 `Input.dispatchMouseEvent(type="mouseWheel")`, because the live extension bridge
@@ -528,6 +529,12 @@ still use the companion Browser Use and Chrome plugins until the adapter
 delegates browser actions through the shared runtime.
 
 ## Verification
+
+Unified control-plane installed acceptance from 2026-07-19 proves navigation,
+click, typing, scroll, screenshots, and two simultaneous Codex connections.
+This does not prove direct-caller overlap, rollback, restart reconciliation,
+performance targets, or the VM `all` profile; those remain tracked in the
+unified-control-plane feature doc.
 
 Focused screenshot-wedge hardening from 2026-06-12:
 
@@ -776,8 +783,11 @@ Live native-host ownership proof from 2026-06-05:
 - Browser tools currently expose readiness, `user_chrome` tab listing,
   creation/navigation of session-owned `user_chrome` tabs, existing-tab
   claiming, browser cursor movement, snapshots, screenshots, click, text entry,
-  key dispatch, and page scrolling. Codex Desktop adapter delegation remains
-  follow-up work (owned by the codex-desktop repo per
+  key dispatch, and page scrolling. Unified-control-plane installed Codex
+  acceptance covers navigation, click, typing, scroll, screenshots, and two
+  simultaneous Codex connections. Direct-caller overlap and the remaining
+  control-plane gates are follow-up work (the Codex adapter is owned by the
+  codex-desktop repo per
   [`docs/runtime/compat-plugin-contract.md`](../runtime/compat-plugin-contract.md));
   managed browser launch was retired on 2026-06-11 and removed from the
   contract.
@@ -797,3 +807,6 @@ Live native-host ownership proof from 2026-06-05:
   compat materialization follow-up.
 - [`docs/features/codex-desktop-compat.md`](codex-desktop-compat.md) — Codex
   companion Browser Use and Chrome plugin compatibility.
+- [`Unified browser bridge control plane`](unified-browser-bridge-control-plane.md)
+  — persistent routing, identity, scheduling, recovery, migration, accepted
+  Codex evidence, and remaining gates.

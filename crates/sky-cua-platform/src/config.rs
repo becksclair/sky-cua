@@ -23,6 +23,8 @@ pub const MACHINE_CONFIG_PATH_ENV: &str = "SKY_CUA_CONFIG_PATH";
 pub const REPO_ROOT_ENV: &str = "SKY_CUA_REPO_ROOT";
 
 pub const BROWSER_SELECTION_ENV: &str = "SKY_CUA_BROWSER";
+pub const BROWSER_CONTROL_MODE_ENV: &str = "SKY_CUA_BROWSER_CONTROL_MODE";
+pub const CODEX_BROWSER_SOCKET_PATH_ENV: &str = "SKY_CUA_CODEX_BROWSER_SOCKET_PATH";
 
 // Phone-use environment overrides. Each beats the matching `[phone]` config key
 // for this process. Names are the public contract surface and are allowlisted in
@@ -89,6 +91,9 @@ pub struct MachineConfig {
     /// Chrome-family browser selection: `brave`, `chrome`, `chromium`, or
     /// `all`. Unset means probe every Chrome-family browser.
     pub browser: Option<String>,
+    /// Durable ownership for the service-level browser control ingress.
+    #[serde(default)]
+    pub browser_control: BrowserControlConfig,
     /// Phone-use `[phone]` table. Absent means defaults plus env overrides.
     #[serde(default)]
     pub phone: PhoneConfig,
@@ -96,6 +101,29 @@ pub struct MachineConfig {
     /// env overrides.
     #[serde(default)]
     pub isolated_desktop: IsolatedDesktopConfig,
+}
+
+/// Parsed `[browser_control]` table. Environment values override these fields
+/// independently, so one MCP client cannot erase a durable machine setting by
+/// omitting it from that client's ambient environment.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct BrowserControlConfig {
+    pub mode: Option<String>,
+    pub codex_socket_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrowserControlMode {
+    Legacy,
+    Hybrid,
+    Strict,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedBrowserControlConfig {
+    pub mode: Option<BrowserControlMode>,
+    pub codex_socket_path: Option<String>,
 }
 
 /// Parsed `[phone]` table. Every field is optional in the file; defaults and
@@ -264,6 +292,8 @@ pub fn all_env_keys() -> &'static [&'static str] {
         MACHINE_CONFIG_PATH_ENV,
         REPO_ROOT_ENV,
         BROWSER_SELECTION_ENV,
+        BROWSER_CONTROL_MODE_ENV,
+        CODEX_BROWSER_SOCKET_PATH_ENV,
         PHONE_ENABLED_ENV,
         PHONE_SERIAL_ENV,
         PHONE_BACKEND_ENV,
@@ -366,7 +396,8 @@ pub fn resolved_browser_selection() -> Result<Option<String>, String> {
     Ok(load_machine_config()?
         .browser
         .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty()))
+        .filter(|value| !value.is_empty())
+        .map(normalize_browser_selection_alias))
 }
 
 fn browser_selection_env_value() -> Option<String> {
@@ -374,6 +405,84 @@ fn browser_selection_env_value() -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+        .map(normalize_browser_selection_alias)
+}
+
+fn normalize_browser_selection_alias(value: String) -> String {
+    match value.as_str() {
+        "brave-origin" => "brave".to_owned(),
+        "chrome-origin" => "chrome".to_owned(),
+        "chromium-origin" => "chromium".to_owned(),
+        _ => value,
+    }
+}
+
+/// Resolve service-level browser-control ownership per field. Explicit process
+/// environment wins over the machine file; absent values remain unset so the
+/// service preserves its legacy behavior.
+pub fn resolved_browser_control_config() -> Result<ResolvedBrowserControlConfig, String> {
+    let mode_env = std::env::var_os(BROWSER_CONTROL_MODE_ENV);
+    let socket_env = std::env::var_os(CODEX_BROWSER_SOCKET_PATH_ENV);
+    let socket_env_was_set = socket_env.is_some();
+    let machine = if mode_env.is_none() || socket_env.is_none() {
+        load_machine_config()?.browser_control
+    } else {
+        BrowserControlConfig::default()
+    };
+
+    let mode = match mode_env {
+        Some(raw) => Some(parse_browser_control_mode_env(raw)?),
+        None => machine
+            .mode
+            .map(|value| parse_browser_control_mode_value(value, "[browser_control].mode"))
+            .transpose()?,
+    };
+    let machine_socket_was_set = machine.codex_socket_path.is_some();
+    let codex_socket_path = match socket_env {
+        Some(raw) => Some(parse_nonempty_utf8_env(CODEX_BROWSER_SOCKET_PATH_ENV, raw)?),
+        None => machine
+            .codex_socket_path
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()),
+    };
+    if machine_socket_was_set && codex_socket_path.is_none() && !socket_env_was_set {
+        return Err("[browser_control].codex_socket_path must not be empty".to_owned());
+    }
+    Ok(ResolvedBrowserControlConfig {
+        mode,
+        codex_socket_path,
+    })
+}
+
+fn parse_browser_control_mode_env(raw: std::ffi::OsString) -> Result<BrowserControlMode, String> {
+    let value = parse_nonempty_utf8_env(BROWSER_CONTROL_MODE_ENV, raw)?;
+    parse_browser_control_mode_value(value, BROWSER_CONTROL_MODE_ENV)
+}
+
+fn parse_browser_control_mode_value(
+    value: String,
+    source: &str,
+) -> Result<BrowserControlMode, String> {
+    let value = value.trim();
+    match value {
+        "legacy" => Ok(BrowserControlMode::Legacy),
+        "hybrid" => Ok(BrowserControlMode::Hybrid),
+        "strict" => Ok(BrowserControlMode::Strict),
+        _ => Err(format!(
+            "invalid {source}: unsupported value {value:?}; use legacy, hybrid, or strict"
+        )),
+    }
+}
+
+fn parse_nonempty_utf8_env(key: &str, raw: std::ffi::OsString) -> Result<String, String> {
+    let value = raw
+        .into_string()
+        .map_err(|_| format!("invalid {key}: value is not valid UTF-8"))?;
+    let value = value.trim().to_owned();
+    if value.is_empty() {
+        return Err(format!("invalid {key}: value must not be empty"));
+    }
+    Ok(value)
 }
 
 /// Non-empty trimmed value of an environment variable, or `None`.
@@ -606,6 +715,108 @@ mod tests {
     #[test]
     fn invalid_toml_is_an_error_not_a_silent_default() {
         assert!(parse_machine_config("browser = ").is_err());
+    }
+
+    #[test]
+    fn parses_browser_control_table_and_rejects_unknown_mode() {
+        let config = parse_machine_config(
+            "[browser_control]\nmode = \"hybrid\"\ncodex_socket_path = \"/run/user/1000/codex.sock\"\n",
+        )
+        .expect("valid config");
+        assert_eq!(config.browser_control.mode.as_deref(), Some("hybrid"));
+        assert_eq!(
+            config.browser_control.codex_socket_path.as_deref(),
+            Some("/run/user/1000/codex.sock")
+        );
+        assert_eq!(
+            parse_machine_config("[browser_control]\nmode = \"automatic\"\n")
+                .expect("syntax is valid")
+                .browser_control
+                .mode
+                .as_deref(),
+            Some("automatic")
+        );
+    }
+
+    #[test]
+    fn browser_control_resolves_env_then_machine_then_unset() {
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let path = std::env::temp_dir().join(format!(
+            "sky-cua-browser-control-config-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "[browser_control]\nmode = \"hybrid\"\ncodex_socket_path = \"/machine/codex.sock\"\n",
+        )
+        .expect("write config");
+        let path_text = path.to_string_lossy().into_owned();
+        let _guard = EnvGuard::set(&[(MACHINE_CONFIG_PATH_ENV, &path_text)]);
+        let _overrides =
+            EnvGuard::clear(&[BROWSER_CONTROL_MODE_ENV, CODEX_BROWSER_SOCKET_PATH_ENV]);
+
+        let resolved = resolved_browser_control_config().expect("machine config resolves");
+        assert_eq!(resolved.mode, Some(BrowserControlMode::Hybrid));
+        assert_eq!(
+            resolved.codex_socket_path.as_deref(),
+            Some("/machine/codex.sock")
+        );
+
+        let _mode_env = EnvGuard::set(&[(BROWSER_CONTROL_MODE_ENV, "strict")]);
+        let resolved = resolved_browser_control_config().expect("env config resolves");
+        assert_eq!(resolved.mode, Some(BrowserControlMode::Strict));
+        assert_eq!(
+            resolved.codex_socket_path.as_deref(),
+            Some("/machine/codex.sock")
+        );
+
+        let _socket_env = EnvGuard::set(&[(CODEX_BROWSER_SOCKET_PATH_ENV, "/env/codex.sock")]);
+        let resolved = resolved_browser_control_config().expect("both env fields resolve");
+        assert_eq!(resolved.mode, Some(BrowserControlMode::Strict));
+        assert_eq!(
+            resolved.codex_socket_path.as_deref(),
+            Some("/env/codex.sock")
+        );
+        drop(_socket_env);
+        drop(_mode_env);
+
+        std::fs::remove_file(&path).expect("remove config");
+        let resolved = resolved_browser_control_config().expect("missing config is legacy/unset");
+        assert_eq!(resolved, ResolvedBrowserControlConfig::default());
+    }
+
+    #[test]
+    fn browser_selection_normalizes_legacy_origin_aliases_from_runtime_env() {
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = EnvGuard::set(&[(BROWSER_SELECTION_ENV, "chrome-origin")]);
+        assert_eq!(
+            resolved_browser_selection()
+                .expect("selection resolves")
+                .as_deref(),
+            Some("chrome")
+        );
+    }
+
+    #[test]
+    fn browser_selection_normalizes_legacy_origin_aliases_from_machine_config() {
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let path = std::env::temp_dir().join(format!(
+            "sky-cua-browser-alias-config-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, "browser = \"brave-origin\"\n").expect("write config");
+        let path_text = path.to_string_lossy().into_owned();
+        let _path = EnvGuard::set(&[(MACHINE_CONFIG_PATH_ENV, &path_text)]);
+        let _selection = EnvGuard::clear(&[BROWSER_SELECTION_ENV]);
+
+        assert_eq!(
+            resolved_browser_selection()
+                .expect("selection resolves")
+                .as_deref(),
+            Some("brave")
+        );
+
+        std::fs::remove_file(path).expect("remove config");
     }
 
     const PHONE_TABLE: &str = r#"

@@ -2,6 +2,7 @@ mod activity;
 mod affinity;
 mod bridge;
 mod cdp;
+mod control_plane;
 mod coordinates;
 mod diagnostics;
 mod executor;
@@ -29,4 +30,6 @@ pub(crate) use bridge::{
     scroll_with_identity, snapshot_with_identity, type_text_element_with_identity,
     type_text_with_identity,
 };
+pub(crate) use control_plane::BrowserControlRuntime;
 pub(crate) use status::{browser_status_from_deferred_doctor, browser_status_from_doctor};
+pub(crate) use transport::{BrowserControlMode, browser_control_mode};

@@ -2,10 +2,15 @@
 use crate::app_server::AppServerControlError;
 use crate::app_server::{AppServerControlResult, AppServerManager};
 use crate::frame::{read_frame, write_frame};
+mod control_plane;
+mod control_plane_settlement;
+
 use anyhow::{Context, Result, bail};
+use control_plane::*;
+use control_plane_settlement::*;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     env, fs,
     fs::File,
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -35,6 +40,8 @@ const SKY_CUA_MCP_SESSION_ID: &str = "sky-cua-mcp";
 const SKY_CUA_CLIENT_ROLE_PARAM: &str = "_sky_cua_client_role";
 const SKY_CUA_OBSERVE_TURNS_PARAM: &str = "_sky_cua_observe_turns";
 const MAX_NON_PRIMARY_CLIENTS: usize = 16;
+const MAX_PENDING_REQUESTS: usize = 100;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 type SharedState = Arc<Mutex<HostState>>;
 type SharedClientWriter = Arc<Mutex<UnixStream>>;
@@ -43,6 +50,8 @@ type SharedClientWriter = Arc<Mutex<UnixStream>>;
 struct Client {
     writer: SharedClientWriter,
     role: ClientRole,
+    daemon_generation: Option<String>,
+    capabilities: HashSet<String>,
     connected_at: Instant,
 }
 
@@ -50,6 +59,7 @@ struct Client {
 enum ClientRole {
     Unknown,
     Primary,
+    ControlPlane,
     Heartbeat,
     Ephemeral,
 }
@@ -58,6 +68,8 @@ struct PendingChromeRequest {
     client_id: usize,
     client_request_id: Value,
     created_at: Instant,
+    settlement: Option<SettlementMetadata>,
+    state: PendingRequestState,
 }
 
 #[derive(Clone)]
@@ -91,10 +103,18 @@ struct HostState {
     clients: HashMap<usize, Client>,
     pending_chrome_requests: HashMap<String, PendingChromeRequest>,
     pending_client_requests: HashMap<String, PendingClientRequest>,
+    pending_id_tombstones: HashMap<String, Instant>,
+    queued_settlements: VecDeque<Value>,
+    settlement_delivery_in_progress: bool,
     next_client_id: usize,
     next_chrome_id: u64,
     next_client_request_id: u64,
     app_server_manager: Arc<AppServerManager>,
+    host_instance_id: String,
+    owner_mode: OwnerMode,
+    owner_daemon_generation: Option<String>,
+    strict_legacy_clients_evicted: u64,
+    strict_legacy_requests_rejected: u64,
 }
 
 impl HostState {
@@ -125,10 +145,25 @@ impl HostState {
             clients: HashMap::new(),
             pending_chrome_requests: HashMap::new(),
             pending_client_requests: HashMap::new(),
+            pending_id_tombstones: HashMap::new(),
+            queued_settlements: VecDeque::new(),
+            settlement_delivery_in_progress: false,
             next_client_id: 1,
             next_chrome_id: 1,
             next_client_request_id: 1,
             app_server_manager,
+            host_instance_id: format!(
+                "native-host-{}-{}",
+                process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ),
+            owner_mode: OwnerMode::Hybrid,
+            owner_daemon_generation: None,
+            strict_legacy_clients_evicted: 0,
+            strict_legacy_requests_rejected: 0,
         }
     }
 
@@ -140,6 +175,8 @@ impl HostState {
             Client {
                 writer,
                 role: ClientRole::Unknown,
+                daemon_generation: None,
+                capabilities: HashSet::new(),
                 connected_at: Instant::now(),
             },
         );
@@ -163,7 +200,13 @@ impl HostState {
 
         let role = client_role_for_message(message);
         match (client.role, role) {
-            (ClientRole::Primary | ClientRole::Heartbeat | ClientRole::Ephemeral, _) => Vec::new(),
+            (
+                ClientRole::Primary
+                | ClientRole::ControlPlane
+                | ClientRole::Heartbeat
+                | ClientRole::Ephemeral,
+                _,
+            ) => Vec::new(),
             (ClientRole::Unknown, ClientRole::Ephemeral) => {
                 self.clients
                     .get_mut(&client_id)
@@ -179,6 +222,7 @@ impl HostState {
                     .role = ClientRole::Heartbeat;
                 Vec::new()
             }
+            (ClientRole::Unknown, ClientRole::ControlPlane) => Vec::new(),
             (ClientRole::Unknown, ClientRole::Unknown) => Vec::new(),
         }
     }
@@ -209,12 +253,9 @@ impl HostState {
     }
 
     fn remove_client(&mut self, client_id: usize) {
-        self.clients.remove(&client_id);
-        remove_pending_requests_for_client(
-            &mut self.pending_chrome_requests,
-            &mut self.pending_client_requests,
-            client_id,
-        );
+        if let Some(client) = self.clients.remove(&client_id) {
+            self.cleanup_pending_for_removed_client(client_id, client.role);
+        }
     }
 
     fn prune_excess_non_primary_clients(&mut self) -> Vec<(usize, Client)> {
@@ -236,45 +277,11 @@ impl HostState {
                 break;
             };
             if let Some(client) = self.clients.remove(&oldest_id) {
-                remove_pending_requests_for_client(
-                    &mut self.pending_chrome_requests,
-                    &mut self.pending_client_requests,
-                    oldest_id,
-                );
+                self.cleanup_pending_for_removed_client(oldest_id, client.role);
                 evicted_clients.push((oldest_id, client));
             }
         }
         evicted_clients
-    }
-
-    fn cleanup_old_requests(&mut self) {
-        const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-        const MAX_PENDING: usize = 100;
-        let now = Instant::now();
-        self.pending_chrome_requests
-            .retain(|_, req| now.duration_since(req.created_at) < TIMEOUT);
-        self.pending_client_requests
-            .retain(|_, req| now.duration_since(req.created_at) < TIMEOUT);
-        while self.pending_chrome_requests.len() > MAX_PENDING {
-            if let Some(oldest) = self
-                .pending_chrome_requests
-                .iter()
-                .min_by_key(|(_, req)| req.created_at)
-                .map(|(id, _)| id.clone())
-            {
-                self.pending_chrome_requests.remove(&oldest);
-            }
-        }
-        while self.pending_client_requests.len() > MAX_PENDING {
-            if let Some(oldest) = self
-                .pending_client_requests
-                .iter()
-                .min_by_key(|(_, req)| req.created_at)
-                .map(|(id, _)| id.clone())
-            {
-                self.pending_client_requests.remove(&oldest);
-            }
-        }
     }
 
     /// Snapshot the Chrome-stdout writer handle and host name so the caller can
@@ -294,12 +301,12 @@ impl HostState {
             .map(|client| Arc::clone(&client.writer))
     }
 
-    /// Clone every current primary client's writer handle for a post-unlock
-    /// broadcast.
-    fn primary_client_writers(&self) -> Vec<SharedClientWriter> {
+    /// Clone the current control-plane and legacy primary writers for a
+    /// post-unlock notification broadcast during hybrid migration.
+    fn notification_client_writers(&self) -> Vec<SharedClientWriter> {
         self.clients
             .values()
-            .filter(|client| client.role == ClientRole::Primary)
+            .filter(|client| matches!(client.role, ClientRole::ControlPlane | ClientRole::Primary))
             .map(|client| Arc::clone(&client.writer))
             .collect()
     }
@@ -327,11 +334,13 @@ fn write_chrome_frame(stdout: &Arc<Mutex<io::Stdout>>, host_name: &str, message:
 /// held, for the same head-of-line reason as [`write_chrome_frame`]. A write
 /// error is non-fatal: the client's own reader thread observes the broken socket
 /// and deregisters it.
-fn write_client_frame(writer: &SharedClientWriter, host_name: &str, message: &Value) {
+fn write_client_frame(writer: &SharedClientWriter, host_name: &str, message: &Value) -> bool {
     let mut writer = writer.lock().expect("client writer mutex poisoned");
     if let Err(error) = write_frame(&mut *writer, message) {
         log(host_name, &format!("client socket write error: {error}"));
+        return false;
     }
+    true
 }
 
 #[derive(Clone)]
@@ -532,6 +541,10 @@ pub fn serve(host_name: String, extension_id: Option<String>) -> Result<()> {
     {
         let state = Arc::clone(&state);
         thread::spawn(move || accept_clients(listener, state));
+    }
+    {
+        let state = Arc::clone(&state);
+        thread::spawn(move || settlement_maintenance_loop(state));
     }
 
     let result = read_chrome_messages(Arc::clone(&state));
@@ -766,10 +779,112 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
             (
                 stdout,
                 host_name,
-                with_id(message, pending.chrome_request_id),
+                strip_host_private_params(with_id(message, pending.chrome_request_id)),
             )
         };
         write_chrome_frame(&stdout, &host_name, &outbound);
+        return;
+    }
+
+    if message.get("method").and_then(Value::as_str) == Some(SKY_CUA_HOST_HELLO_METHOD) {
+        let (writer, host_name, outcome) = {
+            let mut state = state.lock().expect("host state mutex poisoned");
+            let Some(writer) = state.client_writer(client_id) else {
+                return;
+            };
+            let host_name = state.host_name.clone();
+            let outcome = state.handle_host_hello(client_id, &message);
+            (writer, host_name, outcome)
+        };
+        for (fenced_id, fenced_client) in &outcome.fenced_clients {
+            log(
+                &host_name,
+                &format!(
+                    "fencing stale control-plane client {fenced_id} after a newer daemon generation connected"
+                ),
+            );
+            close_client_socket(fenced_client);
+        }
+        for (legacy_id, legacy_client) in &outcome.rejected_legacy_clients {
+            log(
+                &host_name,
+                &format!(
+                    "closing legacy browser-operation client {legacy_id} after strict control-plane activation"
+                ),
+            );
+            close_client_socket(legacy_client);
+        }
+        if write_client_frame(&writer, &host_name, &outcome.response) {
+            deliver_queued_settlements(state);
+        }
+        return;
+    }
+
+    if message.get("method").and_then(Value::as_str).is_some()
+        && message.get("method").and_then(Value::as_str) != Some("ping")
+    {
+        let rejection = {
+            let mut state = state.lock().expect("host state mutex poisoned");
+            let client = state.clients.get(&client_id);
+            if state.owner_mode == OwnerMode::Strict
+                && client.is_some_and(|client| client.role != ClientRole::ControlPlane)
+            {
+                state.strict_legacy_requests_rejected =
+                    state.strict_legacy_requests_rejected.saturating_add(1);
+                Some((
+                    state.client_writer(client_id),
+                    state.host_name.clone(),
+                    strict_legacy_request_error(
+                        message.get("id").cloned().unwrap_or(Value::Null),
+                        state.strict_legacy_requests_rejected,
+                    ),
+                ))
+            } else {
+                None
+            }
+        };
+        if let Some((Some(writer), host_name, response)) = rejection {
+            write_client_frame(&writer, &host_name, &response);
+            return;
+        }
+    }
+
+    let control_plane_marker_requires_hello = message
+        .pointer(&format!("/params/{SKY_CUA_CLIENT_ROLE_PARAM}"))
+        .and_then(Value::as_str)
+        == Some(CONTROL_PLANE_ROLE)
+        && {
+            let state = state.lock().expect("host state mutex poisoned");
+            state
+                .clients
+                .get(&client_id)
+                .is_none_or(|client| client.role != ClientRole::ControlPlane)
+        };
+    if control_plane_marker_requires_hello {
+        let Some((writer, host_name)) = ({
+            let state = state.lock().expect("host state mutex poisoned");
+            state
+                .client_writer(client_id)
+                .map(|writer| (writer, state.host_name.clone()))
+        }) else {
+            return;
+        };
+        write_client_frame(
+            &writer,
+            &host_name,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": message.get("id").cloned().unwrap_or(Value::Null),
+                "error": {
+                    "code": -32001,
+                    "message": "control_plane role requires skyCuaHost/hello before extension dispatch",
+                    "data": {
+                        "type": "sky_cua_host_hello_required",
+                        "host_protocol_version": SKY_CUA_HOST_PROTOCOL_VERSION,
+                    }
+                }
+            }),
+        );
         return;
     }
 
@@ -800,7 +915,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         }) else {
             return;
         };
-        write_chrome_frame(&stdout, &host_name, &message);
+        write_chrome_frame(&stdout, &host_name, &strip_host_private_params(message));
         return;
     }
 
@@ -828,6 +943,63 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         return;
     };
 
+    let settlement = {
+        let guard = state.lock().expect("host state mutex poisoned");
+        let Some(client) = guard.clients.get(&client_id) else {
+            return;
+        };
+        if client.role != ClientRole::ControlPlane {
+            None
+        } else {
+            match settlement_metadata(&message) {
+                Ok(metadata)
+                    if metadata.daemon_generation
+                        == client.daemon_generation.as_deref().unwrap_or_default()
+                        && (!metadata.operation_class.requires_settlement()
+                            || guard.settlement_capacity_available()) =>
+                {
+                    Some(metadata)
+                }
+                Ok(metadata)
+                    if metadata.daemon_generation
+                        != client.daemon_generation.as_deref().unwrap_or_default() =>
+                {
+                    drop(guard);
+                    reject_control_plane_request(
+                        state,
+                        client_id,
+                        &client_request_id,
+                        "sky_cua_host_generation_mismatch",
+                        "request daemon_generation does not match the accepted control-plane hello",
+                    );
+                    return;
+                }
+                Ok(_) => {
+                    drop(guard);
+                    reject_control_plane_request(
+                        state,
+                        client_id,
+                        &client_request_id,
+                        "sky_cua_host_settlement_capacity",
+                        "native-host settlement retention is full",
+                    );
+                    return;
+                }
+                Err(error) => {
+                    drop(guard);
+                    reject_control_plane_request(
+                        state,
+                        client_id,
+                        &client_request_id,
+                        "sky_cua_host_invalid_request_metadata",
+                        error,
+                    );
+                    return;
+                }
+            }
+        }
+    };
+
     let observed_turn = session_turn_from_message(&message);
     let (tracker, observes_rollout_turns) = {
         let state = state.lock().expect("host state mutex poisoned");
@@ -848,22 +1020,23 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         if !state.clients.contains_key(&client_id) {
             return;
         }
-        let chrome_id = format!("linux-{}-{}", process::id(), state.next_chrome_id);
-        state.next_chrome_id += 1;
         state.cleanup_old_requests();
+        let chrome_id = state.allocate_chrome_id();
         state.pending_chrome_requests.insert(
             chrome_id.clone(),
             PendingChromeRequest {
                 client_id,
                 client_request_id,
                 created_at: Instant::now(),
+                settlement,
+                state: PendingRequestState::Active,
             },
         );
         let (stdout, host_name) = state.chrome_writer();
         (
             stdout,
             host_name,
-            with_id(message, Value::String(chrome_id)),
+            strip_host_private_params(with_id(message, Value::String(chrome_id))),
         )
     };
     write_chrome_frame(&stdout, &host_name, &outbound);
@@ -875,7 +1048,16 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
             return;
         };
 
-        let (writer, host_name, outbound) = {
+        enum ResponseRoute {
+            Client {
+                writer: SharedClientWriter,
+                outbound: Value,
+                failed_delivery_settlement: Option<Value>,
+            },
+            Queued,
+        }
+
+        let (route, host_name) = {
             let mut state = state.lock().expect("host state mutex poisoned");
             let Some(pending) = state.pending_chrome_requests.remove(&id) else {
                 trace(
@@ -884,23 +1066,77 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
                 );
                 return;
             };
-            let Some(writer) = state.client_writer(pending.client_id) else {
-                return;
+            state.tombstone_pending_id(id.clone());
+            let host_name = state.host_name.clone();
+            let original_writer = state.client_writer(pending.client_id);
+            let orphaned =
+                pending.state == PendingRequestState::OrphanedPending || original_writer.is_none();
+            let route = if !orphaned {
+                let failed_delivery_settlement = pending
+                    .settlement
+                    .as_ref()
+                    .filter(|metadata| metadata.operation_class.requires_settlement())
+                    .map(|metadata| {
+                        settlement_message(
+                            "completed",
+                            &id,
+                            &pending.client_request_id,
+                            metadata,
+                            Some(message.clone()),
+                        )
+                    });
+                ResponseRoute::Client {
+                    writer: original_writer.expect("active pending client has writer"),
+                    outbound: with_id(message, pending.client_request_id),
+                    failed_delivery_settlement,
+                }
+            } else if let Some(metadata) = pending.settlement {
+                let settlement = settlement_message(
+                    "completed",
+                    &id,
+                    &pending.client_request_id,
+                    &metadata,
+                    Some(message),
+                );
+                if let Some(writer) = state.active_control_plane_writer() {
+                    ResponseRoute::Client {
+                        writer,
+                        outbound: settlement.clone(),
+                        failed_delivery_settlement: Some(settlement),
+                    }
+                } else {
+                    state.queue_settlement(settlement);
+                    ResponseRoute::Queued
+                }
+            } else {
+                ResponseRoute::Queued
             };
-            (
-                writer,
-                state.host_name.clone(),
-                with_id(message, pending.client_request_id),
-            )
+            (route, host_name)
         };
-        write_client_frame(&writer, &host_name, &outbound);
+        match route {
+            ResponseRoute::Client {
+                writer,
+                outbound,
+                failed_delivery_settlement,
+            } => {
+                if !write_client_frame(&writer, &host_name, &outbound)
+                    && let Some(settlement) = failed_delivery_settlement
+                {
+                    state
+                        .lock()
+                        .expect("host state mutex poisoned")
+                        .queue_settlement(settlement);
+                }
+            }
+            ResponseRoute::Queued => {}
+        }
         return;
     }
 
     if !is_request(&message) {
         let (writers, host_name) = {
             let state = state.lock().expect("host state mutex poisoned");
-            (state.primary_client_writers(), state.host_name.clone())
+            (state.notification_client_writers(), state.host_name.clone())
         };
         for writer in writers {
             write_client_frame(&writer, &host_name, &message);
@@ -909,15 +1145,7 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
     }
 
     let app_server_method = message.get("method").and_then(Value::as_str);
-    if matches!(
-        app_server_method,
-        Some(
-            "ensureCodexAppServer"
-                | "codexRuntime/hello"
-                | "codexRuntime/ensure"
-                | "codexRuntime/restart"
-        )
-    ) {
+    if app_server_method.is_some_and(is_app_server_local_method) {
         let (manager, stdout, host_name) = {
             let state = state.lock().expect("host state mutex poisoned");
             let (stdout, host_name) = state.chrome_writer();
@@ -945,7 +1173,16 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
     let (route, host_name) = {
         let mut state = state.lock().expect("host state mutex poisoned");
         let host_name = state.host_name.clone();
-        let route = match select_primary_client_id(&state.clients) {
+        let request_route = if app_server_method == Some("ping") {
+            ChromeRequestRoute::Ping
+        } else {
+            ChromeRequestRoute::SidePanel
+        };
+        let route = match select_chrome_request_client_id(
+            &state.clients,
+            request_route,
+            state.owner_mode,
+        ) {
             Ok(client_id) => {
                 let client_request_id =
                     format!("chrome-{}-{}", process::id(), state.next_client_request_id);
@@ -973,7 +1210,14 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
                         "id": chrome_request_id,
                         "error": {
                             "code": -32000,
-                            "message": error.message()
+                            "message": error.message(),
+                            "data": {
+                                "type": "sky_cua_host_route_unavailable",
+                                "route": match request_route {
+                                    ChromeRequestRoute::Ping => "ping",
+                                    ChromeRequestRoute::SidePanel => "side_panel",
+                                }
+                            }
                         }
                     }),
                 )
@@ -984,12 +1228,22 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
 
     match route {
         ChromeRoute::ToClient(writer, outbound) => {
-            write_client_frame(&writer, &host_name, &outbound)
+            write_client_frame(&writer, &host_name, &outbound);
         }
         ChromeRoute::RouteError(stdout, outbound) => {
             write_chrome_frame(&stdout, &host_name, &outbound)
         }
     }
+}
+
+fn is_app_server_local_method(method: &str) -> bool {
+    matches!(
+        method,
+        "ensureCodexAppServer"
+            | "codexRuntime/hello"
+            | "codexRuntime/ensure"
+            | "codexRuntime/restart"
+    )
 }
 
 fn app_server_control_response(
@@ -1027,8 +1281,7 @@ fn select_primary_client_id(
                 unknown_count += 1;
                 unknown_client_id = Some(*id);
             }
-            ClientRole::Heartbeat => {}
-            ClientRole::Ephemeral => {}
+            ClientRole::ControlPlane | ClientRole::Heartbeat | ClientRole::Ephemeral => {}
         }
     }
     if let Some(primary_client_id) = primary_client_id {
@@ -1531,6 +1784,8 @@ mod tests {
                 client_id: primary_client_id,
                 client_request_id: json!("client-request-1"),
                 created_at: Instant::now(),
+                settlement: None,
+                state: PendingRequestState::Active,
             },
         );
         state.pending_client_requests.insert(
@@ -1873,6 +2128,8 @@ mod tests {
                 client_id: first_client_id,
                 client_request_id: json!("client-request-1"),
                 created_at: Instant::now(),
+                settlement: None,
+                state: PendingRequestState::Active,
             },
         );
 
@@ -1967,6 +2224,8 @@ mod tests {
                     client_id: 1,
                     client_request_id: json!("chrome-request-1"),
                     created_at: Instant::now(),
+                    settlement: None,
+                    state: PendingRequestState::Active,
                 },
             ),
             (
@@ -1975,6 +2234,8 @@ mod tests {
                     client_id: 2,
                     client_request_id: json!("chrome-request-2"),
                     created_at: Instant::now(),
+                    settlement: None,
+                    state: PendingRequestState::Active,
                 },
             ),
         ]);
@@ -2029,6 +2290,8 @@ mod tests {
                     client_id,
                     client_request_id: json!("client-req-1"),
                     created_at: Instant::now(),
+                    settlement: None,
+                    state: PendingRequestState::Active,
                 },
             );
         }
@@ -2053,6 +2316,8 @@ mod tests {
         Client {
             writer: Arc::new(Mutex::new(stream)),
             role,
+            daemon_generation: (role == ClientRole::ControlPlane).then_some("daemon-1".to_string()),
+            capabilities: HashSet::new(),
             connected_at: Instant::now(),
         }
     }

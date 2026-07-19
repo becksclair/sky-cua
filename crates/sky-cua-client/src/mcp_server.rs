@@ -1,7 +1,19 @@
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Map, Value, json};
-use sky_cua_platform::BrowserSessionIdentity;
-use std::sync::Arc;
+use sky_cua_platform::{
+    BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity, BrowserMcpClientInfo,
+    BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequestContext,
+    BrowserSessionIdentity, ServiceRequest,
+};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
@@ -12,6 +24,15 @@ use crate::service_launcher::ServiceClient;
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const SERVER_NAME: &str = "sky-cua";
 const SERVER_VERSION: &str = "0.1.0";
+const MCP_CALLER_PROVENANCE_ENV: &str = "SKY_CUA_MCP_CALLER_PROVENANCE";
+const LEGACY_MCP_HOST_ENV: &str = "SKY_CUA_MCP_HOST";
+
+static MCP_CONNECTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static BROWSER_OPERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    static CURRENT_BROWSER_REQUEST_CONTEXT: RefCell<Option<BrowserRequestContext>> = const { RefCell::new(None) };
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MessageFraming {
@@ -19,9 +40,19 @@ enum MessageFraming {
     JsonLine,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct ServerSession {
+    mcp_connection_id: String,
     config: Option<Arc<McpSessionConfig>>,
+}
+
+impl Default for ServerSession {
+    fn default() -> Self {
+        Self {
+            mcp_connection_id: new_mcp_connection_id(),
+            config: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +60,64 @@ struct McpSessionConfig {
     _process: crate::mcp_tools::McpProcessConfig,
     model: ModelSessionInfo,
     registry: crate::mcp_tools::McpToolRegistry,
+    browser_provenance: BrowserCallerProvenance,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum JsonRpcRequestId {
+    Number(String),
+    String(String),
+}
+
+impl JsonRpcRequestId {
+    fn from_value(value: Option<&Value>) -> Option<Self> {
+        match value? {
+            Value::Number(value) => Some(Self::Number(value.to_string())),
+            Value::String(value) => Some(Self::String(value.clone())),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PreparedBrowserCall {
+    request_id: Option<JsonRpcRequestId>,
+    operation_id: String,
+    identity: Option<BrowserSessionIdentity>,
+    context: BrowserRequestContext,
+}
+
+#[derive(Clone, Default)]
+struct InFlightBrowserCalls(Arc<Mutex<HashMap<JsonRpcRequestId, String>>>);
+
+impl InFlightBrowserCalls {
+    fn register(&self, request_id: JsonRpcRequestId, operation_id: String) {
+        self.0
+            .lock()
+            .expect("in-flight browser call registry poisoned")
+            .insert(request_id, operation_id);
+    }
+
+    fn operation_for(&self, request_id: &JsonRpcRequestId) -> Option<String> {
+        self.0
+            .lock()
+            .expect("in-flight browser call registry poisoned")
+            .get(request_id)
+            .cloned()
+    }
+
+    fn complete(&self, request_id: &JsonRpcRequestId, operation_id: &str) {
+        let mut calls = self
+            .0
+            .lock()
+            .expect("in-flight browser call registry poisoned");
+        if calls
+            .get(request_id)
+            .is_some_and(|active| active == operation_id)
+        {
+            calls.remove(request_id);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -50,6 +139,7 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
     let mut session = ServerSession::default();
     let mut read_line_buf = String::with_capacity(256);
     let mut read_payload_buf = Vec::with_capacity(4096);
+    let in_flight_browser_calls = InFlightBrowserCalls::default();
 
     let (response_tx, mut response_rx) = tokio::sync::mpsc::channel::<(Value, MessageFraming)>(32);
 
@@ -87,11 +177,30 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
             let heuristics = heuristics.clone();
             let response_tx = response_tx.clone();
             let mut session = session.clone();
+            let prepared_browser_call = prepare_browser_call(&message, &session);
+            if let Some(prepared) = &prepared_browser_call
+                && let Some(request_id) = &prepared.request_id
+            {
+                in_flight_browser_calls.register(request_id.clone(), prepared.operation_id.clone());
+            }
+            let in_flight_browser_calls = in_flight_browser_calls.clone();
 
             tokio::spawn(async move {
                 let id = message.get("id").cloned().unwrap_or(Value::Null);
+                let completion = prepared_browser_call.as_ref().and_then(|prepared| {
+                    prepared
+                        .request_id
+                        .clone()
+                        .map(|request_id| (request_id, prepared.operation_id.clone()))
+                });
                 let response = tokio::task::spawn_blocking(move || {
-                    match handle_message(&service, &heuristics, &mut session, message) {
+                    match handle_message(
+                        &service,
+                        &heuristics,
+                        &mut session,
+                        message,
+                        prepared_browser_call,
+                    ) {
                         Ok(Some(response)) => Some(response),
                         Ok(None) => None,
                         Err(error) => Some(json!({
@@ -116,14 +225,25 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
                     }))
                 });
 
+                if let Some((request_id, operation_id)) = completion {
+                    in_flight_browser_calls.complete(&request_id, &operation_id);
+                }
+
                 if let Some(response) = response {
                     let _ = response_tx.send((response, framing)).await;
                 }
             });
+        } else if method == "notifications/cancelled" {
+            if let Some(request) =
+                cancellation_request(&message, &session, &in_flight_browser_calls)
+            {
+                issue_service_request_without_blocking(service.clone(), request);
+            }
         } else {
             // Fast path: initialize, tools/list, notifications, etc.
             let id = message.get("id").cloned().unwrap_or(Value::Null);
-            let response = match handle_message(&service, &heuristics, &mut session, message) {
+            let response = match handle_message(&service, &heuristics, &mut session, message, None)
+            {
                 Ok(Some(response)) => Some(response),
                 Ok(None) => None,
                 Err(error) => Some(json!({
@@ -143,6 +263,22 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
         }
     }
 
+    let mut disconnect_notified = false;
+    if let Some(request) =
+        disconnect_request_once(&mut disconnect_notified, &session.mcp_connection_id)
+    {
+        let service = service.clone();
+        match tokio::task::spawn_blocking(move || service.call(&request)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "failed to notify service of browser client disconnect");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "browser disconnect service task panicked");
+            }
+        }
+    }
+
     drop(response_tx);
     writer_task.await?;
     Ok(())
@@ -153,6 +289,7 @@ fn handle_message(
     heuristics: &HeuristicsRegistry,
     session: &mut ServerSession,
     body: Value,
+    prepared_browser_call: Option<PreparedBrowserCall>,
 ) -> Result<Option<Value>> {
     let method = body
         .get("method")
@@ -168,10 +305,19 @@ fn handle_message(
             let process = crate::mcp_tools::mcp_process_config_from_env();
             let model = parse_model_session_info(&body, process.model_supports_images_override);
             let registry = crate::mcp_tools::build_tool_registry(&process, &model);
+            let declared_provenance = std::env::var(MCP_CALLER_PROVENANCE_ENV)
+                .ok()
+                .or_else(|| std::env::var(LEGACY_MCP_HOST_ENV).ok());
+            let browser_provenance = browser_caller_provenance(
+                &body,
+                &session.mcp_connection_id,
+                declared_provenance.as_deref(),
+            );
             session.config = Some(Arc::new(McpSessionConfig {
                 _process: process,
                 model,
                 registry,
+                browser_provenance,
             }));
             let protocol_version = body
                 .pointer("/params/protocolVersion")
@@ -217,16 +363,28 @@ fn handle_message(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let browser_identity = browser_session_identity_from_tool_call(&body);
-            let result = crate::mcp_tools::handle_session_tool_call_with_browser_identity(
-                service,
-                heuristics,
-                &config.model,
-                &config.registry,
-                tool_name,
-                arguments,
-                browser_identity.as_ref(),
-            )?;
+            let result = match prepared_browser_call {
+                Some(prepared) => with_browser_request_context(prepared.context, || {
+                    crate::mcp_tools::handle_session_tool_call_with_browser_identity(
+                        service,
+                        heuristics,
+                        &config.model,
+                        &config.registry,
+                        tool_name,
+                        arguments,
+                        prepared.identity.as_ref(),
+                    )
+                })?,
+                None => crate::mcp_tools::handle_session_tool_call_with_browser_identity(
+                    service,
+                    heuristics,
+                    &config.model,
+                    &config.registry,
+                    tool_name,
+                    arguments,
+                    None,
+                )?,
+            };
             Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -243,6 +401,251 @@ fn handle_message(
             }
         }))),
     }
+}
+
+fn prepare_browser_call(body: &Value, session: &ServerSession) -> Option<PreparedBrowserCall> {
+    let config = session.config.as_ref()?;
+    let tool_name = body.pointer("/params/name")?.as_str()?;
+    if !is_browser_surface_tool_call(tool_name, body.pointer("/params/arguments")) {
+        return None;
+    }
+    let (identity, context) = browser_call_context(body, &config.browser_provenance);
+    Some(PreparedBrowserCall {
+        request_id: JsonRpcRequestId::from_value(body.get("id")),
+        operation_id: context.operation_identity.operation_id.clone(),
+        identity,
+        context,
+    })
+}
+
+fn is_browser_surface_tool_call(tool_name: &str, arguments: Option<&Value>) -> bool {
+    if tool_name.starts_with("browser_") {
+        return true;
+    }
+    match tool_name {
+        "list_resources" | "observe" | "capture_screen" => {
+            arguments
+                .and_then(|arguments| arguments.get("surface"))
+                .and_then(Value::as_str)
+                == Some("browser")
+        }
+        "status" => {
+            arguments
+                .and_then(|arguments| arguments.get("component"))
+                .and_then(Value::as_str)
+                == Some("browser")
+        }
+        _ => false,
+    }
+}
+
+fn cancellation_request(
+    notification: &Value,
+    session: &ServerSession,
+    in_flight: &InFlightBrowserCalls,
+) -> Option<ServiceRequest> {
+    let request_id = JsonRpcRequestId::from_value(notification.pointer("/params/requestId"))?;
+    let operation_id = in_flight.operation_for(&request_id)?;
+    let reason = notification
+        .pointer("/params/reason")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    Some(ServiceRequest::CancelBrowserOperation {
+        connection_id: session.mcp_connection_id.clone(),
+        operation_id,
+        reason,
+    })
+}
+
+fn issue_service_request_without_blocking(service: ServiceClient, request: ServiceRequest) {
+    tokio::spawn(async move {
+        match tokio::task::spawn_blocking(move || service.call(&request)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "failed to cancel browser operation");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "browser cancellation service task panicked");
+            }
+        }
+    });
+}
+
+fn disconnect_request_once(notified: &mut bool, connection_id: &str) -> Option<ServiceRequest> {
+    if std::mem::replace(notified, true) {
+        return None;
+    }
+    Some(ServiceRequest::BrowserClientDisconnected {
+        connection_id: connection_id.to_owned(),
+    })
+}
+
+struct BrowserRequestContextGuard(Option<BrowserRequestContext>);
+
+impl Drop for BrowserRequestContextGuard {
+    fn drop(&mut self) {
+        CURRENT_BROWSER_REQUEST_CONTEXT.with(|current| {
+            current.replace(self.0.take());
+        });
+    }
+}
+
+pub(crate) fn with_browser_request_context<T>(
+    context: BrowserRequestContext,
+    f: impl FnOnce() -> T,
+) -> T {
+    let previous = CURRENT_BROWSER_REQUEST_CONTEXT.with(|current| current.replace(Some(context)));
+    let _guard = BrowserRequestContextGuard(previous);
+    f()
+}
+
+pub(crate) fn current_browser_request_context() -> Option<BrowserRequestContext> {
+    CURRENT_BROWSER_REQUEST_CONTEXT.with(|current| current.borrow().clone())
+}
+
+fn new_mcp_connection_id() -> String {
+    let sequence = MCP_CONNECTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    stable_fingerprint(&format!("{}:{nanos}:{sequence}", std::process::id()))
+}
+
+fn browser_caller_provenance(
+    initialize: &Value,
+    mcp_connection_id: &str,
+    declared: Option<&str>,
+) -> BrowserCallerProvenance {
+    let declared_caller = declared
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(128).collect::<String>());
+    let client_info = mcp_client_info(initialize);
+    let normalized = declared_caller
+        .as_deref()
+        .and_then(normalize_declared_caller);
+    let inferred = client_info
+        .as_ref()
+        .and_then(|info| infer_caller_from_client_info(&info.name));
+    let (caller, source) = match normalized {
+        Some(caller) => (caller, BrowserProvenanceSource::InstallerDeclaration),
+        None if declared_caller.is_some() => (
+            BrowserCallerKind::LegacyUnknown,
+            BrowserProvenanceSource::LegacyFallback,
+        ),
+        None => match inferred {
+            Some(caller) => (caller, BrowserProvenanceSource::ClientInfoInference),
+            None => (
+                BrowserCallerKind::LegacyUnknown,
+                BrowserProvenanceSource::LegacyFallback,
+            ),
+        },
+    };
+    BrowserCallerProvenance {
+        caller,
+        source,
+        connection_id: mcp_connection_id.to_owned(),
+        declared_caller,
+        client_info,
+    }
+}
+
+fn normalize_declared_caller(value: &str) -> Option<BrowserCallerKind> {
+    let normalized: String = value
+        .trim()
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    match normalized.as_str() {
+        "codexdesktop" | "chatgptdesktop" => Some(BrowserCallerKind::CodexDesktop),
+        "codex" | "codexcli" => Some(BrowserCallerKind::CodexCli),
+        "openclaw" => Some(BrowserCallerKind::OpenClaw),
+        "opencode" => Some(BrowserCallerKind::OpenCode),
+        "pi" | "piagent" | "pimcpadapter" => Some(BrowserCallerKind::Pi),
+        "generic" | "genericmcp" | "direct" | "directmcp" => Some(BrowserCallerKind::DirectMcp),
+        _ => None,
+    }
+}
+
+fn infer_caller_from_client_info(value: &str) -> Option<BrowserCallerKind> {
+    normalize_declared_caller(value)
+}
+
+fn mcp_client_info(initialize: &Value) -> Option<BrowserMcpClientInfo> {
+    let info = initialize.pointer("/params/clientInfo")?.as_object()?;
+    let non_empty = |key: &str| {
+        info.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let name = non_empty("name")?;
+    let version = non_empty("version")?;
+    Some(BrowserMcpClientInfo {
+        name: name.to_owned(),
+        version: version.to_owned(),
+        title: non_empty("title").map(ToOwned::to_owned),
+    })
+}
+
+pub(crate) fn browser_call_context(
+    body: &Value,
+    provenance: &BrowserCallerProvenance,
+) -> (Option<BrowserSessionIdentity>, BrowserRequestContext) {
+    let legacy_identity = browser_session_identity_from_tool_call(body);
+    let connection_id = &provenance.connection_id;
+    let logical_identity = match &legacy_identity {
+        Some(identity) => BrowserLogicalIdentity {
+            session_id: identity.session_id.clone(),
+            thread_id: identity.thread_id.clone(),
+            turn_id: Some(identity.turn_id.clone()),
+        },
+        None => BrowserLogicalIdentity {
+            session_id: connection_id.clone(),
+            thread_id: None,
+            turn_id: None,
+        },
+    };
+    let request_id_fingerprint = json_rpc_id_fingerprint(body.get("id"));
+    let operation_id = new_browser_operation_id(connection_id);
+    (
+        legacy_identity,
+        BrowserRequestContext {
+            provenance: provenance.clone(),
+            logical_identity,
+            operation_identity: BrowserOperationIdentity {
+                operation_id,
+                request_id_fingerprint,
+            },
+        },
+    )
+}
+
+fn new_browser_operation_id(connection_id: &str) -> String {
+    let sequence = BROWSER_OPERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("op-{connection_id}-{sequence:016x}")
+}
+
+fn json_rpc_id_fingerprint(id: Option<&Value>) -> String {
+    let encoded = match id {
+        Some(Value::String(value)) => format!("string:{value}"),
+        Some(Value::Number(value)) => format!("number:{value}"),
+        Some(Value::Null) => "null:".to_string(),
+        Some(other) => format!("invalid:{other}"),
+        None => "missing:".to_string(),
+    };
+    stable_fingerprint(&encoded)
+}
+
+fn stable_fingerprint(value: &str) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn browser_session_identity_from_tool_call(body: &Value) -> Option<BrowserSessionIdentity> {
@@ -485,13 +888,17 @@ where
 mod tests {
     use std::io::Cursor;
 
-    use serde_json::json;
+    use serde_json::{Value, json};
+    use sky_cua_platform::{BrowserCallerKind, BrowserProvenanceSource, ServiceRequest};
 
     use crate::mcp_tools::tool_definitions;
 
     use super::{
-        MessageFraming, browser_session_identity_from_tool_call, parse_model_session_info,
-        read_message, write_message,
+        InFlightBrowserCalls, JsonRpcRequestId, MessageFraming, ServerSession,
+        browser_call_context, browser_caller_provenance, browser_session_identity_from_tool_call,
+        cancellation_request, current_browser_request_context, disconnect_request_once,
+        is_browser_surface_tool_call, json_rpc_id_fingerprint, normalize_declared_caller,
+        parse_model_session_info, read_message, with_browser_request_context, write_message,
     };
 
     #[test]
@@ -545,6 +952,341 @@ mod tests {
             }))
             .is_none()
         );
+    }
+
+    #[test]
+    fn installer_provenance_is_normalized_and_wrong_values_use_legacy_fallback() {
+        let initialize = json!({
+            "params": {
+                "clientInfo": {
+                    "name": " pi-mcp-adapter ",
+                    "version": " 2.4.0 ",
+                    "title": " Pi Adapter "
+                }
+            }
+        });
+        let declared =
+            browser_caller_provenance(&initialize, "connection-stable", Some(" Pi MCP Adapter "));
+        assert_eq!(declared.caller, BrowserCallerKind::Pi);
+        assert_eq!(
+            declared.source,
+            BrowserProvenanceSource::InstallerDeclaration
+        );
+        assert_eq!(declared.connection_id, "connection-stable");
+        let client_info = declared.client_info.as_ref().expect("client info");
+        assert_eq!(client_info.name, "pi-mcp-adapter");
+        assert_eq!(client_info.version, "2.4.0");
+        assert_eq!(client_info.title.as_deref(), Some("Pi Adapter"));
+
+        let wrong = browser_caller_provenance(&initialize, "connection-stable", Some("../../bad"));
+        assert_eq!(wrong.caller, BrowserCallerKind::LegacyUnknown);
+        assert_eq!(wrong.source, BrowserProvenanceSource::LegacyFallback);
+        assert_eq!(wrong.declared_caller.as_deref(), Some("../../bad"));
+        for (declared, expected) in [
+            ("codex_desktop", BrowserCallerKind::CodexDesktop),
+            ("codex_cli", BrowserCallerKind::CodexCli),
+            ("OpenClaw", BrowserCallerKind::OpenClaw),
+            ("OpenCode", BrowserCallerKind::OpenCode),
+            ("pi-mcp-adapter", BrowserCallerKind::Pi),
+            ("direct_mcp", BrowserCallerKind::DirectMcp),
+        ] {
+            assert_eq!(normalize_declared_caller(declared), Some(expected));
+        }
+        assert_eq!(normalize_declared_caller("not-a-real-host"), None);
+
+        let inferred = browser_caller_provenance(
+            &json!({
+                "params": {
+                    "clientInfo": { "name": "OpenCode", "version": "1.0" }
+                }
+            }),
+            "connection-stable",
+            None,
+        );
+        assert_eq!(inferred.caller, BrowserCallerKind::OpenCode);
+        assert_eq!(
+            inferred.source,
+            BrowserProvenanceSource::ClientInfoInference
+        );
+    }
+
+    #[test]
+    fn mcp_connection_identity_is_stable_across_clones_and_unique_per_connection() {
+        let first = ServerSession::default();
+        let clone = first.clone();
+        let second = ServerSession::default();
+
+        assert_eq!(first.mcp_connection_id, clone.mcp_connection_id);
+        assert_ne!(first.mcp_connection_id, second.mcp_connection_id);
+        assert_eq!(first.mcp_connection_id.len(), 16);
+    }
+
+    #[test]
+    fn malformed_turn_metadata_keeps_connection_and_operation_context() {
+        let provenance =
+            browser_caller_provenance(&json!({ "params": {} }), "connection-stable", None);
+        let (legacy_identity, context) = browser_call_context(
+            &json!({
+                "id": "call-9",
+                "params": {
+                    "_meta": {
+                        "x-codex-turn-metadata": "{ definitely not json"
+                    }
+                }
+            }),
+            &provenance,
+        );
+
+        assert_eq!(legacy_identity, None);
+        assert_eq!(context.logical_identity.session_id, "connection-stable");
+        assert_eq!(context.logical_identity.thread_id, None);
+        assert_eq!(context.logical_identity.turn_id, None);
+        assert!(context.operation_identity.operation_id.starts_with("op-"));
+        assert_eq!(
+            context.operation_identity.request_id_fingerprint,
+            json_rpc_id_fingerprint(Some(&json!("call-9")))
+        );
+    }
+
+    #[test]
+    fn codex_logical_metadata_is_separate_from_provenance_and_legacy_identity() {
+        let provenance = browser_caller_provenance(
+            &json!({
+                "params": {
+                    "clientInfo": { "name": "codex", "version": "1.0" }
+                }
+            }),
+            "connection-stable",
+            Some("codex"),
+        );
+        let (legacy_identity, context) = browser_call_context(
+            &json!({
+                "id": 42,
+                "params": {
+                    "_meta": {
+                        "x-codex-turn-metadata": {
+                            "session_id": "session-uuid",
+                            "thread_id": "thread-uuid",
+                            "turn_id": "turn-uuid"
+                        }
+                    }
+                }
+            }),
+            &provenance,
+        );
+
+        let legacy_identity = legacy_identity.expect("legacy Codex identity");
+        assert_eq!(legacy_identity.session_id, "session-uuid");
+        assert_eq!(legacy_identity.turn_id, "turn-uuid");
+        assert_eq!(legacy_identity.thread_id.as_deref(), Some("thread-uuid"));
+        assert_eq!(context.provenance.caller, BrowserCallerKind::CodexCli);
+        assert_eq!(context.provenance.connection_id, "connection-stable");
+        assert_eq!(context.logical_identity.session_id, "session-uuid");
+        assert_eq!(
+            context.logical_identity.thread_id.as_deref(),
+            Some("thread-uuid")
+        );
+        assert_eq!(
+            context.logical_identity.turn_id.as_deref(),
+            Some("turn-uuid")
+        );
+    }
+
+    #[test]
+    fn operation_ids_are_fresh_while_fingerprints_correlate_upstream_ids() {
+        let numeric = json_rpc_id_fingerprint(Some(&json!(7)));
+        let numeric_again = json_rpc_id_fingerprint(Some(&json!(7)));
+        let string = json_rpc_id_fingerprint(Some(&json!("7")));
+        let missing = json_rpc_id_fingerprint(None);
+        let null = json_rpc_id_fingerprint(Some(&Value::Null));
+
+        assert_eq!(numeric, numeric_again);
+        assert_ne!(numeric, string);
+        assert_ne!(missing, null);
+
+        let provenance_a = browser_caller_provenance(&json!({}), "connection-a", None);
+        let provenance_b = browser_caller_provenance(&json!({}), "connection-b", None);
+        let call = json!({ "id": 7, "params": {} });
+        let (_, context_a) = browser_call_context(&call, &provenance_a);
+        let (_, context_a_reused_id) = browser_call_context(&call, &provenance_a);
+        let (_, context_b) = browser_call_context(&call, &provenance_b);
+        assert_eq!(
+            context_a.operation_identity.request_id_fingerprint,
+            context_a_reused_id
+                .operation_identity
+                .request_id_fingerprint
+        );
+        assert_ne!(
+            context_a.operation_identity.operation_id,
+            context_a_reused_id.operation_identity.operation_id
+        );
+        assert_ne!(
+            context_a_reused_id.operation_identity.operation_id,
+            context_b.operation_identity.operation_id
+        );
+
+        let (_, secret_id_context) =
+            browser_call_context(&json!({ "id": "caller-authored-secret" }), &provenance_a);
+        assert!(
+            !secret_id_context
+                .operation_identity
+                .operation_id
+                .contains("caller-authored-secret")
+        );
+    }
+
+    #[test]
+    fn browser_surface_aliases_receive_context_without_capturing_other_surfaces() {
+        for tool in ["list_resources", "observe", "capture_screen"] {
+            assert!(is_browser_surface_tool_call(
+                tool,
+                Some(&json!({"surface":"browser"}))
+            ));
+            assert!(!is_browser_surface_tool_call(
+                tool,
+                Some(&json!({"surface":"desktop"}))
+            ));
+        }
+        assert!(is_browser_surface_tool_call(
+            "status",
+            Some(&json!({"component":"browser"}))
+        ));
+        assert!(!is_browser_surface_tool_call(
+            "status",
+            Some(&json!({"component":"phone"}))
+        ));
+        assert!(is_browser_surface_tool_call(
+            "browser_input",
+            Some(&json!({}))
+        ));
+    }
+
+    #[test]
+    fn queued_browser_call_maps_cancellation_to_its_internal_operation() {
+        let session = ServerSession {
+            mcp_connection_id: "connection-stable".to_string(),
+            config: None,
+        };
+        let calls = InFlightBrowserCalls::default();
+        calls.register(
+            JsonRpcRequestId::String("request-7".to_string()),
+            "op-generated-7".to_string(),
+        );
+
+        let request = cancellation_request(
+            &json!({
+                "method": "notifications/cancelled",
+                "params": {
+                    "requestId": "request-7",
+                    "reason": "caller stopped"
+                }
+            }),
+            &session,
+            &calls,
+        )
+        .expect("queued browser operation should be cancellable");
+
+        assert_eq!(
+            request,
+            ServiceRequest::CancelBrowserOperation {
+                connection_id: "connection-stable".to_string(),
+                operation_id: "op-generated-7".to_string(),
+                reason: Some("caller stopped".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn unknown_late_and_reused_request_ids_are_generation_safe() {
+        let session = ServerSession {
+            mcp_connection_id: "connection-stable".to_string(),
+            config: None,
+        };
+        let calls = InFlightBrowserCalls::default();
+        let notification = json!({
+            "method": "notifications/cancelled",
+            "params": { "requestId": 7 }
+        });
+        assert!(cancellation_request(&notification, &session, &calls).is_none());
+
+        let request_id = JsonRpcRequestId::Number("7".to_string());
+        calls.register(request_id.clone(), "op-old".to_string());
+        let delayed_cancellation =
+            cancellation_request(&notification, &session, &calls).expect("active cancellation");
+        calls.complete(&request_id, "op-old");
+        assert!(cancellation_request(&notification, &session, &calls).is_none());
+
+        calls.register(request_id.clone(), "op-new".to_string());
+        calls.complete(&request_id, "op-old");
+        assert_eq!(
+            delayed_cancellation,
+            ServiceRequest::CancelBrowserOperation {
+                connection_id: "connection-stable".to_string(),
+                operation_id: "op-old".to_string(),
+                reason: None,
+            }
+        );
+        assert_eq!(
+            cancellation_request(&notification, &session, &calls),
+            Some(ServiceRequest::CancelBrowserOperation {
+                connection_id: "connection-stable".to_string(),
+                operation_id: "op-new".to_string(),
+                reason: None,
+            })
+        );
+        calls.complete(&request_id, "op-new");
+        assert!(cancellation_request(&notification, &session, &calls).is_none());
+    }
+
+    #[test]
+    fn eof_disconnect_request_is_emitted_once_for_the_connection() {
+        let mut notified = false;
+        assert_eq!(
+            disconnect_request_once(&mut notified, "connection-stable"),
+            Some(ServiceRequest::BrowserClientDisconnected {
+                connection_id: "connection-stable".to_string(),
+            })
+        );
+        assert_eq!(
+            disconnect_request_once(&mut notified, "connection-stable"),
+            None
+        );
+    }
+
+    #[test]
+    fn browser_request_context_scope_restores_previous_value() {
+        let provenance = browser_caller_provenance(&json!({}), "connection", None);
+        let (_, outer) = browser_call_context(&json!({ "id": "outer" }), &provenance);
+        let (_, inner) = browser_call_context(&json!({ "id": "inner" }), &provenance);
+        let outer_operation_id = outer.operation_identity.operation_id.clone();
+        let inner_operation_id = inner.operation_identity.operation_id.clone();
+        assert_eq!(current_browser_request_context(), None);
+        with_browser_request_context(outer, || {
+            assert_eq!(
+                current_browser_request_context()
+                    .expect("outer context")
+                    .operation_identity
+                    .operation_id,
+                outer_operation_id
+            );
+            with_browser_request_context(inner, || {
+                assert_eq!(
+                    current_browser_request_context()
+                        .expect("inner context")
+                        .operation_identity
+                        .operation_id,
+                    inner_operation_id
+                );
+            });
+            assert_eq!(
+                current_browser_request_context()
+                    .expect("restored outer context")
+                    .operation_identity
+                    .operation_id,
+                outer_operation_id
+            );
+        });
+        assert_eq!(current_browser_request_context(), None);
     }
 
     #[test]

@@ -693,6 +693,174 @@ def test_pi_wrapper_exports_canonical_launch_policy(tmp_path: Path) -> None:
     assert "export SKY_CUA_PRESENCE_ENABLED=1\n" in wrapper_text
 
 
+def test_host_adapters_declare_distinct_caller_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+    env_name = install_mcp_server.MCP_CALLER_PROVENANCE_ENV
+
+    generic = install_mcp_server.generate_mcp_config(client_path, target_dir)
+    generic_env = generic["mcpServers"]["computer-use"]["env"]  # type: ignore[index]
+    assert generic_env[env_name] == "direct_mcp"  # type: ignore[index]
+
+    opencode_path = install_mcp_server.install_opencode(target_dir, client_path)
+    opencode_env = json.loads(opencode_path.read_text(encoding="utf-8"))["mcp"]["sky_cua"][
+        "environment"
+    ]
+    assert opencode_env[env_name] == "opencode"
+
+    claude_desktop_path = install_mcp_server.install_claude_desktop(target_dir, client_path)
+    claude_desktop_env = json.loads(claude_desktop_path.read_text(encoding="utf-8"))["mcpServers"][
+        "computer-use"
+    ]["env"]
+    assert claude_desktop_env[env_name] == "direct_mcp"
+
+    monkeypatch.setattr(install_mcp_server.shutil, "which", lambda _name: None)
+    claude_code_path = install_mcp_server.install_claude_code(
+        target_dir, client_path, claude_config_dir=tmp_path / "missing-claude-home"
+    )
+    claude_code_env = json.loads(claude_code_path.read_text(encoding="utf-8"))["mcpServers"][
+        "sky-cua"
+    ]["env"]
+    assert claude_code_env[env_name] == "direct_mcp"
+
+    pi_path = install_mcp_server.install_pi(
+        target_dir, client_path, pi_agent_dir=tmp_path / "missing-pi-home"
+    )
+    wrapper_path = Path(
+        json.loads(pi_path.read_text(encoding="utf-8"))["mcpServers"]["sky_cua"]["command"]
+    )
+    wrapper_text = wrapper_path.read_text(encoding="utf-8")
+    declaration = f"export {env_name}=pi\n"
+    assert wrapper_text.count(declaration) == 1
+    assert all(
+        value not in wrapper_text
+        for value in (
+            f"export {env_name}=direct_mcp\n",
+            f"export {env_name}=openclaw\n",
+            f"export {env_name}=opencode\n",
+        )
+    )
+
+
+def test_pi_provenance_install_is_idempotent_and_preserves_unrelated_config(
+    tmp_path: Path,
+) -> None:
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+    agent_dir = tmp_path / "pi-agent"
+    agent_dir.mkdir()
+    config_path = agent_dir / "mcp.json"
+    config_path.write_text(
+        json.dumps({"mcpServers": {"context7": {"command": "context7", "env": {"KEEP": "1"}}}})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    install_mcp_server.install_pi(target_dir, client_path, pi_agent_dir=agent_dir)
+    first_wrapper = (target_dir / "pi_mcp_wrapper.sh").read_bytes()
+    first_config = config_path.read_bytes()
+    install_mcp_server.install_pi(target_dir, client_path, pi_agent_dir=agent_dir)
+
+    assert (target_dir / "pi_mcp_wrapper.sh").read_bytes() == first_wrapper
+    assert config_path.read_bytes() == first_config
+    merged = json.loads(first_config)
+    assert merged["mcpServers"]["context7"] == {
+        "command": "context7",
+        "env": {"KEEP": "1"},
+    }
+
+
+def test_direct_and_opencode_provenance_configs_are_idempotent(tmp_path: Path) -> None:
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+
+    direct = install_mcp_server.generate_mcp_config(client_path, target_dir)
+    direct_path = install_mcp_server.write_mcp_json(target_dir, direct)
+    first_direct = direct_path.read_bytes()
+    install_mcp_server.write_mcp_json(
+        target_dir, install_mcp_server.generate_mcp_config(client_path, target_dir)
+    )
+
+    opencode_path = install_mcp_server.install_opencode(target_dir, client_path)
+    first_opencode = opencode_path.read_bytes()
+    install_mcp_server.install_opencode(target_dir, client_path)
+
+    assert direct_path.read_bytes() == first_direct
+    assert opencode_path.read_bytes() == first_opencode
+
+
+def test_browser_control_runtime_env_is_optional_forwarded_and_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+    client_path = target_dir / "bin" / "sky-cua-client"
+    control_mode = install_mcp_server.MCP_BROWSER_CONTROL_MODE_ENV
+    socket_path = install_mcp_server.MCP_CODEX_BROWSER_SOCKET_PATH_ENV
+    removed_transport = "SKY_CUA_BROWSER_BRIDGE_TRANSPORT"
+    for name in install_mcp_server.OPTIONAL_MCP_RUNTIME_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+    default_direct = install_mcp_server.generate_mcp_config(client_path, target_dir)
+    default_direct_env = default_direct["mcpServers"]["computer-use"]["env"]  # type: ignore[index]
+    assert control_mode not in default_direct_env
+    assert socket_path not in default_direct_env
+    assert control_mode in default_direct["mcpServers"]["computer-use"]["env_vars"]  # type: ignore[index]
+    assert socket_path in default_direct["mcpServers"]["computer-use"]["env_vars"]  # type: ignore[index]
+
+    default_opencode_path = install_mcp_server.install_opencode(target_dir, client_path)
+    default_opencode_env = json.loads(default_opencode_path.read_text(encoding="utf-8"))["mcp"][
+        "sky_cua"
+    ]["environment"]
+    assert control_mode not in default_opencode_env
+    assert socket_path not in default_opencode_env
+
+    install_mcp_server.install_pi(
+        target_dir, client_path, pi_agent_dir=tmp_path / "missing-pi-home"
+    )
+    default_wrapper = (target_dir / "pi_mcp_wrapper.sh").read_text(encoding="utf-8")
+    assert control_mode not in default_wrapper
+    assert socket_path not in default_wrapper
+
+    monkeypatch.setenv(control_mode, "hybrid")
+    monkeypatch.setenv(socket_path, "/run/user/1000/sky cua/codex-browser.sock")
+
+    direct = install_mcp_server.generate_mcp_config(client_path, target_dir)
+    direct_env = direct["mcpServers"]["computer-use"]["env"]  # type: ignore[index]
+    assert direct_env[control_mode] == "hybrid"  # type: ignore[index]
+    assert direct_env[socket_path] == "/run/user/1000/sky cua/codex-browser.sock"  # type: ignore[index]
+
+    opencode_path = install_mcp_server.install_opencode(target_dir, client_path)
+    first_opencode = opencode_path.read_bytes()
+    opencode_env = json.loads(first_opencode)["mcp"]["sky_cua"]["environment"]
+    assert opencode_env[control_mode] == "hybrid"
+    assert opencode_env[socket_path] == "/run/user/1000/sky cua/codex-browser.sock"
+    install_mcp_server.install_opencode(target_dir, client_path)
+    assert opencode_path.read_bytes() == first_opencode
+
+    pi_path = install_mcp_server.install_pi(
+        target_dir, client_path, pi_agent_dir=tmp_path / "missing-pi-home"
+    )
+    first_pi_config = pi_path.read_bytes()
+    first_wrapper = (target_dir / "pi_mcp_wrapper.sh").read_bytes()
+    wrapper_text = first_wrapper.decode()
+    assert f"export {control_mode}=hybrid\n" in wrapper_text
+    assert f"export {socket_path}='/run/user/1000/sky cua/codex-browser.sock'\n" in wrapper_text
+    install_mcp_server.install_pi(
+        target_dir, client_path, pi_agent_dir=tmp_path / "missing-pi-home"
+    )
+    assert pi_path.read_bytes() == first_pi_config
+    assert (target_dir / "pi_mcp_wrapper.sh").read_bytes() == first_wrapper
+
+    rendered = json.dumps([default_direct, direct, opencode_env]) + wrapper_text
+    assert removed_transport not in rendered
+
+
 def test_codex_exec_plugin_mention_rejects_stale_compat_root(tmp_path: Path) -> None:
     codex_home = tmp_path / "codex-home"
     latest = codex_home / "plugins" / "cache" / "openai-bundled" / "computer-use" / "latest"
@@ -946,6 +1114,99 @@ def test_machine_config_seeding_writes_and_updates_browser(
     assert config_path.read_text(encoding="utf-8") == before
     monkeypatch.delenv(_install_shared.BROWSER_SELECTION_ENV)
     assert _install_shared.seed_machine_config_from_environment() is None
+
+
+def test_machine_config_seeding_normalizes_legacy_origin_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tomllib
+
+    config_path = tmp_path / "sky-cua.toml"
+    monkeypatch.setenv(_install_shared.MACHINE_CONFIG_PATH_ENV, str(config_path))
+    monkeypatch.setenv(_install_shared.BROWSER_SELECTION_ENV, "brave-origin")
+
+    assert _install_shared.seed_machine_config_from_environment() == config_path
+    assert tomllib.loads(config_path.read_text(encoding="utf-8"))["browser"] == "brave"
+
+
+def test_machine_config_seeding_persists_browser_control_idempotently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tomllib
+
+    config_path = tmp_path / "sky-cua.toml"
+    original = (
+        "future_knob = 3\n\n[phone]\nenabled = true\n\n[browser_control]\n"
+        'mode = "legacy"\nfuture_control_knob = "keep"\n'
+    )
+    config_path.write_text(original, encoding="utf-8")
+    monkeypatch.setenv(_install_shared.MACHINE_CONFIG_PATH_ENV, str(config_path))
+    monkeypatch.delenv(_install_shared.BROWSER_SELECTION_ENV, raising=False)
+    monkeypatch.setenv(_install_shared.BROWSER_CONTROL_MODE_ENV, "hybrid")
+    monkeypatch.setenv(_install_shared.CODEX_BROWSER_SOCKET_PATH_ENV, "/run/user/1000/codex.sock")
+
+    assert _install_shared.seed_machine_config_from_environment() == config_path
+    first = config_path.read_bytes()
+    parsed = tomllib.loads(first.decode())
+    assert parsed["future_knob"] == 3
+    assert parsed["phone"] == {"enabled": True}
+    assert parsed["browser_control"] == {
+        "mode": "hybrid",
+        "future_control_knob": "keep",
+        "codex_socket_path": "/run/user/1000/codex.sock",
+    }
+
+    assert _install_shared.seed_machine_config_from_environment() == config_path
+    assert config_path.read_bytes() == first
+
+    # Per-field seeding does not erase a durable path when only mode is explicit.
+    monkeypatch.delenv(_install_shared.CODEX_BROWSER_SOCKET_PATH_ENV)
+    monkeypatch.setenv(_install_shared.BROWSER_CONTROL_MODE_ENV, "strict")
+    assert _install_shared.seed_machine_config_from_environment() == config_path
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["browser_control"]["mode"] == "strict"
+    assert parsed["browser_control"]["codex_socket_path"] == "/run/user/1000/codex.sock"
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        (_install_shared.BROWSER_CONTROL_MODE_ENV, "automatic", "unsupported"),
+        (_install_shared.CODEX_BROWSER_SOCKET_PATH_ENV, "", "must not be empty"),
+    ],
+)
+def test_machine_config_seeding_rejects_invalid_browser_control_atomically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    key: str,
+    value: str,
+    message: str,
+) -> None:
+    config_path = tmp_path / "sky-cua.toml"
+    original = 'future_knob = 3\n[browser_control]\nmode = "legacy"\n'
+    config_path.write_text(original, encoding="utf-8")
+    monkeypatch.setenv(_install_shared.MACHINE_CONFIG_PATH_ENV, str(config_path))
+    monkeypatch.delenv(_install_shared.BROWSER_SELECTION_ENV, raising=False)
+    monkeypatch.delenv(_install_shared.BROWSER_CONTROL_MODE_ENV, raising=False)
+    monkeypatch.delenv(_install_shared.CODEX_BROWSER_SOCKET_PATH_ENV, raising=False)
+    monkeypatch.setenv(key, value)
+
+    assert _install_shared.seed_machine_config_from_environment() is None
+    assert config_path.read_text(encoding="utf-8") == original
+    assert message in capsys.readouterr().err
+
+
+def test_machine_config_seeding_rejects_unknown_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "sky-cua.toml"
+    monkeypatch.setenv(_install_shared.MACHINE_CONFIG_PATH_ENV, str(config_path))
+    monkeypatch.setenv(_install_shared.BROWSER_SELECTION_ENV, "future-browser")
+
+    assert _install_shared.seed_machine_config_from_environment() is None
+    assert not config_path.exists()
+    assert "unsupported SKY_CUA_BROWSER" in capsys.readouterr().err
 
 
 def test_machine_config_seeding_refuses_unparseable_file(

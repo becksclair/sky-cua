@@ -12,15 +12,16 @@ use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AgentCursorPoint, AgentCursorState, AppInfo,
     AppSelector, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
-    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, BrowserTargetKind,
-    CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace,
-    CuaActionRequest, CuaBackendResponse, CuaCancellation, CuaRequestContext, DisplayTarget,
-    ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat, PhoneAppListRequest,
-    PhoneAppResponseKind, PhoneConnectRequest, PhoneListDevicesRequest, PhoneRequest,
-    PhoneResponse, PhoneStatusRequest, PhoneTapRequest, PixelSize, PortalCapabilities, RectF,
-    SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction,
-    SessionPresenceIntent, SessionPresenceStatus, ToolAvailability, ToolCapabilities, WindowInfo,
-    WindowTarget,
+    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserCallerKind, BrowserCallerProvenance,
+    BrowserLogicalIdentity, BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequest,
+    BrowserRequestContext, BrowserResponse, BrowserTargetKind, CaptureBackendKind, CaptureInfo,
+    CaptureScope, CaptureScreenMode, CoordinateSpace, CuaActionRequest, CuaBackendResponse,
+    CuaCancellation, CuaRequestContext, DiagnosticEntry, DisplayTarget, ElementNode,
+    EnvironmentInfo, InputBackendKind, ModelImageFormat, PhoneAppListRequest, PhoneAppResponseKind,
+    PhoneConnectRequest, PhoneListDevicesRequest, PhoneRequest, PhoneResponse, PhoneStatusRequest,
+    PhoneTapRequest, PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest,
+    ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
+    SessionPresenceStatus, ToolAvailability, ToolCapabilities, WindowInfo, WindowTarget,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -334,9 +335,11 @@ fn only_activity_requests_trigger_automatic_session_presence() {
     assert!(!request_should_hold_presence(&ServiceRequest::Browser {
         request: BrowserRequest::Status,
         identity: None,
+        context: None,
     }));
     assert!(request_should_hold_presence(&ServiceRequest::Browser {
         identity: None,
+        context: None,
         request: BrowserRequest::Click {
             target: Some(BrowserTargetKind::UserChrome),
             tab_id: "tab".to_string(),
@@ -1214,6 +1217,7 @@ async fn service_runtime_browser_open_bypasses_blocked_desktop_request() {
         daemon
             .handle(ServiceRequest::Browser {
                 identity: None,
+                context: None,
                 request: BrowserRequest::Open {
                     target: Some(BrowserTargetKind::UserChrome),
                     url: Some("file:///etc/passwd".to_string()),
@@ -1269,6 +1273,7 @@ async fn service_runtime_browser_status_bypasses_blocked_desktop_request() {
             .handle(ServiceRequest::Browser {
                 request: BrowserRequest::Status,
                 identity: None,
+                context: None,
             })
             .await
     })
@@ -1302,6 +1307,60 @@ async fn service_runtime_browser_status_bypasses_blocked_desktop_request() {
 }
 
 #[tokio::test]
+async fn hybrid_browser_status_reports_codex_ingress_bind_degradation() {
+    let backend = FakeBackend {
+        snapshot: snapshot(Some(capture_with_rect()), Vec::new()),
+        outcome: success_outcome(),
+        presence: None,
+    };
+    let mut daemon = daemon_with_backend(Box::new(backend));
+    daemon.browser_control_mode = Ok(crate::browser::BrowserControlMode::Hybrid);
+    daemon.browser_control_runtime = Some(crate::browser::BrowserControlRuntime::new());
+    daemon.record_browser_control_startup_diagnostic(DiagnosticEntry {
+        code: "CodexBrowserIngressUnavailable".to_owned(),
+        message: "fixture".to_owned(),
+        details: Some("bind failed".to_owned()),
+    });
+
+    let response = daemon
+        .handle(ServiceRequest::Browser {
+            request: BrowserRequest::Status,
+            identity: None,
+            context: Some(BrowserRequestContext {
+                provenance: BrowserCallerProvenance {
+                    caller: BrowserCallerKind::DirectMcp,
+                    source: BrowserProvenanceSource::ClientInfoInference,
+                    connection_id: "status-test".to_owned(),
+                    declared_caller: None,
+                    client_info: None,
+                },
+                logical_identity: BrowserLogicalIdentity {
+                    session_id: "status-test".to_owned(),
+                    thread_id: None,
+                    turn_id: None,
+                },
+                operation_identity: BrowserOperationIdentity {
+                    operation_id: "status-test-operation".to_owned(),
+                    request_id_fingerprint: "status-test".to_owned(),
+                },
+            }),
+        })
+        .await;
+    let ServiceResponse::Browser {
+        response: BrowserResponse::Status { report },
+    } = response
+    else {
+        panic!("unexpected response: {response:?}");
+    };
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|entry| entry.code == "CodexBrowserIngressUnavailable")
+    );
+}
+
+#[tokio::test]
 async fn browser_snapshot_rejects_oversized_text_limit_at_service_boundary() {
     let daemon = daemon_with(
         snapshot(Some(capture_with_rect()), Vec::new()),
@@ -1311,6 +1370,7 @@ async fn browser_snapshot_rejects_oversized_text_limit_at_service_boundary() {
     match daemon
         .handle(ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Snapshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "tab-1".to_string(),
@@ -1340,6 +1400,7 @@ async fn browser_snapshot_rejects_oversized_element_limit_at_service_boundary() 
     match daemon
         .handle(ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: BrowserRequest::Snapshot {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "tab-1".to_string(),
@@ -1788,6 +1849,9 @@ fn daemon_with_phone_and_overlay(
         socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
         cua_cancellations: std::sync::Mutex::new(std::collections::HashMap::new()),
         cua_screenshot_planes: std::sync::Mutex::new(std::collections::HashMap::new()),
+        browser_control_mode: Ok(crate::browser::BrowserControlMode::Legacy),
+        browser_control_runtime: None,
+        browser_control_startup_diagnostics: std::sync::Mutex::new(Vec::new()),
     }
 }
 

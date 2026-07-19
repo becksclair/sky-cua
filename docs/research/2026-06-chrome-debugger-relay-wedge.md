@@ -2,6 +2,11 @@
 
 Investigated 2026-06-28, **root cause found and fixed 2026-07-01.**
 
+Current architecture note (2026-07-19): the persistent primary keepalive below
+remains the `legacy`-mode fix. In `hybrid`/`strict`, the unified browser control
+plane folds heartbeat and operations into one canonical persistent actor; see
+[`unified-browser-bridge-control-plane.md`](../features/unified-browser-bridge-control-plane.md).
+
 ## RESOLVED 2026-07-01 — read this first; the rest of the doc is superseded history
 
 The wedge is **not** MV3 idle-death, **not** an unfixable proprietary relay bug,
@@ -13,7 +18,8 @@ the extension's `client-heartbeat-alarm`): every **30 seconds** the extension
 sends a `ping` request to its **primary** native-host client and waits **3s** for
 a reply. If none arrives it runs `chrome.debugger.detach` on **every tab** and
 stops all sessions — a cleanup so a crashed driver does not leave the browser
-debugged forever. sky-cua drives the browser through per-operation, *ephemeral*
+debugged forever. At the time, sky-cua drove the browser through per-operation,
+*ephemeral*
 connections (`session_id: "sky-cua-mcp"`) that the host does **not** route the
 heartbeat to, so nothing sky-cua does answers the ping. Between (and even within)
 operations the extension detaches the debugger; the next command then reports
@@ -33,13 +39,13 @@ session id (so the host routes the heartbeat to it) received `ping` requests at
 1.6s, 31.6s, 61.6s, 91.6s — exactly every 30.0s — and answering each `pong` kept
 the debugger attached.
 
-**Fix (shipped): a persistent primary keepalive in the daemon.**
+**Legacy fix (shipped): a persistent primary keepalive in the daemon.**
 `crates/sky-cua-service/src/browser/keepalive.rs` holds one long-lived connection
 to the bridge socket, registered as the primary/driving client, whose only job is
 to answer the 30s heartbeat. Started lazily on first browser-bridge use
-(`BrowserBridgeExecutor::from_env`), reconnects across host restarts. Accepted
-tradeoff: sky-cua becomes the primary browser client, so a concurrently-running
-Codex desktop app driving the same browser and sky-cua evict each other.
+(`BrowserBridgeExecutor::from_env`), reconnects across host restarts. The
+legacy-only tradeoff was that this keepalive and a concurrently running Codex
+desktop client could replace one another as primary.
 
 Live-validated 2026-07-01 on real Brave: with the keepalive armed, a
 debugger-attached tab survived a 45s idle and a 70s idle (two heartbeat ticks)

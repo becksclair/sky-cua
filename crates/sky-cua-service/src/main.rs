@@ -6,6 +6,8 @@ mod browser;
 #[cfg(not(unix))]
 #[path = "browser/unsupported.rs"]
 mod browser;
+#[cfg(unix)]
+mod codex_browser_compat;
 mod daemon;
 mod diagnostics;
 mod element_resolver;

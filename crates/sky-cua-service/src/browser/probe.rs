@@ -28,13 +28,18 @@ pub(super) async fn list_tabs_from_sockets(
 ) -> Vec<(PathBuf, Result<Vec<BrowserTab>, DiagnosticEntry>)> {
     let mut tasks = JoinSet::new();
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_BRIDGE_SOCKET_PROBES));
+    let proxy = super::control_plane::capture_persistent_proxy();
     for (index, socket) in sockets.into_iter().enumerate() {
         let semaphore = Arc::clone(&semaphore);
         let identity = identity.clone();
+        let proxy = proxy.clone();
         tasks.spawn(async move {
-            let _permit = semaphore.acquire_owned().await.expect("semaphore is open");
-            let result = list_tabs_from_socket(&socket, target, &identity).await;
-            (index, socket, result)
+            super::control_plane::scope_persistent_proxy(proxy, async move {
+                let _permit = semaphore.acquire_owned().await.expect("semaphore is open");
+                let result = list_tabs_from_socket(&socket, target, &identity).await;
+                (index, socket, result)
+            })
+            .await
         });
     }
 
@@ -150,12 +155,17 @@ impl BridgeProbeCollector {
 fn spawn_bridge_probe_tasks(sockets: Vec<PathBuf>) -> JoinSet<BridgeProbeTaskResult> {
     let mut tasks = JoinSet::new();
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_BRIDGE_SOCKET_PROBES));
+    let proxy = super::control_plane::capture_persistent_proxy();
     for (index, socket) in sockets.into_iter().enumerate() {
         let semaphore = Arc::clone(&semaphore);
+        let proxy = proxy.clone();
         tasks.spawn(async move {
-            let _permit = semaphore.acquire_owned().await.expect("semaphore is open");
-            let result = probe_bridge_socket(&socket).await;
-            (index, socket, result)
+            super::control_plane::scope_persistent_proxy(proxy, async move {
+                let _permit = semaphore.acquire_owned().await.expect("semaphore is open");
+                let result = probe_bridge_socket(&socket).await;
+                (index, socket, result)
+            })
+            .await
         });
     }
     tasks

@@ -7,13 +7,13 @@ checked-in `.mcp.json`, and the agent smoke harnesses) from drifting away
 from the Rust source of truth: a rename or typo on either side is invisible
 until a live smoke fails on a silently-unforwarded toggle.
 
-This module builds two key sets by regex-scanning source rather than
-importing it (works in CI without a Rust build) and asserts both directions:
+This module builds key sets by regex-scanning source rather than importing it
+(works in CI without a Rust build) and asserts both directions:
 
 - Every key any Python forwarding structure references must exist in the
   Rust set (`test_python_referenced_keys_exist_in_rust`) -- catches
   renames/typos, the observed failure mode.
-- Every Rust-declared key must appear in the installer/`.mcp.json`
+- Every Rust environment read must appear in the installer/`.mcp.json`
   forwarding surface, or be in the commented `KNOWN_NOT_FORWARDED`
   exemption below with a one-line reason
   (`test_forwarding_relevant_rust_keys_are_forwarded_or_exempted`) -- a new
@@ -33,6 +33,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # both Rust and Python; Rust never uses single quotes for &str literals but
 # the pattern tolerates it for robustness).
 SKY_CUA_KEY_PATTERN = re.compile(r'["\'](SKY_CUA_[A-Z0-9_]+)["\']')
+RUST_ENV_LITERAL_READ_PATTERN = re.compile(
+    r'(?:std::)?env::(?:var|var_os)\(\s*["\'](SKY_CUA_[A-Z0-9_]+)["\']\s*\)'
+)
+RUST_STRING_CONST_PATTERN = re.compile(
+    r"\b(?:const|static)\s+([A-Z][A-Z0-9_]*)\s*:[^=;]+="
+    r'\s*["\'](SKY_CUA_[A-Z0-9_]+)["\']\s*;'
+)
+RUST_ENV_CONST_READ_PATTERN = re.compile(
+    r"(?:std::)?env::(?:var|var_os)\(\s*([A-Z][A-Z0-9_]*)\s*\)"
+)
 
 # Python-side structures that are meant to track the Rust env-key contract:
 # the installer's default MCP server env forwarding list, the module that
@@ -83,7 +93,7 @@ KNOWN_PYTHON_ONLY: dict[str, str] = {
     "SKY_CUA_XKB_VARIANT": 'Rust builds this key via format!("SKY_CUA_XKB_{suffix}"), not a literal',
 }
 
-# Rust-declared keys not in the installer/.mcp.json forwarding surface, each
+# Rust-read keys not in the installer/.mcp.json forwarding surface, each
 # with a one-line reason. Built empirically: run
 # test_forwarding_relevant_rust_keys_are_forwarded_or_exempted, move every
 # reported miss here with a reason, confirm green. A *new* unforwarded key
@@ -107,6 +117,7 @@ KNOWN_NOT_FORWARDED: dict[str, str] = {
     "SKY_CUA_DAEMON_LOG_PATH": "set by the client for its own spawned service child (resolved per-endpoint log path); never sourced externally",
     "SKY_CUA_FORCE_PIPEWIRE_CAPTURE_FAILURE": "test-only fault injection (portal/pipewire.rs)",
     "SKY_CUA_INPUT_HELPER_SOCKET_MODE": "input-helper systemd socket permission, set once at install time alongside SKY_CUA_INPUT_HELPER_SOCKET_GROUP into /etc/sky-cua/input-helper.env; the privileged sky-cua-input-helper.service never inherits from the MCP-launched process tree, so forwarding it through the per-invocation env_vars allowlist would be a no-op, not a real gap",
+    "SKY_CUA_MCP_HOST": "deprecated client-ingress compatibility fallback; sky-cua-owned adapters set SKY_CUA_MCP_CALLER_PROVENANCE instead",
     "SKY_CUA_PHONE_COMMAND_TIMEOUT_MS": "internal phone-backend command timeout tuning, not a documented operator override",
     "SKY_CUA_POINTER_TRACKING_DEBUG": "overlay-host pointer-tracking debug logging toggle, not an operator toggle",
     "SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS": "test-only (browser/transport.rs test fixture)",
@@ -143,6 +154,35 @@ def rust_declared_keys() -> set[str]:
     keys: set[str] = set()
     for path in (REPO_ROOT / "crates").glob("**/*.rs"):
         keys |= _keys_in_text(path.read_text(encoding="utf-8", errors="ignore"))
+    return keys
+
+
+def rust_environment_keys() -> set[str]:
+    """Rust SKY_CUA_* values that are environment reads, not diagnostic strings.
+
+    Direct string-literal reads and constants passed directly to ``env::var`` /
+    ``env::var_os`` are detected. Env-named constants are also included because
+    small typed parsing helpers commonly receive them one call above the actual
+    generic environment read.
+    """
+    source_texts = [
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in (REPO_ROOT / "crates").glob("**/*.rs")
+    ]
+    constants: dict[str, str] = {}
+    for text in source_texts:
+        for name, value in RUST_STRING_CONST_PATTERN.findall(text):
+            constants[name] = value
+
+    keys: set[str] = set()
+    for text in source_texts:
+        keys.update(RUST_ENV_LITERAL_READ_PATTERN.findall(text))
+        keys.update(
+            constants[name]
+            for name in RUST_ENV_CONST_READ_PATTERN.findall(text)
+            if name in constants
+        )
+    keys.update(value for name, value in constants.items() if "ENV" in name)
     return keys
 
 
@@ -186,11 +226,11 @@ def test_known_python_only_keys_are_still_absent_from_rust() -> None:
 
 
 def test_forwarding_relevant_rust_keys_are_forwarded_or_exempted() -> None:
-    rust_keys = rust_declared_keys()
+    rust_keys = rust_environment_keys()
     forwarded = installer_forwarded_keys()
     unforwarded = rust_keys - forwarded - set(KNOWN_NOT_FORWARDED)
     assert not unforwarded, (
-        "Rust-declared SKY_CUA_* keys missing from the installer/.mcp.json "
+        "Rust-read SKY_CUA_* environment keys missing from the installer/.mcp.json "
         "forwarding surface, and not in KNOWN_NOT_FORWARDED: "
         f"{sorted(unforwarded)}"
     )
@@ -213,3 +253,28 @@ def test_exemption_lists_stay_small() -> None:
         f"KNOWN_NOT_FORWARDED has grown to {len(KNOWN_NOT_FORWARDED)} entries; "
         "re-evaluate the forwarding contract instead of adding more exemptions"
     )
+
+
+def test_diagnostic_error_codes_are_not_classified_as_environment_keys() -> None:
+    diagnostic_codes = {
+        "SKY_CUA_ACTION_OUTCOME_UNKNOWN",
+        "SKY_CUA_DEADLINE_EXCEEDED",
+        "SKY_CUA_FRAME_TOO_LARGE",
+        "SKY_CUA_INTERNAL",
+        "SKY_CUA_INVALID_ARGUMENT",
+        "SKY_CUA_INVALID_CONTEXT",
+        "SKY_CUA_INVALID_REQUEST",
+        "SKY_CUA_TARGET_UNAVAILABLE",
+        "SKY_CUA_TURN_CANCELLED",
+    }
+    assert diagnostic_codes <= rust_declared_keys()
+    assert diagnostic_codes.isdisjoint(rust_environment_keys())
+
+
+def test_browser_control_env_contract_is_forwarded_without_removed_transport() -> None:
+    forwarded = installer_forwarded_keys()
+    assert {
+        "SKY_CUA_BROWSER_CONTROL_MODE",
+        "SKY_CUA_CODEX_BROWSER_SOCKET_PATH",
+    } <= forwarded
+    assert "SKY_CUA_BROWSER_BRIDGE_TRANSPORT" not in forwarded

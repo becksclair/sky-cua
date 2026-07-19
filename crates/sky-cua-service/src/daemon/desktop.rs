@@ -30,6 +30,10 @@ impl ServiceDaemon {
             ServiceRequest::Browser { .. } => {
                 unreachable!("browser requests bypass the desktop request lane")
             }
+            ServiceRequest::CancelBrowserOperation { .. }
+            | ServiceRequest::BrowserClientDisconnected { .. } => {
+                unreachable!("browser lifecycle requests bypass the desktop request lane")
+            }
             ServiceRequest::Phone { .. } => {
                 unreachable!("phone requests bypass the desktop request lane")
             }

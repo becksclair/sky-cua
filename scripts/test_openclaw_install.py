@@ -60,6 +60,7 @@ def test_openclaw_install_sets_mcp_config_without_touching_workspace_skills(
     assert server["args"] == ["mcp"]
     assert server["cwd"] == str(target_dir)
     assert server["env"]["SKY_CUA_REPO_ROOT"] == str(repo_root)
+    assert server["env"][_openclaw_install.MCP_CALLER_PROVENANCE_ENV] == "openclaw"
     assert BROWSER_SELECTION_ENV not in server["env"]
     assert server["enabled"] is True
     # Codex "approve" mode approves every tool call without user interaction;
@@ -149,12 +150,14 @@ def test_openclaw_codex_home_toml_upsert_is_idempotent(
     assert f'command = "{client_path}"' in first
     assert BROWSER_SELECTION_ENV not in first
     assert "SKY_CUA_REPO_ROOT" in first
+    assert first.count('SKY_CUA_MCP_CALLER_PROVENANCE = "openclaw"') == 1
 
     # Re-running replaces the managed block instead of appending a duplicate.
     monkeypatch.delenv(BROWSER_SELECTION_ENV, raising=False)
     _openclaw_install.install_openclaw_agent_codex_mcp_servers(tmp_path, client_path)
     second = config_path.read_text(encoding="utf-8")
     assert second.count("[mcp_servers.sky_cua]") == 1
+    assert second.count('SKY_CUA_MCP_CALLER_PROVENANCE = "openclaw"') == 1
     assert BROWSER_SELECTION_ENV not in second.split("[mcp_servers")[1]
 
     import tomllib
@@ -164,6 +167,123 @@ def test_openclaw_codex_home_toml_upsert_is_idempotent(
     # Always-allow at the codex layer: "approve" never prompts; "auto" would
     # still prompt for destructive/open-world sky-cua tools.
     assert parsed["mcp_servers"]["sky_cua"]["default_tools_approval_mode"] == "approve"
+
+
+def test_openclaw_provenance_is_consistent_idempotent_and_preserves_other_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    agent_config = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    agent_config.parent.mkdir(parents=True)
+    agent_config.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    client_path = target_dir / "bin" / "sky-cua-client"
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(_openclaw_install.subprocess, "run", fake_run)
+    launch_env = {
+        "KEEP_ME": "unchanged",
+        "SKY_CUA_MCP_HOST": "../../legacy-wrong-value",
+        _openclaw_install.MCP_CALLER_PROVENANCE_ENV: "wrong-new-value",
+    }
+
+    first_path = _openclaw_install.install_openclaw(
+        target_dir,
+        client_path,
+        openclaw_dir=openclaw_dir,
+        launch_env=launch_env,
+    )
+    first_snippet = first_path.read_bytes()
+    first_codex_config = agent_config.read_bytes()
+    second_path = _openclaw_install.install_openclaw(
+        target_dir,
+        client_path,
+        openclaw_dir=openclaw_dir,
+        launch_env=launch_env,
+    )
+
+    assert second_path.read_bytes() == first_snippet
+    assert agent_config.read_bytes() == first_codex_config
+    server = json.loads(first_snippet)["mcp"]["servers"]["sky_cua"]
+    assert server["env"][_openclaw_install.MCP_CALLER_PROVENANCE_ENV] == "openclaw"
+    assert server["env"]["KEEP_ME"] == "unchanged"
+    assert server["env"]["SKY_CUA_MCP_HOST"] == "../../legacy-wrong-value"
+    assert all(
+        json.loads(command[4])["env"][_openclaw_install.MCP_CALLER_PROVENANCE_ENV] == "openclaw"
+        for command in calls
+        if command[:4] == ["openclaw", "mcp", "set", "sky_cua"]
+    )
+
+    import tomllib
+
+    codex_env = tomllib.loads(first_codex_config.decode())["mcp_servers"]["sky_cua"]["env"]
+    assert codex_env[_openclaw_install.MCP_CALLER_PROVENANCE_ENV] == "openclaw"
+    assert codex_env["KEEP_ME"] == "unchanged"
+    assert codex_env["SKY_CUA_MCP_HOST"] == "../../legacy-wrong-value"
+    assert len(calls) == 4
+
+
+def test_openclaw_forwards_optional_browser_control_env_without_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    openclaw_dir = tmp_path / "openclaw"
+    agent_config = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
+    agent_config.parent.mkdir(parents=True)
+    agent_config.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    client_path = target_dir / "bin" / "sky-cua-client"
+    monkeypatch.setattr(
+        _openclaw_install.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0),
+    )
+    for name in _openclaw_install.OPTIONAL_MCP_RUNTIME_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+    default_path = _openclaw_install.install_openclaw(
+        target_dir, client_path, openclaw_dir=openclaw_dir
+    )
+    default_server = json.loads(default_path.read_text(encoding="utf-8"))["mcp"]["servers"][
+        "sky_cua"
+    ]
+    assert all(
+        name not in default_server["env"] for name in _openclaw_install.OPTIONAL_MCP_RUNTIME_ENV
+    )
+
+    monkeypatch.setenv("SKY_CUA_BROWSER_CONTROL_MODE", "strict")
+    monkeypatch.setenv(
+        "SKY_CUA_CODEX_BROWSER_SOCKET_PATH", "/run/user/1000/sky-cua/codex-browser.sock"
+    )
+    configured_path = _openclaw_install.install_openclaw(
+        target_dir, client_path, openclaw_dir=openclaw_dir
+    )
+    first_snippet = configured_path.read_bytes()
+    first_codex_config = agent_config.read_bytes()
+    _openclaw_install.install_openclaw(target_dir, client_path, openclaw_dir=openclaw_dir)
+
+    assert configured_path.read_bytes() == first_snippet
+    assert agent_config.read_bytes() == first_codex_config
+    server_env = json.loads(first_snippet)["mcp"]["servers"]["sky_cua"]["env"]
+    assert server_env["SKY_CUA_BROWSER_CONTROL_MODE"] == "strict"
+    assert (
+        server_env["SKY_CUA_CODEX_BROWSER_SOCKET_PATH"]
+        == "/run/user/1000/sky-cua/codex-browser.sock"
+    )
+
+    import tomllib
+
+    codex_env = tomllib.loads(first_codex_config.decode())["mcp_servers"]["sky_cua"]["env"]
+    assert codex_env["SKY_CUA_BROWSER_CONTROL_MODE"] == "strict"
+    assert (
+        codex_env["SKY_CUA_CODEX_BROWSER_SOCKET_PATH"]
+        == "/run/user/1000/sky-cua/codex-browser.sock"
+    )
+    assert "SKY_CUA_BROWSER_BRIDGE_TRANSPORT" not in first_snippet.decode()
+    assert "SKY_CUA_BROWSER_BRIDGE_TRANSPORT" not in first_codex_config.decode()
 
 
 def test_openclaw_codex_home_pin_refusal_fails_install_without_success_message(

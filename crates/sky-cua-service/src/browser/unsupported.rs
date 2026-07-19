@@ -189,6 +189,7 @@ fn unsupported_browser_status(
         }],
         tabs_known: None,
         browser_integration: integration,
+        control_plane: None,
         diagnostics,
     }
 }

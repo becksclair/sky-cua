@@ -59,6 +59,7 @@ async fn browser_status_from_integration(
         available_targets,
         tabs_known: None,
         browser_integration: integration,
+        control_plane: None,
         diagnostics,
     }
 }

@@ -5,11 +5,37 @@ impl ServiceDaemon {
         &self,
         request: BrowserRequest,
         identity: Option<BrowserSessionIdentity>,
+        context: Option<sky_cua_platform::model::BrowserRequestContext>,
     ) -> ServiceResponse {
         // Any browser request marks the session active so the daemon's idle
         // exit cannot kill the heartbeat keepalive (and with it every tab's
         // debugger attachment) between an agent's browser actions.
         crate::browser::mark_bridge_activity();
+        match &self.browser_control_mode {
+            Err(diagnostic) => return error_response(&diagnostic.code, &diagnostic.message),
+            Ok(mode) if mode.uses_persistent_actor() => {
+                let Some(runtime) = &self.browser_control_runtime else {
+                    return error_response(
+                        "BrowserControlUnavailable",
+                        "persistent browser control runtime did not initialize",
+                    );
+                };
+                let Some(context) = context else {
+                    return error_response(
+                        "BrowserRequestContextRequired",
+                        "hybrid/strict browser requests require BrowserRequestContext",
+                    );
+                };
+                runtime.observe_mcp_client(&context.provenance);
+                if !matches!(request, BrowserRequest::Status) {
+                    return match runtime.high_level(request, context).await {
+                        Ok(response) => ServiceResponse::Browser { response },
+                        Err(diagnostic) => error_response(&diagnostic.code, &diagnostic.message),
+                    };
+                }
+            }
+            Ok(_) => {}
+        }
         match request {
             BrowserRequest::ListTabs { target } => {
                 debug!(?target, "handling browser_list_tabs request");
@@ -299,8 +325,16 @@ impl ServiceDaemon {
 
     async fn handle_browser_status_request(&self) -> ServiceResponse {
         debug!("handling browser_status request");
+        let persistent_runtime = self.browser_control_runtime.as_ref();
         let integration = {
             let Ok(_desktop_lane) = self.desktop_lane.try_lock() else {
+                if let Some(runtime) = persistent_runtime {
+                    let mut report = runtime.status_report(None, true).await;
+                    self.append_browser_control_startup_diagnostics(&mut report);
+                    return ServiceResponse::Browser {
+                        response: BrowserResponse::Status { report },
+                    };
+                }
                 return ServiceResponse::Browser {
                     response: BrowserResponse::Status {
                         report: crate::browser::browser_status_from_deferred_doctor().await,
@@ -312,6 +346,14 @@ impl ServiceDaemon {
                 Err(error) => return error_response(error.code, error.message),
             }
         };
+
+        if let Some(runtime) = persistent_runtime {
+            let mut report = runtime.status_report(integration, false).await;
+            self.append_browser_control_startup_diagnostics(&mut report);
+            return ServiceResponse::Browser {
+                response: BrowserResponse::Status { report },
+            };
+        }
 
         ServiceResponse::Browser {
             response: BrowserResponse::Status {

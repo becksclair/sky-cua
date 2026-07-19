@@ -7,13 +7,14 @@ use sky_cua_platform::DESKTOP_LAUNCH_ENV_KEYS;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    ActionName, ActionRequest, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
-    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest, BrowserResponse, BrowserSessionIdentity,
-    CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX, CaptureInfo, CaptureScreenMode, CoordinateSpace,
-    CuaActionRequest, CuaBackendResponse, CuaCancelStatus, CuaCancellation, CuaRequestContext,
-    CuaScreenshot, DiagnosticEntry, DisplayTarget, EnvironmentInfo, PhoneBackendKind, PhoneRequest,
-    RectF, ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent,
-    WindowInfo, WindowTarget, browser_eval_enabled,
+    ActionName, ActionRequest, AppStateSnapshot, BROWSER_CONTROL_CAPABILITY_V1,
+    BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest,
+    BrowserResponse, BrowserSessionIdentity, CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX, CaptureInfo,
+    CaptureScreenMode, CoordinateSpace, CuaActionRequest, CuaBackendResponse, CuaCancelStatus,
+    CuaCancellation, CuaRequestContext, CuaScreenshot, DiagnosticEntry, DisplayTarget,
+    EnvironmentInfo, PhoneBackendKind, PhoneRequest, RectF, ServiceRequest, ServiceResponse,
+    SessionPresenceAction, SessionPresenceIntent, WindowInfo, WindowTarget,
+    browser_control_mode_capability, browser_eval_enabled,
 };
 
 use crate::action_router::route_action;
@@ -67,6 +68,9 @@ pub struct ServiceDaemon {
     socket_path: PathBuf,
     cua_cancellations: std::sync::Mutex<HashMap<(String, String), CuaCancellation>>,
     cua_screenshot_planes: std::sync::Mutex<HashMap<String, CuaScreenshotCoordinatePlane>>,
+    browser_control_mode: Result<crate::browser::BrowserControlMode, DiagnosticEntry>,
+    browser_control_runtime: Option<std::sync::Arc<crate::browser::BrowserControlRuntime>>,
+    browser_control_startup_diagnostics: std::sync::Mutex<Vec<DiagnosticEntry>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +120,13 @@ impl ServiceDaemon {
                 "desktop backend automation permission preparation did not complete"
             );
         }
+        let browser_control_mode = crate::browser::browser_control_mode();
+        let browser_control_runtime = browser_control_mode
+            .as_ref()
+            .ok()
+            .copied()
+            .filter(|mode| mode.uses_persistent_actor())
+            .map(crate::browser::BrowserControlRuntime::new_with_mode);
         Ok(Self {
             backend,
             sessions: SessionStore::new(),
@@ -129,7 +140,57 @@ impl ServiceDaemon {
             socket_path,
             cua_cancellations: std::sync::Mutex::new(HashMap::new()),
             cua_screenshot_planes: std::sync::Mutex::new(HashMap::new()),
+            browser_control_mode,
+            browser_control_runtime,
+            browser_control_startup_diagnostics: std::sync::Mutex::new(Vec::new()),
         })
+    }
+
+    pub(crate) fn effective_browser_control_mode(
+        &self,
+    ) -> Result<crate::browser::BrowserControlMode, &DiagnosticEntry> {
+        self.browser_control_mode.as_ref().copied()
+    }
+
+    pub(crate) fn record_browser_control_startup_diagnostic(&self, diagnostic: DiagnosticEntry) {
+        let mut diagnostics = self
+            .browser_control_startup_diagnostics
+            .lock()
+            .expect("browser control startup diagnostics poisoned");
+        if !diagnostics
+            .iter()
+            .any(|entry| entry.code == diagnostic.code)
+        {
+            diagnostics.push(diagnostic);
+        }
+    }
+
+    fn append_browser_control_startup_diagnostics(
+        &self,
+        report: &mut sky_cua_platform::model::BrowserStatusReport,
+    ) {
+        report.diagnostics.extend(
+            self.browser_control_startup_diagnostics
+                .lock()
+                .expect("browser control startup diagnostics poisoned")
+                .iter()
+                .cloned(),
+        );
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn codex_browser_backend(
+        &self,
+    ) -> std::sync::Arc<dyn crate::codex_browser_compat::CodexBrowserBackend> {
+        if self
+            .browser_control_mode
+            .as_ref()
+            .is_ok_and(|mode| mode.uses_persistent_actor())
+            && let Some(runtime) = &self.browser_control_runtime
+        {
+            return runtime.clone();
+        }
+        std::sync::Arc::new(crate::codex_browser_compat::UnavailableCodexBrowserBackend::new())
     }
 
     /// Spawn a background task that asks the service-owned overlay controller
@@ -245,6 +306,9 @@ impl ServiceDaemon {
             socket_path: PathBuf::from("/tmp/sky-cua-test.sock"),
             cua_cancellations: std::sync::Mutex::new(HashMap::new()),
             cua_screenshot_planes: std::sync::Mutex::new(HashMap::new()),
+            browser_control_mode: Ok(crate::browser::BrowserControlMode::Legacy),
+            browser_control_runtime: None,
+            browser_control_startup_diagnostics: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -253,7 +317,7 @@ impl ServiceDaemon {
         self.ensure_session_presence_for_request(&request).await;
         match request {
             ServiceRequest::Health => {
-                let capabilities = self
+                let mut capabilities = self
                     .backend
                     .probe_environment()
                     .await
@@ -267,6 +331,20 @@ impl ServiceDaemon {
                             &sky_cua_platform::model::InputBackendKind::None,
                         )
                     });
+                if let Ok(mode) = self.browser_control_mode.as_ref().copied() {
+                    capabilities.push(BROWSER_CONTROL_CAPABILITY_V1.to_owned());
+                    capabilities.push(browser_control_mode_capability(match mode {
+                        crate::browser::BrowserControlMode::Legacy => {
+                            sky_cua_platform::config::BrowserControlMode::Legacy
+                        }
+                        crate::browser::BrowserControlMode::Hybrid => {
+                            sky_cua_platform::config::BrowserControlMode::Hybrid
+                        }
+                        crate::browser::BrowserControlMode::Strict => {
+                            sky_cua_platform::config::BrowserControlMode::Strict
+                        }
+                    }));
+                }
                 ServiceResponse::Health {
                     ok: true,
                     service_socket: self.socket_path.display().to_string(),
@@ -386,8 +464,52 @@ impl ServiceDaemon {
                 turn_id,
                 reason,
             } => self.handle_cua_cancel(session_id, turn_id, reason),
-            ServiceRequest::Browser { request, identity } => {
-                self.handle_browser_request(request, identity).await
+            ServiceRequest::Browser {
+                request,
+                identity,
+                context,
+            } => {
+                self.handle_browser_request(request, identity, context)
+                    .await
+            }
+            ServiceRequest::CancelBrowserOperation {
+                connection_id,
+                operation_id,
+                reason: _,
+            } => {
+                let Some(runtime) = &self.browser_control_runtime else {
+                    return error_response(
+                        "BrowserControlUnavailable",
+                        "browser cancellation requires hybrid/strict control runtime",
+                    );
+                };
+                match runtime
+                    .cancel_mcp_operation(&connection_id, &operation_id)
+                    .await
+                {
+                    Ok(status) => ServiceResponse::Error {
+                        ok: true,
+                        code: "BrowserCancellationAcknowledged".to_owned(),
+                        message: format!("{status:?}"),
+                        session_id: None,
+                        turn_id: None,
+                        retry: None,
+                    },
+                    Err(diagnostic) => error_response(&diagnostic.code, &diagnostic.message),
+                }
+            }
+            ServiceRequest::BrowserClientDisconnected { connection_id } => {
+                if let Some(runtime) = &self.browser_control_runtime {
+                    runtime.mcp_client_disconnected(&connection_id).await;
+                }
+                ServiceResponse::Error {
+                    ok: true,
+                    code: "BrowserClientDisconnectAcknowledged".to_owned(),
+                    message: "browser client disconnect processed".to_owned(),
+                    session_id: None,
+                    turn_id: None,
+                    retry: None,
+                }
             }
             ServiceRequest::Phone { request } => self.handle_phone_request(request).await,
             request => {

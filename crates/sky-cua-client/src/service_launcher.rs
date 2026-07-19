@@ -12,9 +12,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
+use sky_cua_platform::config::{
+    BrowserControlMode as PlatformBrowserControlMode, resolved_browser_control_config,
+};
 use sky_cua_platform::{
     CLIENT_CLEARED_SESSION_ENV_KEYS_ENV,
-    model::{DoctorSessionEnvRepair, ServiceRequest, ServiceResponse},
+    model::{
+        DoctorSessionEnvRepair, ServiceRequest, ServiceResponse,
+        browser_control_mode_from_capabilities,
+    },
 };
 use sky_cua_platform::{CLIENT_SESSION_ENV_REPAIRS_ENV, GRAPHICAL_SESSION_ENV_KEYS};
 #[cfg(unix)]
@@ -135,6 +141,10 @@ impl ServiceClient {
         };
         #[cfg(not(unix))]
         let launch_environment = LaunchEnvironment::probe();
+        // Resolve policy before touching an existing singleton. A malformed
+        // per-process override must fail this client, never classify a healthy
+        // shared daemon as stale and replace it.
+        resolved_browser_control_config().map_err(anyhow::Error::msg)?;
         let client = Self::new(&launch_environment)?;
         #[cfg(unix)]
         let client = match &isolated {
@@ -155,6 +165,12 @@ impl ServiceClient {
                 return Ok(client);
             }
             Err(error) => {
+                if error
+                    .downcast_ref::<SharedBrowserDaemonConflict>()
+                    .is_some()
+                {
+                    return Err(error);
+                }
                 if is_stale_startup_health_error(&error) {
                     client.displace_stale_service(&error)?;
                 }
@@ -176,7 +192,27 @@ impl ServiceClient {
             STARTUP_HEALTH_READ_TIMEOUT,
             STARTUP_HEALTH_WRITE_TIMEOUT,
         )?;
-        if let Err(error) = launch_environment.ensure_startup_health(&response) {
+        let requested_mode = resolved_browser_control_config()
+            .map_err(anyhow::Error::msg)?
+            .mode
+            .unwrap_or(PlatformBrowserControlMode::Legacy);
+        let reported_mode = reported_browser_control_mode(&response);
+        ensure_browser_control_mode_compatible(requested_mode, reported_mode).map_err(
+            |detail| {
+                if reported_mode.is_some_and(persistent_browser_control_mode) && !self.is_isolated()
+                {
+                    anyhow!(SharedBrowserDaemonConflict { detail })
+                } else {
+                    anyhow!(StaleStartupService { detail, owner_pid })
+                }
+            },
+        )?;
+        if let Err(error) = launch_environment.ensure_startup_health(&response, true) {
+            if reported_mode.is_some_and(persistent_browser_control_mode) && !self.is_isolated() {
+                return Err(anyhow!(SharedBrowserDaemonConflict {
+                    detail: error.to_string(),
+                }));
+            }
             return Err(anyhow!(StaleStartupService {
                 detail: error.to_string(),
                 owner_pid,
@@ -568,6 +604,46 @@ impl ServiceClient {
             "existing sky-cua-service is stale ({reason}) and automatic daemon replacement is not implemented on Windows"
         ))
     }
+}
+
+fn reported_browser_control_mode(response: &ServiceResponse) -> Option<PlatformBrowserControlMode> {
+    let ServiceResponse::Health { capabilities, .. } = response else {
+        return None;
+    };
+    browser_control_mode_from_capabilities(capabilities)
+}
+
+fn persistent_browser_control_mode(mode: PlatformBrowserControlMode) -> bool {
+    matches!(
+        mode,
+        PlatformBrowserControlMode::Hybrid | PlatformBrowserControlMode::Strict
+    )
+}
+
+fn ensure_browser_control_mode_compatible(
+    requested: PlatformBrowserControlMode,
+    reported: Option<PlatformBrowserControlMode>,
+) -> std::result::Result<(), String> {
+    let compatible = matches!(
+        (requested, reported),
+        (
+            PlatformBrowserControlMode::Legacy,
+            None | Some(PlatformBrowserControlMode::Legacy)
+        ) | (
+            PlatformBrowserControlMode::Hybrid,
+            Some(PlatformBrowserControlMode::Hybrid | PlatformBrowserControlMode::Strict),
+        ) | (
+            PlatformBrowserControlMode::Strict,
+            Some(PlatformBrowserControlMode::Strict)
+        )
+    );
+    if compatible {
+        return Ok(());
+    }
+    Err(format!(
+        "browser-control mode mismatch: client requested {requested:?}, daemon reported {}",
+        reported.map_or("legacy/unknown".to_owned(), |mode| format!("{mode:?}"))
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -1006,6 +1082,23 @@ impl std::fmt::Display for StaleStartupService {
 
 impl std::error::Error for StaleStartupService {}
 
+#[derive(Debug)]
+struct SharedBrowserDaemonConflict {
+    detail: String,
+}
+
+impl std::fmt::Display for SharedBrowserDaemonConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "existing shared sky-cua browser daemon is incompatible and was left running: {}",
+            self.detail
+        )
+    }
+}
+
+impl std::error::Error for SharedBrowserDaemonConflict {}
+
 fn is_stale_startup_health_error(error: &anyhow::Error) -> bool {
     error.downcast_ref::<StaleStartupService>().is_some()
 }
@@ -1294,6 +1387,7 @@ mod tests {
     fn browser_click_is_non_idempotent_but_browser_status_is_idempotent() {
         let click = ServiceRequest::Browser {
             identity: None,
+            context: None,
             request: sky_cua_platform::BrowserRequest::Click {
                 target: Some(sky_cua_platform::BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
@@ -1304,6 +1398,7 @@ mod tests {
         let status = ServiceRequest::Browser {
             request: sky_cua_platform::BrowserRequest::Status,
             identity: None,
+            context: None,
         };
         let after_write = CallFailure::AfterWrite(anyhow!("boom"));
 
@@ -1338,6 +1433,41 @@ mod tests {
                 .downcast_ref::<StaleStartupService>()
                 .and_then(|error| error.owner_pid),
             Some(4242)
+        );
+    }
+
+    #[test]
+    fn browser_control_health_mode_matrix_is_backward_compatible_and_fail_closed() {
+        use PlatformBrowserControlMode::{Hybrid, Legacy, Strict};
+
+        assert!(ensure_browser_control_mode_compatible(Legacy, None).is_ok());
+        assert!(ensure_browser_control_mode_compatible(Legacy, Some(Legacy)).is_ok());
+        assert!(ensure_browser_control_mode_compatible(Hybrid, Some(Hybrid)).is_ok());
+        assert!(ensure_browser_control_mode_compatible(Hybrid, Some(Strict)).is_ok());
+        assert!(ensure_browser_control_mode_compatible(Strict, Some(Strict)).is_ok());
+
+        assert!(ensure_browser_control_mode_compatible(Hybrid, None).is_err());
+        assert!(ensure_browser_control_mode_compatible(Strict, None).is_err());
+        assert!(ensure_browser_control_mode_compatible(Strict, Some(Hybrid)).is_err());
+        assert!(ensure_browser_control_mode_compatible(Legacy, Some(Hybrid)).is_err());
+    }
+
+    #[test]
+    fn health_capabilities_report_the_daemon_browser_control_mode() {
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_owned(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_owned(),
+            capabilities: vec![sky_cua_platform::model::browser_control_mode_capability(
+                PlatformBrowserControlMode::Strict,
+            )],
+            desktop_env: Default::default(),
+            browser_env: Default::default(),
+        };
+        assert_eq!(
+            reported_browser_control_mode(&response),
+            Some(PlatformBrowserControlMode::Strict)
         );
     }
 
@@ -1388,15 +1518,22 @@ mod tests {
 
         let old_service_path = std::env::var_os("SKY_CUA_SERVICE_PATH");
         let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
+        let old_browser_control_mode =
+            std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
         unsafe {
             std::env::set_var("SKY_CUA_SERVICE_PATH", &service_script);
             std::env::set_var(SERVICE_SOCKET_PATH_ENV, &socket_path);
+            std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
         }
 
         let result = run_respawn_test();
 
         restore_env("SKY_CUA_SERVICE_PATH", old_service_path);
         restore_env(SERVICE_SOCKET_PATH_ENV, old_socket_path);
+        restore_env(
+            sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV,
+            old_browser_control_mode,
+        );
         let _ = fs::remove_dir_all(&temp_dir);
 
         result.expect("service client should respawn exited child");

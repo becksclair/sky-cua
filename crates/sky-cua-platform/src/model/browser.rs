@@ -15,6 +15,84 @@ pub struct BrowserSessionIdentity {
     pub thread_id: Option<String>,
 }
 
+/// Normalized caller lane for a browser request entering through MCP.
+///
+/// The installer declaration is advisory same-user provenance, not an
+/// authorization boundary. Unknown declarations deliberately collapse to
+/// [`BrowserCallerKind::LegacyUnknown`] instead of becoming arbitrary
+/// identities.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserCallerKind {
+    CodexDesktop,
+    CodexCli,
+    OpenClaw,
+    OpenCode,
+    Pi,
+    DirectMcp,
+    LegacyUnknown,
+}
+
+/// How the normalized caller lane was obtained.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserProvenanceSource {
+    InstallerDeclaration,
+    ClientInfoInference,
+    TrustedCodexMetadata,
+    LegacyFallback,
+}
+
+/// MCP `initialize.clientInfo`, retained independently from caller
+/// classification so a host's self-reported name never changes provenance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserMcpClientInfo {
+    pub name: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// Stable provenance for the lifetime of one MCP connection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserCallerProvenance {
+    pub caller: BrowserCallerKind,
+    pub source: BrowserProvenanceSource,
+    pub connection_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_caller: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_info: Option<BrowserMcpClientInfo>,
+}
+
+/// Logical agent attribution, independent from transport and operation IDs.
+///
+/// Codex supplies session/thread/turn values. Other and malformed legacy MCP
+/// callers receive a stable connection-scoped session and omit turn fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserLogicalIdentity {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+}
+
+/// Retry-stable identity for one MCP `tools/call` operation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserOperationIdentity {
+    pub operation_id: String,
+    pub request_id_fingerprint: String,
+}
+
+/// Browser caller context propagated alongside the legacy session identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserRequestContext {
+    pub provenance: BrowserCallerProvenance,
+    pub logical_identity: BrowserLogicalIdentity,
+    pub operation_identity: BrowserOperationIdentity,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserRequest {
@@ -217,6 +295,8 @@ pub struct BrowserStatusReport {
     pub tabs_known: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_integration: Option<BrowserIntegrationReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_plane: Option<Box<super::browser_control::BrowserControlPlaneSnapshot>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiagnosticEntry>,
 }
@@ -404,7 +484,9 @@ pub fn normalize_browser_open_url(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::normalize_browser_open_url;
-    use super::{BrowserRequest, BrowserTargetKind};
+    use super::{
+        BrowserRequest, BrowserStatusReport, BrowserTargetAvailability, BrowserTargetKind,
+    };
 
     #[test]
     fn browser_request_idempotency_matches_the_classification_table() {
@@ -505,6 +587,25 @@ mod tests {
         assert_eq!(normalize_browser_open_url(""), None);
         assert_eq!(normalize_browser_open_url("file:///etc/passwd"), None);
         assert_eq!(normalize_browser_open_url("javascript:alert(1)"), None);
+    }
+
+    #[test]
+    fn legacy_browser_status_omits_control_plane_exactly() {
+        let report = BrowserStatusReport {
+            enabled: true,
+            available_targets: vec![BrowserTargetAvailability {
+                target: BrowserTargetKind::UserChrome,
+                available: false,
+                detail: "legacy".to_owned(),
+            }],
+            tabs_known: None,
+            browser_integration: None,
+            control_plane: None,
+            diagnostics: Vec::new(),
+        };
+
+        let encoded = serde_json::to_value(report).expect("serialize browser status");
+        assert!(encoded.get("control_plane").is_none());
     }
 
     #[test]
