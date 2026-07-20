@@ -14,7 +14,12 @@ from pathlib import Path
 
 from _plugin_bundle import DIST_PLUGIN_ROOT, REPO_ROOT, remove_path
 from release_builder import ComponentSource, FileSource, ReleaseBuild, build_release_set
-from release_generation import canonical_json_bytes, canonical_tree_digest, sha256_file
+from release_generation import (
+    FORBIDDEN_CHECKOUT_PATH_PATTERNS,
+    canonical_json_bytes,
+    canonical_tree_digest,
+    sha256_file,
+)
 
 CORE_COMPONENT = "core-linux-x64"
 BROWSER_COMPONENT = "browser-js"
@@ -148,18 +153,30 @@ def _sanitize_and_reject_checkout_path_leaks(inputs: dict[str, Path]) -> None:
             if not path.is_file() or path.is_symlink():
                 continue
             blob = path.read_bytes()
-            if checkout not in blob:
+            if checkout not in blob and not any(
+                pattern.search(blob) for pattern in FORBIDDEN_CHECKOUT_PATH_PATTERNS
+            ):
                 continue
             if path.suffix.lower() not in text_suffixes or b"\x00" in blob:
                 raise ValueError(
                     f"packaged binary contains the absolute producer checkout path: {path}"
                 )
-            path.write_bytes(blob.replace(checkout, replacement))
+            sanitized = blob.replace(checkout, replacement)
+            for pattern in FORBIDDEN_CHECKOUT_PATH_PATTERNS:
+                sanitized = pattern.sub(replacement + b"/", sanitized)
+            path.write_bytes(sanitized)
     leaks = [
         path
         for component in inputs.values()
         for path in sorted(component.rglob("*"), key=lambda item: item.as_posix())
-        if path.is_file() and not path.is_symlink() and checkout in path.read_bytes()
+        if path.is_file()
+        and not path.is_symlink()
+        and (
+            checkout in path.read_bytes()
+            or any(
+                pattern.search(path.read_bytes()) for pattern in FORBIDDEN_CHECKOUT_PATH_PATTERNS
+            )
+        )
     ]
     if leaks:
         raise ValueError(f"packaged files retain the absolute producer checkout path: {leaks}")

@@ -19,7 +19,6 @@ from build_complete_release import (
     build_complete_release,
 )
 from release_generation import (
-    ReleaseValidationError,
     canonical_json_bytes,
     sha256_file,
     verify_release_root,
@@ -399,7 +398,7 @@ def test_complete_release_rejects_cua_node_browser_generation_mismatch(
         )
 
 
-def test_complete_release_rejects_checkout_shaped_paths_in_packaged_bytes(
+def test_complete_release_normalizes_checkout_shaped_paths_in_packaged_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
@@ -411,15 +410,19 @@ def test_complete_release_rejects_checkout_shaped_paths_in_packaged_bytes(
     leak.parent.mkdir()
     leak.write_text("producer path: /home/alice/projects/sky-cua/private\n", encoding="utf-8")
 
-    with pytest.raises(ReleaseValidationError, match="absolute checkout-shaped path"):
-        build_complete_release(
-            tmp_path / "out",
-            producer_commit=PRODUCER_COMMIT,
-            source_date_epoch=1_784_500_000,
-            core_source=core,
-            cua_node_source=_cua_node(tmp_path / "inputs"),
-            include_fat_archive=False,
-        )
+    result = build_complete_release(
+        tmp_path / "out",
+        producer_commit=PRODUCER_COMMIT,
+        source_date_epoch=1_784_500_000,
+        core_source=core,
+        cua_node_source=_cua_node(tmp_path / "inputs"),
+        include_fat_archive=False,
+    )
+
+    packaged = result.release.root / "components/core-linux-x64/docs/leak.md"
+    assert packaged.read_text(encoding="utf-8") == (
+        "producer path: ${SKY_CUA_SOURCE_ROOT}/sky-cua/private\n"
+    )
 
 
 def test_complete_release_rejects_producer_path_embedded_in_binary(
