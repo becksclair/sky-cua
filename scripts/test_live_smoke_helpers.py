@@ -53,6 +53,28 @@ def test_agentic_loop_fixture_choices_include_fallback_anchor() -> None:
     assert live_agentic_loop_smoke.DEFAULT_FIXTURE == "zenity"
 
 
+def test_scroll_region_prefers_visible_scroll_pane_over_oversized_content() -> None:
+    selected = live_desktop_smoke.find_scroll_region(
+        {
+            "elements": [
+                {
+                    "element_index": 21,
+                    "role": "panel",
+                    "name": "Scroll region",
+                    "bounds": {"height": 1595},
+                },
+                {
+                    "element_index": 20,
+                    "role": "scroll pane",
+                    "name": "Scroll region",
+                    "bounds": {"height": 334},
+                },
+            ]
+        }
+    )
+    assert selected["element_index"] == 20
+
+
 def test_mpv_launch_argv_idles_with_distinctive_title() -> None:
     argv = live_fallback_anchor_smoke.build_launch_argv()
 

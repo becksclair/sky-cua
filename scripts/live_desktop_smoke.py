@@ -135,11 +135,18 @@ def find_scroll_region(snapshot: dict[str, Any]) -> dict[str, Any]:
         element
         for element in snapshot.get("elements", [])
         if (element.get("name") or "") == "Scroll region"
-        and element.get("role") in {"panel", "scroll_pane", "scrollbar"}
+        and element.get("role") in {"panel", "scroll pane", "scroll_pane", "scrollbar"}
         and isinstance(element.get("element_index"), int)
     ]
     if candidates:
-        return candidates[0]
+        return min(
+            candidates,
+            key=lambda element: (
+                0 if element.get("role") in {"scroll pane", "scroll_pane"} else 1,
+                float((element.get("bounds") or {}).get("height", float("inf"))),
+                int(element["element_index"]),
+            ),
+        )
     raise RuntimeError(
         "did not find a unique scroll-region target element.\n"
         f"elements={json.dumps(snapshot.get('elements', []), indent=2, sort_keys=True)}"

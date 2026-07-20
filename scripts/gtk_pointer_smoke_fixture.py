@@ -136,6 +136,7 @@ class PointerSmokeWindow(Gtk.Window):
 
         self.scroll_box = Gtk.ScrolledWindow()
         self.scroll_box.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.scroll_box.get_accessible().set_name("Scroll region")
         self.scroll_box_frame = Gtk.Frame(label="Scroll region")
         scroll_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         scroll_content.set_border_width(18)
