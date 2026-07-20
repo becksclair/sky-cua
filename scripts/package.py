@@ -34,17 +34,23 @@ from _plugin_bundle import (
 # The pure-Python installer closure shipped inside the package (no cargo, no
 # build_plugin). Verified import-closed: installer -> install_mcp_server /
 # install_plugin -> _install_shared / _openclaw_install / _kwin_effect /
-# _plugin_bundle, and nothing else.
+# _plugin_bundle. Complete-release consumers also use the transactional
+# OpenClaw CLI and OpenCode JSONC adapters.
 PACKAGE_SCRIPTS = (
     "installer.py",
     "install_mcp_server.py",
+    "install_complete_release.py",
     "install_plugin.py",
     "_install_shared.py",
     "_openclaw_install.py",
+    "_openclaw_cli_transaction.py",
+    "_opencode_install.py",
     "_kwin_effect.py",
     "_plugin_bundle.py",
     "_mcp_stdio.py",
     "deploy_freshness.py",
+    "release_generation.py",
+    "release_builder.py",
 )
 
 DEFAULT_RELEASE_DIR = REPO_ROOT / "dist" / "release"

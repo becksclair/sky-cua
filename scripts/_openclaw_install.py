@@ -9,7 +9,10 @@ import stat
 import subprocess
 import sys
 import tomllib
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 
 import _install_shared
 from _install_shared import (
@@ -20,7 +23,17 @@ from _install_shared import (
     toml_basic_string,
     write_text_atomically,
 )
+from _openclaw_cli_transaction import (
+    CommandRunner,
+    OpenClawCliTransactionError,
+    command_result_detail,
+    restore_servers,
+    run_openclaw_command,
+    set_server,
+    snapshot_servers,
+)
 from _plugin_bundle import remove_path
+from release_generation import FULL_PROFILE, RELEASE_MANIFEST, VerifiedRelease, verify_release_root
 
 DEFAULT_OPENCLAW_DIR = Path.home() / ".openclaw"
 # Codex per-tool approval semantics: "approve" = always approved with no user
@@ -37,6 +50,432 @@ OPTIONAL_MCP_RUNTIME_ENV = (
     "SKY_CUA_BROWSER_CONTROL_MODE",
     "SKY_CUA_CODEX_BROWSER_SOCKET_PATH",
 )
+
+OPENCLAW_RELEASE_SERVER_NAMES = ("sky_cua", "node_repl")
+OPENCLAW_NODE_REPL_REQUEST_TIMEOUT_MS = 3_600_000
+OPENCLAW_NODE_REPL_CONNECTION_TIMEOUT_MS = 120_000
+OPENCLAW_GATEWAY_RESTART_TIMEOUT_SECONDS = 180
+OPENCLAW_GATEWAY_RESTART_WAIT = "120s"
+OPENCLAW_RELEASE_ROOT_ENV = "SKY_CUA_RELEASE_ROOT"
+NODE_REPL_PATH_ENV = "CODEX_NODE_REPL_PATH"
+NODE_PATH_ENV = "NODE_REPL_NODE_PATH"
+NODE_MODULE_DIRS_ENV = "NODE_REPL_NODE_MODULE_DIRS"
+TRUSTED_BROWSER_SHA256S_ENV = "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S"
+PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH"
+
+GatewayActivationMode = Literal["watcher", "restart", "deferred"]
+
+
+class OpenClawReleaseInstallError(RuntimeError):
+    """The two-server OpenClaw registration transaction did not commit."""
+
+
+@dataclass(frozen=True)
+class OpenClawReleasePlan:
+    """Verified immutable-generation paths and the two OpenClaw definitions."""
+
+    release: VerifiedRelease
+    config_path: Path
+    definitions: dict[str, dict[str, object]]
+
+
+@dataclass(frozen=True)
+class OpenClawReleaseInstallReport:
+    """Machine-readable handoff from the local config transaction."""
+
+    release_id: str
+    manifest_sha256: str
+    release_root: str
+    config_path: str
+    registered_servers: tuple[str, ...]
+    changed_servers: tuple[str, ...]
+    gateway_activation: str
+    gateway_detail: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "release_id": self.release_id,
+            "manifest_sha256": self.manifest_sha256,
+            "release_root": self.release_root,
+            "config_path": self.config_path,
+            "registered_servers": list(self.registered_servers),
+            "changed_servers": list(self.changed_servers),
+            "gateway_activation": self.gateway_activation,
+            "gateway_detail": self.gateway_detail,
+        }
+
+
+def _load_json_object(path: Path, *, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise OpenClawReleaseInstallError(f"could not read {label} at {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise OpenClawReleaseInstallError(f"{label} must contain a JSON object: {path}")
+    return cast(dict[str, object], value)
+
+
+def _component_root(release_root: Path, manifest: Mapping[str, object], name: str) -> Path:
+    components = manifest.get("components")
+    if not isinstance(components, list):
+        raise OpenClawReleaseInstallError("release manifest components must be an array")
+    for raw in components:
+        if not isinstance(raw, dict) or raw.get("name") != name:
+            continue
+        relative = raw.get("path")
+        if not isinstance(relative, str):
+            break
+        root = (release_root / relative).resolve(strict=True)
+        if not root.is_relative_to(release_root) or not root.is_dir():
+            break
+        return root
+    raise OpenClawReleaseInstallError(f"verified release is missing component {name}")
+
+
+def _required_component_path(root: Path, relative: object, *, label: str) -> Path:
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        raise OpenClawReleaseInstallError(f"{label} must be a relative path")
+    path = (root / relative).resolve(strict=True)
+    if not path.is_relative_to(root):
+        raise OpenClawReleaseInstallError(f"{label} escapes its component root")
+    return path
+
+
+def _required_executable(root: Path, relative: object, *, label: str) -> Path:
+    path = _required_component_path(root, relative, label=label)
+    if not path.is_file() or path.is_symlink() or path.stat().st_mode & 0o111 == 0:
+        raise OpenClawReleaseInstallError(f"{label} is not a real executable: {path}")
+    return path
+
+
+def _validated_launch_env(values: Mapping[str, str] | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for key, value in (values or {}).items():
+        if not key or "=" in key or "\x00" in key or "\x00" in value:
+            raise OpenClawReleaseInstallError(f"invalid OpenClaw MCP environment entry: {key!r}")
+        result[key] = value
+    return result
+
+
+def plan_openclaw_release_install(
+    release_root: Path,
+    *,
+    browser_socket_path: Path,
+    openclaw_dir: Path | None = None,
+    launch_env: Mapping[str, str] | None = None,
+) -> OpenClawReleasePlan:
+    """Build two definitions from one fully verified immutable generation.
+
+    ``release_root`` may be the standalone ``current`` pointer; it is resolved
+    once, then every executable, module, data, and trust value is derived from
+    that exact generation. No checkout or ambient Node path participates.
+    """
+    try:
+        generation = release_root.expanduser().resolve(strict=True)
+    except OSError as error:
+        raise OpenClawReleaseInstallError(f"release root is unavailable: {release_root}") from error
+    try:
+        verified = verify_release_root(
+            generation,
+            profile=FULL_PROFILE,
+            enforce_profile_shape=True,
+        )
+    except (OSError, ValueError) as error:
+        raise OpenClawReleaseInstallError(f"release verification failed: {error}") from error
+    required = {"core-linux-x64", "browser-js", "cua-node-linux-x64-glibc"}
+    missing = required.difference(verified.component_names)
+    if missing:
+        raise OpenClawReleaseInstallError(
+            f"OpenClaw two-server installation requires the full profile: {sorted(missing)}"
+        )
+    if generation.name != verified.release_id:
+        raise OpenClawReleaseInstallError(
+            "resolved release generation directory must be named by its release id"
+        )
+
+    socket = browser_socket_path.expanduser()
+    if not socket.is_absolute():
+        raise OpenClawReleaseInstallError("browser socket path must be absolute")
+    socket = socket.resolve(strict=False)
+    manifest = _load_json_object(generation / RELEASE_MANIFEST, label="release manifest")
+    core = _component_root(generation, manifest, "core-linux-x64")
+    cua_node = _component_root(generation, manifest, "cua-node-linux-x64-glibc")
+    runtime_manifest = _load_json_object(cua_node / "manifest.json", label="cua_node manifest")
+    if (
+        runtime_manifest.get("target") != "linux-x64-glibc"
+        or runtime_manifest.get("node_version") != "24.14.0"
+    ):
+        raise OpenClawReleaseInstallError("cua_node target or Node version is incompatible")
+
+    sky_cua = _required_executable(core, "bin/sky-cua-client", label="sky_cua MCP executable")
+    node_repl = _required_executable(
+        cua_node,
+        runtime_manifest.get("node_repl_path"),
+        label="node_repl MCP executable",
+    )
+    node = _required_executable(
+        cua_node, runtime_manifest.get("node_path"), label="bundled Node executable"
+    )
+    node_modules = _required_component_path(
+        cua_node, runtime_manifest.get("node_modules"), label="bundled Node module directory"
+    )
+    if not node_modules.is_dir():
+        raise OpenClawReleaseInstallError("bundled Node module path is not a directory")
+    data = runtime_manifest.get("data")
+    if not isinstance(data, dict):
+        raise OpenClawReleaseInstallError("cua_node manifest data inventory is missing")
+    playwright = _required_component_path(
+        cua_node, data.get("playwright"), label="bundled Playwright data directory"
+    )
+    if not playwright.is_dir():
+        raise OpenClawReleaseInstallError("bundled Playwright path is not a directory")
+
+    release_trust = manifest.get("trusted_browser_client_sha256s")
+    runtime_trust = runtime_manifest.get("trusted_browser_client_sha256s")
+    if (
+        not isinstance(release_trust, list)
+        or not release_trust
+        or release_trust != runtime_trust
+        or any(not isinstance(value, str) for value in release_trust)
+    ):
+        raise OpenClawReleaseInstallError(
+            "release and cua_node trusted Browser SHA inventories do not match"
+        )
+
+    supplied_env = _validated_launch_env(launch_env)
+    generation_owned_env = {
+        OPENCLAW_RELEASE_ROOT_ENV,
+        "SKY_CUA_REPO_ROOT",
+        MCP_CALLER_PROVENANCE_ENV,
+        "SKY_CUA_CODEX_BROWSER_SOCKET_PATH",
+        NODE_REPL_PATH_ENV,
+        NODE_PATH_ENV,
+        "CODEX_BROWSER_USE_NODE_PATH",
+        NODE_MODULE_DIRS_ENV,
+        TRUSTED_BROWSER_SHA256S_ENV,
+        PLAYWRIGHT_BROWSERS_PATH_ENV,
+    }
+    for name in generation_owned_env:
+        supplied_env.pop(name, None)
+    common_env = {
+        **supplied_env,
+        OPENCLAW_RELEASE_ROOT_ENV: str(generation),
+        "SKY_CUA_REPO_ROOT": str(core),
+        MCP_CALLER_PROVENANCE_ENV: OPENCLAW_CALLER_PROVENANCE,
+        "SKY_CUA_CODEX_BROWSER_SOCKET_PATH": str(socket),
+    }
+    definitions: dict[str, dict[str, object]] = {
+        "sky_cua": {
+            "enabled": True,
+            "command": str(sky_cua),
+            "args": ["mcp"],
+            "cwd": str(generation),
+            "env": dict(common_env),
+            "codex": {"defaultToolsApprovalMode": CODEX_TOOLS_APPROVAL_MODE},
+        },
+        "node_repl": {
+            "enabled": True,
+            "command": str(node_repl),
+            "args": [],
+            "cwd": str(generation),
+            "env": {
+                **common_env,
+                NODE_REPL_PATH_ENV: str(node_repl),
+                NODE_PATH_ENV: str(node),
+                NODE_MODULE_DIRS_ENV: str(node_modules),
+                TRUSTED_BROWSER_SHA256S_ENV: ",".join(cast(list[str], release_trust)),
+                PLAYWRIGHT_BROWSERS_PATH_ENV: str(playwright),
+            },
+            "connectionTimeoutMs": OPENCLAW_NODE_REPL_CONNECTION_TIMEOUT_MS,
+            "requestTimeoutMs": OPENCLAW_NODE_REPL_REQUEST_TIMEOUT_MS,
+            "supportsParallelToolCalls": False,
+            "codex": {"defaultToolsApprovalMode": CODEX_TOOLS_APPROVAL_MODE},
+        },
+    }
+    state_dir = (openclaw_dir or DEFAULT_OPENCLAW_DIR).expanduser().resolve()
+    return OpenClawReleasePlan(
+        release=verified,
+        config_path=state_dir / "openclaw.json",
+        definitions=definitions,
+    )
+
+
+def _openclaw_command_env(openclaw_state_dir: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(resolve_gateway_auth_env(openclaw_state_dir))
+    env["OPENCLAW_STATE_DIR"] = str(openclaw_state_dir)
+    env["OPENCLAW_CONFIG_PATH"] = str(openclaw_state_dir / "openclaw.json")
+    return env
+
+
+def install_openclaw_release(
+    release_root: Path,
+    *,
+    browser_socket_path: Path,
+    openclaw_dir: Path | None = None,
+    openclaw_bin: str = "openclaw",
+    launch_env: Mapping[str, str] | None = None,
+    gateway_activation: GatewayActivationMode = "watcher",
+    runner: CommandRunner = subprocess.run,
+) -> OpenClawReleaseInstallReport:
+    """Transactionally register both immutable-generation MCP definitions.
+
+    OpenClaw's Gateway watches ``openclaw.json`` and hot-applies ``mcp``
+    changes by disposing its own cached runtimes. The separate
+    ``openclaw mcp reload`` command only disposes caches in that short-lived CLI
+    process, so this installer never presents it as a Gateway reload. Callers
+    may explicitly request a health-checked Gateway restart for deterministic
+    cutover, or leave activation to the watcher and prove it later.
+    """
+    if gateway_activation not in {"watcher", "restart", "deferred"}:
+        raise ValueError(f"unsupported Gateway activation mode: {gateway_activation}")
+    plan = plan_openclaw_release_install(
+        release_root,
+        browser_socket_path=browser_socket_path,
+        openclaw_dir=openclaw_dir,
+        launch_env=launch_env,
+    )
+    state_dir = plan.config_path.parent
+    state_dir.mkdir(parents=True, exist_ok=True)
+    env = _openclaw_command_env(state_dir)
+    try:
+        snapshots = snapshot_servers(
+            runner,
+            openclaw_bin,
+            env,
+            OPENCLAW_RELEASE_SERVER_NAMES,
+            timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
+        )
+    except OpenClawCliTransactionError as error:
+        raise OpenClawReleaseInstallError(str(error)) from error
+    changed = tuple(
+        name for name in OPENCLAW_RELEASE_SERVER_NAMES if snapshots[name] != plan.definitions[name]
+    )
+    try:
+        for name in changed:
+            try:
+                result = set_server(
+                    runner,
+                    openclaw_bin,
+                    name,
+                    plan.definitions[name],
+                    env,
+                    timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
+                )
+            except OpenClawCliTransactionError as error:
+                raise OpenClawReleaseInstallError(str(error)) from error
+            if result.returncode != 0:
+                raise OpenClawReleaseInstallError(
+                    f"failed to register OpenClaw MCP definition {name}"
+                    f"{command_result_detail(result)}"
+                )
+        try:
+            committed = snapshot_servers(
+                runner,
+                openclaw_bin,
+                env,
+                OPENCLAW_RELEASE_SERVER_NAMES,
+                timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
+            )
+        except OpenClawCliTransactionError as error:
+            raise OpenClawReleaseInstallError(str(error)) from error
+        if any(committed[name] != plan.definitions[name] for name in OPENCLAW_RELEASE_SERVER_NAMES):
+            raise OpenClawReleaseInstallError(
+                "OpenClaw did not persist the exact two-server definition set"
+            )
+    except BaseException as error:
+        rollback_failures = restore_servers(
+            runner,
+            openclaw_bin,
+            env,
+            OPENCLAW_RELEASE_SERVER_NAMES,
+            snapshots,
+            timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
+        )
+        if rollback_failures:
+            raise OpenClawReleaseInstallError(
+                f"OpenClaw registration failed and rollback failed for {rollback_failures}"
+            ) from error
+        raise
+
+    if not changed:
+        activation = "unchanged"
+        detail = "definitions already matched the verified generation; Gateway activation unchanged"
+    elif gateway_activation == "watcher":
+        activation = "gateway_watcher_pending_verification"
+        detail = (
+            "OpenClaw Gateway hot-reloads mcp config through its config watcher; "
+            "the installer did not claim process-local 'openclaw mcp reload' as Gateway proof"
+        )
+    elif gateway_activation == "deferred":
+        activation = "deferred"
+        detail = "definitions committed; Gateway activation intentionally deferred"
+    else:
+        command = [
+            openclaw_bin,
+            "gateway",
+            "restart",
+            "--wait",
+            OPENCLAW_GATEWAY_RESTART_WAIT,
+        ]
+        try:
+            result = run_openclaw_command(
+                runner,
+                command,
+                env=env,
+                timeout=OPENCLAW_GATEWAY_RESTART_TIMEOUT_SECONDS,
+            )
+        except OpenClawCliTransactionError as error:
+            rollback_failures = restore_servers(
+                runner,
+                openclaw_bin,
+                env,
+                OPENCLAW_RELEASE_SERVER_NAMES,
+                snapshots,
+                timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
+            )
+            if rollback_failures:
+                raise OpenClawReleaseInstallError(
+                    "OpenClaw Gateway restart failed and definition rollback failed for "
+                    f"{rollback_failures}: {error}"
+                ) from error
+            raise OpenClawReleaseInstallError(
+                f"OpenClaw Gateway restart failed; definitions were rolled back: {error}"
+            ) from error
+        else:
+            if result.returncode == 0:
+                activation = "gateway_restart_verified"
+                detail = "OpenClaw Gateway restart command completed with its health wait"
+            else:
+                rollback_failures = restore_servers(
+                    runner,
+                    openclaw_bin,
+                    env,
+                    OPENCLAW_RELEASE_SERVER_NAMES,
+                    snapshots,
+                    timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
+                )
+                if rollback_failures:
+                    raise OpenClawReleaseInstallError(
+                        "OpenClaw Gateway restart failed and definition rollback failed for "
+                        f"{rollback_failures}: {shlex.join(command)}"
+                        f"{command_result_detail(result)}"
+                    )
+                raise OpenClawReleaseInstallError(
+                    "OpenClaw Gateway restart failed; definitions were rolled back: "
+                    f"{shlex.join(command)}{command_result_detail(result)}"
+                )
+
+    return OpenClawReleaseInstallReport(
+        release_id=plan.release.release_id,
+        manifest_sha256=plan.release.manifest_sha256,
+        release_root=str(plan.release.root),
+        config_path=str(plan.config_path),
+        registered_servers=OPENCLAW_RELEASE_SERVER_NAMES,
+        changed_servers=changed,
+        gateway_activation=activation,
+        gateway_detail=detail,
+    )
 
 
 def install_openclaw(
