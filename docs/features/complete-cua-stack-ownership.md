@@ -2,12 +2,12 @@
 
 ## Status
 
-Partial. Last verified: 2026-07-20 at producer commit
+Shipped. Last verified: 2026-07-20 at producer commit
 `e2d39d24801d8df96c15aee21914dfe1c7897a57`, immutable release
-`f82b61b4962f318b5121464223ba5911d1f66adfed9511ecc42f909fa8b67c11`.
+`f82b61b4962f318b5121464223ba5911d1f66adfed9511ecc42f909fa8b67c11`,
+and Codex consumer commit `1f8d0cc1ad5fbee8e142e34f4b8f8851ab409127`.
 The standalone, Codex Desktop, OpenClaw, and OpenCode installations are active
-on that generation. Physical-phone acceptance remains open because no Android
-device is connected.
+on that generation.
 
 ## Summary
 
@@ -85,27 +85,37 @@ and installed performance within the locked median and p95 budgets. The focused
 KDE Wayland pointer VM acceptance passes at
 `/workspace/artifacts/gui-desktop-smoke/wayland-pointer/20260720T111641Z`.
 
-After the final Codex GUI relaunch, app-server PID `128057` and every spawned
-Codex `node_repl` child resolved from the immutable `f82b61b…` generation; no
-old `/opt/chatgpt-desktop/resources/cua_node` process remained. Installed IAB
-acceptance loaded `browser.documentation()` and opened `https://example.com/`
-through the Codex-provided socket. A separate Brave Origin task ran with
-`CODEX_BROWSER_PROVIDER` unset and used the daemon-owned extension bridge; the
-Web Store extension was not modified. Installed Computer and Phone skills
-routed into the canonical release documentation, and persistent JavaScript
-captured and emitted a live WebP screenshot while the Phone facade reported the
-truthful no-device result. OpenCode independently discovered the installed f82
-Phone skill and invoked `node_repl` with `opencode` provenance; its final prose
-also mentioned a retained older package path that it had searched manually, so
-that statement is not release-identity evidence.
+The final reviewed Codex package has SHA-256
+`f012be97652e783725d37353dda8b0c28cb91f95e7aea5965eeb4d18232f3bd4`.
+After installation and GUI relaunch, GUI PID `199267`, app-server PID `199584`,
+direct client PID `200912`, `node_repl` PID `202950`, and the consumer task's
+direct client PID `202960` all resolved from the immutable `f82b61b…`
+generation with manifest SHA-256 `16fd1878…` and `codex_desktop` provenance.
+The surviving pre-install app-server tree was terminated, and no old
+`/opt/chatgpt-desktop/resources/cua_node` process remains.
+
+Installed skill discovery followed the canonical f82 Browser routing and
+loaded `browser.documentation()`. Persistent Browser JavaScript opened
+`https://example.com/` through the logical Codex IAB entry and verified
+`Example Domain`; the entry metadata records the physical
+`extension_native_host` transport and real `codex_desktop` provenance. A
+separate direct Browser tab `379563395` verified Brave Origin with
+`navigator.brave=true`, `Example Domain`, and `CODEX_BROWSER_PROVIDER` unset.
+The Web Store extension was not modified.
+
+Persistent Phone JS acceptance used the Android 36 `Pixel_9a` emulator through
+the ordinary daemon/service path. It proved discovery/connect, capability
+inventory, WebP screenshots, local-file round trips, two emitted images, tap,
+swipe, key, text, terminal disconnect, and structured post-disconnect rejection
+with `direct_mcp` provenance. OpenCode independently discovered the installed
+f82 Phone skill and invoked `node_repl` with `opencode` provenance.
 
 ## Known limitations
 
 - v1 `node_repl` supports Linux x86-64 glibc. macOS is a placeholder; arm64,
   musl, Windows `node_repl`, and `@heliasar/sky-cua/advanced` are follow-ups.
-- A physical Android phone was not connected for the final release, so the
-  persistent Phone JS no-device path is proven but device screenshot/action
-  parity remains pending.
+- Physical-device coverage is not part of the v1 completion gate; the complete
+  Phone JS lifecycle is accepted against an Android 36 emulator target.
 - No npm packages are published; packages are release components only.
 
 ## Related
@@ -114,4 +124,3 @@ that statement is not release-identity evidence.
 - [`docs/features/unified-browser-bridge-control-plane.md`](unified-browser-bridge-control-plane.md)
 - [`docs/features/codex-desktop-compat.md`](codex-desktop-compat.md)
 - [`docs/research/2026-07-model-facing-cua-docs-phone-js.md`](../research/2026-07-model-facing-cua-docs-phone-js.md)
-- [`plans/complete-cua-stack-ownership.md`](../../plans/complete-cua-stack-ownership.md)

@@ -75,7 +75,7 @@ Open boxes link to the active ExecPlan that owns the work.
 
 ## Phase: Host portability
 
-- [ ] Complete CUA stack ownership — immutable native + persistent Node release,
+- [x] Complete CUA stack ownership — immutable native + persistent Node release,
       verified Codex consumer projection, OpenClaw/OpenCode two-server install,
       canonical model documentation, and persistent Phone JS —
       [`docs/features/complete-cua-stack-ownership.md`](docs/features/complete-cua-stack-ownership.md)
@@ -83,7 +83,8 @@ Open boxes link to the active ExecPlan that owns the work.
         OpenClaw, and OpenCode
   - [x] Final Codex Desktop active-generation/IAB/Brave proof after the one
         consumer package restart
-  - [ ] Physical-device persistent Phone JS screenshot/action acceptance
+  - [x] Persistent Phone JS screenshot/action/lifecycle acceptance on an
+        Android 36 emulator target
 - [x] Codex Desktop compatibility (one active `computer-use` server, Browser Use companion, native-host preflight) — [`docs/features/codex-desktop-compat.md`](docs/features/codex-desktop-compat.md)
 - [x] OpenCode/Pi MCP host smoke parity
 - [x] Claude Code host support (plugin manifest + marketplace, `--host claude-code` installer, `~/.claude/skills` sync, `~/.claude/settings.json` deny-built-in-computer-use + auto-approve sky-cua) — [`docs/features/claude-code-host.md`](docs/features/claude-code-host.md)
