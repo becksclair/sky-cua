@@ -131,10 +131,13 @@ drain admitted tab work, execute exclusively, then reopen it. Phase fairness
 alternates one global operation with one round of waiting tab heads when both
 classes are queued.
 
-Default queue limits are 128 per client and 32 per tab. The scheduler retains
-up to 512 recent internal operation IDs; status emits at most 64 recent
-operation summaries. The bridge permits two ordinary requests or one exclusive
-large-frame request. Heartbeat and extension events bypass ordinary width.
+Default queue limits are 128 pending submit messages, 128 per client, and 32
+per tab. Submit traffic uses a bounded ingress separate from completions,
+settlement, lease ticks, and lifecycle commands, so a caller flood cannot
+starve terminal bookkeeping. The scheduler retains up to 512 recent internal
+operation IDs; status emits at most 64 recent operation summaries. The bridge
+permits two ordinary requests or one exclusive large-frame request. Heartbeat
+and extension events bypass ordinary width.
 
 A group belongs to one browser instance and one same-UID principal. It carries
 one lease ID, monotonically changing fence, membership revision, and member tab
@@ -163,7 +166,7 @@ ready`, with `reconnecting`, `quarantined`, and `lost` failure states. The
 public protocol enum also reserves `discovered`, `probing`, and
 `extension_handshake` for broader discovery/lifecycle reporting. The handshake
 checks protocol version, requested owner mode, and required capabilities.
-Default connect/handshake deadlines are three seconds, heartbeat interval one
+Default connect/handshake/write deadlines are three seconds, heartbeat interval one
 second, heartbeat response deadline three seconds, and reconnect backoff 100 ms
 through three seconds.
 
@@ -171,11 +174,24 @@ Request IDs are monotonic across each actor generation and include daemon and
 actor generation. Timed-out IDs are tombstoned for ten minutes, bounded at
 2,048. Socket health prefers a known healthy actor over a merely newer socket.
 
-The native host does not allow a request to self-select `control_plane` before
+The negotiated capability set includes `owner_release` and `settlement_ack`;
+strict mode does not accept an older host that cannot acknowledge safe
+ownership teardown or retained settlement receipt. The
+native host does not allow a request to self-select `control_plane` before
 handshake. A private role marker before `skyCuaHost/hello` gets
 `sky_cua_host_hello_required` and leaves the role unknown. A valid hello fixes
 the role immutably; subsequent control-plane markers are accepted and stripped
 before extension dispatch, while a legacy-selected client cannot upgrade late.
+On a clean strict-mode shutdown after request and settlement ledgers drain, the
+actor sends generation-checked `skyCuaHost/release` and waits for an
+acknowledged transition to `hybrid`. This permits a surviving native host to
+accept the documented legacy rollback path. A disconnect or unsafe/unsettled
+shutdown does not silently release strict ownership.
+
+Clean strict release also requires the actor's settlement-bearing mutation
+tombstones to be resolved. A timed-out mutation that still awaits a retained
+late completion therefore keeps ownership strict; sending its exact settlement
+acknowledgement resolves the matching actor tombstones before release.
 
 ### Operation and settlement
 
@@ -189,6 +205,23 @@ continue. An ambiguous mutation creates a 30-second settlement-pending window,
 then remains settlement-unknown/recovery-required until a matching retained
 completion or exact target/browser loss settles it. Reconnect, replacement, or
 timeout alone never authorizes replay.
+
+The native host retains every mutating completion, including one also returned
+on the active direct-response path, across socket writes and reconnects until
+the selected actor acknowledges its exact operation, Chrome request, daemon
+generation, and actor generation. Duplicate delivery and duplicate or stale
+acknowledgements are idempotent; a kernel write alone is never receipt.
+Until acknowledgement, the host retransmits the unchanged queue head to the
+same selected actor at a bounded interval so a lagged event receiver cannot
+strand the ledger. After a daemon restart, an actor may acknowledge only a
+currently matching scheduler fence or an exact settlement identity already
+reconciled by that daemon; the mere presence of identity fields is insufficient.
+
+Ready actors are canonicalized deterministically by stable browser-instance
+identity and socket path. Duplicate sockets for the same stable browser do not
+make routing ambiguous. Distinct browser instances remain distinct, and an
+instance-less request fails honestly when more than one distinct eligible
+browser remains after explicit browser selection.
 
 Tab-claim reservations follow the same certainty boundary. Pre-dispatch or
 definitive failure releases a reservation. Ambiguity keeps the tab reserved to
@@ -204,6 +237,11 @@ in-flight parent, it dispatches directly through the actor as a correlated
 child. Queuing it behind the parent would deadlock a parent waiting on the
 event response. Other same-tab work remains FIFO; ambiguous child completion
 is attributed to the parent rather than replayed.
+
+A raw `executeCdp` command rejected up front because the debugger is unattached
+uses the same owner-side session recovery as high-level browser actions and may
+replay only because that rejection proves the command did not execute. Timeouts
+and mid-execution detach remain ambiguous and are not replayed.
 
 ### Restart recovery
 

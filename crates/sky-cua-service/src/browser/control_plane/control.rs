@@ -23,6 +23,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct QueueLimits {
+    pub(crate) submit_ingress: usize,
     pub(crate) per_client: usize,
     pub(crate) per_tab: usize,
     pub(crate) per_bridge_dispatch: usize,
@@ -32,6 +33,7 @@ pub(crate) struct QueueLimits {
 impl Default for QueueLimits {
     fn default() -> Self {
         Self {
+            submit_ingress: 128,
             per_client: 128,
             per_tab: 32,
             per_bridge_dispatch: 2,
@@ -82,11 +84,7 @@ pub(crate) enum CancelResult {
 pub(super) type Reply<T> = oneshot::Sender<T>;
 
 pub(super) enum Command {
-    Submit(
-        Box<SubmitOperation>,
-        Reply<Result<Completion, AdmissionError>>,
-    ),
-    Cancel(OperationId, Reply<CancelResult>),
+    Cancel(OperationId, Option<ClientId>, Reply<CancelResult>),
     Executed(OperationId, super::operation::ExecutorOutcome),
     Settle(OperationId, SettlementOutcome, Reply<SettlementResult>),
     SettlementState(OperationId, Reply<Option<SettlementState>>),
@@ -147,11 +145,18 @@ pub(super) enum Command {
         reply: Reply<Result<GroupSnapshot, GroupError>>,
     },
     Snapshot(Reply<BrowserControlSchedulerSnapshot>),
+    PruneReleased(Reply<Vec<GroupId>>),
 }
+
+pub(super) type SubmitCommand = (
+    Box<SubmitOperation>,
+    Reply<Result<Completion, AdmissionError>>,
+);
 
 #[derive(Clone)]
 pub(crate) struct ControlPlane {
     sender: mpsc::UnboundedSender<Command>,
+    submit_sender: mpsc::Sender<SubmitCommand>,
     generation: String,
     pub(super) events: EventRecorder,
     persistence: Option<JournalWriter>,
@@ -261,8 +266,10 @@ impl ControlPlane {
         events: EventRecorder,
     ) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
+        let (submit_sender, submit_receiver) = mpsc::channel(limits.submit_ingress.max(1));
         scheduler::spawn_actor(
             receiver,
+            submit_receiver,
             sender.clone(),
             executor,
             scheduler::ActorConfig {
@@ -275,6 +282,7 @@ impl ControlPlane {
         );
         Self {
             sender,
+            submit_sender,
             generation,
             events,
             persistence,
@@ -290,14 +298,27 @@ impl ControlPlane {
         operation: SubmitOperation,
     ) -> Result<Completion, AdmissionError> {
         let (reply, receive) = oneshot::channel();
-        self.sender
-            .send(Command::Submit(Box::new(operation), reply))
-            .map_err(|_| AdmissionError::ActorStopped)?;
+        self.submit_sender
+            .try_send((Box::new(operation), reply))
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => AdmissionError::Backpressure,
+                mpsc::error::TrySendError::Closed(_) => AdmissionError::ActorStopped,
+            })?;
         receive.await.unwrap_or(Err(AdmissionError::ActorStopped))
     }
 
     pub(crate) async fn cancel(&self, operation_id: OperationId) -> CancelResult {
-        self.call(|reply| Command::Cancel(operation_id, reply))
+        self.call(|reply| Command::Cancel(operation_id, None, reply))
+            .await
+            .unwrap_or(CancelResult::UnknownOperation)
+    }
+
+    pub(crate) async fn cancel_for_client(
+        &self,
+        operation_id: OperationId,
+        client_id: ClientId,
+    ) -> CancelResult {
+        self.call(|reply| Command::Cancel(operation_id, Some(client_id), reply))
             .await
             .unwrap_or(CancelResult::UnknownOperation)
     }
@@ -491,6 +512,10 @@ impl ControlPlane {
 
     pub(crate) async fn snapshot(&self) -> BrowserControlSchedulerSnapshot {
         self.call(Command::Snapshot).await.unwrap_or_default()
+    }
+
+    pub(crate) async fn prune_released(&self) -> Vec<GroupId> {
+        self.call(Command::PruneReleased).await.unwrap_or_default()
     }
 
     async fn call<T>(&self, command: impl FnOnce(Reply<T>) -> Command) -> Option<T> {

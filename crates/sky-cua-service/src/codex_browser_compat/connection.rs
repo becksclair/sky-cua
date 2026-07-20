@@ -5,16 +5,19 @@ use serde_json::Value;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::UnixStream,
-    sync::{Mutex, mpsc},
+    sync::Mutex,
 };
 
 use super::{
-    CodexBackendReply, CodexBrowserBackend, CodexCallerLifecycle, CodexConnectionContext,
-    GENERATION_CHANGED_CODE, GENERATION_CHANGED_MESSAGE, NEXT_CONNECTION_ID,
+    BACKPRESSURE_CODE, BACKPRESSURE_MESSAGE, CodexBackendReply, CodexBrowserBackend,
+    CodexCallerLifecycle, CodexConnectionContext, GENERATION_CHANGED_CODE,
+    GENERATION_CHANGED_MESSAGE, MAX_RETAINED_REQUESTS_PER_CONNECTION, NEXT_CONNECTION_ID,
     PROTOCOL_MISMATCH_CODE, PROTOCOL_MISMATCH_MESSAGE, fresh_id, normalize_request,
     numeric_id_for_error, numeric_request_id, owner_error_value, read_frame, reply_frame,
     write_frame,
 };
+
+const OUTBOUND_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub(crate) async fn serve_connection(
     stream: UnixStream,
@@ -66,7 +69,7 @@ where
     };
     let connection_id = connection.connection_id.clone();
     let (reader, mut writer) = tokio::io::split(stream);
-    let (outbound, mut outbound_rx) = mpsc::unbounded_channel::<Value>();
+    let (outbound, mut outbound_rx) = super::CodexOutbound::channel();
     if let Err(reply) = backend
         .connection_opened(connection.clone(), outbound.clone())
         .await
@@ -75,16 +78,27 @@ where
         return Ok(());
     }
 
+    let writer_outbound = outbound.clone();
     let writer_task = tokio::spawn(async move {
         while let Some(message) = outbound_rx.recv().await {
-            write_frame(&mut writer, &message).await?;
+            match write_outbound_frame(&mut writer, &message, OUTBOUND_WRITE_TIMEOUT).await {
+                Ok(()) => {}
+                Err(error) => {
+                    writer_outbound.mark_stalled();
+                    return Err(error);
+                }
+            }
         }
         Ok::<(), std::io::Error>(())
     });
     let outstanding = Arc::new(Mutex::new(HashSet::<String>::new()));
     let mut reader = reader;
     loop {
-        let message = match read_frame(&mut reader).await {
+        let message = match tokio::select! {
+            biased;
+            _ = outbound.wait_stalled() => break,
+            frame = read_frame(&mut reader) => frame,
+        } {
             Ok(Some(message)) => message,
             Ok(None) => break,
             Err(error) => {
@@ -98,7 +112,7 @@ where
                 if message.get("id").is_none() {
                     backend.client_message(&connection_id, message).await;
                 } else {
-                    let _ = outbound.send(reply_frame(
+                    let _ = outbound.try_send(reply_frame(
                         numeric_id_for_error(&message),
                         CodexBackendReply::Error(owner_error_value(
                             PROTOCOL_MISMATCH_CODE,
@@ -111,7 +125,7 @@ where
             let request = match normalize_request(message, upstream_id, &connection) {
                 Ok(request) => request,
                 Err(()) => {
-                    let _ = outbound.send(reply_frame(
+                    let _ = outbound.try_send(reply_frame(
                         upstream_id,
                         CodexBackendReply::Error(owner_error_value(
                             PROTOCOL_MISMATCH_CODE,
@@ -123,13 +137,27 @@ where
             };
             let operation_id = request.operation_id.clone();
             if request.method == "ping" {
-                let _ = outbound.send(reply_frame(
+                let _ = outbound.try_send(reply_frame(
                     upstream_id,
                     CodexBackendReply::Result(Value::String("pong".to_owned())),
                 ));
                 continue;
             }
-            outstanding.lock().await.insert(operation_id.clone());
+            {
+                let mut outstanding = outstanding.lock().await;
+                if outstanding.len() >= MAX_RETAINED_REQUESTS_PER_CONNECTION {
+                    drop(outstanding);
+                    let _ = outbound.try_send(reply_frame(
+                        upstream_id,
+                        CodexBackendReply::Error(owner_error_value(
+                            BACKPRESSURE_CODE,
+                            BACKPRESSURE_MESSAGE,
+                        )),
+                    ));
+                    continue;
+                }
+                outstanding.insert(operation_id.clone());
+            }
             let backend = backend.clone();
             let outbound = outbound.clone();
             let outstanding = outstanding.clone();
@@ -164,7 +192,7 @@ where
                     reply
                 };
                 outstanding.lock().await.remove(&operation_id);
-                let _ = outbound.send(reply_frame(upstream_id, reply));
+                let _ = outbound.try_send(reply_frame(upstream_id, reply));
             });
         } else {
             backend.client_message(&connection_id, message).await;
@@ -182,6 +210,21 @@ where
     writer_task.abort();
     let _ = writer_task.await;
     Ok(())
+}
+
+async fn write_outbound_frame(
+    writer: &mut (impl AsyncWrite + Unpin),
+    message: &Value,
+    timeout: std::time::Duration,
+) -> std::io::Result<()> {
+    tokio::time::timeout(timeout, write_frame(writer, message))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Codex browser compatibility peer stopped reading",
+            )
+        })?
 }
 
 #[cfg(target_os = "linux")]
@@ -219,7 +262,15 @@ fn codex_app_build_flavor_from_environ(environment: &[u8]) -> Result<Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use super::codex_app_build_flavor_from_environ;
+    use super::{codex_app_build_flavor_from_environ, write_outbound_frame};
+    use serde_json::json;
+    use std::{
+        io,
+        pin::Pin,
+        task::{Context, Poll},
+        time::Duration,
+    };
+    use tokio::io::AsyncWrite;
 
     #[test]
     fn extracts_bounded_utf8_codex_build_flavor() {
@@ -235,5 +286,34 @@ mod tests {
             codex_app_build_flavor_from_environ(b"BROWSER_USE_CODEX_APP_BUILD_FLAVOR=\0").is_err()
         );
         assert_eq!(codex_app_build_flavor_from_environ(b"A=1\0").unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn stalled_outbound_write_has_a_deadline() {
+        struct StalledWriter;
+        impl AsyncWrite for StalledWriter {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _buffer: &[u8],
+            ) -> Poll<io::Result<usize>> {
+                Poll::Pending
+            }
+            fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+                Poll::Pending
+            }
+            fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        let error = write_outbound_frame(
+            &mut StalledWriter,
+            &json!({"jsonrpc":"2.0","method":"event"}),
+            Duration::from_millis(10),
+        )
+        .await
+        .expect_err("stalled writer must time out");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 }

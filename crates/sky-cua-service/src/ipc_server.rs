@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::Result;
 use sky_cua_platform::model::{ServiceRequest, ServiceResponse};
 #[cfg(windows)]
 use sky_cua_platform::service_tcp_addr;
@@ -234,6 +236,11 @@ pub async fn run_service() -> Result<()> {
             }
         }
     }
+
+    // Clean strict ownership while this daemon still owns its actors and the
+    // native-host stream. Idle actors acknowledge the generation-checked
+    // transition to hybrid; unsettled actors remain strict and fail closed.
+    daemon.shutdown_browser_control().await;
 
     // Unload this process's persistent KWin focus watcher so it does not
     // keep firing callbacks at a dead bus name after the daemon exits.

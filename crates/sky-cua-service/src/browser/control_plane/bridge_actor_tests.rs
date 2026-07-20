@@ -4,7 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 use tokio::net::{UnixListener, UnixStream};
 
-use super::bridge_actor::{BridgeOwnerMode, exercise_write_failure};
+use super::bridge_actor::{
+    BridgeOwnerMode, exercise_stalled_write, exercise_write_failure, request_frame_for_test,
+};
 use super::{
     BridgeActor, BridgeActorConfig, BridgeActorError, BridgeActorEvent, BridgeActorRequest,
     BridgeActorState, BridgeRequestSize, OperationClass, fixed_width_daemon_generation,
@@ -21,7 +23,9 @@ const CAPABILITIES: &[&str] = &[
     "extension_events",
     "private_param_stripping",
     "settlements",
+    "settlement_ack",
     "side_panel_requests",
+    "owner_release",
 ];
 
 struct SocketFixture {
@@ -59,10 +63,32 @@ fn config(path: &Path, generation: u64) -> BridgeActorConfig {
         owner_mode: BridgeOwnerMode::Hybrid,
         connect_timeout: Duration::from_millis(200),
         handshake_timeout: Duration::from_millis(200),
+        write_timeout: Duration::from_millis(200),
         heartbeat_interval: Duration::from_secs(10),
         reconnect_min: Duration::from_millis(10),
         reconnect_max: Duration::from_millis(25),
     }
+}
+
+#[test]
+fn mutating_host_mapping_outlives_actor_timeout_through_settlement_window() {
+    let config = config(Path::new("/tmp/unused-settlement-frame.sock"), 1);
+    let mut request = BridgeActorRequest::new(
+        "executeCdp",
+        json!({"method":"Page.navigate"}),
+        "settlement-window-operation",
+        OperationClass::Mutation,
+    );
+    request.timeout = Duration::from_millis(250);
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let frame = request_frame_for_test(&config, &request);
+    let deadline = frame["params"]["_sky_cua_host_request"]["settlement_deadline_ms"]
+        .as_u64()
+        .unwrap();
+    assert!(deadline >= before + 250 + super::SETTLEMENT_DEADLINE_MS);
 }
 
 async fn accept_hello(listener: &UnixListener, host: &str) -> UnixStream {
@@ -169,10 +195,26 @@ async fn assert_owner_mode_is_accepted(owner_mode: BridgeOwnerMode, generation: 
     let fixture = SocketFixture::new(owner_mode.as_str());
     let listener = UnixListener::bind(&fixture.path).unwrap();
     let server = tokio::spawn(async move {
-        let _stream =
+        let mut stream =
             accept_hello_with_owner_mode(&listener, "host-owner-mode", owner_mode, owner_mode)
                 .await;
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        if owner_mode == BridgeOwnerMode::Strict {
+            let release = read_operation(&mut stream).await;
+            assert_eq!(release["method"], "skyCuaHost/release");
+            assert_eq!(release["params"]["owner_mode"], "hybrid");
+            write_frame(
+                &mut stream,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": release["id"],
+                    "result": { "released": true, "owner_mode": "hybrid" },
+                }),
+            )
+            .await
+            .unwrap();
+        } else {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     });
     let mut actor_config = config(&fixture.path, generation);
     actor_config.owner_mode = owner_mode;
@@ -278,6 +320,46 @@ async fn host_owner_mode_contract_accepts_both_modes_and_quarantines_mismatch() 
 }
 
 #[tokio::test]
+async fn strict_shutdown_does_not_release_with_unresolved_mutation_tombstone() {
+    let fixture = SocketFixture::new("strict-unresolved-tombstone");
+    let listener = UnixListener::bind(&fixture.path).unwrap();
+    let server = tokio::spawn(async move {
+        let mut stream = accept_hello_with_owner_mode(
+            &listener,
+            "host-strict-unresolved",
+            BridgeOwnerMode::Strict,
+            BridgeOwnerMode::Strict,
+        )
+        .await;
+        let mutation = read_operation(&mut stream).await;
+        assert_eq!(mutation["method"], "mutate");
+        let after_shutdown =
+            tokio::time::timeout(Duration::from_millis(200), read_frame(&mut stream)).await;
+        assert!(
+            matches!(after_shutdown, Ok(Ok(None)) | Ok(Err(_))),
+            "strict owner release must not be sent with an unresolved mutation tombstone: {after_shutdown:?}"
+        );
+    });
+    let mut actor_config = config(&fixture.path, 27);
+    actor_config.owner_mode = BridgeOwnerMode::Strict;
+    let mut actor = BridgeActor::spawn(actor_config);
+    actor.wait_until_ready().await.unwrap();
+    let mut mutation = BridgeActorRequest::new(
+        "mutate",
+        json!({}),
+        "strict-unresolved-operation",
+        OperationClass::Mutation,
+    );
+    mutation.timeout = Duration::from_millis(25);
+    assert_eq!(
+        actor.request(mutation).await.unwrap_err(),
+        BridgeActorError::Ambiguous
+    );
+    actor.shutdown().await;
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn healthy_actor_socket_is_preferred_over_merely_newer_candidate() {
     let fixture = SocketFixture::new("healthy-preference");
     let older = fixture.dir.join("extension-111-older.sock");
@@ -322,7 +404,9 @@ async fn canonical_hello_requires_side_panel_requests_capability() {
                         "heartbeat",
                         "extension_events",
                         "private_param_stripping",
-                        "settlements"
+                        "settlements",
+                        "settlement_ack",
+                        "owner_release"
                     ]
                 }
             }),
@@ -379,6 +463,62 @@ async fn failed_and_partial_writes_settle_dispatched_work_without_replay() {
     .await;
     assert_write_failure_settlement(OperationClass::ReadOnly, 5, BridgeActorError::Disconnected)
         .await;
+}
+
+#[tokio::test]
+async fn stalled_dispatch_write_times_out_and_preserves_ambiguous_mutation() {
+    let mut actor_config = config(Path::new("unused.sock"), 24);
+    actor_config.write_timeout = Duration::from_millis(20);
+    let error = exercise_stalled_write(
+        &actor_config,
+        BridgeActorRequest::new(
+            "dispatch",
+            json!({"payload": "test"}),
+            "stalled-mutation",
+            OperationClass::Mutation,
+        ),
+    )
+    .await;
+
+    assert_eq!(error, BridgeActorError::Ambiguous);
+}
+
+#[tokio::test]
+async fn settlement_ack_copies_retained_identity_and_uses_selected_daemon_generation() {
+    let fixture = SocketFixture::new("settlement-ack");
+    let listener = UnixListener::bind(&fixture.path).unwrap();
+    let actor_config = config(&fixture.path, 26);
+    let expected_generation = actor_config.daemon_generation.clone();
+    let server = tokio::spawn(async move {
+        let mut stream = accept_hello(&listener, "host-settlement-ack").await;
+        let ack = read_operation(&mut stream).await;
+        assert_eq!(ack["method"], "skyCuaHost/settlementAck");
+        assert_eq!(ack["params"]["operation_id"], "operation-retained");
+        assert_eq!(ack["params"]["daemon_generation"], "daemon-old");
+        assert_eq!(ack["params"]["actor_generation"], 7);
+        assert_eq!(ack["params"]["chrome_request_id"], "chrome-retained");
+        assert_eq!(
+            ack["params"]["acknowledging_daemon_generation"],
+            expected_generation
+        );
+    });
+    let mut actor = BridgeActor::spawn(actor_config);
+    actor.wait_until_ready().await.unwrap();
+    actor
+        .acknowledge_settlement(&json!({
+            "jsonrpc":"2.0",
+            "method":"skyCuaHost/settlement",
+            "params":{
+                "operation_id":"operation-retained",
+                "daemon_generation":"daemon-old",
+                "actor_generation":7,
+                "chrome_request_id":"chrome-retained",
+            }
+        }))
+        .await
+        .unwrap();
+    actor.shutdown().await;
+    server.await.unwrap();
 }
 
 #[tokio::test]
@@ -795,6 +935,71 @@ async fn repeated_connection_only_browser_id_is_never_treated_as_stable() {
         actor.health().browser_instance_id.as_deref(),
         Some("repeated-browser")
     );
+    actor.shutdown().await;
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn queued_target_lifetime_action_fails_before_reconnect_dispatch() {
+    let fixture = SocketFixture::new("queued-reconnect");
+    let listener = UnixListener::bind(&fixture.path).unwrap();
+    let (two_dispatched, two_dispatched_rx) = tokio::sync::oneshot::channel();
+    let (disconnect, disconnect_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut first = accept_stable_hello(&listener, "stable-host", "browser-before").await;
+        let _first = read_operation(&mut first).await;
+        let _second = read_operation(&mut first).await;
+        two_dispatched.send(()).unwrap();
+        disconnect_rx.await.unwrap();
+        drop(first);
+
+        let mut second = accept_stable_hello(&listener, "stable-host", "browser-after").await;
+        let frame = tokio::time::timeout(Duration::from_millis(75), read_frame(&mut second)).await;
+        assert!(
+            matches!(frame, Err(_) | Ok(Ok(None))),
+            "queued old-browser action must not dispatch after reconnect: {frame:?}"
+        );
+    });
+    let mut actor = BridgeActor::spawn(config(&fixture.path, 25));
+    actor.wait_until_ready().await.unwrap();
+    let first = actor
+        .enqueue_request_for_test(request("occupy-first"))
+        .await;
+    let second = actor
+        .enqueue_request_for_test(request("occupy-second"))
+        .await;
+    two_dispatched_rx.await.unwrap();
+
+    let mut queued = BridgeActorRequest::new(
+        "old-browser-mutation",
+        json!({}),
+        "queued-old-browser",
+        OperationClass::Mutation,
+    );
+    queued.target_lifetime_key = Some(json!({ "browser_instance_id": "browser-before" }));
+    let queued = actor.enqueue_request_for_test(queued).await;
+    actor.barrier_for_test().await;
+    disconnect.send(()).unwrap();
+
+    assert_eq!(
+        queued.await.unwrap().unwrap_err(),
+        BridgeActorError::Disconnected
+    );
+    assert_eq!(
+        first.await.unwrap().unwrap_err(),
+        BridgeActorError::Disconnected
+    );
+    assert_eq!(
+        second.await.unwrap().unwrap_err(),
+        BridgeActorError::Disconnected
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while actor.health().browser_instance_id.as_deref() != Some("browser-after") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     actor.shutdown().await;
     server.await.unwrap();
 }

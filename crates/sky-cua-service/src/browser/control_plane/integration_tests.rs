@@ -297,10 +297,291 @@ async fn accept_hello(listener: &UnixListener, browser_id: &str) -> tokio::net::
             "browser_instance_id":browser_id,
             "browser_instance_stability":"stable",
             "browser_family":"brave",
-            "capabilities":["control_plane","heartbeat","extension_events","private_param_stripping","settlements","side_panel_requests"]
+            "capabilities":["control_plane","heartbeat","extension_events","private_param_stripping","settlements","settlement_ack","side_panel_requests","owner_release"]
         }
     })).await.unwrap();
     stream
+}
+
+fn raw_dispatch_operation(
+    operation_id: &str,
+    browser_id: &str,
+    tab_id: &str,
+    timeout_ms: u64,
+) -> super::DispatchOperation {
+    use super::operation::OperationIdentity;
+
+    super::DispatchOperation {
+        identity: OperationIdentity {
+            operation_id: OperationId::from(operation_id),
+            daemon_generation: "test-generation".to_owned(),
+            canonical_fingerprint: format!("fingerprint-{operation_id}"),
+            upstream: UpstreamCorrelation {
+                ingress: "test".to_owned(),
+                request_id: None,
+            },
+        },
+        client_id: ClientId::from("test-client"),
+        principal: Principal::new("test-principal", unsafe { libc::geteuid() }),
+        group_id: None,
+        scope: OperationScope::Tab(TabKey::new(browser_id, tab_id)),
+        class: OperationClass::Mutation,
+        payload: serde_json::to_string(&json!({
+            "kind":"raw",
+            "method":"executeCdp",
+            "params":{
+                "tabId":tab_id,
+                "method":"Runtime.evaluate",
+                "params":{"expression":"window.testMutation = 1"}
+            },
+            "timeout_ms":timeout_ms,
+            "identity":{
+                "session_id":"test-session",
+                "thread_id":"test-thread",
+                "turn_id":"test-turn"
+            }
+        }))
+        .unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn canonical_ready_actors_deduplicate_stable_browser_sockets_deterministically() {
+    use super::integration::{ActorEntry, BrowserControlRuntime, canonical_ready_actors};
+
+    let first = SocketFixture::new("canonical-a");
+    let second = SocketFixture::new("canonical-b");
+    let first_listener = UnixListener::bind(&first.0).unwrap();
+    let second_listener = UnixListener::bind(&second.0).unwrap();
+    let first_server = tokio::spawn(async move {
+        let _stream = accept_hello(&first_listener, "browser-duplicate").await;
+        std::future::pending::<()>().await;
+    });
+    let second_server = tokio::spawn(async move {
+        let _stream = accept_hello(&second_listener, "browser-duplicate").await;
+        std::future::pending::<()>().await;
+    });
+    let mut first_actor = BridgeActor::spawn(BridgeActorConfig::new(first.0.clone(), 1));
+    let mut second_actor = BridgeActor::spawn(BridgeActorConfig::new(second.0.clone(), 1));
+    first_actor.wait_until_ready().await.unwrap();
+    second_actor.wait_until_ready().await.unwrap();
+    let entries = vec![
+        ActorEntry {
+            actor: second_actor.clone(),
+            socket: second.0.clone(),
+            browser_id: "browser-duplicate".to_owned(),
+        },
+        ActorEntry {
+            actor: first_actor.clone(),
+            socket: first.0.clone(),
+            browser_id: "browser-duplicate".to_owned(),
+        },
+    ];
+
+    let canonical = canonical_ready_actors(entries.clone());
+    assert_eq!(canonical.len(), 1);
+    let expected_socket = std::cmp::min(first.0.clone(), second.0.clone());
+    assert_eq!(canonical[0].socket, expected_socket);
+
+    let runtime = BrowserControlRuntime::new();
+    runtime.shared.actors.write().unwrap().extend(
+        entries
+            .into_iter()
+            .map(|entry| (entry.socket.clone(), entry)),
+    );
+    let snapshot = runtime.control_plane_snapshot().await;
+    assert_eq!(
+        snapshot
+            .actors
+            .iter()
+            .filter(|actor| actor.canonical)
+            .count(),
+        1
+    );
+    assert_eq!(
+        snapshot
+            .actors
+            .iter()
+            .find(|actor| actor.canonical)
+            .unwrap()
+            .socket_path,
+        canonical[0].socket.to_string_lossy()
+    );
+
+    first_actor.shutdown().await;
+    second_actor.shutdown().await;
+    first_server.abort();
+    second_server.abort();
+}
+
+#[tokio::test]
+async fn canonical_ready_actors_preserve_distinct_browser_instances_and_require_selection() {
+    use super::integration::{ActorEntry, canonical_ready_actors, one_actor};
+
+    let first = SocketFixture::new("distinct-a");
+    let second = SocketFixture::new("distinct-b");
+    let first_listener = UnixListener::bind(&first.0).unwrap();
+    let second_listener = UnixListener::bind(&second.0).unwrap();
+    let first_server = tokio::spawn(async move {
+        let _stream = accept_hello(&first_listener, "browser-distinct-a").await;
+        std::future::pending::<()>().await;
+    });
+    let second_server = tokio::spawn(async move {
+        let _stream = accept_hello(&second_listener, "browser-distinct-b").await;
+        std::future::pending::<()>().await;
+    });
+    let mut first_actor = BridgeActor::spawn(BridgeActorConfig::new(first.0.clone(), 1));
+    let mut second_actor = BridgeActor::spawn(BridgeActorConfig::new(second.0.clone(), 1));
+    first_actor.wait_until_ready().await.unwrap();
+    second_actor.wait_until_ready().await.unwrap();
+
+    let canonical = canonical_ready_actors([
+        ActorEntry {
+            actor: first_actor.clone(),
+            socket: first.0.clone(),
+            browser_id: "browser-distinct-a".to_owned(),
+        },
+        ActorEntry {
+            actor: second_actor.clone(),
+            socket: second.0.clone(),
+            browser_id: "browser-distinct-b".to_owned(),
+        },
+    ]);
+    assert_eq!(canonical.len(), 2);
+    let Err(error) = one_actor(&canonical) else {
+        panic!("instance-less selection must reject distinct browsers");
+    };
+    assert_eq!(error.code, "BrowserInstanceAmbiguous");
+
+    first_actor.shutdown().await;
+    second_actor.shutdown().await;
+    first_server.abort();
+    second_server.abort();
+}
+
+#[tokio::test]
+async fn raw_codex_execute_cdp_recovers_and_replays_only_upfront_unattached_failure() {
+    use super::integration::{ActorEntry, IntegrationExecutor, Shared};
+
+    let fixture = SocketFixture::new("raw-codex-upfront-recovery");
+    let listener = UnixListener::bind(&fixture.0).unwrap();
+    let server = tokio::spawn(async move {
+        let mut stream = accept_hello(&listener, "browser-raw-recovery").await;
+        let original = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(original["method"], "executeCdp");
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc":"2.0","id":original["id"],"error":{"code":1,"message":"Debugger unattached"}}),
+        )
+        .await
+        .unwrap();
+
+        let mut recovery_methods = Vec::new();
+        for _ in 0..4 {
+            let request = read_frame(&mut stream).await.unwrap().unwrap();
+            recovery_methods.push(request["method"].as_str().unwrap().to_owned());
+            if request["method"] == "executeCdp" {
+                assert_eq!(request["params"]["method"], "Page.enable");
+            }
+            write_frame(
+                &mut stream,
+                &json!({"jsonrpc":"2.0","id":request["id"],"result":{}}),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            recovery_methods,
+            ["claimUserTab", "detach", "attach", "executeCdp"]
+        );
+        let replay = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(replay["method"], "executeCdp");
+        assert_eq!(replay["params"]["method"], "Runtime.evaluate");
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc":"2.0","id":replay["id"],"result":{"replayed":true}}),
+        )
+        .await
+        .unwrap();
+    });
+    let mut config = BridgeActorConfig::new(fixture.0.clone(), 1);
+    config.heartbeat_interval = Duration::from_secs(30);
+    let mut actor = BridgeActor::spawn(config);
+    actor.wait_until_ready().await.unwrap();
+    let shared = Arc::new(Shared::default());
+    shared.actors.write().unwrap().insert(
+        fixture.0.clone(),
+        ActorEntry {
+            actor: actor.clone(),
+            socket: fixture.0.clone(),
+            browser_id: "browser-raw-recovery".to_owned(),
+        },
+    );
+    let executor = IntegrationExecutor {
+        shared: Arc::clone(&shared),
+    };
+    let control = ControlPlane::start(
+        "raw-recovery-generation",
+        Arc::new(executor.clone()),
+        QueueLimits::default(),
+    );
+    shared.control.set(control).ok().unwrap();
+
+    let outcome = executor
+        .execute(raw_dispatch_operation(
+            "raw-recovery-operation",
+            "browser-raw-recovery",
+            "515",
+            2_000,
+        ))
+        .await;
+    assert_eq!(
+        outcome,
+        ExecutorOutcome::DefinitiveSuccess("{\"replayed\":true}".to_owned())
+    );
+    server.await.unwrap();
+    actor.shutdown().await;
+}
+
+#[tokio::test]
+async fn raw_codex_execute_cdp_ambiguous_timeout_is_never_replayed() {
+    use super::integration::{ActorEntry, IntegrationExecutor, Shared};
+
+    let fixture = SocketFixture::new("raw-codex-ambiguous-no-replay");
+    let listener = UnixListener::bind(&fixture.0).unwrap();
+    let server = tokio::spawn(async move {
+        let mut stream = accept_hello(&listener, "browser-raw-ambiguous").await;
+        let original = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(original["method"], "executeCdp");
+        let second =
+            tokio::time::timeout(Duration::from_millis(250), read_frame(&mut stream)).await;
+        assert!(second.is_err(), "ambiguous command must not be replayed");
+    });
+    let mut config = BridgeActorConfig::new(fixture.0.clone(), 1);
+    config.heartbeat_interval = Duration::from_secs(30);
+    let mut actor = BridgeActor::spawn(config);
+    actor.wait_until_ready().await.unwrap();
+    let shared = Arc::new(Shared::default());
+    shared.actors.write().unwrap().insert(
+        fixture.0.clone(),
+        ActorEntry {
+            actor: actor.clone(),
+            socket: fixture.0.clone(),
+            browser_id: "browser-raw-ambiguous".to_owned(),
+        },
+    );
+    let executor = IntegrationExecutor { shared };
+    let outcome = executor
+        .execute(raw_dispatch_operation(
+            "raw-ambiguous-operation",
+            "browser-raw-ambiguous",
+            "515",
+            50,
+        ))
+        .await;
+    assert!(matches!(outcome, ExecutorOutcome::Ambiguous(_)));
+    server.await.unwrap();
+    actor.shutdown().await;
 }
 
 #[tokio::test]
@@ -408,8 +689,9 @@ async fn extension_server_messages_round_trip_through_the_selected_codex_connect
             browser_id: "browser-server-message".to_owned(),
         },
     );
-    let (outbound, mut outbound_rx) = mpsc::unbounded_channel();
-    let (other_outbound, mut other_outbound_rx) = mpsc::unbounded_channel();
+    let (outbound, mut outbound_rx) = crate::codex_browser_compat::CodexOutbound::channel();
+    let (other_outbound, mut other_outbound_rx) =
+        crate::codex_browser_compat::CodexOutbound::channel();
     let principal = super::Principal::new("codex:connection-1", unsafe { libc::geteuid() });
     runtime
         .shared
@@ -569,7 +851,7 @@ async fn codex_fetch_continuation_reenters_the_in_flight_tab_operation() {
         codex_app_build_flavor: Some("prod".to_owned()),
         daemon_generation: runtime.daemon_generation(),
     };
-    let (outbound, mut outbound_rx) = mpsc::unbounded_channel();
+    let (outbound, mut outbound_rx) = crate::codex_browser_compat::CodexOutbound::channel();
     runtime
         .connection_opened(connection.clone(), outbound)
         .await
@@ -692,8 +974,8 @@ async fn ambiguous_server_requests_are_rejected_and_notifications_fan_out_exactl
             browser_id: "browser-ambiguous-server-message".to_owned(),
         },
     );
-    let (first_tx, mut first_rx) = mpsc::unbounded_channel();
-    let (second_tx, mut second_rx) = mpsc::unbounded_channel();
+    let (first_tx, mut first_rx) = crate::codex_browser_compat::CodexOutbound::channel();
+    let (second_tx, mut second_rx) = crate::codex_browser_compat::CodexOutbound::channel();
     let uid = unsafe { libc::geteuid() };
     runtime.shared.connections.lock().await.extend([
         (
@@ -960,6 +1242,7 @@ async fn stale_settlement_metadata_cannot_resolve_another_operation() {
                 "operation_id":"reused-operation",
                 "daemon_generation":daemon,
                 "actor_generation":actor,
+                "chrome_request_id":"chrome-reused-operation",
                 "target_lifetime_key":browser_target,
                 "operation_class":"mutation",
                 "completion":{"result":{"done":true}}
@@ -1055,7 +1338,45 @@ async fn retained_settlement_uses_recorded_operation_generation_not_current_daem
         },
     )
     .await;
-    settle_actor_message(
+    let settlement = json!({
+        "jsonrpc":"2.0",
+        "method":"skyCuaHost/settlement",
+        "params":{
+            "operation_id":"retained-operation",
+            "daemon_generation":"daemon-old",
+            "actor_generation":7,
+            "chrome_request_id":"chrome-retained-operation",
+            "target_lifetime_key":target,
+            "operation_class":"mutation",
+            "completion":{"result":true}
+        }
+    });
+    assert!(
+        settle_actor_message(
+            &control,
+            &shared,
+            "browser-retained",
+            settlement.clone(),
+            false,
+        )
+        .await
+    );
+    assert!(control.settlement_state(operation).await.is_none());
+    assert_eq!(correlation_counts(&shared).await, (0, 0, 0, 0, 0, 0));
+    assert!(settle_actor_message(&control, &shared, "browser-retained", settlement, false,).await);
+}
+
+#[tokio::test]
+async fn retained_settlement_unknown_to_this_daemon_is_not_acknowledged() {
+    use super::integration::{Shared, settle_actor_message};
+
+    let shared = Shared::default();
+    let control = ControlPlane::start(
+        "daemon-new",
+        Arc::new(AmbiguousExecutor),
+        QueueLimits::default(),
+    );
+    let acknowledged = settle_actor_message(
         &control,
         &shared,
         "browser-retained",
@@ -1063,10 +1384,11 @@ async fn retained_settlement_uses_recorded_operation_generation_not_current_daem
             "jsonrpc":"2.0",
             "method":"skyCuaHost/settlement",
             "params":{
-                "operation_id":"retained-operation",
+                "operation_id":"operation-from-dead-daemon",
                 "daemon_generation":"daemon-old",
                 "actor_generation":7,
-                "target_lifetime_key":target,
+                "chrome_request_id":"chrome-from-dead-daemon",
+                "target_lifetime_key":{"browser_instance_id":"browser-retained"},
                 "operation_class":"mutation",
                 "completion":{"result":true}
             }
@@ -1074,8 +1396,155 @@ async fn retained_settlement_uses_recorded_operation_generation_not_current_daem
         false,
     )
     .await;
-    assert!(control.settlement_state(operation).await.is_none());
+
+    assert!(!acknowledged);
+}
+
+#[tokio::test]
+async fn direct_terminal_mutation_accepts_its_retained_host_settlement() {
+    use super::integration::{Shared, TerminalSettlementOperation, settle_actor_message};
+
+    let shared = Shared::default();
+    shared
+        .terminal_settlement_operations
+        .lock()
+        .await
+        .push_back(TerminalSettlementOperation {
+            operation_id: OperationId("direct-terminal-operation".to_owned()),
+            daemon_generation: "daemon-current".to_owned(),
+        });
+    let control = ControlPlane::start(
+        "daemon-current",
+        Arc::new(AmbiguousExecutor),
+        QueueLimits::default(),
+    );
+    let settlement = json!({
+        "jsonrpc":"2.0",
+        "method":"skyCuaHost/settlement",
+        "params":{
+            "operation_id":"direct-terminal-operation",
+            "daemon_generation":"daemon-current",
+            "actor_generation":9,
+            "chrome_request_id":"chrome-direct-terminal",
+            "target_lifetime_key":{"browser_instance_id":"browser-direct"},
+            "operation_class":"mutation",
+            "completion":{"result":true}
+        }
+    });
+
+    assert!(
+        settle_actor_message(
+            &control,
+            &shared,
+            "browser-direct",
+            settlement.clone(),
+            false,
+        )
+        .await
+    );
+    assert!(
+        settle_actor_message(&control, &shared, "browser-direct", settlement, false).await,
+        "an ack replay of the exact handled identity remains idempotent"
+    );
+    assert!(
+        shared
+            .terminal_settlement_operations
+            .lock()
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn late_mutation_response_preserves_identity_for_following_settlement_ack() {
+    use super::integration::{
+        SettlementFence, Shared, correlation_counts, install_test_operation_correlations,
+        settle_actor_message, settle_late_response,
+    };
+
+    let shared = Shared::default();
+    let control = ControlPlane::start(
+        "daemon-current",
+        Arc::new(AmbiguousExecutor),
+        QueueLimits::default(),
+    );
+    let operation = OperationId("late-terminal-operation".to_owned());
+    control
+        .submit(SubmitOperation {
+            operation_id: Some(operation.clone()),
+            canonical_fingerprint: "late-terminal-request".to_owned(),
+            upstream: UpstreamCorrelation {
+                ingress: "test".to_owned(),
+                request_id: None,
+            },
+            client_id: ClientId("late-terminal-client".to_owned()),
+            principal: Principal::new("late-terminal-principal", 1000),
+            group_id: None,
+            lease: None,
+            scope: OperationScope::BridgeGlobal(BrowserInstanceId(
+                "browser-late-terminal".to_owned(),
+            )),
+            class: OperationClass::Mutation,
+            payload: "ignored".to_owned(),
+            now_ms: 1,
+        })
+        .await
+        .unwrap();
+    let target = json!({"browser_instance_id":"browser-late-terminal"});
+    install_test_operation_correlations(
+        &shared,
+        operation.clone(),
+        "late-terminal-client",
+        SettlementFence {
+            daemon_generation: "daemon-current".to_owned(),
+            actor_generation: Value::from(11),
+            browser_instance_id: BrowserInstanceId("browser-late-terminal".to_owned()),
+            target_lifetime_key: target.clone(),
+            operation_class: "mutation",
+        },
+    )
+    .await;
+
+    settle_late_response(
+        &control,
+        &shared,
+        operation.0.clone(),
+        json!({"jsonrpc":"2.0", "id":"actor-request", "result":{"done":true}}),
+    )
+    .await;
+    assert!(control.settlement_state(operation.clone()).await.is_none());
     assert_eq!(correlation_counts(&shared).await, (0, 0, 0, 0, 0, 0));
+    assert_eq!(shared.terminal_settlement_operations.lock().await.len(), 1);
+
+    assert!(
+        settle_actor_message(
+            &control,
+            &shared,
+            "browser-late-terminal",
+            json!({
+                "jsonrpc":"2.0",
+                "method":"skyCuaHost/settlement",
+                "params":{
+                    "operation_id":"late-terminal-operation",
+                    "daemon_generation":"daemon-current",
+                    "actor_generation":11,
+                    "chrome_request_id":"chrome-late-terminal",
+                    "target_lifetime_key":target,
+                    "operation_class":"mutation",
+                    "completion":{"result":{"done":true}}
+                }
+            }),
+            false,
+        )
+        .await
+    );
+    assert!(
+        shared
+            .terminal_settlement_operations
+            .lock()
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -1159,7 +1628,7 @@ async fn admission_rejections_leave_no_operation_correlation_leaks() {
         codex_app_build_flavor: None,
         daemon_generation: generation,
     };
-    let (outbound, _outbound_rx) = mpsc::unbounded_channel();
+    let (outbound, _outbound_rx) = crate::codex_browser_compat::CodexOutbound::channel();
     runtime
         .connection_opened(connection.clone(), outbound)
         .await
@@ -1357,8 +1826,8 @@ async fn ownership_reconciliation_keeps_pending_and_drops_released_groups() {
 
 #[tokio::test]
 async fn production_runtime_periodically_expires_leases_and_reconciles_owners() {
+    use super::GroupId;
     use super::integration::BrowserControlRuntime;
-    use super::{GroupAdmission, GroupId};
 
     let runtime = BrowserControlRuntime::new();
     let principal = Principal::new("periodic-principal", unsafe { libc::geteuid() });
@@ -1383,11 +1852,7 @@ async fn production_runtime_periodically_expires_leases_and_reconciles_owners() 
 
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if runtime
-                .control
-                .group(group_id.clone())
-                .await
-                .is_ok_and(|group| group.admission == GroupAdmission::Released)
+            if runtime.control.group(group_id.clone()).await.is_err()
                 && !runtime.shared.tab_owners.lock().await.contains_key(&tab)
             {
                 break;
@@ -1397,6 +1862,84 @@ async fn production_runtime_periodically_expires_leases_and_reconciles_owners() 
     })
     .await
     .expect("periodic lease tick released the idle group and reconciled ownership");
+}
+
+#[tokio::test]
+async fn released_group_pruning_removes_scheduler_and_logical_group_indexes() {
+    use super::integration::BrowserControlRuntime;
+    use super::{GroupError, GroupId};
+
+    let runtime = BrowserControlRuntime::new();
+    let principal = Principal::new("pruned-default-owner", unsafe { libc::geteuid() });
+    let browser = BrowserInstanceId::from("pruned-default-browser");
+    let group = runtime
+        .default_group(&principal, "session:pruned", &browser)
+        .await;
+    runtime
+        .control
+        .end_group(group.group_id.clone(), principal)
+        .await
+        .unwrap();
+
+    runtime.prune_released_groups().await;
+
+    assert_eq!(
+        runtime.control.group(group.group_id.clone()).await,
+        Err(GroupError::UnknownGroup)
+    );
+    assert!(!runtime.has_logical_group_index(&group.group_id).await);
+}
+
+#[tokio::test]
+async fn closed_codex_connection_cleanup_reorphanes_a_late_group_renewal() {
+    use super::LeaseState;
+    use super::integration::BrowserControlRuntime;
+    use crate::codex_browser_compat::{CodexBrowserBackend, CodexConnectionContext};
+
+    let runtime = BrowserControlRuntime::new();
+    let connection_id = "closed-renewal-race";
+    let peer_uid = unsafe { libc::geteuid() };
+    let connection = CodexConnectionContext {
+        connection_id: connection_id.to_owned(),
+        provenance: "test",
+        peer_uid,
+        codex_app_build_flavor: None,
+        daemon_generation: runtime.daemon_generation(),
+    };
+    let (outbound, _outbound_rx) = crate::codex_browser_compat::CodexOutbound::channel();
+    runtime
+        .connection_opened(connection, outbound)
+        .await
+        .unwrap();
+    let principal = Principal::new(format!("codex:{connection_id}"), peer_uid);
+    runtime
+        .register_principal_connection(connection_id, principal.clone())
+        .await;
+    let browser = BrowserInstanceId::from("closed-renewal-browser");
+    let group = runtime
+        .default_group(&principal, "session:closed-renewal", &browser)
+        .await;
+
+    runtime.connection_closed(connection_id).await;
+    let orphaned = runtime.control.group(group.group_id.clone()).await.unwrap();
+    assert!(matches!(
+        orphaned.lease.state,
+        LeaseState::OrphanedGrace { .. }
+    ));
+
+    let renewed_after_close = runtime
+        .default_group(&principal, "session:closed-renewal", &browser)
+        .await;
+    assert_eq!(renewed_after_close.lease.state, LeaseState::Active);
+    runtime
+        .abort_closed_codex_request(connection_id, &principal)
+        .await;
+
+    let reorphaned = runtime.control.group(group.group_id).await.unwrap();
+    assert!(matches!(
+        reorphaned.lease.state,
+        LeaseState::OrphanedGrace { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1591,7 +2134,11 @@ async fn integration_executor_ignores_selected_actor_until_it_is_ready() {
                 "kind":"raw",
                 "method":"getInfo",
                 "params":{},
-                "timeout_ms":10
+                "timeout_ms":10,
+                "identity":{
+                    "session_id":"test-session",
+                    "turn_id":"test-turn"
+                }
             }))
             .unwrap(),
         })

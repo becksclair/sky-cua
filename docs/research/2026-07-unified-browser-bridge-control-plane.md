@@ -130,8 +130,9 @@ event flooding; idle ticks no longer consume the bounded event ring.
 
 ### Remaining unknowns and external gates
 
-- Typed external control UDS demand and final listener framing, if any host
-  actually requires it.
+- A dedicated typed external control UDS is explicitly deferred. The v1 frame
+  model stays frozen, but no listener or framing work should be added until a
+  real non-MCP adapter demonstrates demand.
 - Public opaque tab/group/lease handle evolution without breaking current MCP
   results.
 - The aggregate VM `all` profile cannot reach browser members until the
@@ -187,6 +188,8 @@ The original design output is durably represented by these twelve points:
   `codexAppBuildFlavor` in the compatibility reply.
 - Legacy rollback stays packaged through at least one accepted release after
   strict first ships.
+- Keep non-Codex production callers on ordinary service IPC/MCP. Do not bind a
+  dedicated typed control UDS until a real adapter demonstrates that need.
 
 ### Rejected alternatives
 
@@ -213,8 +216,6 @@ The original design output is durably represented by these twelve points:
 
 ### Unresolved decisions
 
-- Whether the typed frame model should gain a dedicated external UDS after a
-  real adapter need is demonstrated.
 - Public opaque tab/group/lease handle evolution while preserving current MCP
   response compatibility.
 - Default-mode promotion timing after measured hybrid/strict release windows.

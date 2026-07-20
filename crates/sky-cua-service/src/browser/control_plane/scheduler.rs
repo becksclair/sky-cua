@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 
 use super::operation;
 use super::{
-    control::{Command, QueueLimits},
+    control::{Command, QueueLimits, SubmitCommand},
     group::GroupRegistry,
     introspection::EventRecorder,
     operation::Executor,
@@ -23,12 +23,14 @@ pub(super) struct ActorConfig {
 
 pub(super) fn spawn_actor(
     receiver: mpsc::UnboundedReceiver<Command>,
+    submit_receiver: mpsc::Receiver<SubmitCommand>,
     sender: mpsc::UnboundedSender<Command>,
     executor: Arc<dyn Executor>,
     config: ActorConfig,
 ) {
     tokio::spawn(state::run_actor(
         receiver,
+        submit_receiver,
         sender,
         executor,
         config.generation,

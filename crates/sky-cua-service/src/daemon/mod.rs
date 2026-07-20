@@ -146,12 +146,21 @@ impl ServiceDaemon {
         })
     }
 
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn effective_browser_control_mode(
         &self,
     ) -> Result<crate::browser::BrowserControlMode, &DiagnosticEntry> {
         self.browser_control_mode.as_ref().copied()
     }
 
+    #[cfg(unix)]
+    pub(crate) async fn shutdown_browser_control(&self) {
+        if let Some(runtime) = &self.browser_control_runtime {
+            runtime.shutdown().await;
+        }
+    }
+
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn record_browser_control_startup_diagnostic(&self, diagnostic: DiagnosticEntry) {
         let mut diagnostics = self
             .browser_control_startup_diagnostics
@@ -477,31 +486,45 @@ impl ServiceDaemon {
                 operation_id,
                 reason: _,
             } => {
-                let Some(runtime) = &self.browser_control_runtime else {
-                    return error_response(
-                        "BrowserControlUnavailable",
-                        "browser cancellation requires hybrid/strict control runtime",
-                    );
-                };
-                match runtime
-                    .cancel_mcp_operation(&connection_id, &operation_id)
-                    .await
+                #[cfg(not(unix))]
                 {
-                    Ok(status) => ServiceResponse::Error {
-                        ok: true,
-                        code: "BrowserCancellationAcknowledged".to_owned(),
-                        message: format!("{status:?}"),
-                        session_id: None,
-                        turn_id: None,
-                        retry: None,
-                    },
-                    Err(diagnostic) => error_response(&diagnostic.code, &diagnostic.message),
+                    let _ = (connection_id, operation_id);
+                    error_response(
+                        "BrowserControlUnsupported",
+                        "browser cancellation is unavailable without Unix browser control",
+                    )
+                }
+                #[cfg(unix)]
+                {
+                    let Some(runtime) = &self.browser_control_runtime else {
+                        return error_response(
+                            "BrowserControlUnavailable",
+                            "browser cancellation requires hybrid/strict control runtime",
+                        );
+                    };
+                    match runtime
+                        .cancel_mcp_operation(&connection_id, &operation_id)
+                        .await
+                    {
+                        Ok(status) => ServiceResponse::Error {
+                            ok: true,
+                            code: "BrowserCancellationAcknowledged".to_owned(),
+                            message: format!("{status:?}"),
+                            session_id: None,
+                            turn_id: None,
+                            retry: None,
+                        },
+                        Err(diagnostic) => error_response(&diagnostic.code, &diagnostic.message),
+                    }
                 }
             }
             ServiceRequest::BrowserClientDisconnected { connection_id } => {
+                #[cfg(unix)]
                 if let Some(runtime) = &self.browser_control_runtime {
                     runtime.mcp_client_disconnected(&connection_id).await;
                 }
+                #[cfg(not(unix))]
+                let _ = connection_id;
                 ServiceResponse::Error {
                     ok: true,
                     code: "BrowserClientDisconnectAcknowledged".to_owned(),

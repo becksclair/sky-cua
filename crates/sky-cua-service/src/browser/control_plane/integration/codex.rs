@@ -9,7 +9,7 @@ impl CodexBrowserBackend for BrowserControlRuntime {
     async fn connection_opened(
         &self,
         connection: CodexConnectionContext,
-        outbound: mpsc::UnboundedSender<Value>,
+        outbound: crate::codex_browser_compat::CodexOutbound,
     ) -> Result<(), CodexBackendReply> {
         self.record_codex_client_open(&connection.connection_id);
         let principal = Principal::new(
@@ -126,10 +126,13 @@ impl CodexBrowserBackend for BrowserControlRuntime {
         }
     }
 
-    async fn cancel_or_detach(&self, _connection_id: &str, operation_id: &str) {
+    async fn cancel_or_detach(&self, connection_id: &str, operation_id: &str) {
         let _ = self
             .control
-            .cancel(OperationId(operation_id.to_owned()))
+            .cancel_for_client(
+                OperationId(operation_id.to_owned()),
+                ClientId(connection_id.to_owned()),
+            )
             .await;
     }
 
@@ -183,13 +186,8 @@ impl BrowserControlRuntime {
         let actor = one_actor(&actors).map_err(|error| error.message)?;
         let browser = BrowserInstanceId(actor.browser_id.clone());
         let connection_id = request.connection.connection_id.clone();
-        if !self
-            .shared
-            .connections
-            .lock()
-            .await
-            .contains_key(&connection_id)
-        {
+        let connections = self.shared.connections.lock().await;
+        if !connections.contains_key(&connection_id) {
             return Err("unknown Codex browser connection".to_owned());
         }
         let principal = principal_from_codex(&request);
@@ -209,6 +207,7 @@ impl BrowserControlRuntime {
                 .or_default()
                 .insert(session_id.to_owned());
         }
+        drop(connections);
         let tab = match &request.scope {
             CodexOperationScope::Tab(id) => Some(TabKey::new(browser.clone(), id)),
             _ => None,
@@ -253,6 +252,17 @@ impl BrowserControlRuntime {
         let group = self
             .default_group(&principal, &logical_group, &browser)
             .await;
+        if !self
+            .shared
+            .connections
+            .lock()
+            .await
+            .contains_key(&connection_id)
+        {
+            self.abort_closed_codex_request(&connection_id, &principal)
+                .await;
+            return Err("Codex browser connection closed before dispatch".to_owned());
+        }
         let reserved_tab = if membership_add {
             if let Some(tab) = &tab {
                 let mut owners = self.shared.tab_owners.lock().await;
@@ -331,6 +341,19 @@ impl BrowserControlRuntime {
             method: request.method.clone(),
             params: request.params.clone(),
             timeout_ms: u64::try_from(request.deadline.as_millis()).unwrap_or(u64::MAX),
+            identity: BrowserSessionIdentity {
+                session_id: request
+                    .logical_identity
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| connection_id.clone()),
+                thread_id: request.logical_identity.thread_id.clone(),
+                turn_id: request
+                    .logical_identity
+                    .turn_id
+                    .clone()
+                    .unwrap_or_else(|| request.operation_id.clone()),
+            },
         })
         .expect("raw payload serializes");
         let completion_result = self
@@ -371,6 +394,9 @@ impl BrowserControlRuntime {
         let certainty = completion.certainty.clone();
         let ambiguous = certainty == CompletionCertainty::Ambiguous;
         if !ambiguous {
+            if request.class == CodexOperationClass::Mutation {
+                remember_terminal_settlement_operation(&self.shared, &operation_id).await;
+            }
             self.clear_operation_correlations(&operation_id).await;
         }
         let mut value: Value = match completion_response(completion) {
@@ -461,6 +487,27 @@ impl BrowserControlRuntime {
             Err(error) => Err(format!("persistent bridge failed: {error:?}")),
         }
     }
+
+    pub(in crate::browser::control_plane) async fn abort_closed_codex_request(
+        &self,
+        connection_id: &str,
+        principal: &Principal,
+    ) {
+        self.release_connection_principals(connection_id).await;
+        let still_referenced = self
+            .shared
+            .principal_connections
+            .lock()
+            .await
+            .get(&principal.id)
+            .is_some_and(|connections| !connections.is_empty());
+        if !still_referenced {
+            // A close can race between the default-group lookup and renewal.
+            // Re-apply disconnect after the liveness check so that late
+            // renewal cannot reactivate an orphan lease.
+            self.control.disconnect(principal.clone(), now_ms()).await;
+        }
+    }
 }
 
 fn principal_from_codex(request: &CodexNormalizedRequest) -> Principal {
@@ -528,14 +575,16 @@ fn enrich_codex_get_info(
 }
 
 fn actor_for_browser(shared: &Shared, browser_id: &str) -> Option<BridgeActor> {
-    shared
+    let entries = shared
         .actors
         .read()
         .expect("actor registry poisoned")
         .values()
-        .find(|entry| {
-            entry.browser_id == browser_id && entry.actor.health().state == BridgeActorState::Ready
-        })
+        .cloned()
+        .collect::<Vec<_>>();
+    canonical_ready_actors(entries)
+        .into_iter()
+        .find(|entry| entry.browser_id == browser_id)
         .map(|entry| entry.actor.clone())
 }
 

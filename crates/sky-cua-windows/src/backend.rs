@@ -565,6 +565,12 @@ fn execute_send_input_action(request: &ActionRequest) -> Result<ActionOutcome, B
             click_at(x, y, MouseButton::Left)?;
             Ok(success("SendInput click completed"))
         }
+        ActionName::Move => {
+            focus_request_window(request);
+            let (x, y) = desktop_action_point(request)?;
+            move_pointer(x, y)?;
+            Ok(success("SendInput pointer move completed"))
+        }
         ActionName::PerformSecondaryAction => {
             focus_request_window(request);
             let (x, y) = desktop_action_point(request)?;
@@ -641,6 +647,13 @@ fn execute_window_message_action(request: &ActionRequest) -> Result<ActionOutcom
             let (x, y) = desktop_action_point(request)?;
             legacy_cursor_click(hwnd, x, y, MouseButton::Left)?;
             Ok(success("Windows RDP cursor click completed"))
+        }
+        ActionName::Move => {
+            let hwnd = request_hwnd(request)?;
+            let (x, y) = desktop_action_point(request)?;
+            focus_window_for_cursor_input(hwnd);
+            set_cursor_pos(x, y)?;
+            Ok(success("Windows RDP cursor move completed"))
         }
         ActionName::PerformSecondaryAction => {
             let hwnd = request_hwnd(request)?;

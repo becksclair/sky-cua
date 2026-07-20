@@ -33,7 +33,9 @@ REQUIRED_HOST_CAPABILITIES = [
     "extension_events",
     "private_param_stripping",
     "settlements",
+    "settlement_ack",
     "side_panel_requests",
+    "owner_release",
 ]
 
 
@@ -182,6 +184,14 @@ class FakeNativeHost(AbstractContextManager["FakeNativeHost"]):
                             "browser_family": "brave",
                             "capabilities": REQUIRED_HOST_CAPABILITIES,
                         },
+                    }
+                elif method == "skyCuaHost/settlementAck":
+                    response = None
+                elif method == "skyCuaHost/release":
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": frame["id"],
+                        "result": {"released": True, "owner_mode": "hybrid"},
                     }
                 elif method == "ping":
                     response = {"jsonrpc": "2.0", "id": frame["id"], "result": "pong"}

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
     path::PathBuf,
     pin::Pin,
@@ -49,12 +49,12 @@ mod support;
 #[cfg(test)]
 pub(in crate::browser::control_plane) use actor_events::spawn_actor_event_receiver_for_test;
 pub(in crate::browser::control_plane) use actor_events::{
-    settle_actor_message, spawn_actor_events,
+    settle_actor_message, settle_late_response, spawn_actor_events,
 };
 pub(crate) use state::BrowserControlRuntime;
 pub(super) use state::{
     ActorEntry, IntegrationExecutor, IntegrationPayload, OperationReservation, ServerRequestId,
-    SettlementFence, Shared,
+    SettlementAckIdentity, SettlementFence, Shared, TerminalSettlementOperation,
 };
 pub(in crate::browser::control_plane) use support::*;
 

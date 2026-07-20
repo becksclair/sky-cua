@@ -1,6 +1,31 @@
 use super::*;
 
 impl BrowserControlRuntime {
+    pub(crate) async fn shutdown(&self) {
+        let actors = self
+            .shared
+            .actors
+            .read()
+            .expect("actor registry poisoned")
+            .values()
+            .map(|entry| entry.actor.clone())
+            .collect::<Vec<_>>();
+        for actor in &actors {
+            actor.shutdown().await;
+        }
+        for actor in actors {
+            if tokio::time::timeout(Duration::from_secs(5), actor.wait_closed())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    socket = %actor.health().socket_path.display(),
+                    "timed out waiting for browser bridge actor shutdown"
+                );
+            }
+        }
+    }
+
     pub(crate) fn new() -> Arc<Self> {
         Self::new_with_owner_mode(BridgeOwnerMode::Hybrid)
     }
@@ -98,7 +123,7 @@ impl BrowserControlRuntime {
                     break;
                 };
                 runtime.control.tick(now_ms()).await;
-                runtime.reconcile_tab_owners().await;
+                runtime.prune_released_groups().await;
             }
         });
     }
@@ -245,6 +270,9 @@ impl BrowserControlRuntime {
         let certainty = completion.certainty.clone();
         let ambiguous = certainty == CompletionCertainty::Ambiguous;
         if !ambiguous {
+            if matches!(class, OperationClass::Mutation | OperationClass::BrowserGlobal) {
+                remember_terminal_settlement_operation(&self.shared, &operation_id).await;
+            }
             self.clear_operation_correlations(&operation_id).await;
         }
         let mut response = match completion_response::<BrowserResponse>(completion) {
@@ -343,13 +371,16 @@ impl BrowserControlRuntime {
             .await
             .get(&operation)
             .cloned();
-        if owner.as_deref() != Some(connection_id) {
+        if owner.as_deref().is_some_and(|owner| owner != connection_id) {
             return Err(runtime_diagnostic(
                 "BrowserCancellationRejected",
                 "browser operation does not belong to this MCP connection",
             ));
         }
-        Ok(self.control.cancel(operation).await)
+        Ok(self
+            .control
+            .cancel_for_client(operation, ClientId(connection_id.to_owned()))
+            .await)
     }
 
     pub(crate) async fn mcp_client_disconnected(&self, connection_id: &str) {
@@ -469,11 +500,16 @@ impl BrowserControlRuntime {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+        let canonical_sockets = canonical_ready_actors(entries.clone())
+            .into_iter()
+            .map(|entry| entry.socket)
+            .collect::<HashSet<_>>();
         let mut actors = entries
             .into_iter()
             .map(|entry| {
                 let health = entry.actor.health();
                 let protocol_capable = health.host_instance_id.is_some();
+                let canonical = canonical_sockets.contains(&entry.socket);
                 BrowserControlActorSnapshot {
                     state: bridge_state(health.state),
                     socket_path: entry.socket.to_string_lossy().into_owned(),
@@ -486,7 +522,7 @@ impl BrowserControlRuntime {
                     actor_generation: health.actor_generation,
                     protocol_capable,
                     selected: health.state == BridgeActorState::Ready,
-                    canonical: false,
+                    canonical,
                     last_heartbeat_rtt_ms: health.last_heartbeat_rtt_ms,
                     reconnect_count: health.reconnect_count,
                     quarantine_reason: health.quarantine_reason,
@@ -494,14 +530,6 @@ impl BrowserControlRuntime {
             })
             .collect::<Vec<_>>();
         actors.sort_by(|left, right| left.socket_path.cmp(&right.socket_path));
-        let mut canonical_browsers = HashSet::new();
-        for actor in &mut actors {
-            actor.canonical = actor.selected
-                && actor
-                    .browser_instance_id
-                    .as_ref()
-                    .is_some_and(|browser| canonical_browsers.insert(browser.clone()));
-        }
         let ready = actors.iter().any(|actor| actor.canonical);
         let actors_omitted =
             u32::try_from(actors.len().saturating_sub(ACTOR_RESULT_LIMIT)).unwrap_or(u32::MAX);
@@ -687,7 +715,7 @@ impl BrowserControlRuntime {
                 entries.insert(entry.socket.clone(), entry.clone());
             }
         }
-        Ok(ready)
+        Ok(canonical_ready_actors(ready))
     }
 
     async fn resolve_high_level_scope(
@@ -752,6 +780,32 @@ impl BrowserControlRuntime {
         owners.extend(authoritative);
     }
 
+    pub(in crate::browser::control_plane) async fn prune_released_groups(&self) {
+        let pruned = self.control.prune_released().await;
+        if !pruned.is_empty() {
+            let pruned = pruned.into_iter().collect::<HashSet<_>>();
+            self.shared
+                .groups
+                .lock()
+                .await
+                .retain(|_, group_id| !pruned.contains(group_id));
+        }
+        self.reconcile_tab_owners().await;
+    }
+
+    #[cfg(test)]
+    pub(in crate::browser::control_plane) async fn has_logical_group_index(
+        &self,
+        group_id: &GroupId,
+    ) -> bool {
+        self.shared
+            .groups
+            .lock()
+            .await
+            .values()
+            .any(|indexed| indexed == group_id)
+    }
+
     pub(in crate::browser::control_plane) async fn register_principal_connection(
         &self,
         connection_id: &str,
@@ -811,9 +865,16 @@ impl BrowserControlRuntime {
         actors: &[ActorEntry],
     ) -> Result<TabKey, DiagnosticEntry> {
         let owners = self.shared.tab_owners.lock().await;
+        let eligible_browsers = actors
+            .iter()
+            .map(|actor| actor.browser_id.as_str())
+            .collect::<HashSet<_>>();
         let known = owners
             .keys()
-            .filter(|tab| tab.tab_id == tab_id)
+            .filter(|tab| {
+                tab.tab_id == tab_id
+                    && eligible_browsers.contains(tab.browser_instance_id.0.as_str())
+            })
             .cloned()
             .collect::<Vec<_>>();
         drop(owners);

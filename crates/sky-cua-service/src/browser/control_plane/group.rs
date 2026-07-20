@@ -126,6 +126,11 @@ impl GroupRegistry {
         principal: Principal,
         now_ms: u64,
     ) -> GroupSnapshot {
+        if let Some(group) = self.groups.get(&group_id)
+            && !matches!(group.admission, GroupAdmission::Released)
+        {
+            return group.clone();
+        }
         self.next_lease += 1;
         let lease = LeaseSnapshot {
             lease_id: format!("lease-{}", self.next_lease),
@@ -145,6 +150,27 @@ impl GroupRegistry {
         };
         self.groups.insert(group_id, group.clone());
         group
+    }
+
+    pub(crate) fn prune_released(&mut self, in_flight: impl Fn(&GroupId) -> usize) -> Vec<GroupId> {
+        let released = self
+            .groups
+            .iter()
+            .filter(|(group_id, group)| {
+                matches!(group.admission, GroupAdmission::Released)
+                    && in_flight(group_id) == 0
+                    && !self.has_unresolved_settlement(group_id)
+                    && !self.deferred_admission.contains_key(group_id)
+            })
+            .map(|(group_id, _)| group_id.clone())
+            .collect::<Vec<_>>();
+        for group_id in &released {
+            self.groups.remove(group_id);
+            self.pending_settlements.remove(group_id);
+            self.unknown_settlements.remove(group_id);
+            self.deferred_admission.remove(group_id);
+        }
+        released
     }
 
     pub(crate) fn insert_recovered(&mut self, mut group: GroupSnapshot) {

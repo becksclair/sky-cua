@@ -119,8 +119,11 @@ The bridge actor owns discovery, handshake, peer identity, one persistent
 connection, request-ID allocation, pending replies, timeout tombstones,
 heartbeat, extension events, reconnect/backoff, quarantine, and settlement
 notifications. Its host hello requires control-plane, heartbeat,
-extension-event, private-field-stripping, settlement, and side-panel
-capabilities. A control-plane role marker before `skyCuaHost/hello` is rejected
+extension-event, private-field-stripping, settlement, settlement-ack,
+side-panel, and owner-release capabilities. Requiring owner release and
+settlement acknowledgement prevents negotiation with an older host that cannot
+complete rollback or durable completion delivery. A control-plane
+role marker before `skyCuaHost/hello` is rejected
 without selecting the role; after a valid hello the same private marker is
 accepted and stripped before extension dispatch. Once any legacy role has been
 selected, a late control-plane hello is rejected because role is immutable.
@@ -130,7 +133,8 @@ shape and exact server messages. The socket is owner-only (`0600`), accepts
 same-UID peers, caps frames at 100 MiB, normalizes identity/class/scope/deadline
 server-side, and detaches or cancels work when the connection closes. Default
 read and mutation deadlines are 30 seconds and 15 seconds, capped at 120
-seconds.
+seconds. Each connection retains at most 64 concurrent requests and 64
+outbound messages; overflow fails closed instead of growing daemon memory.
 
 Option A remains the Codex compatibility rule. For raw ingress, sky-cua maps
 the canonical host reply to `type="iab"`, adds `metadata.codexSessionId` when
@@ -148,13 +152,18 @@ barriers; phase fairness permits at most one queued global operation before a
 head-of-line round across waiting tab lanes. No scheduler lock is held across
 browser or socket I/O.
 
+Actors with the same stable browser-instance identity are canonicalized by
+socket path before routing and status reporting. Multiple distinct browser
+instances are preserved; instance-less operations reject genuine ambiguity
+instead of selecting one by map iteration order.
+
 One narrow reentrancy exception prevents an event-driven deadlock: a raw Codex
 `Fetch` continuation (or `Runtime.runIfWaitingForDebugger`) associated with the
 same connection/tab as an in-flight parent bypasses that tab's FIFO and enters
 the actor as a correlated child. Its ambiguous completion is attributed to the
 parent; unrelated same-tab work remains serialized.
 
-Default bounds are 128 queued operations per client, 32 per tab, 512 recent
+Default bounds are 128 pending scheduler submissions, 128 queued operations per client, 32 per tab, 512 recent
 operation records, two ordinary actor requests per bridge, and one exclusive
 large-frame request. Heartbeat and extension events are out of band. Timed-out
 bridge IDs are tombstoned for ten minutes, bounded to 2,048 entries.
@@ -172,6 +181,25 @@ re-registering a released principal. Claim reservations are operation-scoped:
 definitive failure releases them, ambiguous completion retains them until a
 matching settlement or browser/group loss, and definitive late success commits
 the tab to group membership.
+
+Retained settlements stay in the native host until the selected actor sends an
+identity-fenced acknowledgement after scheduler handling. Reconnect after a
+write-before-consume failure therefore replays the settlement, while duplicate
+delivery and stale acknowledgement remain harmless. The host also retries an
+unacknowledged settlement to the same actor at a bounded interval, covering a
+lagged actor event receiver without requiring reconnect. A replacement daemon
+does not acknowledge a retained settlement unless it has a matching live fence;
+only the daemon that already reconciled an exact identity may acknowledge its
+post-fence duplicate. This retention applies even when the direct response was
+successfully written: kernel-buffer acceptance is not application receipt.
+Direct and late terminal completions record a bounded operation-generation
+marker so the following retained settlement can be acknowledged after its
+active fence is cleared.
+
+Raw Codex `executeCdp` receives debugger-session recovery only for an upfront
+unattached rejection that proves no command ran. The daemon reuses its existing
+recovery policy and replays that one safe class; timeout or mid-command detach
+never authorizes replay.
 
 Cancellation before dispatch guarantees no browser action. After dispatch it
 detaches the waiter while shared execution drains. A dispatched mutation that
@@ -192,7 +220,10 @@ correlation while the target survives produces non-transferable
 Strict is opt-in for its first accepted release. Rollback closes admission,
 drains what can settle, marks unresolved mutations ambiguous, preserves open
 tabs, and changes mode only after state is inspectable. Queued or ambiguous
-mutations are not replayed. See
+mutations are not replayed. An idle clean shutdown sends a generation-checked
+host release and requires its acknowledgement before the surviving native host
+returns to hybrid compatibility. Abrupt or unsettled shutdown stays strict and
+requires explicit recovery. See
 [`browser-control-plane-migration.md`](../operations/browser-control-plane-migration.md)
 for the operator procedure.
 
@@ -279,25 +310,58 @@ installer/provenance adapters unless a future host limitation is proven.
 - `crates/sky-cua-platform/src/model/browser.rs`
 - `crates/sky-cua-platform/src/model/browser_control.rs`
 - `crates/sky-cua-service/src/browser/control_plane/`
+- `crates/sky-cua-service/src/browser/control_plane/scheduler/state/{admission,dispatch,introspection,actor}.rs`
 - `crates/sky-cua-service/src/browser/transport.rs`
 - `crates/sky-cua-service/src/codex_browser_compat/`
 - `crates/sky-cua-service/src/daemon/browser.rs`
 - `crates/sky-cua-service/src/ipc_server.rs`
 - `crates/sky-cua-chrome-host/src/host/control_plane/`
 - `crates/sky-cua-client/src/mcp_server.rs`
+- `scripts/deploy_plugin.py`
 - `scripts/install_mcp_server.py`
 - `scripts/_openclaw_install.py`
 
 ## Verification
 
-Final local source gates on 2026-07-19 passed workspace Rust formatting and
-clippy with warnings denied, all 1,293 nextest cases, Rust doctests, Ruff,
+Final local source gates on 2026-07-20 passed workspace Rust formatting and
+clippy with warnings denied, all 1,321 nextest cases, Rust doctests, Ruff,
 basedpyright, all 730 Python tests, the 15-case process acceptance matrix, and
-plugin packaging. Focused tests cover tab FIFO/cross-tab overlap, global
-barriers, fairness, dispatch width, lease/handoff/expiry/reconnect, cancellation,
-ambiguous settlement/no replay, restart hints, stale actors/sockets, heartbeat,
-full-duplex string and numeric IDs, strict/hybrid listener behavior, and the two
-review-discovered disconnect/reservation races.
+`git diff --check`. Focused tests cover tab FIFO/cross-tab overlap, global
+barriers, fairness, dispatch width, lease/handoff/expiry/reconnect,
+cancellation, ambiguous settlement/no replay, restart hints, stale
+actors/sockets, heartbeat, full-duplex string and numeric IDs, strict/hybrid
+listener behavior, and the two review-discovered disconnect/reservation races.
+Settlement coverage additionally proves restart-safe acknowledgement fencing
+and bounded same-actor retransmit after a lost event delivery. It also proves
+active-response retention, late-response identity preservation, and refusal to
+release strict ownership while mutation tombstones remain unresolved.
+
+The reviewed runtime was locally deployed on 2026-07-20 with
+`scripts/deploy_plugin.py`, followed by `scripts/sync_agent_skills.py` only
+after deployment succeeded. `scripts/deploy_freshness.py` then reported the
+installed client fresh against current runtime source. The deployed hybrid
+daemon kept one canonical ready actor, zero queued/in-flight/pending/unknown
+settlements, and owner-only `0600` service and Codex sockets under one stable
+PID. Direct installed MCP opened a real Brave tab, observed it, typed
+`FRESH CONTROL PLANE CLOSEOUT`, clicked the proof control, scrolled, and emitted
+a browser screenshot. Raw framed Codex `getInfo` concurrently returned
+`type="iab"`, `codexSessionId="closeout-codex-session"`, and
+`codexAppBuildFlavor="prod"` with no JSON-RPC error.
+
+Deployment now invokes Codex Desktop's installed `browser-use-cache-sync.cjs`
+publisher and fails closed unless one identity tuple spans the packaged Browser
+plugin version, packaged client bytes, cache `latest` bytes, the one-entry
+`cua_node` trust manifest, and the resolved node_repl trust environment. The
+live gate republished stale `browser-use/latest` from `0.1.0-alpha2` to the new
+Codex Desktop client `26.707.72221`, SHA-256
+`50c68d489f35739541306dcc82c274f477d8ee13ca002de2311022f6cb31245d`.
+That exact trusted client bootstrapped through `setupBrowserRuntime`, selected
+`iab`, typed `TRUSTED CUA NODE CLOSEOUT`, clicked the proof control, read the
+committed value, emitted a screenshot, and closed its tab. After the updated
+deployment procedure itself completed, a fresh connection repeated the
+ordinary workflow with `POST DEPLOY TRUSTED CUA NODE` and emitted a second
+screenshot. sky-cua invokes and verifies this Codex-owned materializer; it does
+not vendor or rewrite Browser client bytes or the trust manifest.
 
 Installed Brave acceptance used stable service PID `2346805`, service socket
 inode `104724`, and Codex socket inode `104725`. Raw `getInfo` returned

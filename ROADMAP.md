@@ -102,9 +102,9 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Persist bounded recovery hints atomically and restore only suspended,
         freshly fenced groups; unresolved mutations become
         `recovery_required`, with no authority or operation replay
-  - [ ] Decide whether a dedicated typed control UDS is needed; the v1 typed
-        frame model exists, but production non-Codex callers currently use
-        ordinary service IPC/MCP
+  - [x] Defer a dedicated typed control UDS until a real non-MCP adapter
+        demonstrates demand; keep the frozen v1 frame model and current
+        production callers on ordinary service IPC/MCP
   - [x] Installed Codex control-plane proof: navigate, click, type, scroll,
         screenshots, and two simultaneous Codex connections
   - [x] Real Brave overlap: exact installed Codex plus direct MCP, OpenClaw,

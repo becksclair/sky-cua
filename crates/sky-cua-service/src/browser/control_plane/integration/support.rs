@@ -1,5 +1,7 @@
 use super::*;
 
+const TERMINAL_SETTLEMENT_OPERATION_LIMIT: usize = 2_048;
+
 pub(in crate::browser::control_plane) fn authoritative_tab_owners(
     groups: Vec<super::GroupSnapshot>,
 ) -> HashMap<TabKey, GroupId> {
@@ -42,6 +44,33 @@ pub(in crate::browser::control_plane) async fn clear_operation_correlations(
         .lock()
         .await
         .retain(|child, parent| child != operation_id && parent != operation_id);
+}
+
+pub(in crate::browser::control_plane) async fn remember_terminal_settlement_operation(
+    shared: &Shared,
+    operation_id: &OperationId,
+) {
+    let daemon_generation = shared
+        .settlement_fences
+        .lock()
+        .await
+        .get(operation_id)
+        .map(|fence| fence.daemon_generation.clone());
+    let Some(daemon_generation) = daemon_generation else {
+        return;
+    };
+    let key = TerminalSettlementOperation {
+        operation_id: operation_id.clone(),
+        daemon_generation,
+    };
+    let mut terminal = shared.terminal_settlement_operations.lock().await;
+    if terminal.contains(&key) {
+        return;
+    }
+    terminal.push_back(key);
+    while terminal.len() > TERMINAL_SETTLEMENT_OPERATION_LIMIT {
+        terminal.pop_front();
+    }
 }
 
 pub(in crate::browser::control_plane) async fn remember_operation_reservation(
@@ -286,6 +315,45 @@ pub(in crate::browser::control_plane) fn one_actor(
             "multiple eligible browser instances require an explicit instance-qualified tab",
         )),
     }
+}
+
+pub(in crate::browser::control_plane) fn canonical_ready_actors(
+    actors: impl IntoIterator<Item = ActorEntry>,
+) -> Vec<ActorEntry> {
+    let mut actors = actors
+        .into_iter()
+        .filter(|entry| {
+            let health = entry.actor.health();
+            entry.socket.exists()
+                && health.state == BridgeActorState::Ready
+                && health.browser_instance_id.as_deref() == Some(entry.browser_id.as_str())
+        })
+        .collect::<Vec<_>>();
+    actors.sort_by(|left, right| left.socket.cmp(&right.socket));
+
+    let mut stable_browsers = HashSet::new();
+    actors.retain(|entry| {
+        let health = entry.actor.health();
+        health.browser_instance_stability
+            != sky_cua_platform::model::BrowserInstanceStability::Stable
+            || stable_browsers.insert(entry.browser_id.clone())
+    });
+    actors
+}
+
+pub(in crate::browser::control_plane) fn is_upfront_unattached_upstream_error(
+    error: &Value,
+) -> bool {
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| error.to_string());
+    crate::browser::session::is_upfront_unattached_diagnostic(&DiagnosticEntry {
+        code: "BrowserBridgeRequestFailed".to_owned(),
+        message,
+        details: None,
+    })
 }
 pub(in crate::browser::control_plane) fn high_level_tab_id(
     request: &BrowserRequest,

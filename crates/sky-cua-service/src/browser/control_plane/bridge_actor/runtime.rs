@@ -138,6 +138,21 @@ impl Runtime {
         }
     }
 
+    pub(super) fn has_unresolved_settlements(&self) -> bool {
+        self.tombstones
+            .values()
+            .any(|tombstone| tombstone.operation_class.is_some_and(requires_settlement))
+    }
+
+    pub(super) fn resolve_settlement(&mut self, operation_id: &str) {
+        self.tombstones.retain(|_, tombstone| {
+            tombstone.operation_id.as_deref() != Some(operation_id)
+                || !tombstone.operation_class.is_some_and(requires_settlement)
+        });
+        self.tombstone_order
+            .retain(|request_id| self.tombstones.contains_key(request_id));
+    }
+
     pub(super) fn fail_dispatched(&mut self) {
         let now = Instant::now();
         for (request_id, pending) in self.pending.drain() {
@@ -159,5 +174,11 @@ impl Runtime {
         }
         self.heartbeat = None;
         self.prune_tombstones(now);
+    }
+
+    pub(super) fn fail_queued(&mut self, error: BridgeActorError) {
+        for queued in self.queued.drain(..) {
+            let _ = queued.reply.send(Err(error.clone()));
+        }
     }
 }

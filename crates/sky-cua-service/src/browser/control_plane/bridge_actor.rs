@@ -14,8 +14,11 @@ use tokio::net::UnixStream;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::{Instant, MissedTickBehavior};
 
-use super::{DispatchOperation, Executor, ExecutorOutcome, OperationClass, OperationScope};
-use crate::browser::protocol::{read_frame, write_frame};
+use super::{
+    DispatchOperation, Executor, ExecutorOutcome, OperationClass, OperationScope,
+    SETTLEMENT_DEADLINE_MS,
+};
+use crate::browser::protocol::read_frame;
 use crate::browser::sockets::{
     SocketPeerIdentity, record_persistent_actor_health, socket_peer_identity,
 };
@@ -25,8 +28,9 @@ mod wire;
 
 use runtime::{PendingRequest, QueuedRequest, Runtime};
 use wire::{
-    HEARTBEAT_DEADLINE, Handshake, is_ping, operation_class_name, perform_handshake, request_size,
-    requires_settlement, route_notification, unix_epoch_ms, write_pong,
+    HEARTBEAT_DEADLINE, HOST_RELEASE_METHOD, HOST_SETTLEMENT_ACK_METHOD, Handshake, is_ping,
+    operation_class_name, perform_handshake, request_size, requires_settlement, route_notification,
+    settlement_ack_frame, unix_epoch_ms, write_frame_bounded, write_pong,
 };
 
 static DAEMON_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -163,6 +167,7 @@ pub(crate) struct BridgeActorConfig {
     pub(crate) owner_mode: BridgeOwnerMode,
     pub(crate) connect_timeout: Duration,
     pub(crate) handshake_timeout: Duration,
+    pub(crate) write_timeout: Duration,
     pub(crate) heartbeat_interval: Duration,
     pub(crate) reconnect_min: Duration,
     pub(crate) reconnect_max: Duration,
@@ -193,6 +198,7 @@ impl BridgeActorConfig {
             owner_mode: BridgeOwnerMode::default(),
             connect_timeout: Duration::from_secs(3),
             handshake_timeout: Duration::from_secs(3),
+            write_timeout: Duration::from_secs(3),
             heartbeat_interval: Duration::from_secs(1),
             reconnect_min: Duration::from_millis(100),
             reconnect_max: Duration::from_secs(3),
@@ -218,6 +224,8 @@ enum Command {
         oneshot::Sender<Result<Value, BridgeActorError>>,
     ),
     ServerMessage(Value),
+    #[cfg(test)]
+    Barrier(oneshot::Sender<()>),
     Shutdown,
 }
 
@@ -262,6 +270,37 @@ impl BridgeActor {
             .send(Command::ServerMessage(message))
             .await
             .map_err(|_| BridgeActorError::Stopped)
+    }
+
+    pub(crate) async fn acknowledge_settlement(
+        &self,
+        settlement: &Value,
+    ) -> Result<(), BridgeActorError> {
+        let frame = settlement_ack_frame(settlement, &self.health().daemon_generation)?;
+        self.send_server_message(frame).await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn enqueue_request_for_test(
+        &self,
+        request: BridgeActorRequest,
+    ) -> oneshot::Receiver<Result<Value, BridgeActorError>> {
+        let (reply, receive) = oneshot::channel();
+        self.sender
+            .send(Command::Request(request, reply))
+            .await
+            .expect("test actor remains active");
+        receive
+    }
+
+    #[cfg(test)]
+    pub(super) async fn barrier_for_test(&self) {
+        let (reply, receive) = oneshot::channel();
+        self.sender
+            .send(Command::Barrier(reply))
+            .await
+            .expect("test actor remains active");
+        receive.await.expect("test actor acknowledges barrier");
     }
 
     pub(crate) fn health(&self) -> BridgeActorHealth {
@@ -525,6 +564,12 @@ async fn run_actor(
         .await;
         record_persistent_actor_health(&config.socket_path, false);
         runtime.fail_dispatched();
+        if !exit {
+            // Requests still in the actor-private queue were never written to
+            // the old bridge. Fail them definitively instead of carrying
+            // target-lifetime work into a possibly different browser.
+            runtime.fail_queued(BridgeActorError::Disconnected);
+        }
         runtime.advance_actor_generation();
         health.reconnect_count = health.reconnect_count.saturating_add(1);
         if exit {
@@ -569,11 +614,36 @@ async fn serve_ready_connection(
                     runtime.queued.push_back(QueuedRequest { request, reply });
                 }
                 Some(Command::ServerMessage(message)) => {
-                    if write_frame(stream, &message).await.is_err() {
+                    let settled_operation = (message.get("method").and_then(Value::as_str)
+                        == Some(HOST_SETTLEMENT_ACK_METHOD))
+                    .then(|| {
+                        message
+                            .pointer("/params/operation_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .flatten();
+                    if write_frame_bounded(stream, &message, config.write_timeout).await.is_err() {
                         return false;
                     }
+                    if let Some(operation_id) = settled_operation {
+                        runtime.resolve_settlement(&operation_id);
+                    }
                 }
-                Some(Command::Shutdown) | None => return true,
+                #[cfg(test)]
+                Some(Command::Barrier(reply)) => {
+                    let _ = reply.send(());
+                }
+                Some(Command::Shutdown) | None => {
+                    if config.owner_mode == BridgeOwnerMode::Strict
+                        && runtime.pending.is_empty()
+                        && runtime.queued.is_empty()
+                        && !runtime.has_unresolved_settlements()
+                    {
+                        let _ = release_strict_owner(stream, config, runtime, events).await;
+                    }
+                    return true;
+                },
             },
             frame = read_frame(stream) => match frame {
                 Ok(Some(frame)) => {
@@ -592,12 +662,12 @@ async fn serve_ready_connection(
                 }
                 if runtime.heartbeat.is_none() {
                     let id = runtime.allocate_request_id(config);
-                    if write_frame(stream, &json!({
+                    if write_frame_bounded(stream, &json!({
                         "jsonrpc": "2.0",
                         "id": id,
                         "method": "ping",
                         "params": {},
-                    })).await.is_err() {
+                    }), config.write_timeout).await.is_err() {
                         return false;
                     }
                     runtime.heartbeat = Some((id, Instant::now()));
@@ -640,9 +710,59 @@ async fn dispatch_queued(
                 size: queued.request.size,
             },
         );
-        write_frame(stream, &frame)
+        write_frame_bounded(stream, &frame, config.write_timeout).await?;
+    }
+}
+
+async fn release_strict_owner(
+    stream: &mut UnixStream,
+    config: &BridgeActorConfig,
+    runtime: &mut Runtime,
+    events: &broadcast::Sender<BridgeActorEvent>,
+) -> Result<(), BridgeActorError> {
+    let request_id = runtime.allocate_request_id(config);
+    write_frame_bounded(
+        stream,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": HOST_RELEASE_METHOD,
+            "params": {
+                "daemon_generation": config.daemon_generation,
+                "owner_mode": "hybrid",
+            },
+        }),
+        config.write_timeout,
+    )
+    .await?;
+
+    let deadline = Instant::now() + config.handshake_timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let frame = tokio::time::timeout(remaining, read_frame(stream))
             .await
-            .map_err(|error| BridgeActorError::RequestFailed(error.to_string()))?;
+            .map_err(|_| BridgeActorError::TimedOut)?
+            .map_err(|error| BridgeActorError::RequestFailed(error.to_string()))?
+            .ok_or(BridgeActorError::Disconnected)?;
+        if is_ping(&frame) {
+            write_pong(stream, &frame).await?;
+            continue;
+        }
+        if frame.get("id").and_then(Value::as_str) != Some(request_id.as_str()) {
+            route_notification(events, frame);
+            continue;
+        }
+        if let Some(error) = frame.get("error") {
+            return Err(BridgeActorError::Unavailable(format!(
+                "strict owner release rejected: {error}"
+            )));
+        }
+        if frame.pointer("/result/owner_mode").and_then(Value::as_str) != Some("hybrid") {
+            return Err(BridgeActorError::Unavailable(
+                "strict owner release response omitted hybrid owner mode".into(),
+            ));
+        }
+        return Ok(());
     }
 }
 
@@ -720,6 +840,47 @@ pub(super) async fn exercise_write_failure(
     )
 }
 
+#[cfg(test)]
+pub(super) async fn exercise_stalled_write(
+    config: &BridgeActorConfig,
+    request: BridgeActorRequest,
+) -> BridgeActorError {
+    use std::io;
+    use std::task::{Context, Poll};
+
+    struct StalledWriter;
+
+    impl AsyncWrite for StalledWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buffer: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Pending
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    let mut runtime = Runtime::new(config.actor_generation);
+    let (reply, receive) = oneshot::channel();
+    runtime.queued.push_back(QueuedRequest { request, reply });
+    dispatch_queued(&mut StalledWriter, config, &mut runtime)
+        .await
+        .expect_err("stalled writer must time out");
+    runtime.fail_dispatched();
+    receive
+        .await
+        .expect("actor retains reply sender")
+        .expect_err("timed-out dispatch cannot succeed")
+}
+
 fn request_frame(
     config: &BridgeActorConfig,
     actor_generation: u64,
@@ -749,7 +910,12 @@ fn request_frame(
     );
     params.insert("_sky_cua_observe_turns".into(), Value::Bool(false));
     let deadline_ms = unix_epoch_ms()
-        .saturating_add(u64::try_from(request.timeout.as_millis()).unwrap_or(u64::MAX));
+        .saturating_add(u64::try_from(request.timeout.as_millis()).unwrap_or(u64::MAX))
+        .saturating_add(if requires_settlement(request.operation_class) {
+            SETTLEMENT_DEADLINE_MS
+        } else {
+            0
+        });
     params.insert(
         "_sky_cua_host_request".into(),
         json!({
@@ -767,6 +933,15 @@ fn request_frame(
         "method": request.method,
         "params": params,
     }))
+}
+
+#[cfg(test)]
+pub(super) fn request_frame_for_test(
+    config: &BridgeActorConfig,
+    request: &BridgeActorRequest,
+) -> Value {
+    request_frame(config, config.actor_generation, "test-request", request)
+        .expect("test request frame is valid")
 }
 
 async fn handle_frame(
@@ -863,6 +1038,10 @@ async fn delay_or_shutdown(
                     let _ = reply.send(Err(error.clone()));
                 }
                 Some(Command::ServerMessage(_)) => {}
+                #[cfg(test)]
+                Some(Command::Barrier(reply)) => {
+                    let _ = reply.send(());
+                }
                 Some(Command::Shutdown) | None => return true,
             }
         }

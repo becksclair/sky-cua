@@ -1,9 +1,11 @@
 use super::*;
 
 pub(super) const SKY_CUA_HOST_SETTLEMENT_METHOD: &str = "skyCuaHost/settlement";
+pub(super) const SKY_CUA_HOST_SETTLEMENT_ACK_METHOD: &str = "skyCuaHost/settlementAck";
 const MAX_RETAINED_SETTLEMENTS: usize = 100;
 const TOMBSTONE_TTL: Duration = Duration::from_secs(10 * 60);
 const SETTLEMENT_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(250);
+const SETTLEMENT_ACK_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PendingRequestState {
@@ -60,6 +62,10 @@ impl HostState {
         client_id: usize,
         role: ClientRole,
     ) {
+        if self.settlement_delivered_to == Some(client_id) {
+            self.settlement_delivered_to = None;
+            self.settlement_delivered_at = None;
+        }
         let removed_ids = self
             .pending_chrome_requests
             .iter_mut()
@@ -200,31 +206,80 @@ impl HostState {
         }
     }
 
-    pub(super) fn active_control_plane_writer(&self) -> Option<SharedClientWriter> {
-        self.clients.values().find_map(|client| {
-            (client.role == ClientRole::ControlPlane).then(|| Arc::clone(&client.writer))
+    fn active_control_plane(&self) -> Option<(usize, SharedClientWriter)> {
+        self.clients.iter().find_map(|(client_id, client)| {
+            (client.role == ClientRole::ControlPlane
+                && client.capabilities.contains(SETTLEMENT_ACK_CAPABILITY))
+            .then(|| (*client_id, Arc::clone(&client.writer)))
         })
     }
 
-    fn begin_settlement_delivery(&mut self) -> Option<(SharedClientWriter, Value)> {
+    fn begin_settlement_delivery(&mut self) -> Option<(usize, SharedClientWriter, Value)> {
         if self.settlement_delivery_in_progress {
             return None;
         }
-        let writer = self.active_control_plane_writer()?;
+        let (client_id, writer) = self.active_control_plane()?;
+        if self.settlement_delivered_to == Some(client_id)
+            && self
+                .settlement_delivered_at
+                .is_some_and(|delivered_at| delivered_at.elapsed() < SETTLEMENT_ACK_RETRY_INTERVAL)
+        {
+            return None;
+        }
         let message = self.queued_settlements.front()?.clone();
         self.settlement_delivery_in_progress = true;
-        Some((writer, message))
+        Some((client_id, writer, message))
     }
 
-    fn finish_settlement_delivery(&mut self, delivered: bool) {
+    fn finish_settlement_delivery(&mut self, client_id: usize, delivered: bool) {
         assert!(
             self.settlement_delivery_in_progress,
             "settlement delivery completed without an active claim"
         );
         if delivered {
-            self.queued_settlements.pop_front();
+            self.settlement_delivered_to = Some(client_id);
+            self.settlement_delivered_at = Some(Instant::now());
+        } else {
+            self.settlement_delivered_to = None;
+            self.settlement_delivered_at = None;
         }
         self.settlement_delivery_in_progress = false;
+    }
+
+    pub(super) fn acknowledge_settlement(&mut self, client_id: usize, message: &Value) -> bool {
+        let Some(client) = self.clients.get(&client_id) else {
+            return false;
+        };
+        if client.role != ClientRole::ControlPlane
+            || self.settlement_delivered_to != Some(client_id)
+            || message
+                .pointer("/params/acknowledging_daemon_generation")
+                .and_then(Value::as_str)
+                != client.daemon_generation.as_deref()
+        {
+            return false;
+        }
+        let Some(settlement) = self.queued_settlements.front() else {
+            return false;
+        };
+        let identity_matches = [
+            "operation_id",
+            "daemon_generation",
+            "actor_generation",
+            "chrome_request_id",
+        ]
+        .into_iter()
+        .all(|field| {
+            message.pointer(&format!("/params/{field}"))
+                == settlement.pointer(&format!("/params/{field}"))
+        });
+        if !identity_matches {
+            return false;
+        }
+        self.queued_settlements.pop_front();
+        self.settlement_delivered_to = None;
+        self.settlement_delivered_at = None;
+        true
     }
 }
 
@@ -329,25 +384,22 @@ pub(super) fn settlement_maintenance_loop(state: SharedState) {
 }
 
 pub(super) fn deliver_queued_settlements(state: &SharedState) {
-    loop {
-        let delivery = {
-            let mut state = state.lock().expect("host state mutex poisoned");
-            state
-                .begin_settlement_delivery()
-                .map(|(writer, message)| (writer, state.host_name.clone(), message))
-        };
-        let Some((writer, host_name, message)) = delivery else {
-            return;
-        };
-        let delivered = write_client_frame(&writer, &host_name, &message);
+    let delivery = {
+        let mut state = state.lock().expect("host state mutex poisoned");
         state
-            .lock()
-            .expect("host state mutex poisoned")
-            .finish_settlement_delivery(delivered);
-        if !delivered {
-            return;
-        }
-    }
+            .begin_settlement_delivery()
+            .map(|(client_id, writer, message)| {
+                (client_id, writer, state.host_name.clone(), message)
+            })
+    };
+    let Some((client_id, writer, host_name, message)) = delivery else {
+        return;
+    };
+    let delivered = write_client_frame(&writer, &host_name, &message);
+    state
+        .lock()
+        .expect("host state mutex poisoned")
+        .finish_settlement_delivery(client_id, delivered);
 }
 
 #[cfg(test)]

@@ -21,17 +21,16 @@ impl Executor for IntegrationExecutor {
                 OperationScope::BridgeGlobal(browser) => Some(browser),
                 OperationScope::DaemonGlobal => None,
             };
-            let actors = shared
+            let entries = shared
                 .actors
                 .read()
                 .expect("actor registry poisoned")
                 .values()
-                .filter(|entry| {
-                    entry.socket.exists()
-                        && entry.actor.health().state == BridgeActorState::Ready
-                        && browser.is_none_or(|browser| entry.browser_id == browser.0)
-                })
                 .cloned()
+                .collect::<Vec<_>>();
+            let actors = canonical_ready_actors(entries)
+                .into_iter()
+                .filter(|entry| browser.is_none_or(|browser| entry.browser_id == browser.0))
                 .collect::<Vec<_>>();
             let target = operation_target(&operation.scope);
             match payload {
@@ -39,20 +38,23 @@ impl Executor for IntegrationExecutor {
                     method,
                     params,
                     timeout_ms,
+                    identity,
                 } => {
                     let Some(entry) = actors.first() else {
                         return ExecutorOutcome::DefinitiveFailure(
                             "persistent bridge unavailable".to_owned(),
                         );
                     };
+                    let started = tokio::time::Instant::now();
+                    let timeout = Duration::from_millis(timeout_ms);
                     let mut request = BridgeActorRequest::new(
-                        method,
-                        params,
+                        method.clone(),
+                        params.clone(),
                         operation.identity.operation_id.0.clone(),
                         operation.class,
                     );
-                    request.timeout = Duration::from_millis(timeout_ms);
-                    request.target_lifetime_key = target;
+                    request.timeout = timeout;
+                    request.target_lifetime_key = target.clone();
                     let raw_tab_key = match &operation.scope {
                         OperationScope::Tab(tab) => {
                             Some((operation.client_id.0.clone(), tab.clone()))
@@ -66,7 +68,82 @@ impl Executor for IntegrationExecutor {
                             .await
                             .insert(key.clone(), operation.identity.operation_id.clone());
                     }
-                    let result = entry.actor.request(request).await;
+                    let mut result = entry.actor.request(request).await;
+                    if method == "executeCdp"
+                        && matches!(
+                            &result,
+                            Err(BridgeActorError::UpstreamError(error))
+                                if is_upfront_unattached_upstream_error(error)
+                        )
+                        && let OperationScope::Tab(tab) = &operation.scope
+                    {
+                        let deadline = started + timeout;
+                        let remaining =
+                            deadline.saturating_duration_since(tokio::time::Instant::now());
+                        let tracker = ChildTracker::new(
+                            operation.identity.operation_id.clone(),
+                            shared
+                                .control
+                                .get()
+                                .expect("integration control initialized")
+                                .clone(),
+                        );
+                        let recovery_context = ProxyContext::new(
+                            [(entry.socket.clone(), entry.actor.clone())],
+                            format!("{}:session-recovery", operation.identity.operation_id.0),
+                            OperationClass::ReadOnly,
+                            remaining,
+                            target.clone(),
+                            Arc::clone(&shared.settlement_parents),
+                            tracker,
+                        );
+                        let recovery = persistent_proxy::scope(recovery_context, async {
+                            let mut stream =
+                                match crate::browser::control_plane::connect_persistent_proxy(
+                                    &entry.socket,
+                                )
+                                .await
+                                {
+                                    Some(Ok(stream)) => stream,
+                                    Some(Err(error)) => {
+                                        return Err(runtime_diagnostic(
+                                            "BrowserBridgeProxyFailed",
+                                            &error.to_string(),
+                                        ));
+                                    }
+                                    None => unreachable!(
+                                        "recovery runs inside a persistent proxy scope"
+                                    ),
+                                };
+                            crate::browser::session::recover_cdp_session_until(
+                                &mut stream,
+                                &entry.socket,
+                                &crate::browser::tabs::tab_id_value(&tab.tab_id),
+                                deadline,
+                                false,
+                                &identity,
+                            )
+                            .await
+                        })
+                        .await;
+                        if let Err(error) = recovery {
+                            result = Err(BridgeActorError::RequestFailed(format!(
+                                "debugger session recovery failed: {}",
+                                error.message
+                            )));
+                        } else {
+                            let mut replay = BridgeActorRequest::new(
+                                method,
+                                params,
+                                operation.identity.operation_id.0.clone(),
+                                operation.class,
+                            );
+                            replay.timeout =
+                                deadline.saturating_duration_since(tokio::time::Instant::now());
+                            replay.target_lifetime_key = target;
+                            result = entry.actor.request(replay).await;
+                        }
+                    }
                     if let Some(key) = raw_tab_key {
                         let mut parents = shared.raw_tab_parents.lock().await;
                         if parents.get(&key) == Some(&operation.identity.operation_id) {

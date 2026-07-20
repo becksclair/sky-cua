@@ -2,6 +2,8 @@ use super::*;
 use crate::browser::control_plane::SETTLEMENT_DEADLINE_MS;
 use sky_cua_platform::model::BrowserControlEventKind;
 
+const HANDLED_SETTLEMENT_LIMIT: usize = 2_048;
+
 pub(in crate::browser::control_plane) fn spawn_actor_events(
     actor: BridgeActor,
     shared: Arc<Shared>,
@@ -43,13 +45,31 @@ fn spawn_actor_event_receiver(
                     }
                 }
                 BridgeActorEvent::Settlement(message) => {
-                    if let Some(browser_id) = actor.health().browser_instance_id {
-                        settle_actor_message(&control, &shared, &browser_id, message, false).await;
+                    if let Some(browser_id) = actor.health().browser_instance_id
+                        && settle_actor_message(
+                            &control,
+                            &shared,
+                            &browser_id,
+                            message.clone(),
+                            false,
+                        )
+                        .await
+                    {
+                        let _ = actor.acknowledge_settlement(&message).await;
                     }
                 }
                 BridgeActorEvent::SettlementUnknown(message) => {
-                    if let Some(browser_id) = actor.health().browser_instance_id {
-                        settle_actor_message(&control, &shared, &browser_id, message, true).await;
+                    if let Some(browser_id) = actor.health().browser_instance_id
+                        && settle_actor_message(
+                            &control,
+                            &shared,
+                            &browser_id,
+                            message.clone(),
+                            true,
+                        )
+                        .await
+                    {
+                        let _ = actor.acknowledge_settlement(&message).await;
                     }
                 }
                 BridgeActorEvent::BrowserLost {
@@ -92,32 +112,41 @@ fn spawn_actor_event_receiver(
                     response,
                     ..
                 } => {
-                    let child = OperationId(child_id);
-                    let operation = shared
-                        .settlement_parents
-                        .lock()
-                        .await
-                        .get(&child)
-                        .cloned()
-                        .unwrap_or(child);
-                    let outcome = if let Some(error) = response.get("error") {
-                        SettlementOutcome::Error(error.to_string())
-                    } else {
-                        SettlementOutcome::DefinitiveSuccess(
-                            response.get("result").unwrap_or(&response).to_string(),
-                        )
-                    };
-                    if let SettlementResult::Settled(completion) =
-                        control.settle(operation.clone(), outcome).await
-                    {
-                        settle_operation_reservation(&shared, &control, &completion).await;
-                        clear_operation_correlations(&shared, &operation).await;
-                    }
+                    settle_late_response(&control, &shared, child_id, response).await;
                 }
                 BridgeActorEvent::State(_) | BridgeActorEvent::LateResponse { .. } => {}
             }
         }
     });
+}
+
+pub(in crate::browser::control_plane) async fn settle_late_response(
+    control: &ControlPlane,
+    shared: &Shared,
+    child_id: String,
+    response: Value,
+) {
+    let child = OperationId(child_id);
+    let operation = shared
+        .settlement_parents
+        .lock()
+        .await
+        .get(&child)
+        .cloned()
+        .unwrap_or(child);
+    let outcome = if let Some(error) = response.get("error") {
+        SettlementOutcome::Error(error.to_string())
+    } else {
+        SettlementOutcome::DefinitiveSuccess(
+            response.get("result").unwrap_or(&response).to_string(),
+        )
+    };
+    if let SettlementResult::Settled(completion) = control.settle(operation.clone(), outcome).await
+    {
+        settle_operation_reservation(shared, control, &completion).await;
+        remember_terminal_settlement_operation(shared, &operation).await;
+        clear_operation_correlations(shared, &operation).await;
+    }
 }
 
 #[cfg(test)]
@@ -198,7 +227,7 @@ async fn route_extension_message(
         }
         routes.insert(route_key.clone(), actor.clone());
         drop(routes);
-        if outbound.send(message).is_err() {
+        if outbound.try_send(message).is_err() {
             shared.server_request_routes.lock().await.remove(&route_key);
             reject_server_request(actor, request_id, "server request Codex connection closed")
                 .await;
@@ -207,7 +236,7 @@ async fn route_extension_message(
     }
 
     for (_, outbound) in live {
-        let _ = outbound.send(message.clone());
+        let _ = outbound.try_send(message.clone());
     }
 }
 
@@ -300,14 +329,11 @@ pub(in crate::browser::control_plane) async fn settle_actor_message(
     browser_id: &str,
     message: Value,
     unknown: bool,
-) {
-    let Some(child_id) = message
-        .pointer("/params/operation_id")
-        .and_then(Value::as_str)
-    else {
-        return;
+) -> bool {
+    let Some(identity) = settlement_ack_identity(&message) else {
+        return false;
     };
-    let child = OperationId(child_id.to_owned());
+    let child = OperationId(identity.operation_id.clone());
     let operation = shared
         .settlement_parents
         .lock()
@@ -322,10 +348,27 @@ pub(in crate::browser::control_plane) async fn settle_actor_message(
         .get(&operation)
         .cloned();
     let Some(fence) = fence else {
-        return;
+        // Only this daemon's exact, previously reconciled wire identity may be
+        // acknowledged after its fence has been cleared. A fresh daemon must
+        // leave retained settlements from a prior generation on the host.
+        if shared.handled_settlements.lock().await.contains(&identity) {
+            return true;
+        }
+        let key = TerminalSettlementOperation {
+            operation_id: operation.clone(),
+            daemon_generation: identity.daemon_generation.clone(),
+        };
+        let mut terminal = shared.terminal_settlement_operations.lock().await;
+        let Some(index) = terminal.iter().position(|candidate| candidate == &key) else {
+            return false;
+        };
+        terminal.remove(index);
+        drop(terminal);
+        remember_handled_settlement(shared, identity).await;
+        return true;
     };
     if !settlement_matches(&fence, browser_id, &message) {
-        return;
+        return false;
     }
     if unknown {
         let result = control
@@ -341,7 +384,8 @@ pub(in crate::browser::control_plane) async fn settle_actor_message(
         control
             .tick(now_ms().saturating_add(SETTLEMENT_DEADLINE_MS))
             .await;
-        return;
+        remember_handled_settlement(shared, identity).await;
+        return true;
     }
     let completion = message
         .pointer("/params/completion")
@@ -354,10 +398,49 @@ pub(in crate::browser::control_plane) async fn settle_actor_message(
             completion.get("result").unwrap_or(&completion).to_string(),
         )
     };
-    if let SettlementResult::Settled(completion) = control.settle(operation.clone(), outcome).await
+    match control.settle(operation.clone(), outcome).await {
+        SettlementResult::Settled(completion) => {
+            settle_operation_reservation(shared, control, &completion).await;
+            clear_operation_correlations(shared, &operation).await;
+        }
+        SettlementResult::RemainsAmbiguous => return false,
+        SettlementResult::Ignored => {
+            clear_operation_correlations(shared, &operation).await;
+        }
+    }
+    remember_handled_settlement(shared, identity).await;
+    true
+}
+
+fn settlement_ack_identity(message: &Value) -> Option<SettlementAckIdentity> {
+    let params = message.get("params").and_then(Value::as_object)?;
+    let operation_id = params.get("operation_id")?.as_str()?.to_owned();
+    let daemon_generation = params.get("daemon_generation")?.as_str()?.to_owned();
+    let actor_generation = params.get("actor_generation")?.clone();
+    let chrome_request_id = params.get("chrome_request_id")?.as_str()?.to_owned();
+    if operation_id.is_empty()
+        || daemon_generation.is_empty()
+        || chrome_request_id.is_empty()
+        || !(actor_generation.is_string() || actor_generation.is_number())
     {
-        settle_operation_reservation(shared, control, &completion).await;
-        clear_operation_correlations(shared, &operation).await;
+        return None;
+    }
+    Some(SettlementAckIdentity {
+        operation_id,
+        daemon_generation,
+        actor_generation,
+        chrome_request_id,
+    })
+}
+
+async fn remember_handled_settlement(shared: &Shared, identity: SettlementAckIdentity) {
+    let mut handled = shared.handled_settlements.lock().await;
+    if handled.contains(&identity) {
+        return;
+    }
+    handled.push_back(identity);
+    while handled.len() > HANDLED_SETTLEMENT_LIMIT {
+        handled.pop_front();
     }
 }
 

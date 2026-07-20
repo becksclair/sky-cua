@@ -6,7 +6,10 @@
 //! [`CodexBrowserBackend`] without changing this compatibility surface.
 
 use std::{
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -36,14 +39,62 @@ const MAX_FRAME_BYTES: usize = 100 * 1024 * 1024;
 const MAX_DEADLINE_MS: u64 = 120_000;
 const DEFAULT_READ_DEADLINE_MS: u64 = 30_000;
 const DEFAULT_MUTATION_DEADLINE_MS: u64 = 15_000;
+const MAX_RETAINED_REQUESTS_PER_CONNECTION: usize = 64;
+const OUTBOUND_QUEUE_CAPACITY: usize = 64;
 const PROTOCOL_MISMATCH_CODE: i64 = -32070;
 const GENERATION_CHANGED_CODE: i64 = -32071;
+const BACKPRESSURE_CODE: i64 = -32072;
 const PROTOCOL_MISMATCH_MESSAGE: &str = "sky-cua browser compatibility protocol mismatch";
 const GENERATION_CHANGED_MESSAGE: &str =
     "sky-cua browser daemon generation changed; refresh browser backends";
+const BACKPRESSURE_MESSAGE: &str =
+    "sky-cua browser compatibility connection request limit exceeded";
 
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone)]
+pub(crate) struct CodexOutbound {
+    sender: mpsc::Sender<Value>,
+    stalled: Arc<AtomicBool>,
+    stalled_notify: Arc<tokio::sync::Notify>,
+}
+
+impl CodexOutbound {
+    pub(crate) fn channel() -> (Self, mpsc::Receiver<Value>) {
+        let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        (
+            Self {
+                sender,
+                stalled: Arc::new(AtomicBool::new(false)),
+                stalled_notify: Arc::new(tokio::sync::Notify::new()),
+            },
+            receiver,
+        )
+    }
+
+    pub(crate) fn try_send(&self, message: Value) -> Result<(), ()> {
+        self.sender.try_send(message).map_err(|_| {
+            self.mark_stalled();
+        })
+    }
+
+    fn mark_stalled(&self) {
+        if !self.stalled.swap(true, Ordering::AcqRel) {
+            self.stalled_notify.notify_waiters();
+        }
+    }
+
+    async fn wait_stalled(&self) {
+        loop {
+            let notified = self.stalled_notify.notified();
+            if self.stalled.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CodexConnectionContext {
@@ -114,7 +165,7 @@ pub(crate) trait CodexBrowserBackend: Send + Sync + 'static {
     async fn connection_opened(
         &self,
         connection: CodexConnectionContext,
-        outbound: mpsc::UnboundedSender<Value>,
+        outbound: CodexOutbound,
     ) -> Result<(), CodexBackendReply>;
 
     async fn request(&self, request: CodexNormalizedRequest) -> CodexBackendReply;
@@ -156,7 +207,7 @@ impl CodexBrowserBackend for UnavailableCodexBrowserBackend {
     async fn connection_opened(
         &self,
         _connection: CodexConnectionContext,
-        _outbound: mpsc::UnboundedSender<Value>,
+        _outbound: CodexOutbound,
     ) -> Result<(), CodexBackendReply> {
         Ok(())
     }
@@ -240,7 +291,7 @@ mod tests {
         cancelled: Vec<String>,
         closed: Vec<String>,
         replies: VecDeque<CodexBackendReply>,
-        outbound: Option<mpsc::UnboundedSender<Value>>,
+        outbound: Option<CodexOutbound>,
     }
 
     struct FakeBackend {
@@ -280,7 +331,7 @@ mod tests {
         async fn connection_opened(
             &self,
             connection: CodexConnectionContext,
-            outbound: mpsc::UnboundedSender<Value>,
+            outbound: CodexOutbound,
         ) -> Result<(), CodexBackendReply> {
             let mut state = self.state.lock().await;
             state.opened.push(connection);
@@ -508,8 +559,8 @@ mod tests {
         };
         let request = json!({"jsonrpc":"2.0","id":"backend-7","method":"ping"});
         let notification = json!({"jsonrpc":"2.0","method":"onCDPEvent","params":{"x":1}});
-        outbound.send(request.clone()).unwrap();
-        outbound.send(notification.clone()).unwrap();
+        outbound.try_send(request.clone()).unwrap();
+        outbound.try_send(notification.clone()).unwrap();
         assert_eq!(read_frame(&mut reader).await.unwrap().unwrap(), request);
         assert_eq!(
             read_frame(&mut reader).await.unwrap().unwrap(),
@@ -562,6 +613,72 @@ mod tests {
         assert_eq!(state.closed.len(), 1);
         drop(state);
         release.notify_waiters();
+    }
+
+    #[tokio::test]
+    async fn burst_overflow_is_rejected_before_backend_task_spawn() {
+        let (backend, release) = FakeBackend::blocking();
+        let backend = Arc::new(backend);
+        let (mut writer, mut reader, handle) = start_fake(backend.clone()).await;
+        for id in 1..=(MAX_RETAINED_REQUESTS_PER_CONNECTION as u64 + 1) {
+            write_frame(
+                &mut writer,
+                &json!({"jsonrpc":"2.0","id":id,"method":"getTabs"}),
+            )
+            .await
+            .unwrap();
+        }
+
+        let overflow = read_frame(&mut reader).await.unwrap().unwrap();
+        assert_eq!(
+            overflow,
+            json!({
+                "jsonrpc":"2.0",
+                "id":MAX_RETAINED_REQUESTS_PER_CONNECTION as u64 + 1,
+                "error":{
+                    "code":BACKPRESSURE_CODE,
+                    "message":BACKPRESSURE_MESSAGE,
+                },
+            })
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if backend.state.lock().await.requests.len() == MAX_RETAINED_REQUESTS_PER_CONNECTION
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("all admitted backend requests must start");
+        assert_eq!(
+            backend.state.lock().await.requests.len(),
+            MAX_RETAINED_REQUESTS_PER_CONNECTION
+        );
+
+        drop(writer);
+        drop(reader);
+        handle.await.unwrap().unwrap();
+        assert_eq!(
+            backend.state.lock().await.cancelled.len(),
+            MAX_RETAINED_REQUESTS_PER_CONNECTION
+        );
+        release.notify_waiters();
+    }
+
+    #[tokio::test]
+    async fn outbound_queue_is_bounded_and_marks_a_stalled_connection() {
+        let (outbound, _receiver) = CodexOutbound::channel();
+        for sequence in 0..OUTBOUND_QUEUE_CAPACITY {
+            outbound
+                .try_send(json!({"jsonrpc":"2.0","method":"event","params":{"sequence":sequence}}))
+                .unwrap();
+        }
+        assert!(outbound.try_send(json!({"overflow":true})).is_err());
+        tokio::time::timeout(Duration::from_millis(50), outbound.wait_stalled())
+            .await
+            .expect("overflow marks the connection stalled");
     }
 
     #[tokio::test]

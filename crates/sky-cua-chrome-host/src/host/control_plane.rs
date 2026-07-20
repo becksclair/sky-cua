@@ -2,6 +2,7 @@ use super::*;
 use std::cmp::Ordering;
 
 pub(super) const SKY_CUA_HOST_HELLO_METHOD: &str = "skyCuaHost/hello";
+pub(super) const SKY_CUA_HOST_RELEASE_METHOD: &str = "skyCuaHost/release";
 pub(super) const SKY_CUA_HOST_PROTOCOL_VERSION: u64 = 1;
 pub(super) const CONTROL_PLANE_ROLE: &str = "control_plane";
 pub(super) const CONTROL_PLANE_CAPABILITY: &str = "control_plane";
@@ -9,7 +10,9 @@ pub(super) const EXTENSION_EVENTS_CAPABILITY: &str = "extension_events";
 pub(super) const HEARTBEAT_CAPABILITY: &str = "heartbeat";
 pub(super) const PRIVATE_PARAM_STRIPPING_CAPABILITY: &str = "private_param_stripping";
 pub(super) const SIDE_PANEL_REQUESTS_CAPABILITY: &str = "side_panel_requests";
+pub(super) const OWNER_RELEASE_CAPABILITY: &str = "owner_release";
 pub(super) const SETTLEMENTS_CAPABILITY: &str = "settlements";
+pub(super) const SETTLEMENT_ACK_CAPABILITY: &str = "settlement_ack";
 pub(super) const SKY_CUA_HOST_REQUEST_PARAM: &str = "_sky_cua_host_request";
 pub(super) const SKY_CUA_OPERATION_ID_PARAM: &str = "_sky_cua_operation_id";
 pub(super) const SKY_CUA_DAEMON_GENERATION_PARAM: &str = "_sky_cua_daemon_generation";
@@ -52,6 +55,101 @@ pub(super) struct HostHelloOutcome {
     pub(super) response: Value,
     pub(super) fenced_clients: Vec<(usize, Client)>,
     pub(super) rejected_legacy_clients: Vec<(usize, Client)>,
+}
+
+impl HostState {
+    pub(super) fn handle_owner_release(&mut self, client_id: usize, message: &Value) -> Value {
+        let id = message.get("id").cloned().unwrap_or(Value::Null);
+        let error = |error_type: &str, message: &str, data: Value| {
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32001,
+                    "message": message,
+                    "data": {
+                        "type": error_type,
+                        "details": data,
+                    }
+                }
+            })
+        };
+
+        let Some(client) = self.clients.get(&client_id) else {
+            return error(
+                "sky_cua_host_client_gone",
+                "Native-host client disconnected before owner release",
+                json!({}),
+            );
+        };
+        if client.role != ClientRole::ControlPlane {
+            return error(
+                "sky_cua_host_owner_release_forbidden",
+                "Only the active control plane can release strict ownership",
+                json!({ "selected_role": client_role_name(client.role) }),
+            );
+        }
+        let requested_generation = message
+            .pointer("/params/daemon_generation")
+            .and_then(Value::as_str);
+        if requested_generation != client.daemon_generation.as_deref()
+            || requested_generation != self.owner_daemon_generation.as_deref()
+        {
+            return error(
+                "sky_cua_host_generation_mismatch",
+                "owner release daemon_generation does not match the active strict owner",
+                json!({
+                    "active_daemon_generation": self.owner_daemon_generation,
+                    "requested_daemon_generation": requested_generation,
+                }),
+            );
+        }
+        if self.owner_mode != OwnerMode::Strict {
+            return error(
+                "sky_cua_host_owner_release_not_strict",
+                "Native host is not under strict ownership",
+                json!({ "owner_mode": self.owner_mode.name() }),
+            );
+        }
+        if message
+            .pointer("/params/owner_mode")
+            .and_then(Value::as_str)
+            != Some("hybrid")
+        {
+            return error(
+                "sky_cua_host_invalid_owner_mode",
+                "owner release must transition to hybrid mode",
+                json!({ "requested_owner_mode": message.pointer("/params/owner_mode") }),
+            );
+        }
+        if !self.pending_chrome_requests.is_empty()
+            || !self.pending_client_requests.is_empty()
+            || !self.queued_settlements.is_empty()
+            || self.settlement_delivery_in_progress
+        {
+            return error(
+                "sky_cua_host_mode_transition_unsafe",
+                "Cannot release strict ownership while requests or settlements are unsettled",
+                json!({
+                    "active_browser_requests": self.pending_chrome_requests.len(),
+                    "active_extension_requests": self.pending_client_requests.len(),
+                    "queued_settlements": self.queued_settlements.len(),
+                    "settlement_delivery_in_progress": self.settlement_delivery_in_progress,
+                }),
+            );
+        }
+
+        self.owner_mode = OwnerMode::Hybrid;
+        self.owner_daemon_generation = None;
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "released": true,
+                "owner_mode": "hybrid",
+            }
+        })
+    }
 }
 
 impl HostState {
@@ -336,6 +434,8 @@ fn host_control_plane_capabilities() -> HashSet<&'static str> {
         PRIVATE_PARAM_STRIPPING_CAPABILITY,
         SIDE_PANEL_REQUESTS_CAPABILITY,
         SETTLEMENTS_CAPABILITY,
+        SETTLEMENT_ACK_CAPABILITY,
+        OWNER_RELEASE_CAPABILITY,
     ])
 }
 

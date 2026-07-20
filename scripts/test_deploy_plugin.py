@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import os
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -15,7 +19,116 @@ from _plugin_bundle import (
     SKY_CUA_SKILLS,
     update_codex_config,
 )
-from deploy_plugin import drop_retired_channel_caches
+from deploy_plugin import drop_retired_channel_caches, sync_and_verify_codex_browser_client
+
+
+def _write_codex_browser_fixture(root: Path, codex_home: Path) -> tuple[str, str]:
+    version = "26.707.72221"
+    client_bytes = b"new-cua-node-browser-client"
+    client_hash = hashlib.sha256(client_bytes).hexdigest()
+    plugin_root = root / "plugins/openai-bundled/plugins/browser-use"
+    (plugin_root / "scripts").mkdir(parents=True)
+    (plugin_root / ".codex-plugin").mkdir(parents=True)
+    (plugin_root / "scripts/browser-client.mjs").write_bytes(client_bytes)
+    (plugin_root / ".codex-plugin/plugin.json").write_text(
+        json.dumps({"name": "browser-use", "version": version}),
+        encoding="utf-8",
+    )
+    (root / "cua_node/bin").mkdir(parents=True)
+    (root / "cua_node/bin/node").write_text("node", encoding="utf-8")
+    (root / "browser-use-cache-sync.cjs").write_text("sync", encoding="utf-8")
+    (root / "cua_node/manifest.json").write_text(
+        json.dumps({"trusted_browser_client_sha256s": [client_hash]}),
+        encoding="utf-8",
+    )
+
+    stale = codex_home / "plugins/cache/openai-bundled/browser-use/0.1.0-alpha2"
+    (stale / "scripts").mkdir(parents=True)
+    (stale / "scripts/browser-client.mjs").write_text("stale-alpha2", encoding="utf-8")
+    latest = stale.parent / "latest"
+    latest.symlink_to(stale.name, target_is_directory=True)
+    return version, client_hash
+
+
+def test_sync_and_verify_codex_browser_client_repoints_stale_latest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resources = tmp_path / "resources"
+    codex_home = tmp_path / "codex-home"
+    version, client_hash = _write_codex_browser_fixture(resources, codex_home)
+
+    monkeypatch.setenv("CODEX_NODE_REPL_LEGACY_FALLBACK", "1")
+    monkeypatch.setenv("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S", client_hash)
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        assert "CODEX_NODE_REPL_LEGACY_FALLBACK" not in env
+        assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in env
+        command = args[2]
+        if command == "sync-cache":
+            packaged = resources / "plugins/openai-bundled/plugins/browser-use"
+            cached = codex_home / f"plugins/cache/openai-bundled/browser-use/{version}"
+            cached.mkdir(parents=True)
+            for relative in ["scripts/browser-client.mjs", ".codex-plugin/plugin.json"]:
+                destination = cached / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes((packaged / relative).read_bytes())
+            latest = cached.parent / "latest"
+            latest.unlink()
+            latest.symlink_to(version, target_is_directory=True)
+            stdout = json.dumps({"latestLink": str(latest), "version": version})
+        else:
+            assert command == "resolve-env"
+            stdout = json.dumps({"NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": client_hash})
+        return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(deploy_plugin.subprocess, "run", fake_run)
+
+    cached_client = sync_and_verify_codex_browser_client(
+        codex_home,
+        resources_root=resources,
+    )
+
+    assert cached_client == (
+        codex_home
+        / f"plugins/cache/openai-bundled/browser-use/{version}/scripts/browser-client.mjs"
+    )
+    assert os.readlink(codex_home / "plugins/cache/openai-bundled/browser-use/latest") == version
+
+
+def test_sync_and_verify_codex_browser_client_requires_packaged_resources(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(RuntimeError, match="Packaged Codex Desktop cua_node resources"):
+        sync_and_verify_codex_browser_client(
+            tmp_path / "codex-home",
+            resources_root=tmp_path / "missing-resources",
+        )
+
+
+def test_sync_and_verify_codex_browser_client_rejects_trust_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resources = tmp_path / "resources"
+    codex_home = tmp_path / "codex-home"
+    version, _client_hash = _write_codex_browser_fixture(resources, codex_home)
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        stale_latest = codex_home / "plugins/cache/openai-bundled/browser-use/latest"
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout=json.dumps({"latestLink": str(stale_latest), "version": version}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(deploy_plugin.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="packaged or cached manifest"):
+        sync_and_verify_codex_browser_client(codex_home, resources_root=resources)
 
 
 def test_update_codex_config_enables_local_id_when_compat_unavailable(tmp_path: Path) -> None:
@@ -179,6 +292,11 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     )
     monkeypatch.setattr(deploy_plugin, "install_bundle", lambda *_args: None)
     monkeypatch.setattr(deploy_plugin, "run_browser_preflight", lambda _dest, _home: None)
+    monkeypatch.setattr(
+        deploy_plugin,
+        "sync_and_verify_codex_browser_client",
+        lambda _home, **_kwargs: None,
+    )
     monkeypatch.setattr(deploy_plugin, "stop_unix_runtime_processes", lambda _roots: None)
     monkeypatch.setattr(deploy_plugin, "stop_windows_cache_processes", lambda _root: None)
     monkeypatch.setattr(deploy_plugin, "compat_plugin_targets_payload", lambda _home, _dest: False)
@@ -260,6 +378,11 @@ def test_fast_deploy_returns_failure_when_kwin_live_reload_fails(
     )
     monkeypatch.setattr(deploy_plugin, "install_bundle", lambda *_args: None)
     monkeypatch.setattr(deploy_plugin, "run_browser_preflight", lambda _dest, _home: None)
+    monkeypatch.setattr(
+        deploy_plugin,
+        "sync_and_verify_codex_browser_client",
+        lambda _home, **_kwargs: None,
+    )
     monkeypatch.setattr(deploy_plugin, "stop_unix_runtime_processes", lambda _roots: None)
     monkeypatch.setattr(deploy_plugin, "stop_windows_cache_processes", lambda _root: None)
     monkeypatch.setattr(deploy_plugin, "compat_plugin_targets_payload", lambda _home, _dest: True)

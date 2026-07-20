@@ -106,6 +106,8 @@ struct HostState {
     pending_id_tombstones: HashMap<String, Instant>,
     queued_settlements: VecDeque<Value>,
     settlement_delivery_in_progress: bool,
+    settlement_delivered_to: Option<usize>,
+    settlement_delivered_at: Option<Instant>,
     next_client_id: usize,
     next_chrome_id: u64,
     next_client_request_id: u64,
@@ -148,6 +150,8 @@ impl HostState {
             pending_id_tombstones: HashMap::new(),
             queued_settlements: VecDeque::new(),
             settlement_delivery_in_progress: false,
+            settlement_delivered_to: None,
+            settlement_delivered_at: None,
             next_client_id: 1,
             next_chrome_id: 1,
             next_client_request_id: 1,
@@ -820,6 +824,32 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         return;
     }
 
+    if message.get("method").and_then(Value::as_str) == Some(SKY_CUA_HOST_RELEASE_METHOD) {
+        let Some((writer, host_name, response)) = ({
+            let mut state = state.lock().expect("host state mutex poisoned");
+            state.client_writer(client_id).map(|writer| {
+                let host_name = state.host_name.clone();
+                let response = state.handle_owner_release(client_id, &message);
+                (writer, host_name, response)
+            })
+        }) else {
+            return;
+        };
+        write_client_frame(&writer, &host_name, &response);
+        return;
+    }
+
+    if message.get("method").and_then(Value::as_str) == Some(SKY_CUA_HOST_SETTLEMENT_ACK_METHOD) {
+        let acknowledged = {
+            let mut state = state.lock().expect("host state mutex poisoned");
+            state.acknowledge_settlement(client_id, &message)
+        };
+        if acknowledged {
+            deliver_queued_settlements(state);
+        }
+        return;
+    }
+
     if message.get("method").and_then(Value::as_str).is_some()
         && message.get("method").and_then(Value::as_str) != Some("ping")
     {
@@ -1052,7 +1082,7 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
             Client {
                 writer: SharedClientWriter,
                 outbound: Value,
-                failed_delivery_settlement: Option<Value>,
+                retained_settlement: bool,
             },
             Queued,
         }
@@ -1072,7 +1102,7 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
             let orphaned =
                 pending.state == PendingRequestState::OrphanedPending || original_writer.is_none();
             let route = if !orphaned {
-                let failed_delivery_settlement = pending
+                let settlement = pending
                     .settlement
                     .as_ref()
                     .filter(|metadata| metadata.operation_class.requires_settlement())
@@ -1085,10 +1115,17 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
                             Some(message.clone()),
                         )
                     });
+                let retained_settlement = settlement.is_some();
+                if let Some(settlement) = settlement {
+                    // A successful socket write is not application-level
+                    // receipt. Keep every mutating completion until the actor
+                    // acknowledges its exact settlement identity.
+                    state.queue_settlement(settlement);
+                }
                 ResponseRoute::Client {
                     writer: original_writer.expect("active pending client has writer"),
                     outbound: with_id(message, pending.client_request_id),
-                    failed_delivery_settlement,
+                    retained_settlement,
                 }
             } else if let Some(metadata) = pending.settlement {
                 let settlement = settlement_message(
@@ -1098,16 +1135,8 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
                     &metadata,
                     Some(message),
                 );
-                if let Some(writer) = state.active_control_plane_writer() {
-                    ResponseRoute::Client {
-                        writer,
-                        outbound: settlement.clone(),
-                        failed_delivery_settlement: Some(settlement),
-                    }
-                } else {
-                    state.queue_settlement(settlement);
-                    ResponseRoute::Queued
-                }
+                state.queue_settlement(settlement);
+                ResponseRoute::Queued
             } else {
                 ResponseRoute::Queued
             };
@@ -1117,18 +1146,14 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
             ResponseRoute::Client {
                 writer,
                 outbound,
-                failed_delivery_settlement,
+                retained_settlement,
             } => {
-                if !write_client_frame(&writer, &host_name, &outbound)
-                    && let Some(settlement) = failed_delivery_settlement
-                {
-                    state
-                        .lock()
-                        .expect("host state mutex poisoned")
-                        .queue_settlement(settlement);
+                write_client_frame(&writer, &host_name, &outbound);
+                if retained_settlement {
+                    deliver_queued_settlements(state);
                 }
             }
-            ResponseRoute::Queued => {}
+            ResponseRoute::Queued => deliver_queued_settlements(state),
         }
         return;
     }

@@ -208,8 +208,8 @@ and the idle auto-hide watchdog chain are documented in
   `type="iab"`, trusted-session `codexSessionId`, and peer-derived
   `codexAppBuildFlavor` while preserving Codex's exact filter. The persistent
   authority-free journal restores only suspended, freshly fenced groups and
-  never replays operations. Typed external control frames still have no bound
-  listener. See
+  never replays operations. Typed external control frames intentionally have no
+  bound listener until a real non-MCP adapter demonstrates demand. See
   [`docs/features/unified-browser-bridge-control-plane.md`](docs/features/unified-browser-bridge-control-plane.md).
 - Control-plane identity/reentrancy edges: connection-only browser IDs die at
   reconnect even if repeated; native-host control-plane role requires hello
@@ -225,6 +225,11 @@ and the idle auto-hide watchdog chain are documented in
   `getInfo`. Focused VM Codex Desktop/OpenCode/Pi profiles pass; `codex-cua` is
   blocked before tools by a revoked Codex refresh token, and aggregate `all`
   still stops at the unrelated Wayland-pointer scroll acknowledgement.
+- Local deployment republishes Codex Desktop's packaged Browser plugin through
+  its installed cache synchronizer and verifies one exact package/cache/latest/
+  `cua_node`/runtime-env trust identity before reporting success. On 2026-07-20
+  this replaced stale `browser-use/latest -> 0.1.0-alpha2` with the trusted
+  `26.707.72221` client and live-proved `setupBrowserRuntime` browser actions.
 - Lease ticks must not emit no-op lifecycle events: a one-second timer otherwise
   erases the useful 256-event diagnostic window. Ambiguous tab claims retain an
   operation reservation until settlement, and MCP disconnect cleanup waits for

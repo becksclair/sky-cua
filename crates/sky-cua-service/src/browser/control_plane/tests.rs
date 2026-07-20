@@ -945,6 +945,156 @@ async fn cancellation_before_dispatch_and_after_dispatch_have_distinct_certainty
 }
 
 #[tokio::test]
+async fn cancellation_before_scheduler_registration_is_consumed_without_dispatch() {
+    let (fake, mut started) = FakeExecutor::new();
+    let control = ControlPlane::start("cancel-intent", fake, QueueLimits::default());
+    let operation_id = OperationId::from("cancel-before-registration");
+
+    assert_eq!(
+        control
+            .cancel_for_client(operation_id.clone(), ClientId::from("operator"))
+            .await,
+        CancelResult::UnknownOperation
+    );
+    let completion = control
+        .submit(global_operation(
+            &operation_id.0,
+            OperationScope::DaemonGlobal,
+            "must-not-dispatch",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        completion.certainty,
+        CompletionCertainty::PreDispatchRejected
+    );
+    assert_eq!(
+        completion.disposition,
+        CompletionDisposition::CancelledBeforeDispatch
+    );
+    assert!(started.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn pre_registration_cancellation_is_scoped_to_the_submitting_client() {
+    let (fake, mut started) = FakeExecutor::new();
+    let control = ControlPlane::start("scoped-cancel-intent", fake, QueueLimits::default());
+    let operation_id = OperationId::from("scoped-cancel-before-registration");
+
+    assert_eq!(
+        control
+            .cancel_for_client(operation_id.clone(), ClientId::from("different-client"))
+            .await,
+        CancelResult::UnknownOperation
+    );
+    let completion = control
+        .submit(global_operation(
+            &operation_id.0,
+            OperationScope::DaemonGlobal,
+            "dispatch-for-owner",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        next_started(&mut started).await,
+        "dispatch-for-owner".to_owned()
+    );
+    assert_eq!(completion.disposition, CompletionDisposition::Success);
+}
+
+#[tokio::test]
+async fn concurrent_group_creation_preserves_the_first_lease_and_membership() {
+    let (fake, _started) = FakeExecutor::new();
+    let control = ControlPlane::start("atomic-groups", fake, QueueLimits::default());
+    let group_id = GroupId::from("atomic-default-group");
+    let browser = BrowserInstanceId::from("atomic-browser");
+    let principal = Principal::new("atomic-owner", 1000);
+    let tab = TabKey::new(browser.clone(), "member");
+    let created = control
+        .create_group(group_id.clone(), browser.clone(), principal.clone(), 1)
+        .await;
+    let with_member = control
+        .add_member(group_id.clone(), principal.clone(), tab.clone())
+        .await
+        .unwrap();
+
+    let mut creates = tokio::task::JoinSet::new();
+    for now_ms in 2..18 {
+        let control = control.clone();
+        let group_id = group_id.clone();
+        let browser = browser.clone();
+        let principal = principal.clone();
+        creates.spawn(async move {
+            control
+                .create_group(group_id, browser, principal, now_ms)
+                .await
+        });
+    }
+    while let Some(result) = creates.join_next().await {
+        let group = result.unwrap();
+        assert_eq!(group.lease.lease_id, created.lease.lease_id);
+        assert_eq!(group.members, with_member.members);
+        assert_eq!(group.membership_revision, with_member.membership_revision);
+    }
+}
+
+#[tokio::test]
+async fn bounded_submit_ingress_returns_backpressure_before_actor_admission() {
+    let (fake, _started) = FakeExecutor::new();
+    let control = ControlPlane::start(
+        "bounded-ingress",
+        fake,
+        QueueLimits {
+            submit_ingress: 1,
+            ..QueueLimits::default()
+        },
+    );
+    let first = control.submit(global_operation(
+        "ingress-first",
+        OperationScope::DaemonGlobal,
+        "ingress-first",
+    ));
+    let second = control.submit(global_operation(
+        "ingress-second",
+        OperationScope::DaemonGlobal,
+        "ingress-second",
+    ));
+
+    let (first, second) = tokio::join!(first, second);
+    assert!(matches!(
+        (&first, &second),
+        (Ok(_), Err(AdmissionError::Backpressure)) | (Err(AdmissionError::Backpressure), Ok(_))
+    ));
+    assert_eq!(control.snapshot().await.queued_count, 0);
+}
+
+#[tokio::test]
+async fn released_groups_are_pruned_only_after_in_flight_and_settlement_state_clear() {
+    let (fake, _started) = FakeExecutor::new();
+    let control = ControlPlane::start("prune-released", fake, QueueLimits::default());
+    let principal = Principal::new("prune-owner", 1000);
+    let group_id = GroupId::from("prune-group");
+    control
+        .create_group(
+            group_id.clone(),
+            BrowserInstanceId::from("prune-browser"),
+            principal.clone(),
+            0,
+        )
+        .await;
+    let released = control
+        .end_group(group_id.clone(), principal)
+        .await
+        .unwrap();
+    assert_eq!(released.admission, GroupAdmission::Released);
+
+    assert_eq!(control.prune_released().await, vec![group_id.clone()]);
+    assert_eq!(control.group(group_id).await, Err(GroupError::UnknownGroup));
+}
+
+#[tokio::test]
 async fn operation_ids_dedupe_in_generation_and_reject_collisions_and_old_generation() {
     let mut f = fixture().await;
     let finish = f.fake.hold("dedupe");
@@ -1690,6 +1840,7 @@ async fn queue_limits_apply_per_tab_and_per_client() {
         "limited",
         fake,
         QueueLimits {
+            submit_ingress: 128,
             per_client: 1,
             per_tab: 1,
             per_bridge_dispatch: 1,

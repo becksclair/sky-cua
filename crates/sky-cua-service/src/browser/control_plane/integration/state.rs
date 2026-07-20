@@ -32,6 +32,9 @@ pub(in crate::browser::control_plane) struct Shared {
     pub(super) operation_browsers: Mutex<HashMap<OperationId, BrowserInstanceId>>,
     pub(super) operation_clients: Mutex<HashMap<OperationId, String>>,
     pub(super) settlement_fences: Mutex<HashMap<OperationId, SettlementFence>>,
+    pub(super) handled_settlements: Mutex<VecDeque<SettlementAckIdentity>>,
+    pub(in crate::browser::control_plane) terminal_settlement_operations:
+        Mutex<VecDeque<TerminalSettlementOperation>>,
     pub(super) settlement_parents: Arc<Mutex<HashMap<OperationId, OperationId>>>,
     /// Top-level raw Codex operations currently executing on a tab. The
     /// upstream Browser client can synchronously answer extension CDP events
@@ -41,7 +44,7 @@ pub(in crate::browser::control_plane) struct Shared {
     pub(in crate::browser::control_plane) raw_tab_parents:
         Mutex<HashMap<(String, TabKey), OperationId>>,
     pub(in crate::browser::control_plane) connections:
-        Mutex<HashMap<String, (Principal, mpsc::UnboundedSender<Value>)>>,
+        Mutex<HashMap<String, (Principal, crate::codex_browser_compat::CodexOutbound)>>,
     pub(in crate::browser::control_plane) codex_connection_sessions:
         Mutex<HashMap<String, HashSet<String>>>,
     pub(in crate::browser::control_plane) connection_principals:
@@ -56,6 +59,20 @@ pub(in crate::browser::control_plane) struct Shared {
     pub(in crate::browser::control_plane) clients:
         RwLock<HashMap<String, BrowserControlClientSummary>>,
     pub(in crate::browser::control_plane) control: std::sync::OnceLock<ControlPlane>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::browser::control_plane) struct SettlementAckIdentity {
+    pub(super) operation_id: String,
+    pub(super) daemon_generation: String,
+    pub(super) actor_generation: Value,
+    pub(super) chrome_request_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::browser::control_plane) struct TerminalSettlementOperation {
+    pub(in crate::browser::control_plane) operation_id: OperationId,
+    pub(in crate::browser::control_plane) daemon_generation: String,
 }
 
 #[derive(Default)]
@@ -103,5 +120,6 @@ pub(in crate::browser::control_plane) enum IntegrationPayload {
         method: String,
         params: Value,
         timeout_ms: u64,
+        identity: BrowserSessionIdentity,
     },
 }

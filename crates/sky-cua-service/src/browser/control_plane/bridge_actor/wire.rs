@@ -2,6 +2,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 use sky_cua_platform::model::BrowserInstanceStability;
+use tokio::io::AsyncWrite;
 use tokio::net::UnixStream;
 use tokio::sync::broadcast;
 use tokio::time::Instant;
@@ -21,9 +22,13 @@ const REQUIRED_CAPABILITIES: &[&str] = &[
     "extension_events",
     "private_param_stripping",
     "settlements",
+    "settlement_ack",
     "side_panel_requests",
+    "owner_release",
 ];
 pub(super) const HEARTBEAT_DEADLINE: Duration = Duration::from_secs(3);
+pub(super) const HOST_RELEASE_METHOD: &str = "skyCuaHost/release";
+pub(super) const HOST_SETTLEMENT_ACK_METHOD: &str = "skyCuaHost/settlementAck";
 
 pub(super) struct Handshake {
     pub(super) host_instance_id: String,
@@ -50,9 +55,7 @@ pub(super) async fn perform_handshake(
             "capabilities": REQUIRED_CAPABILITIES,
         }
     });
-    write_frame(stream, &hello)
-        .await
-        .map_err(|error| BridgeActorError::RequestFailed(error.to_string()))?;
+    write_frame_bounded(stream, &hello, config.write_timeout).await?;
     let deadline = Instant::now() + config.handshake_timeout;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -140,16 +143,23 @@ pub(super) async fn write_pong(
     ping: &Value,
 ) -> Result<(), BridgeActorError> {
     let id = ping.get("id").cloned().unwrap_or(Value::Null);
-    tokio::time::timeout(
+    write_frame_bounded(
+        stream,
+        &json!({ "jsonrpc": "2.0", "id": id, "result": "pong" }),
         HEARTBEAT_DEADLINE,
-        write_frame(
-            stream,
-            &json!({ "jsonrpc": "2.0", "id": id, "result": "pong" }),
-        ),
     )
     .await
-    .map_err(|_| BridgeActorError::TimedOut)?
-    .map_err(|error| BridgeActorError::RequestFailed(error.to_string()))
+}
+
+pub(super) async fn write_frame_bounded(
+    stream: &mut (impl AsyncWrite + Unpin),
+    frame: &Value,
+    timeout: Duration,
+) -> Result<(), BridgeActorError> {
+    tokio::time::timeout(timeout, write_frame(stream, frame))
+        .await
+        .map_err(|_| BridgeActorError::TimedOut)?
+        .map_err(|error| BridgeActorError::RequestFailed(error.to_string()))
 }
 
 pub(super) fn route_notification(events: &broadcast::Sender<BridgeActorEvent>, frame: Value) {
@@ -170,6 +180,35 @@ pub(super) fn route_notification(events: &broadcast::Sender<BridgeActorEvent>, f
             let _ = events.send(BridgeActorEvent::Extension(frame));
         }
     }
+}
+
+pub(super) fn settlement_ack_frame(
+    settlement: &Value,
+    acknowledging_daemon_generation: &str,
+) -> Result<Value, BridgeActorError> {
+    let params = settlement
+        .get("params")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            BridgeActorError::InvalidPayload("settlement params must be an object".into())
+        })?;
+    let required = |field: &str| {
+        params
+            .get(field)
+            .cloned()
+            .ok_or_else(|| BridgeActorError::InvalidPayload(format!("settlement omitted {field}")))
+    };
+    Ok(json!({
+        "jsonrpc": "2.0",
+        "method": HOST_SETTLEMENT_ACK_METHOD,
+        "params": {
+            "operation_id": required("operation_id")?,
+            "daemon_generation": required("daemon_generation")?,
+            "actor_generation": required("actor_generation")?,
+            "chrome_request_id": required("chrome_request_id")?,
+            "acknowledging_daemon_generation": acknowledging_daemon_generation,
+        }
+    }))
 }
 
 pub(super) fn request_size(method: &str, params: &Value) -> BridgeRequestSize {

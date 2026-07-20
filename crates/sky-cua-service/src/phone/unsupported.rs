@@ -184,6 +184,10 @@ impl PhoneManager {
         false
     }
 
+    pub(crate) fn clear_scrcpy_window_mapping(&mut self, _session_id: &str) -> bool {
+        false
+    }
+
     pub(crate) fn mark_scrcpy_mapping_exhausted(&mut self, _session_id: &str) {}
 
     pub(crate) fn session_view(&self, _session_id: &str) -> Option<PhoneSession> {

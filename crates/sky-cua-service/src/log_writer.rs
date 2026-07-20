@@ -48,7 +48,9 @@ struct Inner {
     /// fallback follow the live log across rotations (the inherited stderr fd
     /// stays bound to the pre-rotation inode otherwise). Production-only: the
     /// daemon enables it; tests must not hijack the test harness's stderr.
-    /// Unix-only — on Windows panic capture ends at the first runtime rotation.
+    /// Unix-only — on Windows panic capture ends at the first runtime rotation,
+    /// and this state is structurally absent.
+    #[cfg(unix)]
     redirect_stderr: bool,
 }
 
@@ -66,7 +68,7 @@ impl RotatingLog {
         Self::with_cap_and_redirect(path, cap, false)
     }
 
-    fn with_cap_and_redirect(path: PathBuf, cap: u64, redirect_stderr: bool) -> Self {
+    fn with_cap_and_redirect(path: PathBuf, cap: u64, _redirect_stderr: bool) -> Self {
         let old_path = old_path_for(&path);
         let mut inner = Inner {
             path,
@@ -74,7 +76,8 @@ impl RotatingLog {
             file: None,
             bytes: 0,
             cap,
-            redirect_stderr,
+            #[cfg(unix)]
+            redirect_stderr: _redirect_stderr,
         };
         inner.open_rotating();
         Self {

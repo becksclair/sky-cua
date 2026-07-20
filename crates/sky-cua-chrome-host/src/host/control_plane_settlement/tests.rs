@@ -3,7 +3,7 @@ use super::*;
 use crate::frame::read_frame;
 
 #[test]
-fn control_plane_normal_completion_returns_to_original_actor() {
+fn active_mutation_completion_returns_directly_and_remains_retained_until_ack() {
     let (mut peer, writer_stream) = UnixStream::pair().unwrap();
     let state = Arc::new(Mutex::new(test_host_state()));
     {
@@ -14,7 +14,11 @@ fn control_plane_normal_completion_returns_to_original_actor() {
             &control_plane_hello(
                 "hello",
                 "daemon-1",
-                &[CONTROL_PLANE_CAPABILITY, SETTLEMENTS_CAPABILITY],
+                &[
+                    CONTROL_PLANE_CAPABILITY,
+                    SETTLEMENTS_CAPABILITY,
+                    SETTLEMENT_ACK_CAPABILITY,
+                ],
             ),
         );
         insert_control_plane_pending(&mut state, "chrome-normal", client_id, "operation-1");
@@ -28,10 +32,17 @@ fn control_plane_normal_completion_returns_to_original_actor() {
     let response = read_frame(&mut peer).unwrap().unwrap();
     assert_eq!(response["id"], json!("actor-request-operation-1"));
     assert_eq!(response["result"]["ok"], json!(true));
-    let state = state.lock().unwrap();
-    assert!(state.pending_chrome_requests.is_empty());
-    assert!(state.pending_id_tombstones.contains_key("chrome-normal"));
-    assert!(state.queued_settlements.is_empty());
+    let settlement = read_frame(&mut peer).unwrap().unwrap();
+    assert_eq!(settlement["method"], SKY_CUA_HOST_SETTLEMENT_METHOD);
+    assert_eq!(settlement["params"]["operation_id"], "operation-1");
+    {
+        let state = state.lock().unwrap();
+        assert!(state.pending_chrome_requests.is_empty());
+        assert!(state.pending_id_tombstones.contains_key("chrome-normal"));
+        assert_eq!(state.queued_settlements.len(), 1);
+    }
+    handle_client_message(&state, 1, settlement_ack(&settlement, "daemon-1"));
+    assert!(state.lock().unwrap().queued_settlements.is_empty());
 }
 
 #[test]
@@ -82,7 +93,11 @@ fn higher_generation_receives_old_actor_late_completion() {
     let new_id = host.add_client(Arc::new(Mutex::new(new_writer)));
     let outcome = host.handle_host_hello(
         new_id,
-        &control_plane_hello("new", "daemon-2", &[CONTROL_PLANE_CAPABILITY]),
+        &control_plane_hello(
+            "new",
+            "daemon-2",
+            &[CONTROL_PLANE_CAPABILITY, SETTLEMENT_ACK_CAPABILITY],
+        ),
     );
     assert_eq!(outcome.fenced_clients.len(), 1);
     assert_eq!(
@@ -108,7 +123,7 @@ fn higher_generation_receives_old_actor_late_completion() {
 }
 
 #[test]
-fn actor_absent_completion_remains_queued_until_delivery() {
+fn actor_absent_completion_remains_retained_until_acknowledged() {
     let mut host = test_host_state();
     let old_id = host.add_client(test_client().writer.clone());
     host.handle_host_hello(
@@ -128,7 +143,11 @@ fn actor_absent_completion_remains_queued_until_delivery() {
     let new_id = host.add_client(Arc::new(Mutex::new(new_writer)));
     host.handle_host_hello(
         new_id,
-        &control_plane_hello("new", "daemon-2", &[CONTROL_PLANE_CAPABILITY]),
+        &control_plane_hello(
+            "new",
+            "daemon-2",
+            &[CONTROL_PLANE_CAPABILITY, SETTLEMENT_ACK_CAPABILITY],
+        ),
     );
 
     assert_eq!(host.queued_settlements.len(), 1);
@@ -145,6 +164,105 @@ fn actor_absent_completion_remains_queued_until_delivery() {
         settlement["params"]["operation_id"],
         json!("operation-held")
     );
+    assert_eq!(state.lock().unwrap().queued_settlements.len(), 1);
+
+    handle_client_message(&state, new_id, settlement_ack(&settlement, "daemon-2"));
+    assert!(state.lock().unwrap().queued_settlements.is_empty());
+}
+
+#[test]
+fn unacknowledged_settlement_is_retried_to_the_same_client() {
+    let mut host = test_host_state();
+    host.queue_settlement(settlement_message(
+        "completed",
+        "chrome-retry",
+        &json!("actor-request-retry"),
+        &test_settlement_metadata("operation-retry"),
+        Some(json!({"jsonrpc":"2.0", "id":"chrome-retry", "result":true})),
+    ));
+    let client_id = host.add_client(test_client().writer);
+    host.handle_host_hello(
+        client_id,
+        &control_plane_hello(
+            "hello",
+            "daemon-1",
+            &[CONTROL_PLANE_CAPABILITY, SETTLEMENT_ACK_CAPABILITY],
+        ),
+    );
+
+    let first = host.begin_settlement_delivery().unwrap();
+    host.finish_settlement_delivery(client_id, true);
+    assert!(host.begin_settlement_delivery().is_none());
+
+    host.settlement_delivered_at = Some(Instant::now() - SETTLEMENT_ACK_RETRY_INTERVAL);
+    let retry = host.begin_settlement_delivery().unwrap();
+    assert_eq!(retry.0, client_id);
+    assert_eq!(retry.2, first.2);
+}
+
+#[test]
+fn settlement_write_then_disconnect_replays_and_generation_safe_ack_clears_once() {
+    let mut host = test_host_state();
+    host.queue_settlement(settlement_message(
+        "completed",
+        "chrome-retained",
+        &json!("actor-request-retained"),
+        &test_settlement_metadata("operation-retained"),
+        Some(json!({"jsonrpc":"2.0", "id":"chrome-retained", "result":true})),
+    ));
+    let (mut first_peer, first_writer) = UnixStream::pair().unwrap();
+    let first_id = host.add_client(Arc::new(Mutex::new(first_writer)));
+    host.handle_host_hello(
+        first_id,
+        &control_plane_hello(
+            "first",
+            "daemon-2",
+            &[
+                CONTROL_PLANE_CAPABILITY,
+                SETTLEMENTS_CAPABILITY,
+                SETTLEMENT_ACK_CAPABILITY,
+            ],
+        ),
+    );
+    let state = Arc::new(Mutex::new(host));
+    deliver_queued_settlements(&state);
+    let first_delivery = read_frame(&mut first_peer).unwrap().unwrap();
+    assert_eq!(state.lock().unwrap().queued_settlements.len(), 1);
+
+    state.lock().unwrap().remove_client(first_id);
+    drop(first_peer);
+    let (mut second_peer, second_writer) = UnixStream::pair().unwrap();
+    let second_id = state
+        .lock()
+        .unwrap()
+        .add_client(Arc::new(Mutex::new(second_writer)));
+    state.lock().unwrap().handle_host_hello(
+        second_id,
+        &control_plane_hello(
+            "second",
+            "daemon-3",
+            &[
+                CONTROL_PLANE_CAPABILITY,
+                SETTLEMENTS_CAPABILITY,
+                SETTLEMENT_ACK_CAPABILITY,
+            ],
+        ),
+    );
+    deliver_queued_settlements(&state);
+    let replay = read_frame(&mut second_peer).unwrap().unwrap();
+    assert_eq!(replay, first_delivery);
+
+    handle_client_message(&state, second_id, settlement_ack(&replay, "daemon-stale"));
+    assert_eq!(state.lock().unwrap().queued_settlements.len(), 1);
+    let mut wrong_operation = settlement_ack(&replay, "daemon-3");
+    wrong_operation["params"]["operation_id"] = json!("other-operation");
+    handle_client_message(&state, second_id, wrong_operation);
+    assert_eq!(state.lock().unwrap().queued_settlements.len(), 1);
+
+    let ack = settlement_ack(&replay, "daemon-3");
+    handle_client_message(&state, second_id, ack.clone());
+    assert!(state.lock().unwrap().queued_settlements.is_empty());
+    handle_client_message(&state, second_id, ack);
     assert!(state.lock().unwrap().queued_settlements.is_empty());
 }
 
@@ -195,7 +313,11 @@ fn failed_hello_settlement_replay_keeps_ledger_entry() {
     let client_id = host.add_client(Arc::new(Mutex::new(writer_stream)));
     let outcome = host.handle_host_hello(
         client_id,
-        &control_plane_hello("hello", "daemon-1", &[CONTROL_PLANE_CAPABILITY]),
+        &control_plane_hello(
+            "hello",
+            "daemon-1",
+            &[CONTROL_PLANE_CAPABILITY, SETTLEMENT_ACK_CAPABILITY],
+        ),
     );
     assert!(outcome.response.get("result").is_some());
     drop(peer);
@@ -334,6 +456,20 @@ fn control_plane_hello(id: &str, daemon_generation: impl ToString, capabilities:
             "client_role": CONTROL_PLANE_ROLE,
             "daemon_generation": daemon_generation.to_string(),
             "capabilities": capabilities,
+        }
+    })
+}
+
+fn settlement_ack(settlement: &Value, acknowledging_daemon_generation: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": SKY_CUA_HOST_SETTLEMENT_ACK_METHOD,
+        "params": {
+            "operation_id": settlement["params"]["operation_id"],
+            "daemon_generation": settlement["params"]["daemon_generation"],
+            "actor_generation": settlement["params"]["actor_generation"],
+            "chrome_request_id": settlement["params"]["chrome_request_id"],
+            "acknowledging_daemon_generation": acknowledging_daemon_generation,
         }
     })
 }

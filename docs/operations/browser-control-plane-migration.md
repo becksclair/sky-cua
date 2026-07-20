@@ -86,8 +86,16 @@ socket. Confirm `getInfo.type == "iab"`,
 `getInfo.metadata.codexAppBuildFlavor` matches the exact value derived from the
 same-UID Codex peer's `BROWSER_USE_CODEX_APP_BUILD_FLAVOR`. Option A forbids a
 flavor exemption or weakening Codex's filter. Installed acceptance currently
-covers the operation set and two-Codex-connection case listed above; it does
-not cover overlap with direct MCP or another agent host.
+covers the operation set, two-Codex-connection case, direct MCP overlap, and
+simultaneous OpenClaw/OpenCode/Pi hosts listed above.
+
+Local sky-cua deployment must also materialize Codex Desktop's packaged Browser
+plugin before declaring readiness. `scripts/deploy_plugin.py` invokes the
+installed `browser-use-cache-sync.cjs` command and verifies that the packaged
+plugin version, packaged and cache-`latest` client bytes, one-entry `cua_node`
+trusted hash, and resolved node_repl trusted hash are identical. A stale cache
+selection or any mismatch aborts deployment; sky-cua never edits the
+Codex-owned Browser client or trust manifest.
 
 ## Promote to strict
 
@@ -198,9 +206,12 @@ recoverable, but it is not proof that an in-flight mutation stopped.
 
 ### Queue backpressure
 
-Default limits are 128 queued per client and 32 per tab. Find the client and tab
-lane accumulating work. Do not widen limits before identifying a stalled actor,
-global barrier, or caller flood.
+Default limits are 128 pending scheduler submissions, 128 queued per client,
+32 per tab, 64 retained raw Codex requests per connection, and 64 queued Codex
+outbound messages. Find the client and tab lane accumulating work. A full raw
+Codex outbound queue closes that stalled compatibility connection and runs its
+normal cancel/detach cleanup. Do not widen limits before identifying a stalled
+actor, global barrier, unread Codex socket, or caller flood.
 
 ### Fetch continuation deadlock
 
@@ -217,12 +228,27 @@ Freeze handoff and expiry for the affected group. Seek a matching retained
 completion or prove exact target/browser-instance loss. Client EOF, timeout,
 debugger detach, actor reconnect, native-host restart, extension restart, or
 daemon restart is insufficient. Never replay the mutation automatically.
+The host keeps a retained settlement until an identity-fenced
+`skyCuaHost/settlementAck` arrives after scheduler handling; a socket write is
+not receipt. If the same settlement repeats, inspect the ack capability and
+daemon/actor generations rather than deleting the host ledger. Repetition on
+the same healthy actor is the expected bounded retransmit path until an ack is
+observed. A newly started daemon intentionally leaves an old retained
+settlement unacknowledged when it has no matching scheduler fence; escalate it
+for recovery instead of treating populated identity fields as proof of handling.
+The host retains mutating completions even after a successful direct-response
+write. Clean strict shutdown also stays strict while the actor has unresolved
+mutation tombstones; resolve the matching retained settlement instead of
+forcing owner release.
 
 ### Duplicate or ambiguous tab ID
 
 Resolve with browser-instance identity or an owned group. `SKY_CUA_BROWSER` may
 narrow discovery during migration, but a bare extension tab ID is not globally
 unique and must not be guessed across browsers.
+Duplicate sockets reporting the same stable browser instance are
+canonicalized by socket path. Multiple genuinely distinct browsers remain
+ambiguous for instance-less operations until selection narrows them.
 
 ### Large screenshot delays unrelated work
 

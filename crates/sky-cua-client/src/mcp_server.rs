@@ -26,6 +26,9 @@ const SERVER_NAME: &str = "sky-cua";
 const SERVER_VERSION: &str = "0.1.0";
 const MCP_CALLER_PROVENANCE_ENV: &str = "SKY_CUA_MCP_CALLER_PROVENANCE";
 const LEGACY_MCP_HOST_ENV: &str = "SKY_CUA_MCP_HOST";
+/// Maximum JSON-RPC payload size accepted through either supported MCP framing
+/// mode. The same bound also caps line and aggregate header accumulation.
+const MAX_MCP_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 static MCP_CONNECTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static BROWSER_OPERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -137,9 +140,10 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
     let mut reader = BufReader::new(stdin);
     let writer = tokio::sync::Mutex::new(tokio::io::BufWriter::new(stdout));
     let mut session = ServerSession::default();
-    let mut read_line_buf = String::with_capacity(256);
+    let mut read_line_buf = Vec::with_capacity(256);
     let mut read_payload_buf = Vec::with_capacity(4096);
     let in_flight_browser_calls = InFlightBrowserCalls::default();
+    let mut browser_tasks = tokio::task::JoinSet::new();
 
     let (response_tx, mut response_rx) = tokio::sync::mpsc::channel::<(Value, MessageFraming)>(32);
 
@@ -168,6 +172,11 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
             };
 
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+        while let Some(result) = browser_tasks.try_join_next() {
+            if let Err(error) = result {
+                tracing::warn!(%error, "browser MCP task failed");
+            }
+        }
 
         if method == "tools/call" {
             // Service calls can block for tens of seconds (portal approval).
@@ -185,7 +194,8 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
             }
             let in_flight_browser_calls = in_flight_browser_calls.clone();
 
-            tokio::spawn(async move {
+            let is_browser_call = prepared_browser_call.is_some();
+            let task = async move {
                 let id = message.get("id").cloned().unwrap_or(Value::Null);
                 let completion = prepared_browser_call.as_ref().and_then(|prepared| {
                     prepared
@@ -232,7 +242,12 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
                 if let Some(response) = response {
                     let _ = response_tx.send((response, framing)).await;
                 }
-            });
+            };
+            if is_browser_call {
+                browser_tasks.spawn(task);
+            } else {
+                tokio::spawn(task);
+            }
         } else if method == "notifications/cancelled" {
             if let Some(request) =
                 cancellation_request(&message, &session, &in_flight_browser_calls)
@@ -260,6 +275,16 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
             {
                 break;
             }
+        }
+    }
+
+    // A browser call parsed before EOF owns an admitted logical request even
+    // if its worker has not yet reached the service. Keep the connection
+    // lifecycle open until every such task has either completed or failed, so
+    // EOF cannot race ahead and make an already-read call fail as disconnected.
+    while let Some(result) = browser_tasks.join_next().await {
+        if let Err(error) = result {
+            tracing::warn!(%error, "browser MCP task failed while draining EOF");
         }
     }
 
@@ -789,21 +814,31 @@ fn infer_image_support_from_model_name(name: String) -> Option<bool> {
 
 async fn read_message<R>(
     reader: &mut R,
-    line_buf: &mut String,
+    line_buf: &mut Vec<u8>,
     payload_buf: &mut Vec<u8>,
 ) -> Result<Option<(Value, MessageFraming)>>
 where
     R: AsyncBufRead + Unpin,
 {
+    read_message_with_limit(reader, line_buf, payload_buf, MAX_MCP_FRAME_BYTES).await
+}
+
+async fn read_message_with_limit<R>(
+    reader: &mut R,
+    line_buf: &mut Vec<u8>,
+    payload_buf: &mut Vec<u8>,
+    max_frame_bytes: usize,
+) -> Result<Option<(Value, MessageFraming)>>
+where
+    R: AsyncBufRead + Unpin,
+{
     let first_line = loop {
-        line_buf.clear();
-        let bytes = reader.read_line(line_buf).await?;
-        if bytes == 0 {
+        if !read_bounded_line(reader, line_buf, max_frame_bytes).await? {
             return Ok(None);
         }
-        let trimmed = line_buf.trim_end_matches(['\r', '\n']);
+        let trimmed = std::str::from_utf8(line_buf).context("MCP frame line is not UTF-8")?;
         if !trimmed.is_empty() {
-            break trimmed.to_string();
+            break trimmed.to_owned();
         }
     };
 
@@ -817,28 +852,101 @@ where
 
     let mut content_length: Option<usize> = None;
     parse_header_line(&first_line, &mut content_length)?;
+    let mut header_bytes = first_line.len();
     loop {
-        line_buf.clear();
-        let bytes = reader.read_line(line_buf).await?;
-        if bytes == 0 {
+        let remaining_header_bytes = max_frame_bytes.saturating_sub(header_bytes);
+        if !read_bounded_line(reader, line_buf, remaining_header_bytes).await? {
             return Err(anyhow!(
                 "unexpected EOF while reading MCP headers after: {first_line}"
             ));
         }
-        let line = line_buf.trim_end_matches(['\r', '\n']);
+        let line = std::str::from_utf8(line_buf).context("MCP header line is not UTF-8")?;
         if line.is_empty() {
             break;
         }
+        header_bytes = header_bytes
+            .checked_add(line.len())
+            .filter(|bytes| *bytes <= max_frame_bytes)
+            .ok_or_else(|| frame_too_large("MCP headers", max_frame_bytes))?;
         parse_header_line(line, &mut content_length)?;
     }
 
     let length = content_length.ok_or_else(|| anyhow!("missing Content-Length header"))?;
+    if length > max_frame_bytes {
+        return Err(frame_too_large(
+            "MCP Content-Length payload",
+            max_frame_bytes,
+        ));
+    }
     payload_buf.resize(length, 0);
     reader.read_exact(payload_buf).await?;
     Ok(Some((
         serde_json::from_slice(payload_buf)?,
         MessageFraming::ContentLength,
     )))
+}
+
+async fn read_bounded_line<R>(
+    reader: &mut R,
+    line_buf: &mut Vec<u8>,
+    max_content_bytes: usize,
+) -> Result<bool>
+where
+    R: AsyncBufRead + Unpin,
+{
+    line_buf.clear();
+    let mut pending_cr = false;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            if pending_cr {
+                extend_bounded_line(line_buf, b"\r", max_content_bytes)?;
+            }
+            return Ok(!line_buf.is_empty());
+        }
+
+        if pending_cr {
+            if available.first() == Some(&b'\n') {
+                reader.consume(1);
+                return Ok(true);
+            }
+            extend_bounded_line(line_buf, b"\r", max_content_bytes)?;
+        }
+
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        let content = newline.map_or(available, |index| &available[..index]);
+        let (content, trailing_cr) = if content.last() == Some(&b'\r') {
+            (&content[..content.len() - 1], true)
+        } else {
+            (content, false)
+        };
+        extend_bounded_line(line_buf, content, max_content_bytes)?;
+        reader.consume(consumed);
+
+        if newline.is_some() {
+            return Ok(true);
+        }
+        pending_cr = trailing_cr;
+    }
+}
+
+fn extend_bounded_line(
+    line_buf: &mut Vec<u8>,
+    content: &[u8],
+    max_content_bytes: usize,
+) -> Result<()> {
+    line_buf
+        .len()
+        .checked_add(content.len())
+        .filter(|length| *length <= max_content_bytes)
+        .ok_or_else(|| frame_too_large("MCP line", max_content_bytes))?;
+    line_buf.extend_from_slice(content);
+    Ok(())
+}
+
+fn frame_too_large(kind: &str, max_frame_bytes: usize) -> anyhow::Error {
+    anyhow!("{kind} exceeds maximum frame size of {max_frame_bytes} bytes")
 }
 
 fn parse_header_line(line: &str, content_length: &mut Option<usize>) -> Result<()> {
@@ -898,7 +1006,8 @@ mod tests {
         browser_call_context, browser_caller_provenance, browser_session_identity_from_tool_call,
         cancellation_request, current_browser_request_context, disconnect_request_once,
         is_browser_surface_tool_call, json_rpc_id_fingerprint, normalize_declared_caller,
-        parse_model_session_info, read_message, with_browser_request_context, write_message,
+        parse_model_session_info, read_message, read_message_with_limit,
+        with_browser_request_context, write_message,
     };
 
     #[test]
@@ -1331,8 +1440,9 @@ mod tests {
         }))
         .unwrap();
         let input = format!("Content-Length: {}\r\n\r\n{}", payload.len(), payload);
-        let mut reader = Cursor::new(input.into_bytes());
-        let mut line_buf = String::with_capacity(128);
+        // A one-byte reader capacity deterministically splits every CRLF pair.
+        let mut reader = tokio::io::BufReader::with_capacity(1, Cursor::new(input.into_bytes()));
+        let mut line_buf = Vec::with_capacity(128);
         let mut payload_buf = Vec::with_capacity(256);
 
         let (message, framing) = read_message(&mut reader, &mut line_buf, &mut payload_buf)
@@ -1356,7 +1466,7 @@ mod tests {
         }))
         .unwrap();
         let mut reader = Cursor::new(format!("{payload}\n").into_bytes());
-        let mut line_buf = String::with_capacity(128);
+        let mut line_buf = Vec::with_capacity(128);
         let mut payload_buf = Vec::with_capacity(256);
 
         let (message, framing) = read_message(&mut reader, &mut line_buf, &mut payload_buf)
@@ -1393,6 +1503,88 @@ mod tests {
         assert_eq!(
             rendered,
             format!("{}\n", serde_json::to_string(&message).unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn json_line_frame_limit_accepts_boundary_and_rejects_overflow() {
+        const LIMIT: usize = 32;
+        let at_limit = format!("{{\"value\":\"{}\"}}", "x".repeat(LIMIT - 12));
+        assert_eq!(at_limit.len(), LIMIT);
+
+        let mut reader = Cursor::new(format!("{at_limit}\n").into_bytes());
+        let mut line_buf = Vec::new();
+        let mut payload_buf = Vec::new();
+        let (_, framing) =
+            read_message_with_limit(&mut reader, &mut line_buf, &mut payload_buf, LIMIT)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(framing, MessageFraming::JsonLine);
+
+        let mut reader = Cursor::new(format!(" {at_limit}\n").into_bytes());
+        let error = read_message_with_limit(&mut reader, &mut line_buf, &mut payload_buf, LIMIT)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("MCP line exceeds maximum frame size")
+        );
+    }
+
+    #[tokio::test]
+    async fn content_length_frame_limit_rejects_before_payload_allocation() {
+        const LIMIT: usize = 32;
+        let payload = format!("{{\"value\":\"{}\"}}", "x".repeat(LIMIT - 12));
+        assert_eq!(payload.len(), LIMIT);
+        let mut reader =
+            Cursor::new(format!("Content-Length: {LIMIT}\r\n\r\n{payload}").into_bytes());
+        let mut line_buf = Vec::new();
+        let mut payload_buf = Vec::new();
+        let (_, framing) =
+            read_message_with_limit(&mut reader, &mut line_buf, &mut payload_buf, LIMIT)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(framing, MessageFraming::ContentLength);
+
+        let mut reader = Cursor::new(format!("Content-Length: {}\r\n\r\n", LIMIT + 1).into_bytes());
+        payload_buf.clear();
+        payload_buf.shrink_to_fit();
+        let error = read_message_with_limit(&mut reader, &mut line_buf, &mut payload_buf, LIMIT)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("MCP Content-Length payload exceeds maximum frame size")
+        );
+        assert_eq!(payload_buf.capacity(), 0);
+    }
+
+    #[tokio::test]
+    async fn aggregate_content_length_headers_are_bounded() {
+        const LIMIT: usize = 32;
+        let mut line_buf = Vec::new();
+        let mut payload_buf = Vec::new();
+
+        let mut reader = Cursor::new(b"Content-Length: 2\r\nX-Pad: 12345678\r\n\r\n{}".to_vec());
+        let (_, framing) =
+            read_message_with_limit(&mut reader, &mut line_buf, &mut payload_buf, LIMIT)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(framing, MessageFraming::ContentLength);
+
+        let mut reader = Cursor::new(b"Content-Length: 2\r\nX-Pad: 123456789\r\n\r\n{}".to_vec());
+        let error = read_message_with_limit(&mut reader, &mut line_buf, &mut payload_buf, LIMIT)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("MCP line exceeds maximum frame size")
         );
     }
 }

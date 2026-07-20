@@ -287,6 +287,66 @@ fn strict_to_hybrid_rollback_requires_an_idle_request_ledger() {
 }
 
 #[test]
+fn acknowledged_strict_release_restores_legacy_on_surviving_host_after_drain() {
+    let state = Arc::new(Mutex::new(test_host_state()));
+    let (mut control_peer, control_writer) = UnixStream::pair().unwrap();
+    let control_plane_id = state
+        .lock()
+        .unwrap()
+        .add_client(Arc::new(Mutex::new(control_writer)));
+    state.lock().unwrap().handle_host_hello(
+        control_plane_id,
+        &control_plane_hello_with_mode(
+            "strict",
+            "daemon-10",
+            &[CONTROL_PLANE_CAPABILITY],
+            Some("strict"),
+        ),
+    );
+    let (mut legacy_peer, legacy_writer) = UnixStream::pair().unwrap();
+    let legacy_id = state
+        .lock()
+        .unwrap()
+        .add_client(Arc::new(Mutex::new(legacy_writer)));
+
+    state
+        .lock()
+        .unwrap()
+        .queued_settlements
+        .push_back(json!({ "method": SKY_CUA_HOST_SETTLEMENT_METHOD }));
+    handle_client_message(
+        &state,
+        control_plane_id,
+        owner_release("blocked-release", "daemon-10"),
+    );
+    let blocked = read_frame(&mut control_peer).unwrap().unwrap();
+    assert_eq!(
+        blocked["error"]["data"]["type"],
+        json!("sky_cua_host_mode_transition_unsafe")
+    );
+    assert_eq!(state.lock().unwrap().owner_mode, OwnerMode::Strict);
+
+    state.lock().unwrap().queued_settlements.clear();
+    handle_client_message(
+        &state,
+        control_plane_id,
+        owner_release("release", "daemon-10"),
+    );
+    let released = read_frame(&mut control_peer).unwrap().unwrap();
+    assert_eq!(released["result"]["owner_mode"], json!("hybrid"));
+    assert_eq!(state.lock().unwrap().owner_mode, OwnerMode::Hybrid);
+
+    state.lock().unwrap().remove_client(control_plane_id);
+    handle_client_message(
+        &state,
+        legacy_id,
+        json!({ "jsonrpc": "2.0", "id": "legacy-ping", "method": "ping" }),
+    );
+    let legacy_response = read_frame(&mut legacy_peer).unwrap().unwrap();
+    assert_eq!(legacy_response["result"], json!("pong"));
+}
+
+#[test]
 fn strict_mode_keeps_app_server_controls_local() {
     let mut state = test_host_state();
     state.owner_mode = OwnerMode::Strict;
@@ -821,6 +881,18 @@ fn control_plane_hello_with_mode(
         "id": id,
         "method": SKY_CUA_HOST_HELLO_METHOD,
         "params": params,
+    })
+}
+
+fn owner_release(id: &str, daemon_generation: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": SKY_CUA_HOST_RELEASE_METHOD,
+        "params": {
+            "daemon_generation": daemon_generation,
+            "owner_mode": "hybrid",
+        }
     })
 }
 

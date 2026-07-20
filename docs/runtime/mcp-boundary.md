@@ -15,6 +15,9 @@ That process speaks MCP over stdio and delegates desktop work to the
 long-lived service process over platform IPC: a Unix socket on Linux and a
 loopback TCP endpoint on Windows. Hosts may launch the client
 directly, use a generated MCP config, or wrap it in their own package format.
+The stdio reader accepts newline-delimited JSON-RPC and `Content-Length`
+framing with one 64 MiB frame limit. Oversized lines, headers, and declared
+payloads are rejected before unbounded accumulation or payload allocation.
 
 The service can also be run directly for debugging:
 
