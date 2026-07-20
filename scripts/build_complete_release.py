@@ -80,6 +80,7 @@ SUPPORTED_CAPABILITIES = (
     "ocr-pdf-image-file-toolbox",
     "openclaw-consumer",
     "opencode-consumer",
+    "phone-use-persistent-js",
     "release-wide-compliance",
     "system-chrome-family-playwright",
 )
@@ -538,7 +539,10 @@ def _prepare_inputs(
         raise ValueError("cua_node embedded Browser bytes differ from the canonical component")
 
     documentation = workspace / DOCUMENTATION_COMPONENT
-    build_model_documentation(documentation)
+    build_model_documentation(
+        documentation,
+        phone_declaration_root=(cua_node / "lib/node_modules/@heliasar/sky-cua/dist/phone"),
+    )
     routing_inventory = documentation / "inventories/routing-inventory.json"
 
     compat = workspace / CODEX_COMPONENT

@@ -3,5 +3,5 @@
   globalThis.computer ??= sky;
   const [shot] = await computer.get_screenshot();
   nodeRepl.write({ filepath: shot.filepath, provenance: nodeRepl.requestMeta });
-  nodeRepl.emitImage(shot.data_url);
+  await nodeRepl.emitImage(shot.data_url);
 }

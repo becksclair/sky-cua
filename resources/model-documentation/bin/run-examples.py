@@ -14,6 +14,11 @@ from pathlib import Path
 
 PDF = "JVBERi0xLjQKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2JqCjIgMCBvYmo8PC9UeXBlL1BhZ2VzL0NvdW50IDEvS2lkc1szIDAgUl0+PmVuZG9iagozIDAgb2JqPDwvVHlwZS9QYWdlL1BhcmVudCAyIDAgUi9NZWRpYUJveFswIDAgMjQwIDEyMF0vQ29udGVudHMgNCAwIFIvUmVzb3VyY2VzPDwvWE9iamVjdDw8L0ltMSA1IDAgUj4+Pj4+PmVuZG9iago0IDAgb2JqPDwvTGVuZ3RoIDkyPj5zdHJlYW0KQlQgL0YxIDEyIFRmIDIwIDk1IFRkIChDdWEgTm9kZSBhY2NlcHRhbmNlIFBERikgVGogRVQKMCAwIDI0MCAxMjAgcmUgUwpxIDQwIDAgNDAgNDAgY20gL0ltMSBEbyBRCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iajw8L1R5cGUvWE9iamVjdC9TdWJ0eXBlL0ltYWdlL1dpZHRoIDEvSGVpZ2h0IDEvQ29sb3JTcGFjZS9EZXZpY2VSR0IvQml0c1BlckNvbXBvbmVudCA4L0ZpbHRlci9EQ1REZWNvZGUvTGVuZ3RoIDA+PnN0cmVhbQplbmRzdHJlYW0KZW5kb2JqCnRyYWlsZXI8PC9Sb290IDEgMCBSPj4KJSVFT0YK"
 PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+IMAGE_EXAMPLES = {
+    "examples/computer/screenshot.mjs",
+    "examples/images/canvas-pixelmatch.mjs",
+    "examples/images/sharp-transform.mjs",
+}
 
 
 class Mcp:
@@ -130,9 +135,31 @@ def main() -> int:
                 )
                 result = response.get("result")
                 passed = isinstance(result, dict) and result.get("isError") is False
-                results.append({"path": example.relative_to(docs).as_posix(), "passed": passed})
+                relative = example.relative_to(docs).as_posix()
+                content = result.get("content") if isinstance(result, dict) else None
+                image_count = (
+                    sum(
+                        1
+                        for item in content
+                        if isinstance(item, dict) and item.get("type") == "image"
+                    )
+                    if isinstance(content, list)
+                    else 0
+                )
+                if relative in IMAGE_EXAMPLES and image_count == 0:
+                    passed = False
+                results.append(
+                    {"path": relative, "passed": passed, "image_count": image_count}
+                )
                 if not passed:
                     raise RuntimeError(f"documentation example failed: {example}: {response}")
+            copied = temp / "sky-cua-copy.bin"
+            transformed = temp / "sky-cua-example.webp"
+            if copied.read_bytes() != binary.read_bytes():
+                raise RuntimeError("binary-data example did not write the expected output bytes")
+            transformed_bytes = transformed.read_bytes()
+            if not transformed_bytes.startswith(b"RIFF") or b"WEBP" not in transformed_bytes[:16]:
+                raise RuntimeError("Sharp example did not write a WebP output")
         finally:
             mcp.close()
     print(

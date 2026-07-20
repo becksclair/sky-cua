@@ -5,5 +5,5 @@
   const output = join(dirname(input), "sky-cua-example.webp");
   await sharp(input).resize({ width: 640, withoutEnlargement: true }).webp({ quality: 82 }).toFile(output);
   nodeRepl.write({ output });
-  nodeRepl.emitImage(await sharp(output).toBuffer());
+  await nodeRepl.emitImage(await sharp(output).toBuffer());
 }

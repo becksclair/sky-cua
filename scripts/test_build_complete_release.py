@@ -118,6 +118,10 @@ def _cua_node(root: Path, *, release_eligible: bool = True) -> Path:
     browser_client.write_bytes(
         (REPO_ROOT / "packages/browser-use/build/browser-client.mjs").read_bytes()
     )
+    phone_declarations = component / "lib/node_modules/@heliasar/sky-cua/dist/phone"
+    phone_declarations.mkdir(parents=True)
+    for name in ("client.d.ts", "index.d.ts", "protocol.d.ts", "screenshot.d.ts"):
+        (phone_declarations / name).write_text(f"export type {name.split('.')[0]} = unknown;\n")
     attestation = {
         "schema_version": 1,
         "release_eligible": release_eligible,
@@ -235,6 +239,28 @@ def test_complete_release_sanitizes_core_and_materializes_exact_codex_projection
     core = release.root / "components/core-linux-x64"
     compat = release.root / "components/codex-compat"
     canonical = release.root / "components/browser-js/browser-client.mjs"
+    manifest = json.loads((release.root / "RELEASE.json").read_text(encoding="utf-8"))
+    documented_capabilities = json.loads(
+        (release.root / "components/documentation/inventories/capability-inventory.json").read_text(
+            encoding="utf-8"
+        )
+    )["supported"]
+
+    assert "phone-use-persistent-js" in manifest["capabilities"]["supported"]
+    assert set(documented_capabilities) <= set(manifest["capabilities"]["supported"])
+    phone_api = json.loads(
+        (release.root / "components/documentation/inventories/api-inventory.json").read_text(
+            encoding="utf-8"
+        )
+    )["phone"]
+    installed_phone_declarations = (
+        release.root
+        / "components/cua-node-linux-x64-glibc/lib/node_modules/@heliasar/sky-cua/dist/phone"
+    )
+    for record in phone_api["declarations"]:
+        declaration = installed_phone_declarations / record["name"]
+        assert record["sha256"] == sha256_file(declaration)
+        assert record["size_bytes"] == declaration.stat().st_size
 
     assert not (core / "resources/plugins/openai-bundled").exists()
     assert not (core / "resources/node_repl").exists()

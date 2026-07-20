@@ -12,5 +12,5 @@
   const pixels = pixelmatch(a.data, b.data, output.data, 32, 32);
   diff.getContext("2d").putImageData(output, 0, 0);
   nodeRepl.write({ pixels });
-  nodeRepl.emitImage(await diff.encode("webp"));
+  await nodeRepl.emitImage(await diff.encode("webp"));
 }

@@ -103,8 +103,12 @@ describe("@heliasar/sky-cua/phone", () => {
       "press_key", "install_companion", "companion_status", "accessibility_tree", "notifications",
       "notification_open", "notification_dismiss", "notification_action", "notification_reply",
       "app_current", "app_list", "app_launch", "app_open_intent", "app_force_stop", "app_install",
-      "open_settings", "close"
+      "open_settings", "disconnected", "close"
     ]);
+    expect("disconnected" in phone).toBe(true);
+    expect(phone.disconnected).toBe(false);
+    phone.close();
+    expect(phone.disconnected).toBe(true);
   });
 
   test("covers every Phone request and response operation with a bound session", async () => {

@@ -53,8 +53,22 @@ def test_api_inventory_binds_complete_canonical_contracts(tmp_path: Path) -> Non
     output = tmp_path / "docs"
     build(output)
     inventory = json.loads((output / "inventories/api-inventory.json").read_text(encoding="utf-8"))
-    assert len(inventory["phone"]["operations"]) == 27
-    assert "phone" not in inventory["phone"]["operations"]
+    assert len(inventory["phone"]["wire_operations"]) == 27
+    assert "phone" not in inventory["phone"]["wire_operations"]
+    assert {"bind", "close", "disconnected", "request"} <= set(inventory["phone"]["client_members"])
+    assert {"disconnected", "info", "selector", "serial", "session_id"} <= set(
+        inventory["phone"]["session_members"]
+    )
+    assert {"bytes", "dataUrl", "emitImage", "path"} <= set(
+        inventory["phone"]["screenshot_members"]
+    )
+    assert {record["name"] for record in inventory["phone"]["declarations"]} == {
+        "client.ts",
+        "index.ts",
+        "protocol.ts",
+        "screenshot.ts",
+        "transport.ts",
+    }
     assert len(inventory["phone"]["protocol_sha256"]) == 64
     assert len(inventory["computer"]["protocol_sha256"]) == 64
     assert [tool["name"] for tool in inventory["node_repl"]["tools"]] == [
@@ -64,12 +78,39 @@ def test_api_inventory_binds_complete_canonical_contracts(tmp_path: Path) -> Non
     ]
 
 
+def test_capability_inventory_uses_release_manifest_vocabulary(tmp_path: Path) -> None:
+    output = tmp_path / "docs"
+    build(output)
+    inventory = json.loads(
+        (output / "inventories/capability-inventory.json").read_text(encoding="utf-8")
+    )
+    assert inventory["supported"] == [
+        "browser-persistent-js",
+        "computer-use-persistent-js",
+        "phone-use-persistent-js",
+        "node-repl-mcp",
+        "ocr-pdf-image-file-toolbox",
+        "system-chrome-family-playwright",
+    ]
+
+
 def test_installed_example_runner_is_shipped_and_parseable(tmp_path: Path) -> None:
     output = tmp_path / "docs"
     build(output)
     runner = output / "bin/run-examples.py"
-    compile(runner.read_text(encoding="utf-8"), runner.as_posix(), "exec")
+    runner_text = runner.read_text(encoding="utf-8")
+    compile(runner_text, runner.as_posix(), "exec")
+    assert "IMAGE_EXAMPLES" in runner_text
+    assert "image_count == 0" in runner_text
+    assert "copied.read_bytes() != binary.read_bytes()" in runner_text
+    assert "Sharp example did not write a WebP output" in runner_text
     assert sorted(path.suffix for path in (output / "examples").rglob("*.mjs")) == [".mjs"] * 10
+    for relative in (
+        "examples/computer/screenshot.mjs",
+        "examples/images/canvas-pixelmatch.mjs",
+        "examples/images/sharp-transform.mjs",
+    ):
+        assert "await nodeRepl.emitImage" in (output / relative).read_text(encoding="utf-8")
 
 
 def test_host_skill_projection_routes_to_exact_generation_and_rejects_unmanaged(

@@ -89,7 +89,7 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def build(output: Path) -> None:
+def build(output: Path, *, phone_declaration_root: Path | None = None) -> None:
     _validate_source(SOURCE)
     remove_path(output)
     shutil.copytree(SOURCE, output)
@@ -118,6 +118,13 @@ def build(output: Path) -> None:
     if len(phone_operations) != 27:
         raise ValueError(f"expected 27 Phone request operations, found {len(phone_operations)}")
     phone_protocol_path = REPO_ROOT / "packages/sky-cua-js/src/phone/protocol.ts"
+    declaration_root = phone_declaration_root or REPO_ROOT / "packages/sky-cua-js/src/phone"
+    declaration_paths = sorted(
+        declaration_root.glob("*.d.ts" if phone_declaration_root is not None else "*.ts"),
+        key=lambda path: path.name,
+    )
+    if not declaration_paths:
+        raise ValueError(f"Phone declaration inventory is empty: {declaration_root}")
     computer_protocol_path = REPO_ROOT / "packages/sky-cua-js/src/protocol/generated.ts"
     node_repl_tools_path = (
         REPO_ROOT / "runtime/cua-node/test/fixtures/upstream-5307/tools-list.json"
@@ -143,7 +150,36 @@ def build(output: Path) -> None:
         },
         "phone": {
             "package": "@heliasar/sky-cua/phone",
-            "operations": phone_operations,
+            "wire_operations": phone_operations,
+            "client_members": [*phone_operations, "bind", "close", "disconnected", "request"],
+            "session_members": [
+                *sorted(
+                    set(phone_operations) - {"connect", "list_devices", "pair_wireless", "status"}
+                ),
+                "disconnected",
+                "info",
+                "selector",
+                "serial",
+                "session_id",
+            ],
+            "screenshot_members": [
+                "bytes",
+                "dataUrl",
+                "emitImage",
+                "inlineBytes",
+                "inlineDataUrl",
+                "mimeType",
+                "path",
+                "response",
+            ],
+            "declarations": [
+                {
+                    "name": path.name,
+                    "sha256": _sha(path),
+                    "size_bytes": path.stat().st_size,
+                }
+                for path in declaration_paths
+            ],
             "protocol_sha256": _sha(phone_protocol_path),
             "protocol_size_bytes": phone_protocol_path.stat().st_size,
         },
@@ -157,7 +193,14 @@ def build(output: Path) -> None:
         "schema_version": 1,
         "target": "linux-x64-glibc",
         "versions": LOCKED_VERSIONS,
-        "supported": ["browser-js", "computer-use-js", "phone-use-js", "node-repl-toolbox"],
+        "supported": [
+            "browser-persistent-js",
+            "computer-use-persistent-js",
+            "phone-use-persistent-js",
+            "node-repl-mcp",
+            "ocr-pdf-image-file-toolbox",
+            "system-chrome-family-playwright",
+        ],
         "unsupported": list(UNSUPPORTED),
     }
     example_inventory = {"schema_version": 1, "runtime": "bundled-node-24", "entries": examples}
