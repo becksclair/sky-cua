@@ -182,6 +182,24 @@ def test_plan_uses_one_verified_generation_for_all_paths_and_locked_env(
     assert repl["requestTimeoutMs"] == 3_600_000
 
 
+def test_desktop_session_launch_env_preserves_only_required_runtime_keys() -> None:
+    source = {
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+        "DESKTOP_SESSION": "plasma",
+        "XDG_CURRENT_DESKTOP": "KDE",
+        "XDG_SESSION_TYPE": "wayland",
+        "WAYLAND_DISPLAY": "wayland-0",
+        "DISPLAY": ":0",
+        "IGNORED": "not-forwarded",
+        "EMPTY": "",
+    }
+
+    assert _openclaw_install._desktop_session_launch_env(source) == {
+        name: source[name] for name in _openclaw_install.OPENCLAW_DESKTOP_SESSION_ENV
+    }
+
+
 def test_install_merges_two_definitions_idempotently_and_preserves_unrelated_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

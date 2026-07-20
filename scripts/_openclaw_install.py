@@ -57,6 +57,15 @@ OPENCLAW_NODE_REPL_CONNECTION_TIMEOUT_MS = 120_000
 OPENCLAW_GATEWAY_RESTART_TIMEOUT_SECONDS = 180
 OPENCLAW_GATEWAY_RESTART_WAIT = "120s"
 OPENCLAW_RELEASE_ROOT_ENV = "SKY_CUA_RELEASE_ROOT"
+OPENCLAW_DESKTOP_SESSION_ENV = (
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DESKTOP_SESSION",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_SESSION_TYPE",
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+)
 NODE_REPL_PATH_ENV = "CODEX_NODE_REPL_PATH"
 NODE_PATH_ENV = "NODE_REPL_NODE_PATH"
 NODE_MODULE_DIRS_ENV = "NODE_REPL_NODE_MODULE_DIRS"
@@ -155,6 +164,12 @@ def _validated_launch_env(values: Mapping[str, str] | None) -> dict[str, str]:
             raise OpenClawReleaseInstallError(f"invalid OpenClaw MCP environment entry: {key!r}")
         result[key] = value
     return result
+
+
+def _desktop_session_launch_env(source: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Preserve the session identity OpenClaw removes from MCP child processes."""
+    values = os.environ if source is None else source
+    return {name: values[name] for name in OPENCLAW_DESKTOP_SESSION_ENV if values.get(name)}
 
 
 def plan_openclaw_release_install(
@@ -329,11 +344,15 @@ def install_openclaw_release(
     """
     if gateway_activation not in {"watcher", "restart", "deferred"}:
         raise ValueError(f"unsupported Gateway activation mode: {gateway_activation}")
+    effective_launch_env = {
+        **_desktop_session_launch_env(),
+        **dict(launch_env or {}),
+    }
     plan = plan_openclaw_release_install(
         release_root,
         browser_socket_path=browser_socket_path,
         openclaw_dir=openclaw_dir,
-        launch_env=launch_env,
+        launch_env=effective_launch_env,
     )
     state_dir = plan.config_path.parent
     state_dir.mkdir(parents=True, exist_ok=True)
