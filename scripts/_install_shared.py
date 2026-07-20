@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -27,6 +28,67 @@ LEGACY_BROWSER_SELECTION_ALIASES = {
 DEFAULT_LOCAL_INSTALL_DIR = Path.home() / ".local" / "share" / "sky-cua"
 MCP_HOST_CHOICES = ("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw")
 GATEWAY_AUTH_ENV_KEYS = ("OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD")
+MODEL_SKILL_NAMES = ("browser-use", "computer-use", "phone-use")
+SKILL_PROJECTION_MARKER = "SKY_CUA_PROJECTION.json"
+
+
+def project_model_skills(documentation_root: Path, skill_root: Path) -> tuple[Path, ...]:
+    """Materialize small host-discoverable routers to one exact documentation generation."""
+    documentation_root = documentation_root.resolve(strict=True)
+    skill_root.mkdir(parents=True, exist_ok=True)
+    destinations = tuple(skill_root / name for name in MODEL_SKILL_NAMES)
+    for name, destination in zip(MODEL_SKILL_NAMES, destinations, strict=True):
+        canonical = documentation_root / "skills" / name / "SKILL.md"
+        if not canonical.is_file() or canonical.is_symlink():
+            raise FileNotFoundError(f"canonical model skill is missing: {canonical}")
+        if destination.exists() or destination.is_symlink():
+            marker = destination / SKILL_PROJECTION_MARKER
+            if destination.is_symlink() or not marker.is_file():
+                raise ValueError(f"refusing to replace an unmanaged model skill: {destination}")
+    for name, destination in zip(MODEL_SKILL_NAMES, destinations, strict=True):
+        canonical = documentation_root / "skills" / name / "SKILL.md"
+        temp = atomic_sibling_path(destination, "tmp")
+        backup = atomic_sibling_path(destination, "backup")
+        remove_path(temp)
+        remove_path(backup)
+        temp.mkdir()
+        source = canonical.read_text(encoding="utf-8")
+        front_matter, _, remainder = source.partition("---\n")
+        if front_matter or not remainder:
+            raise ValueError(f"canonical model skill has invalid front matter: {canonical}")
+        metadata, separator, _body = remainder.partition("---\n")
+        if not separator:
+            raise ValueError(f"canonical model skill has invalid front matter: {canonical}")
+        wrapper = (
+            f"---\n{metadata}---\n\n"
+            f"# Installed sky-cua routing\n\n"
+            f"Read and follow the canonical generation-bound skill at `{canonical}`. "
+            f"Resolve every `references/`, `recipes/`, `examples/`, and `inventories/` path "
+            f"from `{documentation_root}`. Do not use checkout documentation.\n"
+        )
+        (temp / "SKILL.md").write_text(wrapper, encoding="utf-8")
+        (temp / SKILL_PROJECTION_MARKER).write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "documentation_root": str(documentation_root),
+                    "canonical_skill": str(canonical),
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        if destination.exists():
+            os.replace(destination, backup)
+        try:
+            os.replace(temp, destination)
+        except BaseException:
+            if backup.exists():
+                os.replace(backup, destination)
+            raise
+        remove_path(backup)
+    return destinations
 
 
 def resolve_gateway_auth_env(openclaw_dir: Path | None) -> dict[str, str]:

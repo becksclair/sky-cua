@@ -188,7 +188,7 @@ def install_complete_release(
         raise CompleteReleaseInstallError("verified release has no Browser extension binding")
     extension_path = installed.root.joinpath(*Path(extension["path"]).parts).resolve()
     browser_extension = {
-        "activation": "load_unpacked",
+        "activation": "web_store_preinstalled",
         "extension_id": extension["extension_id"],
         "manifest_sha256": extension["manifest_sha256"],
         "path": str(extension_path),
@@ -204,7 +204,7 @@ def install_complete_release(
         configured_hosts=selected_hosts,
         native_messaging=native_messaging,
         browser_extension=browser_extension,
-        browser_reload_required=True,
+        browser_reload_required=False,
         openclaw=openclaw_report,
         opencode=opencode_report,
     )

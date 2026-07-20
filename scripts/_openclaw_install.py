@@ -16,6 +16,7 @@ from typing import Literal, cast
 
 import _install_shared
 from _install_shared import (
+    project_model_skills,
     resolve_gateway_auth_env,
     restore_text_path_snapshot,
     snapshot_text_path,
@@ -57,6 +58,7 @@ OPENCLAW_NODE_REPL_CONNECTION_TIMEOUT_MS = 120_000
 OPENCLAW_GATEWAY_RESTART_TIMEOUT_SECONDS = 180
 OPENCLAW_GATEWAY_RESTART_WAIT = "120s"
 OPENCLAW_RELEASE_ROOT_ENV = "SKY_CUA_RELEASE_ROOT"
+DOCUMENTATION_ROOT_ENV = "SKY_CUA_DOCUMENTATION_ROOT"
 OPENCLAW_DESKTOP_SESSION_ENV = (
     "XDG_RUNTIME_DIR",
     "DBUS_SESSION_BUS_ADDRESS",
@@ -100,6 +102,8 @@ class OpenClawReleaseInstallReport:
     changed_servers: tuple[str, ...]
     gateway_activation: str
     gateway_detail: str
+    skill_root: str
+    projected_skills: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -111,6 +115,8 @@ class OpenClawReleaseInstallReport:
             "changed_servers": list(self.changed_servers),
             "gateway_activation": self.gateway_activation,
             "gateway_detail": self.gateway_detail,
+            "skill_root": self.skill_root,
+            "projected_skills": list(self.projected_skills),
         }
 
 
@@ -215,6 +221,7 @@ def plan_openclaw_release_install(
     manifest = _load_json_object(generation / RELEASE_MANIFEST, label="release manifest")
     core = _component_root(generation, manifest, "core-linux-x64")
     cua_node = _component_root(generation, manifest, "cua-node-linux-x64-glibc")
+    documentation = _component_root(generation, manifest, "documentation")
     runtime_manifest = _load_json_object(cua_node / "manifest.json", label="cua_node manifest")
     if (
         runtime_manifest.get("target") != "linux-x64-glibc"
@@ -260,6 +267,7 @@ def plan_openclaw_release_install(
     supplied_env = _validated_launch_env(launch_env)
     generation_owned_env = {
         OPENCLAW_RELEASE_ROOT_ENV,
+        DOCUMENTATION_ROOT_ENV,
         "SKY_CUA_REPO_ROOT",
         MCP_CALLER_PROVENANCE_ENV,
         "SKY_CUA_CODEX_BROWSER_SOCKET_PATH",
@@ -275,6 +283,7 @@ def plan_openclaw_release_install(
     common_env = {
         **supplied_env,
         OPENCLAW_RELEASE_ROOT_ENV: str(generation),
+        DOCUMENTATION_ROOT_ENV: str(documentation),
         "SKY_CUA_REPO_ROOT": str(core),
         MCP_CALLER_PROVENANCE_ENV: OPENCLAW_CALLER_PROVENANCE,
         "SKY_CUA_CODEX_BROWSER_SOCKET_PATH": str(socket),
@@ -485,6 +494,27 @@ def install_openclaw_release(
                     f"{shlex.join(command)}{command_result_detail(result)}"
                 )
 
+    documentation_root = Path(
+        cast(dict[str, str], plan.definitions["node_repl"]["env"])[DOCUMENTATION_ROOT_ENV]
+    )
+    try:
+        projected = project_model_skills(documentation_root, state_dir / "skills")
+    except BaseException as error:
+        rollback_failures = restore_servers(
+            runner,
+            openclaw_bin,
+            env,
+            OPENCLAW_RELEASE_SERVER_NAMES,
+            snapshots,
+            timeout=OPENCLAW_MCP_SET_TIMEOUT_SECONDS,
+        )
+        detail = (
+            f"; definition rollback failed for {rollback_failures}" if rollback_failures else ""
+        )
+        raise OpenClawReleaseInstallError(
+            f"OpenClaw model-skill projection failed: {error}{detail}"
+        ) from error
+
     return OpenClawReleaseInstallReport(
         release_id=plan.release.release_id,
         manifest_sha256=plan.release.manifest_sha256,
@@ -494,6 +524,8 @@ def install_openclaw_release(
         changed_servers=changed,
         gateway_activation=activation,
         gateway_detail=detail,
+        skill_root=str(state_dir / "skills"),
+        projected_skills=tuple(path.name for path in projected),
     )
 
 

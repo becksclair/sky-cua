@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 from _plugin_bundle import DIST_PLUGIN_ROOT, REPO_ROOT, remove_path
+from build_model_documentation import build as build_model_documentation
 from release_builder import ComponentSource, FileSource, ReleaseBuild, build_release_set
 from release_generation import (
     CHECKOUT_SHAPED_PATH_PATTERNS,
@@ -26,6 +27,7 @@ CORE_COMPONENT = "core-linux-x64"
 BROWSER_COMPONENT = "browser-js"
 CUA_NODE_COMPONENT = "cua-node-linux-x64-glibc"
 CODEX_COMPONENT = "codex-compat"
+DOCUMENTATION_COMPONENT = "documentation"
 COMPLIANCE_COMPONENT = "compliance"
 INSTALLER_COMPONENT = "installer"
 CANONICAL_BROWSER_ENTRYPOINT = "browser-client.mjs"
@@ -74,6 +76,7 @@ SUPPORTED_CAPABILITIES = (
     "direct-sky-cua-mcp",
     "linux-x64-glibc",
     "node-repl-mcp",
+    "model-facing-documentation",
     "ocr-pdf-image-file-toolbox",
     "openclaw-consumer",
     "opencode-consumer",
@@ -213,6 +216,7 @@ def _write_release_compliance(inputs: dict[str, Path], producer_commit: str) -> 
     browser = inputs[BROWSER_COMPONENT]
     cua_node = inputs[CUA_NODE_COMPONENT]
     compat = inputs[CODEX_COMPONENT]
+    documentation = inputs[DOCUMENTATION_COMPONENT]
     compliance = inputs[COMPLIANCE_COMPONENT]
     installer = inputs[INSTALLER_COMPONENT]
     core_runtime = core / "bin/runtimes/linux-x64"
@@ -246,6 +250,11 @@ def _write_release_compliance(inputs: dict[str, Path], producer_commit: str) -> 
         _inventory_record("browser-js", f"components/{BROWSER_COMPONENT}", browser),
         _inventory_record("cua-node", f"components/{CUA_NODE_COMPONENT}", cua_node),
         _inventory_record("codex-compat", f"components/{CODEX_COMPONENT}", compat),
+        _inventory_record(
+            "model-facing-documentation",
+            f"components/{DOCUMENTATION_COMPONENT}",
+            documentation,
+        ),
         _inventory_record("installer", f"components/{INSTALLER_COMPONENT}", installer),
         _inventory_record(
             "installer-entrypoint", "install.py", REPO_ROOT / "scripts/complete_release_cli.py"
@@ -293,6 +302,7 @@ def _write_release_compliance(inputs: dict[str, Path], producer_commit: str) -> 
             "sky-cua-chrome-host",
             "installer",
             "installer-entrypoint",
+            "model-facing-documentation",
         )
     ]
     release_licenses.extend(
@@ -527,6 +537,10 @@ def _prepare_inputs(
     if embedded_browser.read_bytes() != canonical.read_bytes():
         raise ValueError("cua_node embedded Browser bytes differ from the canonical component")
 
+    documentation = workspace / DOCUMENTATION_COMPONENT
+    build_model_documentation(documentation)
+    routing_inventory = documentation / "inventories/routing-inventory.json"
+
     compat = workspace / CODEX_COMPONENT
     canonical_bytes = canonical.read_bytes()
     for relative in CODEX_PROJECTIONS:
@@ -542,6 +556,11 @@ def _prepare_inputs(
                 "canonical_sha256": sha256_file(canonical),
                 "projections": list(CODEX_PROJECTIONS),
                 "implementation": "canonical-first-party-bytes",
+                "documentation": {
+                    "component": DOCUMENTATION_COMPONENT,
+                    "routing_inventory": "inventories/routing-inventory.json",
+                    "routing_inventory_sha256": sha256_file(routing_inventory),
+                },
             },
             indent=2,
             sort_keys=True,
@@ -572,6 +591,7 @@ def _prepare_inputs(
         BROWSER_COMPONENT: browser,
         CUA_NODE_COMPONENT: cua_node,
         CODEX_COMPONENT: compat,
+        DOCUMENTATION_COMPONENT: documentation,
         COMPLIANCE_COMPONENT: compliance,
         INSTALLER_COMPONENT: installer,
     }
@@ -770,7 +790,14 @@ def build_complete_release(
                     dependencies=(CORE_COMPONENT, BROWSER_COMPONENT),
                 ),
                 ComponentSource(
-                    CODEX_COMPONENT, inputs[CODEX_COMPONENT], dependencies=(BROWSER_COMPONENT,)
+                    CODEX_COMPONENT,
+                    inputs[CODEX_COMPONENT],
+                    dependencies=(BROWSER_COMPONENT, DOCUMENTATION_COMPONENT),
+                ),
+                ComponentSource(
+                    DOCUMENTATION_COMPONENT,
+                    inputs[DOCUMENTATION_COMPONENT],
+                    dependencies=(BROWSER_COMPONENT, CUA_NODE_COMPONENT),
                 ),
                 ComponentSource(
                     COMPLIANCE_COMPONENT,
@@ -791,6 +818,12 @@ def build_complete_release(
                 "extension_id": CANONICAL_EXTENSION_ID,
                 "path": CANONICAL_EXTENSION_COMPONENT_PATH,
                 "version": CANONICAL_EXTENSION_VERSION,
+            },
+            documentation={
+                "api_inventory": "components/documentation/inventories/api-inventory.json",
+                "capability_inventory": "components/documentation/inventories/capability-inventory.json",
+                "example_inventory": "components/documentation/inventories/example-inventory.json",
+                "routing_inventory": "components/documentation/inventories/routing-inventory.json",
             },
             source_date_epoch=source_date_epoch,
             include_fat_archive=include_fat_archive,

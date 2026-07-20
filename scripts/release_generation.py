@@ -444,6 +444,46 @@ def _verify_hashed_artifact(root: Path, raw: object, *, field: str) -> None:
         raise ReleaseValidationError(f"{field} hash mismatch: expected {expected}, got {actual}")
 
 
+def _verify_documentation_inventory_entries(
+    root: Path, raw: object, *, documentation_root: PurePosixPath, field: str
+) -> None:
+    """Verify every file record carried by a generated documentation inventory."""
+    if not isinstance(raw, dict):
+        raise ReleaseValidationError(f"{field} must be an object")
+    artifact_path = _relative_contract_path(raw.get("path"), field=f"{field}.path")
+    try:
+        inventory = json.loads(_safe_join(root, artifact_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReleaseValidationError(f"{field} is not valid JSON") from error
+    if not isinstance(inventory, dict):
+        raise ReleaseValidationError(f"{field} must contain a JSON object")
+    # Schema-1 generated inventories bind their routed files. Older reserved-contract
+    # fixtures had no entries and remain valid as opaque hashed artifacts.
+    if "entries" not in inventory:
+        return
+    if inventory.get("schema_version") != 1:
+        raise ReleaseValidationError(f"{field} has unsupported schema_version")
+    entries = inventory.get("entries", [])
+    if not isinstance(entries, list):
+        raise ReleaseValidationError(f"{field}.entries must be an array")
+    seen: set[str] = set()
+    component_path = _safe_join(root, documentation_root)
+    for index, entry in enumerate(entries):
+        entry_field = f"{field}.entries[{index}]"
+        if not isinstance(entry, dict):
+            raise ReleaseValidationError(f"{entry_field} must be an object")
+        relative = _relative_contract_path(entry.get("path"), field=f"{entry_field}.path")
+        if relative.as_posix() in seen:
+            raise ReleaseValidationError(f"{entry_field}.path is duplicated")
+        seen.add(relative.as_posix())
+        expected = _sha256(entry.get("sha256"), field=f"{entry_field}.sha256")
+        path = _safe_join(component_path, relative)
+        if not path.is_file() or path.is_symlink():
+            raise ReleaseValidationError(f"{entry_field} is missing")
+        if sha256_file(path) != expected or path.stat().st_size != entry.get("size_bytes"):
+            raise ReleaseValidationError(f"{entry_field} content does not match inventory")
+
+
 def _browser_binding(
     raw: object,
     *,
@@ -829,6 +869,7 @@ def _verify_release_scope_compliance(
         "codex-compat",
         "installer",
         "installer-entrypoint",
+        "model-facing-documentation",
     }
     expected_paths = {
         "sky-cua-core": "components/core-linux-x64",
@@ -843,6 +884,7 @@ def _verify_release_scope_compliance(
         "codex-compat": "components/codex-compat",
         "installer": "components/installer",
         "installer-entrypoint": "install.py",
+        "model-facing-documentation": "components/documentation",
     }
     records: dict[str, dict[str, Any]] = {}
     for raw in inventory:
@@ -914,6 +956,7 @@ def _verify_release_scope_compliance(
         "sky-cua-chrome-host",
         "installer",
         "installer-entrypoint",
+        "model-facing-documentation",
     }
     for name in mit_names:
         record = license_records[name]
@@ -1137,6 +1180,10 @@ def verify_release_root(
     if manifest.get("documentation") is not None:
         documentation = cast(dict[str, Any], manifest["documentation"])
         if documentation.get("component") in selected:
+            component = components["documentation"]
+            documentation_root = _relative_contract_path(
+                component["path"], field="component documentation path"
+            )
             for name in (
                 "api_inventory",
                 "capability_inventory",
@@ -1144,6 +1191,12 @@ def verify_release_root(
                 "routing_inventory",
             ):
                 _verify_hashed_artifact(root, documentation[name], field=f"documentation.{name}")
+                _verify_documentation_inventory_entries(
+                    root,
+                    documentation[name],
+                    documentation_root=documentation_root,
+                    field=f"documentation.{name}",
+                )
 
     browser_contract = cast(dict[str, Any], manifest["browser_contract"])
     canonical_browser = cast(dict[str, Any], browser_contract["canonical_browser"])

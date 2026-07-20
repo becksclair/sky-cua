@@ -97,6 +97,8 @@ def _opencode_report(root: Path, *, changed: bool = True) -> OpenCodeInstallRepo
         changed=changed,
         backup_path=root / "backup.json" if changed else None,
         installed_config_sha256="e" * 64,
+        skill_root=root / "opencode-skills",
+        projected_skills=("browser-use", "computer-use", "phone-use"),
     )
 
 
@@ -128,6 +130,8 @@ def test_controller_promotes_then_configures_opencode_before_openclaw(
             changed_servers=("sky_cua", "node_repl"),
             gateway_activation="gateway_watcher_pending_verification",
             gateway_detail="pending",
+            skill_root=str(tmp_path / "openclaw/skills"),
+            projected_skills=("browser-use", "computer-use", "phone-use"),
         )
 
     monkeypatch.setattr(controller, "install_opencode_two_server_config", install_opencode)
@@ -144,8 +148,8 @@ def test_controller_promotes_then_configures_opencode_before_openclaw(
     assert report.previous_release_id == PRIOR_ID
     assert report.configured_hosts == ("openclaw", "opencode")
     assert report.as_dict()["release_id"] == RELEASE_ID
-    assert report.as_dict()["browser_reload_required"] is True
-    assert report.browser_extension["activation"] == "load_unpacked"
+    assert report.as_dict()["browser_reload_required"] is False
+    assert report.browser_extension["activation"] == "web_store_preinstalled"
     assert report.browser_extension["version"] == "1.2.3"
 
 

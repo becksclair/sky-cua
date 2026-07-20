@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import cast
 
-from _install_shared import write_text_atomically
+from _install_shared import project_model_skills, write_text_atomically
 from release_generation import (
     FULL_PROFILE,
     RELEASE_MANIFEST,
@@ -49,6 +49,8 @@ class OpenCodeInstallReport:
     changed: bool
     backup_path: Path | None
     installed_config_sha256: str
+    skill_root: Path
+    projected_skills: tuple[str, ...]
     server_names: tuple[str, ...] = MANAGED_SERVER_NAMES
     restart_required: bool = True
     restart_scope: str = RESTART_SCOPE
@@ -64,6 +66,8 @@ class OpenCodeInstallReport:
         result["release_root"] = str(self.release_root)
         result["backup_path"] = str(self.backup_path) if self.backup_path else None
         result["server_names"] = list(self.server_names)
+        result["skill_root"] = str(self.skill_root)
+        result["projected_skills"] = list(self.projected_skills)
         return result
 
 
@@ -442,6 +446,7 @@ def build_opencode_servers(
 
     core = _component_root(release_root, manifest, "core-linux-x64")
     cua_node = _component_root(release_root, manifest, "cua-node-linux-x64-glibc")
+    documentation = _component_root(release_root, manifest, "documentation")
     client = _required_file(core, "bin/sky-cua-client", executable=True)
     node_repl = _required_file(cua_node, "bin/node_repl", executable=True)
     node = _required_file(cua_node, "bin/node", executable=True)
@@ -464,6 +469,7 @@ def build_opencode_servers(
         "SKY_CUA_CODEX_BROWSER_SOCKET_PATH": str(normalized_socket_path),
         "SKY_CUA_MCP_CALLER_PROVENANCE": OPENCODE_CALLER_PROVENANCE,
         "SKY_CUA_RELEASE_ROOT": str(release_root),
+        "SKY_CUA_DOCUMENTATION_ROOT": str(documentation),
         "SKY_CUA_REPO_ROOT": str(core),
     }
     return {
@@ -491,6 +497,19 @@ def build_opencode_servers(
             "timeout": timeout_ms,
         },
     }
+
+
+def _documentation_root_from_servers(servers: Mapping[str, object]) -> Path:
+    node_repl = servers.get("node_repl")
+    if not isinstance(node_repl, dict):
+        raise OpenCodeInstallError("generated node_repl definition is invalid")
+    environment = node_repl.get("environment")
+    if not isinstance(environment, dict):
+        raise OpenCodeInstallError("generated node_repl environment is invalid")
+    value = environment.get("SKY_CUA_DOCUMENTATION_ROOT")
+    if not isinstance(value, str):
+        raise OpenCodeInstallError("generated documentation root is invalid")
+    return Path(value)
 
 
 def _config_path(config_dir: Path) -> Path:
@@ -673,6 +692,8 @@ def install_opencode_two_server_config(
     merged = merge_managed_servers(original_text, servers)
     merged_bytes = merged.encode("utf-8")
     if original_bytes == merged_bytes:
+        documentation_root = _documentation_root_from_servers(servers)
+        projected = project_model_skills(documentation_root, selected_dir / "skills")
         return OpenCodeInstallReport(
             config_path=config_path,
             release_root=canonical,
@@ -681,6 +702,8 @@ def install_opencode_two_server_config(
             changed=False,
             backup_path=None,
             installed_config_sha256=_sha256_bytes(merged_bytes),
+            skill_root=selected_dir / "skills",
+            projected_skills=tuple(path.name for path in projected),
             restart_required=False,
             restart_scope="none",
             activation_status="unchanged",
@@ -694,6 +717,8 @@ def install_opencode_two_server_config(
             raise OpenCodeInstallError("OpenCode config readback differs after atomic write")
         if after_write is not None:
             after_write(config_path)
+        documentation_root = _documentation_root_from_servers(servers)
+        projected = project_model_skills(documentation_root, selected_dir / "skills")
     except BaseException:
         _restore_snapshot(config_path, original_bytes, original_mode)
         raise
@@ -705,6 +730,8 @@ def install_opencode_two_server_config(
         changed=True,
         backup_path=backup_path,
         installed_config_sha256=_sha256_bytes(merged_bytes),
+        skill_root=selected_dir / "skills",
+        projected_skills=tuple(path.name for path in projected),
     )
 
 

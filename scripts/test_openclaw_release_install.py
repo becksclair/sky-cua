@@ -34,6 +34,13 @@ def _release_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
         executable.chmod(0o755)
     (cua_node / "lib" / "node_modules").mkdir(parents=True)
     (cua_node / "share" / "playwright").mkdir(parents=True)
+    documentation = generation / "components" / "documentation"
+    for skill in ("browser-use", "computer-use", "phone-use"):
+        path = documentation / "skills" / skill / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\nname: {skill}\ndescription: fixture\n---\n\n# Fixture\n", encoding="utf-8"
+        )
     (cua_node / "manifest.json").write_text(
         json.dumps(
             {
@@ -65,6 +72,10 @@ def _release_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
                         "name": "cua-node-linux-x64-glibc",
                         "path": "components/cua-node-linux-x64-glibc",
                     },
+                    {
+                        "name": "documentation",
+                        "path": "components/documentation",
+                    },
                 ],
             }
         ),
@@ -91,6 +102,7 @@ def _release_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
                 "core-linux-x64",
                 "browser-js",
                 "cua-node-linux-x64-glibc",
+                "documentation",
             ),
         )
 
@@ -169,6 +181,9 @@ def test_plan_uses_one_verified_generation_for_all_paths_and_locked_env(
     assert direct_env["KEEP_ME"] == "preserved"
     assert direct_env["SKY_CUA_RELEASE_ROOT"] == str(generation)
     assert direct_env["SKY_CUA_REPO_ROOT"] == str(core)
+    assert direct_env["SKY_CUA_DOCUMENTATION_ROOT"] == str(
+        generation / "components" / "documentation"
+    )
     assert direct_env["SKY_CUA_MCP_CALLER_PROVENANCE"] == "openclaw"
     assert direct_env["SKY_CUA_CODEX_BROWSER_SOCKET_PATH"] == str(socket)
     assert "NODE_REPL_NODE_PATH" not in direct_env

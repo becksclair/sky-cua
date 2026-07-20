@@ -35,6 +35,13 @@ def _release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
     _executable(cua_node / "bin/node")
     (cua_node / "lib/node_modules").mkdir(parents=True)
     (cua_node / "share/playwright").mkdir(parents=True)
+    documentation = generation / "components/documentation"
+    for skill in ("browser-use", "computer-use", "phone-use"):
+        path = documentation / "skills" / skill / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\nname: {skill}\ndescription: fixture\n---\n\n# Fixture\n", encoding="utf-8"
+        )
     manifest = {
         "release_id": RELEASE_ID,
         "components": [
@@ -43,6 +50,7 @@ def _release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
                 "name": "cua-node-linux-x64-glibc",
                 "path": "components/cua-node-linux-x64-glibc",
             },
+            {"name": "documentation", "path": "components/documentation"},
         ],
         "trusted_browser_client_sha256s": [BROWSER_SHA256],
     }
@@ -66,6 +74,7 @@ def _release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
                 "cua-node-linux-x64-glibc",
                 "codex-compat",
                 "compliance",
+                "documentation",
             ),
         )
 
@@ -135,6 +144,9 @@ def test_jsonc_merge_preserves_unrelated_comments_and_pins_one_generation(
         assert server["enabled"] is True
         assert server["timeout"] == 30_000
         assert server["environment"]["SKY_CUA_RELEASE_ROOT"] == str(generation)
+        assert server["environment"]["SKY_CUA_DOCUMENTATION_ROOT"] == str(
+            generation / "components/documentation"
+        )
         assert server["environment"]["SKY_CUA_MCP_CALLER_PROVENANCE"] == "opencode"
         assert (
             server["environment"]["SKY_CUA_CODEX_BROWSER_SOCKET_PATH"]

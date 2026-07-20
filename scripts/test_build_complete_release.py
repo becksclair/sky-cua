@@ -259,6 +259,7 @@ def test_complete_release_sanitizes_core_and_materializes_exact_codex_projection
         "codex-compat",
         "installer",
         "installer-entrypoint",
+        "model-facing-documentation",
     }
     sbom = json.loads((release.root / "compliance/sbom.cdx.json").read_text(encoding="utf-8"))
     assert sbom["metadata"]["component"]["name"] == "sky-cua complete CUA stack"
@@ -337,8 +338,8 @@ def test_complete_release_ships_checkout_free_verified_controller(
     )
     install_report = json.loads(installed.stdout)
     assert install_report["release_id"] == result.release.release_id
-    assert install_report["browser_reload_required"] is True
-    assert install_report["browser_extension"]["activation"] == "load_unpacked"
+    assert install_report["browser_reload_required"] is False
+    assert install_report["browser_extension"]["activation"] == "web_store_preinstalled"
     assert install_report["browser_extension"]["path"].startswith(
         str(tmp_path / "store" / "releases" / result.release.release_id)
     )
