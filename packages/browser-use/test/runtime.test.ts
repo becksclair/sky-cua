@@ -37,6 +37,8 @@ class FakeConnection implements NativePipeConnection {
       "getUserTabs",
       "markTab",
       "nameSession",
+      "reportBotDetection",
+      "browserAuthHandoff",
     ]);
     if (!allowedMethods.has(String(request.method))) {
       this.respond(request, undefined, { code: -32601, message: `rejecting fixture: unknown method ${String(request.method)}` });
@@ -68,8 +70,10 @@ class FakeConnection implements NativePipeConnection {
         : expression.includes("return !!nodes[0]&&visible") ? true
         : expression.includes("return nodes.map((_,index)") ? [{ kind: "nth", args: [0] }]
         : expression.includes("return {attached:nodes.length") ? { attached: 0, visible: 0 }
+        : expression.includes("performance.getEntriesByType('resource')") ? { readyState: "complete", pending: 0 }
         : expression.includes("document.readyState") ? "complete"
         : expression.includes("location.href") ? "https://example.test/ready"
+        : expression.includes("location.hostname") ? "example.test"
         : expression.includes("getBoundingClientRect") ? { x: 4, y: 5 }
         : {};
       result = { result: { value } };
@@ -79,6 +83,13 @@ class FakeConnection implements NativePipeConnection {
     }
     void type;
     this.respond(request, result);
+  }
+  emitNotification(method: string, params: Record<string, unknown>): void {
+    const payload = new TextEncoder().encode(JSON.stringify({ jsonrpc: "2.0", method, params }));
+    const encoded = new Uint8Array(payload.byteLength + 4);
+    new DataView(encoded.buffer).setUint32(0, payload.byteLength, true);
+    encoded.set(payload, 4);
+    this.listeners.data?.(encoded);
   }
   private respond(
     request: Record<string, unknown>,
@@ -220,6 +231,88 @@ describe("canonical Browser runtime", () => {
     assert.equal((executeParams._meta as Record<string, unknown>).turn_id, "turn-1");
   });
 
+  test("per-tab retention marks never finalize peer tabs", async () => {
+    const state = fixture({ id: "extension:marks", type: "extension", name: "Chrome Extension" });
+    await setupBrowserRuntime({ globals: state.globals });
+    const browser = await (state.globals.agent as any).browsers.get("extension");
+    const deliverable = await browser.tabs.get("17");
+    const handoff = await browser.tabs.get("peer-tab");
+
+    await deliverable.markDeliverable();
+    await handoff.markHandoff();
+
+    const marks = state.connection.requests.filter((request) => request.method === "markTab");
+    assert.deepEqual(marks.map((request) => {
+      const params = request.params as Record<string, unknown>;
+      return { tabId: params.tabId, status: params.status };
+    }), [
+      { tabId: 17, status: "deliverable" },
+      { tabId: "peer-tab", status: "handoff" },
+    ]);
+    assert.equal(state.connection.requests.some((request) => request.method === "finalizeTabs"), false);
+  });
+
+  test("daemon-local tab capabilities are reachable without extension capability mappings", async () => {
+    const state = fixture({
+      id: "extension:daemon-capabilities",
+      type: "extension",
+      name: "Chrome Extension",
+      capabilities: {
+        tab: [
+          { id: "cdp", description: "Extension CDP" },
+          { id: "botDetection", description: "Daemon bot detection" },
+          { id: "browserAuth", description: "Daemon browser auth" },
+        ],
+      },
+    });
+    await setupBrowserRuntime({ globals: state.globals });
+    const browser = await (state.globals.agent as any).browsers.get("extension");
+    const tab = await browser.tabs.get("17");
+
+    await (await tab.capabilities.get("botDetection")).report({ reason: "captcha" });
+    await (await tab.capabilities.get("browserAuth")).request({
+      origin: "https://example.test",
+      expires_at: "2026-07-20T12:00:00Z",
+      fields: [{ id: "username", type: "text", required: true }],
+    });
+
+    const methods = state.connection.requests.map((request) => request.method);
+    assert.equal(methods.includes("reportBotDetection"), true);
+    assert.equal(methods.includes("browserAuthHandoff"), true);
+  });
+
+  test("expectNavigation ignores stale events, arms before action, and rejects non-navigation", async () => {
+    const state = fixture({ id: "extension:navigation", type: "extension", name: "Chrome Extension" });
+    await setupBrowserRuntime({ globals: state.globals });
+    const browser = await (state.globals.agent as any).browsers.get("extension");
+    const tab = await browser.tabs.get("17");
+    state.connection.emitNotification("onCDPEvent", {
+      source: { tabId: 17 },
+      method: "Page.frameNavigated",
+      params: { frame: { id: "stale-frame", url: "https://example.test/stale" } },
+    });
+
+    await assert.rejects(
+      () => tab.playwright.expectNavigation(async () => {
+        assert.equal(state.connection.requests.some((request) =>
+          request.method === "executeCdp"
+          && (request.params as Record<string, unknown>).method === "Page.enable"), true);
+        return "no navigation";
+      }, { timeoutMs: 10 }),
+      /expectNavigation timed out/u,
+    );
+
+    const navigated = await tab.playwright.expectNavigation(async () => {
+      state.connection.emitNotification("onCDPEvent", {
+        source: { tabId: 17 },
+        method: "Page.frameNavigated",
+        params: { frame: { id: "new-frame", url: "https://example.test/ready" } },
+      });
+      return "navigated";
+    }, { timeoutMs: 100, url: "https://example.test/ready" });
+    assert.equal(navigated, "navigated");
+  });
+
   test("manifest contains all current interfaces, supporting types, and declarations", () => {
     assert.equal(Object.keys(API_MANIFEST.interfaces).length, 22);
     assert.equal(Object.keys(API_MANIFEST.types).length, 58);
@@ -351,10 +444,7 @@ describe("canonical Browser runtime", () => {
       () => tab.playwright.waitForURL("example.test", { timeoutMs: 1 }),
       /timed out/u,
     );
-    await assert.rejects(
-      () => tab.playwright.waitForLoadState({ state: "networkidle", timeoutMs: 20 }),
-      /does not support networkidle/u,
-    );
+    await tab.playwright.waitForLoadState({ state: "networkidle", timeoutMs: 750 });
 
     const expressions = state.connection.requests
       .filter((request) => request.method === "executeCdp")
@@ -365,7 +455,7 @@ describe("canonical Browser runtime", () => {
     assert.match(locatorExpression, /"kind":"getByRole"/u);
     assert.match(locatorExpression, /options\.hasNot/u);
     assert.doesNotMatch(locatorExpression, /"kind":"locator","args":\["\*"/u);
-    assert.equal(expressions.filter((expression) => expression.includes("document.readyState")).length, 2);
+    assert.equal(expressions.filter((expression) => expression.includes("document.readyState")).length >= 3, true);
   });
 
   test("generated locator programs execute against a real Chrome DOM", async () => {

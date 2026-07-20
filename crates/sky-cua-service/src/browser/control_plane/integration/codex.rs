@@ -577,6 +577,31 @@ fn enrich_codex_get_info(
     if !metadata.is_object() {
         return Err("getInfo host metadata must be an object".to_owned());
     }
+    let capabilities = result.entry("capabilities").or_insert_with(|| json!({}));
+    let Some(capabilities) = capabilities.as_object_mut() else {
+        return Err("getInfo host capabilities must be an object".to_owned());
+    };
+    let tab_capabilities = capabilities.entry("tab").or_insert_with(|| json!([]));
+    let Some(tab_capabilities) = tab_capabilities.as_array_mut() else {
+        return Err("getInfo host tab capabilities must be an array".to_owned());
+    };
+    for (id, description) in [
+        (
+            "botDetection",
+            "Report detected anti-bot challenges through the sky-cua daemon",
+        ),
+        (
+            "browserAuth",
+            "Request a sky-cua daemon browser-authentication handoff",
+        ),
+    ] {
+        if !tab_capabilities
+            .iter()
+            .any(|capability| capability.get("id").and_then(Value::as_str) == Some(id))
+        {
+            tab_capabilities.push(json!({"id": id, "description": description}));
+        }
+    }
     let bridge_type = result
         .get("type")
         .and_then(Value::as_str)
@@ -658,7 +683,10 @@ mod tests {
         let mut value = json!({
             "name": "Chrome",
             "type": "extension",
-            "metadata": {"extensionId": "extension-1"}
+            "metadata": {"extensionId": "extension-1"},
+            "capabilities": {
+                "tab": [{"id": "cdp", "description": "Extension CDP"}]
+            }
         });
         enrich_codex_get_info(
             &mut value,
@@ -684,6 +712,20 @@ mod tests {
         assert_eq!(
             value["metadata"]["codexAppBuildFlavor"],
             json!("production-linux")
+        );
+        assert_eq!(
+            value["capabilities"]["tab"],
+            json!([
+                {"id": "cdp", "description": "Extension CDP"},
+                {
+                    "id": "botDetection",
+                    "description": "Report detected anti-bot challenges through the sky-cua daemon"
+                },
+                {
+                    "id": "browserAuth",
+                    "description": "Request a sky-cua daemon browser-authentication handoff"
+                }
+            ])
         );
     }
 
@@ -747,6 +789,31 @@ mod tests {
         assert_eq!(
             node_repl["metadata"]["skyCuaIdentitySynthetic"],
             json!(true)
+        );
+
+        let mut invalid_capabilities = json!({"type":"extension","metadata":{},"capabilities":[]});
+        assert_eq!(
+            enrich_codex_get_info(
+                &mut invalid_capabilities,
+                Some("session-1"),
+                None,
+                BrowserCallerKind::OpenCode,
+                false,
+            ),
+            Err("getInfo host capabilities must be an object".to_owned())
+        );
+
+        let mut invalid_tab_capabilities =
+            json!({"type":"extension","metadata":{},"capabilities":{"tab":{}}});
+        assert_eq!(
+            enrich_codex_get_info(
+                &mut invalid_tab_capabilities,
+                Some("session-1"),
+                None,
+                BrowserCallerKind::OpenCode,
+                false,
+            ),
+            Err("getInfo host tab capabilities must be an array".to_owned())
         );
     }
 }

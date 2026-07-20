@@ -25,11 +25,12 @@ type DownloadState = {
   filename?: string;
   path?: string;
   status: string;
+  tabId: string;
   url?: string;
 };
 
 type BackendState = {
-  activeDownloadRoot?: string;
+  activeDownloadRoots: Map<string, string>;
   cdpEvents: Map<string, CdpEvent[]>;
   dialogs: Map<string, DialogState>;
   downloads: Map<string, DownloadState>;
@@ -46,6 +47,7 @@ function backendState(backend: RawBackend): BackendState {
   const existing = BACKEND_STATES.get(backend);
   if (existing !== undefined) return existing;
   const state: BackendState = {
+    activeDownloadRoots: new Map(),
     cdpEvents: new Map(),
     dialogs: new Map(),
     downloads: new Map(),
@@ -113,8 +115,11 @@ function recordCdpEvent(state: BackendState, notification: ObjectValue): void {
     state.downloads.set(id, {
       id,
       ...(typeof params.suggestedFilename === "string" ? { filename: params.suggestedFilename } : {}),
-      ...(state.activeDownloadRoot === undefined ? {} : { path: join(state.activeDownloadRoot, id) }),
+      ...(state.activeDownloadRoots.get(tab) === undefined
+        ? {}
+        : { path: join(state.activeDownloadRoots.get(tab)!, id) }),
       status: "started",
+      tabId: tab,
       ...(typeof params.url === "string" ? { url: params.url } : {}),
     });
   } else if (method === "Browser.downloadProgress") {
@@ -132,7 +137,13 @@ function normalizeLogLevel(value: unknown): string {
 function recordDownload(state: BackendState, params: ObjectValue): void {
   const id = String(params.id ?? params.guid ?? "");
   if (id === "") return;
-  const current = state.downloads.get(id) ?? { id, status: "started" };
+  const existing = state.downloads.get(id);
+  const notificationTab = notificationTabId(params);
+  if (existing === undefined && notificationTab === undefined) return;
+  if (existing !== undefined && notificationTab !== undefined && existing.tabId !== notificationTab) {
+    return;
+  }
+  const current = existing ?? { id, status: "started", tabId: notificationTab! };
   if (typeof params.filename === "string") current.filename = params.filename;
   if (typeof params.path === "string") current.path = params.path;
   if (typeof params.status === "string") current.status = normalizeDownloadStatus(params.status);
@@ -282,6 +293,14 @@ function button(value: unknown): string {
   return value === 2 || value === "middle" ? "middle" : value === 3 || value === "right" ? "right" : "left";
 }
 
+function modifierMask(key: string): number {
+  if (key === "Alt") return 1;
+  if (key === "Control" || key === "Ctrl") return 2;
+  if (key === "Meta" || key === "Command") return 4;
+  if (key === "Shift") return 8;
+  return 0;
+}
+
 async function playwrightCommand(backend: RawBackend, command: CommandEnvelope): Promise<unknown> {
   switch (command.type) {
     case "playwright_dom_snapshot":
@@ -366,23 +385,33 @@ async function playwrightCommand(backend: RawBackend, command: CommandEnvelope):
     }
     case "playwright_wait_for_download": {
       const state = backendState(backend);
+      const tab = String(tabId(command));
       const root = await artifactDirectory("sky-cua-download");
-      state.activeDownloadRoot = root;
-      const existing = new Set(state.downloads.keys());
+      state.activeDownloadRoots.set(tab, root);
+      const existing = new Set(
+        [...state.downloads.values()]
+          .filter((value) => value.tabId === tab)
+          .map((value) => value.id),
+      );
       await cdp(backend, tabId(command), "Browser.setDownloadBehavior", {
         behavior: "allowAndName",
         downloadPath: root,
         eventsEnabled: true,
       });
       const download = await waitUntil(() => [...state.downloads.values()].find((value) =>
-        !existing.has(value.id) && value.status === "completed"), timeoutMs(command, 120_000), "download");
+        value.tabId === tab && !existing.has(value.id) && value.status === "completed"),
+      timeoutMs(command, 120_000), "download");
       return download.id;
     }
     case "playwright_download_path": {
       const state = backendState(backend);
       const id = String(command.download ?? command.download_id ?? "");
       const download = state.downloads.get(id);
-      if (download === undefined || download.status !== "completed") return null;
+      if (
+        download === undefined
+        || download.tabId !== String(tabId(command))
+        || download.status !== "completed"
+      ) return null;
       let path = download.path;
       if (path === undefined) return null;
       if (download.filename !== undefined && basename(path) !== safeFilename(download.filename, id)) {
@@ -402,6 +431,12 @@ async function waitCommand(backend: RawBackend, command: CommandEnvelope): Promi
     return;
   }
   const timeout = Number(command.timeoutMs ?? command.timeout_ms ?? 10_000);
+  const requestedLoadState = command.type === "playwright_wait_for_url"
+    ? command.waitUntil
+    : command.state;
+  const networkIdle = requestedLoadState === "networkidle"
+    ? await startNetworkIdleTracker(backend, command)
+    : undefined;
   const started = Date.now();
   while (Date.now() - started < timeout) {
     let ready = false;
@@ -417,20 +452,73 @@ async function waitCommand(backend: RawBackend, command: CommandEnvelope): Promi
     } else if (command.type === "playwright_wait_for_url") {
       const url = String(await evaluate(backend, tabId(command), "location.href"));
       ready = urlMatches(url, String(command.url));
-    } else {
-      const requested = String(command.state ?? "load");
-      if (requested === "networkidle") {
-        throw new Error("playwright_wait_for_load_state does not support networkidle");
+      if (ready && command.waitUntil !== undefined) {
+        ready = await loadStateReady(backend, command, String(command.waitUntil), networkIdle);
       }
-      const state = String(await evaluate(backend, tabId(command), "document.readyState"));
-      ready = requested === "domcontentloaded"
-        ? state === "interactive" || state === "complete"
-        : state === "complete";
+    } else {
+      ready = await loadStateReady(backend, command, String(command.state ?? "load"), networkIdle);
     }
     if (ready) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`${command.type} timed out`);
+}
+
+type NetworkIdleTracker = {
+  cursor: number;
+  inflight: Set<string>;
+  quietSince: number | undefined;
+};
+
+async function startNetworkIdleTracker(
+  backend: RawBackend,
+  command: CommandEnvelope,
+): Promise<NetworkIdleTracker> {
+  const state = backendState(backend);
+  await cdp(backend, tabId(command), "Network.enable");
+  return { cursor: state.nextSequence - 1, inflight: new Set(), quietSince: undefined };
+}
+
+async function loadStateReady(
+  backend: RawBackend,
+  command: CommandEnvelope,
+  requested: string,
+  networkIdle?: NetworkIdleTracker,
+): Promise<boolean> {
+  if (!["domcontentloaded", "load", "networkidle"].includes(requested)) {
+    throw new Error(`Unsupported load state: ${requested}`);
+  }
+  if (requested === "networkidle") {
+    if (networkIdle === undefined) throw new Error("networkidle tracker was not initialized");
+    const state = backendState(backend);
+    const events = state.cdpEvents.get(String(tabId(command))) ?? [];
+    for (const event of events) {
+      if (event.sequence <= networkIdle.cursor) continue;
+      networkIdle.cursor = event.sequence;
+      const requestId = String(event.params?.requestId ?? "");
+      if (requestId === "") continue;
+      if (event.method === "Network.requestWillBeSent") {
+        networkIdle.inflight.add(requestId);
+        networkIdle.quietSince = undefined;
+      } else if (
+        event.method === "Network.loadingFinished"
+        || event.method === "Network.loadingFailed"
+      ) {
+        networkIdle.inflight.delete(requestId);
+      }
+    }
+    const readyState = String(await evaluate(backend, tabId(command), "document.readyState"));
+    if (readyState !== "complete" || networkIdle.inflight.size !== 0) {
+      networkIdle.quietSince = undefined;
+      return false;
+    }
+    networkIdle.quietSince ??= Date.now();
+    return Date.now() - networkIdle.quietSince >= 500;
+  }
+  const state = String(await evaluate(backend, tabId(command), "document.readyState"));
+  return requested === "domcontentloaded"
+    ? state === "interactive" || state === "complete"
+    : state === "complete";
 }
 
 function urlMatches(actual: string, expected: string): boolean {
@@ -592,7 +680,11 @@ async function bundlePageAssets(backend: RawBackend, command: CommandEnvelope, s
     try {
       const fetched = object(await evaluate(backend, tabId(command), `(async()=>{const response=await fetch(${js(asset.url)});if(!response.ok)throw new Error('HTTP '+response.status);const bytes=new Uint8Array(await response.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));return{base64:btoa(binary),contentType:response.headers.get('content-type')}})()`));
       const extension = extname(new URL(String(asset.url)).pathname);
-      const path = join(root, `${safeFilename(String(asset.name), String(asset.id))}${extension && !String(asset.name).endsWith(extension) ? extension : ""}`);
+      const filename = safeFilename(String(asset.name), String(asset.id));
+      const path = join(
+        root,
+        `${String(asset.id)}-${filename}${extension && !filename.endsWith(extension) ? extension : ""}`,
+      );
       await writeFile(path, decodedBase64(fetched.base64));
       assets.push({ ...asset, contentType: fetched.contentType ?? null, path });
     } catch (error) {
@@ -675,7 +767,7 @@ export async function executeBrowserCommand(backend: RawBackend, command: Comman
       const options = object(command.options);
       return cdp(backend, tabId(command), "Page.captureScreenshot", {
         format: "webp",
-        ...(options.clip === undefined ? {} : { clip: options.clip }),
+        ...(options.clip === undefined ? {} : { clip: { ...object(options.clip), scale: 1 } }),
         ...(options.fullPage === true ? { captureBeyondViewport: true } : {}),
       });
     }
@@ -781,9 +873,23 @@ export async function executeBrowserCommand(backend: RawBackend, command: Comman
     case "cua_scroll": return mouse(backend, tabId(command), "mouseWheel", Number(command.x), Number(command.y), { deltaX: command.scrollX, deltaY: command.scrollY });
     case "cua_type": return cdp(backend, tabId(command), "Input.insertText", { text: command.text });
     case "cua_keypress": {
-      for (const key of Array.isArray(command.keys) ? command.keys : []) {
-        await cdp(backend, tabId(command), "Input.dispatchKeyEvent", { type: "keyDown", key });
-        await cdp(backend, tabId(command), "Input.dispatchKeyEvent", { type: "keyUp", key });
+      const keys = (Array.isArray(command.keys) ? command.keys : []).map(String);
+      let modifiers = 0;
+      for (const key of keys) {
+        modifiers |= modifierMask(key);
+        await cdp(backend, tabId(command), "Input.dispatchKeyEvent", {
+          type: "keyDown",
+          key,
+          modifiers,
+        });
+      }
+      for (const key of [...keys].reverse()) {
+        modifiers &= ~modifierMask(key);
+        await cdp(backend, tabId(command), "Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key,
+          modifiers,
+        });
       }
       return undefined;
     }

@@ -1,6 +1,6 @@
 {
   "client_path": "packages/browser-use/build/browser-client.mjs",
-  "client_sha256": "4798f74e3ccd0a767a0c99cd72cf29bc03050192b4a76659a19aae97701d8d9f",
+  "client_sha256": "622eedccdd1c5904ded78371e2327ebc6a89c4134246514c35093852c250ad66",
   "frame": {
     "length_prefix_bytes": 4,
     "byte_order": "little-endian",

@@ -20,6 +20,10 @@ function idOf(value: unknown): string {
   throw new Error("Browser command returned no tab id");
 }
 
+function rawTabId(value: string): string | number {
+  return /^\d+$/u.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : value;
+}
+
 function bytesOf(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value;
   const object = asObject(value);
@@ -210,10 +214,10 @@ class Tab {
     return bytesOf(await this.command("tab_screenshot", { options }));
   }
   async markDeliverable(): Promise<void> {
-    await this.browser.tabs.finalize({ keep: [{ status: "deliverable", tab: this }] });
+    await this.browser.backend.raw("markTab", { tabId: rawTabId(this.id), status: "deliverable" });
   }
   async markHandoff(): Promise<void> {
-    await this.browser.tabs.finalize({ keep: [{ status: "handoff", tab: this }] });
+    await this.browser.backend.raw("markTab", { tabId: rawTabId(this.id), status: "handoff" });
   }
   async getJsDialog(): Promise<Dialog | undefined> {
     const result = await this.command("tab_get_js_dialog");
@@ -376,10 +380,48 @@ class PlaywrightAPI {
     return await this.tab.command("playwright_evaluate", { ...options, page_function: serializeFunction(pageFunction), arg }) as TResult;
   }
   async expectNavigation<T>(action: () => Promise<T>, options: Params): Promise<T> {
-    const result = await action();
+    const timeoutMs = options.timeoutMs === undefined ? 30_000 : Number(options.timeoutMs);
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+      throw new Error("expectNavigation timeoutMs must be a non-negative finite number");
+    }
+    await this.tab.command("tab_cdp_call", { method: "Page.enable" });
+    const navigation = this.waitForNavigationEvent(await this.currentCdpCursor(), timeoutMs);
+    const [result] = await Promise.all([action(), navigation]);
     if (options.url !== undefined) await this.waitForURL(String(options.url), options);
     await this.waitForLoadState({ state: options.waitUntil ?? "load", timeoutMs: options.timeoutMs });
     return result;
+  }
+  private async currentCdpCursor(): Promise<number> {
+    let cursor = 0;
+    while (true) {
+      const batch = asObject(await this.tab.command("tab_cdp_events", {
+        after_sequence: cursor,
+        limit: 1_000,
+      }));
+      cursor = Number(batch.cursor ?? cursor);
+      if (batch.hasMore !== true) return cursor;
+    }
+  }
+  private async waitForNavigationEvent(afterSequence: number, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let cursor = afterSequence;
+    while (true) {
+      const remaining = Math.max(0, deadline - Date.now());
+      const batch = asObject(await this.tab.command("tab_cdp_events", {
+        after_sequence: cursor,
+        limit: 1_000,
+        methods: ["Page.frameNavigated", "Page.navigatedWithinDocument"],
+        timeout_ms: remaining,
+      }));
+      const events = asArray(batch.events).map(asObject);
+      if (events.some((event) => {
+        if (event.method === "Page.navigatedWithinDocument") return true;
+        const frame = asObject(asObject(event.params).frame);
+        return event.method === "Page.frameNavigated" && frame.parentId === undefined;
+      })) return;
+      cursor = Number(batch.cursor ?? cursor);
+      if (Date.now() >= deadline) throw new Error(`expectNavigation timed out after ${timeoutMs}ms`);
+    }
   }
   frameLocator(selector: string): PlaywrightFrameLocator { return new PlaywrightFrameLocator(this.tab, { kind: "frameLocator", args: [selector] }); }
   getByLabel(text: unknown, options: Params = {}): PlaywrightLocator { return new PlaywrightLocator(this.tab, { kind: "getByLabel", args: [text, options] }); }
