@@ -251,21 +251,31 @@ def _import_seed(cache: Path, source: Path) -> Path:
 
 
 def _validate_cached_seed(seed: Path, digest: str) -> Path:
+    if digest != MIGRATION_SEED_SHA256:
+        raise AssemblyError("cached seed digest does not match the locked migration input")
     if seed.is_symlink() or not seed.is_dir():
         raise AssemblyError("cached seed tree is missing")
     marker = seed / "SKY_CUA_MIGRATION_INPUT.json"
     if not marker.is_file() or marker.is_symlink():
         raise AssemblyError("cached seed inventory is missing")
-    inventory = json.loads(marker.read_text(encoding="utf-8"))
+    try:
+        inventory = json.loads(marker.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as error:
+        raise AssemblyError("cached seed inventory is invalid") from error
+    if not isinstance(inventory, dict):
+        raise AssemblyError("cached seed inventory is invalid")
     source_manifest = _file_manifest(seed, excluded={marker.name})
     actual_digest = hashlib.sha256(_canonical_json(source_manifest)).hexdigest()
     actual_size = sum(cast(int, item["size_bytes"]) for item in source_manifest)
     if (
-        inventory.get("source_tree_sha256") != digest
-        or actual_digest != digest
-        or inventory.get("source_size_bytes") != actual_size
-        or inventory.get("source_file_count") != len(source_manifest)
+        inventory.get("schema_version") != 1
+        or inventory.get("source_tree_sha256") != MIGRATION_SEED_SHA256
+        or inventory.get("source_size_bytes") != MIGRATION_SEED_SIZE_BYTES
+        or inventory.get("source_file_count") != MIGRATION_SEED_FILE_COUNT
         or inventory.get("migration_evidence") != {"codex_desktop_commit": MIGRATION_COMMIT}
+        or actual_digest != MIGRATION_SEED_SHA256
+        or actual_size != MIGRATION_SEED_SIZE_BYTES
+        or len(source_manifest) != MIGRATION_SEED_FILE_COUNT
     ):
         raise AssemblyError("cached seed inventory or content hash mismatch")
     return seed
@@ -277,10 +287,21 @@ def _resolve_seed(cache: Path, explicit: Path | None) -> Path:
     pointer = cache / "current-seed.json"
     if not pointer.is_file() or pointer.is_symlink():
         raise AssemblyError("no sky-cua cua_node seed cache; pass --seed-runtime once")
-    value = json.loads(pointer.read_text(encoding="utf-8"))
+    try:
+        value = json.loads(pointer.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as error:
+        raise AssemblyError("cached seed pointer is invalid") from error
+    if not isinstance(value, dict):
+        raise AssemblyError("cached seed pointer is invalid")
     digest = value.get("tree_sha256")
     if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         raise AssemblyError("cached seed pointer is invalid")
+    if (
+        value.get("schema_version") != 1
+        or digest != MIGRATION_SEED_SHA256
+        or value.get("path") != f"seeds/{MIGRATION_SEED_SHA256}"
+    ):
+        raise AssemblyError("cached seed pointer does not match the locked migration input")
     seed = cache / "seeds" / digest
     return _validate_cached_seed(seed, digest)
 

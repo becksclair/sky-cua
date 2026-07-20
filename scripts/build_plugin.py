@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 from _plugin_bundle import (
@@ -95,6 +97,8 @@ CARGO_BUILD_COMMAND = [
     "--release",
     *[item for package in CARGO_BUILD_PACKAGES for item in ("--package", package)],
 ]
+
+RELEASE_CORE_INPUT_PROVENANCE = Path("resources") / "release" / "CORE_BUILD_INPUTS.json"
 
 
 def run_cargo_build(env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -243,6 +247,95 @@ def copy_tracked_bundle_sources(temp_root: Path) -> None:
         destination = temp_root / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+
+
+def copy_commit_bundle_sources(
+    temp_root: Path,
+    producer_commit: str,
+    *,
+    source_paths: list[Path] | None = None,
+) -> None:
+    """Materialize regular bundle sources from an exact Git commit.
+
+    Complete releases must not read ignored worktree entries or follow a
+    worktree symlink while claiming that their core came from a clean commit.
+    Git archive provides the committed bytes directly. The explicit member
+    validation keeps a tracked symlink, hard link, or special entry from being
+    dereferenced during extraction.
+    """
+    requested = source_paths or [*BUNDLE_SOURCE_PATHS, Path(".mcp.json"), Path("bin")]
+    existing: list[Path] = []
+    for relative_path in requested:
+        probe = subprocess.run(
+            ["git", "cat-file", "-e", f"{producer_commit}:{relative_path.as_posix()}"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+        )
+        if probe.returncode == 0:
+            existing.append(relative_path)
+    if not existing:
+        raise ValueError("producer commit contains no bundle sources")
+
+    archive = subprocess.run(
+        [
+            "git",
+            "archive",
+            "--format=tar",
+            producer_commit,
+            "--",
+            *[path.as_posix() for path in existing],
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
+        for member in bundle.getmembers():
+            relative = Path(member.name)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"producer archive contains an unsafe path: {member.name}")
+            destination = temp_root / relative
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                raise ValueError(f"producer archive contains a non-regular entry: {member.name}")
+            source = bundle.extractfile(member)
+            if source is None:
+                raise ValueError(f"producer archive member has no bytes: {member.name}")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(source.read())
+            destination.chmod(member.mode & 0o777)
+
+
+def write_release_core_input_provenance(temp_root: Path, producer_commit: str) -> None:
+    destination = temp_root / RELEASE_CORE_INPUT_PROVENANCE
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "producer_commit": producer_commit,
+                "source": {"kind": "git-archive", "commit": producer_commit},
+                "build_outputs": {
+                    "kind": "cargo-release-from-clean-producer-checkout",
+                    "command": CARGO_BUILD_COMMAND,
+                },
+                "external_inputs": [],
+                "excluded_inputs": [
+                    "optional-android-companion",
+                    "legacy-openai-bundled-resources",
+                    "preexisting-plugin-runtime-fallbacks",
+                    "ignored-worktree-overrides",
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def copy_worktree_bundle_files(temp_root: Path) -> None:
@@ -635,27 +728,31 @@ def install_bundled_chrome_host(destination_root: Path) -> None:
     ensure_executable(destination_host)
 
 
-def stage_bundle(bundle_root: Path) -> None:
+def stage_bundle(bundle_root: Path, *, release_core_commit: str | None = None) -> None:
     temp_root = bundle_root.parent / f".{bundle_root.name}.tmp"
     remove_path(temp_root)
     temp_root.mkdir(parents=True, exist_ok=True)
 
-    copy_tracked_bundle_sources(temp_root)
-    copy_worktree_bundle_files(temp_root)
-    copy_worktree_bundle_dirs(temp_root)
-    copy_companion_apk_if_present(temp_root)
-    stage_openai_bundled_plugins(temp_root)
-    shutil.copy2(mcp_config_source(), temp_root / ".mcp.json")
+    if release_core_commit is None:
+        copy_tracked_bundle_sources(temp_root)
+        copy_worktree_bundle_files(temp_root)
+        copy_worktree_bundle_dirs(temp_root)
+        copy_companion_apk_if_present(temp_root)
+        stage_openai_bundled_plugins(temp_root)
+        shutil.copy2(mcp_config_source(), temp_root / ".mcp.json")
+    else:
+        copy_commit_bundle_sources(temp_root, release_core_commit)
 
     bin_dir = temp_root / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    for entrypoint_path in bundle_entrypoint_paths():
-        source = REPO_ROOT / entrypoint_path
-        if source.exists():
-            destination = temp_root / entrypoint_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-            ensure_executable(destination)
+    if release_core_commit is None:
+        for entrypoint_path in bundle_entrypoint_paths():
+            source = REPO_ROOT / entrypoint_path
+            if source.exists():
+                destination = temp_root / entrypoint_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+                ensure_executable(destination)
 
     platform_id = current_runtime_platform()
     for binary_name in platform_runtime_binary_base_names(platform_id):
@@ -667,28 +764,32 @@ def stage_bundle(bundle_root: Path) -> None:
         shutil.copy2(source, destination)
         ensure_executable(destination)
         copy_build_stamp_sidecar(source, destination)
-    for relative_path in all_runtime_binary_paths():
-        destination = temp_root / relative_path
-        if destination.exists():
-            continue
-        source = next(
-            (
-                candidate
-                for candidate in [
-                    bundle_root / relative_path,
-                    REPO_ROOT / relative_path,
-                ]
-                if candidate.exists()
-            ),
-            None,
-        )
-        if source is None:
-            continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-        if not relative_path.name.endswith(".exe"):
-            ensure_executable(destination)
-        copy_build_stamp_sidecar(source, destination)
+    if release_core_commit is None:
+        for relative_path in all_runtime_binary_paths():
+            destination = temp_root / relative_path
+            if destination.exists():
+                continue
+            source = next(
+                (
+                    candidate
+                    for candidate in [
+                        bundle_root / relative_path,
+                        REPO_ROOT / relative_path,
+                    ]
+                    if candidate.exists()
+                ),
+                None,
+            )
+            if source is None:
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            if not relative_path.name.endswith(".exe"):
+                ensure_executable(destination)
+            copy_build_stamp_sidecar(source, destination)
+
+    if release_core_commit is not None:
+        write_release_core_input_provenance(temp_root, release_core_commit)
 
     ensure_bundle_structure(temp_root)
     remove_path(bundle_root)
@@ -703,11 +804,43 @@ def main() -> int:
         default=DIST_PLUGIN_ROOT,
         help="Bundle output directory (default: dist/plugin/sky-cua).",
     )
+    parser.add_argument(
+        "--release-core-commit",
+        help=(
+            "build an isolated complete-release core from exactly this clean Git commit, "
+            "excluding optional and legacy external inputs"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.release_core_commit:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if head != args.release_core_commit:
+            raise ValueError(
+                "release core commit must equal current HEAD: "
+                f"producer={args.release_core_commit}, head={head}"
+            )
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        if status:
+            raise ValueError("release core build requires a clean producer working tree")
+        if args.dist_root.exists() or args.dist_root.is_symlink():
+            raise ValueError("release core output must be an isolated nonexistent path")
 
     build_release_binaries()
     args.dist_root.parent.mkdir(parents=True, exist_ok=True)
-    stage_bundle(args.dist_root)
+    stage_bundle(args.dist_root, release_core_commit=args.release_core_commit)
     print(args.dist_root)
     return 0
 

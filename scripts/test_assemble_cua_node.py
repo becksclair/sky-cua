@@ -140,6 +140,110 @@ def test_resolve_seed_rejects_tampered_cached_bytes(
         _resolve_seed(cache, None)
 
 
+def _write_test_seed(source: Path) -> tuple[str, int, int]:
+    source.mkdir()
+    (source / "manifest.json").write_text(
+        json.dumps({"target": TARGET, "node_version": "24.14.0"}), encoding="utf-8"
+    )
+    (source / "payload").write_bytes(b"verified")
+    return _tree_hash(source)
+
+
+@pytest.mark.parametrize(
+    "forgery",
+    [
+        "pointer_digest",
+        "pointer_path",
+        "marker_digest",
+        "content_digest",
+        "marker_size",
+        "marker_count",
+    ],
+)
+def test_cache_only_seed_requires_independent_locked_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, forgery: str
+) -> None:
+    source = tmp_path / "seed"
+    digest, size_bytes, file_count = _write_test_seed(source)
+    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SHA256", digest)
+    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SIZE_BYTES", size_bytes)
+    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_FILE_COUNT", file_count)
+    cache = tmp_path / "cache"
+    imported = _import_seed(cache, source)
+    pointer_path = cache / "current-seed.json"
+    marker_path = imported / "SKY_CUA_MIGRATION_INPUT.json"
+
+    if forgery.startswith("pointer_"):
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        if forgery == "pointer_digest":
+            pointer["tree_sha256"] = "0" * 64
+            pointer["path"] = f"seeds/{'0' * 64}"
+        else:
+            pointer["path"] = f"seeds/{digest}/../forged"
+        pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+    elif forgery == "content_digest":
+        (imported / "payload").write_bytes(b"tampered")
+    else:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        if forgery == "marker_digest":
+            marker["source_tree_sha256"] = "0" * 64
+        elif forgery == "marker_size":
+            marker["source_size_bytes"] = size_bytes + 1
+        else:
+            marker["source_file_count"] = file_count + 1
+        marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+    with pytest.raises(
+        AssemblyError,
+        match=r"cached seed (?:pointer does not match|inventory or content hash mismatch)",
+    ):
+        _resolve_seed(cache, None)
+
+
+def test_forged_cache_is_rejected_before_composition_or_native_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "seed"
+    digest, size_bytes, file_count = _write_test_seed(source)
+    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SHA256", digest)
+    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SIZE_BYTES", size_bytes)
+    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_FILE_COUNT", file_count)
+    cache = tmp_path / "cache"
+    imported = _import_seed(cache, source)
+    (imported / "payload").write_bytes(b"tampered")
+    compose_called = False
+    native_audit_called = False
+
+    def compose(*_args: object, **_kwargs: object) -> tuple[Path, Path]:
+        nonlocal compose_called
+        compose_called = True
+        raise AssertionError("composition must not inspect an unauthenticated seed")
+
+    def native_audit(*_args: object, **_kwargs: object) -> tuple[dict[str, object], list[object]]:
+        nonlocal native_audit_called
+        native_audit_called = True
+        raise AssertionError("native audit must not inspect an unauthenticated seed")
+
+    monkeypatch.setattr("assemble_cua_node._assert_producer_sources", lambda *_a, **_kw: False)
+    monkeypatch.setattr("assemble_cua_node._recover_publication", lambda *_a: None)
+    monkeypatch.setattr("assemble_cua_node._rebuild_first_party_outputs", lambda: {"outputs": {}})
+    monkeypatch.setattr("assemble_cua_node._compose", compose)
+    monkeypatch.setattr("assemble_cua_node._native_audit", native_audit)
+
+    with pytest.raises(AssemblyError, match="cached seed inventory or content hash mismatch"):
+        assemble(
+            cache=cache,
+            seed_argument=None,
+            output=tmp_path / "output",
+            producer_commit="d" * 40,
+            check=False,
+            allow_development_dirty=True,
+        )
+
+    assert compose_called is False
+    assert native_audit_called is False
+
+
 def test_import_seed_rejects_an_unpinned_source(tmp_path: Path) -> None:
     source = tmp_path / "seed"
     source.mkdir()

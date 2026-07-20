@@ -22,6 +22,7 @@ CUA_NODE_COMPONENT = "cua-node-linux-x64-glibc"
 CODEX_COMPONENT = "codex-compat"
 COMPLIANCE_COMPONENT = "compliance"
 CANONICAL_BROWSER_ENTRYPOINT = "browser-client.mjs"
+CORE_BUILD_INPUT_PROVENANCE = Path("resources/release/CORE_BUILD_INPUTS.json")
 CODEX_PROJECTIONS = (
     "openai-bundled/plugins/browser-use/scripts/browser-client.mjs",
     "openai-bundled/plugins/chrome/scripts/browser-client.mjs",
@@ -84,8 +85,8 @@ def _copy_component(source: Path, destination: Path) -> None:
 
 def _build_core_from_commit(producer_commit: str, requested_source: Path) -> Path:
     """Rebuild the core in this invocation from an exact clean producer commit."""
-    canonical_source = requested_source.expanduser().resolve()
-    expected_source = DIST_PLUGIN_ROOT.resolve()
+    canonical_source = requested_source.expanduser().absolute()
+    expected_source = DIST_PLUGIN_ROOT.absolute()
     if canonical_source != expected_source:
         raise ValueError(
             "complete releases must rebuild the canonical core output in this invocation: "
@@ -105,10 +106,43 @@ def _build_core_from_commit(producer_commit: str, requested_source: Path) -> Pat
     ).stdout
     if status:
         raise ValueError("core release build requires a clean producer working tree")
-    subprocess.run(["python3", "scripts/build_plugin.py"], cwd=REPO_ROOT, check=True)
-    if not expected_source.is_dir() or expected_source.is_symlink():
-        raise ValueError("canonical core build did not produce a real output directory")
-    return expected_source
+    isolated_root = Path(tempfile.mkdtemp(prefix=".complete-release-core-"))
+    isolated_source = isolated_root / expected_source.name
+    try:
+        subprocess.run(
+            [
+                "python3",
+                "scripts/build_plugin.py",
+                "--dist-root",
+                str(isolated_source),
+                "--release-core-commit",
+                producer_commit,
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+        )
+    except BaseException:
+        remove_path(isolated_root)
+        raise
+    if not isolated_source.is_dir() or isolated_source.is_symlink():
+        remove_path(isolated_root)
+        raise ValueError("isolated core build did not produce a real output directory")
+    return isolated_source
+
+
+def _verify_core_input_provenance(component: Path, producer_commit: str) -> None:
+    provenance_path = component / CORE_BUILD_INPUT_PROVENANCE
+    try:
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as error:
+        raise ValueError("core build input provenance is missing or invalid") from error
+    if provenance.get("producer_commit") != producer_commit or provenance.get("source") != {
+        "kind": "git-archive",
+        "commit": producer_commit,
+    }:
+        raise ValueError("core build input provenance is not bound to the producer commit")
+    if provenance.get("external_inputs") != []:
+        raise ValueError("core build contains unattested external inputs")
 
 
 def _prepare_inputs(
@@ -268,7 +302,9 @@ def build_complete_release(
     cua_node_source: Path,
     include_fat_archive: bool = True,
 ) -> ReleaseBuild:
+    requested_core_source = core_source.expanduser().resolve()
     core_source = _build_core_from_commit(producer_commit, core_source)
+    isolated_core_root = core_source.parent if core_source != requested_core_source else None
     output_root.parent.mkdir(parents=True, exist_ok=True)
     workspace = Path(tempfile.mkdtemp(prefix=".complete-release-inputs-", dir=output_root.parent))
     assembly_lock = cua_node_source.parent / ".cua-node-assembly.lock"
@@ -282,8 +318,11 @@ def build_complete_release(
             )
         _verify_inner_cua_node(inputs[CUA_NODE_COMPONENT])
         _verify_git_source_inventory(inputs[CUA_NODE_COMPONENT], producer_commit)
+        _verify_core_input_provenance(inputs[CORE_COMPONENT], producer_commit)
     except BaseException:
         remove_path(workspace)
+        if isolated_core_root is not None:
+            remove_path(isolated_core_root)
         raise
     browser_hash = sha256_file(inputs[BROWSER_COMPONENT] / CANONICAL_BROWSER_ENTRYPOINT)
     node = inputs[CUA_NODE_COMPONENT]
@@ -331,6 +370,11 @@ def build_complete_release(
             inputs[BROWSER_COMPONENT] / "BROWSER_COMPONENT.json",
             "compliance/BROWSER_COMPONENT.json",
         ),
+        FileSource(
+            "core_build_inputs",
+            inputs[CORE_COMPONENT] / CORE_BUILD_INPUT_PROVENANCE,
+            "compliance/CORE_BUILD_INPUTS.json",
+        ),
     )
     try:
         return build_release_set(
@@ -372,6 +416,8 @@ def build_complete_release(
         )
     finally:
         remove_path(workspace)
+        if isolated_core_root is not None:
+            remove_path(isolated_core_root)
 
 
 def _git_value(*arguments: str) -> str:

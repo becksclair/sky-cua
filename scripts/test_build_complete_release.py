@@ -12,6 +12,7 @@ import pytest
 from _plugin_bundle import REPO_ROOT
 from build_complete_release import (
     CODEX_PROJECTIONS,
+    CORE_BUILD_INPUT_PROVENANCE,
     _build_core_from_commit,
     build_complete_release,
 )
@@ -38,6 +39,18 @@ def _core(root: Path) -> Path:
     (core / "resources" / "node_repl" / "launcher").write_text("legacy", encoding="utf-8")
     (core / "bin").mkdir()
     (core / "bin" / "sky-cua").write_text("core", encoding="utf-8")
+    provenance = core / CORE_BUILD_INPUT_PROVENANCE
+    provenance.parent.mkdir(parents=True, exist_ok=True)
+    provenance.write_text(
+        json.dumps(
+            {
+                "producer_commit": PRODUCER_COMMIT,
+                "source": {"kind": "git-archive", "commit": PRODUCER_COMMIT},
+                "external_inputs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     return core
 
 
@@ -257,6 +270,64 @@ def test_complete_release_rejects_nested_component_symlinks(
         )
 
 
+def test_complete_release_rejects_unattested_core_external_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
+    monkeypatch.setattr(
+        "build_complete_release._verify_git_source_inventory", lambda _root, _commit: None
+    )
+    core = _core(tmp_path / "inputs")
+    provenance_path = core / CORE_BUILD_INPUT_PROVENANCE
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["external_inputs"] = [
+        {"path": "resources/android/phone-companion.apk", "binding": None}
+    ]
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unattested external inputs"):
+        build_complete_release(
+            tmp_path / "out",
+            producer_commit=PRODUCER_COMMIT,
+            source_date_epoch=1_784_500_000,
+            core_source=core,
+            cua_node_source=_cua_node(tmp_path / "inputs"),
+            include_fat_archive=False,
+        )
+
+
+def test_complete_release_core_input_build_is_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
+    monkeypatch.setattr(
+        "build_complete_release._verify_git_source_inventory", lambda _root, _commit: None
+    )
+    inputs = tmp_path / "inputs"
+    core = _core(inputs)
+    cua_node = _cua_node(inputs)
+
+    first = build_complete_release(
+        tmp_path / "first",
+        producer_commit=PRODUCER_COMMIT,
+        source_date_epoch=1_784_500_000,
+        core_source=core,
+        cua_node_source=cua_node,
+        include_fat_archive=False,
+    )
+    second = build_complete_release(
+        tmp_path / "second",
+        producer_commit=PRODUCER_COMMIT,
+        source_date_epoch=1_784_500_000,
+        core_source=core,
+        cua_node_source=cua_node,
+        include_fat_archive=False,
+    )
+
+    assert first.release.release_id == second.release.release_id
+    assert first.release.manifest_sha256 == second.release.manifest_sha256
+
+
 def test_core_build_rejects_noncanonical_prebuilt_input(tmp_path: Path) -> None:
     arbitrary = tmp_path / "prebuilt-core"
     arbitrary.mkdir()
@@ -270,19 +341,34 @@ def test_core_build_requires_matching_clean_head_and_runs_canonical_builder(
 ) -> None:
     core = tmp_path / "dist/plugin/sky-cua"
     core.mkdir(parents=True)
+    private = tmp_path / "private.txt"
+    private.write_text("must stay private\n", encoding="utf-8")
+    (core / "nested-private").symlink_to(private)
     monkeypatch.setattr("build_complete_release.DIST_PLUGIN_ROOT", core)
     monkeypatch.setattr("build_complete_release._git_value", lambda *_args: PRODUCER_COMMIT)
     commands: list[list[str]] = []
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         commands.append(command)
+        if command[0] == "python3":
+            isolated = Path(command[command.index("--dist-root") + 1])
+            isolated.mkdir(parents=True)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr("build_complete_release.subprocess.run", run)
-    assert _build_core_from_commit(PRODUCER_COMMIT, core) == core
-    assert commands == [
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        ["python3", "scripts/build_plugin.py"],
+    isolated = _build_core_from_commit(PRODUCER_COMMIT, core)
+    assert isolated != core
+    assert isolated.parent.name.startswith(".complete-release-core-")
+    assert not (isolated / "nested-private").exists()
+    assert (core / "nested-private").is_symlink()
+    assert commands[0] == ["git", "status", "--porcelain=v1", "--untracked-files=all"]
+    assert commands[1] == [
+        "python3",
+        "scripts/build_plugin.py",
+        "--dist-root",
+        str(isolated),
+        "--release-core-commit",
+        PRODUCER_COMMIT,
     ]
 
     monkeypatch.setattr("build_complete_release._git_value", lambda *_args: "f" * 40)
@@ -306,6 +392,113 @@ def test_core_build_rejects_dirty_producer_tree(
 
     with pytest.raises(ValueError, match="requires a clean producer working tree"):
         _build_core_from_commit(PRODUCER_COMMIT, core)
+
+
+def _commit_fixture_repo(root: Path, *, tracked_symlink: bool = False) -> tuple[Path, str]:
+    repo = root / "repo"
+    (repo / "resources").mkdir(parents=True)
+    (repo / ".gitignore").write_text(
+        "/resources/android/\n/resources/private-link\n", encoding="utf-8"
+    )
+    (repo / "resources/tracked.txt").write_text("committed\n", encoding="utf-8")
+    if tracked_symlink:
+        (repo / "tracked-target.txt").write_text("private\n", encoding="utf-8")
+        (repo / "resources/tracked-link").symlink_to(repo / "tracked-target.txt")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return repo, commit
+
+
+def test_release_core_commit_archive_excludes_ignored_and_stale_worktree_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import build_plugin
+
+    repo, commit = _commit_fixture_repo(tmp_path)
+    private = tmp_path / "private.txt"
+    private.write_text("must not be dereferenced\n", encoding="utf-8")
+    (repo / "resources/private-link").symlink_to(private)
+    android = repo / "resources/android"
+    android.mkdir()
+    (android / "phone-companion.apk").write_bytes(b"stale ignored apk")
+    (android / "phone-companion.json").write_text('{"stale":true}\n', encoding="utf-8")
+    (repo / "resources/tracked.txt").write_text("uncommitted replacement\n", encoding="utf-8")
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", repo)
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    build_plugin.copy_commit_bundle_sources(first, commit, source_paths=[Path("resources")])
+    build_plugin.copy_commit_bundle_sources(second, commit, source_paths=[Path("resources")])
+
+    assert (first / "resources/tracked.txt").read_text(encoding="utf-8") == "committed\n"
+    assert not (first / "resources/private-link").exists()
+    assert not (first / "resources/android").exists()
+    assert (first / "resources/tracked.txt").read_bytes() == (
+        second / "resources/tracked.txt"
+    ).read_bytes()
+
+
+def test_release_core_commit_archive_rejects_tracked_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import build_plugin
+
+    repo, commit = _commit_fixture_repo(tmp_path, tracked_symlink=True)
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", repo)
+
+    with pytest.raises(ValueError, match="non-regular entry"):
+        build_plugin.copy_commit_bundle_sources(
+            tmp_path / "out", commit, source_paths=[Path("resources")]
+        )
+
+
+def test_release_core_bundle_skips_all_optional_and_preexisting_fallback_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import build_plugin
+
+    output = tmp_path / "sky-cua"
+    private = tmp_path / "private.txt"
+    private.write_text("private\n", encoding="utf-8")
+    output.mkdir()
+    (output / "nested-private").symlink_to(private)
+
+    def committed_sources(root: Path, _commit: str) -> None:
+        (root / ".codex-plugin").mkdir(parents=True)
+        (root / ".codex-plugin/plugin.json").write_text("{}\n", encoding="utf-8")
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("release-core mode consumed an optional or fallback input")
+
+    monkeypatch.setattr(build_plugin, "copy_commit_bundle_sources", committed_sources)
+    monkeypatch.setattr(build_plugin, "copy_tracked_bundle_sources", forbidden)
+    monkeypatch.setattr(build_plugin, "copy_worktree_bundle_files", forbidden)
+    monkeypatch.setattr(build_plugin, "copy_worktree_bundle_dirs", forbidden)
+    monkeypatch.setattr(build_plugin, "copy_companion_apk_if_present", forbidden)
+    monkeypatch.setattr(build_plugin, "stage_openai_bundled_plugins", forbidden)
+    monkeypatch.setattr(build_plugin, "platform_runtime_binary_base_names", lambda _platform: ())
+    monkeypatch.setattr(build_plugin, "bundle_entrypoint_paths", lambda: [])
+    monkeypatch.setattr(build_plugin, "ensure_bundle_structure", lambda _root: None)
+
+    build_plugin.stage_bundle(output, release_core_commit=PRODUCER_COMMIT)
+
+    provenance = json.loads(
+        (output / build_plugin.RELEASE_CORE_INPUT_PROVENANCE).read_text(encoding="utf-8")
+    )
+    assert provenance["producer_commit"] == PRODUCER_COMMIT
+    assert provenance["external_inputs"] == []
+    assert not (output / "nested-private").exists()
+    assert private.read_text(encoding="utf-8") == "private\n"
 
 
 def test_complete_release_snapshot_holds_assembly_lock_and_excludes_later_generation(
