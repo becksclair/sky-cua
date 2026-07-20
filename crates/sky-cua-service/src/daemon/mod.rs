@@ -12,8 +12,8 @@ use sky_cua_platform::model::{
     BrowserResponse, BrowserSessionIdentity, CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX, CaptureInfo,
     CaptureScreenMode, CoordinateSpace, CuaActionRequest, CuaBackendResponse, CuaCancelStatus,
     CuaCancellation, CuaRequestContext, CuaScreenshot, DiagnosticEntry, DisplayTarget,
-    EnvironmentInfo, PhoneBackendKind, PhoneRequest, RectF, ServiceRequest, ServiceResponse,
-    SessionPresenceAction, SessionPresenceIntent, WindowInfo, WindowTarget,
+    EnvironmentInfo, PhoneBackendKind, PhoneRequest, PhoneRequestContext, RectF, ServiceRequest,
+    ServiceResponse, SessionPresenceAction, SessionPresenceIntent, WindowInfo, WindowTarget,
     browser_control_mode_capability, browser_eval_enabled,
 };
 
@@ -61,6 +61,7 @@ pub struct ServiceDaemon {
     snapshots: tokio::sync::Mutex<SnapshotManager>,
     overlay: tokio::sync::Mutex<OverlayController>,
     phone: tokio::sync::Mutex<crate::phone::PhoneManager>,
+    last_phone_request_context: std::sync::Mutex<Option<PhoneRequestContext>>,
     session_presence_config: SessionPresenceConfig,
     session_presence_held: tokio::sync::Mutex<bool>,
     desktop_lane: tokio::sync::Mutex<()>,
@@ -133,6 +134,7 @@ impl ServiceDaemon {
             snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
             overlay: tokio::sync::Mutex::new(OverlayController::new(&socket_path)),
             phone: tokio::sync::Mutex::new(crate::phone::PhoneManager::new()),
+            last_phone_request_context: std::sync::Mutex::new(None),
             session_presence_config: SessionPresenceConfig::from_env(),
             session_presence_held: tokio::sync::Mutex::new(false),
             desktop_lane: tokio::sync::Mutex::new(()),
@@ -308,6 +310,7 @@ impl ServiceDaemon {
             snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
             overlay: tokio::sync::Mutex::new(OverlayController::new_for_tests()),
             phone: tokio::sync::Mutex::new(crate::phone::PhoneManager::new()),
+            last_phone_request_context: std::sync::Mutex::new(None),
             session_presence_config: SessionPresenceConfig::disabled(),
             session_presence_held: tokio::sync::Mutex::new(false),
             desktop_lane: tokio::sync::Mutex::new(()),
@@ -534,7 +537,9 @@ impl ServiceDaemon {
                     retry: None,
                 }
             }
-            ServiceRequest::Phone { request } => self.handle_phone_request(request).await,
+            ServiceRequest::Phone { request, context } => {
+                self.handle_phone_request(request, context).await
+            }
             request => {
                 let _desktop_lane = self.desktop_lane.lock().await;
                 self.handle_desktop_request(request).await

@@ -20,6 +20,50 @@ use serde::{Deserialize, Serialize};
 
 use super::{DiagnosticEntry, PixelSize, RectF};
 
+/// Normalized caller lane for a Phone request entering through MCP.
+///
+/// This is same-user provenance for attribution and tab/device ownership, not
+/// an authorization boundary. Callers outside the explicitly supported host
+/// adapters use [`PhoneCallerProvenance::DirectMcp`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PhoneCallerProvenance {
+    CodexDesktop,
+    #[serde(rename = "openclaw")]
+    OpenClaw,
+    #[serde(rename = "opencode")]
+    OpenCode,
+    DirectMcp,
+}
+
+/// MCP `initialize.clientInfo`, retained verbatim after non-empty validation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhoneMcpClientInfo {
+    pub name: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// Logical caller identity propagated with a Phone service request.
+///
+/// Codex metadata is preserved exactly. Generic MCP callers receive a stable
+/// session id for the initialized MCP process and a fresh turn id per
+/// `tools/call`; `identity_synthetic` makes that distinction explicit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhoneRequestContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_provenance: Option<PhoneCallerProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_synthetic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_info: Option<PhoneMcpClientInfo>,
+}
+
 /// Tagged request envelope for every `phone_*` MCP tool. The variant set is 1:1
 /// with the canonical tool list.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

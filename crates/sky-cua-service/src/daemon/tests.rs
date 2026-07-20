@@ -18,10 +18,11 @@ use sky_cua_platform::model::{
     CaptureScope, CaptureScreenMode, CoordinateSpace, CuaActionRequest, CuaBackendResponse,
     CuaCancellation, CuaRequestContext, DiagnosticEntry, DisplayTarget, ElementNode,
     EnvironmentInfo, InputBackendKind, ModelImageFormat, PhoneAppListRequest, PhoneAppResponseKind,
-    PhoneConnectRequest, PhoneListDevicesRequest, PhoneRequest, PhoneResponse, PhoneStatusRequest,
-    PhoneTapRequest, PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest,
-    ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
-    SessionPresenceStatus, ToolAvailability, ToolCapabilities, WindowInfo, WindowTarget,
+    PhoneCallerProvenance, PhoneConnectRequest, PhoneListDevicesRequest, PhoneMcpClientInfo,
+    PhoneRequest, PhoneRequestContext, PhoneResponse, PhoneStatusRequest, PhoneTapRequest,
+    PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
+    SessionKind, SessionPresenceAction, SessionPresenceIntent, SessionPresenceStatus,
+    ToolAvailability, ToolCapabilities, WindowInfo, WindowTarget,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -360,9 +361,11 @@ fn only_activity_requests_trigger_automatic_session_presence() {
     // phone write (tap) does, like a desktop write.
     assert!(!request_should_hold_presence(&ServiceRequest::Phone {
         request: PhoneRequest::Status(PhoneStatusRequest::default()),
+        context: None,
     }));
     assert!(!request_should_hold_presence(&ServiceRequest::Phone {
         request: PhoneRequest::ListDevices(PhoneListDevicesRequest::default()),
+        context: None,
     }));
     assert!(request_should_hold_presence(&ServiceRequest::Phone {
         request: PhoneRequest::Tap(PhoneTapRequest {
@@ -372,6 +375,7 @@ fn only_activity_requests_trigger_automatic_session_presence() {
             y: 2.0,
             use_device_coordinates: true,
         }),
+        context: None,
     }));
 }
 
@@ -723,6 +727,7 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
     match daemon
         .handle(ServiceRequest::Phone {
             request: PhoneRequest::Status(PhoneStatusRequest::default()),
+            context: None,
         })
         .await
     {
@@ -739,6 +744,7 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
     match daemon
         .handle(ServiceRequest::Phone {
             request: PhoneRequest::ListDevices(PhoneListDevicesRequest::default()),
+            context: None,
         })
         .await
     {
@@ -755,6 +761,7 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
     match daemon
         .handle(ServiceRequest::Phone {
             request: PhoneRequest::Connect(PhoneConnectRequest::default()),
+            context: None,
         })
         .await
     {
@@ -775,6 +782,7 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
                 y: 6.0,
                 use_device_coordinates: false,
             }),
+            context: None,
         })
         .await
     {
@@ -800,6 +808,7 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
     match daemon
         .handle(ServiceRequest::Phone {
             request: PhoneRequest::AppList(PhoneAppListRequest::default()),
+            context: None,
         })
         .await
     {
@@ -808,6 +817,39 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
         } => assert_eq!(response.kind, PhoneAppResponseKind::List),
         other => panic!("unexpected response: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn phone_request_context_is_recorded_without_requiring_legacy_callers_to_supply_it() {
+    let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
+    assert!(daemon.last_phone_request_context_for_tests().is_none());
+
+    daemon
+        .handle(ServiceRequest::Phone {
+            request: PhoneRequest::Status(PhoneStatusRequest::default()),
+            context: None,
+        })
+        .await;
+    assert!(daemon.last_phone_request_context_for_tests().is_none());
+
+    let context = PhoneRequestContext {
+        session_id: Some("session-openclaw".to_string()),
+        turn_id: Some("turn-7".to_string()),
+        caller_provenance: Some(PhoneCallerProvenance::OpenClaw),
+        identity_synthetic: Some(true),
+        client_info: Some(PhoneMcpClientInfo {
+            name: "openclaw".to_string(),
+            version: "7.1".to_string(),
+            title: Some("OpenClaw".to_string()),
+        }),
+    };
+    daemon
+        .handle(ServiceRequest::Phone {
+            request: PhoneRequest::Status(PhoneStatusRequest::default()),
+            context: Some(context.clone()),
+        })
+        .await;
+    assert_eq!(daemon.last_phone_request_context_for_tests(), Some(context));
 }
 
 #[tokio::test]
@@ -1874,6 +1916,7 @@ fn daemon_with_phone_and_overlay(
         snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
         overlay: tokio::sync::Mutex::new(overlay),
         phone: tokio::sync::Mutex::new(phone),
+        last_phone_request_context: std::sync::Mutex::new(None),
         session_presence_config,
         session_presence_held: tokio::sync::Mutex::new(false),
         desktop_lane: tokio::sync::Mutex::new(()),

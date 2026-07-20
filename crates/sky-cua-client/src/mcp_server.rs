@@ -3,7 +3,8 @@ use serde_json::{Map, Value, json};
 use sky_cua_platform::{
     BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity, BrowserMcpClientInfo,
     BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequestContext,
-    BrowserSessionIdentity, ServiceRequest,
+    BrowserSessionIdentity, PhoneCallerProvenance, PhoneMcpClientInfo, PhoneRequestContext,
+    ServiceRequest,
 };
 use std::{
     cell::RefCell,
@@ -32,9 +33,11 @@ const MAX_MCP_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 static MCP_CONNECTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static BROWSER_OPERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static PHONE_TURN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
     static CURRENT_BROWSER_REQUEST_CONTEXT: RefCell<Option<BrowserRequestContext>> = const { RefCell::new(None) };
+    static CURRENT_PHONE_REQUEST_CONTEXT: RefCell<Option<PhoneRequestContext>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -388,6 +391,9 @@ fn handle_message(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            let phone_context =
+                is_phone_surface_tool_call(tool_name, body.pointer("/params/arguments"))
+                    .then(|| phone_call_context(&body, &config.browser_provenance));
             let result = match prepared_browser_call {
                 Some(prepared) => with_browser_request_context(prepared.context, || {
                     crate::mcp_tools::handle_session_tool_call_with_browser_identity(
@@ -400,15 +406,28 @@ fn handle_message(
                         prepared.identity.as_ref(),
                     )
                 })?,
-                None => crate::mcp_tools::handle_session_tool_call_with_browser_identity(
-                    service,
-                    heuristics,
-                    &config.model,
-                    &config.registry,
-                    tool_name,
-                    arguments,
-                    None,
-                )?,
+                None => match phone_context {
+                    Some(context) => with_phone_request_context(context, || {
+                        crate::mcp_tools::handle_session_tool_call_with_browser_identity(
+                            service,
+                            heuristics,
+                            &config.model,
+                            &config.registry,
+                            tool_name,
+                            arguments,
+                            None,
+                        )
+                    })?,
+                    None => crate::mcp_tools::handle_session_tool_call_with_browser_identity(
+                        service,
+                        heuristics,
+                        &config.model,
+                        &config.registry,
+                        tool_name,
+                        arguments,
+                        None,
+                    )?,
+                },
             };
             Ok(Some(json!({
                 "jsonrpc": "2.0",
@@ -460,6 +479,27 @@ fn is_browser_surface_tool_call(tool_name: &str, arguments: Option<&Value>) -> b
                 .and_then(Value::as_str)
                 == Some("browser")
         }
+        _ => false,
+    }
+}
+
+fn is_phone_surface_tool_call(tool_name: &str, arguments: Option<&Value>) -> bool {
+    if tool_name.starts_with("phone_") {
+        return true;
+    }
+    match tool_name {
+        "list_resources" | "observe" | "capture_screen" => {
+            arguments
+                .and_then(|arguments| arguments.get("surface"))
+                .and_then(Value::as_str)
+                == Some("phone")
+        }
+        "status" => matches!(
+            arguments
+                .and_then(|arguments| arguments.get("component"))
+                .and_then(Value::as_str),
+            Some("phone" | "phone_companion")
+        ),
         _ => false,
     }
 }
@@ -526,6 +566,29 @@ pub(crate) fn with_browser_request_context<T>(
 
 pub(crate) fn current_browser_request_context() -> Option<BrowserRequestContext> {
     CURRENT_BROWSER_REQUEST_CONTEXT.with(|current| current.borrow().clone())
+}
+
+struct PhoneRequestContextGuard(Option<PhoneRequestContext>);
+
+impl Drop for PhoneRequestContextGuard {
+    fn drop(&mut self) {
+        CURRENT_PHONE_REQUEST_CONTEXT.with(|current| {
+            current.replace(self.0.take());
+        });
+    }
+}
+
+pub(crate) fn with_phone_request_context<T>(
+    context: PhoneRequestContext,
+    f: impl FnOnce() -> T,
+) -> T {
+    let previous = CURRENT_PHONE_REQUEST_CONTEXT.with(|current| current.replace(Some(context)));
+    let _guard = PhoneRequestContextGuard(previous);
+    f()
+}
+
+pub(crate) fn current_phone_request_context() -> Option<PhoneRequestContext> {
+    CURRENT_PHONE_REQUEST_CONTEXT.with(|current| current.borrow().clone())
 }
 
 fn new_mcp_connection_id() -> String {
@@ -599,6 +662,61 @@ fn mcp_client_info(initialize: &Value) -> Option<BrowserMcpClientInfo> {
         version: version.to_owned(),
         title: non_empty("title").map(ToOwned::to_owned),
     })
+}
+
+fn phone_call_context(body: &Value, provenance: &BrowserCallerProvenance) -> PhoneRequestContext {
+    let supplied = phone_session_and_turn_from_tool_call(body);
+    let identity_synthetic = supplied.is_none();
+    let (session_id, turn_id) = supplied.map_or_else(
+        || {
+            let sequence = PHONE_TURN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            (
+                provenance.connection_id.clone(),
+                format!("phone-turn-{}-{sequence:016x}", provenance.connection_id),
+            )
+        },
+        |(session_id, turn_id)| (session_id, turn_id),
+    );
+    PhoneRequestContext {
+        session_id: Some(session_id),
+        turn_id: Some(turn_id),
+        caller_provenance: Some(match provenance.caller {
+            BrowserCallerKind::CodexDesktop => PhoneCallerProvenance::CodexDesktop,
+            BrowserCallerKind::OpenClaw => PhoneCallerProvenance::OpenClaw,
+            BrowserCallerKind::OpenCode => PhoneCallerProvenance::OpenCode,
+            _ => PhoneCallerProvenance::DirectMcp,
+        }),
+        identity_synthetic: Some(identity_synthetic),
+        client_info: provenance
+            .client_info
+            .as_ref()
+            .map(|info| PhoneMcpClientInfo {
+                name: info.name.clone(),
+                version: info.version.clone(),
+                title: info.title.clone(),
+            }),
+    }
+}
+
+fn phone_session_and_turn_from_tool_call(body: &Value) -> Option<(String, String)> {
+    let metadata = body.pointer("/params/_meta/x-codex-turn-metadata")?;
+    let parsed;
+    let metadata = match metadata {
+        Value::Object(map) => map,
+        Value::String(raw) => {
+            parsed = serde_json::from_str::<Map<String, Value>>(raw).ok()?;
+            &parsed
+        }
+        _ => return None,
+    };
+    let exact_non_empty = |key: &str| {
+        metadata
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+    };
+    Some((exact_non_empty("session_id")?, exact_non_empty("turn_id")?))
 }
 
 pub(crate) fn browser_call_context(
@@ -983,7 +1101,9 @@ mod tests {
     use std::io::Cursor;
 
     use serde_json::{Value, json};
-    use sky_cua_platform::{BrowserCallerKind, BrowserProvenanceSource, ServiceRequest};
+    use sky_cua_platform::{
+        BrowserCallerKind, BrowserProvenanceSource, PhoneCallerProvenance, ServiceRequest,
+    };
 
     use crate::mcp_tools::tool_definitions;
 
@@ -991,10 +1111,131 @@ mod tests {
         InFlightBrowserCalls, JsonRpcRequestId, MessageFraming, ServerSession,
         browser_call_context, browser_caller_provenance, browser_session_identity_from_tool_call,
         cancellation_request, current_browser_request_context, disconnect_request_once,
-        is_browser_surface_tool_call, json_rpc_id_fingerprint, normalize_declared_caller,
-        parse_model_session_info, read_message, read_message_with_limit,
+        is_browser_surface_tool_call, is_phone_surface_tool_call, json_rpc_id_fingerprint,
+        normalize_declared_caller, parse_model_session_info, phone_call_context,
+        phone_session_and_turn_from_tool_call, read_message, read_message_with_limit,
         with_browser_request_context, write_message,
     };
+
+    #[test]
+    fn phone_context_preserves_codex_identity_and_client_info() {
+        let initialize = json!({
+            "params": {
+                "clientInfo": {
+                    "name": "codex-desktop",
+                    "version": "42.7",
+                    "title": "Codex Desktop"
+                }
+            }
+        });
+        let provenance =
+            browser_caller_provenance(&initialize, "connection-codex", Some("codex_desktop"));
+        let context = phone_call_context(
+            &json!({
+                "id": 17,
+                "params": {
+                    "_meta": {
+                        "x-codex-turn-metadata": {
+                            "session_id": "codex-session",
+                            "turn_id": "codex-turn",
+                            "thread_id": "codex-thread"
+                        }
+                    }
+                }
+            }),
+            &provenance,
+        );
+
+        assert_eq!(context.session_id.as_deref(), Some("codex-session"));
+        assert_eq!(context.turn_id.as_deref(), Some("codex-turn"));
+        assert_eq!(
+            context.caller_provenance,
+            Some(PhoneCallerProvenance::CodexDesktop)
+        );
+        assert_eq!(context.identity_synthetic, Some(false));
+        let client_info = context.client_info.expect("client info");
+        assert_eq!(client_info.name, "codex-desktop");
+        assert_eq!(client_info.version, "42.7");
+        assert_eq!(client_info.title.as_deref(), Some("Codex Desktop"));
+    }
+
+    #[test]
+    fn phone_identity_preserves_supplied_codex_values_exactly() {
+        let supplied = phone_session_and_turn_from_tool_call(&json!({
+            "params": {
+                "_meta": {
+                    "x-codex-turn-metadata": serde_json::to_string(&json!({
+                        "session_id": " session-as-supplied ",
+                        "turn_id": " turn-as-supplied "
+                    })).unwrap()
+                }
+            }
+        }))
+        .expect("phone identity");
+        assert_eq!(supplied.0, " session-as-supplied ");
+        assert_eq!(supplied.1, " turn-as-supplied ");
+    }
+
+    #[test]
+    fn phone_context_synthesizes_stable_session_and_unique_turns_for_generic_callers() {
+        let initialize = json!({
+            "params": {
+                "clientInfo": { "name": "openclaw", "version": "1.2.3" }
+            }
+        });
+        let openclaw =
+            browser_caller_provenance(&initialize, "connection-openclaw", Some("openclaw"));
+        let first = phone_call_context(&json!({"id": "first"}), &openclaw);
+        let second = phone_call_context(&json!({"id": "second"}), &openclaw);
+        assert_eq!(first.session_id.as_deref(), Some("connection-openclaw"));
+        assert_eq!(second.session_id, first.session_id);
+        assert_ne!(second.turn_id, first.turn_id);
+        assert_eq!(
+            first.caller_provenance,
+            Some(PhoneCallerProvenance::OpenClaw)
+        );
+        assert_eq!(first.identity_synthetic, Some(true));
+
+        let direct = browser_caller_provenance(
+            &json!({"params": {"clientInfo": {"name": "other", "version": "9"}}}),
+            "connection-direct",
+            None,
+        );
+        assert_eq!(
+            phone_call_context(&json!({"id": 1}), &direct).caller_provenance,
+            Some(PhoneCallerProvenance::DirectMcp)
+        );
+    }
+
+    #[test]
+    fn phone_surface_aliases_receive_context_without_capturing_other_surfaces() {
+        assert!(is_phone_surface_tool_call(
+            "status",
+            Some(&json!({"component": "phone"}))
+        ));
+        assert!(is_phone_surface_tool_call(
+            "status",
+            Some(&json!({"component": "phone_companion"}))
+        ));
+        for tool in ["observe", "capture_screen", "list_resources"] {
+            assert!(is_phone_surface_tool_call(
+                tool,
+                Some(&json!({"surface": "phone"}))
+            ));
+            assert!(!is_phone_surface_tool_call(
+                tool,
+                Some(&json!({"surface": "desktop"}))
+            ));
+        }
+        assert!(is_phone_surface_tool_call(
+            "phone_pointer",
+            Some(&json!({}))
+        ));
+        assert!(!is_phone_surface_tool_call(
+            "desktop_pointer",
+            Some(&json!({}))
+        ));
+    }
 
     #[test]
     fn extracts_codex_browser_identity_from_string_metadata() {

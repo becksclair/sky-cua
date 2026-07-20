@@ -669,3 +669,21 @@ fn phone_request_idempotency_matches_the_classification_table() {
         );
     }
 }
+
+#[test]
+fn phone_caller_provenance_values_have_exact_wire_names() {
+    for (value, expected) in [
+        (PhoneCallerProvenance::CodexDesktop, "codex_desktop"),
+        (PhoneCallerProvenance::OpenClaw, "openclaw"),
+        (PhoneCallerProvenance::OpenCode, "opencode"),
+        (PhoneCallerProvenance::DirectMcp, "direct_mcp"),
+    ] {
+        let rendered = serde_json::to_value(value).expect("provenance should serialize");
+        assert_eq!(rendered, json!(expected));
+        assert_eq!(
+            serde_json::from_value::<PhoneCallerProvenance>(rendered)
+                .expect("provenance should deserialize"),
+            value
+        );
+    }
+}

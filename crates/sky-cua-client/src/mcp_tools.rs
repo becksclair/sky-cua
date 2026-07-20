@@ -1990,6 +1990,7 @@ mod tests {
         match requests.remove(0) {
             ServiceRequest::Phone {
                 request: PhoneRequest::Status(request),
+                ..
             } => assert!(request.refresh_devices),
             other => panic!("expected phone status request: {other:?}"),
         }
@@ -2020,6 +2021,7 @@ mod tests {
         match requests.remove(0) {
             ServiceRequest::Phone {
                 request: PhoneRequest::CompanionStatus(request),
+                ..
             } => assert_eq!(request.session.session_id.as_deref(), Some("phone-1")),
             other => panic!("expected phone companion status request: {other:?}"),
         }
@@ -2291,6 +2293,7 @@ mod tests {
         match requests.remove(0) {
             ServiceRequest::Phone {
                 request: PhoneRequest::AppInstall(request),
+                ..
             } => {
                 assert_eq!(request.apk_paths, vec!["/tmp/base.apk"]);
                 assert_eq!(request.mode, PhoneAppInstallMode::Single);
@@ -2334,6 +2337,7 @@ mod tests {
             match requests.remove(0) {
                 ServiceRequest::Phone {
                     request: PhoneRequest::OpenSettings(request),
+                    ..
                 } => {
                     assert_eq!(request.session.session_id.as_deref(), Some("phone-1"));
                     assert_eq!(request.package_name, None);
@@ -2486,6 +2490,7 @@ mod tests {
         match requests.remove(0) {
             ServiceRequest::Phone {
                 request: PhoneRequest::Notifications(request),
+                ..
             } => assert_eq!(request.limit, None),
             other => panic!("expected phone notifications request: {other:?}"),
         }
@@ -2522,6 +2527,7 @@ mod tests {
         match requests.remove(0) {
             ServiceRequest::Phone {
                 request: PhoneRequest::AppList(request),
+                ..
             } => {
                 assert!(!request.include_system);
                 assert_eq!(request.limit, None);
@@ -2560,6 +2566,7 @@ mod tests {
         match requests.remove(0) {
             ServiceRequest::Phone {
                 request: PhoneRequest::AppOpenIntent(request),
+                ..
             } => {
                 assert_eq!(request.intent_uri, "intent://example");
                 assert_eq!(request.package_name.as_deref(), Some("com.example"));
@@ -2599,6 +2606,7 @@ mod tests {
             match requests.remove(0) {
                 ServiceRequest::Phone {
                     request: PhoneRequest::AppOpenIntent(request),
+                    ..
                 } => {
                     assert_eq!(request.intent_uri, "intent://example");
                     assert_eq!(request.package_name, None);

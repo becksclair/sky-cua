@@ -19,7 +19,24 @@ impl ServiceDaemon {
     /// owns no overlay). The phone-manager lock and the overlay lock are taken
     /// separately and held only across a read/update, never nested, to avoid
     /// deadlock.
-    pub(super) async fn handle_phone_request(&self, request: PhoneRequest) -> ServiceResponse {
+    pub(super) async fn handle_phone_request(
+        &self,
+        request: PhoneRequest,
+        context: Option<sky_cua_platform::model::PhoneRequestContext>,
+    ) -> ServiceResponse {
+        if let Some(context) = context {
+            tracing::debug!(
+                session_id = ?context.session_id,
+                turn_id = ?context.turn_id,
+                caller_provenance = ?context.caller_provenance,
+                identity_synthetic = ?context.identity_synthetic,
+                "phone request provenance"
+            );
+            self.last_phone_request_context
+                .lock()
+                .expect("phone request context record poisoned")
+                .replace(context);
+        }
         // Derive the phone-scale scrcpy `--max-size` cap for a mirror-bearing
         // connect OUTSIDE the phone lock (the display probe is slow), then apply
         // it under the SAME lock span as handle() so a concurrent connect on
@@ -60,6 +77,16 @@ impl ServiceDaemon {
         // daemon just applied (host_window_mapped flipped true).
         let response = self.refresh_phone_response_after_mapping(response).await;
         ServiceResponse::Phone { response }
+    }
+
+    #[cfg(test)]
+    pub(super) fn last_phone_request_context_for_tests(
+        &self,
+    ) -> Option<sky_cua_platform::model::PhoneRequestContext> {
+        self.last_phone_request_context
+            .lock()
+            .expect("phone request context record poisoned")
+            .clone()
     }
 
     /// Compute the host-derived phone-scale scrcpy `--max-size` cap for a connect

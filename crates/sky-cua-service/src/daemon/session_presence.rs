@@ -151,7 +151,7 @@ pub(super) fn request_should_hold_presence(request: &ServiceRequest) -> bool {
         // active operation the agent is mid-flow on, so it holds presence the same
         // way a desktop write does. Read-only phone perception (status, listing,
         // observe, screenshot, capability/companion queries) does not.
-        ServiceRequest::Phone { request } => phone_request_is_write(request),
+        ServiceRequest::Phone { request, .. } => phone_request_is_write(request),
         _ => true,
     }
 }

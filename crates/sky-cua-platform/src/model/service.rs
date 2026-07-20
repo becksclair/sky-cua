@@ -478,6 +478,8 @@ pub enum ServiceRequest {
     },
     Phone {
         request: PhoneRequest,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<super::PhoneRequestContext>,
     },
     SessionPresence {
         action: SessionPresenceAction,
@@ -536,7 +538,7 @@ impl ServiceRequest {
             | Self::TypeText { .. } => false,
             Self::CancelTurn { .. } => true,
             Self::Browser { request, .. } => request.is_idempotent(),
-            Self::Phone { request } => request.is_idempotent(),
+            Self::Phone { request, .. } => request.is_idempotent(),
         }
     }
 }
@@ -713,9 +715,9 @@ mod tests {
         AccessibilitySetupReport, ActionName, BrowserClaimTabResponse, BrowserListTabsResponse,
         BrowserMoveMouseResponse, BrowserOpenResponse, BrowserRequest, BrowserResponse,
         BrowserStatusReport, BrowserTab, BrowserTargetAvailability, BrowserTargetKind,
-        PhoneBackendKind, PhoneListDevicesRequest, PhoneListDevicesResponse, PhoneRequest,
-        PhoneResponse, PhoneSessionSelector, PhoneStatusReport, PhoneStatusRequest,
-        PhoneTapRequest, WindowTargetingSetupReport,
+        PhoneBackendKind, PhoneCallerProvenance, PhoneListDevicesRequest, PhoneListDevicesResponse,
+        PhoneMcpClientInfo, PhoneRequest, PhoneRequestContext, PhoneResponse, PhoneSessionSelector,
+        PhoneStatusReport, PhoneStatusRequest, PhoneTapRequest, WindowTargetingSetupReport,
     };
     use serde_json::json;
 
@@ -773,6 +775,7 @@ mod tests {
             },
             ServiceRequest::Phone {
                 request: PhoneRequest::Status(PhoneStatusRequest::default()),
+                context: None,
             },
         ];
         for request in idempotent {
@@ -819,6 +822,7 @@ mod tests {
                     y: 10.0,
                     use_device_coordinates: false,
                 }),
+                context: None,
             },
         ];
         for request in non_idempotent {
@@ -948,12 +952,14 @@ mod tests {
             (
                 ServiceRequest::Phone {
                     request: PhoneRequest::Status(PhoneStatusRequest::default()),
+                    context: None,
                 },
                 "phone",
             ),
             (
                 ServiceRequest::Phone {
                     request: PhoneRequest::ListDevices(PhoneListDevicesRequest::default()),
+                    context: None,
                 },
                 "phone",
             ),
@@ -1585,11 +1591,114 @@ mod tests {
     fn phone_service_request_uses_nested_type_tag() {
         let rendered = serde_json::to_value(ServiceRequest::Phone {
             request: PhoneRequest::ListDevices(PhoneListDevicesRequest::default()),
+            context: None,
         })
         .expect("phone request should serialize");
 
         assert_eq!(rendered["type"], "phone");
         assert_eq!(rendered["request"]["type"], "list_devices");
+        assert!(rendered.get("context").is_none());
+
+        let legacy: ServiceRequest = serde_json::from_value(json!({
+            "type": "phone",
+            "request": { "type": "status", "refresh_devices": false }
+        }))
+        .expect("legacy phone envelope without context should remain valid");
+        assert_eq!(
+            legacy,
+            ServiceRequest::Phone {
+                request: PhoneRequest::Status(PhoneStatusRequest::default()),
+                context: None,
+            }
+        );
+    }
+
+    #[test]
+    fn phone_service_request_context_has_exact_stable_wire_shape() {
+        let context = PhoneRequestContext {
+            session_id: Some("session-1".to_string()),
+            turn_id: Some("turn-2".to_string()),
+            caller_provenance: Some(PhoneCallerProvenance::OpenCode),
+            identity_synthetic: Some(true),
+            client_info: Some(PhoneMcpClientInfo {
+                name: "opencode".to_string(),
+                version: "1.4.0".to_string(),
+                title: Some("OpenCode".to_string()),
+            }),
+        };
+        let request = ServiceRequest::Phone {
+            request: PhoneRequest::Status(PhoneStatusRequest::default()),
+            context: Some(context.clone()),
+        };
+        let rendered = serde_json::to_value(&request).expect("phone context should serialize");
+        assert_eq!(
+            rendered,
+            json!({
+                "type": "phone",
+                "request": { "type": "status" },
+                "context": {
+                    "session_id": "session-1",
+                    "turn_id": "turn-2",
+                    "caller_provenance": "opencode",
+                    "identity_synthetic": true,
+                    "client_info": {
+                        "name": "opencode",
+                        "version": "1.4.0",
+                        "title": "OpenCode"
+                    }
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<ServiceRequest>(rendered)
+                .expect("phone context should deserialize"),
+            request
+        );
+
+        let partial: ServiceRequest = serde_json::from_value(json!({
+            "type": "phone",
+            "request": { "type": "status" },
+            "context": {
+                "session_id": "partial-session",
+                "client_info": { "name": "node_repl", "version": "1" }
+            }
+        }))
+        .expect("partial Phone context should remain valid");
+        let ServiceRequest::Phone {
+            context: Some(partial),
+            ..
+        } = partial
+        else {
+            panic!("expected contextual Phone request");
+        };
+        assert_eq!(partial.session_id.as_deref(), Some("partial-session"));
+        assert_eq!(partial.turn_id, None);
+        assert_eq!(partial.caller_provenance, None);
+        assert_eq!(partial.identity_synthetic, None);
+
+        let empty: ServiceRequest = serde_json::from_value(json!({
+            "type": "phone",
+            "request": { "type": "status" },
+            "context": {}
+        }))
+        .expect("empty Phone context should remain valid");
+        let ServiceRequest::Phone {
+            context: Some(empty),
+            ..
+        } = empty
+        else {
+            panic!("expected empty contextual Phone request");
+        };
+        assert_eq!(
+            empty,
+            PhoneRequestContext {
+                session_id: None,
+                turn_id: None,
+                caller_provenance: None,
+                identity_synthetic: None,
+                client_info: None,
+            }
+        );
     }
 
     #[test]

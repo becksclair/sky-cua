@@ -2,7 +2,7 @@
 //!
 //! Mirrors `browser.rs`: `is_phone_tool` gates dispatch, and `handle_tool_call`
 //! parses each tool's arguments into a `PhoneRequest`, sends it through the
-//! service as `ServiceRequest::Phone { request }`, and shapes the matching
+//! service as `ServiceRequest::Phone`, and shapes the matching
 //! `PhoneResponse` variant into the `{content, structuredContent, isError}` MCP
 //! result. Screenshots return an image content block only when the model can
 //! receive images, with `data_base64` stripped from `structuredContent`.
@@ -73,7 +73,10 @@ pub(super) fn is_phone_tool(tool_name: &str) -> bool {
 
 /// Wrap a `PhoneRequest` into the service envelope.
 fn phone_service_request(request: PhoneRequest) -> ServiceRequest {
-    ServiceRequest::Phone { request }
+    ServiceRequest::Phone {
+        request,
+        context: crate::mcp_server::current_phone_request_context(),
+    }
 }
 
 /// Macro to short-circuit a parse error into an InvalidRequest tool error.

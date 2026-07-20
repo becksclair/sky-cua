@@ -10,15 +10,16 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::{
     CoordinateSpace, DiagnosticEntry, PhoneActionResponse, PhoneAppInfo, PhoneAppInstallMode,
     PhoneAppResponse, PhoneAppResponseKind, PhoneBackendCapabilities, PhoneBackendKind,
-    PhoneCapabilityProfile, PhoneCapabilityRefreshState, PhoneCompanionCapabilities,
-    PhoneConnectionKind, PhoneCoordinateMapping, PhoneImage, PhoneListDevicesResponse,
-    PhoneNotificationsResponse, PhoneObserveResponse, PhonePairWirelessRequest, PhoneRequest,
-    PhoneResponse, PhoneScrcpyCapabilities, PhoneScreenshotResponse, PhoneSession,
-    PhoneStatusReport, PhoneTargetDeviceKind, PixelSize, RectF, ServiceRequest, ServiceResponse,
+    PhoneCallerProvenance, PhoneCapabilityProfile, PhoneCapabilityRefreshState,
+    PhoneCompanionCapabilities, PhoneConnectionKind, PhoneCoordinateMapping, PhoneImage,
+    PhoneListDevicesResponse, PhoneMcpClientInfo, PhoneNotificationsResponse, PhoneObserveResponse,
+    PhonePairWirelessRequest, PhoneRequest, PhoneRequestContext, PhoneResponse,
+    PhoneScrcpyCapabilities, PhoneScreenshotResponse, PhoneSession, PhoneStatusReport,
+    PhoneTargetDeviceKind, PixelSize, RectF, ServiceRequest, ServiceResponse,
 };
 
 use crate::heuristics::HeuristicsRegistry;
-use crate::mcp_server::ModelSessionInfo;
+use crate::mcp_server::{ModelSessionInfo, with_phone_request_context};
 
 use super::{build_tool_definitions, handle_tool_call, validation_tool_definitions};
 
@@ -308,6 +309,7 @@ fn phone_status_maps_request_and_summarizes_report() {
             request: PhoneRequest::Status(sky_cua_platform::model::PhoneStatusRequest {
                 refresh_devices: false,
             }),
+            context: None,
         }
     );
 }
@@ -330,8 +332,37 @@ fn phone_status_timeout_diagnostic_is_error() {
             request: PhoneRequest::Status(sky_cua_platform::model::PhoneStatusRequest {
                 refresh_devices: false,
             }),
+            context: None,
         }
     );
+}
+
+#[test]
+fn phone_service_request_propagates_scoped_context() {
+    let service = FakeService::with_response(phone_service_response!(Status(status_report())));
+    let context = PhoneRequestContext {
+        session_id: Some("opencode-session".to_string()),
+        turn_id: Some("opencode-turn".to_string()),
+        caller_provenance: Some(PhoneCallerProvenance::OpenCode),
+        identity_synthetic: Some(true),
+        client_info: Some(PhoneMcpClientInfo {
+            name: "opencode".to_string(),
+            version: "3.0".to_string(),
+            title: None,
+        }),
+    };
+
+    with_phone_request_context(context.clone(), || {
+        call(&service, &image_model(), "phone_status", json!({}));
+    });
+
+    match service.take_requests().remove(0) {
+        ServiceRequest::Phone {
+            request: PhoneRequest::Status(_),
+            context: Some(recorded),
+        } => assert_eq!(recorded, context),
+        other => panic!("expected contextual phone status request, got {other:?}"),
+    }
 }
 
 #[test]
@@ -346,6 +377,7 @@ fn phone_observe_requests_image_data_only_for_image_models() {
     match &service.take_requests()[0] {
         ServiceRequest::Phone {
             request: PhoneRequest::Observe(request),
+            ..
         } => {
             assert_eq!(request.session.serial.as_deref(), Some("ABC123"));
             assert!(request.include_accessibility);
@@ -391,6 +423,7 @@ fn phone_list_devices_maps_include_mdns() {
             request: PhoneRequest::ListDevices(sky_cua_platform::model::PhoneListDevicesRequest {
                 include_mdns: true,
             }),
+            context: None,
         }
     );
 }
@@ -429,6 +462,7 @@ fn phone_pair_wireless_maps_code_but_never_echoes_it() {
                 host_port: "192.168.1.5:37000".to_string(),
                 pairing_code: "424242".to_string(),
             }),
+            context: None,
         }
     );
 }
@@ -445,6 +479,7 @@ fn phone_tap_maps_snapshot_and_coordinates() {
     match &service.take_requests()[0] {
         ServiceRequest::Phone {
             request: PhoneRequest::Tap(request),
+            ..
         } => {
             assert_eq!(request.phone_snapshot_id.as_deref(), Some("snap-7"));
             assert_eq!(request.x, 120.0);
@@ -490,6 +525,7 @@ fn phone_app_install_maps_paths_and_mode() {
     match &service.take_requests()[0] {
         ServiceRequest::Phone {
             request: PhoneRequest::AppInstall(request),
+            ..
         } => {
             assert_eq!(request.apk_paths, vec!["/tmp/base.apk", "/tmp/split.apk"]);
             assert_eq!(request.mode, PhoneAppInstallMode::Multiple);
@@ -513,6 +549,7 @@ fn phone_open_settings_maps_screen_enum() {
     match &service.take_requests()[0] {
         ServiceRequest::Phone {
             request: PhoneRequest::OpenSettings(request),
+            ..
         } => {
             assert_eq!(
                 request.screen,
@@ -633,6 +670,7 @@ fn phone_notifications_maps_and_flags_error_on_diagnostic() {
     match &service.take_requests()[0] {
         ServiceRequest::Phone {
             request: PhoneRequest::Notifications(request),
+            ..
         } => {
             assert_eq!(request.session.session_id.as_deref(), Some("sess-1"));
             assert_eq!(request.limit, Some(5));
@@ -662,6 +700,7 @@ fn phone_notifications_maps_and_flags_error_on_diagnostic() {
     match &whitespace_service.take_requests()[0] {
         ServiceRequest::Phone {
             request: PhoneRequest::Notifications(request),
+            ..
         } => assert_eq!(request.session.session_id.as_deref(), Some(" ")),
         other => panic!("expected notifications request, got {other:?}"),
     }
@@ -820,6 +859,7 @@ fn phone_screenshot_attaches_image_block_and_strips_base64() {
     match &service.take_requests()[0] {
         ServiceRequest::Phone {
             request: PhoneRequest::Screenshot(request),
+            ..
         } => assert!(request.include_image_data),
         other => panic!("expected screenshot request, got {other:?}"),
     }
@@ -846,6 +886,7 @@ fn phone_screenshot_text_only_omits_image_block() {
     match &service.take_requests()[0] {
         ServiceRequest::Phone {
             request: PhoneRequest::Screenshot(request),
+            ..
         } => assert!(
             !request.include_image_data,
             "text-only model must not request image data"
