@@ -448,6 +448,29 @@ def test_complete_release_rejects_producer_path_embedded_in_binary(
         )
 
 
+def test_complete_release_allows_attested_native_debug_build_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
+    monkeypatch.setattr(
+        "build_complete_release._verify_git_source_inventory", lambda _root, _commit: None
+    )
+    core = _core(tmp_path / "inputs")
+    binary = core / "bin/runtimes/linux-x64/sky-cua-service"
+    binary.write_bytes(b"\x00/home/builder/projects/codex-desktop/vendor/native/source/file.cc\x00")
+
+    result = build_complete_release(
+        tmp_path / "out",
+        producer_commit=PRODUCER_COMMIT,
+        source_date_epoch=1_784_500_000,
+        core_source=core,
+        cua_node_source=_cua_node(tmp_path / "inputs"),
+        include_fat_archive=False,
+    )
+
+    assert result.release.release_id
+
+
 def test_complete_release_workspace_never_collides_with_output_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -58,10 +58,19 @@ CALLER_PROVENANCE_VOCABULARY = (
     "opencode",
 )
 BRIDGE_TRANSPORT_IDENTITIES = ("extension_native_host", "host_provided_iab")
-FORBIDDEN_CHECKOUT_PATH_PATTERNS = (
+CHECKOUT_SHAPED_PATH_PATTERNS = (
     re.compile(rb"/(?:home|Users)/[^/\x00\s]+/(?:projects?|src|source|code|workspace|repos?)/"),
     re.compile(
         rb"[A-Za-z]:\\Users\\[^\\\x00\s]+\\(?:projects?|src|source|code|workspace|repos?)\\",
+        re.IGNORECASE,
+    ),
+)
+FORBIDDEN_CHECKOUT_PATH_PATTERNS = (
+    re.compile(
+        rb"/(?:home|Users)/[^/\x00\s]+/(?:projects?|src|source|code|workspace|repos?)/sky-cua(?:/|\x00|\s|$)"
+    ),
+    re.compile(
+        rb"[A-Za-z]:\\Users\\[^\\\x00\s]+\\(?:projects?|src|source|code|workspace|repos?)\\sky-cua(?:\\|\x00|\s|$)",
         re.IGNORECASE,
     ),
 )
@@ -794,10 +803,10 @@ def _verify_release_scope_compliance(
             )
         ):
             raise ReleaseValidationError(f"{name} does not declare complete-release scope")
-    if (
-        provenance.get("schema_version") != 2
-        or provenance.get("absolute_checkout_paths") is not False
-    ):
+    if provenance.get("schema_version") != 2 or provenance.get("absolute_checkout_paths") != {
+        "embedded_native_build_debug_metadata": True,
+        "runtime_path_dependencies": False,
+    }:
         raise ReleaseValidationError("release provenance path/scope claim is invalid")
     if provenance.get("producer_commit") != cast(dict[str, Any], manifest["producer"]).get(
         "commit"
@@ -1027,7 +1036,11 @@ def _verify_release_scope_compliance(
             if not path.is_file() or path.is_symlink():
                 continue
             blob = path.read_bytes()
-            if any(pattern.search(blob) for pattern in FORBIDDEN_CHECKOUT_PATH_PATTERNS):
+            forbidden = any(pattern.search(blob) for pattern in FORBIDDEN_CHECKOUT_PATH_PATTERNS)
+            checkout_shaped_text = b"\x00" not in blob and any(
+                pattern.search(blob) for pattern in CHECKOUT_SHAPED_PATH_PATTERNS
+            )
+            if forbidden or checkout_shaped_text:
                 raise ReleaseValidationError(
                     "release contains an absolute checkout-shaped path: "
                     f"{path.relative_to(root).as_posix()}"

@@ -15,6 +15,7 @@ from pathlib import Path
 from _plugin_bundle import DIST_PLUGIN_ROOT, REPO_ROOT, remove_path
 from release_builder import ComponentSource, FileSource, ReleaseBuild, build_release_set
 from release_generation import (
+    CHECKOUT_SHAPED_PATH_PATTERNS,
     FORBIDDEN_CHECKOUT_PATH_PATTERNS,
     canonical_json_bytes,
     canonical_tree_digest,
@@ -154,15 +155,19 @@ def _sanitize_and_reject_checkout_path_leaks(inputs: dict[str, Path]) -> None:
                 continue
             blob = path.read_bytes()
             if checkout not in blob and not any(
-                pattern.search(blob) for pattern in FORBIDDEN_CHECKOUT_PATH_PATTERNS
+                pattern.search(blob) for pattern in CHECKOUT_SHAPED_PATH_PATTERNS
             ):
                 continue
             if path.suffix.lower() not in text_suffixes or b"\x00" in blob:
+                if checkout not in blob and not any(
+                    pattern.search(blob) for pattern in FORBIDDEN_CHECKOUT_PATH_PATTERNS
+                ):
+                    continue
                 raise ValueError(
                     f"packaged binary contains the absolute producer checkout path: {path}"
                 )
             sanitized = blob.replace(checkout, replacement)
-            for pattern in FORBIDDEN_CHECKOUT_PATH_PATTERNS:
+            for pattern in CHECKOUT_SHAPED_PATH_PATTERNS:
                 sanitized = pattern.sub(replacement + b"/", sanitized)
             path.write_bytes(sanitized)
     leaks = [
@@ -343,7 +348,10 @@ def _write_release_compliance(inputs: dict[str, Path], producer_commit: str) -> 
             "scope": "complete-sky-cua-release",
             "producer": "sky-cua",
             "producer_commit": producer_commit,
-            "absolute_checkout_paths": False,
+            "absolute_checkout_paths": {
+                "embedded_native_build_debug_metadata": True,
+                "runtime_path_dependencies": False,
+            },
             "release_inventory": release_inventory,
             "node_package_inventory": {
                 "path": "compliance/LICENSES.json",

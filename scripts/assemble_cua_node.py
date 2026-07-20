@@ -722,7 +722,10 @@ def _generate_compliance(
         "canonical_browser_sha256": browser_hash,
         "migration_input": migration_input,
         "package_inventory_sha256": _sha256_bytes(_canonical_json(inventory)),
-        "absolute_checkout_paths": False,
+        "absolute_checkout_paths": {
+            "embedded_native_build_debug_metadata": True,
+            "runtime_path_dependencies": False,
+        },
     }
     (root / "licenses" / "PROVENANCE.json").write_bytes(_canonical_json(provenance))
 
