@@ -7,6 +7,7 @@ Installed generations are never repaired by borrowing files from another release
 from __future__ import annotations
 
 import argparse
+import base64
 import fcntl
 import gzip
 import hashlib
@@ -57,6 +58,13 @@ CALLER_PROVENANCE_VOCABULARY = (
     "opencode",
 )
 BRIDGE_TRANSPORT_IDENTITIES = ("extension_native_host", "host_provided_iab")
+FORBIDDEN_CHECKOUT_PATH_PATTERNS = (
+    re.compile(rb"/(?:home|Users)/[^/\x00\s]+/(?:projects?|src|source|code|workspace|repos?)/"),
+    re.compile(
+        rb"[A-Za-z]:\\Users\\[^\\\x00\s]+\\(?:projects?|src|source|code|workspace|repos?)\\",
+        re.IGNORECASE,
+    ),
+)
 RELEASE_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 Failpoint = Callable[[str], None]
@@ -68,6 +76,15 @@ class ReleaseValidationError(ValueError):
 
 class InstallTransactionError(RuntimeError):
     """A generation install or recovery could not converge safely."""
+
+
+def _chrome_extension_id(public_key: str) -> str:
+    try:
+        decoded = base64.b64decode(public_key, validate=True)
+    except (ValueError, TypeError) as error:
+        raise ReleaseValidationError("Browser extension manifest key is invalid") from error
+    hexadecimal = hashlib.sha256(decoded).hexdigest()[:32]
+    return "".join(chr(ord("a") + int(nibble, 16)) for nibble in hexadecimal)
 
 
 @dataclass(frozen=True)
@@ -576,7 +593,7 @@ def validate_manifest_shape(manifest: Mapping[str, Any]) -> dict[str, dict[str, 
         "codex-compat",
         "compliance",
     }
-    allowed_components = required_components | {"documentation"}
+    allowed_components = required_components | {"documentation", "installer"}
     if not required_components.issubset(components):
         raise ReleaseValidationError(
             f"required release components are missing: {sorted(required_components - components.keys())}"
@@ -674,6 +691,50 @@ def validate_manifest_shape(manifest: Mapping[str, Any]) -> dict[str, dict[str, 
             "trusted_browser_client_sha256s must contain exactly the canonical Browser hash"
         )
 
+    extension = browser_contract.get("extension_bridge")
+    extension_capability = "browser-extension-bridge" in capabilities.get("supported", [])
+    if extension_capability:
+        if not isinstance(extension, dict) or set(extension) != {
+            "component",
+            "extension_id",
+            "manifest_sha256",
+            "path",
+            "tree_sha256",
+            "version",
+        }:
+            raise ReleaseValidationError(
+                "browser-extension-bridge support requires one exact extension binding"
+            )
+        if extension.get("component") != "core-linux-x64":
+            raise ReleaseValidationError("Browser extension must be owned by the core component")
+        extension_path = _relative_contract_path(
+            extension.get("path"), field="browser_contract.extension_bridge.path"
+        )
+        core_path = _relative_contract_path(
+            components["core-linux-x64"].get("path"), field="component core-linux-x64 path"
+        )
+        if extension_path.parts[: len(core_path.parts)] != core_path.parts:
+            raise ReleaseValidationError("Browser extension path must be inside the core component")
+        extension_id = _string(
+            extension.get("extension_id"),
+            field="browser_contract.extension_bridge.extension_id",
+        )
+        if re.fullmatch(r"[a-p]{32}", extension_id) is None:
+            raise ReleaseValidationError("Browser extension id is invalid")
+        _string(extension.get("version"), field="browser_contract.extension_bridge.version")
+        _sha256(
+            extension.get("manifest_sha256"),
+            field="browser_contract.extension_bridge.manifest_sha256",
+        )
+        _sha256(
+            extension.get("tree_sha256"),
+            field="browser_contract.extension_bridge.tree_sha256",
+        )
+    elif extension is not None:
+        raise ReleaseValidationError(
+            "Browser extension binding requires browser-extension-bridge capability"
+        )
+
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):
         raise ReleaseValidationError("artifacts must be an object")
@@ -692,6 +753,285 @@ def validate_manifest_shape(manifest: Mapping[str, Any]) -> dict[str, dict[str, 
             "model-facing-documentation support requires documentation in the full profile"
         )
     return components
+
+
+def _release_scope_compliance_enabled(manifest: Mapping[str, Any]) -> bool:
+    capabilities = manifest.get("capabilities")
+    return isinstance(capabilities, dict) and "release-wide-compliance" in capabilities.get(
+        "supported", []
+    )
+
+
+def _verify_release_scope_compliance(
+    root: Path,
+    manifest: Mapping[str, Any],
+    *,
+    selected_components: Sequence[str],
+) -> None:
+    """Verify the expanded compliance claim against exact selected release bytes."""
+    artifacts = cast(dict[str, Any], manifest["artifacts"])
+    loaded: dict[str, dict[str, Any]] = {}
+    for name in ("sbom", "provenance", "licenses"):
+        artifact = cast(dict[str, Any], artifacts[name])
+        path = _safe_join(
+            root,
+            _relative_contract_path(artifact.get("path"), field=f"artifacts.{name}.path"),
+        )
+        loaded[name] = _load_object(path)
+
+    provenance = loaded["provenance"]
+    licenses = loaded["licenses"]
+    sbom = loaded["sbom"]
+    for name, document in loaded.items():
+        if document.get("scope") != "complete-sky-cua-release" and not (
+            name == "sbom"
+            and isinstance(document.get("metadata"), dict)
+            and any(
+                isinstance(item, dict)
+                and item.get("name") == "sky-cua:scope"
+                and item.get("value") == "complete-sky-cua-release"
+                for item in cast(dict[str, Any], document["metadata"]).get("properties", [])
+            )
+        ):
+            raise ReleaseValidationError(f"{name} does not declare complete-release scope")
+    if (
+        provenance.get("schema_version") != 2
+        or provenance.get("absolute_checkout_paths") is not False
+    ):
+        raise ReleaseValidationError("release provenance path/scope claim is invalid")
+    if provenance.get("producer_commit") != cast(dict[str, Any], manifest["producer"]).get(
+        "commit"
+    ):
+        raise ReleaseValidationError("release provenance producer commit mismatch")
+    if licenses.get("schema_version") != 2:
+        raise ReleaseValidationError("release license inventory schema must be 2")
+
+    inventory = provenance.get("release_inventory")
+    if not isinstance(inventory, list):
+        raise ReleaseValidationError("release provenance inventory is missing")
+    required_inventory = {
+        "sky-cua-core",
+        "sky-cua-client",
+        "sky-cua-service",
+        "sky-cua-chrome-host",
+        "browser-extension-assets",
+        "browser-js",
+        "cua-node",
+        "codex-compat",
+        "installer",
+        "installer-entrypoint",
+    }
+    expected_paths = {
+        "sky-cua-core": "components/core-linux-x64",
+        "sky-cua-client": "components/core-linux-x64/bin/runtimes/linux-x64/sky-cua-client",
+        "sky-cua-service": "components/core-linux-x64/bin/runtimes/linux-x64/sky-cua-service",
+        "sky-cua-chrome-host": (
+            "components/core-linux-x64/bin/runtimes/linux-x64/sky-cua-chrome-host"
+        ),
+        "browser-extension-assets": "components/core-linux-x64/resources/chrome-extension",
+        "browser-js": "components/browser-js",
+        "cua-node": "components/cua-node-linux-x64-glibc",
+        "codex-compat": "components/codex-compat",
+        "installer": "components/installer",
+        "installer-entrypoint": "install.py",
+    }
+    records: dict[str, dict[str, Any]] = {}
+    for raw in inventory:
+        if not isinstance(raw, dict):
+            raise ReleaseValidationError("release provenance inventory record is invalid")
+        name = _string(raw.get("name"), field="release provenance inventory name")
+        if name in records:
+            raise ReleaseValidationError(f"duplicate release provenance inventory name: {name}")
+        records[name] = raw
+    if set(records) != required_inventory:
+        raise ReleaseValidationError(
+            "release provenance inventory coverage mismatch: "
+            f"missing={sorted(required_inventory - records.keys())}, "
+            f"extra={sorted(records.keys() - required_inventory)}"
+        )
+    if any(records[name].get("path") != path for name, path in expected_paths.items()):
+        raise ReleaseValidationError("release provenance inventory paths are not canonical")
+
+    selected_prefixes = {f"components/{name}" for name in selected_components}
+    for name, record in records.items():
+        relative = _relative_contract_path(
+            record.get("path"), field=f"release provenance inventory {name} path"
+        )
+        relative_text = relative.as_posix()
+        owning_prefix = next(
+            (
+                prefix
+                for prefix in selected_prefixes
+                if relative_text == prefix or relative_text.startswith(prefix + "/")
+            ),
+            None,
+        )
+        if owning_prefix is None and relative_text != "install.py":
+            continue
+        path = _safe_join(root, relative)
+        kind = record.get("kind")
+        if kind == "file":
+            if not path.is_file() or path.is_symlink():
+                raise ReleaseValidationError(f"release provenance file is missing: {name}")
+            if (
+                record.get("sha256") != sha256_file(path)
+                or record.get("size_bytes") != path.stat().st_size
+            ):
+                raise ReleaseValidationError(f"release provenance file binding mismatch: {name}")
+        elif kind == "tree":
+            digest = canonical_tree_digest(path)
+            file_count = sum(1 for entry in digest.entries if entry.get("type") == "file")
+            if (
+                record.get("tree_sha256") != digest.sha256
+                or record.get("size_bytes") != digest.size
+                or record.get("file_count") != file_count
+            ):
+                raise ReleaseValidationError(f"release provenance tree binding mismatch: {name}")
+        else:
+            raise ReleaseValidationError(f"release provenance inventory kind is invalid: {name}")
+
+    release_licenses = licenses.get("release_artifacts")
+    if not isinstance(release_licenses, list):
+        raise ReleaseValidationError("release artifact license inventory is missing")
+    license_records = {
+        item.get("name"): item for item in release_licenses if isinstance(item, dict)
+    }
+    if set(license_records) != required_inventory - {"browser-extension-assets"}:
+        raise ReleaseValidationError("release artifact license coverage mismatch")
+    mit_names = {
+        "sky-cua-core",
+        "sky-cua-client",
+        "sky-cua-service",
+        "sky-cua-chrome-host",
+        "installer",
+        "installer-entrypoint",
+    }
+    for name in mit_names:
+        record = license_records[name]
+        if (
+            record.get("license") != "MIT"
+            or record.get("path") != expected_paths[name]
+            or not isinstance(record.get("license_files"), list)
+            or not record["license_files"]
+        ):
+            raise ReleaseValidationError(f"MIT release license binding is invalid: {name}")
+    for name in ("browser-js", "codex-compat"):
+        record = license_records[name]
+        if (
+            record.get("license") != "LicenseRef-Heliasar-Proprietary"
+            or record.get("path") != expected_paths[name]
+            or not isinstance(record.get("license_files"), list)
+            or not record["license_files"]
+        ):
+            raise ReleaseValidationError(f"Browser release license binding is invalid: {name}")
+    if (
+        license_records["cua-node"].get("path") != expected_paths["cua-node"]
+        or license_records["cua-node"].get("license_inventory") != "packages"
+    ):
+        raise ReleaseValidationError("cua-node aggregate license inventory binding is invalid")
+    for name in (*sorted(mit_names), "browser-js", "codex-compat"):
+        record = license_records[name]
+        license_files = cast(list[object], record["license_files"])
+        license_hashes = record.get("license_file_sha256s")
+        if (
+            not all(isinstance(value, str) for value in license_files)
+            or not isinstance(license_hashes, dict)
+            or set(license_hashes) != set(cast(list[str], license_files))
+        ):
+            raise ReleaseValidationError(f"release license file hash set is invalid: {name}")
+        for index, relative_raw in enumerate(license_files):
+            relative = _relative_contract_path(
+                relative_raw, field=f"release license {name} file {index}"
+            )
+            path = root / "components/compliance" / relative
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or license_hashes[relative.as_posix()] != sha256_file(path)
+            ):
+                raise ReleaseValidationError(f"release license file binding mismatch: {name}")
+    bundled_assets = licenses.get("bundled_assets")
+    if not isinstance(bundled_assets, list) or not any(
+        isinstance(item, dict)
+        and item.get("name") == "browser-extension-assets"
+        and item.get("license") == "NOASSERTION"
+        and isinstance(item.get("license_status"), str)
+        for item in bundled_assets
+    ):
+        raise ReleaseValidationError("browser extension asset license status is missing")
+
+    sbom_components = sbom.get("components")
+    if not isinstance(sbom_components, list):
+        raise ReleaseValidationError("release SBOM components are missing")
+    sbom_pairs = {
+        (item.get("name"), item.get("version"))
+        for item in sbom_components
+        if isinstance(item, dict)
+    }
+    if not all(any(pair[0] == name for pair in sbom_pairs) for name in required_inventory):
+        raise ReleaseValidationError("release SBOM first-party/asset coverage mismatch")
+    sbom_records = {
+        item.get("name"): item
+        for item in sbom_components
+        if isinstance(item, dict) and item.get("name") in required_inventory
+    }
+    for name, provenance_record in records.items():
+        sbom_record = sbom_records[name]
+        digest = provenance_record.get("sha256", provenance_record.get("tree_sha256"))
+        if {"alg": "SHA-256", "content": digest} not in sbom_record.get("hashes", []):
+            raise ReleaseValidationError(f"release SBOM digest binding mismatch: {name}")
+    packages = licenses.get("packages")
+    if not isinstance(packages, list) or not all(
+        isinstance(package, dict) and (package.get("name"), package.get("version")) in sbom_pairs
+        for package in packages
+    ):
+        raise ReleaseValidationError("release SBOM does not cover the cua_node package inventory")
+    package_inventory = provenance.get("node_package_inventory")
+    licenses_artifact_path = _safe_join(
+        root,
+        _relative_contract_path(artifacts["licenses"].get("path"), field="artifacts.licenses.path"),
+    )
+    if not isinstance(package_inventory, dict) or (
+        package_inventory.get("path") != artifacts["licenses"].get("path")
+        or package_inventory.get("package_count") != len(packages)
+        or package_inventory.get("sha256") != sha256_file(licenses_artifact_path)
+    ):
+        raise ReleaseValidationError("release provenance package inventory binding mismatch")
+
+    if "core-linux-x64" in selected_components:
+        producer_commit = cast(dict[str, Any], manifest["producer"])["commit"]
+        core = root / "components/core-linux-x64"
+        buildstamps = sorted(core.rglob("*.buildstamp.json"), key=lambda path: path.as_posix())
+        if not buildstamps:
+            raise ReleaseValidationError("release core contains no buildstamp")
+        for path in buildstamps:
+            stamp = _load_object(path)
+            if (
+                "repo_root" in stamp
+                or "deployed_at_ms" in stamp
+                or stamp.get("git_sha") != producer_commit
+                or stamp.get("git_dirty") is not False
+                or stamp.get("source") != {"kind": "git-archive", "commit": producer_commit}
+            ):
+                raise ReleaseValidationError(
+                    f"release core buildstamp leaks producer state or is unbound: {path}"
+                )
+
+    scan_roots = [root / "components" / name for name in selected_components]
+    scan_roots.extend((root / "compliance", root / "locks", root / "install.py"))
+    for scan_root in scan_roots:
+        if not scan_root.exists():
+            continue
+        paths: Iterable[Path] = [scan_root] if scan_root.is_file() else scan_root.rglob("*")
+        for path in paths:
+            if not path.is_file() or path.is_symlink():
+                continue
+            blob = path.read_bytes()
+            if any(pattern.search(blob) for pattern in FORBIDDEN_CHECKOUT_PATH_PATTERNS):
+                raise ReleaseValidationError(
+                    "release contains an absolute checkout-shaped path: "
+                    f"{path.relative_to(root).as_posix()}"
+                )
 
 
 def verify_release_root(
@@ -774,6 +1114,13 @@ def verify_release_root(
         for name, artifact in section.items():
             _verify_hashed_artifact(root, artifact, field=f"{section_name}.{name}")
 
+    if _release_scope_compliance_enabled(manifest):
+        _verify_release_scope_compliance(
+            root,
+            manifest,
+            selected_components=selected,
+        )
+
     if manifest.get("documentation") is not None:
         documentation = cast(dict[str, Any], manifest["documentation"])
         if documentation.get("component") in selected:
@@ -797,6 +1144,34 @@ def verify_release_root(
                 projection,
                 field=f"browser_contract.compatibility_projections[{index}]",
             )
+    extension = browser_contract.get("extension_bridge")
+    if isinstance(extension, dict) and extension.get("component") in selected:
+        extension_root = _safe_join(
+            root,
+            _relative_contract_path(
+                extension.get("path"), field="browser_contract.extension_bridge.path"
+            ),
+        )
+        manifest_path = extension_root / "manifest.json"
+        if (
+            extension_root.is_symlink()
+            or not extension_root.is_dir()
+            or manifest_path.is_symlink()
+            or not manifest_path.is_file()
+        ):
+            raise ReleaseValidationError("selected Browser extension is missing")
+        if sha256_file(manifest_path) != extension.get("manifest_sha256"):
+            raise ReleaseValidationError("Browser extension manifest hash mismatch")
+        if canonical_tree_digest(extension_root).sha256 != extension.get("tree_sha256"):
+            raise ReleaseValidationError("Browser extension tree hash mismatch")
+        extension_manifest = _load_object(manifest_path)
+        if (
+            extension_manifest.get("version") != extension.get("version")
+            or not isinstance(extension_manifest.get("key"), str)
+            or _chrome_extension_id(extension_manifest["key"]) != extension.get("extension_id")
+            or "nativeMessaging" not in extension_manifest.get("permissions", [])
+        ):
+            raise ReleaseValidationError("Browser extension identity or capability mismatch")
 
     omitted_names = set(components) - set(selected)
     if enforce_profile_shape:

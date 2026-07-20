@@ -11,12 +11,19 @@ import pytest
 
 from _plugin_bundle import REPO_ROOT
 from build_complete_release import (
+    CANONICAL_EXTENSION_COMPONENT_PATH,
+    CANONICAL_EXTENSION_VERSION,
     CODEX_PROJECTIONS,
     CORE_BUILD_INPUT_PROVENANCE,
     _build_core_from_commit,
     build_complete_release,
 )
-from release_generation import canonical_json_bytes, sha256_file, verify_release_root
+from release_generation import (
+    ReleaseValidationError,
+    canonical_json_bytes,
+    sha256_file,
+    verify_release_root,
+)
 
 PRODUCER_COMMIT = "dcd4f30f3d0246e9ff1e9450bdb25b3656a5510a"
 
@@ -39,6 +46,37 @@ def _core(root: Path) -> Path:
     (core / "resources" / "node_repl" / "launcher").write_text("legacy", encoding="utf-8")
     (core / "bin").mkdir()
     (core / "bin" / "sky-cua").write_text("core", encoding="utf-8")
+    (core / "bin" / "sky-cua-browser-preflight").write_text("legacy", encoding="utf-8")
+    (core / "resources/chrome_preflight.py").write_text("legacy", encoding="utf-8")
+    runtime = core / "bin/runtimes/linux-x64"
+    runtime.mkdir(parents=True)
+    for name in ("sky-cua-client", "sky-cua-service", "sky-cua-chrome-host"):
+        binary = runtime / name
+        binary.write_text(name, encoding="utf-8")
+        binary.chmod(0o755)
+    (runtime / "sky-cua-client.buildstamp.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "source_fingerprint": "f" * 64,
+                "git_sha": PRODUCER_COMMIT,
+                "git_dirty": False,
+                "repo_root": str(REPO_ROOT),
+            }
+        ),
+        encoding="utf-8",
+    )
+    extension = core / Path(CANONICAL_EXTENSION_COMPONENT_PATH).relative_to(
+        "components/core-linux-x64"
+    )
+    extension.mkdir(parents=True)
+    (extension / "manifest.json").write_bytes(
+        (
+            REPO_ROOT
+            / "resources/chrome-extension/codex"
+            / f"{CANONICAL_EXTENSION_VERSION}_0/manifest.json"
+        ).read_bytes()
+    )
     provenance = core / CORE_BUILD_INPUT_PROVENANCE
     provenance.parent.mkdir(parents=True, exist_ok=True)
     provenance.write_text(
@@ -109,12 +147,34 @@ def _cua_node(root: Path, *, release_eligible: bool = True) -> Path:
         path.write_text(
             json.dumps({"release_ready": True, "release_blockers": []}), encoding="utf-8"
         )
-    (component / "licenses/LICENSES.json").write_text('{"packages":[]}\n', encoding="utf-8")
+    browser_license = component / "licenses/packages/browser/LICENSE.txt"
+    browser_license.parent.mkdir(parents=True)
+    browser_license.write_text("test proprietary license\n", encoding="utf-8")
+    (component / "licenses/LICENSES.json").write_text(
+        json.dumps(
+            {
+                "packages": [
+                    {
+                        "name": "@heliasar/browser-use",
+                        "version": "1.0.0",
+                        "license": "LicenseRef-Heliasar-Proprietary",
+                        "license_files": ["licenses/packages/browser/LICENSE.txt"],
+                        "license_file_sha256s": {
+                            "licenses/packages/browser/LICENSE.txt": sha256_file(browser_license)
+                        },
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (component / "licenses/PROVENANCE.json").write_text(
         '{"producer":"sky-cua"}\n', encoding="utf-8"
     )
     (component / "sbom.cdx.json").write_text(
-        '{"bomFormat":"CycloneDX","specVersion":"1.6"}\n', encoding="utf-8"
+        '{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"properties":[]},"components":[{"type":"library","name":"@heliasar/browser-use","version":"1.0.0"}]}\n',
+        encoding="utf-8",
     )
     checksum_files = []
     for path in sorted(component.rglob("*"), key=lambda item: item.as_posix()):
@@ -179,8 +239,121 @@ def test_complete_release_sanitizes_core_and_materializes_exact_codex_projection
 
     assert not (core / "resources/plugins/openai-bundled").exists()
     assert not (core / "resources/node_repl").exists()
+    assert not (core / "bin/sky-cua-browser-preflight").exists()
+    assert not (core / "resources/chrome_preflight.py").exists()
+    stamp = json.loads(
+        (core / "bin/runtimes/linux-x64/sky-cua-client.buildstamp.json").read_text(encoding="utf-8")
+    )
+    assert "repo_root" not in stamp
+    assert stamp["source"] == {"kind": "git-archive", "commit": PRODUCER_COMMIT}
+    provenance = json.loads(
+        (release.root / "compliance/PROVENANCE.json").read_text(encoding="utf-8")
+    )
+    assert {record["name"] for record in provenance["release_inventory"]} == {
+        "sky-cua-core",
+        "sky-cua-client",
+        "sky-cua-service",
+        "sky-cua-chrome-host",
+        "browser-extension-assets",
+        "browser-js",
+        "cua-node",
+        "codex-compat",
+        "installer",
+        "installer-entrypoint",
+    }
+    sbom = json.loads((release.root / "compliance/sbom.cdx.json").read_text(encoding="utf-8"))
+    assert sbom["metadata"]["component"]["name"] == "sky-cua complete CUA stack"
     for relative in CODEX_PROJECTIONS:
         assert (compat / relative).read_bytes() == canonical.read_bytes()
+
+
+def test_complete_release_ships_checkout_free_verified_controller(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
+    monkeypatch.setattr(
+        "build_complete_release._verify_git_source_inventory", lambda _root, _commit: None
+    )
+    result = build_complete_release(
+        tmp_path / "out",
+        producer_commit=PRODUCER_COMMIT,
+        source_date_epoch=1_784_500_000,
+        core_source=_core(tmp_path / "inputs"),
+        cua_node_source=_cua_node(tmp_path / "inputs"),
+        include_fat_archive=True,
+    )
+    root = result.release.root
+    manifest = json.loads((root / "RELEASE.json").read_text(encoding="utf-8"))
+    components = {record["name"]: record for record in manifest["components"]}
+
+    assert "installer" in components
+    assert set(components["installer"]["profiles"]) == {"core-only", "full"}
+    assert manifest["artifacts"]["installer_entrypoint"]["path"] == "install.py"
+    extension = manifest["browser_contract"]["extension_bridge"]
+    assert extension["extension_id"] == "hehggadaopoacecdllhhajmbjkdcmajg"
+    assert extension["version"] == CANONICAL_EXTENSION_VERSION
+    assert extension["path"] == CANONICAL_EXTENSION_COMPONENT_PATH
+    assert len(extension["manifest_sha256"]) == 64
+    assert len(extension["tree_sha256"]) == 64
+    assert (root / "components/installer/install_complete_release.py").is_file()
+    assert (root / "components/installer/_native_messaging_install.py").is_file()
+
+    neutral = tmp_path / "neutral"
+    neutral.mkdir()
+    completed = subprocess.run(
+        [
+            "python3",
+            str(root / "install.py"),
+            "verify",
+            "--manifest-sha256",
+            result.release.manifest_sha256,
+        ],
+        cwd=neutral,
+        env={"HOME": str(tmp_path / "home"), "PATH": "/usr/bin:/bin", "PYTHONPATH": ""},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    report = json.loads(completed.stdout)
+    assert report["status"] == "ok"
+    assert report["release_id"] == result.release.release_id
+    assert "installer" in report["components"]
+
+    installed = subprocess.run(
+        [
+            "python3",
+            str(root / "install.py"),
+            "install",
+            "--store-root",
+            str(tmp_path / "store"),
+            "--native-messaging-home",
+            str(tmp_path / "browser-home"),
+        ],
+        cwd=neutral,
+        env={"HOME": str(tmp_path / "home"), "PATH": "/usr/bin:/bin", "PYTHONPATH": ""},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    install_report = json.loads(installed.stdout)
+    assert install_report["release_id"] == result.release.release_id
+    assert install_report["browser_reload_required"] is True
+    assert install_report["browser_extension"]["activation"] == "load_unpacked"
+    assert install_report["browser_extension"]["path"].startswith(
+        str(tmp_path / "store" / "releases" / result.release.release_id)
+    )
+    assert (tmp_path / "store/current").resolve() == (
+        tmp_path / "store" / "releases" / result.release.release_id
+    )
+    brave_origin_manifest = (
+        tmp_path
+        / "browser-home/.config/BraveSoftware/Brave-Origin/NativeMessagingHosts"
+        / "com.openai.codexextension.json"
+    )
+    assert json.loads(brave_origin_manifest.read_text(encoding="utf-8"))["path"].startswith(
+        str(tmp_path / "store" / "releases" / result.release.release_id)
+    )
 
 
 def test_complete_release_rejects_development_cua_node_component(
@@ -222,6 +395,52 @@ def test_complete_release_rejects_cua_node_browser_generation_mismatch(
             source_date_epoch=1_784_500_000,
             core_source=_core(tmp_path / "inputs"),
             cua_node_source=component,
+            include_fat_archive=False,
+        )
+
+
+def test_complete_release_rejects_checkout_shaped_paths_in_packaged_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
+    monkeypatch.setattr(
+        "build_complete_release._verify_git_source_inventory", lambda _root, _commit: None
+    )
+    core = _core(tmp_path / "inputs")
+    leak = core / "docs/leak.md"
+    leak.parent.mkdir()
+    leak.write_text("producer path: /home/alice/projects/sky-cua/private\n", encoding="utf-8")
+
+    with pytest.raises(ReleaseValidationError, match="absolute checkout-shaped path"):
+        build_complete_release(
+            tmp_path / "out",
+            producer_commit=PRODUCER_COMMIT,
+            source_date_epoch=1_784_500_000,
+            core_source=core,
+            cua_node_source=_cua_node(tmp_path / "inputs"),
+            include_fat_archive=False,
+        )
+
+
+def test_complete_release_rejects_producer_path_embedded_in_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
+    monkeypatch.setattr(
+        "build_complete_release._verify_git_source_inventory", lambda _root, _commit: None
+    )
+    core = _core(tmp_path / "inputs")
+    (core / "bin/runtimes/linux-x64/sky-cua-service").write_bytes(
+        b"\x00" + str(REPO_ROOT).encode() + b"\x00"
+    )
+
+    with pytest.raises(ValueError, match="packaged binary contains"):
+        build_complete_release(
+            tmp_path / "out",
+            producer_commit=PRODUCER_COMMIT,
+            source_date_epoch=1_784_500_000,
+            core_source=core,
+            cua_node_source=_cua_node(tmp_path / "inputs"),
             include_fat_archive=False,
         )
 

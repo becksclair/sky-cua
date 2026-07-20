@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -21,6 +22,7 @@ from release_generation import (
     SCHEMA_VERSION,
     VerifiedRelease,
     canonical_json_bytes,
+    canonical_tree_digest,
     component_record,
     content_addressed_release_id,
     sha256_file,
@@ -49,6 +51,15 @@ class FileSource:
 class ReleaseBuild:
     release: VerifiedRelease
     fat_archive: Path | None
+
+
+def _chrome_extension_id(public_key: str) -> str:
+    try:
+        decoded = base64.b64decode(public_key, validate=True)
+    except (ValueError, TypeError) as error:
+        raise ValueError("Browser extension manifest key is invalid") from error
+    hexadecimal = hashlib.sha256(decoded).hexdigest()[:32]
+    return "".join(chr(ord("a") + int(nibble, 16)) for nibble in hexadecimal)
 
 
 def _verify_cua_node_release_eligibility(
@@ -225,6 +236,7 @@ def build_release_set(
     components: Sequence[ComponentSource],
     locks: Sequence[FileSource],
     artifacts: Sequence[FileSource],
+    browser_extension_bridge: Mapping[str, str] | None = None,
     documentation: Mapping[str, str] | None = None,
     source_date_epoch: int | None = None,
     include_fat_archive: bool = True,
@@ -325,6 +337,48 @@ def build_release_set(
         if not projection_records:
             raise ValueError("at least one Codex Browser compatibility projection is required")
 
+        extension_record: dict[str, str] | None = None
+        if browser_extension_bridge is not None:
+            if set(browser_extension_bridge) != {"component", "extension_id", "path", "version"}:
+                raise ValueError("Browser extension bridge selection fields are invalid")
+            if browser_extension_bridge["component"] != "core-linux-x64":
+                raise ValueError("Browser extension bridge must be owned by the core component")
+            extension_relative = _component_relative_path(
+                browser_extension_bridge["path"], field="browser_extension_bridge.path"
+            )
+            core_prefix = PurePosixPath("components/core-linux-x64")
+            if extension_relative.parts[: len(core_prefix.parts)] != core_prefix.parts:
+                raise ValueError("Browser extension bridge path must be inside the core component")
+            extension_root = staging.joinpath(*extension_relative.parts)
+            manifest_path = extension_root / "manifest.json"
+            if (
+                extension_root.is_symlink()
+                or not extension_root.is_dir()
+                or manifest_path.is_symlink()
+                or not manifest_path.is_file()
+            ):
+                raise FileNotFoundError("selected Browser extension bridge is missing")
+            extension_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(extension_manifest, dict):
+                raise ValueError("selected Browser extension manifest is invalid")
+            extension_id = browser_extension_bridge["extension_id"]
+            if (
+                extension_manifest.get("version") != browser_extension_bridge["version"]
+                or not isinstance(extension_manifest.get("key"), str)
+                or _chrome_extension_id(extension_manifest["key"]) != extension_id
+                or "nativeMessaging" not in extension_manifest.get("permissions", [])
+            ):
+                raise ValueError("selected Browser extension identity or capability is invalid")
+            extension_record = {
+                **dict(browser_extension_bridge),
+                "manifest_sha256": sha256_file(manifest_path),
+                "tree_sha256": canonical_tree_digest(extension_root).sha256,
+            }
+        elif "browser-extension-bridge" in capabilities_supported:
+            raise ValueError(
+                "browser-extension-bridge capability requires one exact extension selection"
+            )
+
         lock_records = {
             source.name: _copy_file_source(staging, source)
             for source in sorted(locks, key=lambda item: item.name)
@@ -368,6 +422,7 @@ def build_release_set(
                     "sha256": canonical_browser_sha256,
                 },
                 "compatibility_projections": projection_records,
+                **({"extension_bridge": extension_record} if extension_record else {}),
             },
         }
         if documentation is not None:

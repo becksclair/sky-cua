@@ -9,6 +9,11 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from _native_messaging_install import (
+    NativeMessagingInstallReport,
+    install_native_messaging_manifests,
+    rollback_native_messaging_manifests,
+)
 from _openclaw_install import (
     DEFAULT_OPENCLAW_DIR,
     GatewayActivationMode,
@@ -42,6 +47,9 @@ class CompleteReleaseInstallReport:
     profile: str
     previous_release_id: str | None
     configured_hosts: tuple[str, ...]
+    native_messaging: NativeMessagingInstallReport
+    browser_extension: Mapping[str, str]
+    browser_reload_required: bool
     openclaw: OpenClawReleaseInstallReport | None
     opencode: OpenCodeInstallReport | None
 
@@ -53,6 +61,9 @@ class CompleteReleaseInstallReport:
             "profile": self.profile,
             "previous_release_id": self.previous_release_id,
             "configured_hosts": list(self.configured_hosts),
+            "native_messaging": self.native_messaging.as_dict(),
+            "browser_extension": dict(self.browser_extension),
+            "browser_reload_required": self.browser_reload_required,
             "openclaw": self.openclaw.as_dict() if self.openclaw else None,
             "opencode": self.opencode.to_dict() if self.opencode else None,
         }
@@ -80,6 +91,7 @@ def install_complete_release(
     opencode_config_dir: Path | None = None,
     opencode_process_env: Mapping[str, str] | None = None,
     opencode_effective_cwd: Path | None = None,
+    native_messaging_home: Path | None = None,
 ) -> CompleteReleaseInstallReport:
     """Promote a generation, then transactionally project both MCP servers.
 
@@ -106,9 +118,14 @@ def install_complete_release(
         expected_manifest_sha256=expected_manifest_sha256,
         profile=profile,
     )
+    native_messaging: NativeMessagingInstallReport | None = None
     opencode_report: OpenCodeInstallReport | None = None
     openclaw_report: OpenClawReleaseInstallReport | None = None
     try:
+        native_messaging = install_native_messaging_manifests(
+            installed.root,
+            home=native_messaging_home,
+        )
         if "opencode" in selected_hosts:
             assert browser_socket_path is not None
             opencode_report = install_opencode_two_server_config(
@@ -139,6 +156,11 @@ def install_complete_release(
                 )
             except BaseException as rollback_error:
                 rollback_failures.append(f"opencode: {rollback_error}")
+        if native_messaging is not None and native_messaging.changed_paths:
+            try:
+                rollback_native_messaging_manifests(native_messaging)
+            except BaseException as rollback_error:
+                rollback_failures.append(f"native-messaging: {rollback_error}")
         if prior != installed.release_id:
             try:
                 if prior is None:
@@ -156,6 +178,23 @@ def install_complete_release(
             f"complete-release consumer configuration failed: {error}{detail}"
         ) from error
 
+    assert native_messaging is not None
+    manifest = json.loads((installed.root / "RELEASE.json").read_text(encoding="utf-8"))
+    extension = manifest.get("browser_contract", {}).get("extension_bridge")
+    if not isinstance(extension, dict) or not all(
+        isinstance(extension.get(name), str)
+        for name in ("extension_id", "manifest_sha256", "path", "tree_sha256", "version")
+    ):
+        raise CompleteReleaseInstallError("verified release has no Browser extension binding")
+    extension_path = installed.root.joinpath(*Path(extension["path"]).parts).resolve()
+    browser_extension = {
+        "activation": "load_unpacked",
+        "extension_id": extension["extension_id"],
+        "manifest_sha256": extension["manifest_sha256"],
+        "path": str(extension_path),
+        "tree_sha256": extension["tree_sha256"],
+        "version": extension["version"],
+    }
     return CompleteReleaseInstallReport(
         release_id=installed.release_id,
         manifest_sha256=installed.manifest_sha256,
@@ -163,6 +202,9 @@ def install_complete_release(
         profile=installed.profile,
         previous_release_id=prior,
         configured_hosts=selected_hosts,
+        native_messaging=native_messaging,
+        browser_extension=browser_extension,
+        browser_reload_required=True,
         openclaw=openclaw_report,
         opencode=opencode_report,
     )
@@ -170,7 +212,12 @@ def install_complete_release(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("candidate", type=Path)
+    parser.add_argument("candidate", type=Path, nargs="?")
+    parser.add_argument(
+        "--rollback",
+        action="store_true",
+        help="activate the retained prior generation and reproject selected consumers",
+    )
     parser.add_argument("--store-root", type=Path, default=Path.home() / ".local/share/sky-cua")
     parser.add_argument(
         "--profile", choices=(FULL_PROFILE, CORE_ONLY_PROFILE), default=FULL_PROFILE
@@ -187,10 +234,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--opencode-config-dir", type=Path)
     parser.add_argument("--opencode-effective-cwd", type=Path)
+    parser.add_argument("--native-messaging-home", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.rollback:
+            if args.candidate is not None:
+                raise CompleteReleaseInstallError(
+                    "a candidate path cannot be supplied together with --rollback"
+                )
+            store = GenerationStore(args.store_root.expanduser().resolve())
+            previous = store.previous_release_id()
+            if previous is None:
+                raise CompleteReleaseInstallError("no retained prior generation is available")
+            candidate = store.releases / previous
+        elif args.candidate is None:
+            raise CompleteReleaseInstallError("a candidate release path is required")
+        else:
+            candidate = args.candidate
         report = install_complete_release(
-            args.candidate,
+            candidate,
             store_root=args.store_root,
             profile=args.profile,
             expected_manifest_sha256=args.manifest_sha256,
@@ -201,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
             openclaw_gateway_activation=args.openclaw_gateway_activation,
             opencode_config_dir=args.opencode_config_dir,
             opencode_effective_cwd=args.opencode_effective_cwd,
+            native_messaging_home=args.native_messaging_home,
         )
     except (CompleteReleaseInstallError, InstallTransactionError, OSError, ValueError) as error:
         parser.exit(2, f"error: {error}\n")
