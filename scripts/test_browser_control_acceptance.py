@@ -77,6 +77,22 @@ def test_modes_share_one_actor_preserve_raw_wire_and_heartbeat(
                 "browser": "Brave",
                 "type": "iab",
                 "codexAppBuildFlavor": "acceptance-fake",
+                "capabilities": {
+                    "tab": [
+                        {
+                            "id": "botDetection",
+                            "description": (
+                                "Report detected anti-bot challenges through the sky-cua daemon"
+                            ),
+                        },
+                        {
+                            "id": "browserAuth",
+                            "description": (
+                                "Request a sky-cua daemon browser-authentication handoff"
+                            ),
+                        },
+                    ]
+                },
                 "metadata": {
                     "codexSessionId": "codex-info",
                     "skyCuaBridgeTransport": "extension_native_host",
