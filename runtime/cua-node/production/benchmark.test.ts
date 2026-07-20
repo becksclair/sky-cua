@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { test } from "bun:test";
 import {
   benchmarkVerdicts,
+  defaultBenchmarkLockPaths,
   runCuaNodeBenchmark,
   type CuaNodeBenchmarkBaseline,
   type CuaNodeBenchmarkMetrics,
@@ -14,6 +15,13 @@ import { stopChildProcess } from "./web-workbench-acceptance-helper";
 
 const repoRoot = resolve(__dirname, "..");
 const fixtureRoot = resolve(__dirname, "../test/fixtures/fake-runtime");
+
+test("installed benchmarks enforce the candidate generation's own lock bytes", () => {
+  assert.deepEqual(defaultBenchmarkLockPaths("/installed/cua_node"), [
+    "/installed/cua_node/share/locks/runtime-lock.json",
+    "/installed/cua_node/share/locks/native-assets.lock.json",
+  ]);
+});
 
 function baseline(
   metrics: Partial<CuaNodeBenchmarkBaseline["metrics"]> = {},

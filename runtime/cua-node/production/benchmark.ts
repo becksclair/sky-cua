@@ -138,6 +138,13 @@ const EMPTY_SAMPLES: Samples = {
   median_ms: null,
   p95_ms: null,
 };
+
+export function defaultBenchmarkLockPaths(runtimeRoot: string): string[] {
+  return [
+    join(runtimeRoot, "share/locks/runtime-lock.json"),
+    join(runtimeRoot, "share/locks/native-assets.lock.json"),
+  ];
+}
 export const DEFAULT_BENCHMARK_THRESHOLDS: CuaNodeBenchmarkThresholds = {
   node_spawn_p95_ms: 500,
   initialized_cold_start_ms: 5_000,
@@ -549,10 +556,7 @@ export async function runCuaNodeBenchmark(
     root: runtimeRoot,
     expectedTarget: "linux-x64-glibc",
     allowFixtureValues: options.allowFixtureValues,
-    enforceLockPaths: options.enforceLockPaths ?? [
-      join(repoRoot, "runtime-lock.json"),
-      join(repoRoot, "native-assets.lock.json"),
-    ],
+    enforceLockPaths: options.enforceLockPaths ?? defaultBenchmarkLockPaths(runtimeRoot),
   });
   if (verification.status !== "passed")
     return {
