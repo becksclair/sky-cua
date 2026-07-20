@@ -43,6 +43,7 @@ use super::introspection;
 mod actor_events;
 mod codex;
 mod executor;
+mod raw_host;
 mod runtime;
 mod state;
 mod support;

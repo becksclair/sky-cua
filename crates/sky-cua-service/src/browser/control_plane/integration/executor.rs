@@ -45,6 +45,19 @@ impl Executor for IntegrationExecutor {
                             "persistent bridge unavailable".to_owned(),
                         );
                     };
+                    if let Some(outcome) = super::raw_host::execute(
+                        &shared,
+                        &entry.actor,
+                        &operation,
+                        &method,
+                        &params,
+                        timeout_ms,
+                        &identity,
+                    )
+                    .await
+                    {
+                        return outcome;
+                    }
                     let started = tokio::time::Instant::now();
                     let timeout = Duration::from_millis(timeout_ms);
                     let mut request = BridgeActorRequest::new(

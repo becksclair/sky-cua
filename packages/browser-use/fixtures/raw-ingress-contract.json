@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Minimal daemon/extension seam required for the final two Browser capability commands; every other canonical command uses existing raw/CDP/notification primitives.",
+  "methods": {
+    "reportBotDetection": {
+      "operationClass": "mutation",
+      "scope": "tab",
+      "params": {
+        "tabId": "string | number; required; caller-owned tab",
+        "reason": "captcha_failed | access_denied | challenge_loop | unexpected_bot_error",
+        "hostname": "string; observed by Browser JS from the same tab immediately before dispatch"
+      },
+      "result": {
+        "status": "reported",
+        "hostname": "string | null"
+      },
+      "invariants": [
+        "The daemon validates caller ownership of tabId and stamps the existing raw-ingress provenance and logical identity.",
+        "The report is recorded at most once for the operation id; ambiguous mutation outcomes are never retried.",
+        "The returned hostname is the accepted report hostname or null when the host intentionally redacts it."
+      ]
+    },
+    "browserAuthHandoff": {
+      "operationClass": "mutation",
+      "scope": "tab",
+      "params": {
+        "tabId": "string | number; required; caller-owned tab",
+        "origin": "absolute origin string",
+        "reason": "non-empty user-facing reason",
+        "expires_at": "RFC 3339 timestamp no more than five minutes in the future",
+        "fields": "1..6 entries with id, label, type, autocomplete, required, selector",
+        "submit": "optional selector plus click | press_enter action"
+      },
+      "result": {
+        "status": "submitted | declined | cancelled | unavailable | expired | origin_changed | page_changed | locator_invalid | submission_failed"
+      },
+      "invariants": [
+        "The daemon validates caller ownership, current tab origin, expiry, field ids, and selectors before presenting host UI.",
+        "Credential values never return through Browser JS, MCP output, logs, metadata, or the extension notification stream.",
+        "The host applies values and optional submission exactly once under the existing operation settlement fence; ambiguous mutation outcomes are never retried.",
+        "Any origin or page identity change before application returns the corresponding non-submitted status."
+      ]
+    }
+  },
+  "notifications": {
+    "onCDPEvent": {
+      "existing": true,
+      "params": "{ source: { tabId, sessionId?, targetId?, extensionId? }, method: string, params?: object }",
+      "invariant": "Ordered per bridge actor and delivered to every live logical connection that owns the browser."
+    },
+    "onCDPDetach": {
+      "existing": true,
+      "params": "{ tabId, sessionId?, targetId? }",
+      "invariant": "Delivered after the final event for the detached target."
+    },
+    "onDownloadChange": {
+      "existing": true,
+      "params": "{ id, status, filename?, path?, url?, session_id? }",
+      "invariant": "Only caller-owned download state is routed; complete paths name regular same-user files."
+    }
+  }
+}

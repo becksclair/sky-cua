@@ -14,6 +14,8 @@ use super::{
 };
 use crate::browser::protocol::{read_frame, write_frame};
 
+mod raw_host;
+
 #[derive(Clone)]
 struct AmbiguousExecutor;
 
