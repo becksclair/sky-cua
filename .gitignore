@@ -9,6 +9,7 @@ __pycache__/
 *.py[cod]
 /dist
 /artifacts
+/out
 /docs/computer-use-1.0.750
 .clawpatch/features/
 .clawpatch/runs/

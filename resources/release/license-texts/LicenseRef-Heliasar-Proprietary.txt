@@ -1,0 +1,5 @@
+Copyright (c) Heliasar. All rights reserved.
+
+This first-party sky-cua package is proprietary software. No permission is
+granted to copy, modify, distribute, sublicense, or sell it except under a
+separate written agreement with Heliasar.
