@@ -385,7 +385,16 @@ class PlaywrightAPI {
       throw new Error("expectNavigation timeoutMs must be a non-negative finite number");
     }
     await this.tab.command("tab_cdp_call", { method: "Page.enable" });
-    const navigation = this.waitForNavigationEvent(await this.currentCdpCursor(), timeoutMs);
+    const frameTree = asObject(await this.tab.command("tab_cdp_call", {
+      method: "Page.getFrameTree",
+    }));
+    const mainFrameId = String(asObject(asObject(frameTree.frameTree).frame).id ?? "");
+    if (mainFrameId === "") throw new Error("expectNavigation could not resolve the main frame");
+    const navigation = this.waitForNavigationEvent(
+      await this.currentCdpCursor(),
+      timeoutMs,
+      mainFrameId,
+    );
     const [result] = await Promise.all([action(), navigation]);
     if (options.url !== undefined) await this.waitForURL(String(options.url), options);
     await this.waitForLoadState({ state: options.waitUntil ?? "load", timeoutMs: options.timeoutMs });
@@ -402,7 +411,11 @@ class PlaywrightAPI {
       if (batch.hasMore !== true) return cursor;
     }
   }
-  private async waitForNavigationEvent(afterSequence: number, timeoutMs: number): Promise<void> {
+  private async waitForNavigationEvent(
+    afterSequence: number,
+    timeoutMs: number,
+    mainFrameId: string,
+  ): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     let cursor = afterSequence;
     while (true) {
@@ -415,12 +428,18 @@ class PlaywrightAPI {
       }));
       const events = asArray(batch.events).map(asObject);
       if (events.some((event) => {
-        if (event.method === "Page.navigatedWithinDocument") return true;
-        const frame = asObject(asObject(event.params).frame);
-        return event.method === "Page.frameNavigated" && frame.parentId === undefined;
+        const params = asObject(event.params);
+        if (event.method === "Page.navigatedWithinDocument") {
+          return String(params.frameId ?? "") === mainFrameId;
+        }
+        const frame = asObject(params.frame);
+        return event.method === "Page.frameNavigated"
+          && frame.parentId === undefined
+          && String(frame.id ?? "") === mainFrameId;
       })) return;
       cursor = Number(batch.cursor ?? cursor);
       if (Date.now() >= deadline) throw new Error(`expectNavigation timed out after ${timeoutMs}ms`);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, remaining))));
     }
   }
   frameLocator(selector: string): PlaywrightFrameLocator { return new PlaywrightFrameLocator(this.tab, { kind: "frameLocator", args: [selector] }); }

@@ -64,6 +64,9 @@ class FakeConnection implements NativePipeConnection {
     else if (request.method === "getUserHistory") result = [{ url: "https://example.test", dateVisited: "2026-07-20T00:00:00Z" }];
     else if (request.method === "getTabs") result = [{ id: "tab-1", active: true, title: "Fixture", url: "about:blank" }];
     else if (request.method === "executeCdp" && params.method === "Page.captureScreenshot") result = { data: "iVBORw0KGgo=" };
+    else if (request.method === "executeCdp" && params.method === "Page.getFrameTree") {
+      result = { frameTree: { frame: { id: "main-frame", url: "https://example.test/ready" } } };
+    }
     else if (request.method === "executeCdp" && params.method === "Runtime.evaluate") {
       const expression = String((params.commandParams as Record<string, unknown>)?.expression ?? "");
       const value = expression.includes("return nodes.length") ? 1
@@ -305,9 +308,14 @@ describe("canonical Browser runtime", () => {
     const navigated = await tab.playwright.expectNavigation(async () => {
       state.connection.emitNotification("onCDPEvent", {
         source: { tabId: 17 },
-        method: "Page.frameNavigated",
-        params: { frame: { id: "new-frame", url: "https://example.test/ready" } },
+        method: "Page.navigatedWithinDocument",
+        params: { frameId: "child-frame", url: "https://example.test/iframe#changed" },
       });
+      setTimeout(() => state.connection.emitNotification("onCDPEvent", {
+        source: { tabId: 17 },
+        method: "Page.frameNavigated",
+        params: { frame: { id: "main-frame", url: "https://example.test/ready" } },
+      }), 10);
       return "navigated";
     }, { timeoutMs: 100, url: "https://example.test/ready" });
     assert.equal(navigated, "navigated");

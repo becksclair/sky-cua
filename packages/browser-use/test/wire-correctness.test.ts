@@ -143,6 +143,7 @@ test("download handles and paths remain owned by their originating tab", async (
     timeoutMs: 1_000,
   });
   const behaviors = await waitForBehavior(backend, 2);
+  assert.equal(behaviors[0]?.downloadPath, behaviors[1]?.downloadPath);
   const tabTwoRoot = String(behaviors[1]?.downloadPath);
   const rawPath = join(tabTwoRoot, "download-2");
   await writeFile(rawPath, "owned by tab two");

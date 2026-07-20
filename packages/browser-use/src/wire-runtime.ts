@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import type { BrowserCommand, CommandEnvelope } from "./commands.ts";
@@ -30,9 +30,9 @@ type DownloadState = {
 };
 
 type BackendState = {
-  activeDownloadRoots: Map<string, string>;
   cdpEvents: Map<string, CdpEvent[]>;
   dialogs: Map<string, DialogState>;
+  downloadRoot: string | undefined;
   downloads: Map<string, DownloadState>;
   fileChooserHandles: Map<string, FileChooserState>;
   fileChoosers: Map<string, FileChooserState[]>;
@@ -47,9 +47,9 @@ function backendState(backend: RawBackend): BackendState {
   const existing = BACKEND_STATES.get(backend);
   if (existing !== undefined) return existing;
   const state: BackendState = {
-    activeDownloadRoots: new Map(),
     cdpEvents: new Map(),
     dialogs: new Map(),
+    downloadRoot: undefined,
     downloads: new Map(),
     fileChooserHandles: new Map(),
     fileChoosers: new Map(),
@@ -115,9 +115,7 @@ function recordCdpEvent(state: BackendState, notification: ObjectValue): void {
     state.downloads.set(id, {
       id,
       ...(typeof params.suggestedFilename === "string" ? { filename: params.suggestedFilename } : {}),
-      ...(state.activeDownloadRoots.get(tab) === undefined
-        ? {}
-        : { path: join(state.activeDownloadRoots.get(tab)!, id) }),
+      ...(state.downloadRoot === undefined ? {} : { path: join(state.downloadRoot, id) }),
       status: "started",
       tabId: tab,
       ...(typeof params.url === "string" ? { url: params.url } : {}),
@@ -386,8 +384,7 @@ async function playwrightCommand(backend: RawBackend, command: CommandEnvelope):
     case "playwright_wait_for_download": {
       const state = backendState(backend);
       const tab = String(tabId(command));
-      const root = await artifactDirectory("sky-cua-download");
-      state.activeDownloadRoots.set(tab, root);
+      state.downloadRoot ??= await sharedDownloadDirectory();
       const existing = new Set(
         [...state.downloads.values()]
           .filter((value) => value.tabId === tab)
@@ -395,7 +392,7 @@ async function playwrightCommand(backend: RawBackend, command: CommandEnvelope):
       );
       await cdp(backend, tabId(command), "Browser.setDownloadBehavior", {
         behavior: "allowAndName",
-        downloadPath: root,
+        downloadPath: state.downloadRoot,
         eventsEnabled: true,
       });
       const download = await waitUntil(() => [...state.downloads.values()].find((value) =>
@@ -552,6 +549,16 @@ function safeFilename(value: string, fallback: string): string {
 
 async function artifactDirectory(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), `${prefix}-`));
+}
+
+async function sharedDownloadDirectory(): Promise<string> {
+  const uid = typeof process.getuid === "function" ? process.getuid() : "user";
+  const root = join(tmpdir(), `sky-cua-browser-downloads-${uid}`);
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  if (!(await stat(root)).isDirectory()) {
+    throw new Error(`Browser download root is not a directory: ${root}`);
+  }
+  return root;
 }
 
 function decodedBase64(value: unknown): Uint8Array {
