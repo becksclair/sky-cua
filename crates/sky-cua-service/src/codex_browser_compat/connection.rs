@@ -62,7 +62,7 @@ where
     let generation = backend.daemon_generation();
     let connection = CodexConnectionContext {
         connection_id: fresh_id("codex-connection", &NEXT_CONNECTION_ID),
-        provenance: "codex_desktop",
+        ingress: "raw_native_pipe",
         peer_uid,
         codex_app_build_flavor,
         daemon_generation: generation.clone(),

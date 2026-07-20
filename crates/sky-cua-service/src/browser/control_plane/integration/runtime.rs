@@ -384,7 +384,7 @@ impl BrowserControlRuntime {
     }
 
     pub(crate) async fn mcp_client_disconnected(&self, connection_id: &str) {
-        self.record_client_closed(connection_id, "mcp");
+        self.record_client_closed(connection_id);
         let release_now = {
             let mut lifecycle = self.shared.mcp_connections.lock().await;
             lifecycle.closed.insert(connection_id.to_owned());
@@ -512,6 +512,7 @@ impl BrowserControlRuntime {
                 let canonical = canonical_sockets.contains(&entry.socket);
                 BrowserControlActorSnapshot {
                     state: bridge_state(health.state),
+                    transport: BrowserBridgeTransport::ExtensionNativeHost,
                     socket_path: entry.socket.to_string_lossy().into_owned(),
                     bridge_connection_id: health.bridge_connection_id,
                     browser_instance_id: health.browser_instance_id,
@@ -573,66 +574,114 @@ impl BrowserControlRuntime {
             .client_info
             .as_ref()
             .map(|info| bounded_label(&format!("{}/{}", info.name, info.version)));
-        self.record_client_open(BrowserControlClientSummary {
+        let client_info = provenance
+            .client_info
+            .as_ref()
+            .map(|info| BrowserMcpClientInfo {
+                name: bounded_label(&info.name),
+                version: bounded_label(&info.version),
+                title: info.title.as_deref().map(bounded_label),
+            });
+        let result = self.record_client_open(BrowserControlClientSummary {
             connection_id: provenance.connection_id.clone(),
             ingress: "mcp".to_owned(),
+            surface: BrowserClientSurface::McpTools,
             caller: provenance.caller,
             provenance_source: provenance.source,
             declared_label: provenance.declared_caller.as_deref().map(bounded_label),
             client_info_label,
+            client_info,
         });
+        if result.is_err() {
+            tracing::warn!(
+                connection_id = %provenance.connection_id,
+                "MCP browser connection attempted to change caller provenance"
+            );
+        }
     }
 
     pub(crate) fn observe_mcp_client(&self, provenance: &BrowserCallerProvenance) {
         self.record_mcp_client(provenance);
     }
 
-    pub(in crate::browser::control_plane) fn record_codex_client_open(&self, connection_id: &str) {
-        self.record_client_open(BrowserControlClientSummary {
-            connection_id: connection_id.to_owned(),
-            ingress: "codex_compat".to_owned(),
-            caller: BrowserCallerKind::CodexDesktop,
-            provenance_source: BrowserProvenanceSource::TrustedCodexMetadata,
-            declared_label: Some("codex_desktop".to_owned()),
-            client_info_label: None,
-        });
+    pub(in crate::browser::control_plane) fn record_raw_client_open(
+        &self,
+        provenance: &BrowserCallerProvenance,
+    ) -> Result<(), String> {
+        let surface = match provenance.caller {
+            BrowserCallerKind::CodexDesktop | BrowserCallerKind::CodexCli => {
+                BrowserClientSurface::HostProvidedIab
+            }
+            _ => BrowserClientSurface::NodeReplBrowserApi,
+        };
+        let client_info_label = provenance
+            .client_info
+            .as_ref()
+            .map(|info| bounded_label(&format!("{}/{}", info.name, info.version)));
+        let client = BrowserControlClientSummary {
+            connection_id: provenance.connection_id.clone(),
+            ingress: "raw_native_pipe".to_owned(),
+            surface,
+            caller: provenance.caller,
+            provenance_source: provenance.source,
+            declared_label: provenance.declared_caller.as_deref().map(bounded_label),
+            client_info_label,
+            client_info: provenance
+                .client_info
+                .as_ref()
+                .map(|info| BrowserMcpClientInfo {
+                    name: bounded_label(&info.name),
+                    version: bounded_label(&info.version),
+                    title: info.title.as_deref().map(bounded_label),
+                }),
+        };
+        self.record_client_open(client)
+            .map(|_| ())
+            .map_err(|()| "raw browser connection attempted to change caller provenance".to_owned())
     }
 
-    fn record_client_open(&self, client: BrowserControlClientSummary) {
+    fn record_client_open(&self, client: BrowserControlClientSummary) -> Result<bool, ()> {
         let ingress = client.ingress.clone();
-        if self
-            .shared
-            .clients
-            .write()
-            .expect("client registry poisoned")
-            .insert(client.connection_id.clone(), client)
-            .is_none()
-        {
+        let inserted = {
+            let mut clients = self
+                .shared
+                .clients
+                .write()
+                .expect("client registry poisoned");
+            match clients.get(&client.connection_id) {
+                Some(existing) if existing == &client => false,
+                Some(_) => return Err(()),
+                None => {
+                    clients.insert(client.connection_id.clone(), client.clone());
+                    true
+                }
+            }
+        };
+        if inserted {
             self.control.events.record(
                 BrowserControlEventKind::ClientState {
                     state: format!("{ingress}_connected"),
+                    client,
                 },
                 super::introspection::EventContext::default(),
             );
         }
+        Ok(inserted)
     }
 
-    pub(in crate::browser::control_plane) fn record_client_closed(
-        &self,
-        connection_id: &str,
-        ingress: &str,
-    ) {
-        if self
+    pub(in crate::browser::control_plane) fn record_client_closed(&self, connection_id: &str) {
+        if let Some(client) = self
             .shared
             .clients
             .write()
             .expect("client registry poisoned")
             .remove(connection_id)
-            .is_some()
         {
+            let ingress = client.ingress.clone();
             self.control.events.record(
                 BrowserControlEventKind::ClientState {
                     state: format!("{ingress}_disconnected"),
+                    client,
                 },
                 super::introspection::EventContext::default(),
             );

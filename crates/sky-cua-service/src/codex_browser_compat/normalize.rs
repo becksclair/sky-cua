@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
+use sky_cua_platform::model::{
+    BrowserCallerKind, BrowserCallerProvenance, BrowserMcpClientInfo, BrowserProvenanceSource,
+};
 
 use super::{
     CodexConnectionContext, CodexLogicalIdentity, CodexNormalizedRequest, CodexOperationClass,
@@ -35,6 +38,10 @@ pub(super) fn normalize_request(
     }
     .min(MAX_DEADLINE_MS);
     let logical_identity = extract_logical_identity(&raw_request);
+    let caller_provenance = extract_caller_provenance(&raw_request, connection);
+    let identity_synthetic = metadata_value(&raw_request, "identity_synthetic")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(CodexNormalizedRequest {
         operation_id: fresh_id("codex-operation", &NEXT_OPERATION_ID),
         upstream_id,
@@ -43,10 +50,76 @@ pub(super) fn normalize_request(
         raw_request,
         connection: connection.clone(),
         logical_identity,
+        caller_provenance,
+        identity_synthetic,
         class,
         scope,
         canonical_fingerprint: canonical_fingerprint(&method, &params),
         deadline: Duration::from_millis(deadline_ms),
+    })
+}
+
+fn extract_caller_provenance(
+    value: &Value,
+    connection: &CodexConnectionContext,
+) -> BrowserCallerProvenance {
+    let declared_caller = metadata_value(value, "caller_provenance")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|declared| !declared.is_empty())
+        .map(|declared| declared.chars().take(128).collect::<String>());
+    let client_info = metadata_value(value, "client_info").and_then(parse_client_info);
+    let normalized = declared_caller
+        .as_deref()
+        .and_then(BrowserCallerKind::from_provenance_label);
+    let inferred = client_info
+        .as_ref()
+        .and_then(|info| BrowserCallerKind::from_provenance_label(&info.name));
+    let (caller, source) = match normalized {
+        Some(caller) => (caller, BrowserProvenanceSource::RequestMetadataDeclaration),
+        None if declared_caller.is_some() => (
+            BrowserCallerKind::LegacyUnknown,
+            BrowserProvenanceSource::LegacyFallback,
+        ),
+        None if inferred.is_some() => (
+            inferred.expect("inferred caller was checked"),
+            BrowserProvenanceSource::ClientInfoInference,
+        ),
+        None => (
+            BrowserCallerKind::CodexDesktop,
+            BrowserProvenanceSource::HostProvidedIab,
+        ),
+    };
+    BrowserCallerProvenance {
+        caller,
+        source,
+        connection_id: connection.connection_id.clone(),
+        declared_caller,
+        client_info,
+    }
+}
+
+fn metadata_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    let params = value.get("params")?;
+    params
+        .get(key)
+        .or_else(|| params.get("request_meta").and_then(|meta| meta.get(key)))
+        .or_else(|| params.get("_meta").and_then(|meta| meta.get(key)))
+}
+
+fn parse_client_info(value: &Value) -> Option<BrowserMcpClientInfo> {
+    let object = value.as_object()?;
+    let non_empty = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    Some(BrowserMcpClientInfo {
+        name: non_empty("name")?.chars().take(128).collect(),
+        version: non_empty("version")?.chars().take(128).collect(),
+        title: non_empty("title").map(|title| title.chars().take(128).collect()),
     })
 }
 

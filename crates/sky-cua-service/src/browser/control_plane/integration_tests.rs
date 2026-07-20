@@ -733,6 +733,9 @@ async fn codex_fetch_continuation_reenters_the_in_flight_tab_operation() {
         CodexBackendReply, CodexBrowserBackend, CodexConnectionContext, CodexLogicalIdentity,
         CodexNormalizedRequest, CodexOperationClass, CodexOperationScope,
     };
+    use sky_cua_platform::model::{
+        BrowserCallerKind, BrowserCallerProvenance, BrowserProvenanceSource,
+    };
 
     fn request(
         connection: &CodexConnectionContext,
@@ -759,6 +762,14 @@ async fn codex_fetch_continuation_reenters_the_in_flight_tab_operation() {
                 thread_id: Some("codex-reentrant-thread".to_owned()),
                 turn_id: Some("codex-reentrant-turn".to_owned()),
             },
+            caller_provenance: BrowserCallerProvenance {
+                caller: BrowserCallerKind::CodexDesktop,
+                source: BrowserProvenanceSource::HostProvidedIab,
+                connection_id: connection.connection_id.clone(),
+                declared_caller: None,
+                client_info: None,
+            },
+            identity_synthetic: false,
             class: CodexOperationClass::Mutation,
             scope,
             canonical_fingerprint: format!("fingerprint-{operation_id}"),
@@ -846,7 +857,7 @@ async fn codex_fetch_continuation_reenters_the_in_flight_tab_operation() {
     spawn_actor_events(actor, Arc::clone(&runtime.shared), runtime.control.clone());
     let connection = CodexConnectionContext {
         connection_id: "codex-reentrant-connection".to_owned(),
-        provenance: "test",
+        ingress: "test",
         peer_uid: unsafe { libc::geteuid() },
         codex_app_build_flavor: Some("prod".to_owned()),
         daemon_generation: runtime.daemon_generation(),
@@ -1623,7 +1634,7 @@ async fn admission_rejections_leave_no_operation_correlation_leaks() {
     let generation = runtime.daemon_generation();
     let connection = CodexConnectionContext {
         connection_id: "codex-rejected".to_owned(),
-        provenance: "test",
+        ingress: "test",
         peer_uid: unsafe { libc::geteuid() },
         codex_app_build_flavor: None,
         daemon_generation: generation,
@@ -1642,6 +1653,14 @@ async fn admission_rejections_leave_no_operation_correlation_leaks() {
             raw_request: json!({"jsonrpc":"2.0","id":42,"method":"createTab","params":{}}),
             connection,
             logical_identity: CodexLogicalIdentity::default(),
+            caller_provenance: BrowserCallerProvenance {
+                caller: BrowserCallerKind::CodexDesktop,
+                source: BrowserProvenanceSource::HostProvidedIab,
+                connection_id: "codex-rejected".to_owned(),
+                declared_caller: None,
+                client_info: None,
+            },
+            identity_synthetic: false,
             class: CodexOperationClass::Mutation,
             scope: CodexOperationScope::Bridge,
             canonical_fingerprint: "codex-fingerprint".to_owned(),
@@ -1901,7 +1920,7 @@ async fn closed_codex_connection_cleanup_reorphanes_a_late_group_renewal() {
     let peer_uid = unsafe { libc::geteuid() };
     let connection = CodexConnectionContext {
         connection_id: connection_id.to_owned(),
-        provenance: "test",
+        ingress: "test",
         peer_uid,
         codex_app_build_flavor: None,
         daemon_generation: runtime.daemon_generation(),
@@ -2014,6 +2033,63 @@ async fn normalized_session_principal_survives_reconnect_and_is_reference_counte
     let resumed = runtime.default_group(&principal, logical, &browser).await;
     assert_eq!(resumed.lease.state, LeaseState::Active);
     assert_eq!(resumed.group_id, group.group_id);
+}
+
+#[tokio::test]
+async fn caller_lanes_with_the_same_session_own_distinct_groups_on_one_browser() {
+    use super::integration::{BrowserControlRuntime, principal_from_mcp};
+    use sky_cua_platform::model::{
+        BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity,
+        BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequestContext,
+    };
+
+    let runtime = BrowserControlRuntime::new();
+    let browser = BrowserInstanceId::from("shared-extension-actor");
+    let logical = "session:shared-session:thread:shared-thread";
+    let callers = [
+        BrowserCallerKind::CodexDesktop,
+        BrowserCallerKind::OpenClaw,
+        BrowserCallerKind::OpenCode,
+        BrowserCallerKind::DirectMcp,
+    ];
+    let mut principals = Vec::new();
+    let mut groups = Vec::new();
+    for (index, caller) in callers.into_iter().enumerate() {
+        let connection_id = format!("connection-{index}");
+        let context = BrowserRequestContext {
+            provenance: BrowserCallerProvenance {
+                caller,
+                source: BrowserProvenanceSource::InstallerDeclaration,
+                connection_id: connection_id.clone(),
+                declared_caller: None,
+                client_info: None,
+            },
+            logical_identity: BrowserLogicalIdentity {
+                session_id: "shared-session".to_owned(),
+                thread_id: Some("shared-thread".to_owned()),
+                turn_id: None,
+            },
+            operation_identity: BrowserOperationIdentity {
+                operation_id: format!("operation-{index}"),
+                request_id_fingerprint: format!("fingerprint-{index}"),
+            },
+        };
+        let principal = principal_from_mcp(&context);
+        groups.push(
+            runtime
+                .default_group(&principal, logical, &browser)
+                .await
+                .group_id,
+        );
+        principals.push(principal.id);
+    }
+
+    principals.sort();
+    principals.dedup();
+    groups.sort();
+    groups.dedup();
+    assert_eq!(principals.len(), 4);
+    assert_eq!(groups.len(), 4);
 }
 
 #[tokio::test]
@@ -2189,7 +2265,27 @@ async fn control_plane_snapshot_aggregates_actor_health_and_normalized_clients()
             title: Some("not exposed".to_owned()),
         }),
     });
-    runtime.record_codex_client_open("codex-1");
+    runtime
+        .record_raw_client_open(&BrowserCallerProvenance {
+            caller: BrowserCallerKind::CodexDesktop,
+            source: BrowserProvenanceSource::RequestMetadataDeclaration,
+            connection_id: "codex-1".to_owned(),
+            declared_caller: Some("codex_desktop".to_owned()),
+            client_info: None,
+        })
+        .unwrap();
+    assert!(
+        runtime
+            .record_raw_client_open(&BrowserCallerProvenance {
+                caller: BrowserCallerKind::OpenCode,
+                source: BrowserProvenanceSource::RequestMetadataDeclaration,
+                connection_id: "codex-1".to_owned(),
+                declared_caller: Some("opencode".to_owned()),
+                client_info: None,
+            })
+            .is_err(),
+        "one raw connection must not switch caller ownership lanes"
+    );
 
     let snapshot = runtime.control_plane_snapshot().await;
     assert!(snapshot.ready);
@@ -2203,6 +2299,10 @@ async fn control_plane_snapshot_aggregates_actor_health_and_normalized_clients()
         Some("host-integration")
     );
     assert_eq!(snapshot.actors[0].actor_generation, 7);
+    assert_eq!(
+        snapshot.actors[0].transport,
+        sky_cua_platform::model::BrowserBridgeTransport::ExtensionNativeHost
+    );
     assert!(snapshot.actors[0].protocol_capable);
     assert!(snapshot.actors[0].canonical);
     assert_eq!(snapshot.client_count, 2);
@@ -2211,13 +2311,54 @@ async fn control_plane_snapshot_aggregates_actor_health_and_normalized_clients()
         client.connection_id == "mcp-legacy"
             && client.caller == BrowserCallerKind::LegacyUnknown
             && client.provenance_source == BrowserProvenanceSource::LegacyFallback
+            && client.surface == sky_cua_platform::model::BrowserClientSurface::McpTools
             && client.declared_label.as_deref() == Some("unexpected-host")
             && client.client_info_label.as_deref() == Some("third-party/1")
+            && client.client_info.as_ref().is_some_and(|info| {
+                info.name == "third-party"
+                    && info.version == "1"
+                    && info.title.as_deref() == Some("not exposed")
+            })
     }));
     assert!(snapshot.clients.iter().any(|client| {
         client.connection_id == "codex-1"
             && client.caller == BrowserCallerKind::CodexDesktop
-            && client.provenance_source == BrowserProvenanceSource::TrustedCodexMetadata
+            && client.surface == sky_cua_platform::model::BrowserClientSurface::HostProvidedIab
+            && client.provenance_source == BrowserProvenanceSource::RequestMetadataDeclaration
+    }));
+
+    let client_events = snapshot
+        .events
+        .events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            sky_cua_platform::model::BrowserControlEventKind::ClientState { state, client } => {
+                Some((state.as_str(), client))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(client_events.iter().any(|(state, client)| {
+        *state == "mcp_connected"
+            && client.connection_id == "mcp-legacy"
+            && client.declared_label.as_deref() == Some("unexpected-host")
+            && client.client_info_label.as_deref() == Some("third-party/1")
+    }));
+
+    runtime.record_client_closed("codex-1");
+    let after_close = runtime.control_plane_snapshot().await;
+    assert!(after_close.events.events.iter().any(|event| matches!(
+        &event.kind,
+        sky_cua_platform::model::BrowserControlEventKind::ClientState { state, client }
+            if state == "raw_native_pipe_disconnected"
+                && client.connection_id == "codex-1"
+                && client.surface
+                    == sky_cua_platform::model::BrowserClientSurface::HostProvidedIab
+    )));
+    assert!(client_events.iter().any(|(state, client)| {
+        *state == "raw_native_pipe_connected"
+            && client.connection_id == "codex-1"
+            && client.surface == sky_cua_platform::model::BrowserClientSurface::HostProvidedIab
     }));
 
     release.notify_one();

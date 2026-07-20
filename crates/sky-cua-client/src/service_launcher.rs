@@ -419,13 +419,13 @@ impl ServiceClient {
         })?;
         stream
             .write_all(&payload)
-            .map_err(|error| CallFailure::BeforeWrite(error.into()))?;
+            .map_err(|error| CallFailure::AfterWrite(error.into()))?;
         stream
             .write_all(b"\n")
-            .map_err(|error| CallFailure::BeforeWrite(error.into()))?;
+            .map_err(|error| CallFailure::AfterWrite(error.into()))?;
         stream
             .flush()
-            .map_err(|error| CallFailure::BeforeWrite(error.into()))?;
+            .map_err(|error| CallFailure::AfterWrite(error.into()))?;
 
         // Everything past this point runs after the request has been written
         // (and flushed) to the daemon: the daemon may already have received
@@ -972,12 +972,12 @@ fn unix_stream_peer_pid(stream: &UnixStream) -> Option<u32> {
 /// a *cached* connection should be dropped): it decides whether a *request*
 /// can be safely re-sent.
 ///
-/// `BeforeWrite` failures (connect, timeout setup, serialize, write, flush)
-/// provably precede daemon receipt — the daemon never saw the request, so
-/// resending is always safe. `AfterWrite` failures (read errors, an empty
-/// response, an oversized response, a JSON parse failure) occur strictly
-/// after the request was fully written and flushed to the daemon, which may
-/// already have executed it; resending is only safe for idempotent requests.
+/// `BeforeWrite` failures (connect, timeout setup, serialize) provably precede
+/// daemon receipt, so resending is always safe. Once the first write begins,
+/// every failure is `AfterWrite`: `write_all` may have written a prefix, and a
+/// failed newline write can still leave a complete JSON request that the
+/// daemon parses at EOF. Read/parse failures are likewise after dispatch.
+/// Resending after any of those failures is safe only for idempotent requests.
 #[derive(Debug)]
 enum CallFailure {
     BeforeWrite(anyhow::Error),
@@ -1381,6 +1381,20 @@ mod tests {
         ));
 
         assert!(should_retry(&request, &failure));
+    }
+
+    #[test]
+    fn any_request_write_failure_is_ambiguous_for_mutations() {
+        let request = ServiceRequest::ExecuteAction {
+            request: Box::new(action_request()),
+        };
+
+        // A failed payload/newline/flush write can leave a complete JSON frame
+        // readable at EOF. The transport must classify every such failure as
+        // after-dispatch instead of replaying a mutation on a fresh socket.
+        let failure = CallFailure::AfterWrite(anyhow!("request write failed"));
+        assert!(!should_retry(&request, &failure));
+        assert!(should_retry(&ServiceRequest::Health, &failure));
     }
 
     #[test]

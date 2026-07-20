@@ -577,21 +577,7 @@ fn browser_caller_provenance(
 }
 
 fn normalize_declared_caller(value: &str) -> Option<BrowserCallerKind> {
-    let normalized: String = value
-        .trim()
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect();
-    match normalized.as_str() {
-        "codexdesktop" | "chatgptdesktop" => Some(BrowserCallerKind::CodexDesktop),
-        "codex" | "codexcli" => Some(BrowserCallerKind::CodexCli),
-        "openclaw" => Some(BrowserCallerKind::OpenClaw),
-        "opencode" => Some(BrowserCallerKind::OpenCode),
-        "pi" | "piagent" | "pimcpadapter" => Some(BrowserCallerKind::Pi),
-        "generic" | "genericmcp" | "direct" | "directmcp" => Some(BrowserCallerKind::DirectMcp),
-        _ => None,
-    }
+    BrowserCallerKind::from_provenance_label(value)
 }
 
 fn infer_caller_from_client_info(value: &str) -> Option<BrowserCallerKind> {

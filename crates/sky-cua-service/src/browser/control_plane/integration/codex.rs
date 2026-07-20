@@ -11,7 +11,6 @@ impl CodexBrowserBackend for BrowserControlRuntime {
         connection: CodexConnectionContext,
         outbound: crate::codex_browser_compat::CodexOutbound,
     ) -> Result<(), CodexBackendReply> {
-        self.record_codex_client_open(&connection.connection_id);
         let principal = Principal::new(
             format!("codex:{}", connection.connection_id),
             connection.peer_uid,
@@ -41,9 +40,17 @@ impl CodexBrowserBackend for BrowserControlRuntime {
         lifecycle: CodexCallerLifecycle,
         request: CodexNormalizedRequest,
     ) -> CodexBackendReply {
+        let connections = self.shared.connections.lock().await;
+        if !connections.contains_key(&request.connection.connection_id) {
+            return backend_error("unknown raw browser connection".to_owned());
+        }
+        if let Err(message) = self.record_raw_client_open(&request.caller_provenance) {
+            return backend_error(message);
+        }
+        drop(connections);
         self.control.events.record(
-            BrowserControlEventKind::ClientState {
-                state: format!("codex_lifecycle_{lifecycle:?}").to_lowercase(),
+            BrowserControlEventKind::Lifecycle {
+                state: format!("raw_lifecycle_{lifecycle:?}").to_lowercase(),
             },
             super::super::introspection::EventContext::default(),
         );
@@ -56,7 +63,7 @@ impl CodexBrowserBackend for BrowserControlRuntime {
             .lock()
             .await
             .get(&request.connection.connection_id)
-            .map(|_| principal_from_codex(&request));
+            .map(|_| principal_from_raw(&request));
         if let Some(principal) = principal {
             self.register_principal_connection(
                 &request.connection.connection_id,
@@ -137,7 +144,7 @@ impl CodexBrowserBackend for BrowserControlRuntime {
     }
 
     async fn connection_closed(&self, connection_id: &str) {
-        self.record_client_closed(connection_id, "codex");
+        self.record_client_closed(connection_id);
         self.shared.connections.lock().await.remove(connection_id);
         self.shared
             .codex_connection_sessions
@@ -181,16 +188,22 @@ impl BrowserControlRuntime {
         // so mark them explicitly. Otherwise an active canonical bridge can
         // hit the daemon's five-minute idle exit during Browser discovery.
         crate::browser::mark_bridge_activity();
+        let connection_id = request.connection.connection_id.clone();
+        let connections = self.shared.connections.lock().await;
+        if !connections.contains_key(&connection_id) {
+            return Err("unknown raw browser connection".to_owned());
+        }
+        self.record_raw_client_open(&request.caller_provenance)?;
+        drop(connections);
         self.initialize_ownership_indexes().await;
         let actors = self.ready_actors().await.map_err(|error| error.message)?;
         let actor = one_actor(&actors).map_err(|error| error.message)?;
         let browser = BrowserInstanceId(actor.browser_id.clone());
-        let connection_id = request.connection.connection_id.clone();
         let connections = self.shared.connections.lock().await;
         if !connections.contains_key(&connection_id) {
-            return Err("unknown Codex browser connection".to_owned());
+            return Err("raw browser connection closed before ownership".to_owned());
         }
-        let principal = principal_from_codex(&request);
+        let principal = principal_from_raw(&request);
         self.register_principal_connection(&connection_id, principal.clone())
             .await;
         if let Some(session_id) = request
@@ -261,7 +274,7 @@ impl BrowserControlRuntime {
         {
             self.abort_closed_codex_request(&connection_id, &principal)
                 .await;
-            return Err("Codex browser connection closed before dispatch".to_owned());
+            return Err("raw browser connection closed before dispatch".to_owned());
         }
         let reserved_tab = if membership_add {
             if let Some(tab) = &tab {
@@ -416,6 +429,8 @@ impl BrowserControlRuntime {
                 &mut value,
                 request.logical_identity.session_id.as_deref(),
                 request.connection.codex_app_build_flavor.as_deref(),
+                request.caller_provenance.caller,
+                request.identity_synthetic,
             )?;
         }
         if membership_add
@@ -510,7 +525,7 @@ impl BrowserControlRuntime {
     }
 }
 
-fn principal_from_codex(request: &CodexNormalizedRequest) -> Principal {
+fn principal_from_raw(request: &CodexNormalizedRequest) -> Principal {
     let session_id = request
         .logical_identity
         .session_id
@@ -518,7 +533,10 @@ fn principal_from_codex(request: &CodexNormalizedRequest) -> Principal {
         .filter(|session_id| !session_id.is_empty())
         .unwrap_or(&request.connection.connection_id);
     Principal::new(
-        format!("codex:codex_desktop:session:{session_id}"),
+        format!(
+            "raw:{}:session:{session_id}",
+            caller_name(request.caller_provenance.caller)
+        ),
         request.connection.peer_uid,
     )
 }
@@ -544,6 +562,8 @@ fn enrich_codex_get_info(
     value: &mut Value,
     session_id: Option<&str>,
     codex_app_build_flavor: Option<&str>,
+    caller: BrowserCallerKind,
+    identity_synthetic: bool,
 ) -> Result<(), String> {
     let Some(result) = value.as_object_mut() else {
         return Err("getInfo host result must be an object".to_owned());
@@ -557,7 +577,17 @@ fn enrich_codex_get_info(
     if !metadata.is_object() {
         return Err("getInfo host metadata must be an object".to_owned());
     }
-    result.insert("type".to_owned(), Value::String("iab".to_owned()));
+    let bridge_type = result
+        .get("type")
+        .and_then(Value::as_str)
+        .filter(|bridge_type| !bridge_type.is_empty())
+        .map(str::to_owned);
+    if matches!(
+        caller,
+        BrowserCallerKind::CodexDesktop | BrowserCallerKind::CodexCli
+    ) {
+        result.insert("type".to_owned(), Value::String("iab".to_owned()));
+    }
     let metadata = result["metadata"]
         .as_object_mut()
         .expect("metadata object was validated");
@@ -565,6 +595,21 @@ fn enrich_codex_get_info(
         "codexSessionId".to_owned(),
         Value::String(session_id.to_owned()),
     );
+    metadata.insert(
+        "skyCuaBridgeTransport".to_owned(),
+        Value::String("extension_native_host".to_owned()),
+    );
+    metadata.insert(
+        "skyCuaCallerProvenance".to_owned(),
+        Value::String(caller_name(caller).to_owned()),
+    );
+    metadata.insert(
+        "skyCuaIdentitySynthetic".to_owned(),
+        Value::Bool(identity_synthetic),
+    );
+    if let Some(bridge_type) = bridge_type {
+        metadata.insert("skyCuaBridgeType".to_owned(), Value::String(bridge_type));
+    }
     if let Some(flavor) = codex_app_build_flavor {
         metadata.insert(
             "codexAppBuildFlavor".to_owned(),
@@ -606,6 +651,7 @@ async fn remove_browser_connection_association(
 mod tests {
     use super::enrich_codex_get_info;
     use serde_json::json;
+    use sky_cua_platform::model::BrowserCallerKind;
 
     #[test]
     fn get_info_metadata_preserves_extension_fields_and_adds_codex_compatibility() {
@@ -614,10 +660,27 @@ mod tests {
             "type": "extension",
             "metadata": {"extensionId": "extension-1"}
         });
-        enrich_codex_get_info(&mut value, Some("session-1"), Some("production-linux")).unwrap();
+        enrich_codex_get_info(
+            &mut value,
+            Some("session-1"),
+            Some("production-linux"),
+            BrowserCallerKind::CodexDesktop,
+            false,
+        )
+        .unwrap();
         assert_eq!(value["type"], json!("iab"));
         assert_eq!(value["metadata"]["extensionId"], json!("extension-1"));
+        assert_eq!(value["metadata"]["skyCuaBridgeType"], json!("extension"));
+        assert_eq!(
+            value["metadata"]["skyCuaBridgeTransport"],
+            json!("extension_native_host")
+        );
         assert_eq!(value["metadata"]["codexSessionId"], json!("session-1"));
+        assert_eq!(
+            value["metadata"]["skyCuaCallerProvenance"],
+            json!("codex_desktop")
+        );
+        assert_eq!(value["metadata"]["skyCuaIdentitySynthetic"], json!(false));
         assert_eq!(
             value["metadata"]["codexAppBuildFlavor"],
             json!("production-linux")
@@ -628,7 +691,13 @@ mod tests {
     fn get_info_requires_session_and_rejects_non_object_metadata() {
         let mut no_session = json!({"type":"extension","metadata":{"preserved":true}});
         assert_eq!(
-            enrich_codex_get_info(&mut no_session, Some(""), None),
+            enrich_codex_get_info(
+                &mut no_session,
+                Some(""),
+                None,
+                BrowserCallerKind::CodexDesktop,
+                false,
+            ),
             Err("getInfo requires a non-empty logical session".to_owned())
         );
         assert_eq!(no_session["type"], json!("extension"));
@@ -637,15 +706,47 @@ mod tests {
 
         let mut invalid = json!({"type":"extension","metadata":[]});
         assert_eq!(
-            enrich_codex_get_info(&mut invalid, Some("session-1"), None),
+            enrich_codex_get_info(
+                &mut invalid,
+                Some("session-1"),
+                None,
+                BrowserCallerKind::CodexDesktop,
+                false,
+            ),
             Err("getInfo host metadata must be an object".to_owned())
         );
         assert_eq!(invalid["type"], json!("extension"));
 
         let mut no_flavor = json!({"type":"extension","metadata":{"preserved":true}});
-        enrich_codex_get_info(&mut no_flavor, Some("session-1"), None).unwrap();
+        enrich_codex_get_info(
+            &mut no_flavor,
+            Some("session-1"),
+            None,
+            BrowserCallerKind::CodexDesktop,
+            false,
+        )
+        .unwrap();
         assert_eq!(no_flavor["type"], json!("iab"));
         assert_eq!(no_flavor["metadata"]["preserved"], json!(true));
         assert!(no_flavor["metadata"].get("codexAppBuildFlavor").is_none());
+
+        let mut node_repl = json!({"type":"extension","metadata":{}});
+        enrich_codex_get_info(
+            &mut node_repl,
+            Some("openclaw-session"),
+            None,
+            BrowserCallerKind::OpenClaw,
+            true,
+        )
+        .unwrap();
+        assert_eq!(node_repl["type"], json!("extension"));
+        assert_eq!(
+            node_repl["metadata"]["skyCuaCallerProvenance"],
+            json!("openclaw")
+        );
+        assert_eq!(
+            node_repl["metadata"]["skyCuaIdentitySynthetic"],
+            json!(true)
+        );
     }
 }

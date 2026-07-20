@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use super::{BrowserIntegrationReport, DiagnosticEntry};
@@ -33,14 +33,62 @@ pub enum BrowserCallerKind {
     LegacyUnknown,
 }
 
+impl BrowserCallerKind {
+    /// Normalize a declared MCP/native-pipe caller label to a bounded set of
+    /// ownership lanes. Punctuation and ASCII case are insignificant; unknown
+    /// labels return `None` rather than becoming arbitrary principal IDs.
+    #[must_use]
+    pub fn from_provenance_label(value: &str) -> Option<Self> {
+        let normalized: String = value
+            .trim()
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect();
+        match normalized.as_str() {
+            "codexdesktop" | "chatgptdesktop" => Some(Self::CodexDesktop),
+            "codex" | "codexcli" => Some(Self::CodexCli),
+            "openclaw" => Some(Self::OpenClaw),
+            "opencode" => Some(Self::OpenCode),
+            "pi" | "piagent" | "pimcpadapter" => Some(Self::Pi),
+            "generic" | "genericmcp" | "direct" | "directmcp" => Some(Self::DirectMcp),
+            _ => None,
+        }
+    }
+}
+
 /// How the normalized caller lane was obtained.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserProvenanceSource {
     InstallerDeclaration,
+    RequestMetadataDeclaration,
     ClientInfoInference,
     TrustedCodexMetadata,
+    HostProvidedIab,
     LegacyFallback,
+}
+
+impl BrowserProvenanceSource {
+    /// Return the protocol-v1 value that older readers can decode.
+    ///
+    /// The exact value is emitted separately as a forward-compatible detail
+    /// when this fallback differs. That keeps rollback readers operational
+    /// without discarding the truthful source for current readers.
+    pub(super) const fn v1_wire_fallback(self) -> Self {
+        match self {
+            Self::RequestMetadataDeclaration => Self::InstallerDeclaration,
+            Self::HostProvidedIab => Self::TrustedCodexMetadata,
+            source => source,
+        }
+    }
+
+    pub(super) const fn v1_wire_detail(self) -> Option<Self> {
+        match self {
+            Self::RequestMetadataDeclaration | Self::HostProvidedIab => Some(self),
+            _ => None,
+        }
+    }
 }
 
 /// MCP `initialize.clientInfo`, retained independently from caller
@@ -54,15 +102,72 @@ pub struct BrowserMcpClientInfo {
 }
 
 /// Stable provenance for the lifetime of one MCP connection.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserCallerProvenance {
     pub caller: BrowserCallerKind,
     pub source: BrowserProvenanceSource,
     pub connection_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declared_caller: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_info: Option<BrowserMcpClientInfo>,
+}
+
+#[derive(Serialize)]
+struct BrowserCallerProvenanceRef<'a> {
+    caller: BrowserCallerKind,
+    source: BrowserProvenanceSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_detail: Option<BrowserProvenanceSource>,
+    connection_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    declared_caller: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_info: Option<&'a BrowserMcpClientInfo>,
+}
+
+#[derive(Deserialize)]
+struct BrowserCallerProvenanceOwned {
+    caller: BrowserCallerKind,
+    source: BrowserProvenanceSource,
+    #[serde(default)]
+    source_detail: Option<BrowserProvenanceSource>,
+    connection_id: String,
+    #[serde(default)]
+    declared_caller: Option<String>,
+    #[serde(default)]
+    client_info: Option<BrowserMcpClientInfo>,
+}
+
+impl Serialize for BrowserCallerProvenance {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        BrowserCallerProvenanceRef {
+            caller: self.caller,
+            source: self.source.v1_wire_fallback(),
+            source_detail: self.source.v1_wire_detail(),
+            connection_id: &self.connection_id,
+            declared_caller: self.declared_caller.as_deref(),
+            client_info: self.client_info.as_ref(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BrowserCallerProvenance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BrowserCallerProvenanceOwned::deserialize(deserializer)?;
+        Ok(Self {
+            caller: wire.caller,
+            source: wire.source_detail.unwrap_or(wire.source),
+            connection_id: wire.connection_id,
+            declared_caller: wire.declared_caller,
+            client_info: wire.client_info,
+        })
+    }
 }
 
 /// Logical agent attribution, independent from transport and operation IDs.

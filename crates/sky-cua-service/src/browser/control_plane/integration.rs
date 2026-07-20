@@ -11,12 +11,13 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    BROWSER_CONTROL_PROTOCOL_VERSION, BrowserBridgeState, BrowserCallerKind,
-    BrowserCallerProvenance, BrowserControlActorSnapshot, BrowserControlClientSummary,
-    BrowserControlEventKind, BrowserControlPlaneSnapshot, BrowserIntegrationReport,
-    BrowserMigrationMode, BrowserProvenanceSource, BrowserRequest, BrowserRequestContext,
-    BrowserResponse, BrowserSessionIdentity, BrowserStatusReport, BrowserTabKey,
-    BrowserTargetAvailability, BrowserTargetKind, DiagnosticEntry,
+    BROWSER_CONTROL_PROTOCOL_VERSION, BrowserBridgeState, BrowserBridgeTransport,
+    BrowserCallerKind, BrowserCallerProvenance, BrowserClientSurface, BrowserControlActorSnapshot,
+    BrowserControlClientSummary, BrowserControlEventKind, BrowserControlPlaneSnapshot,
+    BrowserIntegrationReport, BrowserMcpClientInfo, BrowserMigrationMode, BrowserProvenanceSource,
+    BrowserRequest, BrowserRequestContext, BrowserResponse, BrowserSessionIdentity,
+    BrowserStatusReport, BrowserTabKey, BrowserTargetAvailability, BrowserTargetKind,
+    DiagnosticEntry,
 };
 use tokio::sync::{Mutex, mpsc};
 

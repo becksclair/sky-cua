@@ -77,7 +77,12 @@ def test_modes_share_one_actor_preserve_raw_wire_and_heartbeat(
                 "browser": "Brave",
                 "type": "iab",
                 "codexAppBuildFlavor": "acceptance-fake",
-                "metadata": {"codexSessionId": "codex-info"},
+                "metadata": {
+                    "codexSessionId": "codex-info",
+                    "skyCuaBridgeTransport": "extension_native_host",
+                    "skyCuaCallerProvenance": "codex_desktop",
+                    "skyCuaIdentitySynthetic": False,
+                },
                 "nested": {"preserved": True},
             },
         }

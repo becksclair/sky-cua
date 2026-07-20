@@ -16,6 +16,7 @@ use std::{
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use sky_cua_platform::model::BrowserCallerProvenance;
 use tokio::sync::mpsc;
 
 mod connection;
@@ -99,7 +100,7 @@ impl CodexOutbound {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CodexConnectionContext {
     pub(crate) connection_id: String,
-    pub(crate) provenance: &'static str,
+    pub(crate) ingress: &'static str,
     pub(crate) peer_uid: u32,
     pub(crate) codex_app_build_flavor: Option<String>,
     pub(crate) daemon_generation: String,
@@ -135,6 +136,8 @@ pub(crate) struct CodexNormalizedRequest {
     pub(crate) raw_request: Value,
     pub(crate) connection: CodexConnectionContext,
     pub(crate) logical_identity: CodexLogicalIdentity,
+    pub(crate) caller_provenance: BrowserCallerProvenance,
+    pub(crate) identity_synthetic: bool,
     pub(crate) class: CodexOperationClass,
     pub(crate) scope: CodexOperationScope,
     pub(crate) canonical_fingerprint: String,
@@ -463,7 +466,11 @@ mod tests {
                 &json!({
                     "jsonrpc":"2.0","id":1,"method":"moveMouse",
                     "session_id":"top-level-session",
-                    "params":{"target":{"tabId":44},"_meta":{"x-codex-turn-metadata":{
+                    "params":{"target":{"tabId":44},
+                    "caller_provenance":"openclaw",
+                    "client_info":{"name":"OpenClaw","version":"2026.7.1","title":"OpenClaw host"},
+                    "identity_synthetic":true,
+                    "_meta":{"x-codex-turn-metadata":{
                         "sessionId":"session-a","thread_id":"thread-a","turnId":turn
                     }},"x":5,"y":6,"timeoutMs":999999}
                 }),
@@ -482,7 +489,28 @@ mod tests {
             state.requests[1].operation_id
         );
         assert_eq!(state.requests[0].upstream_id, 1);
-        assert_eq!(state.requests[0].connection.provenance, "codex_desktop");
+        assert_eq!(state.requests[0].connection.ingress, "raw_native_pipe");
+        assert_eq!(
+            state.requests[0].caller_provenance.caller,
+            sky_cua_platform::model::BrowserCallerKind::OpenClaw
+        );
+        assert_eq!(
+            state.requests[0].caller_provenance.source,
+            sky_cua_platform::model::BrowserProvenanceSource::RequestMetadataDeclaration
+        );
+        assert_eq!(
+            state.requests[0]
+                .caller_provenance
+                .client_info
+                .as_ref()
+                .map(|info| (
+                    info.name.as_str(),
+                    info.version.as_str(),
+                    info.title.as_deref()
+                )),
+            Some(("OpenClaw", "2026.7.1", Some("OpenClaw host")))
+        );
+        assert!(state.requests[0].identity_synthetic);
         assert_eq!(
             state.requests[0].logical_identity.session_id.as_deref(),
             Some("top-level-session")
@@ -510,7 +538,7 @@ mod tests {
     fn nested_payload_metadata_cannot_override_owner_policy_or_identity() {
         let connection = CodexConnectionContext {
             connection_id: "codex-1".to_owned(),
-            provenance: "codex_desktop",
+            ingress: "raw_native_pipe",
             peer_uid: 1000,
             codex_app_build_flavor: None,
             daemon_generation: "generation-1".to_owned(),
@@ -524,6 +552,7 @@ mod tests {
                     "payload":{
                         "session_id":"nested-session",
                         "turn_id":"nested-turn",
+                        "caller_provenance":"opencode",
                         "timeoutMs":1
                     }
                 }
@@ -544,6 +573,14 @@ mod tests {
         assert_eq!(
             request.logical_identity.turn_id.as_deref(),
             Some("real-turn")
+        );
+        assert_eq!(
+            request.caller_provenance.caller,
+            sky_cua_platform::model::BrowserCallerKind::CodexDesktop
+        );
+        assert_eq!(
+            request.caller_provenance.source,
+            sky_cua_platform::model::BrowserProvenanceSource::HostProvidedIab
         );
     }
 
