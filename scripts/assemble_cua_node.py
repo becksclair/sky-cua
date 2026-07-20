@@ -20,7 +20,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, cast
 
 from _plugin_bundle import REPO_ROOT, remove_path
-from release_generation import canonical_json_bytes, sha256_file, write_json_durably
+from release_generation import (
+    CHECKOUT_SHAPED_PATH_PATTERNS,
+    canonical_json_bytes,
+    sha256_file,
+    write_json_durably,
+)
 
 TARGET = "linux-x64-glibc"
 NODE_VERSION = "24.14.0"
@@ -60,6 +65,33 @@ def _canonical_json(value: object) -> bytes:
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _normalize_checkout_text_paths(root: Path) -> None:
+    replacement = b"${SKY_CUA_SOURCE_ROOT}/"
+    text_suffixes = {
+        ".json",
+        ".md",
+        ".mjs",
+        ".py",
+        ".sh",
+        ".toml",
+        ".ts",
+        ".txt",
+        ".yaml",
+        ".yml",
+    }
+    for path in _files(root):
+        if path.suffix.lower() not in text_suffixes:
+            continue
+        blob = path.read_bytes()
+        if b"\x00" in blob:
+            continue
+        normalized = blob
+        for pattern in CHECKOUT_SHAPED_PATH_PATTERNS:
+            normalized = pattern.sub(replacement, normalized)
+        if normalized != blob:
+            path.write_bytes(normalized)
 
 
 def _files(root: Path) -> list[Path]:
@@ -1278,6 +1310,7 @@ def _compose(
     }
     sky_hash, browser_hash = _install_first_party_packages(staging)
     _remove_wrong_platform_content(staging / "lib" / "node_modules")
+    _normalize_checkout_text_paths(staging)
     _generate_compliance(
         staging,
         producer_commit=producer_commit,

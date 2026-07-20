@@ -18,6 +18,7 @@ from assemble_cua_node import (
     _files,
     _generate_compliance,
     _import_seed,
+    _normalize_checkout_text_paths,
     _producer_commit,
     _recover_publication,
     _remove_wrong_platform_content,
@@ -26,6 +27,23 @@ from assemble_cua_node import (
     assemble,
     main,
 )
+
+
+def test_normalizes_checkout_paths_in_text_but_preserves_native_debug_bytes(
+    tmp_path: Path,
+) -> None:
+    text = tmp_path / "provenance.md"
+    native = tmp_path / "addon.node"
+    checkout = b"/home/builder/projects/codex-desktop/vendor/source/file.cc"
+    text.write_bytes(b"source=" + checkout + b"\n")
+    native.write_bytes(b"\x00" + checkout + b"\x00")
+
+    _normalize_checkout_text_paths(tmp_path)
+
+    assert (
+        text.read_bytes() == b"source=${SKY_CUA_SOURCE_ROOT}/codex-desktop/vendor/source/file.cc\n"
+    )
+    assert native.read_bytes() == b"\x00" + checkout + b"\x00"
 
 
 def _write_package_tarball(path: Path, name: str, member_type: bytes) -> None:
