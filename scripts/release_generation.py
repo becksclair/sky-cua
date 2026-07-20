@@ -858,6 +858,8 @@ def _verify_release_scope_compliance(
     inventory = provenance.get("release_inventory")
     if not isinstance(inventory, list):
         raise ReleaseValidationError("release provenance inventory is missing")
+    capabilities = cast(dict[str, Any], manifest["capabilities"])
+    documentation_enabled = "model-facing-documentation" in capabilities.get("supported", [])
     required_inventory = {
         "sky-cua-core",
         "sky-cua-client",
@@ -869,8 +871,9 @@ def _verify_release_scope_compliance(
         "codex-compat",
         "installer",
         "installer-entrypoint",
-        "model-facing-documentation",
     }
+    if documentation_enabled:
+        required_inventory.add("model-facing-documentation")
     expected_paths = {
         "sky-cua-core": "components/core-linux-x64",
         "sky-cua-client": "components/core-linux-x64/bin/runtimes/linux-x64/sky-cua-client",
@@ -884,8 +887,9 @@ def _verify_release_scope_compliance(
         "codex-compat": "components/codex-compat",
         "installer": "components/installer",
         "installer-entrypoint": "install.py",
-        "model-facing-documentation": "components/documentation",
     }
+    if documentation_enabled:
+        expected_paths["model-facing-documentation"] = "components/documentation"
     records: dict[str, dict[str, Any]] = {}
     for raw in inventory:
         if not isinstance(raw, dict):
@@ -956,8 +960,9 @@ def _verify_release_scope_compliance(
         "sky-cua-chrome-host",
         "installer",
         "installer-entrypoint",
-        "model-facing-documentation",
     }
+    if documentation_enabled:
+        mit_names.add("model-facing-documentation")
     for name in mit_names:
         record = license_records[name]
         if (
