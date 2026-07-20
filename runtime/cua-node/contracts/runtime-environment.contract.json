@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex.local/contracts/cua-node/runtime-environment.contract.json",
+  "contract_version": 1,
+  "target": "linux-x64-glibc",
+  "path_delimiter": ":",
+  "runtime_root": "<resources>/cua_node",
+  "manifest_path": "<resources>/cua_node/manifest.json",
+  "mode_selection": {
+    "legacy_variable": "CODEX_NODE_REPL_LEGACY_FALLBACK",
+    "enabled_value": "1",
+    "legacy_mode_is_explicit": true,
+    "legacy_mode_precedes_bundled_defaults": true,
+    "legacy_mode_does_not_silently_activate": true,
+    "invalid_bundled_manifest_fails_closed": true
+  },
+  "precedence": [
+    "explicit_legacy_fallback",
+    "explicit_valid_compatible_environment",
+    "bundled_manifest_environment",
+    "actionable_missing_runtime_error"
+  ],
+  "compatibility": {
+    "manifest_schema_version": 2,
+    "manifest_version": 1,
+    "target": "linux-x64-glibc",
+    "required_node_version": "24.14.0",
+    "required_runtime_name": "cua_node",
+    "explicit_runtime_root": "the ancestor containing bin/ and manifest.json for the explicit executable or module directory",
+    "explicit_path_validation": [
+      "the path exists and has the required file or directory kind",
+      "the path is inside a manifest-selected runtime root",
+      "the manifest target and versions match v1",
+      "the manifest checksum for the selected file matches its exact bytes"
+    ]
+  },
+  "variables": {
+    "CODEX_NODE_REPL_PATH": {
+      "kind": "executable",
+      "bundled_relative_path": "bin/node_repl",
+      "explicit_override": "valid_compatible_only",
+      "legacy_mode": "use_explicit_path_if_executable_then_existing_legacy_resolver",
+      "unset_behavior": "derive_from_manifest_or_fail"
+    },
+    "NODE_REPL_NODE_PATH": {
+      "kind": "executable",
+      "bundled_relative_path": "bin/node",
+      "explicit_override": "valid_compatible_only",
+      "legacy_alias": "CODEX_BROWSER_USE_NODE_PATH_when_NODE_REPL_NODE_PATH_is_unset",
+      "legacy_mode": "preserve_existing_value_or_legacy_alias",
+      "unset_behavior": "derive_from_manifest_or_fail"
+    },
+    "NODE_REPL_NODE_MODULE_DIRS": {
+      "kind": "path_list",
+      "separator": ":",
+      "bundled_value": "lib/node_modules",
+      "entries_are_direct_module_roots": true,
+      "explicit_override": "all_entries_must_be_readable_directories_in_compatible_runtime_roots",
+      "legacy_mode": "preserve_existing_value",
+      "unset_behavior": "derive_from_manifest_or_fail"
+    },
+    "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": {
+      "kind": "sha256_list",
+      "separator": ",",
+      "format": "lowercase_64_hex_values_without_empty_entries",
+      "bundled_value": "manifest.trusted_browser_client_sha256s joined with comma",
+      "explicit_override": "valid_only_when_every_manifest_digest_is_present",
+      "legacy_mode": "preserve_existing_value",
+      "unset_behavior": "derive_from_manifest_or_fail"
+    },
+    "PLAYWRIGHT_BROWSERS_PATH": {
+      "kind": "directory",
+      "bundled_relative_path": "share/playwright",
+      "explicit_override": "valid_compatible_only_and_must_contain_manifest_browser_revision",
+      "legacy_mode": "preserve_existing_value",
+      "unset_behavior": "derive_from_manifest_or_fail"
+    }
+  },
+  "legacy_resolver": {
+    "allowed_sources_in_order": [
+      "explicit CODEX_NODE_REPL_PATH when executable",
+      "<resources>/node_repl",
+      "$XDG_CACHE_HOME/codex-runtimes/codex-primary-runtime/dependencies/bin/node_repl",
+      "PATH lookup for node_repl"
+    ],
+    "default_mode_may_use_legacy_sources": false,
+    "failure_message_must_include": [
+      "CODEX_NODE_REPL_LEGACY_FALLBACK=1",
+      "manifest path",
+      "required target"
+    ]
+  },
+  "output_invariants": [
+    "All five v1 variables resolve from one compatible runtime root unless an explicitly validated compatible override is selected.",
+    "CODEX_BROWSER_USE_NODE_PATH and NODE_REPL_NODE_PATH remain synchronized when the legacy alias is used.",
+    "A present but corrupt or incompatible bundled manifest never silently falls back to PATH, host Node, or the legacy executable.",
+    "The resolver does not create or modify a user Playwright cache and does not enable dependency downloads.",
+    "The selected runtime root is recorded without logging full request metadata or trusted hash contents at normal verbosity."
+  ]
+}

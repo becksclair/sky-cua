@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "component_id": "canvas-linux-x64-gnu",
+  "artifact_sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d",
+  "topology": "one-package prepared production subsystem",
+  "runtime": {
+    "node": "24.14.0",
+    "napi": "10",
+    "module_abi": "137"
+  },
+  "status": "passed",
+  "checks_passed": 9,
+  "checks": [
+    "runtime startup",
+    "Canvas PNG",
+    "Canvas WebP",
+    "Sharp",
+    "PDF.js",
+    "Tesseract",
+    "pixelmatch",
+    "Playwright click, keyboard, and button interaction",
+    "cleanup"
+  ],
+  "raw_addon": {
+    "status": "passed",
+    "result": "The accepted addon loads under bundled Node 24 and exposes CanvasElement and the native Canvas API."
+  },
+  "invalid_legacy_topology": "Do not use build1/smoke/smoke.mjs as release evidence: it loads Canvas from the source checkout and PDF.js from a separate runtime root, creates two native addon instances, and can produce a false Path type mismatch."
+}

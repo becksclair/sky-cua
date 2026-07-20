@@ -1,0 +1,113 @@
+{
+  "fixture_version": 1,
+  "timeout": {
+    "default_ms": 30000,
+    "minimum_ms": 1,
+    "validation": {
+      "timeout_ms": "positive integer",
+      "zero": "rejected",
+      "negative": "rejected",
+      "fraction": "rejected",
+      "omitted": "uses 30000 ms"
+    },
+    "request": {
+      "name": "js",
+      "arguments": {
+        "code": "await new Promise(() => {})",
+        "timeout_ms": 25
+      }
+    },
+    "expected_error": "js execution timed out; kernel reset, rerun your request",
+    "after_timeout": {
+      "kernel_generation": "new",
+      "bindings": "cleared",
+      "native_connections": "closed",
+      "next_js_call": "succeeds in a fresh kernel"
+    }
+  },
+  "timeout_suspension": {
+    "trusted_helper": "nodeRepl.withSuspendedTimeout",
+    "messages": [
+      {
+        "type": "suspend_timeout",
+        "exec_id": "exec-fixture",
+        "token": "<active-kernel-token>"
+      },
+      {
+        "type": "resume_timeout",
+        "exec_id": "exec-fixture",
+        "token": "<active-kernel-token>"
+      }
+    ],
+    "nested_calls": "each nesting level emits a matching suspend/resume pair",
+    "throw_behavior": "resume is emitted from finally before the error is reported",
+    "cancellation": "suspension pauses only the execution deadline; cancellation remains active"
+  },
+  "cancellation": {
+    "notification": {
+      "jsonrpc": "2.0",
+      "method": "notifications/cancelled",
+      "params": {
+        "requestId": 30,
+        "reason": "user_cancelled"
+      }
+    },
+    "kernel_control": {
+      "message_type": "cancel",
+      "exec_id": "exec-fixture"
+    },
+    "required_behavior": [
+      "interrupt active JavaScript execution",
+      "close pending native-pipe, image, elicitation, and fetch operations",
+      "kill a wedged kernel after bounded escalation",
+      "reject the cancelled call with an error containing cancelled",
+      "leave no orphaned kernel or privileged connection",
+      "make the next js call usable without manual recovery"
+    ],
+    "race_winner": "cancellation wins over a simultaneous timeout"
+  },
+  "reset": {
+    "tool": "js_reset",
+    "request": {
+      "name": "js_reset",
+      "arguments": {}
+    },
+    "required_behavior": [
+      "terminate the current kernel generation",
+      "close all native-pipe connections",
+      "reject pending execution and helper operations",
+      "clear all carried bindings",
+      "preserve normalized module search roots for this MCP server lifetime",
+      "create a fresh generation for the next js call"
+    ],
+    "pending_error": "js execution reset",
+    "tool_value": true,
+    "text_serialization": "true"
+  },
+  "kernel_crash": {
+    "trigger_examples": [
+      "uncaught exception",
+      "unhandled rejection",
+      "fatal EventEmitter error"
+    ],
+    "kernel_message": {
+      "type": "exec_result",
+      "ok": false,
+      "output": "",
+      "error_pattern": "node_repl kernel <kind>: <message>; kernel reset. Catch or handle async errors (including Promise rejections and EventEmitter 'error' events) to avoid kernel termination."
+    },
+    "host_behavior": "observe child exit, fail current call, close privileged state, and restart on demand"
+  },
+  "upstream_sandbox_evidence_only": {
+    "recovered_markers": ["sandbox_changed", "sandbox request metadata"],
+    "status": "evidence-only; not an implementation lifecycle",
+    "production_rule": "MUST NOT trigger child launch, reset, or cancellation. Production reset is limited to explicit js_reset, timeout, cancellation, crash, or control loss."
+  },
+  "shutdown": {
+    "tool_errors": [
+      "js execution unavailable because the runtime manager is shutting down",
+      "js add node module directory unavailable because the runtime manager is shutting down"
+    ],
+    "behavior": "do not start new child processes after shutdown begins"
+  }
+}

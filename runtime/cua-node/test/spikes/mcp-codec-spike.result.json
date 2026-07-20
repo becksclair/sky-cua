@@ -1,0 +1,14 @@
+{
+  "cancellation": "mapped",
+  "client_elicitation": "round-tripped",
+  "framing": "ndjson",
+  "methods": [
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "tools/call",
+    "notifications/cancelled"
+  ],
+  "result": "passed",
+  "unsupported_method": "JSON-RPC -32601"
+}

@@ -1,0 +1,406 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex.local/contracts/cua-node/native-assets.lock.schema.json",
+  "title": "Codex cua_node native asset lock",
+  "description": "Resolved non-npm archives, browser payloads, native addons, language data, fonts, CMaps, codecs, and visual-diff assets for the Linux x86-64 glibc cua_node assembly.",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"properties": {"release_ready": {"const": true}}, "required": ["release_ready"]},
+      "then": {"properties": {"release_blockers": {"type": "array", "maxItems": 0}}},
+      "else": {"properties": {"release_blockers": {"type": "array", "minItems": 1}}}
+    }
+  ],
+  "required": [
+    "schema_version",
+    "lock_version",
+    "target",
+    "local_assembly_ready",
+    "release_ready",
+    "release_blockers",
+    "assets",
+    "native_dependency_audit",
+    "redistribution"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "lock_version": {
+      "const": 1
+    },
+    "target": {
+      "const": "linux-x64-glibc"
+    },
+    "local_assembly_ready": {
+      "const": true
+    },
+    "release_ready": {
+      "type": "boolean"
+    },
+    "release_blockers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/asset"
+      }
+    },
+    "native_dependency_audit": {
+      "$ref": "#/$defs/native_dependency_audit"
+    },
+    "redistribution": {
+      "$ref": "#/$defs/redistribution"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "description": "Lowercase SHA-256 of the exact resolved archive, file, or deterministic tree manifest named by sha256_scope.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "semver": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]*$"
+    },
+    "relative_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\u0000\\n]+$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "uri", "provenance", "resolved"],
+      "properties": {
+        "type": {
+          "enum": [
+            "official-release",
+            "npm",
+            "playwright-cdn",
+            "local-cache",
+            "local-file",
+            "first-party-build",
+            "authoritative-source-build"
+          ]
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provenance": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolved": {
+          "const": true
+        }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expression", "notice_files", "redistribution_status"],
+      "properties": {
+        "expression": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notice_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relative_path"
+          },
+          "uniqueItems": true
+        },
+        "redistribution_status": {
+          "enum": ["approved", "pending", "blocked"]
+        }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch", "libc", "glibc_max_required"],
+      "properties": {
+        "os": {
+          "const": "linux"
+        },
+        "arch": {
+          "const": "x64"
+        },
+        "libc": {
+          "const": "glibc"
+        },
+        "glibc_max_required": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "native_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "format",
+        "sha256",
+        "size_bytes",
+        "needed",
+        "rpath",
+        "runpath",
+        "glibc_max_required",
+        "ldd"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "format": {
+          "enum": ["elf-executable", "elf-shared-object", "node-addon"]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "needed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "rpath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "runpath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "glibc_max_required": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "ldd": {
+          "enum": ["passed", "failed"]
+        }
+      }
+    },
+    "native_dependency_audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "abi",
+        "files",
+        "needed",
+        "rpath",
+        "runpath",
+        "glibc_max_required",
+        "ldd",
+        "notes"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["passed", "not-applicable", "pending", "failed"]
+        },
+        "abi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "class", "machine"],
+          "properties": {
+            "format": {
+              "enum": ["elf", "node-addon", "none"]
+            },
+            "class": {
+              "type": ["string", "null"],
+              "enum": ["ELF64", null]
+            },
+            "machine": {
+              "type": ["string", "null"],
+              "enum": ["x86-64", null]
+            }
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/native_file"
+          },
+          "uniqueItems": true
+        },
+        "needed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "rpath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "runpath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "glibc_max_required": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "ldd": {
+          "enum": ["passed", "not-applicable", "failed"]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "redistribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "allowed",
+        "notice_files",
+        "source_offer_required",
+        "approval"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["approved", "pending", "blocked", "not-applicable"]
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "notice_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relative_path"
+          },
+          "uniqueItems": true
+        },
+        "source_offer_required": {
+          "type": "boolean"
+        },
+        "approval": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "version",
+        "source",
+        "sha256",
+        "sha256_scope",
+        "size_bytes",
+        "license",
+        "platform",
+        "destination",
+        "native_dependency_audit",
+        "redistribution"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "kind": {
+          "enum": [
+            "archive",
+            "browser",
+            "codec",
+            "cmap",
+            "data",
+            "font",
+            "language-data",
+            "native-addon",
+            "native-library",
+            "package",
+            "visual-diff"
+          ]
+        },
+        "version": {
+          "$ref": "#/$defs/semver"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sha256_scope": {
+          "enum": ["artifact", "native-file", "tree-manifest"]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "license": {
+          "$ref": "#/$defs/license"
+        },
+        "platform": {
+          "$ref": "#/$defs/platform"
+        },
+        "destination": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "native_dependency_audit": {
+          "$ref": "#/$defs/native_dependency_audit"
+        },
+        "redistribution": {
+          "$ref": "#/$defs/redistribution"
+        },
+        "native_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/native_file"
+          },
+          "uniqueItems": true
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

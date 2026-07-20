@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "component_id": "canvas-linux-x64-gnu",
+  "status": "operational",
+  "corresponding_source": {
+    "uri": "https://github.com/Brooooooklyn/canvas.git",
+    "revision": "6661e25b9520bfc2df1e4c9820717fee5dd304fd",
+    "skia_submodule_revision": "ee20d565acb08dece4a32e3f209cdd41119015ca",
+    "local_verified_checkout": "vendor/cua-node-cache/canvas-build/source"
+  },
+  "locked_inputs": {
+    "cargo_lock": "canvas-0.1.91.Cargo.lock",
+    "cargo_lock_sha256": "e99ea0bc80e3c8992790f546163ab978bb8d97466cd9953d1d359a8388c2d8e2",
+    "skia_release_tag": "skia-ee20d565",
+    "skia_release_metadata": "vendor/cua-node-cache/canvas-build/inputs/skia-ee20d565-release.json",
+    "skia_archive_manifest": "canvas-0.1.91-evidence.json",
+    "rust_crate_inventory": "canvas-0.1.91-rust-crates.json"
+  },
+  "rebuild": {
+    "target": "x86_64-unknown-linux-gnu",
+    "instructions": [
+      "Clone https://github.com/Brooooooklyn/canvas.git and checkout detached commit 6661e25b9520bfc2df1e4c9820717fee5dd304fd; verify git rev-parse HEAD.",
+      "Initialize the skia submodule and verify its HEAD is ee20d565acb08dece4a32e3f209cdd41119015ca.",
+      "Download only the ten Linux x64 gnu assets listed in canvas-0.1.91-evidence.json from GitHub release skia-ee20d565, verify every SHA-256, and copy them to skia/out/Static using the upstream release-skia-binary.mjs naming convention.",
+      "Copy canvas-0.1.91.Cargo.lock into the source checkout and use cargo 1.92.0. The accepted invocation resolved this lock without a literal --locked flag; adding --locked is recommended for future rebuild enforcement.",
+      "Use Node 24.14.0, rustc/cargo 1.92.0, cargo-zigbuild 0.23.0, Zig 0.16.0, clang 22.1.6, LLD 22.1.6, NASM 2.15.05, CMake 4.3.4, Ninja 1.13.2, and libc++/libc++abi 22.1.6.",
+      "Use the Zig x86_64-linux-gnu.2.28 wrapper for target C dependencies, then the external /usr/bin/clang plus LLD wrapper against the exact Debian glibc 2.28 sysroot for the final link.",
+      "Use the ten original exact upstream Skia archives without deduplication and preserve the upstream release profile/default runtime behavior.",
+      "Set the exact RUSTFLAGS and PATH prefix recorded in canvas-0.1.91-build-record.json; do not export SOURCE_DATE_EPOCH, CFLAGS, or CXXFLAGS.",
+      "Run cargo +1.92.0 zigbuild --manifest-path $ROOT/source/Cargo.toml --target x86_64-unknown-linux-gnu.2.28 --release (optionally add the recommended --locked enforcement), copy the resulting cdylib as skia.linux-x64-gnu.node, and verify SHA-256 edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d.",
+      "Run the raw-addon and prepared-package checks recorded in canvas-0.1.91-smoke.json with bundled Node 24.14.0."
+    ],
+    "host_note": "The accepted x86_64-unknown-linux-gnu artifact requires at most GLIBC_2.28. Target C dependencies use Zig's glibc 2.28 target; the final external clang/LLD link uses the exact Debian glibc 2.28 sysroot.",
+    "archive_note": "The accepted final4/final5 builds use the original exact upstream Skia archives. Earlier deduplicated experimental archives are not build inputs."
+  },
+  "notices": [
+    "notices/canvas-0.1.91.NOTICE.md",
+    "notices/canvas-0.1.91-NATIVE-NOTICES.md",
+    "notices/canvas-0.1.91-RUST-NOTICES.md"
+  ]
+}

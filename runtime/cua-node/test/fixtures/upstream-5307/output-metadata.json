@@ -1,0 +1,175 @@
+{
+  "fixture_version": 1,
+  "output": {
+    "event_kinds": ["write", "line"],
+    "write": {
+      "string": "preserve exactly and do not append a newline",
+      "non_string": "format with console-style inspect, depth 4, colors false",
+      "bigint_example": {
+        "value": "1n",
+        "rendered": "1n"
+      },
+      "ordering": "events are rendered in emission order"
+    },
+    "console_capture": {
+      "captured_methods": ["log", "info", "warn", "error", "debug"],
+      "format": "strings unchanged; other arguments inspect-formatted and joined with a space",
+      "line_behavior": "append one newline per console call, then remove one final trailing newline from the returned output"
+    },
+    "ordered_example": {
+      "code": "console.log(\"a\"); nodeRepl.write(\"b\"); console.error(\"c\")",
+      "events": [
+        {
+          "kind": "line",
+          "text": "a"
+        },
+        {
+          "kind": "write",
+          "text": "b"
+        },
+        {
+          "kind": "line",
+          "text": "c"
+        }
+      ],
+      "output": "a\nbc"
+    },
+    "kernel_success_message": {
+      "type": "exec_result",
+      "ok": true,
+      "output": "<rendered output>",
+      "error": null,
+      "response_meta_trace": "nullable trace value"
+    },
+    "kernel_error_message": {
+      "type": "exec_result",
+      "ok": false,
+      "output": "",
+      "error": "error message string",
+      "response_meta_trace": "nullable trace value"
+    }
+  },
+  "images": {
+    "accepted_inputs": [
+      "non-empty data URL string",
+      "non-empty PNG bytes inferred from the PNG signature",
+      "non-empty JPEG bytes inferred from FF D8 FF",
+      "non-empty WebP bytes inferred from RIFF....WEBP",
+      "{bytes, mimeType} with non-empty byte view and non-empty MIME type"
+    ],
+    "data_url_validation": {
+      "must_start_with": "data:",
+      "empty_string": "rejected",
+      "non_data_string": "rejected"
+    },
+    "byte_validation": {
+      "empty_bytes": "rejected",
+      "unsupported_signature_without_mimeType": "rejected",
+      "supported_byte_types": ["Buffer", "Uint8Array", "ArrayBuffer", "ArrayBufferView"]
+    },
+    "sniff_cases": [
+      {
+        "bytes_hex": "89504e470d0a1a0a",
+        "mimeType": "image/png",
+        "data_url": "data:image/png;base64,iVBORw0KGgo="
+      },
+      {
+        "bytes_hex": "ffd8ff",
+        "mimeType": "image/jpeg",
+        "data_url": "data:image/jpeg;base64,/9j/"
+      },
+      {
+        "bytes_hex": "524946460000000057454250",
+        "mimeType": "image/webp",
+        "data_url": "data:image/webp;base64,UklGRgAAAABXRUJQ"
+      }
+    ],
+    "explicit_case": {
+      "bytes_hex": "0102",
+      "mimeType": "image/x-fixture",
+      "data_url": "data:image/x-fixture;base64,AQI="
+    },
+    "kernel_message": {
+      "type": "emit_image",
+      "id_pattern": "<exec_id>-emit-image-<counter>",
+      "exec_id": "exec-fixture",
+      "image_url": "data:image/png;base64,iVBORw0KGgo="
+    },
+    "host_ack_message": {
+      "type": "emit_image_result",
+      "id": "<exec_id>-emit-image-<counter>",
+      "ok": true
+    },
+    "multiple_images": "each call produces one ordered image content item",
+    "implicit_emission": "nodeRepl.write does not emit images; callers must explicitly call emitImage"
+  },
+  "request_metadata": {
+    "input": {
+      "session_id": "session-fixture",
+      "turn_id": "turn-fixture",
+      "x-codex-turn-metadata": {
+        "session_id": "session-fixture",
+        "turn_id": "turn-fixture"
+      }
+    },
+    "kernel_exec_message": {
+      "type": "exec",
+      "id": "exec-fixture",
+      "request_meta": "deep-frozen structured clone of input _meta",
+      "form_elicitation_supported": true,
+      "gaas_browser_config": "frozen per-exec object"
+    },
+    "observable": "nodeRepl.requestMeta is the exact request metadata shape available during the call; mutation must fail"
+  },
+  "upstream_sandbox_metadata_evidence_only": {
+    "example": {
+      "sandbox": "<recovered upstream request metadata field>"
+    },
+    "status": "retained for provenance only",
+    "production_rule": "MUST NOT drive normal-child launch, kernel reset, or control-channel policy"
+  },
+  "response_metadata": {
+    "calls": [
+      {
+        "code": "nodeRepl.setResponseMeta({one: 1}); nodeRepl.setResponseMeta({two: 2})"
+      }
+    ],
+    "kernel_messages": [
+      {
+        "type": "response_meta",
+        "id": "exec-fixture",
+        "response_meta": {
+          "one": 1
+        }
+      },
+      {
+        "type": "response_meta",
+        "id": "exec-fixture",
+        "response_meta": {
+          "one": 1,
+          "two": 2
+        }
+      }
+    ],
+    "merge": "shallow, last key wins",
+    "accepted_value": "plain object only",
+    "clone": "structured clone before storage",
+    "final_mcp_result": "top-level _meta equals the final merged object"
+  },
+  "mcp_image_mapping": {
+    "status": "confirmed-compatible",
+    "shape": {
+      "type": "image",
+      "data": "base64 payload without data-URL prefix",
+      "mimeType": "parsed data-URL MIME type",
+      "_meta": {
+        "codex/imageDetail": "original"
+      }
+    },
+    "evidence": [
+      "A local tools/call probe against resources/node_repl converted data:image/png;base64,iVBORw0KGgo= into RawImageContent with data iVBORw0KGgo=, mimeType image/png, and _meta codex/imageDetail=original.",
+      "The pinned modern Darwin binary contains RawImageContent, mimeType, codex/imageDetail, and original host markers alongside EmitImageRequest."
+    ],
+    "modern_inference": "The exact modern Darwin executable cannot run on this Linux host; matching RMCP host markers plus the executable legacy Linux response establish the planned serialization contract."
+  }
+}

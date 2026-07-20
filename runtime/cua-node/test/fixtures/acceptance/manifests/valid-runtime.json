@@ -1,0 +1,18 @@
+{
+  "asset_hashes": [
+    {
+      "path": "media/ocr-known.ppm",
+      "sha256": "ae7b22a7c233aa61fc15a2f8281fe451a8f62e7257aa35f8a35dbd9d39d7fdc1"
+    },
+    {
+      "path": "media/acceptance.pdf",
+      "sha256": "52c253c54cc9a1af60a430e8107d6b8da11455543fb84ac7006a14c1faf1be0c"
+    },
+    {
+      "path": "media/red.png",
+      "sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
+    }
+  ],
+  "node_version": "v24.14.0",
+  "runtime_version": "fixture-1"
+}

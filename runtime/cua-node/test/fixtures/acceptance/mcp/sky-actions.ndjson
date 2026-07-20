@@ -1,0 +1,5 @@
+{"op":"Health"}
+{"op":"Screenshot"}
+{"op":"Move","x":10,"y":20}
+{"op":"Click","x":10,"y":20,"button":"middle","click_count":2}
+{"op":"Scroll","direction":"left","pixels":17}

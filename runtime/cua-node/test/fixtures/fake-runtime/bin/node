@@ -1,0 +1,13 @@
+#!/bin/sh
+
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+  printf '%s\n' 'v24.14.0'
+  exit 0
+fi
+
+system_node="${FAKE_RUNTIME_SYSTEM_NODE:-/usr/bin/node}"
+if [ ! -x "$system_node" ]; then
+  system_node="$(command -v node)"
+fi
+
+exec "$system_node" "$@"

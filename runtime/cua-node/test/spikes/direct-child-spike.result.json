@@ -1,0 +1,9 @@
+{
+  "cycles": 100,
+  "elapsed_ms": 2740,
+  "mcp_stdout": "byte-exact and host-owned",
+  "result": "passed",
+  "runtime": "v24.14.1",
+  "stderr": "separate",
+  "transport": "direct-private-child-stdio"
+}

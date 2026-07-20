@@ -1,0 +1,3 @@
+{"id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}
+{"id":2,"method":"tools/list"}
+{"id":3,"method":"tools/call","params":{"name":"js","arguments":{"code":"counter"}}}

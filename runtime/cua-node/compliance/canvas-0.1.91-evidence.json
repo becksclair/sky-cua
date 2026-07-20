@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "component_id": "canvas-linux-x64-gnu",
+  "status": "cleared",
+  "artifact": {
+    "uri": "vendor/cua-node-cache/canvas-build/build-glibc228-final4/target/x86_64-unknown-linux-gnu/release/libcanvas.so",
+    "package_destination": "skia.linux-x64-gnu.node",
+    "sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d",
+    "bytes": 31261376,
+    "elf_build_id": "0b4378841be7f5b7f0c9c894217f820dfaf2cfe3",
+    "maximum_glibc_symbol_version": "GLIBC_2.28",
+    "build_record": "canvas-0.1.91-build-record.json",
+    "source_offer": "canvas-0.1.91-source-offer.json"
+  },
+  "slsa": {
+    "source_commit": "6661e25b9520bfc2df1e4c9820717fee5dd304fd",
+    "workflow": ".github/workflows/CI.yaml",
+    "workflow_uri": "https://raw.githubusercontent.com/Brooooooklyn/canvas/6661e25b9520bfc2df1e4c9820717fee5dd304fd/.github/workflows/CI.yaml",
+    "skia_submodule_commit": "ee20d565acb08dece4a32e3f209cdd41119015ca"
+  },
+  "source_inventory": {
+    "cargo_toml_uri": "https://raw.githubusercontent.com/Brooooooklyn/canvas/6661e25b9520bfc2df1e4c9820717fee5dd304fd/Cargo.toml",
+    "cargo_lock_present": true,
+    "cargo_lock_path": "canvas-0.1.91.Cargo.lock",
+    "cargo_lock_sha256": "e99ea0bc80e3c8992790f546163ab978bb8d97466cd9953d1d359a8388c2d8e2",
+    "cargo_metadata_sha256": "ad2815ca1362ea3bd9aaac022a21cbace9a8dda0b978f5d5c882a9eea7da6461",
+    "resolved_package_count": 84,
+    "rust_direct_dependencies": ["anyhow@1","base64-simd@0.8","cssparser@0.35","cssparser-color@0.3","gif@0.14","imagesize@0.14","infer@0.19","libavif@0.14","libavif-sys@0.17","mimalloc-safe@0.1","napi@3.1","napi-derive@3.1","nom@8","num_cpus@1","regex@1","rgb@0.8","serde@1","serde_derive@1","serde_json@1","thiserror@2"],
+    "rust_build_dependencies": ["cc@1","napi-build@2"],
+    "yarn_lock_uri": "https://raw.githubusercontent.com/Brooooooklyn/canvas/6661e25b9520bfc2df1e4c9820717fee5dd304fd/yarn.lock",
+    "yarn_lock_git_blob_sha1": "5d8f14fe43977c1708e952c53216bce36893f541",
+    "yarn_lock_role": "Build and test tooling only; the native npm package contains package.json, README.md, and skia.linux-x64-gnu.node."
+  },
+  "static_composition": {
+    "skia_release_tag": "skia-ee20d565",
+    "release_metadata_uri": "https://api.github.com/repos/Brooooooklyn/canvas/releases/tags/skia-ee20d565",
+    "download_script_uri": "https://raw.githubusercontent.com/Brooooooklyn/canvas/6661e25b9520bfc2df1e4c9820717fee5dd304fd/scripts/release-skia-binary.mjs",
+    "static_archives": [
+      {"name":"libjsonreader-linux-x64-gnu.a","sha256":"616524f4b2b9d8d474ef647cc46f2302430d292cdf6686a1bd96f9f83289cd1f"},
+      {"name":"libskia-linux-x64-gnu.a","sha256":"65a8e48f9e69fc99e09fdab7bc6b4875dfad52bbc323165edd154176f53aa5d1"},
+      {"name":"libskottie-linux-x64-gnu.a","sha256":"bb6d101a88de8f47da0d257dd8ed40972f3117d6fca6117a993699b3686fc79c"},
+      {"name":"libskparagraph-linux-x64-gnu.a","sha256":"f5c1f5decec9e1abb31c9ae05ab7ec2d2194a835c6301e8a507beedb52da56e6"},
+      {"name":"libskresources-linux-x64-gnu.a","sha256":"d2e321f30b42f523ff8105dbf7dd4e8bad82123130540981206e3bb6514d2a34"},
+      {"name":"libsksg-linux-x64-gnu.a","sha256":"782be711a4b2384209c4f4704c43ac50fd3d2042c818e860e98df98f5aff8680"},
+      {"name":"libskshaper-linux-x64-gnu.a","sha256":"32868a18984f2d30c9012e837a3245c339b3f10e77ae82390577aea2a51cf25f"},
+      {"name":"libskunicode_core-linux-x64-gnu.a","sha256":"85b66c386afa9ba0a0ee6e4e7def6db212902d6211a9ef183d635c39d5475980"},
+      {"name":"libskunicode_icu-linux-x64-gnu.a","sha256":"2ef6165ee3c070a0c147eff5393308865a8e0d7ebee158dcf1bbe9ad8949f342"},
+      {"name":"libsvg-linux-x64-gnu.a","sha256":"b76c8d2181264b0cd36af4ed025b3b4197ba34b770be080678ca1add0b3db845"}
+    ],
+    "enabled_skia_components": ["expat","freetype","harfbuzz","icu","libjpeg-turbo","libjxl-decode","libpng","libwebp","wuffs","zlib"],
+    "rust_static_components": ["libavif","libavif-sys","libaom","Rust dependency graph from Cargo.toml"],
+    "native_dynamic_dependencies": ["libgcc_s.so.1","librt.so.1","libpthread.so.0","libm.so.6","libdl.so.2","libc.so.6","ld-linux-x86-64.so.2"],
+    "link_map_path": "vendor/cua-node-cache/canvas-build/build-glibc228-final4/canvas-link.map",
+    "link_map_sha256": "bd898ccb8249e189b5bb18058d7ec4e8d4c5a3c49c88c0789f51095e85c927bb",
+    "toolchain_evidence": ["Node 24.14.0","rustc 1.92.0 ded5c06cf","cargo 1.92.0 344c4567c","cargo-zigbuild 0.23.0","Zig 0.16.0","clang 22.1.6","LLD 22.1.6","NASM 2.15.05","exact Debian glibc 2.28 sysroot"],
+    "archive_policy": "Original exact upstream Skia archives; no deduplicated archives in the accepted build.",
+    "byte_reproducible": true,
+    "second_build_sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d",
+    "second_build_id": "0b4378841be7f5b7f0c9c894217f820dfaf2cfe3",
+    "smoke_evidence": "canvas-0.1.91-smoke.json"
+  },
+  "notices": {
+    "paths": ["notices/canvas-0.1.91.NOTICE.md","notices/canvas-0.1.91-NATIVE-NOTICES.md","notices/canvas-0.1.91-RUST-NOTICES.md"],
+    "covers": ["MIT canvas license","Skia and bundled dependency notices","exact AOM 3.11.0 source notices and patent text","all 84 target-resolved Rust packages","libavif, mimalloc, libc++, and libc++abi notices"]
+  },
+  "irreducible_missing_evidence": []
+}

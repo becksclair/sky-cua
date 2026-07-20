@@ -1,0 +1,540 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex.local/contracts/cua-node/runtime-lock.schema.json",
+  "title": "Codex cua_node runtime lock",
+  "description": "Resolved, checksummed first-party runtime and npm inputs for the Linux x86-64 glibc cua_node assembly. Inventory records may contain unresolved entries; this lock schema is fail-closed and accepts only resolved artifacts.",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"properties": {"release_ready": {"const": true}}, "required": ["release_ready"]},
+      "then": {"properties": {"release_blockers": {"type": "array", "maxItems": 0}}},
+      "else": {"properties": {"release_blockers": {"type": "array", "minItems": 1}}}
+    }
+  ],
+  "required": [
+    "schema_version",
+    "lock_version",
+    "target",
+    "local_assembly_ready",
+    "release_ready",
+    "release_blockers",
+    "runtime",
+    "node",
+    "npm",
+    "corepack",
+    "packages",
+    "outputs",
+    "native_dependency_audit",
+    "redistribution"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Structural schema version. Increment when a required field or meaning changes."
+    },
+    "lock_version": {
+      "const": 1,
+      "description": "Runtime lock compatibility version. Increment when assembly semantics change."
+    },
+    "target": {
+      "const": "linux-x64-glibc"
+    },
+    "local_assembly_ready": {
+      "const": true
+    },
+    "release_ready": {
+      "type": "boolean"
+    },
+    "release_blockers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime_artifact"
+    },
+    "node": {
+      "$ref": "#/$defs/node_artifact"
+    },
+    "npm": {
+      "$ref": "#/$defs/npm_artifact"
+    },
+    "corepack": {
+      "$ref": "#/$defs/corepack_artifact"
+    },
+    "packages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/package_artifact"
+      },
+      "uniqueItems": true
+    },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/output_artifact"
+      },
+      "uniqueItems": true
+    },
+    "native_dependency_audit": {
+      "$ref": "#/$defs/native_dependency_audit"
+    },
+    "redistribution": {
+      "$ref": "#/$defs/redistribution"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "description": "Lowercase SHA-256 of the exact resolved archive, file, or deterministic tree manifest named by sha256_scope.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "semver": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]*$"
+    },
+    "relative_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\u0000\\n]+$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "uri", "provenance", "resolved"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "official-release",
+            "npm",
+            "playwright-cdn",
+            "local-cache",
+            "local-file",
+            "first-party-build",
+            "authoritative-source-build"
+          ]
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical source URL or repository-relative/cache URI. Absolute machine-local paths are not valid lock provenance."
+        },
+        "provenance": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolved": {
+          "const": true
+        }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expression", "notice_files", "redistribution_status"],
+      "properties": {
+        "expression": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SPDX expression, including an explicit custom expression when SPDX is insufficient."
+        },
+        "notice_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relative_path"
+          },
+          "uniqueItems": true
+        },
+        "redistribution_status": {
+          "type": "string",
+          "enum": ["approved", "pending", "blocked"]
+        }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch", "libc", "glibc_max_required"],
+      "properties": {
+        "os": {
+          "const": "linux"
+        },
+        "arch": {
+          "const": "x64"
+        },
+        "libc": {
+          "const": "glibc"
+        },
+        "glibc_max_required": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "native_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "format",
+        "sha256",
+        "size_bytes",
+        "needed",
+        "rpath",
+        "runpath",
+        "glibc_max_required",
+        "ldd"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["elf-executable", "elf-shared-object", "node-addon"]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "needed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "rpath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "runpath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "glibc_max_required": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "ldd": {
+          "enum": ["passed", "failed"]
+        }
+      }
+    },
+    "native_dependency_audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "abi",
+        "files",
+        "needed",
+        "rpath",
+        "runpath",
+        "glibc_max_required",
+        "ldd",
+        "notes"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["passed", "not-applicable", "pending", "failed"]
+        },
+        "abi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "class", "machine"],
+          "properties": {
+            "format": {
+              "enum": ["elf", "node-addon", "none"]
+            },
+            "class": {
+              "type": ["string", "null"],
+              "enum": ["ELF64", null]
+            },
+            "machine": {
+              "type": ["string", "null"],
+              "enum": ["x86-64", null]
+            }
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/native_file"
+          },
+          "uniqueItems": true
+        },
+        "needed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "rpath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "runpath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "glibc_max_required": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "ldd": {
+          "enum": ["passed", "not-applicable", "failed"]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "redistribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "allowed",
+        "notice_files",
+        "source_offer_required",
+        "approval"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["approved", "pending", "blocked", "not-applicable"]
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "notice_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relative_path"
+          },
+          "uniqueItems": true
+        },
+        "source_offer_required": {
+          "type": "boolean"
+        },
+        "approval": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "source",
+        "sha256",
+        "sha256_scope",
+        "size_bytes",
+        "license",
+        "platform",
+        "native_dependency_audit",
+        "redistribution"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/semver"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sha256_scope": {
+          "enum": ["artifact", "native-file", "tree-manifest"]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "license": {
+          "$ref": "#/$defs/license"
+        },
+        "platform": {
+          "$ref": "#/$defs/platform"
+        },
+        "native_dependency_audit": {
+          "$ref": "#/$defs/native_dependency_audit"
+        },
+        "redistribution": {
+          "$ref": "#/$defs/redistribution"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "integrity": {
+          "type": "string",
+          "pattern": "^sha512-[A-Za-z0-9+/]+=*$"
+        },
+        "destination": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "native_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/native_file"
+          },
+          "uniqueItems": true
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "runtime_artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": {
+              "const": "cua_node"
+            }
+          }
+        }
+      ]
+    },
+    "node_artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": {
+              "const": "node"
+            },
+            "version": {
+              "const": "24.14.0"
+            }
+          }
+        }
+      ]
+    },
+    "npm_artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": {
+              "const": "npm"
+            },
+            "version": {
+              "const": "11.9.0"
+            }
+          }
+        }
+      ]
+    },
+    "corepack_artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": {
+              "const": "corepack"
+            },
+            "version": {
+              "const": "0.34.6"
+            }
+          }
+        }
+      ]
+    },
+    "package_artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "type": "object",
+          "required": ["name", "integrity", "destination"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "integrity": {
+              "type": "string",
+              "pattern": "^sha512-[A-Za-z0-9+/]+=*$"
+            },
+            "destination": {
+              "$ref": "#/$defs/relative_path"
+            }
+          }
+        }
+      ]
+    },
+    "output_artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "type": "object",
+          "required": ["name", "destination"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destination": {
+              "$ref": "#/$defs/relative_path"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

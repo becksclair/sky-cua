@@ -1,0 +1,12 @@
+{
+  "name": "portable-source-fixture",
+  "version": "1.0.0",
+  "files": ["lib/index.js", "lib/win32.js"],
+  "exports": {
+    ".": "./lib/index.js",
+    "./win32.js": "./lib/win32.js"
+  },
+  "optionalDependencies": {
+    "portable-helper": "1.0.0"
+  }
+}

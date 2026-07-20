@@ -1,0 +1,146 @@
+{
+  "schema_version": 2,
+  "manifest_version": 1,
+  "runtime_name": "cua_node",
+  "platform": "linux",
+  "arch": "x64",
+  "libc": "glibc",
+  "target": "linux-x64-glibc",
+  "node_version": "24.14.0",
+  "node_path": "bin/node",
+  "node_sha256": "8949d0775c2b8b631cf90248e6a77778642b05346bd43722daa3f98a483ce27d",
+  "node_repl_version": "1.0.0",
+  "node_repl_path": "bin/node_repl",
+  "node_repl_sha256": "3c30741319ba778e9f17c526118b391326c931af19557c035a38e700203ffca4",
+  "node_modules": "lib/node_modules",
+  "data": {
+    "playwright": "share/playwright",
+    "tessdata": "share/tessdata",
+    "pdfjs": "share/pdfjs",
+    "licenses": "licenses",
+    "sbom": "sbom.cdx.json"
+  },
+  "trusted_browser_client_sha256s": [
+    "413a620ec65f785c26d12983bb3eed609cf73b9d46474491131d0d38e634134d"
+  ],
+  "components": {
+    "host": {
+      "name": "fake-node-repl-host",
+      "version": "1.0.0",
+      "build_id": "fixture",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "kernel": {
+      "name": "fake-node-kernel",
+      "version": "24.14.0",
+      "build_id": "fixture",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "sky_cua": {
+      "package_name": "@heliasar/sky-cua",
+      "package_version": "0.1.0",
+      "entrypoint": "lib/node_modules/@heliasar/sky-cua/index.mjs",
+      "tarball_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "browser_use": {
+      "package_name": "@heliasar/browser-use",
+      "package_version": "1.0.0",
+      "entrypoint": "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs",
+      "declarations": "lib/node_modules/@heliasar/browser-use/build/index.d.ts",
+      "entrypoint_sha256": "413a620ec65f785c26d12983bb3eed609cf73b9d46474491131d0d38e634134d"
+    }
+  },
+  "browser": {
+    "revision": "fake-browser-revision"
+  },
+  "source": {
+    "producer": "sky-cua",
+    "producer_commit": "0000000000000000000000000000000000000000",
+    "migration_evidence": {
+      "codex_desktop_commit": "0000000000000000000000000000000000000000"
+    },
+    "migration_input": {
+      "schema_version": 1,
+      "source_tree_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "source_size_bytes": 1,
+      "source_file_count": 1,
+      "migration_evidence": {
+        "codex_desktop_commit": "0000000000000000000000000000000000000000"
+      }
+    }
+  },
+  "checksums": {
+    "algorithm": "sha256",
+    "files": [
+      {
+        "path": "bin/node",
+        "sha256": "8949d0775c2b8b631cf90248e6a77778642b05346bd43722daa3f98a483ce27d",
+        "size_bytes": 255
+      },
+      {
+        "path": "bin/node_repl",
+        "sha256": "3c30741319ba778e9f17c526118b391326c931af19557c035a38e700203ffca4",
+        "size_bytes": 233
+      },
+      {
+        "path": "lib/node_repl.mjs",
+        "sha256": "dcec6940da0d78192fa331f7b5c5870eb2aa27e773b720f66a20d740e131434d",
+        "size_bytes": 5637
+      },
+      {
+        "path": "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs",
+        "sha256": "413a620ec65f785c26d12983bb3eed609cf73b9d46474491131d0d38e634134d",
+        "size_bytes": 158
+      },
+      {
+        "path": "lib/node_modules/@heliasar/browser-use/build/index.d.ts",
+        "sha256": "19b0ac9d249780901d287db57265300598e1b3dc42e1d87eda62f072690617d4",
+        "size_bytes": 101
+      },
+      {
+        "path": "lib/node_modules/@heliasar/browser-use/package.json",
+        "sha256": "f707292c38078b831871f25932a6af2bec27d6679c3c093a557ddccb4abf877e",
+        "size_bytes": 218
+      },
+      {
+        "path": "lib/node_modules/@heliasar/sky-cua/index.mjs",
+        "sha256": "a9ba9c0df74575cb39de54ba1dd65274709286a796fb58f560a7eca5644f3d15",
+        "size_bytes": 527
+      },
+      {
+        "path": "lib/node_modules/@heliasar/sky-cua/package.json",
+        "sha256": "60fb3d1a8f73678c71b3935f29ffe3e6189440163b8db5de7986f1dcf325b3f6",
+        "size_bytes": 138
+      },
+      {
+        "path": "share/playwright/.keep",
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "size_bytes": 1
+      },
+      {
+        "path": "share/tessdata/.keep",
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "size_bytes": 1
+      },
+      {
+        "path": "share/pdfjs/.keep",
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "size_bytes": 1
+      },
+      {
+        "path": "licenses/NOTICE.txt",
+        "sha256": "ec3518883397b5d4c45462911594be95c04e11dcab17d954a57f267a68eb49f2",
+        "size_bytes": 95
+      },
+      {
+        "path": "sbom.cdx.json",
+        "sha256": "3f10b789fbfcbab0fc138641361d21c66bd4456dce14a18451032574e667b2f3",
+        "size_bytes": 218
+      }
+    ],
+    "lock_hashes": {
+      "runtime_lock_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "native_assets_lock_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

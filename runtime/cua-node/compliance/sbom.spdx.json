@@ -1,0 +1,609 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "cua-node-linux-x64-glibc-compliance",
+  "documentNamespace": "https://codex.local/sbom/cua-node/linux-x64-glibc/compliance-v1",
+  "creationInfo": {
+    "created": "1970-01-01T00:00:00Z",
+    "creators": [
+      "Tool: @heliasar/cua-node-compliance-scaffold-1.0.0"
+    ]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-cua-node",
+      "name": "cua_node",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "UNLICENSED",
+      "packageComment": "Compliance policy linux-cua-node-compliance; release status clear.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/cua-node@0.1.0"
+        }
+      ],
+      "attributionTexts": [
+        "First-party Linux cua_node runtime."
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-canvas",
+      "name": "@napi-rs/canvas",
+      "versionInfo": "0.1.91",
+      "downloadLocation": "https://registry.npmjs.org/@napi-rs/canvas/-/canvas-0.1.91.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "packageComment": "routine-notice-clearance; The JavaScript package declares MIT and carries lib/node_modules/@napi-rs/canvas/LICENSE; the Linux native addon is independently self-built and cleared with native and Rust notices.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/@napi-rs/canvas@0.1.91"
+        }
+      ],
+      "attributionTexts": [
+        "canvas-license"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "110b2f6fbf3234fea13a14fce94284f1383eba1aa958447bf4ba06e3e8d29be8"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-canvas-linux-x64-gnu",
+      "name": "@napi-rs/canvas Linux x64 gnu native addon",
+      "versionInfo": "0.1.91",
+      "downloadLocation": "https://github.com/Brooooooklyn/canvas/tree/6661e25b9520bfc2df1e4c9820717fee5dd304fd",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "packageComment": "routine-notice-clearance; Self-built GLIBC 2.28 release addon is byte-reproducible from the locked Rust graph and ten original digest-pinned Skia archives; LLD linker-map composition, exact notices, source offer, and bundled Node 24 raw/prepared-package evidence are recorded.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/@napi-rs/canvas-linux-x64-gnu@0.1.91"
+        }
+      ],
+      "attributionTexts": [
+        "canvas-0.1.91-evidence.json",
+        "canvas-0.1.91-source-offer.json",
+        "canvas-license",
+        "canvas-skia-notices"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d"
+        }
+      ],
+      "licenseComments": "Project designation: MIT plus Skia/static component notices"
+    },
+    {
+      "SPDXID": "SPDXRef-corepack",
+      "name": "Corepack",
+      "versionInfo": "0.34.6",
+      "downloadLocation": "https://registry.npmjs.org/corepack/-/corepack-0.34.6.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "packageComment": "routine-notice-clearance; Routine notice clearance for the exact pinned Corepack package.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/corepack@0.34.6"
+        }
+      ],
+      "attributionTexts": [
+        "corepack-license"
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-node-runtime",
+      "name": "Node.js",
+      "versionInfo": "24.14.0",
+      "downloadLocation": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LicenseRef-Node.js",
+      "licenseDeclared": "LicenseRef-Node.js",
+      "packageComment": "routine-notice-clearance; Exact Linux x64 glibc archive provenance is resolved; release license and notice clearance remains.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/node@24.14.0"
+        }
+      ],
+      "attributionTexts": [
+        "node-license"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "41cd79bb7877c81605a9e68ec4c91547774f46a40c67a17e34d7179ef11729df"
+        }
+      ],
+      "licenseComments": "Project designation: Node.js License"
+    },
+    {
+      "SPDXID": "SPDXRef-npm",
+      "name": "npm",
+      "versionInfo": "11.9.0",
+      "downloadLocation": "https://registry.npmjs.org/npm/-/npm-11.9.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Artistic-2.0",
+      "licenseDeclared": "Artistic-2.0",
+      "packageComment": "routine-notice-clearance; Clear the npm license and bundled dependency notices from the exact Node 24.14.0 distribution context.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/npm@11.9.0"
+        }
+      ],
+      "attributionTexts": [
+        "npm-license"
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-pdfjs-cmaps",
+      "name": "PDF.js CMaps",
+      "versionInfo": "5.4.624",
+      "downloadLocation": "https://github.com/mozilla/pdf.js/tree/v5.4.624/web/cmaps",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "packageComment": "routine-notice-clearance; The exact shipped CMap tree is BSD-3-Clause and carries share/pdfjs/cmaps/LICENSE.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/pdfjs-cmaps@5.4.624"
+        }
+      ],
+      "attributionTexts": [
+        "pdfjs-cmaps-notice"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "8e7e37a6ab3d1b0d7d24ed62ef49e7374c6f79378b8189dc23bf90a6955b6de6"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-pdfjs-dist",
+      "name": "PDF.js",
+      "versionInfo": "5.4.624",
+      "downloadLocation": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.4.624.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "packageComment": "routine-notice-clearance; Routine notice clearance includes the PDF.js distribution and its component notices.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/pdfjs-dist@5.4.624"
+        }
+      ],
+      "attributionTexts": [
+        "pdfjs-license",
+        "pdfjs-third-party"
+      ],
+      "licenseComments": "Project designation: Apache-2.0 plus PDF.js component notices"
+    },
+    {
+      "SPDXID": "SPDXRef-pdfjs-standard-fonts",
+      "name": "PDF.js standard fonts",
+      "versionInfo": "5.4.624",
+      "downloadLocation": "https://github.com/mozilla/pdf.js/tree/v5.4.624/standard_fonts",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause AND OFL-1.1",
+      "licenseDeclared": "BSD-3-Clause AND OFL-1.1",
+      "packageComment": "routine-notice-clearance; The exact shipped standard-font tree carries the BSD-3-Clause Foxit notice and OFL-1.1 Liberation notice.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/pdfjs-standard-fonts@5.4.624"
+        }
+      ],
+      "attributionTexts": [
+        "pdfjs-fonts-foxit",
+        "pdfjs-fonts-liberation"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "c8b927c60a75d97c4f75deb1ffc04eaa700b598106db47c67422ecb7dbe974cf"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-pixelmatch",
+      "name": "pixelmatch",
+      "versionInfo": "7.1.0",
+      "downloadLocation": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.1.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "ISC",
+      "licenseDeclared": "ISC",
+      "packageComment": "routine-notice-clearance; The exact pixelmatch 7.1.0 prepared package tree and ISC license are pinned by runtime-lock.json.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/pixelmatch@7.1.0"
+        }
+      ],
+      "attributionTexts": [
+        "pixelmatch-license"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "6407fbe0821c7b3635924870de1173714beb723161dc033e5421eacdad8c6137"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-playwright",
+      "name": "Playwright",
+      "versionInfo": "1.57.0",
+      "downloadLocation": "https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "packageComment": "routine-notice-clearance; The shipped payload contains the Playwright JavaScript package only; Linux browser execution uses the external system-browser requirement.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/playwright@1.57.0"
+        }
+      ],
+      "attributionTexts": [
+        "playwright-license",
+        "playwright-third-party"
+      ],
+      "licenseComments": "Project designation: Apache-2.0 plus Playwright third-party notices"
+    },
+    {
+      "SPDXID": "SPDXRef-playwright-core",
+      "name": "Playwright Core",
+      "versionInfo": "1.57.0",
+      "downloadLocation": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.57.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "packageComment": "routine-notice-clearance; The shipped payload contains the Playwright Core JavaScript package only; no browser or video payload is redistributed.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/playwright-core@1.57.0"
+        }
+      ],
+      "attributionTexts": [
+        "playwright-license",
+        "playwright-third-party"
+      ],
+      "licenseComments": "Project designation: Apache-2.0 plus Playwright third-party notices"
+    },
+    {
+      "SPDXID": "SPDXRef-sharp",
+      "name": "sharp",
+      "versionInfo": "0.34.5",
+      "downloadLocation": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "packageComment": "routine-notice-clearance; Routine notice clearance for the sharp JavaScript package; its native dependency remains separately gated.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/sharp@0.34.5"
+        }
+      ],
+      "attributionTexts": [
+        "sharp-license"
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-sharp-libvips-linux-x64",
+      "name": "sharp bundled libvips Linux x64",
+      "versionInfo": "1.2.4",
+      "downloadLocation": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LGPL-3.0-or-later",
+      "licenseDeclared": "LGPL-3.0-or-later",
+      "packageComment": "routine-notice-clearance; npm SLSA binds package 1.2.4 to sharp-libvips commit 20b5e899954907a3039d6e3d4c200aaa0ec52c4c. The operational source-offer record pins the Linux build, libvips 8.17.3, all 29 notice components, patches, direct source URLs, and notices.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/@img/sharp-libvips-linux-x64@1.2.4"
+        }
+      ],
+      "attributionTexts": [
+        "libvips-component-notices",
+        "libvips-license",
+        "notices/sharp-libvips-1.2.4.NOTICE.md",
+        "sharp-libvips-1.2.4-source-offer.json"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "9a2a2cf2b53ec123b3ee293bf66c234f8306681a5edfb058815b6bf66b9df8e9"
+        },
+        {
+          "algorithm": "SHA512",
+          "checksumValue": "b49c6288bb261dcf40c756f3de868e6015114d718844338306a86f7951e89eb1c9f7ffa4f3da9b2e5d1b7099ecf9ee2de2bbda341c5a119b05b527c076ab8faf"
+        }
+      ],
+      "licenseComments": "Project designation: LGPL-3.0-or-later plus codec component notices"
+    },
+    {
+      "SPDXID": "SPDXRef-sharp-linux-x64-addon",
+      "name": "sharp Linux x64 native addon",
+      "versionInfo": "0.34.5",
+      "downloadLocation": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.34.5.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "packageComment": "routine-notice-clearance; Routine notice clearance for the sharp native addon, conditional on the separately gated libvips dependency.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/@img/sharp-linux-x64@0.34.5"
+        }
+      ],
+      "attributionTexts": [
+        "sharp-addon-notice",
+        "sharp-license"
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-sky-cua",
+      "name": "@heliasar/sky-cua",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "https://github.com/heliasar/sky-cua",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LicenseRef-Heliasar-Proprietary",
+      "licenseDeclared": "LicenseRef-Heliasar-Proprietary",
+      "packageComment": "routine-notice-clearance; Resolved first-party tarball SHA-256 fecb9426aa44de2abdaaf4bc081d9c1a0cba7a2021dfbdc8c9c0d8572f8c86c2; preserve the explicit LicenseRef-Heliasar-Proprietary/UNLICENSED designation in all compliance outputs.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/@heliasar/sky-cua@0.1.0"
+        }
+      ],
+      "attributionTexts": [
+        "sky-cua-license"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "fecb9426aa44de2abdaaf4bc081d9c1a0cba7a2021dfbdc8c9c0d8572f8c86c2"
+        }
+      ],
+      "licenseComments": "Project designation: LicenseRef-Heliasar-Proprietary/UNLICENSED"
+    },
+    {
+      "SPDXID": "SPDXRef-tessdata-eng",
+      "name": "Tesseract English traineddata",
+      "versionInfo": "eng",
+      "downloadLocation": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "packageComment": "routine-notice-clearance; Resolved by signed Arch package tesseract-data-eng 2:4.1.0-5 (pacman -Qkk: 0 altered) from upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/tessdata-eng@eng"
+        }
+      ],
+      "attributionTexts": [
+        "tessdata-license"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-tessdata-osd",
+      "name": "Tesseract orientation and script detection traineddata",
+      "versionInfo": "osd",
+      "downloadLocation": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "packageComment": "routine-notice-clearance; Resolved by signed Arch package tesseract-data-osd 2:4.1.0-5 (pacman -Qkk: 0 altered) from upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/tessdata-osd@osd"
+        }
+      ],
+      "attributionTexts": [
+        "tessdata-license"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e19f2ae860792fdf372cf48d8ce70ae5da3c4052962fe22e9de1f680c374bb0e"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-tesseract-js",
+      "name": "Tesseract.js",
+      "versionInfo": "7.0.0",
+      "downloadLocation": "https://registry.npmjs.org/tesseract.js/-/tesseract.js-7.0.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "packageComment": "routine-notice-clearance; Routine notice clearance for the exact Tesseract.js package.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/tesseract.js@7.0.0"
+        }
+      ],
+      "attributionTexts": [
+        "tesseract-js-license"
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-tesseract-js-core",
+      "name": "Tesseract.js core",
+      "versionInfo": "7.0.0",
+      "downloadLocation": "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-7.0.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "packageComment": "routine-notice-clearance; Routine notice clearance for the exact Tesseract.js core package.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/tesseract.js-core@7.0.0"
+        }
+      ],
+      "attributionTexts": [
+        "tesseract-js-core-license"
+      ]
+    }
+  ],
+  "hasExtractedLicensingInfos": [
+    {
+      "licenseId": "LicenseRef-Heliasar-Proprietary",
+      "extractedText": "First-party @heliasar/sky-cua; project designation LicenseRef-Heliasar-Proprietary/UNLICENSED."
+    },
+    {
+      "licenseId": "LicenseRef-Node.js",
+      "extractedText": "Node.js release license text must be copied from the exact official release archive."
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-cua-node"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-canvas"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-canvas-linux-x64-gnu"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-corepack"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-node-runtime"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-npm"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-pdfjs-cmaps"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-pdfjs-dist"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-pdfjs-standard-fonts"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-pixelmatch"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-playwright"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-playwright-core"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-sharp"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-sharp-libvips-linux-x64"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-sharp-linux-x64-addon"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-sky-cua"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-tessdata-eng"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-tessdata-osd"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-tesseract-js"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-tesseract-js-core"
+    }
+  ]
+}

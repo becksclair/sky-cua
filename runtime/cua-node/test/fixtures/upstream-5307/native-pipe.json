@@ -1,0 +1,167 @@
+{
+  "fixture_version": 1,
+  "kernel_bridge": {
+    "transport": "private newline-delimited JSON between host and kernel",
+    "handshake": {
+      "direction": "kernel -> host",
+      "message": {
+        "type": "privileged_bridge_handshake",
+        "token": "<random UUID per kernel generation>"
+      }
+    },
+    "request_id_pattern": "native-pipe-<monotonic counter>",
+    "requests": [
+      {
+        "operation": "connect",
+        "message": {
+          "type": "native_pipe_request",
+          "id": "native-pipe-0",
+          "token": "<active-kernel-token>",
+          "op": "connect",
+          "path": "/tmp/codex-browser-use"
+        },
+        "success_result": {
+          "connection_id": "connection-fixture"
+        }
+      },
+      {
+        "operation": "write",
+        "message": {
+          "type": "native_pipe_request",
+          "id": "native-pipe-1",
+          "token": "<active-kernel-token>",
+          "op": "write",
+          "connection_id": "connection-fixture",
+          "data_base64": "eyJmaXh0dXJlIjp0cnVlfQ=="
+        },
+        "success_result": {}
+      },
+      {
+        "operation": "close",
+        "message": {
+          "type": "native_pipe_request",
+          "id": "native-pipe-2",
+          "token": "<active-kernel-token>",
+          "op": "close",
+          "connection_id": "connection-fixture"
+        },
+        "success_result": {}
+      }
+    ],
+    "responses": {
+      "success": {
+        "type": "native_pipe_response",
+        "id": "<matching-request-id>",
+        "ok": true,
+        "result": "operation-specific result"
+      },
+      "failure": {
+        "type": "native_pipe_response",
+        "id": "<matching-request-id>",
+        "ok": false,
+        "error": "stable host error text"
+      },
+      "data": {
+        "type": "native_pipe_data",
+        "connection_id": "connection-fixture",
+        "data_base64": "<base64 socket bytes>"
+      },
+      "close_without_error": {
+        "type": "native_pipe_closed",
+        "connection_id": "connection-fixture",
+        "error": null
+      },
+      "close_with_error": {
+        "type": "native_pipe_closed",
+        "connection_id": "connection-fixture",
+        "error": "peer closed before response"
+      }
+    },
+    "authorization": {
+      "missing_token": "rejected",
+      "wrong_token": "rejected",
+      "replayed_old_generation_token": "rejected",
+      "unsupported_op": "rejected",
+      "connection_id_unknown": "rejected"
+    }
+  },
+  "native_pipe_object": {
+    "createConnection": "(path: string) => Promise<NativePipeConnection>",
+    "connection_is_frozen": true,
+    "methods": {
+      "write": {
+        "signature": "(data: Buffer|Uint8Array|ArrayBuffer|ArrayBufferView) => void",
+        "closed_behavior": "no-op after the connection is terminal",
+        "encoding": "bytes converted to base64 in the private request"
+      },
+      "on": {
+        "events": ["data", "error", "close"],
+        "listener_validation": "function only",
+        "duplicate_listener": "Set-deduplicated",
+        "late_terminal_listener": "error/close state is replayed asynchronously when listener is attached after close"
+      },
+      "off": {
+        "events": ["data", "error", "close"],
+        "behavior": "remove exact listener identity"
+      },
+      "end": {
+        "signature": "() => void",
+        "behavior": "fire-and-forget close request"
+      }
+    },
+    "event_order": {
+      "error_then_close": "when a terminal error exists, error listeners are queued before close listeners",
+      "data": "delivered through the originating exec context",
+      "listener_errors": "listener rejection is swallowed by the event dispatcher"
+    },
+    "early_close": "host close received before createConnection resolves is retained and hydrated into the wrapper"
+  },
+  "path_validation": {
+    "kernel_non_empty": "nodeRepl.nativePipe.createConnection requires a non-empty string",
+    "host_absolute": "native pipe path must be absolute",
+    "host_socket": "native pipe path is not a socket",
+    "parent": "native pipe path has no parent directory",
+    "filename": "native pipe path has no file name",
+    "length": "native pipe file name is too long",
+    "connect_timeout_environment": "NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS",
+    "initial_connect_timeout": "native pipe initial connect timed out"
+  },
+  "browser_socket": {
+    "platform": "Linux",
+    "paths": {
+      "iab": "/tmp/codex-browser-use",
+      "chrome": "/tmp/codex-browser-use",
+      "windows_reference": "\\\\.\\pipe\\codex-browser-use"
+    },
+    "framing": {
+      "length_prefix_bytes": 4,
+      "byte_order": "little-endian on Linux",
+      "length_meaning": "UTF-8 JSON payload byte length, excluding the prefix",
+      "payload": "JSON-RPC 2.0 object",
+      "maximum_frame_bytes": 8388608,
+      "fragmentation": "decoder accepts fragmented and coalesced data chunks"
+    },
+    "ping_example": {
+      "json": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+      "payload_bytes": 40,
+      "little_endian_prefix_hex": "28000000",
+      "full_frame_hex": "280000007b226a736f6e727063223a22322e30222c226964223a312c226d6574686f64223a2270696e67227d"
+    },
+    "metadata": {
+      "request_meta": "session_id, turn_id, and x-codex-turn-metadata survive from MCP request through the trusted browser client",
+      "connection": "trusted browser-client package owns JSON-RPC request/response dispatch"
+    },
+    "lifecycle": [
+      "createConnection resolves only after the Unix socket is connected",
+      "socket error marks the transport terminal",
+      "socket close before a response fails pending requests",
+      "close listeners are notified once",
+      "browser client close calls connection.end"
+    ]
+  },
+  "compatibility_boundary": {
+    "current_codex_desktop_accessor": "globalThis.nodeRepl?.nativePipe ?? import.meta.__codexNativePipe",
+    "replacement_target": "globalThis.nodeRepl.nativePipe only",
+    "legacy_fallback_status": "temporary current-integration compatibility behavior; do not make it the new runtime contract"
+  }
+}

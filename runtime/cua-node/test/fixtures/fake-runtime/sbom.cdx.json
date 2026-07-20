@@ -1,0 +1,13 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "@heliasar/sky-cua",
+      "version": "0.1.0",
+      "scope": "required"
+    }
+  ]
+}

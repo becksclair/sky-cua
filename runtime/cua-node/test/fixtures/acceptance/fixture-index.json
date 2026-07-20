@@ -1,0 +1,85 @@
+{
+  "files": [
+    {
+      "bytes": 396,
+      "path": "browser/interactive.html",
+      "sha256": "d6bce90cc71f7978dca0b2d169bc62809fb5414c6a19bab3edd1627cf1b34048"
+    },
+    {
+      "bytes": 395,
+      "path": "browser/playwright-local.html",
+      "sha256": "a08c91207656388ce346430b6110b0bc6fdbe01b282915641584c0f2a8e2f2e3"
+    },
+    {
+      "bytes": 144,
+      "path": "manifests/corrupt-runtime.json",
+      "sha256": "5c1d7c6bd056ab8065ad1e8c6af887de99d83709330870cd79b15d3d6495ed5c"
+    },
+    {
+      "bytes": 160,
+      "path": "manifests/missing-runtime.json",
+      "sha256": "409ae8731903c756517995be5ced0edbc0e41ae7bc82a32b368ae3c98db3246f"
+    },
+    {
+      "bytes": 485,
+      "path": "manifests/valid-runtime.json",
+      "sha256": "60312321383a904e274536a1b047cc4f301680255b783c31c679f0aacc3f1c57"
+    },
+    {
+      "bytes": 189,
+      "path": "mcp/golden-transcript.ndjson",
+      "sha256": "b465b8f5304792a5471e31e28b7b859f65210e5507ed9ef67613eb544d86a84a"
+    },
+    {
+      "bytes": 129,
+      "path": "mcp/image-content.json",
+      "sha256": "58a9c4714eee03e80b3a0865bc33eb88a666316d27d15f270ab277e941e09f75"
+    },
+    {
+      "bytes": 70,
+      "path": "mcp/malformed-framing.ndjson",
+      "sha256": "915ca1fdea0f5aa960ff8d95d800d0ed899a21172bad6fa1b9c9798630731b05"
+    },
+    {
+      "bytes": 174,
+      "path": "mcp/sky-actions.ndjson",
+      "sha256": "9da6c24d91da838aa997f3690a9dc447a18dbcfb32a0d757d4bfc2617bbd53a3"
+    },
+    {
+      "bytes": 531,
+      "path": "media/acceptance.pdf",
+      "sha256": "52c253c54cc9a1af60a430e8107d6b8da11455543fb84ac7006a14c1faf1be0c"
+    },
+    {
+      "bytes": 111,
+      "path": "media/acceptance.svg",
+      "sha256": "373e5d6e8ed2839f7941eae806b340cb4605f35875cb7569d8d26329c22e4cc2"
+    },
+    {
+      "bytes": 44,
+      "path": "media/blue.webp",
+      "sha256": "75fc26b4ddf24ca5686a14f6cde29bae53d86f2edadd42e00c5f14a1e23dbd66"
+    },
+    {
+      "bytes": 33,
+      "path": "media/known-text.txt",
+      "sha256": "bb091f519a94e3b904f8ccae3af7f24a2423c4a29a4bb9d3a12e42a51ebae988"
+    },
+    {
+      "bytes": 86,
+      "path": "media/ocr-known.ppm",
+      "sha256": "ae7b22a7c233aa61fc15a2f8281fe451a8f62e7257aa35f8a35dbd9d39d7fdc1"
+    },
+    {
+      "bytes": 68,
+      "path": "media/red.png",
+      "sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
+    },
+    {
+      "bytes": 339,
+      "path": "media/white.jpg",
+      "sha256": "b4b96f7c51721fd8a580b2efc2f7e86f7c31f3627280ccf3e307cd909255328d"
+    }
+  ],
+  "schema_version": "cua-node-acceptance/fixtures-v1"
+}

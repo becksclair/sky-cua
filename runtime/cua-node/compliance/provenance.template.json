@@ -1,0 +1,16 @@
+{
+  "component_id": "<policy component id>",
+  "source_uri": "<canonical upstream or first-party source URI>",
+  "source_kind": "<official-release|npm|playwright-cdn|first-party>",
+  "expected_platform": "linux-x64-glibc",
+  "status": "planned|provenance-open|evidence-open|cleared",
+  "resolved": false,
+  "artifact_sha256": null,
+  "sha256_scope": "<exact archive, file, native tree, or deterministic tree manifest>",
+  "release_or_commit": "<exact upstream release, revision, or first-party commit>",
+  "local_evidence_uri": "<repository-relative evidence path; never a machine-local absolute path>",
+  "license_source_uri": "<authoritative license or notice URI>",
+  "corresponding_source_uri": "<required for source-offer or unresolved evidence gates>",
+  "build_record_uri": "<required for native/build evidence gates>",
+  "notes": "<what this record proves and what remains open>"
+}

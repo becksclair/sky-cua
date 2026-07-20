@@ -1,0 +1,8 @@
+dist/
+node_modules/
+out/
+!test/fixtures/fake-runtime/lib/node_modules/
+!test/fixtures/fake-runtime/lib/node_modules/@heliasar/
+!test/fixtures/fake-runtime/lib/node_modules/@heliasar/sky-cua/
+!test/fixtures/browser-native-pipe-package/node_modules/
+!test/fixtures/browser-native-pipe-package/node_modules/browser-native-pipe-fixture/

@@ -1,0 +1,125 @@
+{
+  "fixture_version": 1,
+  "evidence_policy": "Every frozen field below names a local artifact and a selector. Embedded strings are used for behavior only; no source implementation is copied into the fixtures.",
+  "sources": [
+    {
+      "id": "darwin_manifest",
+      "path": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/manifest.json",
+      "selector": "#/node_version, #/node_repl_archive_path, #/runtime_archive_version",
+      "supports": ["upstream.node_version", "upstream.node_repl_version", "upstream.runtime_archive_version"]
+    },
+    {
+      "id": "darwin_binary",
+      "path": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/bin/node_repl",
+      "selector": "sha256 dcd520bf4bcc6c9bc360ed716deb0d7f1dcf1ff734d9ae9fa205eacd5760f59b; strings -a -n 5 markers listed below",
+      "supports": ["tools-list.json descriptions and schemas", "kernel.json", "node-repl-surfaces.json", "output-metadata.json", "lifecycle.json", "trusted-helper.json", "native-pipe.json"]
+    },
+    {
+      "id": "sky_report",
+      "path": "research/upstream-cua-node/26.707.72221-darwin-arm64/SKY_API_REPORT.md",
+      "selector": "lines 30-38, 47-64, 124-125, 181-203",
+      "supports": ["sky/native browser framing", "model-visible image/output shape", "metadata and timeout integration context"]
+    },
+    {
+      "id": "legacy_linux_elf",
+      "path": "resources/node_repl",
+      "selector": "sha256 ac14a0d1483a2b33622c96bb12ecdab9fd8b31fb73a63ec6d2ba51dfeebfa27a; live newline-delimited JSON-RPC probe recorded in mcp-transcripts.json",
+      "supports": ["MCP newline framing", "legacy initialize and tools/call result envelopes", "legacy reset text result"]
+    },
+    {
+      "id": "browser_client_socket",
+      "path": "resources/upstream/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs",
+      "selector": "line 71: kE default Unix path and 4-byte framing helpers; line 127: native pipe socket adapter and JSON-RPC frame decoder",
+      "supports": ["native-pipe.json#browser_socket", "current fallback comparison"]
+    },
+    {
+      "id": "chrome_client_socket",
+      "path": "resources/upstream/plugins/openai-bundled/plugins/chrome/scripts/browser-client.mjs",
+      "selector": "line 71 and line 127, same socket/framing implementation as browser client",
+      "supports": ["IAB/Chrome shared framing contract"]
+    },
+    {
+      "id": "browser_use_sync",
+      "path": "scripts/sync-browser-use-plugin.ts",
+      "selector": "lines 134-145, 160-180",
+      "supports": ["current globalThis.nodeRepl?.nativePipe accessor", "temporary import.meta.__codexNativePipe fallback", "setupBrowserRuntime export seam"]
+    },
+    {
+      "id": "browser_use_resource_install",
+      "path": "scripts/browser-use-cache-sync.cjs",
+      "selector": "lines 1178-1203 and 1220-1254",
+      "supports": ["legacy node_repl executable resolution", "Linux resource installation boundary"]
+    },
+    {
+      "id": "linux_integration_patch",
+      "path": "scripts/patch-linux-browser-integrations.ts",
+      "selector": "lines 103-130, 1754-1778",
+      "supports": ["js approval-mode integration", "trusted browser-client hash patch target"]
+    },
+    {
+      "id": "parity_matrix",
+      "path": "docs/plans/linux-cua-node-replacement.md",
+      "selector": "lines 386-401, 404-409 and 797-816",
+      "supports": ["contract lane acceptance rows", "typed nodeRepl and native-pipe interfaces"]
+    }
+  ],
+  "binary_string_markers": {
+    "mcp_tools": [
+      "struct JsToolArgs with 3 elements",
+      "struct JsResetArgs",
+      "struct JsAddNodeModuleDirArgs with 1 element",
+      "js schema should deserialize",
+      "js_reset schema should deserialize",
+      "js_add_node_module_dir schema should deserialize",
+      "Use `js` to run JavaScript in the persistent Node-backed kernel"
+    ],
+    "kernel": [
+      "Every exec is compiled as a fresh ESM cell",
+      "previousModule is the most recently committed module namespace",
+      "NODE_REPL_NODE_MODULE_DIRS",
+      "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
+      "Top-level static import",
+      "node_repl exec context not found"
+    ],
+    "node_repl_surfaces": [
+      "const nodeRepl = Object.freeze",
+      "const trustedNodeRepl = createPrivilegedNodeReplBridge",
+      "addAfterSubmittedCodeHook",
+      "gaasBrowserConfig",
+      "launchServices",
+      "createElicitation",
+      "nativePipe",
+      "withSuspendedTimeout"
+    ],
+    "output_and_images": [
+      "nodeRepl.emitImage expected non-empty bytes",
+      "nodeRepl.emitImage could not infer image MIME type",
+      "nodeRepl.setResponseMeta expected a plain object",
+      "response_meta",
+      "emit_image"
+    ],
+    "native_pipe": [
+      "privileged_bridge_handshake",
+      "native_pipe_request",
+      "native_pipe_response",
+      "native_pipe_data",
+      "native_pipe_closed",
+      "native pipe path must be absolute",
+      "native pipe path is not a socket"
+    ],
+    "lifecycle": [
+      "js execution timed out; kernel reset, rerun your request",
+      "js execution reset",
+      "node_repl kernel reset",
+      "sandbox_changed",
+      "node_repl kernel exited unexpectedly"
+    ]
+  },
+  "live_probe_command": "printf '<newline-delimited initialize/tools/list/tools/call requests>' | timeout 5s resources/node_repl",
+  "live_probe_limit": "The live probe is against the legacy Linux ELF; it is not substituted for modern Darwin-only fields.",
+  "upstream_sandbox_evidence_only": {
+    "markers": ["sandbox_changed", "sandbox request metadata"],
+    "source": "Recovered upstream binary/runtime evidence",
+    "production_rule": "MUST NOT drive production launch, kernel reset, or control policy; Bex removed sandbox execution and state behavior."
+  }
+}

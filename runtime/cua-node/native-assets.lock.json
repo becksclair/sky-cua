@@ -1,0 +1,408 @@
+{
+  "schema_version": 1,
+  "lock_version": 1,
+  "target": "linux-x64-glibc",
+  "local_assembly_ready": true,
+  "release_ready": true,
+  "release_blockers": [],
+  "assets": [
+    {
+      "id": "tessdata-eng",
+      "kind": "language-data",
+      "version": "4.1.0",
+      "source": {
+        "type": "official-release",
+        "uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz",
+        "provenance": "signed Arch tesseract-data-eng 2:4.1.0-5; pacman -Qkk 0 altered; upstream archive sha256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7",
+        "resolved": true
+      },
+      "sha256": "daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047",
+      "sha256_scope": "artifact",
+      "size_bytes": 23466654,
+      "license": {
+        "expression": "Apache-2.0",
+        "notice_files": [
+          "licenses/THIRD_PARTY_NOTICES.md"
+        ],
+        "redistribution_status": "approved"
+      },
+      "platform": {
+        "os": "linux",
+        "arch": "x64",
+        "libc": "glibc",
+        "glibc_max_required": "2.28"
+      },
+      "native_dependency_audit": {
+        "status": "not-applicable",
+        "abi": {
+          "format": "none",
+          "class": null,
+          "machine": null
+        },
+        "files": [],
+        "needed": [],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": null,
+        "ldd": "not-applicable",
+        "notes": []
+      },
+      "redistribution": {
+        "status": "approved",
+        "allowed": true,
+        "notice_files": [
+          "licenses/THIRD_PARTY_NOTICES.md"
+        ],
+        "source_offer_required": false,
+        "approval": "resolved production provenance"
+      },
+      "destination": "share/tessdata/eng.traineddata"
+    },
+    {
+      "id": "tessdata-osd",
+      "kind": "language-data",
+      "version": "4.1.0",
+      "source": {
+        "type": "official-release",
+        "uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz",
+        "provenance": "signed Arch tesseract-data-osd 2:4.1.0-5; pacman -Qkk 0 altered; upstream archive sha256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7",
+        "resolved": true
+      },
+      "sha256": "e19f2ae860792fdf372cf48d8ce70ae5da3c4052962fe22e9de1f680c374bb0e",
+      "sha256_scope": "artifact",
+      "size_bytes": 10562874,
+      "license": {
+        "expression": "Apache-2.0",
+        "notice_files": [
+          "licenses/THIRD_PARTY_NOTICES.md"
+        ],
+        "redistribution_status": "approved"
+      },
+      "platform": {
+        "os": "linux",
+        "arch": "x64",
+        "libc": "glibc",
+        "glibc_max_required": "2.28"
+      },
+      "native_dependency_audit": {
+        "status": "not-applicable",
+        "abi": {
+          "format": "none",
+          "class": null,
+          "machine": null
+        },
+        "files": [],
+        "needed": [],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": null,
+        "ldd": "not-applicable",
+        "notes": []
+      },
+      "redistribution": {
+        "status": "approved",
+        "allowed": true,
+        "notice_files": [
+          "licenses/THIRD_PARTY_NOTICES.md"
+        ],
+        "source_offer_required": false,
+        "approval": "resolved production provenance"
+      },
+      "destination": "share/tessdata/osd.traineddata"
+    },
+    {
+      "id": "pdfjs-cmaps",
+      "kind": "cmap",
+      "version": "5.4.624",
+      "source": {
+        "type": "local-cache",
+        "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/pdfjs-dist",
+        "provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
+        "resolved": true
+      },
+      "sha256": "8e7e37a6ab3d1b0d7d24ed62ef49e7374c6f79378b8189dc23bf90a6955b6de6",
+      "sha256_scope": "tree-manifest",
+      "size_bytes": 1167747,
+      "license": {
+        "expression": "BSD-3-Clause",
+        "notice_files": [
+          "share/pdfjs/cmaps/LICENSE"
+        ],
+        "redistribution_status": "approved"
+      },
+      "platform": {
+        "os": "linux",
+        "arch": "x64",
+        "libc": "glibc",
+        "glibc_max_required": "2.28"
+      },
+      "native_dependency_audit": {
+        "status": "not-applicable",
+        "abi": {
+          "format": "none",
+          "class": null,
+          "machine": null
+        },
+        "files": [],
+        "needed": [],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": null,
+        "ldd": "not-applicable",
+        "notes": []
+      },
+      "redistribution": {
+        "status": "approved",
+        "allowed": true,
+        "notice_files": [
+          "share/pdfjs/cmaps/LICENSE"
+        ],
+        "source_offer_required": false,
+        "approval": "resolved production provenance"
+      },
+      "destination": "share/pdfjs/cmaps"
+    },
+    {
+      "id": "pdfjs-standard-fonts",
+      "kind": "font",
+      "version": "5.4.624",
+      "source": {
+        "type": "local-cache",
+        "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/pdfjs-dist",
+        "provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
+        "resolved": true
+      },
+      "sha256": "c8b927c60a75d97c4f75deb1ffc04eaa700b598106db47c67422ecb7dbe974cf",
+      "sha256_scope": "tree-manifest",
+      "size_bytes": 780306,
+      "license": {
+        "expression": "BSD-3-Clause AND OFL-1.1",
+        "notice_files": [
+          "share/pdfjs/standard_fonts/LICENSE_FOXIT",
+          "share/pdfjs/standard_fonts/LICENSE_LIBERATION"
+        ],
+        "redistribution_status": "approved"
+      },
+      "platform": {
+        "os": "linux",
+        "arch": "x64",
+        "libc": "glibc",
+        "glibc_max_required": "2.28"
+      },
+      "native_dependency_audit": {
+        "status": "not-applicable",
+        "abi": {
+          "format": "none",
+          "class": null,
+          "machine": null
+        },
+        "files": [],
+        "needed": [],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": null,
+        "ldd": "not-applicable",
+        "notes": []
+      },
+      "redistribution": {
+        "status": "approved",
+        "allowed": true,
+        "notice_files": [
+          "share/pdfjs/standard_fonts/LICENSE_FOXIT",
+          "share/pdfjs/standard_fonts/LICENSE_LIBERATION"
+        ],
+        "source_offer_required": false,
+        "approval": "resolved production provenance"
+      },
+      "destination": "share/pdfjs/standard_fonts"
+    },
+    {
+      "id": "sharp-linux-x64",
+      "kind": "native-addon",
+      "version": "0.34.5",
+      "source": {
+        "type": "local-cache",
+        "uri": "opencode-cache/true-mem@latest/node_modules/@img/sharp-linux-x64",
+        "provenance": "exact local x64 package tree",
+        "resolved": true
+      },
+      "sha256": "dd697b76137cf99ab3aec210f6648f3d1269fbbe247506fd80937752e48078e3",
+      "sha256_scope": "tree-manifest",
+      "size_bytes": 422864,
+      "license": {
+        "expression": "Apache-2.0",
+        "notice_files": [
+          "licenses/THIRD_PARTY_NOTICES.md"
+        ],
+        "redistribution_status": "approved"
+      },
+      "platform": {
+        "os": "linux",
+        "arch": "x64",
+        "libc": "glibc",
+        "glibc_max_required": "2.28"
+      },
+      "native_dependency_audit": {
+        "status": "not-applicable",
+        "abi": {
+          "format": "none",
+          "class": null,
+          "machine": null
+        },
+        "files": [],
+        "needed": [],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": null,
+        "ldd": "not-applicable",
+        "notes": []
+      },
+      "redistribution": {
+        "status": "approved",
+        "allowed": true,
+        "notice_files": [
+          "licenses/THIRD_PARTY_NOTICES.md"
+        ],
+        "source_offer_required": false,
+        "approval": "resolved production provenance"
+      },
+      "destination": "lib/node_modules/@img/sharp-linux-x64"
+    },
+    {
+      "id": "sharp-libvips-linux-x64",
+      "kind": "native-library",
+      "version": "1.2.4",
+      "source": {
+        "type": "local-cache",
+        "uri": "opencode-cache/true-mem@latest/node_modules/@img/sharp-libvips-linux-x64",
+        "provenance": "exact local x64 package tree; corresponding source and notices recorded by compliance source offer",
+        "resolved": true
+      },
+      "sha256": "433a2bdd05c1f8e9a8cc2272d602d6537d78997ac4724d6fb9a50f56a26868b2",
+      "sha256_scope": "tree-manifest",
+      "size_bytes": 16656835,
+      "license": {
+        "expression": "LGPL-3.0-or-later",
+        "notice_files": [
+          "licenses/THIRD_PARTY_NOTICES.md"
+        ],
+        "redistribution_status": "approved"
+      },
+      "platform": {
+        "os": "linux",
+        "arch": "x64",
+        "libc": "glibc",
+        "glibc_max_required": "2.28"
+      },
+      "native_dependency_audit": {
+        "status": "not-applicable",
+        "abi": {
+          "format": "none",
+          "class": null,
+          "machine": null
+        },
+        "files": [],
+        "needed": [],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": null,
+        "ldd": "not-applicable",
+        "notes": []
+      },
+      "redistribution": {
+        "status": "approved",
+        "allowed": true,
+        "notice_files": [
+          "licenses/THIRD_PARTY_NOTICES.md"
+        ],
+        "source_offer_required": false,
+        "approval": "resolved production provenance"
+      },
+      "destination": "lib/node_modules/@img/sharp-libvips-linux-x64"
+    },
+    {
+      "id": "canvas-linux-x64-gnu",
+      "kind": "native-addon",
+      "version": "0.1.91",
+      "source": {
+        "type": "authoritative-source-build",
+        "uri": "https://github.com/Brooooooklyn/canvas/tree/6661e25b9520bfc2df1e4c9820717fee5dd304fd",
+        "provenance": "self-built addon sha256 edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d; Cargo.lock, linker map, notices, and reproducibility evidence recorded by canvas-0.1.91-build-record.json",
+        "resolved": true
+      },
+      "sha256": "7fdac97237efb39e46fa49d65f1ec0cea89018294a02a0e2ab19e5c114d67295",
+      "sha256_scope": "tree-manifest",
+      "size_bytes": 31262301,
+      "license": {
+        "expression": "MIT",
+        "notice_files": [
+          "lib/node_modules/@napi-rs/canvas/LICENSE",
+          "licenses/notices/canvas-0.1.91-NATIVE-NOTICES.md",
+          "licenses/notices/canvas-0.1.91-RUST-NOTICES.md",
+          "licenses/notices/canvas-0.1.91.NOTICE.md"
+        ],
+        "redistribution_status": "approved"
+      },
+      "platform": {
+        "os": "linux",
+        "arch": "x64",
+        "libc": "glibc",
+        "glibc_max_required": "2.28"
+      },
+      "native_dependency_audit": {
+        "status": "not-applicable",
+        "abi": {
+          "format": "none",
+          "class": null,
+          "machine": null
+        },
+        "files": [],
+        "needed": [],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": null,
+        "ldd": "not-applicable",
+        "notes": []
+      },
+      "redistribution": {
+        "status": "approved",
+        "allowed": true,
+        "notice_files": [
+          "lib/node_modules/@napi-rs/canvas/LICENSE",
+          "licenses/notices/canvas-0.1.91-NATIVE-NOTICES.md",
+          "licenses/notices/canvas-0.1.91-RUST-NOTICES.md",
+          "licenses/notices/canvas-0.1.91.NOTICE.md"
+        ],
+        "source_offer_required": false,
+        "approval": "resolved production provenance"
+      },
+      "destination": "lib/node_modules/@napi-rs/canvas-linux-x64-gnu"
+    }
+  ],
+  "native_dependency_audit": {
+    "status": "not-applicable",
+    "abi": {
+      "format": "none",
+      "class": null,
+      "machine": null
+    },
+    "files": [],
+    "needed": [],
+    "rpath": [],
+    "runpath": [],
+    "glibc_max_required": null,
+    "ldd": "not-applicable",
+    "notes": [
+      "Exact Linux x64 glibc native packages are present; verifier performs ELF checks."
+    ]
+  },
+  "redistribution": {
+    "status": "approved",
+    "allowed": true,
+    "notice_files": [
+      "licenses/THIRD_PARTY_NOTICES.md"
+    ],
+    "source_offer_required": false,
+    "approval": "resolved production provenance"
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "fixture_version": 1,
+  "trust_environment": {
+    "hash_allowlist": "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
+    "parser": {
+      "accepted_tokens": "any 64-character hexadecimal token found in the value",
+      "case": "lowercase before comparison",
+      "empty_or_missing": "empty Set",
+      "malformed_tokens": "ignored; no malformed value grants trust"
+    },
+    "directory_allowlist": {
+      "environment": "NODE_REPL_TRUSTED_CODE_PATHS",
+      "accepted_entries": "non-empty absolute paths only",
+      "scope": "module path equal to or within a configured directory"
+    },
+    "diagnostic_override": {
+      "environment": "NODE_REPL_TRUST_ALL_CODE",
+      "accepted_value": "1",
+      "scope": "all non-main imported code"
+    }
+  },
+  "hash_cases": [
+    {
+      "id": "exact-entrypoint-bytes",
+      "source_bytes": "fixture browser-client entrypoint bytes",
+      "sha256": "<sha256-of-the-exact-entrypoint-bytes>",
+      "allowlist": "<same-sha256>",
+      "main": false,
+      "expected_context": "trusted package context",
+      "expected_native_connection_attempts": 0
+    },
+    {
+      "id": "wrong-hash",
+      "source_bytes": "same bytes",
+      "sha256": "<different-sha256>",
+      "allowlist": "<expected-sha256>",
+      "main": false,
+      "expected_context": "untrusted package context",
+      "expected_native_connection_attempts": 0
+    },
+    {
+      "id": "one-byte-modification",
+      "source_bytes": "entrypoint with one byte changed",
+      "sha256": "<different-sha256>",
+      "allowlist": "<original-sha256>",
+      "main": false,
+      "expected_context": "untrusted package context",
+      "expected_native_connection_attempts": 0
+    },
+    {
+      "id": "missing-hash",
+      "source_bytes": "fixture browser-client entrypoint bytes",
+      "sha256": "<sha256-of-the-exact-entrypoint-bytes>",
+      "allowlist": "",
+      "main": false,
+      "expected_context": "untrusted package context",
+      "expected_native_connection_attempts": 0
+    },
+    {
+      "id": "main-cell",
+      "source_bytes": "root model cell",
+      "sha256": "<any>",
+      "allowlist": "<matching-sha256>",
+      "main": true,
+      "expected_context": "untrusted context; main cells never receive trusted package capabilities",
+      "expected_native_connection_attempts": 0
+    }
+  ],
+  "context_selection": {
+    "trusted_hash": "hash exact resolved entrypoint bytes before evaluation",
+    "trusted_dynamic_import": "trusted importer keeps its dependency graph in the trusted VM context",
+    "untrusted_dynamic_import": "matching hash or configured trusted directory may cross into trusted context at the import boundary",
+    "path_only": "path name, directory ownership, package name, or symlink identity alone is insufficient",
+    "realpath": "used for directory containment checks, not as a replacement for byte hashing"
+  },
+  "handshake": {
+    "kernel_to_host": {
+      "type": "privileged_bridge_handshake",
+      "token": "<random UUID per kernel generation>"
+    },
+    "token_properties": [
+      "generated once for the kernel generation",
+      "carried by privileged and native-pipe requests",
+      "accepted only for the active child generation",
+      "replay from an old generation rejected",
+      "missing or wrong token rejected"
+    ],
+    "native_request": {
+      "type": "native_pipe_request",
+      "id": "native-pipe-0",
+      "token": "<active-kernel-token>",
+      "op": "connect"
+    }
+  },
+  "trusted_only_surface": [
+    "nodeRepl.nativePipe",
+    "nodeRepl.fetch",
+    "nodeRepl.createElicitation",
+    "nodeRepl.config",
+    "nodeRepl.launchServices",
+    "nodeRepl.withSuspendedTimeout",
+    "nodeRepl.addAfterSubmittedCodeHook",
+    "nodeRepl.env"
+  ],
+  "wrong_hash_ordering": "reject before evaluating the privileged module and before any native socket connect(2)"
+}

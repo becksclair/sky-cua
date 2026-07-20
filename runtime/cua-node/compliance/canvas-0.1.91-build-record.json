@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "component_id": "canvas-linux-x64-gnu",
+  "version": "0.1.91",
+  "target": "x86_64-unknown-linux-gnu",
+  "profile": "release",
+  "status": "verified-reproducible",
+  "source": {
+    "uri": "https://github.com/Brooooooklyn/canvas/tree/6661e25b9520bfc2df1e4c9820717fee5dd304fd",
+    "commit": "6661e25b9520bfc2df1e4c9820717fee5dd304fd",
+    "tree": "0a58a72023ebfbe7f63fd85218a5e3e8e26c81b0",
+    "source_date_epoch": 1770647827,
+    "workflow": ".github/workflows/CI.yaml",
+    "skia_submodule_commit": "ee20d565acb08dece4a32e3f209cdd41119015ca",
+    "skia_submodule_tree": "9da21dacb7fb0826a963c9df0fcbb3ed805cf2c4"
+  },
+  "command": "cargo +1.92.0 zigbuild --manifest-path $ROOT/source/Cargo.toml --target x86_64-unknown-linux-gnu.2.28 --release",
+  "environment": {
+    "CARGO_HOME": "vendor/cua-node-cache/canvas-build/cargo-home",
+    "CARGO_TARGET_DIR": "vendor/cua-node-cache/canvas-build/build-glibc228-finalN/target",
+    "PATH_PREFIX": "$ROOT/tools/nasm-jammy/usr/bin:$ROOT/tools/cargo-zigbuild/bin:$HOME/.local/share/mise/shims",
+    "RUSTFLAGS_TEMPLATE": "-L native=$ROOT/tools/libcxx-combined -C link-args=-Wl,-z,nodelete -C link-arg=-Wl,--build-id=sha1 -C link-arg=-Wl,-Map=$BUILD/canvas-link.map --remap-path-prefix=$BUILD=/usr/src/canvas-target --remap-path-prefix=$ROOT=/usr/src/canvas-build -C debuginfo=0"
+  },
+  "release_settings": {
+    "opt_level": 3,
+    "lto": "thin",
+    "codegen_units": 1,
+    "strip": "symbols",
+    "panic": "abort",
+    "runtime_verification_added": false
+  },
+  "toolchain": {
+    "node": "24.14.0",
+    "node_napi": "10",
+    "node_module_abi": "137",
+    "rustc": "1.92.0 (ded5c06cf 2025-12-08)",
+    "cargo": "1.92.0 (344c4567c 2025-10-21)",
+    "cargo_zigbuild": "0.23.0",
+    "zig": "0.16.0",
+    "clang": "22.1.6",
+    "linker": "LLD 22.1.6",
+    "nasm": "2.15.05",
+    "cmake": "4.3.4",
+    "ninja": "1.13.2",
+    "libcxx": "22.1.6-1",
+    "target_c_dependencies": "Zig cc/c++ wrapper targeting x86_64-linux-gnu.2.28",
+    "final_link": "/usr/bin/clang with -fuse-ld=lld and the exact Debian glibc 2.28 sysroot"
+  },
+  "lock_and_metadata": {
+    "cargo_lock": "canvas-0.1.91.Cargo.lock",
+    "observed_locked_flag": false,
+    "cargo_lock_sha256": "e99ea0bc80e3c8992790f546163ab978bb8d97466cd9953d1d359a8388c2d8e2",
+    "cargo_metadata": "vendor/cua-node-cache/canvas-build/inputs/cargo-metadata-linux-x64-gnu.json",
+    "cargo_metadata_sha256": "ad2815ca1362ea3bd9aaac022a21cbace9a8dda0b978f5d5c882a9eea7da6461",
+    "resolved_package_count": 84,
+    "crate_inventory": "canvas-0.1.91-rust-crates.json",
+    "crate_inventory_sha256": "8f828fb75ce7417a0827fb5f5e8a464d83332b9d3dc5815edba0de374e0a6007"
+  },
+  "artifact": {
+    "path": "vendor/cua-node-cache/canvas-build/build-glibc228-final4/target/x86_64-unknown-linux-gnu/release/libcanvas.so",
+    "package_destination": "skia.linux-x64-gnu.node",
+    "bytes": 31261376,
+    "sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d",
+    "elf_build_id": "0b4378841be7f5b7f0c9c894217f820dfaf2cfe3",
+    "maximum_glibc_symbol_version": "GLIBC_2.28",
+    "link_map": "vendor/cua-node-cache/canvas-build/build-glibc228-final4/canvas-link.map",
+    "link_map_sha256": "bd898ccb8249e189b5bb18058d7ec4e8d4c5a3c49c88c0789f51095e85c927bb"
+  },
+  "verification": {
+    "node": "24.14.0",
+    "evidence": "canvas-0.1.91-smoke.json",
+    "raw_addon_load": "passed",
+    "package_create_canvas": "passed"
+  },
+  "reproducibility": {
+    "clean_build_count": 2,
+    "byte_reproducible": true,
+    "build_1": "build-glibc228-final4",
+    "build_2": "build-glibc228-final5",
+    "build_1_sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d",
+    "build_2_sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d",
+    "build_1_build_id": "0b4378841be7f5b7f0c9c894217f820dfaf2cfe3",
+    "build_2_build_id": "0b4378841be7f5b7f0c9c894217f820dfaf2cfe3",
+    "accepted_link_map": "build-glibc228-final4",
+    "note": "The independent final4 and final5 builds have identical addon bytes, SHA-256, and build ID. Their linker maps differ only by build path; the final4 map is the accepted evidence. Exact upstream release defaults were preserved, target-specific RUSTFLAGS path remapping was applied, and no deduplicated Skia archives were used. SOURCE_DATE_EPOCH, CFLAGS, and CXXFLAGS were not exported for either accepted invocation."
+  }
+}

@@ -1,0 +1,3 @@
+text/vector/raster fixture marker
+This is a deterministic placeholder consumed by the offline harness metadata.
+It is not a PDF acceptance artifact and must not be treated as PDF.js parity evidence.

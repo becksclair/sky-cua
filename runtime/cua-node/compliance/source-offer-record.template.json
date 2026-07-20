@@ -1,0 +1,33 @@
+{
+  "component_id": "<component id>",
+  "artifact": {
+    "uri": "<canonical binary or archive URI>",
+    "version": "<exact version or revision>",
+    "sha256": "<sha256>",
+    "sha256_scope": "<archive, file, or deterministic tree manifest>"
+  },
+  "corresponding_source": {
+    "uri": "<canonical source URI or archive>",
+    "revision": "<exact source commit/tag/release>",
+    "sha256": "<sha256>",
+    "sha256_scope": "<archive or deterministic source tree manifest>"
+  },
+  "build": {
+    "record_uri": "<repository-relative build record>",
+    "toolchain": "<compiler/linker/libc>",
+    "configure_flags": ["<exact flag>"],
+    "patches": ["<patch URI and sha256>"],
+    "composition": "<mapping from source inputs to shipped bytes>",
+    "reproduction": "<command or documented limitation>"
+  },
+  "license_and_notices": {
+    "spdx_expression": "<SPDX expression>",
+    "license_text": "<notice path>",
+    "component_notices": ["<notice path>"]
+  },
+  "offer": {
+    "valid_until": "<date or perpetual>",
+    "delivery_channel": "<URL or contact>",
+    "status": "OPEN"
+  }
+}

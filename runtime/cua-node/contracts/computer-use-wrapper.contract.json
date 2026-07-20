@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex.local/contracts/cua-node/computer-use-wrapper.contract.json",
+  "contract_version": 1,
+  "target_source": "resources/upstream/plugins/openai-bundled/plugins/computer-use/scripts/computer-use-client.mjs",
+  "locator": {
+    "kind": "ast",
+    "parse_mode": "module",
+    "required_current_seams": [
+      {
+        "kind": "variable_declarator",
+        "name": "SKY_MAC_CLIENT_ENTRYPOINT",
+        "initializer": ["@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "mac", "create_client.js"]
+      },
+      {
+        "kind": "function_declaration",
+        "name": "importPackagedCreateClient",
+        "contains": "NODE_REPL_NODE_MODULE_DIRS"
+      },
+      {
+        "kind": "call_expression",
+        "callee": "importPackagedCreateClient",
+        "parent_function": "setupComputerUseRuntime"
+      }
+    ],
+    "replacement_granularity": "replace_ast_derived_declarations_and_function_body_only",
+    "drift_behavior": "ambiguous_or_missing_required_seam_is_an_error"
+  },
+  "target_behavior": {
+    "package_specifier": "@heliasar/sky-cua",
+    "named_export": "sky",
+    "import_form": "const { sky } = await import(\"@heliasar/sky-cua\")",
+    "resolution": "the node_repl ESM resolver searches NODE_REPL_NODE_MODULE_DIRS direct module roots",
+    "lazy": true,
+    "import_time_io": false,
+    "identity": "publish_the_exported_sky_value_without_wrapping_or_cloning",
+    "target_selection": "none_in_wrapper; package_selects_linux_at_runtime",
+    "private_mac_entrypoint": "removed",
+    "oai_sky_alias": "forbidden"
+  },
+  "publication": {
+    "symbol": "Symbol.for(\"openai.computer-use.runtime\")",
+    "global_property": "sky",
+    "provided_globals_property": "sky",
+    "existing_symbol_behavior": "reuse_existing_value_and_publish_it_to_globalThis_and_provided_globals",
+    "new_value_behavior": "publish_the_same_sky_identity_to_all_three_locations",
+    "freeze_behavior": "do_not_call_Object.freeze_on_the_exported_proxy"
+  },
+  "required_absences": [
+    "@oai/sky",
+    "create_client",
+    "targets/mac/create_client.js",
+    "Object.freeze(createClient(...))",
+    "import.meta.__codexNativePipe"
+  ],
+  "idempotence": {
+    "sentinel": "codex-cua-node-computer-use-wrapper-v1",
+    "already_patched_status": "already",
+    "second_apply_byte_identical": true
+  },
+  "rollback": {
+    "source_patch_rollback": "restore_the_pre_patch_AST_ranges_from_the_current_generated_source",
+    "runtime_rollback": "set_CODEX_NODE_REPL_LEGACY_FALLBACK_to_1_before_Milestone_8",
+    "no_silent_fallback": true
+  }
+}

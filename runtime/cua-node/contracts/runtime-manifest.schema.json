@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sky-cua.heliasar.com/contracts/cua-node/runtime-manifest.schema.json",
+  "title": "sky-cua cua_node runtime manifest",
+  "description": "Versioned sky-cua producer manifest for the Linux x86-64 glibc cua_node distribution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_version",
+    "runtime_name",
+    "platform",
+    "arch",
+    "libc",
+    "target",
+    "node_version",
+    "node_path",
+    "node_sha256",
+    "node_repl_version",
+    "node_repl_path",
+    "node_repl_sha256",
+    "node_modules",
+    "data",
+    "trusted_browser_client_sha256s",
+    "components",
+    "browser",
+    "source",
+    "checksums"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2,
+      "description": "Schema shape version. A structural incompatibility increments this value."
+    },
+    "manifest_version": {
+      "const": 1,
+      "description": "Runtime manifest compatibility version. A launcher-incompatible manifest increments this value."
+    },
+    "runtime_name": {
+      "const": "cua_node"
+    },
+    "platform": {
+      "const": "linux"
+    },
+    "arch": {
+      "const": "x64"
+    },
+    "libc": {
+      "const": "glibc"
+    },
+    "target": {
+      "const": "linux-x64-glibc"
+    },
+    "node_version": {
+      "const": "24.14.0"
+    },
+    "node_path": {
+      "$ref": "#/$defs/relative_path",
+      "const": "bin/node"
+    },
+    "node_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "node_repl_version": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]*$"
+    },
+    "node_repl_path": {
+      "$ref": "#/$defs/relative_path",
+      "const": "bin/node_repl"
+    },
+    "node_repl_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "node_modules": {
+      "$ref": "#/$defs/relative_path",
+      "const": "lib/node_modules"
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "playwright",
+        "tessdata",
+        "pdfjs",
+        "licenses",
+        "sbom"
+      ],
+      "properties": {
+        "playwright": {
+          "$ref": "#/$defs/relative_path",
+          "const": "share/playwright"
+        },
+        "tessdata": {
+          "$ref": "#/$defs/relative_path",
+          "const": "share/tessdata"
+        },
+        "pdfjs": {
+          "$ref": "#/$defs/relative_path",
+          "const": "share/pdfjs"
+        },
+        "licenses": {
+          "$ref": "#/$defs/relative_path",
+          "const": "licenses"
+        },
+        "sbom": {
+          "$ref": "#/$defs/relative_path",
+          "const": "sbom.cdx.json"
+        }
+      }
+    },
+    "trusted_browser_client_sha256s": {
+      "type": "array",
+      "description": "Exact lowercase SHA-256 digests accepted for privileged Browser Use modules.",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/sha256"
+      },
+      "uniqueItems": true
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "kernel", "sky_cua", "browser_use"],
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/component"
+        },
+        "kernel": {
+          "$ref": "#/$defs/component"
+        },
+        "sky_cua": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "package_name",
+            "package_version",
+            "entrypoint",
+            "tarball_sha256"
+          ],
+          "properties": {
+            "package_name": {
+              "const": "@heliasar/sky-cua"
+            },
+            "package_version": {
+              "const": "0.1.0"
+            },
+            "entrypoint": {
+              "$ref": "#/$defs/relative_path"
+            },
+            "tarball_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "browser_use": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "package_name",
+            "package_version",
+            "entrypoint",
+            "declarations",
+            "entrypoint_sha256"
+          ],
+          "properties": {
+            "package_name": {
+              "const": "@heliasar/browser-use"
+            },
+            "package_version": {
+              "const": "1.0.0"
+            },
+            "entrypoint": {
+              "$ref": "#/$defs/relative_path",
+              "const": "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs"
+            },
+            "declarations": {
+              "$ref": "#/$defs/relative_path",
+              "const": "lib/node_modules/@heliasar/browser-use/build/index.d.ts"
+            },
+            "entrypoint_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision"],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[0-9A-Za-z._-]+$"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "producer_commit", "migration_evidence", "migration_input"],
+      "properties": {
+        "producer": {
+          "const": "sky-cua"
+        },
+        "producer_commit": {
+          "$ref": "#/$defs/git_commit"
+        },
+        "migration_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["codex_desktop_commit"],
+          "properties": {
+            "codex_desktop_commit": {
+              "$ref": "#/$defs/git_commit"
+            }
+          }
+        },
+        "migration_input": {
+          "$ref": "#/$defs/migration_input"
+        }
+      }
+    },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "files", "lock_hashes"],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "files": {
+          "type": "array",
+          "description": "Checksums for the shipped files whose bytes affect runtime selection or execution.",
+          "items": {
+            "$ref": "#/$defs/file_checksum"
+          },
+          "minItems": 2,
+          "uniqueItems": true
+        },
+        "lock_hashes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runtime_lock_sha256", "native_assets_lock_sha256"],
+          "properties": {
+            "runtime_lock_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "native_assets_lock_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "git_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "relative_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\u0000\\n]+$"
+    },
+    "migration_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "source_tree_sha256",
+        "source_size_bytes",
+        "source_file_count",
+        "migration_evidence"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "source_tree_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_file_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "migration_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["codex_desktop_commit"],
+          "properties": {
+            "codex_desktop_commit": {
+              "$ref": "#/$defs/git_commit"
+            }
+          }
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "build_id", "sha256"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "file_checksum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

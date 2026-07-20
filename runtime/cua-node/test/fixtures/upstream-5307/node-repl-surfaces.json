@@ -1,0 +1,148 @@
+{
+  "fixture_version": 1,
+  "untrusted": {
+    "object_model": "Object.freeze plain object",
+    "own_keys_order": [
+      "cwd",
+      "env",
+      "homeDir",
+      "tmpDir",
+      "requestMeta",
+      "write",
+      "setResponseMeta",
+      "emitImage"
+    ],
+    "own_keys_are_enumerable": true,
+    "object_is_frozen": true,
+    "properties": {
+      "cwd": {
+        "type": "string",
+        "meaning": "startup working directory"
+      },
+      "env": {
+        "type": "Readonly<Record<string,string>>",
+        "meaning": "allowlisted environment snapshot; empty or restricted when no allowlist is configured",
+        "frozen": true
+      },
+      "homeDir": {
+        "type": "string|null",
+        "meaning": "HOME snapshot"
+      },
+      "tmpDir": {
+        "type": "string",
+        "meaning": "os.tmpdir snapshot"
+      },
+      "requestMeta": {
+        "type": "Readonly<Record<string,unknown>>|null",
+        "meaning": "deep-frozen clone for the active MCP request"
+      },
+      "write": {
+        "type": "(value: unknown) => void",
+        "behavior": "strings are unchanged; non-strings use console-style inspect formatting; no newline is appended"
+      },
+      "setResponseMeta": {
+        "type": "(meta: Record<string,unknown>) => void",
+        "behavior": "plain object only; structured clone; shallow merge into the current call"
+      },
+      "emitImage": {
+        "type": "(value: string|Uint8Array|ArrayBuffer|ArrayBufferView|{bytes: ArrayBufferView; mimeType: string}) => Promise<void>",
+        "behavior": "tracked asynchronous image emission; see output-metadata.json"
+      }
+    },
+    "forbidden_privileged_properties": [
+      "addAfterSubmittedCodeHook",
+      "gaasBrowserConfig",
+      "launchServices",
+      "config",
+      "createElicitation",
+      "fetch",
+      "nativePipe",
+      "withSuspendedTimeout",
+      "telemetry"
+    ],
+    "forbidden_escalation": [
+      "same-name local binding cannot replace the frozen global nodeRepl",
+      "prototype mutation cannot reveal trusted properties",
+      "model code cannot import process or node:process"
+    ]
+  },
+  "trusted": {
+    "object_model": "Object.freeze object whose prototype is the untrusted nodeRepl surface",
+    "own_keys_order_without_telemetry": [
+      "addAfterSubmittedCodeHook",
+      "gaasBrowserConfig",
+      "launchServices",
+      "config",
+      "env",
+      "createElicitation",
+      "fetch",
+      "nativePipe",
+      "withSuspendedTimeout"
+    ],
+    "optional_own_key": "telemetry, only when response-meta tracing was enabled at kernel bootstrap",
+    "inherited_keys": "all untrusted own keys",
+    "object_is_frozen": true,
+    "own_properties_non_writable": true,
+    "properties": {
+      "addAfterSubmittedCodeHook": {
+        "type": "({run: () => unknown, timeoutMs: positive integer}) => void",
+        "behavior": "registered hooks run after submitted code, are best-effort, and are bounded by timeoutMs"
+      },
+      "gaasBrowserConfig": {
+        "type": "Readonly<Record<string,unknown>>",
+        "behavior": "per-exec frozen config object; empty object when unavailable"
+      },
+      "launchServices": {
+        "type": "{openApplication(target): Promise<unknown>}",
+        "target": "exactly one non-empty applicationPath or bundleIdentifier"
+      },
+      "config": {
+        "methods": [
+          "readToml(path)",
+          "writeToml(path, value)",
+          "read(options?)",
+          "readRequirements()",
+          "writeValue(request)",
+          "batchWrite(request)"
+        ],
+        "constraints": [
+          "writeToml cannot write ~/.codex/config.toml",
+          "TOML values must be plain objects",
+          "JSON config values must be JSON-serializable",
+          "batchWrite edits must be non-empty"
+        ]
+      },
+      "env": {
+        "type": "Readonly<Record<string,string>>",
+        "meaning": "full frozen host environment snapshot"
+      },
+      "createElicitation": {
+        "type": "(request: {message: string; requestedSchema?: object; meta?: object}) => Promise<{action: accept|decline|cancel; content: object|null; _meta: object|null}>",
+        "availability": "only when the MCP client advertises form elicitation"
+      },
+      "fetch": {
+        "type": "(input: RequestInfo|URL, init?: RequestInit) => Promise<Response>",
+        "behavior": "host-mediated authenticated fetch; request and response bodies cross the private bridge as bytes"
+      },
+      "nativePipe": {
+        "type": "NativePipe",
+        "fixture": "native-pipe.json#kernel_bridge"
+      },
+      "withSuspendedTimeout": {
+        "type": "<T>(fn: () => T|Promise<T>) => Promise<T>",
+        "behavior": "suspend/resume execution deadline around awaited work; cancellation remains active"
+      },
+      "telemetry": {
+        "type": "optional trusted helper",
+        "behavior": "present only under explicit response-meta trace bootstrap; disabled by default"
+      }
+    },
+    "context_propagation": {
+      "trusted_main_entrypoint": "model root cell remains untrusted",
+      "trusted_dynamic_dependency": "trusted importer keeps its dependency graph trusted",
+      "hash_trust_boundary": "exact source bytes are hashed before a local module is evaluated",
+      "trusted_code_directory": "absolute NODE_REPL_TRUSTED_CODE_PATHS entries may trust contained modules",
+      "trust_all_override": "NODE_REPL_TRUST_ALL_CODE=1 is an explicit diagnostic override"
+    }
+  }
+}

@@ -1,0 +1,1 @@
+Fake cua_node fixture assets are repository test fixtures and are not production dependencies.

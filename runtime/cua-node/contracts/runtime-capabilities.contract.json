@@ -1,0 +1,208 @@
+{
+  "schema_version": 1,
+  "node_version": "24.14.0",
+  "source": "https://nodejs.org/download/release/v24.14.0/docs/api/globals.html",
+  "realms": ["model", "package", "trusted-browser"],
+  "node_global_descriptors": {
+    "enumerable_writable_functions": ["atob", "btoa", "fetch", "structuredClone"],
+    "non_enumerable_writable_values": [
+      "AbortController",
+      "AbortSignal",
+      "Blob",
+      "BroadcastChannel",
+      "ByteLengthQueuingStrategy",
+      "CloseEvent",
+      "CompressionStream",
+      "CountQueuingStrategy",
+      "Crypto",
+      "CryptoKey",
+      "CustomEvent",
+      "DecompressionStream",
+      "DOMException",
+      "Event",
+      "EventTarget",
+      "File",
+      "FormData",
+      "Headers",
+      "MessageChannel",
+      "MessageEvent",
+      "MessagePort",
+      "Navigator",
+      "Performance",
+      "PerformanceEntry",
+      "PerformanceMark",
+      "PerformanceMeasure",
+      "PerformanceObserver",
+      "PerformanceObserverEntryList",
+      "PerformanceResourceTiming",
+      "ReadableByteStreamController",
+      "ReadableStream",
+      "ReadableStreamBYOBReader",
+      "ReadableStreamBYOBRequest",
+      "ReadableStreamDefaultController",
+      "ReadableStreamDefaultReader",
+      "Request",
+      "Response",
+      "SubtleCrypto",
+      "TextDecoder",
+      "TextDecoderStream",
+      "TextEncoder",
+      "TextEncoderStream",
+      "TransformStream",
+      "TransformStreamDefaultController",
+      "URL",
+      "URLPattern",
+      "URLSearchParams",
+      "WebSocket",
+      "WritableStream",
+      "WritableStreamDefaultController",
+      "WritableStreamDefaultWriter"
+    ],
+    "enumerable_accessors": ["crypto", "navigator", "performance"],
+    "non_enumerable_binary_identity_values": [
+      "ArrayBuffer",
+      "Atomics",
+      "BigInt64Array",
+      "BigUint64Array",
+      "DataView",
+      "Float16Array",
+      "Float32Array",
+      "Float64Array",
+      "Int16Array",
+      "Int32Array",
+      "Int8Array",
+      "SharedArrayBuffer",
+      "Uint16Array",
+      "Uint32Array",
+      "Uint8Array",
+      "Uint8ClampedArray"
+    ]
+  },
+  "node_identity": {
+    "global_alias": true,
+    "existing_kernel_values": [
+      "Buffer",
+      "clearImmediate",
+      "clearInterval",
+      "clearTimeout",
+      "console",
+      "queueMicrotask",
+      "setImmediate",
+      "setInterval",
+      "setTimeout"
+    ]
+  },
+  "canvas_lazy_globals": [
+    "DOMMatrix",
+    "DOMPoint",
+    "DOMRect",
+    "Image",
+    "ImageData",
+    "Path2D"
+  ],
+  "deliberately_absent": [
+    "DOMParser",
+    "FileReader",
+    "ImageBitmap",
+    "OffscreenCanvas",
+    "Worker",
+    "XMLSerializer",
+    "createImageBitmap",
+    "document",
+    "indexedDB",
+    "localStorage",
+    "location",
+    "self",
+    "sessionStorage",
+    "window"
+  ],
+  "process_facades": {
+    "model": null,
+    "package": {
+      "identity": [
+        "arch",
+        "argv",
+        "cwd",
+        "env",
+        "execPath",
+        "getuid",
+        "pid",
+        "platform",
+        "release",
+        "stderr",
+        "stdin",
+        "stdout",
+        "version",
+        "versions"
+      ],
+      "operations": [
+        "cpuUsage",
+        "getBuiltinModule",
+        "hrtime",
+        "memoryUsage",
+        "nextTick",
+        "resourceUsage",
+        "uptime"
+      ],
+      "forbidden": ["abort", "chdir", "exit", "kill", "send"],
+      "stdio": {
+        "kind": "frozen-metadata-only",
+        "fields": ["fd", "isTTY"],
+        "forbidden": ["read", "write", "pipe", "destroy"]
+      },
+      "commonjs_compatibility": {
+        "facade": "safe-shallow-mutable-clone",
+        "reason": "Node CommonJS dependencies such as graceful-fs patch safe process facade fields during initialization",
+        "host_process_identity": false,
+        "raw_stdio": false,
+        "forwarded_event_methods": [
+          "addListener",
+          "off",
+          "on",
+          "once",
+          "removeListener"
+        ]
+      }
+    },
+    "trusted-browser": "package-plus-existing-trusted-hooks"
+  },
+  "builtin_modules": {
+    "context_breaking_denied": ["inspector", "inspector/promises", "repl", "vm"]
+  },
+  "runtime_surface": {
+    "version": 1,
+    "deeply_frozen": true,
+    "manifest_projection": true,
+    "required_groups": ["browser", "licenses", "modules", "node", "pdfjs", "tesseract"],
+    "required_values": ["root", "sbomPath", "version"]
+  },
+  "loader_promotion": {
+    "fixed_names": [
+      "canvas",
+      "pdfjs",
+      "pixelmatch",
+      "playwright",
+      "sharp",
+      "tesseract"
+    ],
+    "general_package_loader": false,
+    "required_properties": [
+      "ordinary-import-identity",
+      "per-generation-cache",
+      "reset-isolation",
+      "no-trust-escalation",
+      "no-eager-native-load"
+    ]
+  },
+  "performance": {
+    "cold_start": {
+      "relative_p95_limit": 1.15,
+      "absolute_p95_allowance_ms": 25
+    },
+    "steady_cell": {
+      "relative_p95_limit": 1.05,
+      "absolute_p95_allowance_ms": 2
+    },
+    "idle_rss_allowance_mib": 20
+  }
+}

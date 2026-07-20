@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "lock_version": 1,
+  "target": "linux-x64-glibc",
+  "local_assembly_ready": true,
+  "release_ready": false,
+  "release_blockers": ["fixture-release-notices"],
+  "assets": [
+    {
+      "id": "chromium-headless-shell",
+      "kind": "browser",
+      "version": "1200",
+      "source": {
+        "type": "playwright-cdn",
+        "uri": "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1200/chromium-headless-shell-linux.zip",
+        "provenance": "fixture Playwright browser archive",
+        "resolved": true
+      },
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "sha256_scope": "artifact",
+      "size_bytes": 100000,
+      "license": {
+        "expression": "BSD-3-Clause",
+        "notice_files": ["licenses/chromium.NOTICE"],
+        "redistribution_status": "approved"
+      },
+      "platform": {
+        "os": "linux",
+        "arch": "x64",
+        "libc": "glibc",
+        "glibc_max_required": "2.28"
+      },
+      "destination": "share/playwright/chromium-headless-shell-1200",
+      "native_dependency_audit": {
+        "status": "passed",
+        "abi": {"format": "elf", "class": "ELF64", "machine": "x86-64"},
+        "files": [],
+        "needed": [],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": "2.28",
+        "ldd": "passed",
+        "notes": ["Fixture browser audit."]
+      },
+      "redistribution": {
+        "status": "approved",
+        "allowed": true,
+        "notice_files": ["licenses/chromium.NOTICE"],
+        "source_offer_required": false,
+        "approval": "fixture-approved"
+      }
+    },
+    {
+      "id": "sharp-libvips-linux-x64",
+      "kind": "native-library",
+      "version": "1.2.4",
+      "source": {
+        "type": "local-cache",
+        "uri": "$HOME/.cache/cua-node/sharp-libvips-linux-x64-1.2.4.tgz",
+        "provenance": "fixture cached native archive",
+        "resolved": true
+      },
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "sha256_scope": "artifact",
+      "size_bytes": 100000,
+      "license": {
+        "expression": "LGPL-3.0-or-later",
+        "notice_files": ["licenses/libvips.NOTICE"],
+        "redistribution_status": "approved"
+      },
+      "platform": {
+        "os": "linux",
+        "arch": "x64",
+        "libc": "glibc",
+        "glibc_max_required": "2.25"
+      },
+      "destination": "lib/node_modules/@img/sharp-libvips-linux-x64",
+      "native_files": [{
+        "path": "lib/libvips-cpp.so.8.17.3",
+        "format": "elf-shared-object",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "size_bytes": 100000,
+        "needed": ["libc.so.6"],
+        "rpath": [],
+        "runpath": ["$ORIGIN/"],
+        "glibc_max_required": "2.25",
+        "ldd": "passed"
+      }],
+      "native_dependency_audit": {
+        "status": "passed",
+        "abi": {"format": "elf", "class": "ELF64", "machine": "x86-64"},
+        "files": [],
+        "needed": ["libc.so.6"],
+        "rpath": [],
+        "runpath": ["$ORIGIN/"],
+        "glibc_max_required": "2.25",
+        "ldd": "passed",
+        "notes": ["Fixture native dependency audit."]
+      },
+      "redistribution": {
+        "status": "approved",
+        "allowed": true,
+        "notice_files": ["licenses/libvips.NOTICE"],
+        "source_offer_required": true,
+        "approval": "fixture-approved-with-source-offer"
+      }
+    }
+  ],
+  "native_dependency_audit": {
+    "status": "passed",
+    "abi": {"format": "elf", "class": "ELF64", "machine": "x86-64"},
+    "files": [],
+    "needed": ["libc.so.6"],
+    "rpath": [],
+    "runpath": [],
+    "glibc_max_required": "2.28",
+    "ldd": "passed",
+    "notes": ["Fixture aggregate audit."]
+  },
+  "redistribution": {
+    "status": "approved",
+    "allowed": true,
+    "notice_files": ["licenses/chromium.NOTICE", "licenses/libvips.NOTICE"],
+    "source_offer_required": true,
+    "approval": "fixture-approved-with-source-offer"
+  }
+}

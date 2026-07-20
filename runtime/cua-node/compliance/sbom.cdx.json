@@ -1,0 +1,848 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:00000000-0000-4000-8000-000000000001",
+  "version": 1,
+  "metadata": {
+    "timestamp": "1970-01-01T00:00:00Z",
+    "tools": [
+      {
+        "vendor": "@heliasar",
+        "name": "cua-node-compliance-scaffold",
+        "version": "1.0.0"
+      }
+    ],
+    "component": {
+      "type": "application",
+      "bomRef": "pkg:generic/cua-node@0.1.0",
+      "name": "cua_node",
+      "version": "0.1.0",
+      "purl": "pkg:generic/cua-node@0.1.0"
+    },
+    "properties": [
+      {
+        "name": "compliance:policy-id",
+        "value": "linux-cua-node-compliance"
+      },
+      {
+        "name": "compliance:target",
+        "value": "linux-x64-glibc"
+      },
+      {
+        "name": "compliance:release-status",
+        "value": "clear"
+      },
+      {
+        "name": "compliance:open-blocking-gates",
+        "value": ""
+      },
+      {
+        "name": "compliance:network-access",
+        "value": "not-used"
+      },
+      {
+        "name": "compliance:external-system-browser",
+        "value": "A supported system-installed Chromium-family browser executable must be available to Playwright at runtime."
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/canvas",
+      "name": "@napi-rs/canvas",
+      "version": "0.1.91",
+      "scope": "required",
+      "purl": "pkg:npm/@napi-rs/canvas@0.1.91",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "110b2f6fbf3234fea13a14fce94284f1383eba1aa958447bf4ba06e3e8d29be8"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "cleared"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "canvas-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/canvas-linux-x64-gnu",
+      "name": "@napi-rs/canvas Linux x64 gnu native addon",
+      "version": "0.1.91",
+      "scope": "required",
+      "purl": "pkg:npm/@napi-rs/canvas-linux-x64-gnu@0.1.91",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "cleared"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "canvas-license,canvas-skia-notices"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        },
+        {
+          "name": "compliance:native-addon-sha256",
+          "value": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d"
+        },
+        {
+          "name": "compliance:slsa-source-commit",
+          "value": "6661e25b9520bfc2df1e4c9820717fee5dd304fd"
+        },
+        {
+          "name": "compliance:skia-submodule-commit",
+          "value": "ee20d565acb08dece4a32e3f209cdd41119015ca"
+        },
+        {
+          "name": "compliance:evidence-record-uri",
+          "value": "canvas-0.1.91-evidence.json"
+        },
+        {
+          "name": "compliance:source-offer-uri",
+          "value": "canvas-0.1.91-source-offer.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/corepack",
+      "name": "Corepack",
+      "version": "0.34.6",
+      "scope": "required",
+      "purl": "pkg:npm/corepack@0.34.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "planned"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "corepack-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/node-runtime",
+      "name": "Node.js",
+      "version": "24.14.0",
+      "scope": "required",
+      "purl": "pkg:generic/node@24.14.0",
+      "licenses": [
+        {
+          "license": {
+            "name": "Node.js License"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "41cd79bb7877c81605a9e68ec4c91547774f46a40c67a17e34d7179ef11729df"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "artifact-resolved"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "node-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/npm",
+      "name": "npm",
+      "version": "11.9.0",
+      "scope": "required",
+      "purl": "pkg:npm/npm@11.9.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Artistic-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "planned"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "npm-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "data",
+      "bomRef": "pkg:generic/cua-node-component/pdfjs-cmaps",
+      "name": "PDF.js CMaps",
+      "version": "5.4.624",
+      "scope": "required",
+      "purl": "pkg:generic/pdfjs-cmaps@5.4.624",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8e7e37a6ab3d1b0d7d24ed62ef49e7374c6f79378b8189dc23bf90a6955b6de6"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "cleared"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "pdfjs-cmaps-notice"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/pdfjs-dist",
+      "name": "PDF.js",
+      "version": "5.4.624",
+      "scope": "required",
+      "purl": "pkg:npm/pdfjs-dist@5.4.624",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "planned"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "pdfjs-license,pdfjs-third-party"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "data",
+      "bomRef": "pkg:generic/cua-node-component/pdfjs-standard-fonts",
+      "name": "PDF.js standard fonts",
+      "version": "5.4.624",
+      "scope": "required",
+      "purl": "pkg:generic/pdfjs-standard-fonts@5.4.624",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause AND OFL-1.1"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c8b927c60a75d97c4f75deb1ffc04eaa700b598106db47c67422ecb7dbe974cf"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "cleared"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "pdfjs-fonts-liberation,pdfjs-fonts-foxit"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/pixelmatch",
+      "name": "pixelmatch",
+      "version": "7.1.0",
+      "scope": "required",
+      "purl": "pkg:npm/pixelmatch@7.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6407fbe0821c7b3635924870de1173714beb723161dc033e5421eacdad8c6137"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "cleared"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "pixelmatch-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/playwright",
+      "name": "Playwright",
+      "version": "1.57.0",
+      "scope": "required",
+      "purl": "pkg:npm/playwright@1.57.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "planned"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "playwright-license,playwright-third-party"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/playwright-core",
+      "name": "Playwright Core",
+      "version": "1.57.0",
+      "scope": "required",
+      "purl": "pkg:npm/playwright-core@1.57.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "planned"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "playwright-license,playwright-third-party"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/sharp",
+      "name": "sharp",
+      "version": "0.34.5",
+      "scope": "required",
+      "purl": "pkg:npm/sharp@0.34.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "planned"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "sharp-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/sharp-libvips-linux-x64",
+      "name": "sharp bundled libvips Linux x64",
+      "version": "1.2.4",
+      "scope": "required",
+      "purl": "pkg:npm/@img/sharp-libvips-linux-x64@1.2.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "LGPL-3.0-or-later"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9a2a2cf2b53ec123b3ee293bf66c234f8306681a5edfb058815b6bf66b9df8e9"
+        },
+        {
+          "alg": "SHA-512",
+          "content": "b49c6288bb261dcf40c756f3de868e6015114d718844338306a86f7951e89eb1c9f7ffa4f3da9b2e5d1b7099ecf9ee2de2bbda341c5a119b05b527c076ab8faf"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "cleared"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "libvips-license,libvips-component-notices"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        },
+        {
+          "name": "compliance:slsa-source-commit",
+          "value": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c"
+        },
+        {
+          "name": "compliance:evidence-record-uri",
+          "value": "notices/sharp-libvips-1.2.4.NOTICE.md"
+        },
+        {
+          "name": "compliance:source-offer-uri",
+          "value": "sharp-libvips-1.2.4-source-offer.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/sharp-linux-x64-addon",
+      "name": "sharp Linux x64 native addon",
+      "version": "0.34.5",
+      "scope": "required",
+      "purl": "pkg:npm/@img/sharp-linux-x64@0.34.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "planned"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "sharp-license,sharp-addon-notice"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/sky-cua",
+      "name": "@heliasar/sky-cua",
+      "version": "0.1.0",
+      "scope": "required",
+      "purl": "pkg:npm/@heliasar/sky-cua@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "name": "LicenseRef-Heliasar-Proprietary/UNLICENSED"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fecb9426aa44de2abdaaf4bc081d9c1a0cba7a2021dfbdc8c9c0d8572f8c86c2"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "artifact-resolved"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "sky-cua-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "data",
+      "bomRef": "pkg:generic/cua-node-component/tessdata-eng",
+      "name": "Tesseract English traineddata",
+      "version": "eng",
+      "scope": "required",
+      "purl": "pkg:generic/tessdata-eng@eng",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "artifact-resolved"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "tessdata-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "data",
+      "bomRef": "pkg:generic/cua-node-component/tessdata-osd",
+      "name": "Tesseract orientation and script detection traineddata",
+      "version": "osd",
+      "scope": "required",
+      "purl": "pkg:generic/tessdata-osd@osd",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e19f2ae860792fdf372cf48d8ce70ae5da3c4052962fe22e9de1f680c374bb0e"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "artifact-resolved"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "tessdata-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/tesseract-js",
+      "name": "Tesseract.js",
+      "version": "7.0.0",
+      "scope": "required",
+      "purl": "pkg:npm/tesseract.js@7.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "planned"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "tesseract-js-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/tesseract-js-core",
+      "name": "Tesseract.js core",
+      "version": "7.0.0",
+      "scope": "required",
+      "purl": "pkg:npm/tesseract.js-core@7.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "planned"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "tesseract-js-core-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    }
+  ]
+}

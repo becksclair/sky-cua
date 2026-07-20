@@ -1,0 +1,676 @@
+{
+  "inventory_schema_version": 1,
+  "inventory_date": "2026-07-17",
+  "target": {
+    "id": "linux-x64-glibc",
+    "os": "linux",
+    "arch": "x64",
+    "libc": "glibc",
+    "glibc_baseline": "2.28",
+    "observed_host_glibc": "2.43"
+  },
+  "constraints": {
+    "network_access": "not-used",
+    "new_download_bytes": 0,
+    "cumulative_new_download_bytes": 0,
+    "estimated_missing_download_bytes_if_approved": 103912000,
+    "single_download_limit_bytes": 20971520,
+    "cumulative_download_limit_bytes": 52428800
+  },
+  "sources_inspected": [
+    "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/manifest.json",
+    "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/*/package.json",
+    "vendor/cua-node-cache/ (absent)",
+    "$HOME/.npm/_cacache (package metadata only)",
+    "$HOME/.bun/install/cache and node_modules (package metadata and files only)",
+    "$HOME/.cache/ms-playwright and $HOME/.cache/ms-playwright-go (browser/package files only)",
+    "$HOME/.cache/opencode/packages/true-mem@latest (package files only)",
+    "$SYSTEM_PREFIX/share/tessdata and installed package metadata"
+  ],
+  "requirements": [
+    {
+      "id": "node",
+      "kind": "runtime",
+      "required_version": "24.14.0",
+      "status": "missing-linux-artifact",
+      "source": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz",
+      "local_evidence": [
+        {
+          "status": "near-match",
+          "version": "24.14.1",
+          "uri": "$HOME/.vite-plus/js_runtime/node/24.14.1/bin/node",
+          "sha256": "bf9112eb83a827dc9f9c8d19bb7bddcbf00f7b2fedae18fdcaee05406981f20a",
+          "size_bytes": 122502392,
+          "sha256_scope": "native-file",
+          "platform": "linux-x64-glibc",
+          "glibc_max_required": "2.28"
+        },
+        {
+          "status": "reference-only",
+          "version": "24.14.0",
+          "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/bin/node",
+          "sha256": "6005571de444c80c44b574a2922776beea5ee3103793e597f28f5d73570e6fa4",
+          "size_bytes": 119131584,
+          "sha256_scope": "native-file",
+          "platform": "darwin-arm64",
+          "glibc_max_required": null
+        }
+      ],
+      "license": "Node.js license (exact notice required from release archive)",
+      "redistribution": "pending-release-notice-and-linux-archive"
+    },
+    {
+      "id": "npm",
+      "kind": "runtime-tool",
+      "required_version": "11.9.0",
+      "status": "reference-only",
+      "source": "https://registry.npmjs.org/npm/-/npm-11.9.0.tgz",
+      "local_evidence": [
+        {
+          "status": "reference-only",
+          "version": "11.9.0",
+          "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/npm",
+          "platform": "darwin-arm64"
+        },
+        {
+          "status": "near-match",
+          "version": "11.11.0",
+          "uri": "$HOME/.vite-plus/js_runtime/node/24.14.1/lib/node_modules/npm",
+          "platform": "linux-x64-glibc"
+        }
+      ],
+      "license": "Artistic-2.0",
+      "redistribution": "pending-node-distribution-notice"
+    },
+    {
+      "id": "corepack",
+      "kind": "runtime-tool",
+      "required_version": "0.34.6",
+      "status": "present-version-only",
+      "source": "https://registry.npmjs.org/corepack/-/corepack-0.34.6.tgz",
+      "local_evidence": [
+        {
+          "status": "local-cache",
+          "version": "0.34.6",
+          "uri": "$HOME/.vite-plus/js_runtime/node/24.14.1/lib/node_modules/corepack",
+          "sha256": "f3d8f517fba1b730796864c74c167496df69ab3fd80369227b7d0d1064560376",
+          "size_bytes": 1040114,
+          "sha256_scope": "tree-manifest",
+          "platform": "linux-x64-glibc"
+        }
+      ],
+      "license": "MIT",
+      "redistribution": "pending-node-distribution"
+    },
+    {
+      "id": "playwright",
+      "kind": "npm-package",
+      "required_version": "1.57.0",
+      "status": "reference-only",
+      "source": "https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz",
+      "local_evidence": [
+        {
+          "status": "reference-only",
+          "version": "1.57.0",
+          "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/playwright",
+          "sha256": "61be2aa435a962b87e327b4914f6f4a7d9364d6590f3b93782dd53621e64dc56",
+          "size_bytes": 3888413,
+          "sha256_scope": "tree-manifest",
+          "platform": "darwin-arm64"
+        }
+      ],
+      "npm_integrity": "sha512-ilYQj1s8sr2ppEJ2YVadYBN0Mb3mdo9J0wQ+UuDhzYqURwSoW4n1Xs5vs7ORwgDGmyEh33tRMeS8KhdkMoLXQw==",
+      "license": "Apache-2.0 plus Playwright third-party notices",
+      "redistribution": "pending-package-and-third-party-notices"
+    },
+    {
+      "id": "playwright-core",
+      "kind": "npm-package",
+      "required_version": "1.57.0",
+      "status": "present-package-missing-browser",
+      "source": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.57.0.tgz",
+      "local_evidence": [
+        {
+          "status": "local-cache",
+          "version": "1.57.0",
+          "uri": "$HOME/.cache/ms-playwright-go/1.57.0/package",
+          "sha256": "458ef2a9270a5d0d3de0315cbd4bd1c4b82d6b5680fe1620cedb1c9c54228494",
+          "size_bytes": 11234540,
+          "sha256_scope": "tree-manifest",
+          "platform": "linux-x64-glibc (JS package)"
+        }
+      ],
+      "npm_integrity": "sha512-agTcKlMw/mjBWOnD6kFZttAAGHgi/Nw0CZ2o6JqWSbMlI219lAFLZZCyqByTsvVAJq5XA5H8cA6PrvBRpBWEuQ==",
+      "license": "Apache-2.0 plus Playwright third-party notices",
+      "redistribution": "pending-package-and-third-party-notices"
+    },
+    {
+      "id": "playwright-browser-system-chromium",
+      "kind": "browser",
+      "required_version": "installed-compatible",
+      "status": "external-runtime-dependency-proven",
+      "source": "system Chromium-family executable resolved at runtime",
+      "local_evidence": [
+        {
+          "status": "system-package",
+          "version": "150.0.7871.46",
+          "uri": "/usr/bin/chromium",
+          "sha256": "84b3eb3549d31fe8c9eb61363303770d5fdfd50ce6a80aee249205a790703466",
+          "size_bytes": 14424,
+          "sha256_scope": "native-file",
+          "platform": "linux-x64-glibc",
+          "glibc_max_required": "system-managed"
+        }
+      ],
+      "license": "not redistributed by cua_node",
+      "redistribution": "not-applicable-system-dependency"
+    },
+    {
+      "id": "pdfjs-dist",
+      "kind": "npm-package",
+      "required_version": "5.4.624",
+      "status": "reference-only",
+      "source": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.4.624.tgz",
+      "local_evidence": [
+        {
+          "status": "reference-only",
+          "version": "5.4.624",
+          "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/pdfjs-dist",
+          "sha256": "fdecf861f1c13793aadaf1583757cdb5f73c859dd3e616f2fc165f89db733094",
+          "size_bytes": 37633075,
+          "sha256_scope": "tree-manifest",
+          "platform": "darwin-arm64 (pure JS/data)"
+        },
+        {
+          "status": "near-match",
+          "version": "5.4.296",
+          "uri": "$HOME/.bun/install/node_modules/pdfjs-dist",
+          "sha256": "9648f42f13297a24ea2e09ecfc9882f5fdc81480be3005cdecbcad7b38e7fed1",
+          "size_bytes": 36624782,
+          "sha256_scope": "tree-manifest",
+          "platform": "linux-x64-glibc (pure JS/data)"
+        }
+      ],
+      "npm_integrity": "sha512-sm6TxKTtWv1Oh6n3C6J6a8odejb5uO4A4zo/2dgkHuC0iu8ZMAXOezEODkVaoVp8nX1Xzr+0WxFJJmUr45hQzg==",
+      "license": "Apache-2.0 plus PDF.js component notices",
+      "redistribution": "pending-package-and-font-notice-review"
+    },
+    {
+      "id": "pdfjs-cmaps",
+      "kind": "cmap",
+      "required_version": "5.4.624",
+      "status": "present-bytes-version-independent",
+      "source": "pdfjs-dist package data",
+      "local_evidence": [
+        {
+          "status": "local-cache",
+          "version": "5.4.296",
+          "uri": "$HOME/.bun/install/node_modules/pdfjs-dist/cmaps",
+          "sha256": "de236ab6935065a710b8ca16a60b0eaa124fa7ec792cf9d2a051fec82a14deab",
+          "size_bytes": 1167747,
+          "sha256_scope": "tree-manifest",
+          "file_count": 169,
+          "platform": "linux-x64-glibc (data)"
+        }
+      ],
+      "license": "Apache-2.0 and PDF.js CMap notice",
+      "redistribution": "pending-notice-review"
+    },
+    {
+      "id": "pdfjs-standard-fonts",
+      "kind": "font",
+      "required_version": "5.4.624",
+      "status": "present-bytes-version-independent",
+      "source": "pdfjs-dist package data",
+      "local_evidence": [
+        {
+          "status": "local-cache",
+          "version": "5.4.296",
+          "uri": "$HOME/.bun/install/node_modules/pdfjs-dist/standard_fonts",
+          "sha256": "e017860d1d356126f3b336cc181c5f281b96b319a4c848e03c6dea8165113799",
+          "size_bytes": 780306,
+          "sha256_scope": "tree-manifest",
+          "file_count": 16,
+          "platform": "linux-x64-glibc (data)"
+        }
+      ],
+      "license": "Apache-2.0, Liberation, and Foxit font notices",
+      "redistribution": "pending-font-notice-review"
+    },
+    {
+      "id": "tesseract-js",
+      "kind": "npm-package",
+      "required_version": "7.0.0",
+      "status": "reference-only",
+      "source": "https://registry.npmjs.org/tesseract.js/-/tesseract.js-7.0.0.tgz",
+      "local_evidence": [
+        {
+          "status": "reference-only",
+          "version": "7.0.0",
+          "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/tesseract.js",
+          "sha256": "6f9fb9fcd5ffae70afc368654bd133c97425a82c8ef9dfd16702a34aa0010138",
+          "size_bytes": 1412134,
+          "sha256_scope": "tree-manifest",
+          "platform": "darwin-arm64 (pure JS)"
+        }
+      ],
+      "npm_integrity": "sha512-exPBkd+z+wM1BuMkx/Bjv43OeLBxhL5kKWsz/9JY+DXcXdiBjiAch0V49QR3oAJqCaL5qURE0vx9Eo+G5YE7mA==",
+      "license": "Apache-2.0",
+      "redistribution": "pending-package-review"
+    },
+    {
+      "id": "tesseract-js-core",
+      "kind": "npm-package",
+      "required_version": "7.0.0",
+      "status": "reference-only",
+      "source": "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-7.0.0.tgz",
+      "local_evidence": [
+        {
+          "status": "reference-only",
+          "version": "7.0.0",
+          "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/tesseract.js-core",
+          "sha256": "4645252c13083df1645834707390b40433a1f07a5e48f622373c8bf7e8a5fedd",
+          "size_bytes": 45262431,
+          "sha256_scope": "tree-manifest",
+          "platform": "darwin-arm64 (WASM)"
+        }
+      ],
+      "npm_integrity": "sha512-WnNH518NzmbSq9zgTPeoF8c+xmilS8rFIl1YKbk/ptuuc7p6cLNELNuPAzcmsYw450ca6bLa8j3t0VAtq435Vw==",
+      "license": "Apache-2.0",
+      "redistribution": "pending-package-review"
+    },
+    {
+      "id": "tessdata-eng",
+      "kind": "language-data",
+      "required_version": "system-5.5.2",
+      "status": "present-system-only",
+      "source": "$SYSTEM_PREFIX/share/tessdata/eng.traineddata",
+      "local_evidence": [
+        {
+          "status": "system-file",
+          "version": "system package",
+          "uri": "$SYSTEM_PREFIX/share/tessdata/eng.traineddata",
+          "sha256": "daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047",
+          "size_bytes": 23466654,
+          "sha256_scope": "artifact",
+          "platform": "linux-x64-glibc"
+        }
+      ],
+      "license": "Apache-2.0 (tessdata provenance must be pinned separately)",
+      "redistribution": "pending-tessdata-release-provenance"
+    },
+    {
+      "id": "tessdata-osd",
+      "kind": "language-data",
+      "required_version": "system-5.5.2",
+      "status": "present-system-only",
+      "source": "$SYSTEM_PREFIX/share/tessdata/osd.traineddata",
+      "local_evidence": [
+        {
+          "status": "system-file",
+          "version": "system package",
+          "uri": "$SYSTEM_PREFIX/share/tessdata/osd.traineddata",
+          "sha256": "e19f2ae860792fdf372cf48d8ce70ae5da3c4052962fe22e9de1f680c374bb0e",
+          "size_bytes": 10562874,
+          "sha256_scope": "artifact",
+          "platform": "linux-x64-glibc"
+        }
+      ],
+      "license": "Apache-2.0 (tessdata provenance must be pinned separately)",
+      "redistribution": "pending-tessdata-release-provenance"
+    },
+    {
+      "id": "tesseract-system-engine-reference",
+      "kind": "native-library",
+      "required_version": "5.5.2",
+      "status": "system-reference-not-bundleable",
+      "source": "installed OS package metadata",
+      "local_evidence": [
+        {
+          "status": "system-file",
+          "version": "5.5.2",
+          "uri": "$SYSTEM_PREFIX/bin/tesseract",
+          "sha256": "3216314fbc4aa6f9eb4cc903093005e2eccb7d1879ab86dc1a9c32e513b1f89f",
+          "size_bytes": 51408,
+          "sha256_scope": "native-file",
+          "platform": "linux-x64-glibc",
+          "glibc_max_required": "2.38",
+          "native_dependency_audit": "failed-baseline",
+          "needed": ["libtesseract.so.5", "libleptonica.so.6", "libarchive.so.13", "libcurl.so.4", "libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6"],
+          "rpath": [],
+          "runpath": [],
+          "audit_note": "Host glibc is 2.43 and this system binary exceeds the 2.28 bundle baseline."
+        }
+      ],
+      "license": "Apache-2.0",
+      "redistribution": "not-approved-system-package"
+    },
+    {
+      "id": "image-codecs-via-libvips",
+      "kind": "codec",
+      "required_version": "1.2.4",
+      "status": "present-through-sharp-libvips",
+      "source": "$HOME/.cache/opencode/packages/true-mem@latest/node_modules/@img/sharp-libvips-linux-x64",
+      "local_evidence": [
+        {
+          "status": "local-cache",
+          "version": "1.2.4",
+          "uri": "$HOME/.cache/opencode/packages/true-mem@latest/node_modules/@img/sharp-libvips-linux-x64/lib/libvips-cpp.so.8.17.3",
+          "sha256": "9a2a2cf2b53ec123b3ee293bf66c234f8306681a5edfb058815b6bf66b9df8e9",
+          "size_bytes": 16645008,
+          "sha256_scope": "native-file",
+          "platform": "linux-x64-glibc",
+          "native_dependency_audit": "passed",
+          "codec_scope": ["png", "jpeg", "webp", "tiff", "gif", "avif"]
+        }
+      ],
+      "license": "LGPL-3.0-or-later and codec component notices",
+      "redistribution": "pending-lgpl-source-and-codec-notice-approval"
+    },
+    {
+      "id": "sharp",
+      "kind": "npm-package",
+      "required_version": "0.34.5",
+      "status": "present",
+      "source": "$HOME/.cache/opencode/packages/true-mem@latest/node_modules/sharp",
+      "local_evidence": [
+        {
+          "status": "local-cache",
+          "version": "0.34.5",
+          "uri": "$HOME/.cache/opencode/packages/true-mem@latest/node_modules/sharp",
+          "sha256": "b2cb41a6599de5dfda506907aca721ff0bb17819438bc40dac2188dc01a9d8eb",
+          "size_bytes": 533628,
+          "sha256_scope": "tree-manifest",
+          "platform": "linux-x64-glibc"
+        }
+      ],
+      "npm_integrity": "sha512-Ou9I5Ft9WNcCbXrU9cMgPBcCK8LiwLqcbywW3t4oDV37n1pzpuNLsYiAV8eODnjbtQlSDwZ2cUEeQz4E54Hltg==",
+      "license": "Apache-2.0",
+      "redistribution": "pending-libvips-notice-review"
+    },
+    {
+      "id": "sharp-linux-x64",
+      "kind": "native-addon",
+      "required_version": "0.34.5",
+      "status": "present",
+      "source": "$HOME/.cache/opencode/packages/true-mem@latest/node_modules/@img/sharp-linux-x64",
+      "local_evidence": [
+        {
+          "status": "local-cache",
+          "version": "0.34.5",
+          "uri": "$HOME/.cache/opencode/packages/true-mem@latest/node_modules/@img/sharp-linux-x64/lib/sharp-linux-x64.node",
+          "sha256": "fdbcd90b39941fb7a4bc1b70f1c3e98d4b56b4d1150d4b4dbd0dc62945aeedd5",
+          "size_bytes": 410952,
+          "sha256_scope": "native-file",
+          "platform": "linux-x64-glibc",
+          "glibc_max_required": "2.17",
+          "native_dependency_audit": "passed",
+          "needed": ["libvips-cpp.so.8.17.3", "libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libpthread.so.0", "libc.so.6", "ld-linux-x86-64.so.2"],
+          "rpath": ["$ORIGIN/../../sharp-libvips-linux-x64/lib"],
+          "runpath": []
+        }
+      ],
+      "license": "Apache-2.0",
+      "redistribution": "pending-libvips-notice-review"
+    },
+    {
+      "id": "sharp-libvips-linux-x64",
+      "kind": "native-library",
+      "required_version": "1.2.4",
+      "status": "present",
+      "source": "$HOME/.cache/opencode/packages/true-mem@latest/node_modules/@img/sharp-libvips-linux-x64",
+      "local_evidence": [
+        {
+          "status": "local-cache",
+          "version": "1.2.4",
+          "uri": "$HOME/.cache/opencode/packages/true-mem@latest/node_modules/@img/sharp-libvips-linux-x64/lib/libvips-cpp.so.8.17.3",
+          "sha256": "9a2a2cf2b53ec123b3ee293bf66c234f8306681a5edfb058815b6bf66b9df8e9",
+          "size_bytes": 16645008,
+          "sha256_scope": "native-file",
+          "platform": "linux-x64-glibc",
+          "glibc_max_required": "2.25",
+          "native_dependency_audit": "passed",
+          "needed": ["libresolv.so.2", "libdl.so.2", "libstdc++.so.6", "libpthread.so.0", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-x86-64.so.2"],
+          "rpath": [],
+          "runpath": ["$ORIGIN/"]
+        }
+      ],
+      "license": "LGPL-3.0-or-later",
+      "redistribution": "pending-lgpl-source-and-notice-approval"
+    },
+    {
+      "id": "canvas",
+      "kind": "npm-package",
+      "required_version": "0.1.91",
+      "status": "missing-version",
+      "source": "https://registry.npmjs.org/@napi-rs/canvas/-/canvas-0.1.91.tgz",
+      "local_evidence": [
+        {
+          "status": "reference-only",
+          "version": "0.1.91",
+          "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/@napi-rs/canvas",
+          "sha256": "d7a5579a6573e3c778b9307e5fa3d30d3e890c28474f854e82a3e999cc5cebc8",
+          "size_bytes": 103742,
+          "sha256_scope": "tree-manifest",
+          "platform": "darwin-arm64 (pure JS package)"
+        },
+        {
+          "status": "near-match",
+          "version": "0.1.80",
+          "uri": "$HOME/.bun/install/node_modules/@napi-rs/canvas",
+          "sha256": "17341eb94c745d1cc1222b3822afca0467860d6a077fdc0bd96881a47528bf4b",
+          "size_bytes": 86290,
+          "sha256_scope": "tree-manifest",
+          "platform": "linux-x64-glibc"
+        }
+      ],
+      "license": "MIT",
+      "redistribution": "pending-target-version"
+    },
+    {
+      "id": "canvas-linux-x64-gnu",
+      "kind": "native-addon",
+      "required_version": "0.1.91",
+      "status": "missing-version",
+      "source": "https://registry.npmjs.org/@napi-rs/canvas-linux-x64-gnu/-/canvas-linux-x64-gnu-0.1.91.tgz",
+      "local_evidence": [
+        {
+          "status": "reference-only",
+          "version": "0.1.91",
+          "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/@napi-rs/canvas-darwin-arm64",
+          "sha256": "de04aabe54294fa9c95290dea47bee367f761679ea71760cbe9e6bb76eff78e7",
+          "size_bytes": 26235034,
+          "sha256_scope": "tree-manifest",
+          "platform": "darwin-arm64",
+          "native_dependency_audit": "incompatible-target"
+        },
+        {
+          "status": "near-match",
+          "version": "0.1.80",
+          "uri": "$HOME/.bun/install/node_modules/@napi-rs/canvas-linux-x64-gnu/skia.linux-x64-gnu.node",
+          "sha256": "7607cda801e86bee96d88b685766e7d22b707128de25134147f68192304220c5",
+          "size_bytes": 31201192,
+          "sha256_scope": "native-file",
+          "platform": "linux-x64-glibc",
+          "backend": "Skia",
+          "glibc_max_required": "2.16",
+          "native_dependency_audit": "passed",
+          "needed": ["libgcc_s.so.1", "librt.so.1", "libpthread.so.0", "libm.so.6", "libdl.so.2", "libc.so.6", "ld-linux-x86-64.so.2"],
+          "rpath": [],
+          "runpath": []
+        }
+      ],
+      "license": "MIT",
+      "redistribution": "pending-target-version"
+    },
+    {
+      "id": "visual-diff-pixelmatch",
+      "kind": "visual-diff",
+      "required_version": "7.1.0",
+      "status": "reference-only",
+      "source": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.1.0.tgz",
+      "local_evidence": [
+        {
+          "status": "reference-only",
+          "version": "7.1.0",
+          "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/pixelmatch",
+          "sha256": "cfa29cf6d8cdae84824a10cf0d1bd38d8f9408daca2f29b62eb7af7bc003f0cc",
+          "size_bytes": 19428,
+          "sha256_scope": "tree-manifest",
+          "platform": "darwin-arm64 (pure JS)"
+        },
+        {
+          "status": "vendored-in-exact-core",
+          "version": "1.57.0",
+          "uri": "$HOME/.cache/ms-playwright-go/1.57.0/package/lib/third_party/pixelmatch.js",
+          "sha256": "7383ae817a69534f6e6729e654f7013c54cb863b0e2c65465213f3de83c327f6",
+          "size_bytes": 9501,
+          "sha256_scope": "artifact",
+          "platform": "linux-x64-glibc (JS package)"
+        }
+      ],
+      "license": "ISC",
+      "redistribution": "pending-choice-of-standalone-or-vendored-implementation"
+    }
+  ],
+  "missing_artifacts": [
+    {
+      "id": "node-v24.14.0-linux-x64",
+      "required_version": "24.14.0",
+      "source": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz",
+      "estimated_download_bytes": 35000000,
+      "estimate_basis": "31,065,656-byte local Node 22.22.2 Linux archive plus Node 24 size delta",
+      "sha256": null,
+      "approval": "required-before-download"
+    },
+    {
+      "id": "npm-11.9.0-linux-bundle",
+      "required_version": "11.9.0",
+      "source": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz (bundled lib/node_modules/npm)",
+      "estimated_download_bytes": 0,
+      "estimate_basis": "bundled inside the required Node archive; no separate download",
+      "sha256": null,
+      "approval": "blocked-on-node-archive-and-notice-review"
+    },
+    {
+      "id": "corepack-0.34.6-linux-bundle",
+      "required_version": "0.34.6",
+      "source": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz (bundled lib/node_modules/corepack)",
+      "estimated_download_bytes": 0,
+      "estimate_basis": "bundled inside the required Node archive; exact version is locally present in a near-match Node 24.14.1 tree",
+      "sha256": null,
+      "approval": "blocked-on-node-archive-and-notice-review"
+    },
+    {
+      "id": "playwright-1.57.0-linux-package",
+      "required_version": "1.57.0",
+      "source": "https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz",
+      "estimated_download_bytes": 2000000,
+      "estimate_basis": "npm metadata reports 3,888,413-byte unpacked tree",
+      "sha256": null,
+      "npm_sha1": "74d1dacff5048dc40bf4676940b1901e18ad0f46",
+      "approval": "required-before-download-or-approved-reference-copy"
+    },
+    {
+      "id": "pdfjs-dist-5.4.624-linux-package",
+      "required_version": "5.4.624",
+      "source": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.4.624.tgz",
+      "estimated_download_bytes": 18000000,
+      "estimate_basis": "npm metadata reports 37,633,075-byte unpacked tree",
+      "sha256": null,
+      "npm_sha1": "f00911beb481de998c29e8e464b88d500cb1f4a8",
+      "approval": "required-before-download-or-approved-reference-copy"
+    },
+    {
+      "id": "tesseract-js-7.0.0-linux-package",
+      "required_version": "7.0.0",
+      "source": "https://registry.npmjs.org/tesseract.js/-/tesseract.js-7.0.0.tgz",
+      "estimated_download_bytes": 800000,
+      "estimate_basis": "npm metadata reports 1,411,341-byte unpacked tree",
+      "sha256": null,
+      "npm_sha1": "4106fb6245efab40c57b94bc1798368807526be8",
+      "approval": "required-before-download-or-approved-reference-copy"
+    },
+    {
+      "id": "tesseract-js-core-7.0.0-linux-package",
+      "required_version": "7.0.0",
+      "source": "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-7.0.0.tgz",
+      "estimated_download_bytes": 16000000,
+      "estimate_basis": "npm metadata reports 45,262,431-byte unpacked WASM tree",
+      "sha256": null,
+      "npm_sha1": "596aa1ab5c130adab12f21059e6aa1a1cecc0bab",
+      "approval": "required-before-download-or-approved-reference-copy"
+    },
+    {
+      "id": "tessdata-eng-approved-bundle",
+      "required_version": "system-5.5.2",
+      "source": "$SYSTEM_PREFIX/share/tessdata/eng.traineddata",
+      "estimated_download_bytes": 0,
+      "estimate_basis": "exact local system file is present; no download required if provenance and redistribution are approved",
+      "sha256": "daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047",
+      "approval": "pending-tessdata-release-provenance"
+    },
+    {
+      "id": "tessdata-osd-approved-bundle",
+      "required_version": "system-5.5.2",
+      "source": "$SYSTEM_PREFIX/share/tessdata/osd.traineddata",
+      "estimated_download_bytes": 0,
+      "estimate_basis": "exact local system file is present; no download required if provenance and redistribution are approved",
+      "sha256": "e19f2ae860792fdf372cf48d8ce70ae5da3c4052962fe22e9de1f680c374bb0e",
+      "approval": "pending-tessdata-release-provenance"
+    },
+    {
+      "id": "canvas-0.1.91-linux-package",
+      "required_version": "0.1.91",
+      "source": "https://registry.npmjs.org/@napi-rs/canvas/-/canvas-0.1.91.tgz",
+      "estimated_download_bytes": 100000,
+      "estimate_basis": "local 0.1.80 package tree is 86,290 bytes",
+      "sha256": null,
+      "approval": "required-before-download"
+    },
+    {
+      "id": "canvas-linux-x64-gnu-0.1.91",
+      "required_version": "0.1.91",
+      "source": "https://registry.npmjs.org/@napi-rs/canvas-linux-x64-gnu/-/canvas-linux-x64-gnu-0.1.91.tgz",
+      "estimated_download_bytes": 32000000,
+      "estimate_basis": "local 0.1.80 native addon is 31,201,192 bytes",
+      "sha256": null,
+      "approval": "required-before-download; native ABI audit required"
+    },
+    {
+      "id": "pixelmatch-7.1.0-linux-package",
+      "required_version": "7.1.0",
+      "source": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.1.0.tgz",
+      "estimated_download_bytes": 12000,
+      "estimate_basis": "local reference tree is 19,428 bytes",
+      "sha256": null,
+      "approval": "required only if standalone implementation is selected"
+    }
+  ],
+  "first_party_build_outputs_pending": [
+    {
+      "id": "node_repl-linux-x64",
+      "source": "first-party-build",
+      "download_bytes": 0,
+      "owner": "Lane N",
+      "note": "Required runtime-lock output; not an external download."
+    },
+    {
+      "id": "sky-cua-js-tarball",
+      "source": "first-party-build",
+      "download_bytes": 0,
+      "owner": "Lane J",
+      "note": "Required runtime-lock output; not an external download."
+    }
+  ],
+  "approvals_remaining": [
+    "Require and verify a compatible system Chromium-family executable; do not redistribute Playwright revision 1200 because its URLs redirect to Chrome for Testing.",
+    "Approve sourcing and redistribution of the Linux Node 24.14.0 archive and its Node/npm notices.",
+    "Approve npm package acquisition for Playwright, PDF.js, Tesseract.js/core, Canvas 0.1.91, and standalone pixelmatch if selected.",
+    "Approve PDF.js standard-font and CMap notices, including Liberation and Foxit files.",
+    "Pin Tesseract.js language-data provenance instead of relying on the system Tesseract 5.5.2 files.",
+    "Approve Sharp/libvips LGPL-3.0-or-later source-offer and notice obligations.",
+    "Choose standalone pixelmatch 7.1.0 versus the exact-core vendored implementation and record its license treatment.",
+    "Confirm the oldest supported glibc VM for the Node 24.14.0 and native-addon ABI gates."
+  ]
+}

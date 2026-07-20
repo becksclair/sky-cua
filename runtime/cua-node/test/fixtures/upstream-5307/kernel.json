@@ -1,0 +1,141 @@
+{
+  "fixture_version": 1,
+  "execution": {
+    "cell_kind": "ESM",
+    "fresh_cell_per_call": true,
+    "top_level_await": true,
+    "previous_namespace": "synthetic @prev view of the last committed cell",
+    "cell_counter_starts_at": 0,
+    "working_directory": "startup cwd is captured and process.chdir is performed before the first cell",
+    "cell_source_is_not_public_output": "diagnostic redacted source is host-controlled and not part of the model result"
+  },
+  "binding_persistence": [
+    {
+      "id": "var-redeclare",
+      "calls": [
+        {
+          "code": "var reusable = 1; nodeRepl.write(reusable)",
+          "output": "1"
+        },
+        {
+          "code": "var reusable = 2; nodeRepl.write(reusable)",
+          "output": "2"
+        }
+      ],
+      "expected": "both calls succeed"
+    },
+    {
+      "id": "const-conflict",
+      "calls": [
+        {
+          "code": "const fixed = 1; nodeRepl.write(fixed)",
+          "output": "1"
+        },
+        {
+          "code": "const fixed = 2",
+          "expected_error_contains": "already been declared"
+        }
+      ],
+      "expected": "reset is not required to reuse an existing const; a new name or reset is required"
+    },
+    {
+      "id": "throw-after-initialization",
+      "code": "const beforeThrow = 7; var writtenBeforeThrow = 8; throw new Error(\"later\")",
+      "expected_error": "later",
+      "next_call": {
+        "code": "nodeRepl.write(beforeThrow); nodeRepl.write(writtenBeforeThrow)",
+        "expected_output": "78",
+        "expected": "bindings that completed initialization before the throw remain reusable"
+      }
+    },
+    {
+      "id": "failed-link-does-not-replace-last-safe-module",
+      "code": "await import(\"./missing-fixture-module.mjs\")",
+      "expected": "the prior successfully linked namespace remains the carry-forward source"
+    }
+  ],
+  "module_resolution": {
+    "dynamic_only_for_root_cells": true,
+    "static_import_error": "Top-level static import \"<specifier>\" is not supported in node_repl. Use await import(\"<specifier>\") instead.",
+    "local_file_extensions": [".js", ".mjs"],
+    "directory_imports": "unsupported",
+    "unsupported_local_extensions": "only .js and .mjs are supported",
+    "bare_package_resolution": {
+      "roots": ["NODE_REPL_NODE_MODULE_DIRS", "js_add_node_module_dir roots", "cwd"],
+      "conditions": ["node", "import"],
+      "package_relative_dependencies": "trusted ESM package dependencies resolve relative to the package root",
+      "escape_from_configured_root": "rejected for package files"
+    },
+    "import_meta": {
+      "url": "file URL for the module identifier",
+      "filename": "absolute module path",
+      "dirname": "absolute parent directory",
+      "main": "true only for a root cell",
+      "resolve": "returns importable file://, bare package, or node: specifier"
+    }
+  },
+  "module_cache": {
+    "local_files": "clear between execs",
+    "trusted_package_entrypoints": "retain singleton identity",
+    "native_modules": "cached by module context and resolved identity",
+    "failed_link_cleanup": "newly created failed modules are removed from the link caches"
+  },
+  "search_roots": {
+    "env_variable": "NODE_REPL_NODE_MODULE_DIRS",
+    "path_delimiter": "platform path delimiter",
+    "normalization": [
+      "trim whitespace",
+      "resolve relative entries against cwd",
+      "if basename is node_modules, use its parent as the search base",
+      "ignore empty entries",
+      "de-duplicate exact normalized bases"
+    ],
+    "runtime_addition": {
+      "message_type": "add_node_module_dir",
+      "duplicate_result": false,
+      "new_result": true,
+      "survives_js_reset": true,
+      "insertion": "before the cwd fallback"
+    }
+  },
+  "process_surface": {
+    "untrusted": {
+      "ambient_process": "absent",
+      "dynamic_imports": [
+        {
+          "specifier": "process",
+          "result": "rejected"
+        },
+        {
+          "specifier": "node:process",
+          "result": "rejected"
+        }
+      ],
+      "reason": "raw process streams could corrupt the JSONL kernel transport"
+    },
+    "trusted": {
+      "ambient_process": "frozen metadata-only facade",
+      "properties": ["arch", "cwd", "env", "pid", "platform"],
+      "exit_listener": "once/off for exit cleanup only",
+      "real_process": "never exposed"
+    }
+  },
+  "process_boundary": {
+    "launch": "host directly spawns bundled Node 24 as a normal isolated child",
+    "mcp_stdio": "host owns MCP stdin/stdout; child control framing is private and never mixed with MCP frames",
+    "control_transport": "child stdin/stdout or ordinary private IPC",
+    "stderr": "separate child stderr capture for diagnostics and output",
+    "external_launch_policy": "none; the child uses ordinary process and private control-channel boundaries",
+    "privileged_operations": "remain host-mediated through authenticated private control messages"
+  },
+  "upstream_sandbox_evidence_only": {
+    "markers": ["sandbox_changed", "sandbox request metadata"],
+    "status": "retained for recovered-upstream provenance only",
+    "production_rule": "MUST NOT drive child launch, kernel reset, or private control behavior; Bex removed sandbox execution and state behavior"
+  },
+  "late_callbacks": {
+    "saved_write_or_emit_image": "can be reused while an exec is active",
+    "callback_after_exec": "fails with node_repl exec context not found",
+    "callback_after_kernel_reset": "cannot attach to a later generation"
+  }
+}

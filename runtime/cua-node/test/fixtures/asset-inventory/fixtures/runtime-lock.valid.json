@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "lock_version": 1,
+  "target": "linux-x64-glibc",
+  "local_assembly_ready": true,
+  "release_ready": false,
+  "release_blockers": ["fixture-release-notices"],
+  "runtime": {
+    "name": "cua_node",
+    "version": "0.1.0",
+    "source": {
+      "type": "first-party-build",
+      "uri": "codex-desktop/runtime/cua-node",
+      "provenance": "fixture runtime assembled from frozen first-party sources",
+      "resolved": true
+    },
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sha256_scope": "artifact",
+    "size_bytes": 123456,
+    "license": {
+      "expression": "Apache-2.0",
+      "notice_files": ["licenses/runtime.NOTICE"],
+      "redistribution_status": "approved"
+    },
+    "platform": {
+      "os": "linux",
+      "arch": "x64",
+      "libc": "glibc",
+      "glibc_max_required": "2.28"
+    },
+    "native_dependency_audit": {
+      "status": "not-applicable",
+      "abi": {"format": "none", "class": null, "machine": null},
+      "files": [],
+      "needed": [],
+      "rpath": [],
+      "runpath": [],
+      "glibc_max_required": null,
+      "ldd": "not-applicable",
+      "notes": ["Fixture runtime is a metadata-only artifact."]
+    },
+    "redistribution": {
+      "status": "approved",
+      "allowed": true,
+      "notice_files": ["licenses/runtime.NOTICE"],
+      "source_offer_required": false,
+      "approval": "fixture-approved"
+    }
+  },
+  "node": {
+    "name": "node",
+    "version": "24.14.0",
+    "source": {
+      "type": "official-release",
+      "uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz",
+      "provenance": "fixture official Node release",
+      "resolved": true
+    },
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sha256_scope": "artifact",
+    "size_bytes": 123456,
+    "license": {
+      "expression": "MIT",
+      "notice_files": ["licenses/node.LICENSE"],
+      "redistribution_status": "approved"
+    },
+    "platform": {
+      "os": "linux",
+      "arch": "x64",
+      "libc": "glibc",
+      "glibc_max_required": "2.28"
+    },
+    "native_dependency_audit": {
+      "status": "passed",
+      "abi": {"format": "elf", "class": "ELF64", "machine": "x86-64"},
+      "files": [{
+        "path": "bin/node",
+        "format": "elf-executable",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "size_bytes": 123456,
+        "needed": ["libc.so.6"],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": "2.28",
+        "ldd": "passed"
+      }],
+      "needed": ["libc.so.6"],
+      "rpath": [],
+      "runpath": [],
+      "glibc_max_required": "2.28",
+      "ldd": "passed",
+      "notes": ["Fixture ABI audit."]
+    },
+    "redistribution": {
+      "status": "approved",
+      "allowed": true,
+      "notice_files": ["licenses/node.LICENSE"],
+      "source_offer_required": false,
+      "approval": "fixture-approved"
+    }
+  },
+  "npm": {
+    "name": "npm",
+    "version": "11.9.0",
+    "source": {
+      "type": "npm",
+      "uri": "https://registry.npmjs.org/npm/-/npm-11.9.0.tgz",
+      "provenance": "fixture npm package",
+      "resolved": true
+    },
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "sha256_scope": "artifact",
+    "size_bytes": 123456,
+    "license": {
+      "expression": "Artistic-2.0",
+      "notice_files": ["licenses/npm.LICENSE"],
+      "redistribution_status": "approved"
+    },
+    "platform": {
+      "os": "linux",
+      "arch": "x64",
+      "libc": "glibc",
+      "glibc_max_required": "2.28"
+    },
+    "native_dependency_audit": {
+      "status": "not-applicable",
+      "abi": {"format": "none", "class": null, "machine": null},
+      "files": [],
+      "needed": [],
+      "rpath": [],
+      "runpath": [],
+      "glibc_max_required": null,
+      "ldd": "not-applicable",
+      "notes": ["Pure JavaScript package metadata fixture."]
+    },
+    "redistribution": {
+      "status": "approved",
+      "allowed": true,
+      "notice_files": ["licenses/npm.LICENSE"],
+      "source_offer_required": false,
+      "approval": "fixture-approved"
+    }
+  },
+  "corepack": {
+    "name": "corepack",
+    "version": "0.34.6",
+    "source": {
+      "type": "npm",
+      "uri": "https://registry.npmjs.org/corepack/-/corepack-0.34.6.tgz",
+      "provenance": "fixture corepack package",
+      "resolved": true
+    },
+    "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "sha256_scope": "artifact",
+    "size_bytes": 123456,
+    "license": {
+      "expression": "MIT",
+      "notice_files": ["licenses/corepack.LICENSE"],
+      "redistribution_status": "approved"
+    },
+    "platform": {
+      "os": "linux",
+      "arch": "x64",
+      "libc": "glibc",
+      "glibc_max_required": "2.28"
+    },
+    "native_dependency_audit": {
+      "status": "not-applicable",
+      "abi": {"format": "none", "class": null, "machine": null},
+      "files": [],
+      "needed": [],
+      "rpath": [],
+      "runpath": [],
+      "glibc_max_required": null,
+      "ldd": "not-applicable",
+      "notes": ["Pure JavaScript package metadata fixture."]
+    },
+    "redistribution": {
+      "status": "approved",
+      "allowed": true,
+      "notice_files": ["licenses/corepack.LICENSE"],
+      "source_offer_required": false,
+      "approval": "fixture-approved"
+    }
+  },
+  "packages": [{
+    "name": "@heliasar/sky-cua",
+    "version": "0.1.0",
+    "source": {
+      "type": "first-party-build",
+      "uri": "sky-cua/packages/sky-cua-js",
+      "provenance": "fixture first-party package",
+      "resolved": true
+    },
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "sha256_scope": "artifact",
+    "size_bytes": 123456,
+    "license": {
+      "expression": "MIT",
+      "notice_files": ["licenses/sky-cua.NOTICE"],
+      "redistribution_status": "approved"
+    },
+    "platform": {
+      "os": "linux",
+      "arch": "x64",
+      "libc": "glibc",
+      "glibc_max_required": "2.28"
+    },
+    "native_dependency_audit": {
+      "status": "not-applicable",
+      "abi": {"format": "none", "class": null, "machine": null},
+      "files": [],
+      "needed": [],
+      "rpath": [],
+      "runpath": [],
+      "glibc_max_required": null,
+      "ldd": "not-applicable",
+      "notes": ["Pure ESM package fixture."]
+    },
+    "redistribution": {
+      "status": "approved",
+      "allowed": true,
+      "notice_files": ["licenses/sky-cua.NOTICE"],
+      "source_offer_required": false,
+      "approval": "fixture-approved"
+    },
+    "integrity": "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "destination": "lib/node_modules/@heliasar/sky-cua"
+  }],
+  "outputs": [{
+    "name": "node_repl",
+    "version": "0.1.0",
+    "source": {
+      "type": "first-party-build",
+      "uri": "codex-desktop/runtime/cua-node/src",
+      "provenance": "fixture first-party host output",
+      "resolved": true
+    },
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "sha256_scope": "artifact",
+    "size_bytes": 123456,
+    "license": {
+      "expression": "MIT",
+      "notice_files": ["licenses/node-repl.NOTICE"],
+      "redistribution_status": "approved"
+    },
+    "platform": {
+      "os": "linux",
+      "arch": "x64",
+      "libc": "glibc",
+      "glibc_max_required": "2.28"
+    },
+    "native_dependency_audit": {
+      "status": "passed",
+      "abi": {"format": "elf", "class": "ELF64", "machine": "x86-64"},
+      "files": [{
+        "path": "bin/node_repl",
+        "format": "elf-executable",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "size_bytes": 123456,
+        "needed": ["libc.so.6"],
+        "rpath": [],
+        "runpath": [],
+        "glibc_max_required": "2.28",
+        "ldd": "passed"
+      }],
+      "needed": ["libc.so.6"],
+      "rpath": [],
+      "runpath": [],
+      "glibc_max_required": "2.28",
+      "ldd": "passed",
+      "notes": ["Fixture ABI audit."]
+    },
+    "redistribution": {
+      "status": "approved",
+      "allowed": true,
+      "notice_files": ["licenses/node-repl.NOTICE"],
+      "source_offer_required": false,
+      "approval": "fixture-approved"
+    },
+    "destination": "bin/node_repl"
+  }],
+  "native_dependency_audit": {
+    "status": "passed",
+    "abi": {"format": "elf", "class": "ELF64", "machine": "x86-64"},
+    "files": [],
+    "needed": ["libc.so.6"],
+    "rpath": [],
+    "runpath": [],
+    "glibc_max_required": "2.28",
+    "ldd": "passed",
+    "notes": ["Fixture aggregate audit."]
+  },
+  "redistribution": {
+    "status": "approved",
+    "allowed": true,
+    "notice_files": ["licenses/runtime.NOTICE"],
+    "source_offer_required": false,
+    "approval": "fixture-approved"
+  }
+}

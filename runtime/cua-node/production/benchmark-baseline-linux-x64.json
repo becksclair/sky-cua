@@ -1,0 +1,27 @@
+{
+  "schema": "com.heliasar.cua-node.benchmark-baseline",
+  "schema_version": 2,
+  "id": "asgard-linux-x64-cua-node-2026-07-20",
+  "target": "linux-x64",
+  "machine": {
+    "platform": "linux",
+    "arch": "x64",
+    "hostname": "asgard",
+    "cpu_model": "Intel(R) Core(TM) i9-14900HX"
+  },
+  "provenance": {
+    "recorded_at": "2026-07-20T05:39:11+02:00",
+    "source_commit": "65c69a3f1afc9f81274189901bc72e80682ea03a",
+    "runtime_sha256": "eed2bb02daf9ed79add6e96b2b759897e04bde4b393d3049b7fdde4cb93e6b95",
+    "command": "bun production/benchmark.ts --target=linux-x64 --root=/home/bex/projects/codex-desktop/out/cua-node/linux-x64/cua_node --network=disabled --empty-user-cache --iterations=20 --json",
+    "harness_state": "Codex migration-input runtime verified against the migrated sky-cua harness before candidate assembly"
+  },
+  "metrics": {
+    "initialized_cold_start_p95_ms": 83.628941,
+    "initialized_cold_start_samples": 3,
+    "steady_empty_cells_median_ms": 0.4761975,
+    "steady_empty_cells_p95_ms": 0.87909,
+    "steady_empty_cells_samples": 20,
+    "idle_rss_bytes": 73003008
+  }
+}

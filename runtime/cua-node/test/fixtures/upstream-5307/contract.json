@@ -1,0 +1,133 @@
+{
+  "fixture_version": 1,
+  "contract_id": "upstream-5307-node-repl",
+  "upstream": {
+    "build": "26.707.72221",
+    "runtime_archive_version": "0.0.4/20260713191736-ad8b1874340f-pr-1124580",
+    "node_repl_version": "20260713.2",
+    "node_version": "24.14.0",
+    "darwin_node_repl_sha256": "dcd520bf4bcc6c9bc360ed716deb0d7f1dcf1ff734d9ae9fa205eacd5760f59b",
+    "evidence_role": "behavioral research only; no upstream implementation is redistributed"
+  },
+  "architecture_deviation": {
+    "upstream_evidence_only": {
+      "markers": ["sandbox_changed", "sandbox request metadata"],
+      "source": "Recovered upstream binary/runtime evidence retained for provenance"
+    },
+    "production_behavior": "Bex's implementation runs bundled Node 24 directly as a normal child and keeps MCP stdio, private control IPC, and stderr capture separate.",
+    "must_not": "Upstream sandbox markers or metadata MUST NOT drive production launch, kernel reset, or control-channel policy. Bex removed sandbox execution and sandbox state behavior."
+  },
+  "mcp": {
+    "transport": "stdio",
+    "framing": "one JSON-RPC 2.0 object per newline",
+    "server_info": {
+      "name": "node_repl",
+      "version": "0.1.0"
+    },
+    "supported_protocol_versions": [
+      "2024-11-05",
+      "2025-03-26",
+      "2025-06-18",
+      "2025-11-25"
+    ],
+    "initialize": {
+      "request_method": "initialize",
+      "response_protocol_version": "the selected version from the supported intersection",
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "Use `js` to run JavaScript in the persistent Node-backed kernel. When a skill or prompt says to use `node_repl`, call this server's `js` execution tool. Calls default to a 30000 ms (30 seconds) timeout when `timeout_ms` is omitted. The runtime exposes `nodeRepl.cwd`, `nodeRepl.homeDir`, `nodeRepl.tmpDir`, `nodeRepl.requestMeta`, `nodeRepl.setResponseMeta(...)`, and `await nodeRepl.emitImage(...)`. Top-level bindings persist across `js` calls until `js_reset`; do not redeclare existing `const` or `let` names. Reuse existing bindings, use top-level `var` for reusable state that may be assigned again, or choose a fresh descriptive name. Use `js_add_node_module_dir` before `js` when a skill provides an extra package directory, and use dynamic imports like `await import(\"playwright\")` rather than filesystem paths under `./node_modules`.",
+      "post_initialize_notification": "notifications/initialized"
+    },
+    "tools_list": {
+      "method": "tools/list",
+      "exact_tool_order": ["js", "js_reset", "js_add_node_module_dir"],
+      "fixture": "tools-list.json"
+    },
+    "tools_call": {
+      "method": "tools/call",
+      "request_shape": {
+        "name": "one of the three tool names",
+        "arguments": "object validated by the selected tool inputSchema"
+      },
+      "success_shape": {
+        "content": "ordered MCP content array",
+        "isError": false,
+        "_meta": "present only when response metadata was set"
+      },
+      "error_shape": {
+        "content": "ordered text content describing the failure",
+        "isError": true
+      }
+    }
+  },
+  "kernel": {
+    "launch": "host directly spawns the bundled Node 24 runtime as a normal isolated child",
+    "host_control": "host owns MCP stdio and uses the child's private stdin/stdout or ordinary private IPC for kernel control",
+    "execution_model": "fresh ESM cell per js call with top-level await",
+    "state": "the last successfully linked/committed namespace is carried into the next cell",
+    "binding_kinds": ["const", "let", "var", "function", "class"],
+    "failure_commit": "prior bindings survive; bindings whose initialization committed before a later throw may survive",
+    "static_import": "rejected; use await import(...)",
+    "dynamic_import": "supported",
+    "cell_identifier_pattern": ".node_repl_cell_<counter>.mjs",
+    "stdout": "reserved for private JSONL kernel control; model process is not exposed",
+    "reset": "kill/recreate the kernel and clear bindings; configured module search roots survive"
+  },
+  "module_loader": {
+    "environment_root": "NODE_REPL_NODE_MODULE_DIRS, split by the platform path delimiter",
+    "added_root": "js_add_node_module_dir, normalized and de-duplicated",
+    "fallback_root": "working directory",
+    "search_order": ["environment roots", "added roots", "working directory"],
+    "accepted_local_extensions": [".js", ".mjs"],
+    "local_file_cache": "reloads between execs",
+    "trusted_package_cache": "trusted package entrypoints retain singleton identity",
+    "process_import": "model code cannot import process or node:process",
+    "trusted_process": "trusted modules receive a frozen metadata-only process facade"
+  },
+  "node_repl": {
+    "untrusted_surface_fixture": "node-repl-surfaces.json#untrusted",
+    "trusted_surface_fixture": "node-repl-surfaces.json#trusted",
+    "request_meta": "deep-frozen per-exec clone or null",
+    "response_meta": "plain-object validation followed by shallow merge",
+    "image_emission": "tracked asynchronous emit_image operation",
+    "background_operations": "tracked operations drain before success; unobserved rejection fails the call",
+    "trusted_hash_environment": "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S"
+  },
+  "native_pipe": {
+    "kernel_bridge_fixture": "native-pipe.json#kernel_bridge",
+    "browser_socket_fixture": "native-pipe.json#browser_socket",
+    "trusted_only": true,
+    "legacy_fallback": "observed in current codex-desktop integration, not part of the replacement target"
+  },
+  "lifecycle": {
+    "fixture": "lifecycle.json",
+    "default_timeout_ms": 30000,
+    "minimum_timeout_ms": 1,
+    "cancel_notification": "notifications/cancelled",
+    "reset_error_marker": "js execution reset",
+    "timeout_error_marker": "js execution timed out; kernel reset, rerun your request"
+  },
+  "fixture_files": [
+    "tools-list.json",
+    "provenance.json",
+    "mcp-transcripts.json",
+    "kernel.json",
+    "node-repl-surfaces.json",
+    "output-metadata.json",
+    "lifecycle.json",
+    "trusted-helper.json",
+    "native-pipe.json"
+  ],
+  "resolved_experiments": [
+    {
+      "id": "modern_mcp_image_content_conversion",
+      "status": "resolved-by-compatible-host-probe-and-modern-markers",
+      "result": "RawImageContent uses type=image, base64 data without the data-URL prefix, parsed mimeType, and _meta codex/imageDetail=original.",
+      "evidence": "resources/node_repl local tools/call probe plus pinned Darwin RawImageContent and codex/imageDetail/original strings"
+    }
+  ],
+  "unknowns": []
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "network": "disabled",
+  "fixtures": [
+    {
+      "id": "ocr-known-text",
+      "path": "known-text.txt",
+      "expected": "Cua node offline OCR fixture 123"
+    },
+    {
+      "id": "pdf-text-vector-raster",
+      "path": "minimal-pdf.txt",
+      "expected": "text/vector/raster fixture marker"
+    },
+    { "id": "canvas-vector", "path": "minimal.svg", "expected": "red rectangle" },
+    { "id": "pixel-diff-a", "path": "pixel-a.ppm", "expected": "1x1 red" },
+    { "id": "pixel-diff-b", "path": "pixel-b.ppm", "expected": "1x1 blue" },
+    {
+      "id": "playwright-local-page",
+      "path": "local-page.html",
+      "expected": "local fixture"
+    }
+  ],
+  "parity": "not-claimed"
+}
