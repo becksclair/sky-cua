@@ -96,13 +96,22 @@ function solidPng(red: number): Buffer {
   ]);
 }
 
-function imageItem(bytes: Buffer): Record<string, unknown> {
+function imageItem(bytes: Buffer, mimeType = "image/png"): Record<string, unknown> {
   return {
     type: "image",
     data: bytes.toString("base64"),
-    mimeType: "image/png",
+    mimeType,
     _meta: { "codex/imageDetail": "original" },
   };
+}
+
+function solidWebp(marker: number): Buffer {
+  return Buffer.from(
+    marker === 0
+      ? "UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoDAAMAAgA0JaACdLoB+AADsAD+8MQL/yC5YXXI1/8gP+QH/ID/+PIAAAA="
+      : "UklGRjgAAABXRUJQVlA4ICwAAACQAQCdASoDAAMAAgA0JaACdLoAA5gA/vmTb/+QH/+QH/+QH/8gP+IXeyAwAA==",
+    "base64",
+  );
 }
 
 function fixture(): { options: BrowserAcceptanceOptions; clientHash: string } {
@@ -395,6 +404,76 @@ test("parses and verifies complete structured live evidence", () => {
   });
 });
 
+test("accepts WebP-default screenshots at the display scale", () => {
+  const { options } = fixture();
+  const beforeWebp = solidWebp(0);
+  const afterWebp = solidWebp(1);
+  const requestMeta = {
+    session_id: options.sessionId,
+    turn_id: options.turnId,
+    "x-codex-turn-metadata": {
+      session_id: options.sessionId,
+      turn_id: options.turnId,
+    },
+  };
+  const evidence = {
+    navigation: { requested_url: options.url, final_url: options.url },
+    keyboard: {
+      method: "PlaywrightLocator.type+press",
+      key: "End",
+      text: options.typedText,
+      value: options.typedText,
+    },
+    click: { actual: true, button_name: options.buttonName },
+    readback: options.typedText,
+    screenshot: {
+      method: "Tab.screenshot",
+      emitted: true,
+      expected_width: 2,
+      expected_height: 2,
+      before_byte_length: beforeWebp.length,
+      after_byte_length: afterWebp.length,
+    },
+    request_meta: requestMeta,
+  };
+  const parsed = parseToolResult(
+    {
+      result: {
+        content: [
+          imageItem(beforeWebp, "image/webp"),
+          imageItem(afterWebp, "image/webp"),
+          { type: "text", text: JSON.stringify(evidence) },
+        ],
+        isError: false,
+        _meta: {
+          "codex/toolSurface": {
+            kind: "browserUse",
+            backend: "iab",
+            browserId: "iab",
+          },
+        },
+      },
+    },
+    options,
+  );
+  assert.deepEqual(parsed.emitted_images, {
+    before: {
+      mime_type: "image/webp",
+      byte_length: beforeWebp.length,
+      width: 3,
+      height: 3,
+      detail: "original",
+    },
+    after: {
+      mime_type: "image/webp",
+      byte_length: afterWebp.length,
+      width: 3,
+      height: 3,
+      detail: "original",
+    },
+  });
+});
+
 test("rejects missing or malformed screenshot image evidence", () => {
   const { options } = fixture();
   const evidence = {
@@ -487,7 +566,7 @@ test("rejects missing or malformed screenshot image evidence", () => {
   );
 });
 
-test("rejects signature-only and truncated PNG screenshots", () => {
+test("rejects signature-only PNG and header-only WebP screenshots", () => {
   const { options } = fixture();
   const validPng = solidPng(32);
   const requestMeta = {
@@ -498,11 +577,11 @@ test("rejects signature-only and truncated PNG screenshots", () => {
       turn_id: options.turnId,
     },
   };
-  const response = (before: Buffer, after: Buffer) => ({
+  const response = (before: Buffer, after: Buffer, mimeType = "image/png") => ({
     result: {
       content: [
-        imageItem(before),
-        imageItem(after),
+        imageItem(before, mimeType),
+        imageItem(after, mimeType),
         {
           type: "text",
           text: JSON.stringify({
@@ -548,6 +627,15 @@ test("rejects signature-only and truncated PNG screenshots", () => {
   assert.throws(
     () => parseToolResult(response(validPng.subarray(0, -4), validPng), options),
     /truncated/u,
+  );
+  const headerOnly = Buffer.alloc(30);
+  headerOnly.write("RIFF", 0, "ascii");
+  headerOnly.writeUInt32LE(22, 4);
+  headerOnly.write("WEBPVP8X", 8, "ascii");
+  headerOnly.writeUInt32LE(10, 16);
+  assert.throws(
+    () => parseToolResult(response(headerOnly, solidWebp(0), "image/webp"), options),
+    /no complete WebP image payload/u,
   );
 });
 

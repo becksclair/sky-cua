@@ -17,7 +17,10 @@ function sanitizedChildEnvironment(): Record<string, string> {
 
 rmSync(join(PACKAGE_ROOT, "dist"), { recursive: true, force: true });
 const result = await Bun.build({
-  entrypoints: [join(PACKAGE_ROOT, "src", "index.ts")],
+  entrypoints: [
+    join(PACKAGE_ROOT, "src", "index.ts"),
+    join(PACKAGE_ROOT, "src", "phone", "index.ts")
+  ],
   outdir: join(PACKAGE_ROOT, "dist"),
   target: "node",
   format: "esm",

@@ -91,6 +91,35 @@ test("packaged Node 24 acceptance runner exercises the complete action fixture w
   ]);
 });
 
+test("Node 24 resolves the Phone subpath while the root export remains unchanged", () => {
+  const build = Bun.spawnSync(["bun", "run", "build"], {
+    cwd: process.cwd(),
+    stdout: "pipe",
+    stderr: "pipe"
+  });
+  expect(build.exitCode).toBe(0);
+  const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+    exports: Record<string, { types: string; import: string }>;
+  };
+  expect(packageJson.exports).toEqual({
+    ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+    "./phone": { types: "./dist/phone/index.d.ts", import: "./dist/phone/index.js" }
+  });
+  const result = Bun.spawnSync([
+    "node",
+    "--input-type=module",
+    "--eval",
+    "const root=await import('./dist/index.js'); const p=await import('./dist/phone/index.js'); console.log(JSON.stringify({root:Object.keys(root).sort(),phone:Object.keys(p).sort()}));"
+  ], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+  expect(result.exitCode).toBe(0);
+  const exported = JSON.parse(new TextDecoder().decode(result.stdout)) as { root: string[]; phone: string[] };
+  expect(exported.root).toEqual(["sky"]);
+  expect(exported.phone).toEqual([
+    "PhoneClient", "PhoneDeviceSession", "PhoneDisconnectedError", "PhoneScreenshot", "SkyCuaError", "SkyPhoneFileError",
+    "createPhoneClient", "isSkyCuaError", "phone"
+  ]);
+});
+
 test("build ignores an injected ambient tsc and sanitizes its declaration child", () => {
   const fakeBin = mkdtempSync(join(tmpdir(), "sky-cua-fake-tsc-"));
   const fakeTsc = join(fakeBin, "tsc");

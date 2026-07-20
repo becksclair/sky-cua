@@ -5,9 +5,16 @@ already-running sky-cua service. The package is bundled into `cua_node` and is
 never published.
 
 The root export is exactly the lazy named export `sky`. Linux exposes
-`click`, `drag`, `get_screenshot`, `move`, `press_key`, `scroll`, and
-`type_text`. The Darwin-shaped API is present as a lazy placeholder and throws
+`activate_window`, `click`, `drag`, `get_screenshot`, `move`, `press_key`,
+`scroll`, and `type_text`. The Darwin-shaped API is present as a lazy placeholder and throws
 `SKY_CUA_TARGET_UNAVAILABLE` because v1 has no macOS backend.
+
+The `@heliasar/sky-cua/phone` subpath exports the lazy `phone` facade,
+`createPhoneClient`, bound `PhoneDeviceSession` objects, the complete v1 Phone
+operation surface, and screenshot byte/data-URL/image-emission helpers. It uses
+the same service socket and per-call `nodeRepl.requestMeta` provenance as the
+Computer facade. A bound session becomes terminal after disconnect and never
+silently reconnects or retries an ambiguous mutation.
 
 Configuration is read only on first enumeration or use. `OAI_SKY_CONFIG_PATH`
 takes precedence over `SKY_CUA_JS_CONFIG_PATH`; both accept the upstream-shaped

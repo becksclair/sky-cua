@@ -8,7 +8,7 @@ import { strict as assert } from "node:assert";
 import { test } from "bun:test";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const codexRoot = process.env.CODEX_DESKTOP_ROOT ?? "/home/bex/projects/codex-desktop";
+const skyCuaRoot = process.env.SKY_CUA_ROOT ?? resolve(packageRoot, "../..");
 
 type DispatchResponse = {
   result?: { isError?: boolean; content?: Array<{ text?: string }> };
@@ -60,8 +60,8 @@ async function startBrowserPeer(socketPath: string) {
 
 test("the real cua_node trusted loader rejects a wrong hash before connect and runs the canonical hash", async () => {
   const [{ RuntimeManager }, { McpServer }] = await Promise.all([
-    import(`${codexRoot}/runtime/cua-node/src/host/runtime-manager.ts`),
-    import(`${codexRoot}/runtime/cua-node/src/host/mcp-server.ts`),
+    import(`${skyCuaRoot}/runtime/cua-node/src/host/runtime-manager.ts`),
+    import(`${skyCuaRoot}/runtime/cua-node/src/host/mcp-server.ts`),
   ]);
   const root = await mkdtemp(join(tmpdir(), "browser-use-real-trust-"));
   const moduleRoot = join(root, "node_modules", "@heliasar", "browser-use");

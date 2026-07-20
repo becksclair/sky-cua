@@ -1,4 +1,5 @@
 declare const process: {
+  readonly pid: number;
   readonly execPath: string;
   readonly platform: string;
   readonly env: Record<string, string | undefined>;
@@ -39,6 +40,10 @@ declare module "node:fs" {
   export function rmSync(path: string, options: { recursive: boolean; force: boolean }): void;
   export function writeFileSync(path: string, data: string): void;
   export function unlinkSync(path: string): void;
+}
+
+declare module "node:fs/promises" {
+  export function readFile(path: string): Promise<Uint8Array>;
 }
 
 declare module "node:os" {

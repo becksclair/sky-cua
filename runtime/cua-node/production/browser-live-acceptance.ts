@@ -93,8 +93,11 @@ const SCHEMA = "com.heliasar.cua-node.browser-live-acceptance" as const;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const DEFAULT_RUNTIME_ROOT = resolve(__dirname, "../out/linux-x64/cua_node");
 const DEFAULT_BRAVE_EXECUTABLE = "/opt/brave-origin-bin/brave";
-const BRAVE_EXTENSION_ORIGIN = "chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/";
+const BRAVE_EXTENSION_ORIGIN =
+  "chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/";
 const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
+const WEBP_RIFF = Buffer.from("RIFF", "ascii");
+const WEBP_SIGNATURE = Buffer.from("WEBP", "ascii");
 const NODE_REPL_EXIT_WAIT_MS = 5_000;
 
 function errorText(error: unknown): string {
@@ -137,7 +140,9 @@ export function parseBrowserAcceptanceArgs(
       "--timeout-ms",
       "--trust-negative",
     ];
-    const name = names.find((candidate) => valueAfter(argument, candidate) !== null);
+    const name = names.find(
+      (candidate) => valueAfter(argument, candidate) !== null,
+    );
     if (name === undefined) throw new Error(`unknown argument: ${argument}`);
     values.set(name, valueAfter(argument, name) ?? "");
   }
@@ -171,7 +176,9 @@ export function parseBrowserAcceptanceArgs(
   const timeoutMs = Number(timeoutText);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000)
     throw new Error("--timeout-ms must be an integer from 1000 through 300000");
-  const runtimeRoot = resolve(values.get("--runtime-root") ?? DEFAULT_RUNTIME_ROOT);
+  const runtimeRoot = resolve(
+    values.get("--runtime-root") ?? DEFAULT_RUNTIME_ROOT,
+  );
   const defaultBrowserClient = join(
     runtimeRoot,
     "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs",
@@ -183,7 +190,9 @@ export function parseBrowserAcceptanceArgs(
         env.CUA_NODE_BROWSER_CLIENT_PATH ??
         defaultBrowserClient,
     ),
-    nodeRepl: resolve(values.get("--node-repl") ?? join(runtimeRoot, "bin/node_repl")),
+    nodeRepl: resolve(
+      values.get("--node-repl") ?? join(runtimeRoot, "bin/node_repl"),
+    ),
     braveExecutable: resolve(
       values.get("--brave-executable") ?? DEFAULT_BRAVE_EXECUTABLE,
     ),
@@ -309,7 +318,9 @@ export function validateInstalledSelection(
     isAbsolute(manifest.node_repl_path)
   )
     throw new Error("runtime manifest node_repl_path must be relative");
-  const manifestNodeRepl = realpathSync(join(runtimeRoot, manifest.node_repl_path));
+  const manifestNodeRepl = realpathSync(
+    join(runtimeRoot, manifest.node_repl_path),
+  );
   const selectedNodeRepl = realpathSync(options.nodeRepl);
   if (selectedNodeRepl !== manifestNodeRepl)
     throw new Error(
@@ -319,7 +330,9 @@ export function validateInstalledSelection(
   if (!SHA256.test(String(manifest.node_repl_sha256 ?? "")))
     throw new Error("runtime manifest node_repl_sha256 is invalid");
   if (fileSha256(selectedNodeRepl) !== manifest.node_repl_sha256)
-    throw new Error("installed node_repl SHA-256 does not match runtime manifest");
+    throw new Error(
+      "installed node_repl SHA-256 does not match runtime manifest",
+    );
   rejectSkynetPath(options.browserClient, "browser client");
   const browserClient = realpathSync(options.browserClient);
   rejectSkynetPath(browserClient, "resolved browser client");
@@ -450,7 +463,9 @@ globalThis.acceptanceBrowser = await agent.browsers.get(${JSON.stringify(browser
 nodeRepl.write("BROWSER-SETUP-OK");`;
 }
 
-export function buildAcceptanceActionCode(options: BrowserAcceptanceOptions): string {
+export function buildAcceptanceActionCode(
+  options: BrowserAcceptanceOptions,
+): string {
   return `
 await acceptanceBrowser.nameSession("Browser live acceptance");
 const acceptanceTab = await acceptanceBrowser.tabs.new();
@@ -630,17 +645,23 @@ function pngCrc32(bytes: Buffer): number {
   let crc = 0xffffffff;
   for (const byte of bytes) {
     crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    for (let bit = 0; bit < 8; bit += 1)
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-function paethPredictor(left: number, above: number, upperLeft: number): number {
+function paethPredictor(
+  left: number,
+  above: number,
+  upperLeft: number,
+): number {
   const estimate = left + above - upperLeft;
   const leftDistance = Math.abs(estimate - left);
   const aboveDistance = Math.abs(estimate - above);
   const upperLeftDistance = Math.abs(estimate - upperLeft);
-  if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) return left;
+  if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance)
+    return left;
   return aboveDistance <= upperLeftDistance ? above : upperLeft;
 }
 
@@ -669,7 +690,9 @@ function decodePng(bytes: Buffer, label: string): DecodedPng {
     const data = bytes.subarray(offset + 8, offset + 8 + length);
     const expectedCrc = bytes.readUInt32BE(offset + 8 + length);
     if (pngCrc32(Buffer.concat([typeBytes, data])) !== expectedCrc)
-      throw new Error(`${label} screenshot PNG has an invalid ${type} checksum`);
+      throw new Error(
+        `${label} screenshot PNG has an invalid ${type} checksum`,
+      );
     if (!sawHeader && type !== "IHDR")
       throw new Error(`${label} screenshot PNG does not start with IHDR`);
     if (type === "IHDR") {
@@ -700,7 +723,9 @@ function decodePng(bytes: Buffer, label: string): DecodedPng {
         data[11] !== 0 ||
         data[12] !== 0
       )
-        throw new Error(`${label} screenshot PNG has an unsupported content shape`);
+        throw new Error(
+          `${label} screenshot PNG has an unsupported content shape`,
+        );
       sawHeader = true;
     } else if (type === "IDAT") {
       if (!sawHeader || sawEnd)
@@ -716,7 +741,9 @@ function decodePng(bytes: Buffer, label: string): DecodedPng {
     offset = chunkEnd;
   }
   if (!sawEnd || offset !== bytes.length)
-    throw new Error(`${label} screenshot PNG is truncated or has trailing bytes`);
+    throw new Error(
+      `${label} screenshot PNG is truncated or has trailing bytes`,
+    );
   let scanlines: Buffer;
   try {
     scanlines = inflateSync(Buffer.concat(compressed));
@@ -736,8 +763,11 @@ function decodePng(bytes: Buffer, label: string): DecodedPng {
     for (let column = 0; column < rowBytes; column += 1) {
       const encoded = scanlines[sourceOffset + 1 + column] ?? 0;
       const left =
-        column >= channels ? (samples[outputOffset + column - channels] ?? 0) : 0;
-      const above = row > 0 ? (samples[outputOffset + column - rowBytes] ?? 0) : 0;
+        column >= channels
+          ? (samples[outputOffset + column - channels] ?? 0)
+          : 0;
+      const above =
+        row > 0 ? (samples[outputOffset + column - rowBytes] ?? 0) : 0;
       const upperLeft =
         row > 0 && column >= channels
           ? (samples[outputOffset + column - rowBytes - channels] ?? 0)
@@ -773,6 +803,88 @@ function decodePng(bytes: Buffer, label: string): DecodedPng {
   return { width, height, pixels };
 }
 
+function readUint24Le(bytes: Buffer, offset: number): number {
+  return (
+    (bytes[offset] ?? 0) |
+    ((bytes[offset + 1] ?? 0) << 8) |
+    ((bytes[offset + 2] ?? 0) << 16)
+  );
+}
+
+function decodeWebp(bytes: Buffer, label: string): DecodedPng {
+  if (
+    bytes.length < 20 ||
+    !bytes.subarray(0, 4).equals(WEBP_RIFF) ||
+    !bytes.subarray(8, 12).equals(WEBP_SIGNATURE)
+  )
+    throw new Error(`${label} screenshot is not a WebP image`);
+  if (bytes.readUInt32LE(4) + 8 !== bytes.length)
+    throw new Error(`${label} screenshot has an invalid WebP RIFF length`);
+  const chunks: Array<{ type: string; start: number; size: number }> = [];
+  let offset = 12;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length)
+      throw new Error(`${label} screenshot has a truncated WebP chunk header`);
+    const type = bytes.subarray(offset, offset + 4).toString("ascii");
+    const size = bytes.readUInt32LE(offset + 4);
+    const start = offset + 8;
+    const end = start + size;
+    if (end > bytes.length)
+      throw new Error(`${label} screenshot has a truncated WebP ${type} chunk`);
+    chunks.push({ type, start, size });
+    offset = end + (size & 1);
+  }
+  if (offset !== bytes.length)
+    throw new Error(`${label} screenshot has invalid WebP chunk padding`);
+  const imageChunk = chunks.find((entry) => entry.type === "VP8 " || entry.type === "VP8L");
+  if (imageChunk === undefined || imageChunk.size < 5)
+    throw new Error(`${label} screenshot has no complete WebP image payload`);
+  const extended = chunks.find((entry) => entry.type === "VP8X");
+  const chunk = extended?.type ?? imageChunk.type;
+  const start = extended?.start ?? imageChunk.start;
+  let width: number;
+  let height: number;
+  if (chunk === "VP8X") {
+    if ((extended?.size ?? 0) !== 10)
+      throw new Error(`${label} screenshot has an invalid VP8X header`);
+    width = readUint24Le(bytes, start + 4) + 1;
+    height = readUint24Le(bytes, start + 7) + 1;
+  } else if (chunk === "VP8L") {
+    if (bytes[start] !== 0x2f)
+      throw new Error(`${label} screenshot has an invalid VP8L header`);
+    const packed = bytes.readUInt32LE(start + 1);
+    width = (packed & 0x3fff) + 1;
+    height = ((packed >>> 14) & 0x3fff) + 1;
+  } else if (chunk === "VP8 ") {
+    if (
+      imageChunk.size < 10 ||
+      !bytes.subarray(imageChunk.start + 3, imageChunk.start + 6).equals(
+        Buffer.from([0x9d, 0x01, 0x2a]),
+      )
+    )
+      throw new Error(`${label} screenshot has an invalid VP8 frame header`);
+    width = bytes.readUInt16LE(imageChunk.start + 6) & 0x3fff;
+    height = bytes.readUInt16LE(imageChunk.start + 8) & 0x3fff;
+  } else {
+    throw new Error(
+      `${label} screenshot uses unsupported WebP chunk ${JSON.stringify(chunk)}`,
+    );
+  }
+  if (width < 1 || height < 1 || width > 16_384 || height > 16_384)
+    throw new Error(`${label} screenshot has invalid WebP dimensions`);
+  return { width, height, pixels: bytes };
+}
+
+function decodeScreenshot(
+  bytes: Buffer,
+  mimeType: string,
+  label: string,
+): DecodedPng {
+  if (mimeType === "image/png") return decodePng(bytes, label);
+  if (mimeType === "image/webp") return decodeWebp(bytes, label);
+  throw new Error(`${label} screenshot has unsupported MIME type ${mimeType}`);
+}
+
 export function parseToolResult(
   response: McpResponse,
   options: BrowserAcceptanceOptions,
@@ -788,11 +900,17 @@ export function parseToolResult(
       typeof message === "string" ? message : "node_repl tools/call failed",
     );
   }
-  const content = Array.isArray(response.result.content) ? response.result.content : [];
-  const textItem = content.find((item) => isObject(item) && item.type === "text");
+  const content = Array.isArray(response.result.content)
+    ? response.result.content
+    : [];
+  const textItem = content.find(
+    (item) => isObject(item) && item.type === "text",
+  );
   if (!isObject(textItem) || typeof textItem.text !== "string")
     throw new Error("node_repl tools/call returned no text evidence");
-  const imageItems = content.filter((item) => isObject(item) && item.type === "image");
+  const imageItems = content.filter(
+    (item) => isObject(item) && item.type === "image",
+  );
   const beforeImage = imageItems[0];
   const afterImage = imageItems[1];
   if (
@@ -800,7 +918,9 @@ export function parseToolResult(
     !isEmittedImage(beforeImage) ||
     !isEmittedImage(afterImage)
   )
-    throw new Error("browser screenshots were not emitted as two original images");
+    throw new Error(
+      "browser screenshots were not emitted as two original images",
+    );
   const evidence: unknown = JSON.parse(textItem.text);
   if (!isObject(evidence)) throw new Error("browser evidence is not an object");
   const navigation = evidence.navigation;
@@ -809,7 +929,9 @@ export function parseToolResult(
     navigation.requested_url !== options.url ||
     navigation.final_url !== options.url
   )
-    throw new Error("browser navigation did not reach the exact acceptance URL");
+    throw new Error(
+      "browser navigation did not reach the exact acceptance URL",
+    );
   const keyboard = evidence.keyboard;
   if (
     !isObject(keyboard) ||
@@ -818,7 +940,9 @@ export function parseToolResult(
     keyboard.text !== options.typedText ||
     keyboard.value !== options.typedText
   )
-    throw new Error("browser keyboard input was not observed in the target control");
+    throw new Error(
+      "browser keyboard input was not observed in the target control",
+    );
   const click = evidence.click;
   if (
     !isObject(click) ||
@@ -853,20 +977,37 @@ export function parseToolResult(
     beforeImageBytes.byteLength !== screenshot.before_byte_length ||
     afterImageBytes.byteLength !== screenshot.after_byte_length
   )
-    throw new Error("browser screenshot byte length does not match emitted image");
-  if (beforeImage.mimeType !== "image/png" || afterImage.mimeType !== "image/png")
-    throw new Error("browser screenshots must be original PNG images");
-  const beforePng = decodePng(beforeImageBytes, "before");
-  const afterPng = decodePng(afterImageBytes, "after");
+    throw new Error(
+      "browser screenshot byte length does not match emitted image",
+    );
+  if (beforeImage.mimeType !== afterImage.mimeType)
+    throw new Error("browser screenshots must use one consistent image format");
+  const beforePng = decodeScreenshot(
+    beforeImageBytes,
+    beforeImage.mimeType,
+    "before",
+  );
+  const afterPng = decodeScreenshot(
+    afterImageBytes,
+    afterImage.mimeType,
+    "after",
+  );
+  const widthScale = beforePng.width / screenshot.expected_width;
+  const heightScale = beforePng.height / screenshot.expected_height;
   if (
-    beforePng.width !== screenshot.expected_width ||
-    beforePng.height !== screenshot.expected_height ||
-    afterPng.width !== screenshot.expected_width ||
-    afterPng.height !== screenshot.expected_height
+    beforePng.width !== afterPng.width ||
+    beforePng.height !== afterPng.height ||
+    widthScale < 1 ||
+    widthScale > 4 ||
+    Math.abs(widthScale - heightScale) > 0.01
   )
-    throw new Error("browser screenshot dimensions do not match the page viewport");
+    throw new Error(
+      `browser screenshot dimensions do not match the page viewport: expected ${screenshot.expected_width}x${screenshot.expected_height}, before ${beforePng.width}x${beforePng.height}, after ${afterPng.width}x${afterPng.height}`,
+    );
   if (beforePng.pixels.equals(afterPng.pixels))
-    throw new Error("browser before/after screenshots have identical decoded pixels");
+    throw new Error(
+      "browser before/after screenshots have identical decoded pixels",
+    );
   const requestMeta = evidence.request_meta;
   if (
     !isObject(requestMeta) ||
@@ -878,8 +1019,11 @@ export function parseToolResult(
   )
     throw new Error("session_id/turn_id were not preserved by node_repl");
   const metadata = response.result._meta;
-  const toolSurface = isObject(metadata) ? metadata["codex/toolSurface"] : undefined;
-  if (!isObject(toolSurface)) throw new Error("codex/toolSurface metadata is missing");
+  const toolSurface = isObject(metadata)
+    ? metadata["codex/toolSurface"]
+    : undefined;
+  if (!isObject(toolSurface))
+    throw new Error("codex/toolSurface metadata is missing");
   const expectedBackend = options.scenario === "iab" ? "iab" : "chrome";
   if (toolSurface.backend !== expectedBackend)
     throw new Error(
@@ -997,7 +1141,9 @@ async function invokeInstalledNodeRepl(
       const response = responses.get(id);
       if (response !== undefined) return response;
       if (child.exitCode !== null)
-        throw new Error(`node_repl exited before response ${id}: ${stderr.trim()}`);
+        throw new Error(
+          `node_repl exited before response ${id}: ${stderr.trim()}`,
+        );
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
     }
     throw new Error(`timed out waiting for node_repl response ${id}`);
@@ -1007,7 +1153,8 @@ async function invokeInstalledNodeRepl(
   try {
     write(requests[0] ?? {});
     const initialized = await waitFor(1);
-    if (initialized.error !== undefined) throw new Error("node_repl initialize failed");
+    if (initialized.error !== undefined)
+      throw new Error("node_repl initialize failed");
     write(requests[1] ?? {});
     const setup = await waitFor(2);
     if (isObject(setup.result) && setup.result.isError === true)

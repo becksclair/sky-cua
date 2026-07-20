@@ -90,7 +90,11 @@ export class NdjsonConnection {
     });
   }
 
-  async request(request: TransportRequest): Promise<TransportResponse> {
+  async request(request: TransportRequest): Promise<TransportResponse>;
+  async request<TResponse extends { type: string }>(request: { type: string }): Promise<TResponse>;
+  async request<TResponse extends { type: string } = TransportResponse>(
+    request: { type: string }
+  ): Promise<TResponse> {
     if (this.closed || this.broken) {
       throw new NdjsonDisconnectError("Sky-cua service socket is already closed.", {
         connected: this.connected,
@@ -111,7 +115,7 @@ export class NdjsonConnection {
       );
     }
 
-    return await new Promise<TransportResponse>((resolve, reject) => {
+    return await new Promise<TResponse>((resolve, reject) => {
       const segments: Buffer[] = [];
       let bufferedBytes = 0;
       let wrote = false;
@@ -223,7 +227,7 @@ export class NdjsonConnection {
         }
         settled = true;
         cleanup();
-        resolve(parsed as TransportResponse);
+        resolve(parsed as TResponse);
       };
 
       this.socket.on("data", onData);

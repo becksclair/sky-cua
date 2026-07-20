@@ -109,3 +109,62 @@ export function setComputerUseResponseMeta(): void {
     "codex/toolSurface": { app: null, kind: "computerUse" }
   });
 }
+
+export type CallerProvenance = "codex_desktop" | "openclaw" | "opencode" | "direct_mcp";
+
+export type McpClientInfo = {
+  name: string;
+  version: string;
+  title?: string;
+};
+
+export type PhoneRequestContext = {
+  session_id?: string;
+  turn_id?: string;
+  caller_provenance?: CallerProvenance;
+  identity_synthetic?: boolean;
+  client_info?: McpClientInfo;
+};
+
+function optionalProvenance(value: unknown): CallerProvenance | undefined {
+  return value === "codex_desktop" || value === "openclaw" || value === "opencode" || value === "direct_mcp"
+    ? value
+    : undefined;
+}
+
+function optionalClientInfo(value: unknown): McpClientInfo | undefined {
+  const record = asRecord(value);
+  if (record === undefined || !nonEmptyString(record.name) || !nonEmptyString(record.version)) {
+    return undefined;
+  }
+  const title = nonEmptyString(record.title) ? record.title : undefined;
+  return { name: record.name, version: record.version, ...(title === undefined ? {} : { title }) };
+}
+
+/** Snapshot the current Node REPL call identity without retaining mutable metadata. */
+export function phoneRequestContext(): PhoneRequestContext | undefined {
+  const meta = readRequestMetadata();
+  const sessionId = meta.session_id ?? meta.sessionId;
+  const turnId = meta.turn_id ?? meta.turnId;
+  const callerProvenance = optionalProvenance(meta.caller_provenance ?? meta.callerProvenance);
+  const identitySynthetic = typeof meta.identity_synthetic === "boolean"
+    ? meta.identity_synthetic
+    : typeof meta.identitySynthetic === "boolean"
+      ? meta.identitySynthetic
+      : undefined;
+  const clientInfo = optionalClientInfo(meta.client_info ?? meta.clientInfo);
+  const context: PhoneRequestContext = {
+    ...(nonEmptyString(sessionId) ? { session_id: sessionId } : {}),
+    ...(nonEmptyString(turnId) ? { turn_id: turnId } : {}),
+    ...(callerProvenance === undefined ? {} : { caller_provenance: callerProvenance }),
+    ...(identitySynthetic === undefined ? {} : { identity_synthetic: identitySynthetic }),
+    ...(clientInfo === undefined ? {} : { client_info: clientInfo })
+  };
+  return Object.keys(context).length === 0 ? undefined : deepFreeze(context);
+}
+
+export function setPhoneUseResponseMeta(): void {
+  globalThis.nodeRepl?.setResponseMeta?.({
+    "codex/toolSurface": { app: null, kind: "phoneUse" }
+  });
+}
