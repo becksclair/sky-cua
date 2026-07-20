@@ -4,25 +4,24 @@ import { unlinkSync } from "node:fs";
 
 import {
   HEALTH_CAPABILITIES,
-  type HealthResponse,
-  type ServiceRequest,
-  type ServiceResponse
+  type HealthResponse
 } from "../../src/protocol/generated";
+import type { TransportRequest, TransportResponse } from "../../src/window-action";
 
 export type FakeDaemonRequest = {
-  request: ServiceRequest;
+  request: TransportRequest;
   socket: Socket;
 };
 
 export type FakeDaemonOptions = {
-  onRequest?: (request: FakeDaemonRequest) => Promise<ServiceResponse | undefined> | ServiceResponse | undefined;
+  onRequest?: (request: FakeDaemonRequest) => Promise<TransportResponse | undefined> | TransportResponse | undefined;
   fragmentResponses?: boolean;
   defaultHealth?: Partial<HealthResponse>;
 };
 
 export class FakeDaemon {
   readonly path: string;
-  readonly requests: ServiceRequest[] = [];
+  readonly requests: TransportRequest[] = [];
   readonly connectionIds: Socket[] = [];
   private readonly options: FakeDaemonOptions;
   private server: Server | undefined;
@@ -76,14 +75,14 @@ export class FakeDaemon {
         }
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        const request = JSON.parse(line) as ServiceRequest;
+        const request = JSON.parse(line) as TransportRequest;
         this.requests.push(request);
         void this.respond(socket, request);
       }
     });
   }
 
-  private async respond(socket: Socket, request: ServiceRequest): Promise<void> {
+  private async respond(socket: Socket, request: TransportRequest): Promise<void> {
     const custom = this.options.onRequest;
     let response = custom === undefined ? undefined : await custom({ request, socket });
     if (response === undefined && request.type === "health") {
@@ -111,7 +110,7 @@ export class FakeDaemon {
   }
 }
 
-function defaultResponse(request: ServiceRequest): ServiceResponse {
+function defaultResponse(request: TransportRequest): TransportResponse {
   switch (request.type) {
     case "get_screenshot":
       return {
@@ -135,6 +134,16 @@ function defaultResponse(request: ServiceRequest): ServiceResponse {
         service_version: "0.1.0",
         capabilities: [...HEALTH_CAPABILITIES],
         service_socket: "fake"
+      };
+    case "activate_window":
+      return {
+        type: "activate_window",
+        outcome: {
+          success: true,
+          message: "window activated",
+          code: "Activated",
+          diagnostics: []
+        }
       };
     default:
       return {

@@ -77,3 +77,8 @@ declare module "node:net" {
 declare module "node:timers/promises" {
   export function setTimeout(milliseconds: number): Promise<void>;
 }
+
+declare module "node:zlib" {
+  import { Buffer } from "node:buffer";
+  export function gunzipSync(data: Uint8Array): Buffer;
+}

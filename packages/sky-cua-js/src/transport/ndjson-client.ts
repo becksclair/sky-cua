@@ -7,13 +7,13 @@ import {
   type ActionType,
   type CuaJsCapability,
   type RequestContext,
-  type ServiceRequest,
-  type ServiceResponse
+  type ServiceRequest
 } from "../protocol/generated";
 import { SkyCuaError, errorFromService } from "../errors";
 import { serviceEndpoint } from "./endpoint";
 import { isServiceError, requireCapabilities, validateHealth } from "./health";
 import type { SkyConfig } from "../config";
+import type { TransportRequest, TransportResponse } from "../window-action";
 
 export class NdjsonDisconnectError extends Error {
   readonly connected: boolean;
@@ -90,7 +90,7 @@ export class NdjsonConnection {
     });
   }
 
-  async request(request: ServiceRequest): Promise<ServiceResponse> {
+  async request(request: TransportRequest): Promise<TransportResponse> {
     if (this.closed || this.broken) {
       throw new NdjsonDisconnectError("Sky-cua service socket is already closed.", {
         connected: this.connected,
@@ -111,7 +111,7 @@ export class NdjsonConnection {
       );
     }
 
-    return await new Promise<ServiceResponse>((resolve, reject) => {
+    return await new Promise<TransportResponse>((resolve, reject) => {
       const segments: Buffer[] = [];
       let bufferedBytes = 0;
       let wrote = false;
@@ -223,7 +223,7 @@ export class NdjsonConnection {
         }
         settled = true;
         cleanup();
-        resolve(parsed as ServiceResponse);
+        resolve(parsed as TransportResponse);
       };
 
       this.socket.on("data", onData);
@@ -277,9 +277,9 @@ export class SkyCuaTransport {
     this.endpoint = serviceEndpoint(config);
   }
 
-  async request(request: ServiceRequest, options: RequestOptions = {}): Promise<ServiceResponse> {
+  async request(request: TransportRequest, options: RequestOptions = {}): Promise<TransportResponse> {
     const state: RequestState = { cancelled: false };
-    const run = (): Promise<ServiceResponse> => {
+    const run = (): Promise<TransportResponse> => {
       if (options.context === undefined) {
         return this.performAction(request, options, state);
       }
@@ -304,7 +304,7 @@ export class SkyCuaTransport {
   async cancelTurn(
     context: RequestContext,
     reason: string
-  ): Promise<Extract<ServiceResponse, { type: "cancel_turn" }>> {
+  ): Promise<Extract<TransportResponse, { type: "cancel_turn" }>> {
     if (
       context.session_id.length === 0 ||
       context.turn_id.length === 0
@@ -374,10 +374,10 @@ export class SkyCuaTransport {
   }
 
   private async performAction(
-    request: ServiceRequest,
+    request: TransportRequest,
     options: RequestOptions,
     state: RequestState
-  ): Promise<ServiceResponse> {
+  ): Promise<TransportResponse> {
     if (state.cancelled) {
       throw new SkyCuaError(
         "SKY_CUA_TURN_CANCELLED",
@@ -521,13 +521,13 @@ export class SkyCuaTransport {
   }
 
   private async withDeadline(
-    operation: () => Promise<ServiceResponse>,
+    operation: () => Promise<TransportResponse>,
     context: RequestContext,
     state: RequestState,
     signal?: AbortSignal
-  ): Promise<ServiceResponse> {
+  ): Promise<TransportResponse> {
     const deadlineMs = context.deadline_ms ?? 30_000;
-    return await new Promise<ServiceResponse>((resolve, reject) => {
+    return await new Promise<TransportResponse>((resolve, reject) => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = (): void => {
@@ -595,7 +595,7 @@ export class SkyCuaTransport {
     ]);
   }
 
-  private validateActionResponse(request: ServiceRequest, response: ServiceResponse): void {
+  private validateActionResponse(request: TransportRequest, response: TransportResponse): void {
     if (!ACTION_TYPES.has(request.type as ActionType)) {
       return;
     }

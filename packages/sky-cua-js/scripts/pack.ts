@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, rmSync }
 import { gzipSync } from "node:zlib";
 import { join, relative } from "node:path";
 
-type TarEntry = { name: string; bytes: Buffer };
+type TarEntry = { name: string; bytes: Buffer; mode?: number };
 
 function filesUnder(root: string, prefix: string): TarEntry[] {
   const entries: TarEntry[] = [];
@@ -27,7 +27,7 @@ function octal(value: number, width: number): Buffer {
 function tarHeader(entry: TarEntry): Buffer {
   const header = Buffer.alloc(512);
   header.write(entry.name, 0, 100, "utf8");
-  octal(0o644, 8).copy(header, 100);
+  octal(entry.mode ?? 0o644, 8).copy(header, 100);
   octal(0, 8).copy(header, 108);
   octal(0, 8).copy(header, 116);
   octal(entry.bytes.length, 12).copy(header, 124);
@@ -64,6 +64,7 @@ mkdirSync("out", { recursive: true });
 const entries = [
   { name: "package/package.json", bytes: readFileSync("package.json") },
   { name: "package/README.md", bytes: readFileSync("README.md") },
+  { name: "package/scripts/acceptance-actions.mjs", bytes: readFileSync("scripts/acceptance-actions.mjs"), mode: 0o755 },
   ...filesUnder("dist", "package/dist")
 ];
 const archive = gzipSync(deterministicTar(entries), { level: 9, mtime: 0 });

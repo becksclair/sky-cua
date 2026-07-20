@@ -1,6 +1,7 @@
 import { targetUnavailable } from "../errors";
 
 export type MacPlaceholderClient = {
+  activate_window(...args: readonly unknown[]): Promise<never>;
   click(...args: readonly unknown[]): Promise<never>;
   drag(...args: readonly unknown[]): Promise<never>;
   get_app_state(...args: readonly unknown[]): Promise<never>;
@@ -14,6 +15,7 @@ export type MacPlaceholderClient = {
 };
 
 const MAC_KEYS = [
+  "activate_window",
   "click",
   "drag",
   "get_app_state",
@@ -31,6 +33,7 @@ export function createMacPlaceholder(): MacPlaceholderClient {
     throw targetUnavailable("darwin");
   };
   return {
+    activate_window: fail,
     click: fail,
     drag: fail,
     get_app_state: fail,

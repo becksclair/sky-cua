@@ -13,6 +13,11 @@ import { requestContext, setComputerUseResponseMeta, withSuspendedTimeout } from
 import type { SkyConfig } from "../config";
 import { decodeScreenshots } from "../screenshot";
 import { SkyCuaTransport } from "../transport/ndjson-client";
+import type {
+  ActivateWindowRequest,
+  WindowActionOutcome,
+  WindowTarget
+} from "../window-action";
 
 export type LinuxOptions = Pick<SkyConfig, "post_action_sleep_ms" | "mouse_size_px">;
 
@@ -54,7 +59,10 @@ export type TypeTextInput = {
   text: string;
 };
 
+export type ActivateWindowInput = WindowTarget;
+
 export type LinuxClient = {
+  activate_window(input: ActivateWindowInput): Promise<WindowActionOutcome>;
   click(input: ClickInput): Promise<void>;
   drag(input: DragInput): Promise<void>;
   get_screenshot(): Promise<ReturnType<typeof decodeScreenshots>>;
@@ -65,6 +73,7 @@ export type LinuxClient = {
 };
 
 const LINUX_KEYS = [
+  "activate_window",
   "click",
   "drag",
   "get_screenshot",
@@ -122,6 +131,72 @@ function optionalInteger(
   return value as number;
 }
 
+const WINDOW_TARGET_FIELDS = [
+  "window_id",
+  "pid",
+  "tty",
+  "terminal_pid",
+  "terminal_command",
+  "terminal_cwd",
+  "app_id",
+  "wm_class",
+  "title"
+] as const;
+
+function normalizeWindowTarget(input: ActivateWindowInput): WindowTarget {
+  const value = recordInput(input, "activate_window");
+  assertKeys(value, WINDOW_TARGET_FIELDS, "activate_window");
+  const target: WindowTarget = {};
+  for (const field of WINDOW_TARGET_FIELDS) {
+    const candidate = value[field];
+    if (candidate === undefined) {
+      continue;
+    }
+    if (field === "pid" || field === "terminal_pid") {
+      if (!Number.isInteger(candidate) || (candidate as number) < 1 || (candidate as number) > 0xffff_ffff) {
+        throw invalidArgument(`${field} must be an integer between 1 and 4294967295.`);
+      }
+      target[field] = candidate as number;
+      continue;
+    }
+    if (typeof candidate !== "string" || candidate.trim().length === 0) {
+      throw invalidArgument(`${field} must be a non-empty string when supplied.`);
+    }
+    target[field] = candidate.trim();
+  }
+  if (Object.keys(target).length === 0) {
+    throw invalidArgument(
+      "activate_window requires window_id, pid, app_id, wm_class, title, or a terminal selector."
+    );
+  }
+  return target;
+}
+
+function windowActionOutcome(value: unknown): WindowActionOutcome {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidArgument("Sky-cua service returned an invalid activate_window outcome.");
+  }
+  const outcome = value as Record<string, unknown>;
+  if (
+    typeof outcome.success !== "boolean" ||
+    typeof outcome.message !== "string" ||
+    typeof outcome.code !== "string" ||
+    !Array.isArray(outcome.diagnostics) ||
+    outcome.diagnostics.some((diagnostic) => {
+      if (typeof diagnostic !== "object" || diagnostic === null || Array.isArray(diagnostic)) {
+        return true;
+      }
+      const record = diagnostic as Record<string, unknown>;
+      return typeof record.code !== "string" ||
+        typeof record.message !== "string" ||
+        (record.details !== undefined && typeof record.details !== "string");
+    })
+  ) {
+    throw invalidArgument("Sky-cua service returned an invalid activate_window outcome.");
+  }
+  return value as WindowActionOutcome;
+}
+
 function requiredCapabilities(
   base: "linux.click" | "linux.drag" | "linux.move" | "linux.press_key" | "linux.scroll" | "linux.type_text",
   key?: string,
@@ -160,6 +235,25 @@ export function createLinuxClient(config: SkyConfig): LinuxClient {
   const transport = new SkyCuaTransport(config);
 
   const client: LinuxClient = {
+    async activate_window(input: ActivateWindowInput): Promise<WindowActionOutcome> {
+      const context = requestContext();
+      const request: ActivateWindowRequest = {
+        type: "activate_window",
+        target: normalizeWindowTarget(input),
+        context
+      };
+      const response = await withSuspendedTimeout(async () => transport.request(request, {
+        context,
+        requiredCapabilities: ["linux.activate_window", "turn.cancel"]
+      }));
+      if (response.type !== "activate_window") {
+        throw invalidArgument("Sky-cua service returned an invalid activate_window response.");
+      }
+      const outcome = windowActionOutcome(response.outcome);
+      setComputerUseResponseMeta();
+      return outcome;
+    },
+
     async click(input: ClickInput): Promise<void> {
       const value = recordInput(input, "click");
       assertKeys(value, ["x", "y", "mouse_button", "click_count", "key"], "click");

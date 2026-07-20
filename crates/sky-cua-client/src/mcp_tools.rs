@@ -634,7 +634,10 @@ fn handle_tool_call_with_browser_eval_policy(
                 Ok(target) => target,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
-            match service.call(&ServiceRequest::ActivateWindow { target })? {
+            match service.call(&ServiceRequest::ActivateWindow {
+                target,
+                context: None,
+            })? {
                 ServiceResponse::ActivateWindow { outcome } => Ok(json!({
                     "content": [{
                         "type": "text",

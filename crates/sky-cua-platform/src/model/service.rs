@@ -28,6 +28,7 @@ const BROWSER_CONTROL_MODE_CAPABILITY_PREFIX: &str = "browser_control.mode=";
 pub const CUA_SERVICE_CAPABILITIES: &[&str] = &[
     "action.held_key",
     "action.post_action_sleep_ms",
+    "linux.activate_window",
     "linux.click",
     "linux.click.button",
     "linux.click.count",
@@ -66,7 +67,7 @@ pub fn cua_service_capabilities_for_input_backend(backend: &InputBackendKind) ->
     CUA_SERVICE_CAPABILITIES
         .iter()
         .filter(|capability| {
-            (**capability == "linux.get_screenshot"
+            ((**capability == "linux.activate_window" || **capability == "linux.get_screenshot")
                 || !capability.starts_with("linux.")
                 || supports_linux_input)
                 && (**capability != "linux.scroll.pixels"
@@ -434,6 +435,8 @@ pub enum ServiceRequest {
     ActivateWindow {
         #[serde(default)]
         target: WindowTarget,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<CuaRequestContext>,
     },
     GetAppState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -747,6 +750,7 @@ mod tests {
             ServiceRequest::FocusedWindow,
             ServiceRequest::ActivateWindow {
                 target: WindowTarget::default(),
+                context: None,
             },
             ServiceRequest::GetAppState {
                 selector: None,
@@ -851,6 +855,7 @@ mod tests {
                         window_id: Some("w1".to_string()),
                         ..Default::default()
                     },
+                    context: None,
                 },
                 "activate_window",
             ),
@@ -1154,6 +1159,51 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn activate_window_context_round_trips_and_legacy_request_stays_readable() {
+        let context = CuaRequestContext {
+            session_id: "node-repl-session".to_string(),
+            turn_id: "node-repl-turn".to_string(),
+            deadline_ms: Some(1_234),
+        };
+        let request = ServiceRequest::ActivateWindow {
+            target: WindowTarget {
+                window_id: Some("window-1".to_string()),
+                ..Default::default()
+            },
+            context: Some(context.clone()),
+        };
+
+        let rendered = serde_json::to_value(&request).expect("window context should serialize");
+        assert_eq!(rendered["context"]["session_id"], "node-repl-session");
+        assert_eq!(rendered["context"]["turn_id"], "node-repl-turn");
+        assert_eq!(rendered["context"]["deadline_ms"], 1_234);
+        assert_eq!(
+            serde_json::from_value::<ServiceRequest>(rendered)
+                .expect("context-bearing window request should round trip"),
+            request
+        );
+
+        let legacy = serde_json::from_value::<ServiceRequest>(json!({
+            "type": "activate_window",
+            "target": { "window_id": "legacy-window" }
+        }))
+        .expect("legacy context-free window request should remain readable");
+        assert_eq!(
+            legacy,
+            ServiceRequest::ActivateWindow {
+                target: WindowTarget {
+                    window_id: Some("legacy-window".to_string()),
+                    ..Default::default()
+                },
+                context: None,
+            }
+        );
+        let rendered_legacy =
+            serde_json::to_value(legacy).expect("legacy window request should serialize");
+        assert!(rendered_legacy.get("context").is_none());
     }
 
     #[test]
@@ -1701,6 +1751,11 @@ mod tests {
 
         let unavailable = cua_service_capabilities_for_input_backend(&InputBackendKind::None);
         assert!(!unavailable.iter().any(|value| value == "linux.scroll"));
+        assert!(
+            unavailable
+                .iter()
+                .any(|value| value == "linux.activate_window")
+        );
         assert!(
             unavailable
                 .iter()

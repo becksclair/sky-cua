@@ -13,8 +13,12 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "sky-cua-acceptance": "./scripts/acceptance-actions.mjs"
+  },
   "files": [
     "dist",
+    "scripts/acceptance-actions.mjs",
     "README.md",
     "package.json"
   ],
@@ -22,6 +26,8 @@
     "build": "bun scripts/build.ts",
     "benchmark:screenshot": "bun run build && node --expose-gc scripts/benchmark-screenshot.mjs",
     "benchmark:screenshot:self-test": "bun run build && node --expose-gc scripts/benchmark-screenshot.mjs --self-test",
+    "acceptance:actions": "bun run build && node scripts/acceptance-actions.mjs --dry-run",
+    "acceptance:actions:live": "bun run build && node scripts/acceptance-actions.mjs --live",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun run build && bun test test",
     "pack": "bun run pack:deterministic",

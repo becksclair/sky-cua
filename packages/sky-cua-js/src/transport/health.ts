@@ -4,16 +4,16 @@ import {
   SUPPORTED_PROTOCOL_VERSION_MAX,
   SUPPORTED_PROTOCOL_VERSION_MIN,
   type CuaJsCapability,
-  type HealthResponse,
-  type ServiceResponse
+  type HealthResponse
 } from "../protocol/generated";
 import { SkyCuaError, errorFromService } from "../errors";
+import type { TransportResponse } from "../window-action";
 
-export function isServiceError(response: ServiceResponse): response is Extract<ServiceResponse, { type: "error" }> {
+export function isServiceError(response: TransportResponse): response is Extract<TransportResponse, { type: "error" }> {
   return response.type === "error" && response.ok === false;
 }
 
-export function validateHealth(response: ServiceResponse): HealthResponse {
+export function validateHealth(response: TransportResponse): HealthResponse {
   if (isServiceError(response)) {
     throw errorFromService(response);
   }

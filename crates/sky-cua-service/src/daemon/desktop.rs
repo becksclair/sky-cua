@@ -191,8 +191,24 @@ impl ServiceDaemon {
                     },
                 }
             }
-            ServiceRequest::ActivateWindow { target } => {
-                debug!(target = ?target, "handling activate_window request");
+            ServiceRequest::ActivateWindow { target, context } => {
+                if let Some(context) = context.as_ref()
+                    && let Err(message) = context.validate()
+                {
+                    return cua_error_response(
+                        "SKY_CUA_INVALID_CONTEXT",
+                        message,
+                        Some(context),
+                        Some("never"),
+                    );
+                }
+                debug!(
+                    target = ?target,
+                    session_id = context.as_ref().map(|context| context.session_id.as_str()),
+                    turn_id = context.as_ref().map(|context| context.turn_id.as_str()),
+                    deadline_ms = context.as_ref().map(CuaRequestContext::deadline_ms),
+                    "handling activate_window request"
+                );
                 match self.backend.activate_window(target).await {
                     Ok(outcome) => ServiceResponse::ActivateWindow { outcome },
                     Err(error) => {

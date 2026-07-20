@@ -376,6 +376,38 @@ fn only_activity_requests_trigger_automatic_session_presence() {
 }
 
 #[tokio::test]
+async fn activate_window_rejects_invalid_optional_request_context() {
+    let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
+    let response = daemon
+        .handle(ServiceRequest::ActivateWindow {
+            target: WindowTarget {
+                window_id: Some("fixture-window".to_string()),
+                ..Default::default()
+            },
+            context: Some(CuaRequestContext {
+                session_id: "window-session".to_string(),
+                turn_id: "window-turn".to_string(),
+                deadline_ms: Some(0),
+            }),
+        })
+        .await;
+
+    assert!(matches!(
+        response,
+        ServiceResponse::Error {
+            ref code,
+            ref session_id,
+            ref turn_id,
+            ref retry,
+            ..
+        } if code == "SKY_CUA_INVALID_CONTEXT"
+            && session_id.as_deref() == Some("window-session")
+            && turn_id.as_deref() == Some("window-turn")
+            && retry.as_deref() == Some("never")
+    ));
+}
+
+#[tokio::test]
 async fn cua_cancel_turn_interrupts_an_action_over_the_control_path() {
     let started = Arc::new(Notify::new());
     let daemon = Arc::new(daemon_with_backend(Box::new(CuaBlockingBackend {

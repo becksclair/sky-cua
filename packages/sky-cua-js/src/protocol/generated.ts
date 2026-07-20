@@ -114,6 +114,25 @@ export type CancelTurnRequest = {
   reason: string;
 };
 
+export type WindowTarget = {
+  window_id?: string;
+  pid?: number;
+  tty?: string;
+  terminal_pid?: number;
+  terminal_command?: string;
+  terminal_cwd?: string;
+  app_id?: string;
+  wm_class?: string;
+  title?: string;
+};
+
+export type ActivateWindowRequest = {
+  type: "activate_window";
+  target: WindowTarget;
+  /** Optional on the v1 wire so context-free legacy callers remain readable. */
+  context?: RequestContext;
+};
+
 export type ServiceRequest =
   | HealthRequest
   | ClickRequest
@@ -123,11 +142,13 @@ export type ServiceRequest =
   | PressKeyRequest
   | ScrollRequest
   | TypeTextRequest
+  | ActivateWindowRequest
   | CancelTurnRequest;
 
 export type CuaJsCapability =
   | "action.held_key"
   | "action.post_action_sleep_ms"
+  | "linux.activate_window"
   | "linux.click"
   | "linux.click.button"
   | "linux.click.count"
@@ -193,6 +214,25 @@ export type CancelTurnResponse = {
   status: CancelTurnStatus;
 };
 
+export type WindowActionDiagnostic = {
+  code: string;
+  message: string;
+  details?: string;
+};
+
+export type WindowActionOutcome = {
+  success: boolean;
+  message: string;
+  code: string;
+  diagnostics: WindowActionDiagnostic[];
+  agent_cursor?: unknown;
+};
+
+export type ActivateWindowResponse = {
+  type: "activate_window";
+  outcome: WindowActionOutcome;
+};
+
 export type ServiceErrorCode =
   | "SKY_CUA_SERVICE_RESTART_REQUIRED"
   | "SKY_CUA_SERVICE_DISCONNECTED"
@@ -229,6 +269,7 @@ export type ServiceResponse =
   | HealthResponse
   | ActionResponse
   | GetScreenshotResponse
+  | ActivateWindowResponse
   | CancelTurnResponse
   | ServiceError;
 
@@ -246,13 +287,14 @@ export type IdempotencyClass =
   | "not_applicable";
 
 export const REQUEST_IDEMPOTENCY: Readonly<Record<
-  "health" | ActionType | "get_screenshot" | "cancel_turn" | "error",
+  "health" | ActionType | "get_screenshot" | "activate_window" | "cancel_turn" | "error",
   IdempotencyClass
 >> = {
   health: "idempotent_read",
   click: "non_idempotent_mutation",
   drag: "non_idempotent_mutation",
   get_screenshot: "idempotent_read",
+  activate_window: "idempotent_set",
   move: "idempotent_set",
   press_key: "non_idempotent_mutation",
   scroll: "non_idempotent_mutation",
@@ -264,6 +306,7 @@ export const REQUEST_IDEMPOTENCY: Readonly<Record<
 export const HEALTH_CAPABILITIES: readonly CuaJsCapability[] = [
   "action.held_key",
   "action.post_action_sleep_ms",
+  "linux.activate_window",
   "linux.click",
   "linux.click.button",
   "linux.click.count",
@@ -345,6 +388,7 @@ export const SERVICE_PROTOCOL = {
             "enum": [
               "action.held_key",
               "action.post_action_sleep_ms",
+              "linux.activate_window",
               "linux.click",
               "linux.click.button",
               "linux.click.count",
@@ -396,6 +440,7 @@ export const SERVICE_PROTOCOL = {
       "capabilities": [
         "action.held_key",
         "action.post_action_sleep_ms",
+        "linux.activate_window",
         "linux.click",
         "linux.click.button",
         "linux.click.count",
@@ -458,7 +503,8 @@ export const SERVICE_PROTOCOL = {
         "type_text"
       ],
       "optional_for": [
-        "get_screenshot"
+        "get_screenshot",
+        "activate_window"
       ],
       "forbidden_for": [
         "health"
@@ -803,6 +849,70 @@ export const SERVICE_PROTOCOL = {
       },
       "additionalProperties": false
     },
+    "activate_window": {
+      "type": "object",
+      "required": [
+        "type",
+        "target"
+      ],
+      "properties": {
+        "type": {
+          "const": "activate_window"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "window_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "tty": {
+              "type": "string",
+              "minLength": 1
+            },
+            "terminal_pid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "terminal_command": {
+              "type": "string",
+              "minLength": 1
+            },
+            "terminal_cwd": {
+              "type": "string",
+              "minLength": 1
+            },
+            "app_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "wm_class": {
+              "type": "string",
+              "minLength": 1
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        },
+        "context": {
+          "$ref": "#/context/request_context",
+          "required": false,
+          "compatibility": "legacy_optional"
+        }
+      },
+      "additionalProperties": false,
+      "idempotency": "idempotent_set"
+    },
     "cancel_turn": {
       "type": "object",
       "required": [
@@ -889,6 +999,63 @@ export const SERVICE_PROTOCOL = {
       },
       "additionalProperties": false,
       "implicit_emit_image": false
+    },
+    "activate_window": {
+      "type": "object",
+      "required": [
+        "type",
+        "outcome"
+      ],
+      "properties": {
+        "type": {
+          "const": "activate_window"
+        },
+        "outcome": {
+          "type": "object",
+          "required": [
+            "success",
+            "message",
+            "code",
+            "diagnostics"
+          ],
+          "properties": {
+            "success": {
+              "type": "boolean"
+            },
+            "message": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "diagnostics": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "details": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "agent_cursor": {}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     },
     "cancel_turn": {
       "type": "object",
@@ -1106,6 +1273,7 @@ export const SERVICE_PROTOCOL = {
       "click": "non_idempotent_mutation",
       "drag": "non_idempotent_mutation",
       "get_screenshot": "idempotent_read",
+      "activate_window": "idempotent_set",
       "move": "idempotent_set",
       "press_key": "non_idempotent_mutation",
       "scroll": "non_idempotent_mutation",
@@ -1135,6 +1303,7 @@ export const SERVICE_PROTOCOL = {
   },
   "compatibility": {
     "linux_methods": [
+      "activate_window",
       "click",
       "drag",
       "get_screenshot",

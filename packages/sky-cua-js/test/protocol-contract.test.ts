@@ -60,9 +60,11 @@ describe("cua-js service protocol fixture", () => {
       "press_key",
       "scroll",
       "type_text",
+      "activate_window",
       "cancel_turn"
     ]);
     expect(linuxMethods).toEqual([
+      "activate_window",
       "click",
       "drag",
       "get_screenshot",
@@ -79,7 +81,7 @@ describe("cua-js service protocol fixture", () => {
       "scroll",
       "type_text"
     ]);
-    expect(typedFixture.context.rules.optional_for).toEqual(["get_screenshot"]);
+    expect(typedFixture.context.rules.optional_for).toEqual(["get_screenshot", "activate_window"]);
     expect(typedFixture.context.rules.forbidden_for).toEqual(["health"]);
     expect(typedFixture.context.request_context.deadline.default_ms).toBe(30_000);
     expect(typedFixture.definitions.post_action_sleep_ms.default).toBe(100);
@@ -146,6 +148,7 @@ describe("cua-js service protocol fixture", () => {
       click: "non_idempotent_mutation",
       drag: "non_idempotent_mutation",
       get_screenshot: "idempotent_read",
+      activate_window: "idempotent_set",
       move: "idempotent_set",
       press_key: "non_idempotent_mutation",
       scroll: "non_idempotent_mutation",
@@ -169,6 +172,7 @@ const requests: ServiceRequest[] = [
   { type: "press_key", context, key: "Ctrl+L" },
   { type: "scroll", context, direction: "r", pixels: 250, x: 50, y: 60, key: "Shift" },
   { type: "type_text", context, text: "hello" },
+  { type: "activate_window", target: { window_id: "window-1" }, context },
   { type: "cancel_turn", session_id: "session-1", turn_id: "turn-1", reason: "deadline" }
 ];
 
