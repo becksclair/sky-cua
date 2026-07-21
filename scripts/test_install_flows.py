@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,15 @@ from _test_support import (
     write_minimal_bundle,
 )
 from deploy_freshness import STAMP_SUFFIX
+
+
+def _stub_current_unix_user(monkeypatch: pytest.MonkeyPatch, user: str) -> None:
+    monkeypatch.setattr(install_mcp_server.os, "getuid", lambda: 1000)
+    monkeypatch.setitem(
+        sys.modules,
+        "pwd",
+        SimpleNamespace(getpwuid=lambda _uid: SimpleNamespace(pw_name=user)),
+    )
 
 
 def test_install_bundle_uses_runtime_binary_paths(tmp_path: Path) -> None:
@@ -313,6 +323,7 @@ def test_refresh_accessibility_bus_restarts_user_atspi(
     monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
     monkeypatch.setenv("USER", "bex")
+    _stub_current_unix_user(monkeypatch, "bex")
     monkeypatch.setattr(install_mcp_server.shutil, "which", fake_which)
     monkeypatch.setattr(install_mcp_server.subprocess, "run", fake_run)
 
@@ -415,6 +426,7 @@ def test_refresh_accessibility_bus_warns_when_systemctl_fails(
     monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
     monkeypatch.setenv("USER", "bex")
+    _stub_current_unix_user(monkeypatch, "bex")
     monkeypatch.setattr(
         install_mcp_server.shutil,
         "which",
