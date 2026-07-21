@@ -15,17 +15,32 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { test } from "bun:test";
 import {
+  browserInfoMatchesAcceptance,
   buildAcceptanceCode,
   buildMcpRequests,
   closeNodeRepl,
   combinePrimaryAndCleanupErrors,
   parseBrowserAcceptanceArgs,
   parseToolResult,
+  selectBrowserInfoForAcceptance,
   validateInstalledSelection,
   validateShutdownResponse,
   verifyBraveOriginNativeHost,
   type BrowserAcceptanceOptions,
 } from "./browser-live-acceptance.ts";
+
+function iabBrowserEvidence(sessionId: string): Record<string, unknown> {
+  return {
+    id: "iab",
+    name: "Codex In-app Browser",
+    type: "iab",
+    transport: "host_provided_iab",
+    metadata: {
+      codexSessionId: sessionId,
+      skyCuaBridgeTransport: "host_provided_iab",
+    },
+  };
+}
 
 class FakeNodeRepl extends EventEmitter {
   exitCode: number | null = null;
@@ -187,6 +202,49 @@ test("keeps IAB and Brave Origin parameterized while rejecting every Skynet sele
   }
 });
 
+test("acceptance selects only truthful session-matched native transports", () => {
+  const iab = iabBrowserEvidence("session-1");
+  const relabelledExtension = {
+    id: "iab:compatibility-extension",
+    name: "Chrome",
+    type: "iab",
+    transport: "extension_native_host",
+    metadata: {
+      codexSessionId: "session-1",
+      skyCuaBridgeType: "extension",
+      skyCuaBridgeTransport: "extension_native_host",
+    },
+  };
+  const extension = {
+    id: "extension:daemon",
+    name: "Chrome",
+    type: "extension",
+    transport: "extension_native_host",
+    metadata: { skyCuaBridgeTransport: "extension_native_host" },
+  };
+  assert.equal(browserInfoMatchesAcceptance(iab, "iab", "session-1"), true);
+  assert.equal(
+    browserInfoMatchesAcceptance(relabelledExtension, "iab", "session-1"),
+    false,
+  );
+  assert.equal(
+    selectBrowserInfoForAcceptance(
+      [relabelledExtension, extension, iab],
+      "iab",
+      "session-1",
+    ),
+    iab,
+  );
+  assert.equal(
+    selectBrowserInfoForAcceptance(
+      [relabelledExtension, extension, iab],
+      "brave-origin-extension",
+      "session-1",
+    ),
+    extension,
+  );
+});
+
 test("validates the selected installed node_repl and exact manifest browser-client SHA", () => {
   const { options, clientHash } = fixture();
   const selection = validateInstalledSelection(options);
@@ -305,7 +363,8 @@ test("constructs structured IAB command with metadata, keyboard, click, readback
   const { options } = fixture();
   const selection = validateInstalledSelection(options);
   const code = buildAcceptanceCode(options, selection);
-  assert.match(code, /agent\.browsers\.get\("iab"\)/u);
+  assert.match(code, /agent\.browsers\.get\(selectedInfo\.id\)/u);
+  assert.match(code, /host_provided_iab/u);
   assert.match(code, /\.type\("CUA NODE BROWSER ACCEPTANCE"/u);
   assert.match(code, /input\.press\("End"/u);
   assert.match(code, /input\.evaluate\(\(element\) => element\.value/u);
@@ -338,7 +397,7 @@ test("parses and verifies complete structured live evidence", () => {
     },
   };
   const browserEvidence = {
-    browser: { id: "iab", name: "Codex", type: "iab" },
+    browser: iabBrowserEvidence(options.sessionId),
     navigation: { requested_url: options.url, final_url: options.url },
     keyboard: {
       method: "PlaywrightLocator.type+press",
@@ -417,6 +476,7 @@ test("accepts WebP-default screenshots at the display scale", () => {
     },
   };
   const evidence = {
+    browser: iabBrowserEvidence(options.sessionId),
     navigation: { requested_url: options.url, final_url: options.url },
     keyboard: {
       method: "PlaywrightLocator.type+press",
@@ -477,6 +537,7 @@ test("accepts WebP-default screenshots at the display scale", () => {
 test("rejects missing or malformed screenshot image evidence", () => {
   const { options } = fixture();
   const evidence = {
+    browser: iabBrowserEvidence(options.sessionId),
     navigation: { requested_url: options.url, final_url: options.url },
     keyboard: {
       method: "PlaywrightLocator.type+press",
@@ -585,6 +646,7 @@ test("rejects signature-only PNG and header-only WebP screenshots", () => {
         {
           type: "text",
           text: JSON.stringify({
+            browser: iabBrowserEvidence(options.sessionId),
             navigation: { requested_url: options.url, final_url: options.url },
             keyboard: {
               method: "PlaywrightLocator.type+press",
@@ -661,6 +723,7 @@ test("rejects identical decoded before and after screenshots", () => {
               {
                 type: "text",
                 text: JSON.stringify({
+                  browser: iabBrowserEvidence(options.sessionId),
                   navigation: {
                     requested_url: options.url,
                     final_url: options.url,
@@ -705,8 +768,9 @@ test("constructs Brave-primary Origin extension scenario with extension selectio
   const { options } = fixture();
   options.scenario = "brave-origin-extension";
   const code = buildAcceptanceCode(options, validateInstalledSelection(options));
-  assert.match(code, /agent\.browsers\.get\("extension"\)/u);
-  assert.match(code, /entry\.type === "extension"/u);
+  assert.match(code, /agent\.browsers\.get\(selectedInfo\.id\)/u);
+  assert.match(code, /browser\.type === "extension"/u);
+  assert.match(code, /extension_native_host/u);
   // The upstream protocol reports the logical extension backend as Chrome even
   // when the native host belongs to Brave Origin. Browser provenance is a live
   // acceptance precondition, not an API display-name assertion.

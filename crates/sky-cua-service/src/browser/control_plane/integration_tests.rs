@@ -2325,7 +2325,7 @@ async fn control_plane_snapshot_aggregates_actor_health_and_normalized_clients()
     assert!(snapshot.clients.iter().any(|client| {
         client.connection_id == "codex-1"
             && client.caller == BrowserCallerKind::CodexDesktop
-            && client.surface == sky_cua_platform::model::BrowserClientSurface::HostProvidedIab
+            && client.surface == sky_cua_platform::model::BrowserClientSurface::NodeReplBrowserApi
             && client.provenance_source == BrowserProvenanceSource::RequestMetadataDeclaration
     }));
 
@@ -2355,12 +2355,12 @@ async fn control_plane_snapshot_aggregates_actor_health_and_normalized_clients()
             if state == "raw_native_pipe_disconnected"
                 && client.connection_id == "codex-1"
                 && client.surface
-                    == sky_cua_platform::model::BrowserClientSurface::HostProvidedIab
+                    == sky_cua_platform::model::BrowserClientSurface::NodeReplBrowserApi
     )));
     assert!(client_events.iter().any(|(state, client)| {
         *state == "raw_native_pipe_connected"
             && client.connection_id == "codex-1"
-            && client.surface == sky_cua_platform::model::BrowserClientSurface::HostProvidedIab
+            && client.surface == sky_cua_platform::model::BrowserClientSurface::NodeReplBrowserApi
     }));
 
     release.notify_one();

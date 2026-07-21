@@ -607,12 +607,6 @@ fn enrich_codex_get_info(
         .and_then(Value::as_str)
         .filter(|bridge_type| !bridge_type.is_empty())
         .map(str::to_owned);
-    if matches!(
-        caller,
-        BrowserCallerKind::CodexDesktop | BrowserCallerKind::CodexCli
-    ) {
-        result.insert("type".to_owned(), Value::String("iab".to_owned()));
-    }
     let metadata = result["metadata"]
         .as_object_mut()
         .expect("metadata object was validated");
@@ -679,7 +673,7 @@ mod tests {
     use sky_cua_platform::model::BrowserCallerKind;
 
     #[test]
-    fn get_info_metadata_preserves_extension_fields_and_adds_codex_compatibility() {
+    fn get_info_metadata_preserves_truthful_extension_identity_for_codex() {
         let mut value = json!({
             "name": "Chrome",
             "type": "extension",
@@ -696,7 +690,7 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(value["type"], json!("iab"));
+        assert_eq!(value["type"], json!("extension"));
         assert_eq!(value["metadata"]["extensionId"], json!("extension-1"));
         assert_eq!(value["metadata"]["skyCuaBridgeType"], json!("extension"));
         assert_eq!(
@@ -768,7 +762,7 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(no_flavor["type"], json!("iab"));
+        assert_eq!(no_flavor["type"], json!("extension"));
         assert_eq!(no_flavor["metadata"]["preserved"], json!(true));
         assert!(no_flavor["metadata"].get("codexAppBuildFlavor").is_none());
 

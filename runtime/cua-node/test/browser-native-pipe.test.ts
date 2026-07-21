@@ -324,7 +324,7 @@ test("the exact installed Browser client decodes its public screenshot and emits
       (await server.dispatch(
         browserJs(
           1,
-          'globalThis.exactBrowserClient = await import("browser-use-installed"); await exactBrowserClient.setupBrowserRuntime({ globals: globalThis }); globalThis.exactBrowser = await agent.browsers.get("iab"); nodeRepl.write("exact-client-ready");',
+          'globalThis.exactBrowserClient = await import("browser-use-installed"); await exactBrowserClient.setupBrowserRuntime({ globals: globalThis }); globalThis.exactBrowser = await agent.browsers.get("extension"); nodeRepl.write("exact-client-ready");',
           "turn-browser-client-setup",
         ),
       )) as Response,

@@ -241,7 +241,7 @@
         "list": {
           "declarations": [
             {
-              "text": "list(): Promise<Array<{ apiSupportOverrides?: Record<string, boolean>; capabilities: { browser?: Array<{ description: string; id: string }>; tab?: Array<{ description: string; id: string }> }; id: string; metadata?: Record<string, string>; name: string; type: \"iab\" | \"extension\" | \"cdp\" }>>; // List available browsers.",
+              "text": "list(): Promise<Array<{ apiSupportOverrides?: Record<string, boolean>; capabilities: { browser?: Array<{ description: string; id: string }>; tab?: Array<{ description: string; id: string }> }; id: string; metadata?: Record<string, string>; name: string; transport: \"host_provided_iab\" | \"extension_native_host\"; type: \"iab\" | \"extension\" | \"cdp\" }>>; // List available browsers with their concrete native transport identity.",
               "references": []
             }
           ]
@@ -372,7 +372,6 @@
             }
           ],
           "unsupportedByDefaultIn": [
-            "iab",
             "cdp"
           ]
         },
@@ -547,7 +546,6 @@
             }
           ],
           "unsupportedByDefaultIn": [
-            "iab",
             "cdp"
           ]
         },
@@ -559,7 +557,6 @@
             }
           ],
           "unsupportedByDefaultIn": [
-            "iab",
             "cdp"
           ]
         },

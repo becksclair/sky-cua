@@ -608,12 +608,6 @@ impl BrowserControlRuntime {
         &self,
         provenance: &BrowserCallerProvenance,
     ) -> Result<(), String> {
-        let surface = match provenance.caller {
-            BrowserCallerKind::CodexDesktop | BrowserCallerKind::CodexCli => {
-                BrowserClientSurface::HostProvidedIab
-            }
-            _ => BrowserClientSurface::NodeReplBrowserApi,
-        };
         let client_info_label = provenance
             .client_info
             .as_ref()
@@ -621,7 +615,7 @@ impl BrowserControlRuntime {
         let client = BrowserControlClientSummary {
             connection_id: provenance.connection_id.clone(),
             ingress: "raw_native_pipe".to_owned(),
-            surface,
+            surface: BrowserClientSurface::NodeReplBrowserApi,
             caller: provenance.caller,
             provenance_source: provenance.source,
             declared_label: provenance.declared_caller.as_deref().map(bounded_label),

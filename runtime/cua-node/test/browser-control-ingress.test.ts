@@ -89,12 +89,13 @@ async function startBrowserPeer(socketPath: string): Promise<BrowserPeer> {
         const result =
           request.method === "getInfo"
             ? {
-                type: "iab",
+                type: "extension",
                 name: "sky-cua compatibility fixture",
                 capabilities: {},
                 metadata: {
                   codexAppBuildFlavor: CODEX_APP_BUILD_FLAVOR,
                   codexSessionId: "session-control-ingress",
+                  skyCuaBridgeTransport: "extension_native_host",
                 },
               }
             : {};
@@ -148,7 +149,7 @@ test("exact Browser client selects the sky-cua socket and stays disconnected aft
     const response = await server.dispatch(
       browserJs(
         1,
-        'const client = await import("browser-use-installed"); await client.setupBrowserRuntime({ globals: globalThis }); await agent.browsers.get("iab"); nodeRepl.write("sky-cua-ingress-ready");',
+        'const client = await import("browser-use-installed"); await client.setupBrowserRuntime({ globals: globalThis }); await agent.browsers.get("extension"); nodeRepl.write("sky-cua-ingress-ready");',
       ),
     );
     const result = toolResult(response);

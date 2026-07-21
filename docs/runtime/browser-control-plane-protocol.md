@@ -19,7 +19,7 @@ snapshot.
 This is the implemented typed ingress for direct MCP, OpenClaw, OpenCode, and
 Pi. It preserves the existing MCP tool contract.
 
-### Raw Codex compatibility UDS
+### Raw Codex extension compatibility UDS
 
 `SKY_CUA_CODEX_BROWSER_SOCKET_PATH=<path>` asks the daemon to bind a second Unix
 socket. The path must differ from the service socket. If both environment and
@@ -28,6 +28,11 @@ explicit empty environment or machine value is invalid. The daemon creates paren
 removes a stale path before bind, sets mode `0600`, verifies same-UID peers,
 rebinds an unexpectedly unlinked path on its maintenance tick, and removes the
 path at clean shutdown.
+
+The endpoint carries the daemon-owned Chrome-family extension transport. It is
+separate from Codex Desktop's task-scoped host IAB pipes under
+`/tmp/codex-browser-use`; Browser JavaScript discovers those host pipes
+directly through trusted native-pipe access.
 
 The wire is the upstream Browser client protocol: native-endian four-byte frame
 length followed by JSON-RPC JSON, with a 100-MiB maximum frame. It does not send
@@ -41,12 +46,14 @@ chooses deadlines. Defaults are 30,000 ms for reads and 15,000 ms for absolute
 sets/mutations, with a 120,000-ms cap. Client EOF invokes cancellation or waiter
 detach according to dispatch state; it is not a quiescence boundary.
 
-For raw Codex ingress, `getInfo` preserves unrelated host metadata but maps the
-reply to `type="iab"`. When available, it adds `metadata.codexSessionId` from
-the trusted top-level logical session and `metadata.codexAppBuildFlavor` from
-the bounded, UTF-8 `BROWSER_USE_CODEX_APP_BUILD_FLAVOR` value read from the
-same-UID socket peer's process environment. The Codex adapter continues exact
-build-flavor matching (Option A); sky-cua does not bypass that check.
+For raw Codex ingress, `getInfo` preserves the host's truthful
+`type="extension"` and unrelated metadata. It adds
+`metadata.skyCuaBridgeTransport="extension_native_host"` plus, when available,
+`metadata.codexSessionId` from the trusted top-level logical session and
+`metadata.codexAppBuildFlavor` from the bounded, UTF-8
+`BROWSER_USE_CODEX_APP_BUILD_FLAVOR` value read from the same-UID socket peer's
+process environment. A Codex caller is provenance, not an IAB transport
+conversion. Exact build-flavor matching remains in force.
 
 ### Typed control protocol v1
 

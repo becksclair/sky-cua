@@ -95,11 +95,13 @@ The surviving pre-install app-server tree was terminated, and no old
 `/opt/chatgpt-desktop/resources/cua_node` process remains.
 
 Installed skill discovery followed the canonical f82 Browser routing and
-loaded `browser.documentation()`. Persistent Browser JavaScript opened
-`https://example.com/` through the logical Codex IAB entry and verified
-`Example Domain`; the entry metadata records the physical
-`extension_native_host` transport and real `codex_desktop` provenance. A
-separate direct Browser tab `379563395` verified Brave Origin with
+loaded `browser.documentation()`. The historical `https://example.com/` check
+was later found to have exercised the `extension_native_host` transport through
+a compatibility entry mislabeled as IAB; it is not accepted as host-IAB proof.
+The corrected contract keeps extension type and transport truthful, discovers
+Codex's task-scoped `host_provided_iab` pipe separately, and requires exact
+transport plus session identity before `agent.browsers.get("iab")` can select
+it. A separate direct Browser tab `379563395` verified Brave Origin with
 `navigator.brave=true`, `Example Domain`, and `CODEX_BROWSER_PROVIDER` unset.
 The Web Store extension was not modified.
 

@@ -11,7 +11,6 @@ import { API_MANIFEST, API_SURFACE, COMMANDS } from "../src/index.ts";
 import { materializeCodexProjections } from "../src/projection.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const codexRoot = process.env.CODEX_DESKTOP_ROOT ?? "/home/bex/projects/codex-desktop";
 
 async function buildAt(path: string): Promise<Uint8Array> {
   const result = await Bun.$`BROWSER_USE_BUILD_DIR=${path} bun run src/build.ts`.cwd(packageRoot).quiet();
@@ -26,21 +25,10 @@ test("generated API and command fixtures are exhaustive and current", () => {
   assert.deepEqual(commandFixture.commands, COMMANDS);
 });
 
-test("canonical fixtures match the preserved current Codex declaration and command surfaces", async () => {
-  const upstreamApi = JSON.parse(await readFile(resolve(
-    codexRoot,
-    "resources/plugins/openai-bundled/plugins/browser-use/docs/api.json",
-  ), "utf8"));
-  assert.deepEqual(API_MANIFEST, upstreamApi);
-  const upstreamClient = await readFile(resolve(
-    codexRoot,
-    "resources/plugins/openai-bundled/plugins/browser-use/scripts/browser-client.mjs",
-  ), "utf8");
-  const commandPattern = /["'`](browser_user_[a-z0-9_]+|close_tab|create_tab|finalize_tabs|list_tabs|name_session|selected_tab|navigate_tab_[a-z0-9_]+|cua_[a-z0-9_]+|dom_cua_[a-z0-9_]+|playwright_[a-z0-9_]+|tab_[a-z0-9_]+)["'`]/gu;
-  const commands = [...new Set([...upstreamClient.matchAll(commandPattern)].map((match) => match[1]))]
-    .filter((value): value is string => value !== undefined)
-    .sort();
-  assert.deepEqual([...COMMANDS].sort(), commands);
+test("canonical declarations expose truthful native transport identities", () => {
+  const listDeclaration = API_MANIFEST.interfaces.Browsers?.list?.declarations[0]?.text;
+  assert.match(listDeclaration ?? "", /transport: "host_provided_iab" \| "extension_native_host"/u);
+  assert.equal((listDeclaration ?? "").includes("skynet"), false);
 });
 
 test("Bun builds deterministic canonical bytes and projections are byte-identical", async () => {

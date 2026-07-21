@@ -1,12 +1,21 @@
+import { readdir } from "node:fs/promises";
+import { endianness } from "node:os";
 import type { BrowserCommand, CommandEnvelope } from "./commands.ts";
 import { callerContext, type BrowserGlobals, type NativePipeConnection } from "./globals.ts";
 import { executeBrowserCommand } from "./wire-runtime.ts";
 
-const MAX_FRAME_BYTES = 8 * 1024 * 1024;
+const MAX_FRAME_BYTES = 100 * 1024 * 1024;
+const GET_INFO_TIMEOUT_MS = 5_000;
+const FRAME_LITTLE_ENDIAN = endianness() === "LE";
+const IAB_SOCKET_DIRECTORY = "/tmp/codex-browser-use";
+const IAB_SOCKET_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.sock$/u;
+
+export type BrowserTransport = "extension_native_host" | "host_provided_iab";
 
 export type BrowserInfo = {
   id: string;
   type: "iab" | "extension" | "cdp";
+  transport: BrowserTransport;
   name: string;
   capabilities: {
     browser?: Array<{ id: string; description: string }>;
@@ -14,6 +23,11 @@ export type BrowserInfo = {
   };
   apiSupportOverrides?: Record<string, boolean>;
   metadata?: Record<string, string>;
+};
+
+type BrowserCandidate = {
+  path: string;
+  transport: BrowserTransport;
 };
 
 type JsonRpcResponse = {
@@ -28,7 +42,7 @@ function frame(value: unknown): Uint8Array {
   const payload = new TextEncoder().encode(JSON.stringify(value));
   if (payload.byteLength > MAX_FRAME_BYTES) throw new Error("BROWSER_PIPE_FRAME_TOO_LARGE");
   const result = new Uint8Array(payload.byteLength + 4);
-  new DataView(result.buffer).setUint32(0, payload.byteLength, true);
+  new DataView(result.buffer).setUint32(0, payload.byteLength, FRAME_LITTLE_ENDIAN);
   result.set(payload, 4);
   return result;
 }
@@ -97,7 +111,8 @@ class JsonRpcConnection {
   private onData(chunk: Uint8Array): void {
     this.buffer = append(this.buffer, chunk);
     while (this.buffer.byteLength >= 4) {
-      const size = new DataView(this.buffer.buffer, this.buffer.byteOffset, 4).getUint32(0, true);
+      const size = new DataView(this.buffer.buffer, this.buffer.byteOffset, 4)
+        .getUint32(0, FRAME_LITTLE_ENDIAN);
       if (size > MAX_FRAME_BYTES) {
         this.failAll(new Error("BROWSER_PIPE_FRAME_TOO_LARGE"));
         return;
@@ -116,6 +131,18 @@ class JsonRpcConnection {
           listener(message.params);
         }
       }
+      return;
+    }
+    if (message.method === "ping") {
+      this.connection.write(frame({ jsonrpc: "2.0", id: message.id, result: "pong" }));
+      return;
+    }
+    if (typeof message.method === "string") {
+      this.connection.write(frame({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32601, message: `No handler registered for method: ${message.method}` },
+      }));
       return;
     }
     const pending = this.pending.get(message.id);
@@ -139,19 +166,72 @@ function asError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function validSocketPath(path: string): boolean {
   return path.startsWith("/") && !path.includes("\0");
 }
 
-async function discoverSocketPaths(globals: BrowserGlobals): Promise<string[]> {
-  const explicit = globals.nodeRepl?.env?.SKY_CUA_CODEX_BROWSER_SOCKET_PATH?.trim();
-  if (explicit === undefined || explicit === "") {
-    throw new Error("SKY_CUA_CODEX_BROWSER_SOCKET_PATH is required");
+function requestSessionId(globals: BrowserGlobals): string | undefined {
+  const meta = globals.nodeRepl?.requestMeta;
+  const direct = meta?.session_id;
+  if (typeof direct === "string" && direct !== "") return direct;
+  const nested = meta?.["x-codex-turn-metadata"];
+  if (nested !== null && typeof nested === "object") {
+    const sessionId = (nested as Record<string, unknown>).session_id;
+    if (typeof sessionId === "string" && sessionId !== "") return sessionId;
   }
-  if (!validSocketPath(explicit)) {
+  return undefined;
+}
+
+async function discoverBrowserCandidates(globals: BrowserGlobals): Promise<BrowserCandidate[]> {
+  const explicit = globals.nodeRepl?.env?.SKY_CUA_CODEX_BROWSER_SOCKET_PATH?.trim();
+  if (explicit !== undefined && explicit !== "" && !validSocketPath(explicit)) {
     throw new Error("SKY_CUA_CODEX_BROWSER_SOCKET_PATH must be an absolute Unix socket path");
   }
-  return [explicit];
+  const candidates: BrowserCandidate[] = [];
+  let entries: string[] = [];
+  if (requestSessionId(globals) !== undefined) {
+    try {
+      const injectedListDirectory = globals.nodeRepl?.nativePipe?.listDirectory;
+      entries = typeof injectedListDirectory === "function"
+        ? await injectedListDirectory(IAB_SOCKET_DIRECTORY)
+        : (await readdir(IAB_SOCKET_DIRECTORY, { withFileTypes: true }))
+          .filter((entry) => entry.isSocket())
+          .map((entry) => entry.name);
+    } catch {
+      // The task-scoped directory may not exist yet. An explicit extension
+      // candidate can still be usable, so discovery failures stay local.
+    }
+  }
+  for (const name of [...new Set(entries)].sort((left, right) => left.localeCompare(right))) {
+    if (!IAB_SOCKET_NAME.test(name)) continue;
+    candidates.push({
+      path: `${IAB_SOCKET_DIRECTORY}/${name}`,
+      transport: "host_provided_iab",
+    });
+  }
+  if (explicit !== undefined && explicit !== "") {
+    candidates.push({ path: explicit, transport: "extension_native_host" });
+  }
+  if (candidates.length === 0 && (explicit === undefined || explicit === "")) {
+    throw new Error(
+      "No task-scoped Browser socket or SKY_CUA_CODEX_BROWSER_SOCKET_PATH is available",
+    );
+  }
+  return candidates;
 }
 
 export class BrowserBackend {
@@ -162,12 +242,26 @@ export class BrowserBackend {
     private readonly rpc: JsonRpcConnection,
   ) {}
 
-  static async connect(globals: BrowserGlobals, path: string): Promise<BrowserBackend> {
+  static async connect(
+    globals: BrowserGlobals,
+    path: string,
+    transport: BrowserTransport,
+  ): Promise<BrowserBackend> {
+    const candidate = { path, transport };
     const rpc = await JsonRpcConnection.connect(globals, path);
-    const context = callerContext(globals);
-    const raw = await rpc.request("getInfo", { ...context, _meta: context, request_meta: context });
-    const info = normalizeBrowserInfo(raw, path);
-    return new BrowserBackend(path, info, globals, rpc);
+    try {
+      const context = callerContext(globals);
+      const raw = await withTimeout(
+        rpc.request("getInfo", { ...context, _meta: context, request_meta: context }),
+        GET_INFO_TIMEOUT_MS,
+        "Browser getInfo probe timed out",
+      );
+      const info = normalizeBrowserInfo(raw, candidate, requestSessionId(globals));
+      return new BrowserBackend(path, info, globals, rpc);
+    } catch (error) {
+      rpc.close();
+      throw error;
+    }
   }
 
   async execute(type: BrowserCommand, params: Record<string, unknown> = {}): Promise<unknown> {
@@ -211,14 +305,30 @@ export class BrowserBackendRegistry {
 
   async list(): Promise<BrowserBackend[]> {
     if (this.backends !== undefined) return this.backends;
-    const paths = await discoverSocketPaths(this.globals);
-    this.backends = await Promise.all(paths.map((path) => BrowserBackend.connect(this.globals, path)));
+    const candidates = await discoverBrowserCandidates(this.globals);
+    const settled = await Promise.allSettled(
+      candidates.map((candidate) =>
+        BrowserBackend.connect(this.globals, candidate.path, candidate.transport)),
+    );
+    this.backends = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    if (this.backends.length === 0) {
+      const trustFailure = settled.find((result) =>
+        result.status === "rejected"
+        && asError(result.reason).message === "Trusted Browser native-pipe access is unavailable"
+      );
+      if (trustFailure?.status === "rejected") throw asError(trustFailure.reason);
+    }
     return this.backends;
   }
 
   async get(idOrType: string): Promise<BrowserBackend> {
     const backends = await this.list();
-    const match = backends.find(({ info }) => info.id === idOrType || info.type === idOrType);
+    const exact = backends.find(({ info }) => info.id === idOrType);
+    if (exact !== undefined) return exact;
+    const match = idOrType === "iab"
+      ? backends.find(({ info }) =>
+        info.type === "iab" && info.transport === "host_provided_iab")
+      : backends.find(({ info }) => info.type === idOrType);
     if (match === undefined) throw new Error(`Browser is not available: ${idOrType}`);
     return match;
   }
@@ -229,14 +339,50 @@ export class BrowserBackendRegistry {
   }
 }
 
-function normalizeBrowserInfo(raw: unknown, path: string): BrowserInfo {
+function normalizeBrowserInfo(
+  raw: unknown,
+  candidate: BrowserCandidate,
+  expectedSessionId: string | undefined,
+): BrowserInfo {
   if (raw === null || typeof raw !== "object") throw new Error("Browser getInfo returned no identity");
   const value = raw as Record<string, unknown>;
   if (value.type !== "iab" && value.type !== "extension" && value.type !== "cdp") {
     throw new Error("Browser getInfo returned an unsupported type");
   }
-  const name = typeof value.name === "string" ? value.name : value.type;
-  const id = typeof value.id === "string" ? value.id : `${value.type}:${path}`;
+  const rawMetadata = value.metadata !== null && typeof value.metadata === "object"
+    ? value.metadata as Record<string, unknown>
+    : {};
+  const advertisedTransport = rawMetadata.skyCuaBridgeTransport;
+  if (candidate.transport === "host_provided_iab") {
+    if (
+      value.type !== "iab"
+      || advertisedTransport === "extension_native_host"
+      || rawMetadata.skyCuaBridgeType === "extension"
+      || rawMetadata.provider === "extension"
+    ) {
+      throw new Error("Task-scoped Browser socket did not return a host-provided IAB");
+    }
+  }
+  const transport = candidate.transport;
+  const type = value.type === "iab" && transport === "extension_native_host"
+    ? "extension"
+    : value.type;
+  if (transport === "host_provided_iab") {
+    if (type !== "iab") throw new Error("Host-provided IAB returned a non-IAB browser type");
+    const actualSessionId = rawMetadata.codexSessionId;
+    if (
+      expectedSessionId === undefined
+      || actualSessionId !== expectedSessionId
+    ) {
+      throw new Error("Host-provided IAB session does not match the current Codex session");
+    }
+  }
+  const metadata = {
+    ...rawMetadata,
+    skyCuaBridgeTransport: transport,
+  } as Record<string, string>;
+  const name = typeof value.name === "string" ? value.name : type;
+  const id = typeof value.id === "string" ? value.id : `${type}:${candidate.path}`;
   const capabilities = value.capabilities !== null && typeof value.capabilities === "object"
     ? value.capabilities as BrowserInfo["capabilities"]
     : {};
@@ -246,12 +392,11 @@ function normalizeBrowserInfo(raw: unknown, path: string): BrowserInfo {
     : undefined;
   return {
     id,
-    type: value.type,
+    type,
+    transport,
     name,
     capabilities,
     ...(apiSupportOverrides === undefined ? {} : { apiSupportOverrides }),
-    ...(value.metadata !== null && typeof value.metadata === "object"
-      ? { metadata: value.metadata as Record<string, string> }
-      : {}),
+    metadata,
   };
 }

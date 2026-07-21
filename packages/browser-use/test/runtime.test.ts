@@ -12,16 +12,22 @@ type ListenerMap = {
 };
 
 class FakeConnection implements NativePipeConnection {
+  ended = false;
   readonly requests: Array<Record<string, unknown>> = [];
+  readonly responses: Array<Record<string, unknown>> = [];
   private listeners: ListenerMap = {};
   constructor(private readonly browserInfo: Record<string, unknown> = {}) {}
-  end(): void {}
+  end(): void { this.ended = true; }
   on(event: "data" | "error" | "close", listener: never): void {
     this.listeners[event] = listener;
   }
   write(frame: Uint8Array): void {
     const size = new DataView(frame.buffer, frame.byteOffset, 4).getUint32(0, true);
     const request = JSON.parse(new TextDecoder().decode(frame.slice(4, size + 4))) as Record<string, unknown>;
+    if (typeof request.method !== "string") {
+      this.responses.push(request);
+      return;
+    }
     this.requests.push(request);
     const params = request.params as Record<string, unknown>;
     const type = params.type;
@@ -53,8 +59,9 @@ class FakeConnection implements NativePipeConnection {
         tab: [{ id: "cdp", description: "CDP diagnostics" }],
       },
       metadata: {
-        provider: "extension",
-        browserInstanceId: "brave:actor-1",
+        provider: "iab",
+        browserInstanceId: "codex:iab-1",
+        codexSessionId: "session-1",
       },
       ...this.browserInfo,
     };
@@ -94,6 +101,13 @@ class FakeConnection implements NativePipeConnection {
     encoded.set(payload, 4);
     this.listeners.data?.(encoded);
   }
+  emitRequest(id: number, method: string): void {
+    const payload = new TextEncoder().encode(JSON.stringify({ jsonrpc: "2.0", id, method }));
+    const encoded = new Uint8Array(payload.byteLength + 4);
+    new DataView(encoded.buffer).setUint32(0, payload.byteLength, true);
+    encoded.set(payload, 4);
+    this.listeners.data?.(encoded);
+  }
   private respond(
     request: Record<string, unknown>,
     result: unknown,
@@ -113,13 +127,18 @@ class FakeConnection implements NativePipeConnection {
 
 function fixture(browserInfo: Record<string, unknown> = {}) {
   const connection = new FakeConnection(browserInfo);
+  const browserType = browserInfo.type ?? "iab";
+  const hostProvidedIab = browserType === "iab";
+  const iabSocketName = "11111111-1111-4111-8111-111111111111.sock";
+  const iabSocketPath = `/tmp/codex-browser-use/${iabSocketName}`;
+  const extensionSocketPath = "/run/user/1000/sky-cua/browser.sock";
   let connectionCount = 0;
   const responseMeta: Array<Record<string, unknown>> = [];
   const globals = {
     console,
     nodeRepl: {
       env: {
-        SKY_CUA_CODEX_BROWSER_SOCKET_PATH: "/run/user/1000/sky-cua/browser.sock",
+        ...(hostProvidedIab ? {} : { SKY_CUA_CODEX_BROWSER_SOCKET_PATH: extensionSocketPath }),
         SKY_CUA_MCP_CALLER_PROVENANCE: "codex_desktop",
       },
       requestMeta: {
@@ -133,16 +152,56 @@ function fixture(browserInfo: Record<string, unknown> = {}) {
         },
       },
       nativePipe: {
-        createConnection: async () => {
+        createConnection: async (path: string) => {
           connectionCount += 1;
+          assert.equal(path, hostProvidedIab ? iabSocketPath : extensionSocketPath);
           return connection;
         },
+        listDirectory: async () => hostProvidedIab ? [iabSocketName] : [],
       },
       setResponseMeta: (meta: Record<string, unknown>) => responseMeta.push(meta),
       write: () => {},
     },
   } as unknown as BrowserGlobals;
   return { globals, connection, connectionCount: () => connectionCount, responseMeta };
+}
+
+function routingFixture(options: {
+  entries: string[];
+  explicit?: string;
+  peers: Map<string, FakeConnection | Error>;
+}) {
+  const attempted: string[] = [];
+  const globals = {
+    console,
+    nodeRepl: {
+      env: {
+        ...(options.explicit === undefined
+          ? {}
+          : { SKY_CUA_CODEX_BROWSER_SOCKET_PATH: options.explicit }),
+        SKY_CUA_MCP_CALLER_PROVENANCE: "codex_desktop",
+      },
+      requestMeta: {
+        session_id: "session-1",
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+      },
+      nativePipe: {
+        listDirectory: async (path: string) => {
+          assert.equal(path, "/tmp/codex-browser-use");
+          return options.entries;
+        },
+        createConnection: async (path: string) => {
+          attempted.push(path);
+          const peer = options.peers.get(path);
+          if (peer === undefined) throw new Error(`unexpected Browser socket: ${path}`);
+          if (peer instanceof Error) throw peer;
+          return peer;
+        },
+      },
+    },
+  } as unknown as BrowserGlobals;
+  return { attempted, globals };
 }
 
 describe("canonical Browser runtime", () => {
@@ -156,12 +215,18 @@ describe("canonical Browser runtime", () => {
     assert.deepEqual(list[0], {
       id: "iab:shared-actor",
       type: "iab",
+      transport: "host_provided_iab",
       name: "Codex In-app Browser",
       capabilities: {
         browser: [{ id: "visibility", description: "Host visibility" }],
         tab: [{ id: "cdp", description: "CDP diagnostics" }],
       },
-      metadata: { provider: "extension", browserInstanceId: "brave:actor-1" },
+      metadata: {
+        provider: "iab",
+        browserInstanceId: "codex:iab-1",
+        codexSessionId: "session-1",
+        skyCuaBridgeTransport: "host_provided_iab",
+      },
     });
     const getInfo = state.connection.requests[0] as Record<string, unknown>;
     assert.equal(getInfo.method, "getInfo");
@@ -170,6 +235,132 @@ describe("canonical Browser runtime", () => {
     assert.equal(params.thread_id, "thread-1");
     assert.equal(params.turn_id, "turn-1");
     assert.equal(params.caller_provenance, "codex_desktop");
+  });
+
+  test("discovers the session-matched host IAB, ignores stale peers, and keeps extension identity truthful", async () => {
+    const staleName = "00000000-0000-4000-8000-000000000000.sock";
+    const iabName = "11111111-1111-4111-8111-111111111111.sock";
+    const foreignName = "22222222-2222-4222-8222-222222222222.sock";
+    const directoryExtensionName = "33333333-3333-4333-8333-333333333333.sock";
+    const iabPath = `/tmp/codex-browser-use/${iabName}`;
+    const foreignPath = `/tmp/codex-browser-use/${foreignName}`;
+    const directoryExtensionPath = `/tmp/codex-browser-use/${directoryExtensionName}`;
+    const extensionPath = "/run/user/1000/sky-cua/codex-browser.sock";
+    const iab = new FakeConnection({
+      id: "iab:session-1",
+      type: "iab",
+      name: "Codex In-app Browser",
+      metadata: { codexSessionId: "session-1" },
+    });
+    const foreign = new FakeConnection({
+      id: "iab:foreign",
+      type: "iab",
+      metadata: { codexSessionId: "another-session" },
+    });
+    const extension = new FakeConnection({
+      id: "iab:legacy-extension",
+      type: "iab",
+      name: "Chrome",
+      metadata: {
+        codexSessionId: "session-1",
+        skyCuaBridgeType: "extension",
+        skyCuaBridgeTransport: "extension_native_host",
+      },
+    });
+    const directoryExtension = new FakeConnection({
+      id: "iab:directory-extension",
+      type: "iab",
+      metadata: {
+        codexSessionId: "session-1",
+        skyCuaBridgeTransport: "extension_native_host",
+      },
+    });
+    const state = routingFixture({
+      entries: [
+        foreignName,
+        "extension-1234-deadbeef.sock",
+        iabName,
+        directoryExtensionName,
+        staleName,
+        iabName,
+        "../escape.sock",
+      ],
+      explicit: extensionPath,
+      peers: new Map<string, FakeConnection | Error>([
+        [`/tmp/codex-browser-use/${staleName}`, new Error("stale socket")],
+        [iabPath, iab],
+        [foreignPath, foreign],
+        [directoryExtensionPath, directoryExtension],
+        [extensionPath, extension],
+      ]),
+    });
+
+    await setupBrowserRuntime({ globals: state.globals });
+    const agent = state.globals.agent as any;
+    const available = await agent.browsers.list();
+    assert.deepEqual(available.map((info: Record<string, unknown>) => ({
+      id: info.id,
+      type: info.type,
+      transport: info.transport,
+    })), [
+      { id: "iab:session-1", type: "iab", transport: "host_provided_iab" },
+      { id: "iab:legacy-extension", type: "extension", transport: "extension_native_host" },
+    ]);
+    assert.equal((await agent.browsers.get("iab")).info.id, "iab:session-1");
+    assert.equal((await agent.browsers.get("extension")).info.id, "iab:legacy-extension");
+    assert.equal((await agent.browsers.get("iab:legacy-extension")).info.type, "extension");
+    assert.equal(foreign.ended, true);
+    assert.equal(directoryExtension.ended, true);
+    assert.deepEqual(state.attempted, [
+      `/tmp/codex-browser-use/${staleName}`,
+      iabPath,
+      foreignPath,
+      directoryExtensionPath,
+      extensionPath,
+    ]);
+  });
+
+  test("responds to server-side ping requests", async () => {
+    const state = fixture();
+    await setupBrowserRuntime({ globals: state.globals });
+    const agent = state.globals.agent as { browsers: { list(): Promise<unknown> } };
+    await agent.browsers.list();
+    state.connection.emitRequest(41, "ping");
+    state.connection.emitRequest(42, "unsupportedServerRequest");
+    assert.deepEqual(state.connection.responses, [
+      { jsonrpc: "2.0", id: 41, result: "pong" },
+      {
+        jsonrpc: "2.0",
+        id: 42,
+        error: {
+          code: -32601,
+          message: "No handler registered for method: unsupportedServerRequest",
+        },
+      },
+    ]);
+  });
+
+  test("an extension-native compatibility label never satisfies get iab", async () => {
+    const extensionPath = "/run/user/1000/sky-cua/codex-browser.sock";
+    const extension = new FakeConnection({
+      id: "iab:compatibility-label",
+      type: "iab",
+      name: "Chrome",
+      metadata: {
+        skyCuaBridgeType: "extension",
+        skyCuaBridgeTransport: "extension_native_host",
+      },
+    });
+    const state = routingFixture({
+      entries: [],
+      explicit: extensionPath,
+      peers: new Map<string, FakeConnection | Error>([[extensionPath, extension]]),
+    });
+
+    await setupBrowserRuntime({ globals: state.globals });
+    const agent = state.globals.agent as any;
+    await assert.rejects(() => agent.browsers.get("iab"), /Browser is not available: iab/u);
+    assert.equal((await agent.browsers.get("iab:compatibility-label")).info.type, "extension");
   });
 
   test("full object graph implements the documented API and routes canonical commands", async () => {
@@ -390,7 +581,7 @@ describe("canonical Browser runtime", () => {
 
   test("manifest defaults and apiSupportOverrides produce truthful iab, extension, and cdp views", async () => {
     const variants = [
-      { type: "iab", expectedHistory: false, expectedFinalize: false },
+      { type: "iab", expectedHistory: false, expectedFinalize: true },
       { type: "extension", expectedHistory: true, expectedFinalize: true },
       { type: "cdp", expectedHistory: false, expectedFinalize: false },
     ] as const;
@@ -408,6 +599,10 @@ describe("canonical Browser runtime", () => {
       assert.equal(typeof tab.playwright.elementScreenshot, "function");
       assert.equal(typeof tab.playwright.waitForEvent, "function");
       assert.equal(typeof tab.playwright.locator("a").downloadMedia, "function");
+      if (variant.type === "iab") {
+        assert.equal(typeof tab.markDeliverable, "function");
+        assert.equal(typeof tab.markHandoff, "function");
+      }
     }
 
     const overridden = fixture({
@@ -507,14 +702,22 @@ describe("canonical Browser runtime", () => {
     }
   }, 30_000);
 
-  test("missing or relative explicit socket fails before a native-pipe connection", async () => {
-    for (const path of [undefined, "relative.sock"]) {
-      const state = fixture();
-      state.globals.nodeRepl!.env!.SKY_CUA_CODEX_BROWSER_SOCKET_PATH = path;
-      await setupBrowserRuntime({ globals: state.globals });
-      const agent = state.globals.agent as any;
-      await assert.rejects(() => agent.browsers.list(), /SKY_CUA_CODEX_BROWSER_SOCKET_PATH/u);
-      assert.equal(state.connectionCount(), 0);
-    }
+  test("relative explicit socket fails before trusted discovery or connection", async () => {
+    const state = fixture();
+    state.globals.nodeRepl!.env!.SKY_CUA_CODEX_BROWSER_SOCKET_PATH = "relative.sock";
+    await setupBrowserRuntime({ globals: state.globals });
+    const agent = state.globals.agent as any;
+    await assert.rejects(() => agent.browsers.list(), /SKY_CUA_CODEX_BROWSER_SOCKET_PATH/u);
+    assert.equal(state.connectionCount(), 0);
+  });
+
+  test("missing explicit socket requires a task-scoped discovery candidate", async () => {
+    const state = fixture({ id: "extension:actor", type: "extension" });
+    delete state.globals.nodeRepl!.env!.SKY_CUA_CODEX_BROWSER_SOCKET_PATH;
+    state.globals.nodeRepl!.nativePipe!.listDirectory = async () => [];
+    await setupBrowserRuntime({ globals: state.globals });
+    const agent = state.globals.agent as any;
+    await assert.rejects(() => agent.browsers.list(), /No task-scoped Browser socket/u);
+    assert.equal(state.connectionCount(), 0);
   });
 });

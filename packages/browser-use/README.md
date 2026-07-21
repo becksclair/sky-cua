@@ -9,11 +9,19 @@ const { setupBrowserRuntime } = await import("@heliasar/browser-use");
 await setupBrowserRuntime({ globals: globalThis });
 ```
 
-The runtime connects directly to the existing sky-cua browser scheduler over
-an owner-only native-pipe socket. It does not launch a browser, daemon, MCP
-server, or proxy. `SKY_CUA_CODEX_BROWSER_SOCKET_PATH` selects the verified
-standalone/Codex ingress. Without it, Codex's legacy owner-only socket directory
-is not guessed; setup fails before opening a native pipe.
+The runtime connects over two distinct owner-only native transports. The
+explicit `SKY_CUA_CODEX_BROWSER_SOCKET_PATH` is the daemon-owned
+`extension_native_host` lane for Chrome-family browsers. In Codex Desktop, the
+client also discovers task-scoped pipes under `/tmp/codex-browser-use`, probes
+them through trusted `nodeRepl.nativePipe.createConnection`, and accepts a
+`host_provided_iab` only when its native type and Codex session identity match
+the current trusted request metadata. It does not launch a browser, daemon, MCP
+server, or proxy.
+
+`await agent.browsers.list()` reports the concrete `transport` for every
+accepted backend. `await agent.browsers.get("iab")` can resolve only
+`host_provided_iab`; a daemon extension entry cannot satisfy it even if an older
+compatibility response mislabeled the extension as `type: "iab"`.
 
 The effective API is filtered from `api-manifest.json` for the selected `iab`,
 `extension`, or `cdp` surface, then adjusted by the daemon's

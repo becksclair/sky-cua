@@ -21,6 +21,47 @@ import {
 type Scenario = "iab" | "brave-origin-extension";
 type JsonObject = Record<string, unknown>;
 
+export function browserInfoMatchesAcceptance(
+  entry: unknown,
+  scenario: Scenario,
+  sessionId: string,
+): entry is JsonObject {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const browser = entry as JsonObject;
+  const metadata = browser.metadata;
+  if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata))
+    return false;
+  const browserMetadata = metadata as JsonObject;
+  if (scenario === "iab") {
+    return browser.type === "iab"
+      && browser.transport === "host_provided_iab"
+      && browserMetadata.skyCuaBridgeTransport === "host_provided_iab"
+      && browserMetadata.skyCuaBridgeType !== "extension"
+      && browserMetadata.codexSessionId === sessionId;
+  }
+  return browser.type === "extension"
+    && browser.transport === "extension_native_host"
+    && browserMetadata.skyCuaBridgeTransport === "extension_native_host";
+}
+
+export function selectBrowserInfoForAcceptance(
+  availableBrowsers: unknown,
+  scenario: Scenario,
+  sessionId: string,
+): JsonObject {
+  if (!Array.isArray(availableBrowsers))
+    throw new Error("Browser discovery did not return an array");
+  const selected = availableBrowsers.find((entry) =>
+    browserInfoMatchesAcceptance(entry, scenario, sessionId));
+  if (selected === undefined) {
+    const expected = scenario === "iab"
+      ? "type=iab transport=host_provided_iab"
+      : "type=extension transport=extension_native_host";
+    throw new Error(`Required browser backend is unavailable: ${expected}`);
+  }
+  return selected as JsonObject;
+}
+
 export type BrowserAcceptanceOptions = {
   runtimeRoot: string;
   browserClient: string;
@@ -450,16 +491,16 @@ export function buildAcceptanceSetupCode(
   options: BrowserAcceptanceOptions,
   selection: InstalledSelection,
 ): string {
-  const browserKind = options.scenario === "iab" ? "iab" : "extension";
-  const reportedBrowserType = browserKind;
+  const selectorSource = browserInfoMatchesAcceptance.toString();
   return `
 var browserClientUrl = ${JSON.stringify(pathToFileURL(selection.browserClient).href)};
 var { setupBrowserRuntime } = await import(browserClientUrl);
 await setupBrowserRuntime({ globals: globalThis });
 var availableBrowsers = await agent.browsers.list();
-globalThis.selectedInfo = availableBrowsers.find((entry) => entry.id === ${JSON.stringify(browserKind)} || entry.type === ${JSON.stringify(reportedBrowserType)});
-if (selectedInfo == null) throw new Error("Required browser backend is unavailable: " + ${JSON.stringify(browserKind)});
-globalThis.acceptanceBrowser = await agent.browsers.get(${JSON.stringify(browserKind)});
+var browserInfoMatchesAcceptance = ${selectorSource};
+globalThis.selectedInfo = availableBrowsers.find((entry) => browserInfoMatchesAcceptance(entry, ${JSON.stringify(options.scenario)}, ${JSON.stringify(options.sessionId)}));
+if (selectedInfo == null) throw new Error("Required browser backend is unavailable: " + ${JSON.stringify(options.scenario === "iab" ? "type=iab transport=host_provided_iab" : "type=extension transport=extension_native_host")});
+globalThis.acceptanceBrowser = await agent.browsers.get(selectedInfo.id);
 nodeRepl.write("BROWSER-SETUP-OK");`;
 }
 
@@ -488,7 +529,7 @@ var afterScreenshot = await acceptanceTab.screenshot();
 await nodeRepl.emitImage(afterScreenshot);
 var requestMeta = nodeRepl.requestMeta;
 nodeRepl.write(JSON.stringify({
-  browser: { id: selectedInfo.id, name: selectedInfo.name, type: selectedInfo.type },
+  browser: { id: selectedInfo.id, name: selectedInfo.name, type: selectedInfo.type, transport: selectedInfo.transport, metadata: selectedInfo.metadata ?? {} },
   navigation: { requested_url: ${JSON.stringify(options.url)}, final_url: navigationUrl },
   keyboard: { method: "PlaywrightLocator.type+press", key: "End", text: ${JSON.stringify(options.typedText)}, value: typedValue },
   click: { actual: true, button_name: ${JSON.stringify(options.buttonName)} },
@@ -923,6 +964,12 @@ export function parseToolResult(
     );
   const evidence: unknown = JSON.parse(textItem.text);
   if (!isObject(evidence)) throw new Error("browser evidence is not an object");
+  if (!browserInfoMatchesAcceptance(evidence.browser, options.scenario, options.sessionId))
+    throw new Error(
+      options.scenario === "iab"
+        ? "browser identity is not a session-matching host_provided_iab"
+        : "browser identity is not an extension_native_host extension",
+    );
   const navigation = evidence.navigation;
   if (
     !isObject(navigation) ||

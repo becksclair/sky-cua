@@ -1,10 +1,10 @@
 {
   "client_path": "packages/browser-use/build/browser-client.mjs",
-  "client_sha256": "085ba347a047473272cafc9f024b59c35dca4b29e44dab8b22eaa80e81e7c60d",
+  "client_sha256": "1cd7934868831ef032e2388a5924906be0ca66138cfe5a61cf08f47da64bf400",
   "frame": {
     "length_prefix_bytes": 4,
-    "byte_order": "little-endian",
-    "maximum_payload_bytes": 8388608
+    "byte_order": "native-endian",
+    "maximum_payload_bytes": 104857600
   },
   "metadata_keys": ["session_id", "turn_id", "x-codex-turn-metadata"]
 }

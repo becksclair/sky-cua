@@ -103,16 +103,17 @@ pub enum BrowserBridgeState {
     Lost,
 }
 
-/// Concrete transport behind a daemon-owned browser actor.
+/// Concrete browser transport identity.
 ///
-/// A Codex caller may see the host-provided IAB API surface, but Chrome-family
-/// browsers still execute through the extension/native-host relay. Keeping
-/// this separate from the caller-facing surface prevents status consumers
-/// from conflating an IAB adapter with the underlying browser actor.
+/// Daemon-owned Chrome-family actors currently use the extension/native-host
+/// relay. A host-provided IAB is a separate native transport whose lifecycle
+/// remains owned by the host. Keeping transport separate from caller-facing
+/// surface prevents compatibility adapters from conflating the two.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserBridgeTransport {
     ExtensionNativeHost,
+    HostProvidedIab,
 }
 
 /// Browser API surface used by a control-plane client.
@@ -690,6 +691,25 @@ mod tests {
             serde_json::from_value::<BrowserControlClientFrame>(encoded)
                 .expect("deserialize typed hello"),
             frame
+        );
+    }
+
+    #[test]
+    fn browser_bridge_transport_vocabulary_distinguishes_native_backends() {
+        assert_eq!(
+            serde_json::to_value(BrowserBridgeTransport::ExtensionNativeHost)
+                .expect("serialize extension transport"),
+            json!("extension_native_host")
+        );
+        assert_eq!(
+            serde_json::to_value(BrowserBridgeTransport::HostProvidedIab)
+                .expect("serialize host IAB transport"),
+            json!("host_provided_iab")
+        );
+        assert_eq!(
+            serde_json::from_value::<BrowserBridgeTransport>(json!("host_provided_iab"))
+                .expect("deserialize host IAB transport"),
+            BrowserBridgeTransport::HostProvidedIab
         );
     }
 
