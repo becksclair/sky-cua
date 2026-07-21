@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -238,6 +239,32 @@ def test_builder_emits_verified_component_set_and_fat_archive(tmp_path: Path) ->
     }
     assert all(component["archive"].startswith("archives/") for component in manifest["components"])
     assert verify_release_root(root).manifest_sha256 == result.release.manifest_sha256
+
+
+def test_builder_normalizes_modes_for_fat_archive_extraction(tmp_path: Path) -> None:
+    inputs_root = tmp_path / "inputs"
+    components, locks, artifacts = _inputs(inputs_root)
+    core_file = inputs_root / "core/sky-cua-client"
+    launcher = inputs_root / "node/bin/node_repl"
+    core_file.chmod(0o664)
+    launcher.chmod(0o775)
+
+    result = _build_inputs(tmp_path / "out", inputs_root, components, locks, artifacts)
+    assert result.fat_archive is not None
+    assert core_file.stat().st_mode & 0o777 == 0o664
+    assert launcher.stat().st_mode & 0o777 == 0o775
+    assert (
+        result.release.root / "components/core-linux-x64/sky-cua-client"
+    ).stat().st_mode & 0o777 == 0o644
+    assert (
+        result.release.root / "components/cua-node-linux-x64-glibc/bin/node_repl"
+    ).stat().st_mode & 0o777 == 0o755
+
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    subprocess.run(["tar", "xzf", str(result.fat_archive)], cwd=extracted, check=True)
+    verified = verify_release_root(extracted / f"sky-cua-{result.release.release_id}")
+    assert verified.manifest_sha256 == result.release.manifest_sha256
 
 
 def test_builder_is_content_addressed_and_deterministic(tmp_path: Path) -> None:

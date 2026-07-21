@@ -199,6 +199,23 @@ def _copy_file_source(staging: Path, source: FileSource) -> dict[str, str]:
     return {"path": source.destination, "sha256": sha256_file(destination)}
 
 
+def _normalize_component_modes(root: Path) -> None:
+    """Make staged component modes stable across archive extraction with a normal umask."""
+    if not root.is_dir() or root.is_symlink():
+        raise ValueError(f"component root is not a real directory: {root}")
+    root.chmod(0o755)
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"component contains a symlink: {relative}")
+        if path.is_dir():
+            path.chmod(0o755)
+        elif path.is_file():
+            path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
+        else:
+            raise ValueError(f"component contains a special entry: {relative}")
+
+
 def _write_checksums(release_root: Path) -> None:
     paths = sorted(
         (
@@ -342,6 +359,7 @@ def build_release_set(
                 )
             destination = staging / "components" / component.name
             shutil.copytree(component.source, destination, symlinks=True)
+            _normalize_component_modes(destination)
             archive_relative = f"archives/{component.name}.tar.gz"
             write_deterministic_tar_gz(
                 destination,
