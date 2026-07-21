@@ -1,13 +1,15 @@
 # Plugin Deploy and Release Runbook
 
 Use this runbook for Codex plugin lifecycle work, not ordinary desktop or
-browser automation. There are three distribution entrypoints and no
-marketplace:
+browser automation. There are two normal lanes and no marketplace:
 
-- `scripts/deploy_plugin.py` - fast local dev deploy.
-- `scripts/package.py` - build a self-contained release tarball.
-- `install.py` (delegating to `scripts/installer.py`) - install on a clean
-  machine.
+- `scripts/deploy_plugin.py` - compatibility-only local development deploy.
+- `scripts/build_complete_release.py` plus the generated release-root
+  `install.py install` - immutable distribution and complete activation.
+
+The repository-root `install.py` and `scripts/package.py` are retained for
+checkout bootstrap and legacy bundle compatibility. They are not complete
+release activation entrypoints.
 
 ## Core Invariant
 
@@ -68,57 +70,52 @@ The `computer-use` server should point at the local cache path
 (`~/.codex/plugins/cache/local/sky-cua/local`). The server is provided by
 `computer-use@openai-bundled`; the command path shows which payload it runs.
 
-## Build a Release Package
+## Build a Complete Release
 
 To ship sky-cua to a machine without a checkout or toolchain, build a
-self-contained release tarball:
+self-contained immutable release:
 
 ```bash
-python3 scripts/package.py
+python3 scripts/build_complete_release.py
 ```
 
-This builds `dist/plugin/sky-cua` and assembles
-`dist/release/sky-cua-<version>-<platform>.tar.gz`. The tarball contains:
+The command prints the exact `release_id`, `manifest_sha256`, `release_root`,
+and `fat_archive`. Inspect those selected artifacts rather than choosing the
+newest directory by name. The fat archive is
+`dist/complete-release/sky-cua-<release-id>-linux-x64-glibc.tar.gz` and contains:
 
-- `plugin/sky-cua/` - the full plugin bundle (runtime binaries, resources,
-  skills, plugin manifests).
-- `scripts/` - the pure-Python installer subset (no cargo, no
-  `build_plugin.py`).
-- `skills/` - mirrored skills so the installer resolves them as in the repo.
-- `install.py`, `VERSION` - the package-root installer and version stamp.
+- `RELEASE.json` and `SHA256SUMS` - the content-addressed release contract.
+- `components/` and `archives/` - the bound core, Browser, CUA Node, Codex,
+  documentation, compliance, and installer payloads.
+- `install.py` - the checkout-free complete activation controller.
 
 Useful options:
 
-- `--no-build`: package the existing `dist/plugin/sky-cua` bundle as-is.
-- `--platform`: target platform id (default: current host platform). Packaging
-  fails loudly if the bundle lacks that platform's runtime binaries.
-- `--version-from-tag [TAG]`: set the bundle version from a `vX.Y.Z` git tag
-  before packaging. When `TAG` is omitted, use the current CI/git tag.
-- `--release-dir`: output directory for the tarball (default `dist/release`).
+- `--output-root`, `--core-source`, and `--cua-node-component` select inputs.
+- `--producer-commit` binds provenance explicitly.
+- `--no-fat-archive` builds only the unpacked release.
 
 ## Install on a Clean Machine
 
-Copy the tarball to the target machine, extract it, and run the package-root
-installer:
+Copy the reported fat archive to the target machine, extract it, and use the
+reported manifest hash:
 
 ```bash
-tar xzf sky-cua-<version>-<platform>.tar.gz
-cd sky-cua-<version>
-python3 install.py
+tar xzf sky-cua-<release-id>-linux-x64-glibc.tar.gz
+cd sky-cua-<release-id>
+python3 install.py verify --manifest-sha256 <manifest-sha256>
+python3 install.py install --manifest-sha256 <manifest-sha256>
+python3 install.py verify-activation --manifest-sha256 <manifest-sha256>
 ```
 
-The package-root `install.py` pins bundle mode and the package's own payload
-path, then delegates to `scripts/installer.py`. It installs the prebuilt
-bundle with no build step and no cargo, materializes the
-`computer-use@openai-bundled` compat plugin from the bundled preflight, and
-registers the MCP server plus skills for every detected agent.
-
-The same installer runs from a checkout with `python3 install.py` at the repo
-root, where it builds the runtime from source first. See
-[`docs/features/one-shot-installer.md`](../features/one-shot-installer.md) for
-the mode and agent-detection details and
-[`docs/features/release-package.md`](../features/release-package.md) for the
-package layout and clean-machine flow.
+The release-root `install` command owns the entire activation transaction:
+generation promotion, exact native manifests, stable command links through
+`current`, stale-process draining, receipt, and pruning. `ensure` is the
+idempotent repair operation used by consumers. Never substitute raw
+`scripts/release_generation.py install`; it is internal-only. The repository
+root `install.py` and `scripts/package.py` remain compatibility/development
+workflows, not the normal immutable release path. See
+[`docs/features/release-package.md`](../features/release-package.md).
 
 ## Config Reset
 
@@ -188,16 +185,18 @@ codex mcp list --json
 The `computer-use` server command should point at
 `~/.codex/plugins/cache/local/sky-cua/local`.
 
-For release-package changes, prove the package lane and the clean-machine
-installer path:
+For complete-release changes, prove the builder and checkout-free controller:
 
 ```bash
-python3 scripts/package.py --no-build
-docker/validate/run.sh --tarball dist/release/sky-cua-<version>-<platform>.tar.gz
+uv run pytest \
+  scripts/test_build_complete_release.py \
+  scripts/test_release_generation.py \
+  scripts/test_install_complete_release.py \
+  scripts/test_release_activation.py
+python3 scripts/build_complete_release.py
+# Then use the JSON-reported root and manifest:
+python3 <release-root>/install.py verify --manifest-sha256 <manifest-sha256>
 ```
 
-The Docker validation is headless: it gates install/config/binary execution and
-attempts the MCP handshake, but a skipped handshake is expected without a
-desktop session. It does not mount host auth/config by default; pass
-`--with-host-auth` only for trusted tarballs that need live host credentials.
-Use the GUI VM smokes for hard tool-list and desktop-control proof.
+Use isolated temporary home/store roots for activation integration tests. Use
+the GUI VM smokes for hard tool-list and desktop-control proof.

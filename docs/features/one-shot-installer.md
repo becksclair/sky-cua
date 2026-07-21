@@ -2,14 +2,21 @@
 
 ## Status
 
-Shipped. Last verified: 2026-06-12, full live run on the KDE host
+Compatibility/development workflow. Last verified: 2026-06-12, full live run on the KDE host
 (`python3 install.py --skip-build` -> all phases ok for codex, claude-code,
 claude-desktop, opencode, pi, openclaw; doctor and `codex mcp list` /
 `claude mcp list` health checks green).
 
+This generic checkout/bundle installer is not the immutable machine-release
+activation path. Normal releases use `scripts/build_complete_release.py` and
+the extracted release-root `python3 install.py install`; Codex Desktop invokes
+that same producer transaction automatically. See
+[`docs/features/release-package.md`](release-package.md).
+
 ## Summary
 
-`install.py` turns a fresh checkout or an extracted release package into a
+The repository-root `install.py` turns a fresh checkout or a legacy extracted
+bundle package into a
 fully set-up sky-cua machine in one command: system dependencies, the runtime
 (built from source or taken from a prebuilt bundle), the computer-use compat
 plugin materialized from the bundled preflight, MCP server registration plus
@@ -21,6 +28,9 @@ skills for every detected agent, and a final health check.
   shim level; delegates to `scripts/installer.py`). The release package ships
   its own top-level `install.py` that pins bundle mode and its payload path
   before delegating to the same installer.
+- This interface is retained for checkout bootstrap and legacy compatibility.
+  It does not replace complete-release activation and must not be used after a
+  Codex Desktop package install.
 - Two modes, `--mode {auto,repo,bundle}`:
   - `repo` builds the Rust runtime from a checkout (requires `cargo` and
     `git`), then installs.
@@ -80,7 +90,7 @@ block the others.
 
 - `install.py` - root shim (interpreter guard, `scripts/` import path).
 - `scripts/installer.py` - phase orchestration, detection, mode resolution.
-- `scripts/package.py` - builds the release tarball that ships the
+- `scripts/package.py` - builds the legacy compatibility tarball that ships the
   bundle-mode installer subset; see
   [`docs/features/release-package.md`](release-package.md).
 - Reused: `scripts/build_plugin.py`, `scripts/install_plugin.py`,

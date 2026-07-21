@@ -1109,6 +1109,7 @@ def test_machine_config_seeding_writes_and_updates_browser(
     config_path = tmp_path / "sky-cua.toml"
     monkeypatch.setenv(_install_shared.MACHINE_CONFIG_PATH_ENV, str(config_path))
     monkeypatch.setenv(_install_shared.BROWSER_SELECTION_ENV, "brave")
+    monkeypatch.delenv(_install_shared.CODEX_BROWSER_SOCKET_PATH_ENV, raising=False)
 
     assert _install_shared.seed_machine_config_from_environment() == config_path
     assert tomllib.loads(config_path.read_text(encoding="utf-8"))["browser"] == "brave"

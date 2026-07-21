@@ -22,7 +22,7 @@ tarball, or bundle install is requested.
 Every plan and report must copy the selected lane's exact commands, order, and stop dependency rather than paraphrasing them:
 
 - Local: `python3 scripts/deploy_plugin.py`, then only on success `python3 scripts/sync_agent_skills.py`. The first command already builds, bundles, installs, and refreshes the runtime; never split it.
-- Release: `python3 scripts/package.py`, inspect the tarball; target handoff is `tar xzf sky-cua-<version>-<platform>.tar.gz`, `cd sky-cua-<version>`, `python3 install.py`, using the bundled runtime without Cargo. Do not mutate the local runtime or global skill links.
+- Release: `python3 scripts/build_complete_release.py`, inspect the JSON-selected immutable release and fat archive; target handoff is `tar xzf sky-cua-<release-id>-linux-x64-glibc.tar.gz`, `cd sky-cua-<release-id>`, `python3 install.py install --manifest-sha256 <manifest-sha256>`. This is the only normal machine-activation path. Do not call `scripts/release_generation.py install` or the legacy `scripts/package.py` installer.
 - Standalone restart: exactly `python3 scripts/install_mcp_server.py --host claude-code --restart-runtime`, without build/deploy/package/sync. Do not add `--refresh-accessibility` unless AT-SPI is proven wedged; report that decision.
 - Git: only when explicitly requested, with explicit pathspecs; stop before git writes when the prerequisite lane fails, and never push after a failed deploy or commit.
 
@@ -53,9 +53,10 @@ python3 scripts/deploy_plugin.py
 python3 scripts/sync_agent_skills.py
 ```
 
-This order is normative: `deploy_plugin.py` is the build, bundle, install, and
-runtime-refresh entrypoint. Do not split it into `build_plugin.py` plus a
-manual installer. No build, install, or sync command may precede step 1, and
+This order is normative for unreleased checkout iteration only:
+`deploy_plugin.py` is the development build, bundle, compatibility install,
+and runtime-refresh entrypoint. It is not the immutable release activation
+interface. Do not split it into `build_plugin.py` plus a manual installer. No build, install, or sync command may precede step 1, and
 step 2 must never run before it succeeds. Plans and reports must name both
 exact commands in this order. The sync only replaces the sky-cua-owned global
 skill links. Load
@@ -70,15 +71,21 @@ live-smoke details.
 For a clean machine, use this exact order:
 
 ```bash
-python3 scripts/package.py
+python3 scripts/build_complete_release.py
 # On the target:
-tar xzf sky-cua-<version>-<platform>.tar.gz
-cd sky-cua-<version>
-python3 install.py
+tar xzf sky-cua-<release-id>-linux-x64-glibc.tar.gz
+cd sky-cua-<release-id>
+python3 install.py install --manifest-sha256 <manifest-sha256>
+python3 install.py verify-activation --manifest-sha256 <manifest-sha256>
 ```
 
-Inspect the tarball before target handoff. The target install uses the
-bundled runtime and does not run Cargo. Load
+Use the `release_root`, `release_id`, `manifest_sha256`, and `fat_archive`
+reported by the builder; inspect the release and archive before handoff. The
+target command atomically promotes the generation, writes native manifests,
+projects stable commands through `current`, drains stale runtimes, records the
+activation receipt, and only then prunes. `ensure` is the idempotent first-start
+repair command. Raw `release_generation.py install` is internal-only, and the
+legacy `scripts/package.py` package is not a complete activation. Load
 `references/release-package.md` for package evidence and target install;
 `references/command-and-flag-catalog.md` for flags.
 

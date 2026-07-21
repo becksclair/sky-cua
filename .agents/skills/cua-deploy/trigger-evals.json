@@ -8,11 +8,11 @@
     "should_trigger": true
   },
   {
-    "query": "Build a self-contained sky-cua release tarball for a clean machine and tell me how to install it there.",
+    "query": "Build a complete immutable sky-cua release tarball for a clean machine and tell me how to activate and verify it there.",
     "should_trigger": true
   },
   {
-    "query": "Install the existing sky-cua dist/release bundle on another machine in bundle mode without rebuilding it.",
+    "query": "Install the existing sky-cua complete-release bundle on another machine and verify its activation without rebuilding it.",
     "should_trigger": true
   },
   {

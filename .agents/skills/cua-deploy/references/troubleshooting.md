@@ -13,8 +13,9 @@ Load only after a selected lane fails or produces an unexpected result.
   APK, or load `android-phone-companion.md` for an explicit override or force.
 - **AT-SPI is wedged:** load `rare-operations.md`; refresh only with the
   explicit flag and relaunch affected GTK applications.
-- **Target package install attempts a build:** use the extracted bundle’s
-  `python3 install.py --mode bundle`; the target needs neither Cargo nor a
-  checkout.
+- **Target activation attempts a build or asks for bundle mode:** the wrong
+  legacy package was selected. Use the fat archive reported by
+  `scripts/build_complete_release.py`, then run its release-root
+  `python3 install.py install --manifest-sha256 <manifest-sha256>`.
 - **Codex shows duplicate skills:** retain the global links for other agents;
   inspect the managed Codex config block rather than deleting links.

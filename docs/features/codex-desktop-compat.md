@@ -123,11 +123,13 @@ task-complete session log so the extension's session lifecycle is honored.
 - `scripts/install_plugin.py` — local install path.
 - `scripts/deploy_plugin.py` - fast local deploy (`sky-cua@local`,
   compat root retargeted at it).
-- `scripts/package.py` - builds the self-contained release tarball
-  (`dist/release/sky-cua-<version>-<platform>.tar.gz`).
-- `scripts/installer.py` / `install.py` - clean-machine installer
-  (repo and bundle modes); materializes the compat plugin from the
-  bundled preflight, no marketplace.
+- `scripts/build_complete_release.py` - builds the immutable complete release
+  and fat archive under `dist/complete-release/`.
+- `scripts/complete_release_cli.py` / generated release-root `install.py` -
+  complete machine activation, idempotent ensure, and activation proof.
+- `scripts/installer.py`, repository-root `install.py`, and
+  `scripts/package.py` - checkout/legacy compatibility workflows, not complete
+  release activation.
 - `resources/chrome_preflight.py` - preflight that syncs bundled
   cache, writes native-host manifests, enables companion plugins.
 - `crates/sky-cua-chrome-host/` — Linux native messaging host.

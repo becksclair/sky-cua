@@ -324,6 +324,7 @@ def test_complete_release_ships_checkout_free_verified_controller(
     assert len(extension["manifest_sha256"]) == 64
     assert len(extension["tree_sha256"]) == 64
     assert (root / "components/installer/install_complete_release.py").is_file()
+    assert (root / "components/installer/_release_activation.py").is_file()
     assert (root / "components/installer/_native_messaging_install.py").is_file()
 
     neutral = tmp_path / "neutral"

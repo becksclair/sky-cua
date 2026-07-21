@@ -552,6 +552,29 @@ def test_install_is_atomic_idempotent_and_retains_one_prior(tmp_path: Path) -> N
     assert sorted(path.name for path in store.releases.iterdir()) == sorted((three_id, two_id))
 
 
+def test_complete_transaction_can_defer_pruning_until_activation_commits(
+    tmp_path: Path,
+) -> None:
+    store = GenerationStore(tmp_path / "store")
+    one = _release(tmp_path / "one", "release-one", marker="one")
+    two = _release(tmp_path / "two", "release-two", marker="two")
+    three = _release(tmp_path / "three", "release-three", marker="three")
+    one_id, two_id, three_id = _release_id(one), _release_id(two), _release_id(three)
+    store.install(one)
+    store.install(two)
+
+    with store.transaction() as transaction:
+        transaction.install(three, prune=False)
+        assert {path.name for path in store.releases.iterdir()} == {
+            one_id,
+            two_id,
+            three_id,
+        }
+        transaction.prune_generations({two_id, three_id})
+
+    assert {path.name for path in store.releases.iterdir()} == {two_id, three_id}
+
+
 def test_failed_first_consumer_cutover_can_deactivate_without_deleting_generation(
     tmp_path: Path,
 ) -> None:
@@ -737,6 +760,11 @@ def test_cli_verify_and_install_report_bound_release(
     assert verified_output["release_id"] == _release_id(candidate)
     assert verified_output["manifest_sha256"] == manifest_hash
 
+    assert main(["install", str(candidate), "--store-root", str(store)]) == 1
+    guarded_output = json.loads(capsys.readouterr().out)
+    assert "install.py install" in guarded_output["error"]
+    assert not (store / "current").exists()
+
     assert (
         main(
             [
@@ -746,6 +774,7 @@ def test_cli_verify_and_install_report_bound_release(
                 str(store),
                 "--manifest-sha256",
                 manifest_hash,
+                "--internal-generation-only",
             ]
         )
         == 0

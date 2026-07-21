@@ -119,21 +119,24 @@ git, no marketplace, no Codex `plugin/install`. The installed cache lives at:
 ~/.codex/plugins/cache/local/sky-cua/local/
 ```
 
-For a machine without a checkout or toolchain, build a self-contained tarball
-and install it there:
+For a machine without a checkout or toolchain, build and activate the complete
+immutable release:
 
 ```bash
-python3 scripts/package.py
-# copy dist/release/sky-cua-<version>-<platform>.tar.gz to the target, then:
-tar xzf sky-cua-<version>-<platform>.tar.gz
-cd sky-cua-<version>
-python3 install.py
+python3 scripts/build_complete_release.py
+# Copy the JSON-reported fat_archive to the target, then:
+tar xzf sky-cua-<release-id>-linux-x64-glibc.tar.gz
+cd sky-cua-<release-id>
+python3 install.py install --manifest-sha256 <manifest-sha256>
+python3 install.py verify-activation --manifest-sha256 <manifest-sha256>
 ```
 
-`package.py` assembles the plugin bundle, a pure-Python installer subset,
-mirrored skills, and a top-level `install.py`; the package-root installer runs
-in bundle mode (no build, no cargo) and materializes the compat plugin from the
-bundled preflight. See
+The release-root controller atomically promotes the generation, writes exact
+native-host manifests and stable `current` links, drains obsolete runtimes,
+records the activation receipt, and prunes only after success. Codex Desktop
+invokes this same producer transaction automatically and resolves its runtime
+through the standalone active generation. The older `scripts/package.py`
+installer remains compatibility packaging, not complete activation. See
 [`docs/features/release-package.md`](../features/release-package.md) and
 [`docs/operations/plugin-release.md`](../operations/plugin-release.md).
 

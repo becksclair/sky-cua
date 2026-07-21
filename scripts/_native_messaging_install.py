@@ -50,7 +50,7 @@ class NativeMessagingInstallReport:
         }
 
 
-def _manifest_bytes(host_path: Path) -> bytes:
+def native_messaging_manifest_bytes(host_path: Path) -> bytes:
     manifest = {
         "name": HOST_NAME,
         "description": "sky-cua browser automation native host",
@@ -180,7 +180,7 @@ def install_native_messaging_manifests(
     paths = tuple(
         manifest_home / relative / f"{HOST_NAME}.json" for relative in MANIFEST_RELATIVE_DIRS
     )
-    desired = _manifest_bytes(host_path)
+    desired = native_messaging_manifest_bytes(host_path)
     snapshots = tuple(_snapshot(path) for path in paths)
     changed: list[Path] = []
     try:

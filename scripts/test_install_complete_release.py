@@ -12,6 +12,7 @@ import install_complete_release as controller
 from _native_messaging_install import HOST_RELATIVE_PATH
 from _openclaw_install import OpenClawReleaseInstallReport
 from _opencode_install import OpenCodeInstallReport
+from _release_activation import ActivationReport
 from release_generation import VerifiedRelease
 
 RELEASE_ID = "a" * 64
@@ -101,6 +102,9 @@ class FakeStore:
             component_names=("core-linux-x64", "cua-node-linux-x64-glibc"),
         )
 
+    def prune_generations(self, _keep: set[str]) -> None:
+        self.events.append("prune")
+
 
 def _opencode_report(root: Path, *, changed: bool = True) -> OpenCodeInstallReport:
     return OpenCodeInstallReport(
@@ -117,13 +121,15 @@ def _opencode_report(root: Path, *, changed: bool = True) -> OpenCodeInstallRepo
 
 
 @pytest.fixture(autouse=True)
-def _reset_store(monkeypatch: pytest.MonkeyPatch) -> None:
+def _reset_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     FakeStore.prior = PRIOR_ID
     FakeStore.recovered_prior = PRIOR_ID
     FakeStore.recover_changes_prior = False
     FakeStore.events = []
     FakeStore.create_host = True
     monkeypatch.setattr(controller, "GenerationStore", FakeStore)
+    monkeypatch.setattr(controller, "drain_stale_processes", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("_release_activation.DEFAULT_BIN_DIRECTORY", tmp_path / "bin")
 
 
 def test_controller_promotes_then_configures_opencode_before_openclaw(
@@ -160,7 +166,7 @@ def test_controller_promotes_then_configures_opencode_before_openclaw(
         native_messaging_home=tmp_path / "home",
     )
 
-    assert FakeStore.events == ["recover", "install", "opencode", "openclaw"]
+    assert FakeStore.events == ["recover", "install", "opencode", "openclaw", "prune"]
     assert report.previous_release_id == PRIOR_ID
     assert report.configured_hosts == ("openclaw", "opencode")
     assert report.as_dict()["release_id"] == RELEASE_ID
@@ -182,6 +188,93 @@ def test_controller_recovers_before_capturing_prior(tmp_path: Path) -> None:
 
     assert FakeStore.events[:2] == ["recover", "install"]
     assert report.previous_release_id == recovered
+
+
+def test_ensure_returns_unchanged_without_running_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    activation = ActivationReport(
+        release_id=RELEASE_ID,
+        manifest_sha256="c" * 64,
+        release_root=str(tmp_path / "store/releases" / RELEASE_ID),
+        profile="full",
+        platform="linux-x64",
+        receipt_path=str(tmp_path / "store/activation-receipt.json"),
+        native_manifest_paths=(),
+        stable_links={},
+        stale_processes_drained=False,
+    )
+    monkeypatch.setattr(controller, "verify_activation", lambda *_args, **_kwargs: activation)
+    monkeypatch.setattr(
+        controller,
+        "install_complete_release",
+        lambda *_args, **_kwargs: pytest.fail("coherent ensure must not install"),
+    )
+
+    status, result = controller.ensure_complete_release(
+        tmp_path / "candidate",
+        store_root=tmp_path / "store",
+        profile="full",
+        expected_manifest_sha256=None,
+        native_messaging_home=tmp_path / "home",
+        bin_dir=tmp_path / "bin",
+        proc_root=tmp_path / "proc",
+    )
+
+    assert status == "unchanged"
+    assert result is activation
+
+
+@pytest.mark.parametrize("status", ["unchanged", "repaired"])
+def test_ensure_cli_has_one_stable_activation_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    status: str,
+) -> None:
+    activation = ActivationReport(
+        release_id=RELEASE_ID,
+        manifest_sha256="c" * 64,
+        release_root=str(tmp_path / "store/releases" / RELEASE_ID),
+        profile="full",
+        platform="linux-x64",
+        receipt_path=str(tmp_path / "store/activation-receipt.json"),
+        native_manifest_paths=(),
+        stable_links={},
+        stale_processes_drained=status == "repaired",
+    )
+    if status == "unchanged":
+        outcome: object = activation
+    else:
+        outcome = object.__new__(controller.CompleteReleaseInstallReport)
+        object.__setattr__(outcome, "activation", activation)
+    monkeypatch.setattr(
+        controller,
+        "ensure_complete_release",
+        lambda *_args, **_kwargs: (status, outcome),
+    )
+
+    assert (
+        controller.main(
+            [
+                str(tmp_path / "candidate"),
+                "--store-root",
+                str(tmp_path / "store"),
+                "--native-messaging-home",
+                str(tmp_path / "home"),
+                "--bin-dir",
+                str(tmp_path / "bin"),
+                "--proc-root",
+                str(tmp_path / "proc"),
+            ],
+            operation="ensure",
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == {"status", "activation"}
+    assert payload["status"] == status
+    assert payload["activation"]["release_id"] == RELEASE_ID
 
 
 @pytest.mark.parametrize(
@@ -284,6 +377,46 @@ def test_opencode_failure_restores_manifests_before_generation(
 
     assert existing.read_bytes() == original
     assert FakeStore.events == ["recover", "install", "rollback-generation"]
+
+
+def test_activation_failure_restores_links_receipt_manifests_and_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = tmp_path / "store"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    command = bin_dir / "sky-cua-chrome-host"
+    command.write_bytes(b"prior command")
+    legacy = store / "bin/sky-cua-chrome-host"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"prior legacy")
+    receipt = store / "activation-receipt.json"
+    receipt.write_bytes(b'{"prior":true}\n')
+    monkeypatch.setattr(
+        controller,
+        "drain_stale_processes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("drain failed")),
+    )
+
+    with pytest.raises(
+        controller.CompleteReleaseInstallError,
+        match="consumer configuration failed: drain failed",
+    ):
+        controller.install_complete_release(
+            tmp_path / "candidate",
+            store_root=store,
+            native_messaging_home=tmp_path / "home",
+            bin_dir=bin_dir,
+            proc_root=tmp_path / "proc",
+        )
+
+    assert command.read_bytes() == b"prior command"
+    assert not command.is_symlink()
+    assert legacy.read_bytes() == b"prior legacy"
+    assert not legacy.is_symlink()
+    assert receipt.read_bytes() == b'{"prior":true}\n'
+    assert FakeStore.events == ["recover", "install", "rollback-generation"]
+    assert not list((tmp_path / "home").rglob("*.json"))
 
 
 def test_missing_generation_host_rolls_back_without_manifest_mutation(tmp_path: Path) -> None:

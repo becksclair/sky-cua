@@ -43,6 +43,7 @@ PACKAGE_SCRIPTS = (
     "install_plugin.py",
     "_install_shared.py",
     "_native_messaging_install.py",
+    "_release_activation.py",
     "_openclaw_install.py",
     "_openclaw_cli_transaction.py",
     "_opencode_install.py",

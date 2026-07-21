@@ -25,6 +25,18 @@ from _opencode_install import (
     install_opencode_two_server_config,
     rollback_opencode_install,
 )
+from _plugin_bundle import current_runtime_platform
+from _release_activation import (
+    ActivationReport,
+    ActivationVerificationError,
+    drain_stale_processes,
+    install_stable_links,
+    receipt_path,
+    restore_path,
+    snapshot_path,
+    verify_activation,
+    write_receipt,
+)
 from release_generation import (
     CORE_ONLY_PROFILE,
     FULL_PROFILE,
@@ -52,6 +64,7 @@ class CompleteReleaseInstallReport:
     browser_reload_required: bool
     openclaw: OpenClawReleaseInstallReport | None
     opencode: OpenCodeInstallReport | None
+    activation: ActivationReport
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -66,6 +79,7 @@ class CompleteReleaseInstallReport:
             "browser_reload_required": self.browser_reload_required,
             "openclaw": self.openclaw.as_dict() if self.openclaw else None,
             "opencode": self.opencode.to_dict() if self.opencode else None,
+            "activation": self.activation.as_dict(),
         }
 
 
@@ -92,6 +106,8 @@ def install_complete_release(
     opencode_process_env: Mapping[str, str] | None = None,
     opencode_effective_cwd: Path | None = None,
     native_messaging_home: Path | None = None,
+    bin_dir: Path | None = None,
+    proc_root: Path = Path("/proc"),
 ) -> CompleteReleaseInstallReport:
     """Promote a generation, then transactionally project both MCP servers.
 
@@ -119,10 +135,14 @@ def install_complete_release(
             candidate.expanduser().resolve(),
             expected_manifest_sha256=expected_manifest_sha256,
             profile=profile,
+            prune=False,
         )
         native_messaging: NativeMessagingInstallReport | None = None
         opencode_report: OpenCodeInstallReport | None = None
         openclaw_report: OpenClawReleaseInstallReport | None = None
+        link_snapshots = ()
+        prior_receipt = snapshot_path(receipt_path(store.root))
+        activation: ActivationReport | None = None
         try:
             native_messaging = install_native_messaging_manifests(
                 installed.root,
@@ -146,8 +166,41 @@ def install_complete_release(
                     openclaw_bin=openclaw_bin,
                     gateway_activation=openclaw_gateway_activation,
                 )
+            stable_links, link_snapshots = install_stable_links(
+                store.root,
+                installed,
+                bin_dir=bin_dir,
+            )
+            write_receipt(
+                store.root,
+                installed,
+                native_manifest_paths=native_messaging.manifest_paths,
+                stable_links=stable_links,
+            )
+            drain_stale_processes(store.root, proc_root=proc_root)
+            transaction.prune_generations({installed.release_id, prior} - {None})
+            activation = ActivationReport(
+                release_id=installed.release_id,
+                manifest_sha256=installed.manifest_sha256,
+                release_root=str(installed.root),
+                profile=installed.profile,
+                platform=current_runtime_platform(),
+                receipt_path=str(receipt_path(store.root)),
+                native_manifest_paths=tuple(str(path) for path in native_messaging.manifest_paths),
+                stable_links=stable_links,
+                stale_processes_drained=True,
+            )
         except BaseException as error:
             rollback_failures: list[str] = []
+            for snapshot in reversed(link_snapshots):
+                try:
+                    restore_path(snapshot)
+                except BaseException as rollback_error:
+                    rollback_failures.append(f"stable-link {snapshot.path}: {rollback_error}")
+            try:
+                restore_path(prior_receipt)
+            except BaseException as rollback_error:
+                rollback_failures.append(f"activation-receipt: {rollback_error}")
             if opencode_report is not None and opencode_report.changed:
                 assert opencode_report.backup_path is not None
                 try:
@@ -181,6 +234,7 @@ def install_complete_release(
             ) from error
 
         assert native_messaging is not None
+        assert activation is not None
         manifest = json.loads((installed.root / "RELEASE.json").read_text(encoding="utf-8"))
         extension = manifest.get("browser_contract", {}).get("extension_bridge")
         if not isinstance(extension, dict) or not all(
@@ -215,10 +269,38 @@ def install_complete_release(
             browser_reload_required=False,
             openclaw=openclaw_report,
             opencode=opencode_report,
+            activation=activation,
         )
 
 
-def main(argv: list[str] | None = None) -> int:
+def ensure_complete_release(
+    candidate: Path,
+    **kwargs: object,
+) -> tuple[str, CompleteReleaseInstallReport | ActivationReport]:
+    """Return unchanged when artifact-derived activation proof succeeds; repair otherwise."""
+    verify_kwargs = {
+        name: kwargs[name]
+        for name in (
+            "store_root",
+            "profile",
+            "expected_manifest_sha256",
+            "native_messaging_home",
+            "bin_dir",
+            "proc_root",
+        )
+        if name in kwargs
+    }
+    try:
+        return "unchanged", verify_activation(candidate, **verify_kwargs)  # type: ignore[arg-type]
+    except ActivationVerificationError:
+        return "repaired", install_complete_release(candidate, **kwargs)  # type: ignore[arg-type]
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    operation: str = "install",
+) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("candidate", type=Path, nargs="?")
     parser.add_argument(
@@ -243,9 +325,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--opencode-config-dir", type=Path)
     parser.add_argument("--opencode-effective-cwd", type=Path)
     parser.add_argument("--native-messaging-home", type=Path)
+    parser.add_argument("--bin-dir", type=Path)
+    parser.add_argument("--proc-root", type=Path, default=Path("/proc"))
     args = parser.parse_args(argv)
     try:
+        if operation not in {"install", "ensure", "verify-activation"}:
+            raise CompleteReleaseInstallError(f"unsupported activation operation: {operation}")
         if args.rollback:
+            if operation != "install":
+                raise CompleteReleaseInstallError(f"--rollback cannot be used with {operation}")
             if args.candidate is not None:
                 raise CompleteReleaseInstallError(
                     "a candidate path cannot be supplied together with --rollback"
@@ -259,21 +347,48 @@ def main(argv: list[str] | None = None) -> int:
             raise CompleteReleaseInstallError("a candidate release path is required")
         else:
             candidate = args.candidate
-        report = install_complete_release(
-            candidate,
-            store_root=args.store_root,
-            profile=args.profile,
-            expected_manifest_sha256=args.manifest_sha256,
-            hosts=args.host,
-            browser_socket_path=args.browser_socket,
-            openclaw_dir=args.openclaw_dir,
-            openclaw_bin=args.openclaw_bin,
-            openclaw_gateway_activation=args.openclaw_gateway_activation,
-            opencode_config_dir=args.opencode_config_dir,
-            opencode_effective_cwd=args.opencode_effective_cwd,
-            native_messaging_home=args.native_messaging_home,
-        )
-    except (CompleteReleaseInstallError, InstallTransactionError, OSError, ValueError) as error:
+        common = {
+            "store_root": args.store_root,
+            "profile": args.profile,
+            "expected_manifest_sha256": args.manifest_sha256,
+            "native_messaging_home": args.native_messaging_home,
+            "bin_dir": args.bin_dir,
+            "proc_root": args.proc_root,
+        }
+        if operation == "verify-activation":
+            activation = verify_activation(candidate, **common)
+            print(json.dumps({"status": "ok", "activation": activation.as_dict()}, sort_keys=True))
+            return 0
+        install_options = {
+            **common,
+            "hosts": args.host,
+            "browser_socket_path": args.browser_socket,
+            "openclaw_dir": args.openclaw_dir,
+            "openclaw_bin": args.openclaw_bin,
+            "openclaw_gateway_activation": args.openclaw_gateway_activation,
+            "opencode_config_dir": args.opencode_config_dir,
+            "opencode_effective_cwd": args.opencode_effective_cwd,
+        }
+        if operation == "ensure":
+            status, outcome = ensure_complete_release(candidate, **install_options)
+            activation = (
+                outcome.activation if isinstance(outcome, CompleteReleaseInstallReport) else outcome
+            )
+            print(
+                json.dumps(
+                    {"status": status, "activation": activation.as_dict()},
+                    sort_keys=True,
+                )
+            )
+            return 0
+        report = install_complete_release(candidate, **install_options)
+    except (
+        ActivationVerificationError,
+        CompleteReleaseInstallError,
+        InstallTransactionError,
+        OSError,
+        ValueError,
+    ) as error:
         parser.exit(2, f"error: {error}\n")
     print(json.dumps(report.as_dict(), sort_keys=True))
     return 0

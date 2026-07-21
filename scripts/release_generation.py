@@ -1482,6 +1482,7 @@ class GenerationStore:
         expected_manifest_sha256: str | None = None,
         profile: str = FULL_PROFILE,
         failpoint: Failpoint | None = None,
+        prune: bool = True,
     ) -> VerifiedRelease:
         with self._transaction_lock():
             return self._install(
@@ -1489,6 +1490,7 @@ class GenerationStore:
                 expected_manifest_sha256=expected_manifest_sha256,
                 profile=profile,
                 failpoint=failpoint,
+                prune=prune,
             )
 
     def _install(
@@ -1498,6 +1500,7 @@ class GenerationStore:
         expected_manifest_sha256: str | None,
         profile: str,
         failpoint: Failpoint | None,
+        prune: bool = True,
     ) -> VerifiedRelease:
         self.initialize()
         if self.journal.exists():
@@ -1582,7 +1585,8 @@ class GenerationStore:
         write_json_durably(self.journal, journal)
         self._hit(failpoint, "after_previous_switch")
 
-        self._prune_generations({verified.release_id, prior} - {None})
+        if prune:
+            self._prune_generations({verified.release_id, prior} - {None})
         self.journal.unlink(missing_ok=True)
         _fsync_directory(self.root)
         return verify_release_root(
@@ -1595,6 +1599,10 @@ class GenerationStore:
     def recover(self, *, failpoint: Failpoint | None = None) -> VerifiedRelease | None:
         with self._transaction_lock():
             return self._recover(failpoint=failpoint)
+
+    def verify_installed_generation(self, release_id: str) -> VerifiedRelease:
+        """Verify one immutable installed generation without mutation."""
+        return self._verify_installed_generation(release_id)
 
     def _recover(self, *, failpoint: Failpoint | None = None) -> VerifiedRelease | None:
         self.initialize()
@@ -1821,12 +1829,14 @@ class _GenerationTransaction:
         expected_manifest_sha256: str | None = None,
         profile: str = FULL_PROFILE,
         failpoint: Failpoint | None = None,
+        prune: bool = True,
     ) -> VerifiedRelease:
         return self._store._install(
             candidate,
             expected_manifest_sha256=expected_manifest_sha256,
             profile=profile,
             failpoint=failpoint,
+            prune=prune,
         )
 
     def rollback(self, *, failpoint: Failpoint | None = None) -> VerifiedRelease:
@@ -1834,6 +1844,9 @@ class _GenerationTransaction:
 
     def deactivate_initial_activation(self, release_id: str) -> VerifiedRelease:
         return self._store._deactivate_initial_activation(release_id)
+
+    def prune_generations(self, keep: Iterable[str]) -> None:
+        self._store._prune_generations(keep)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1847,11 +1860,19 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--profile", choices=sorted(INSTALL_PROFILES), default=FULL_PROFILE)
     verify.add_argument("--manifest-sha256")
 
-    install = subcommands.add_parser("install", help="Install and promote a complete generation.")
+    install = subcommands.add_parser(
+        "install",
+        help="Internal generation promotion primitive; use release-root install.py install.",
+    )
     install.add_argument("release_root", type=Path)
     install.add_argument("--store-root", type=Path, default=Path.home() / ".local/share/sky-cua")
     install.add_argument("--profile", choices=sorted(INSTALL_PROFILES), default=FULL_PROFILE)
     install.add_argument("--manifest-sha256")
+    install.add_argument(
+        "--internal-generation-only",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
 
     recover = subcommands.add_parser("recover", help="Finish an interrupted promotion journal.")
     recover.add_argument("--store-root", type=Path, default=Path.home() / ".local/share/sky-cua")
@@ -1885,6 +1906,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             store = GenerationStore(args.store_root.expanduser().resolve())
             if args.command == "install":
+                if not args.internal_generation_only:
+                    raise InstallTransactionError(
+                        "raw generation promotion is internal-only; run the release-root "
+                        "`install.py install` command for complete activation"
+                    )
                 verified = store.install(
                     args.release_root.expanduser().resolve(),
                     profile=args.profile,

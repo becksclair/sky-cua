@@ -3,11 +3,13 @@
 Load this reference only for the local deploy lane, its skill sync, or a
 worktree/linking question.
 
-`scripts/deploy_plugin.py` installs the built bundle as `sky-cua@local`, points
+`scripts/deploy_plugin.py` is the unreleased development compatibility lane. It
+installs the built bundle as `sky-cua@local`, points
 the computer-use compatibility plugin at it, and refreshes the installed MCP
 runtime. A normal build-bearing deploy therefore does not need a separate MCP
-restart. `--no-build` installs the existing bundle and skips the companion
-build lane.
+restart. It does not create or activate an immutable complete release and must
+not be used as the clean-machine or Codex package activation path. `--no-build`
+installs the existing bundle and skips the companion build lane.
 
 After a successful local deploy, run:
 

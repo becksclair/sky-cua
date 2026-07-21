@@ -27,11 +27,11 @@
     {
       "id": 3,
       "prompt": "Build a self-contained sky-cua release package for a clean machine. Use the repository's release packaging lane, inspect the resulting tarball shape, and report the target-side install command. Do not install it locally, deploy the local runtime, commit, or push.",
-      "expected_output": "A release tarball is built under dist/release, its basic contents are checked, and the response gives the bundle-mode target installation command without changing the local runtime or git history.",
+      "expected_output": "A complete immutable release and fat archive are built under dist/complete-release, their identities and contents are checked, and the response gives the release-root install and activation-verification commands without changing the local runtime or git history.",
       "expectations": [
-        "Uses scripts/package.py for the release lane and produces or verifies the expected dist/release tarball rather than calling the local deploy script.",
-        "Inspects the staged package enough to confirm it contains the self-contained installer/runtime shape needed by a clean target.",
-        "Reports the target extraction and python3 install.py command, including that the target install uses the existing bundle without Cargo.",
+        "Uses scripts/build_complete_release.py for the release lane and does not substitute scripts/package.py, raw release_generation.py install, or the local deploy script.",
+        "Inspects the JSON-selected release root and fat archive enough to confirm RELEASE.json, install.py, installer component, runtime components, and manifest identity.",
+        "Reports target extraction, immutable verify, install with the expected manifest hash, and verify-activation commands.",
         "Does not install the package locally, run scripts/sync_agent_skills.py, mutate global skill links, commit, or push."
       ]
     },

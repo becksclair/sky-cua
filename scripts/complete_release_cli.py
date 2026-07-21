@@ -20,9 +20,11 @@ def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if not arguments or arguments[0] in {"-h", "--help"}:
         print(
-            "usage: install.py {verify|install|recover|rollback} [options]\n"
+            "usage: install.py {verify|install|ensure|verify-activation|recover|rollback} [options]\n"
             "  verify    verify this extracted immutable release\n"
             "  install   install this release and optionally configure MCP hosts\n"
+            "  ensure    verify activation and repair it only when required\n"
+            "  verify-activation  verify producer-owned machine activation without mutation\n"
             "  recover   finish an interrupted generation transaction\n"
             "  rollback  atomically activate the retained prior generation"
         )
@@ -35,11 +37,13 @@ def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, str(module_root))
 
     command, *rest = arguments
-    if command in {"install", "rollback"}:
+    if command in {"install", "ensure", "verify-activation", "rollback"}:
         from install_complete_release import main as install_main
 
         if command == "install":
             return install_main([str(root), *rest])
+        if command in {"ensure", "verify-activation"}:
+            return install_main([str(root), *rest], operation=command)
         return install_main(["--rollback", *rest])
     if command in {"verify", "recover"}:
         from release_generation import main as generation_main

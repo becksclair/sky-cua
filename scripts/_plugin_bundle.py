@@ -342,15 +342,33 @@ def stop_unix_runtime_processes(
     """
     if sys.platform == "win32":
         return
+    matches = find_unix_runtime_processes(
+        search_roots,
+        proc_root=proc_root,
+        match_all_paths=match_all_paths,
+    )
+    for pid, _exe in matches:
+        _terminate_process(pid)
+
+
+def find_unix_runtime_processes(
+    search_roots: list[Path],
+    proc_root: Path = Path("/proc"),
+    *,
+    match_all_paths: bool = False,
+) -> list[tuple[int, str | None]]:
+    """Return current-user sky-cua runtime PIDs and normalized executable paths."""
+    if sys.platform == "win32":
+        return []
     root_prefixes = [
         _normalize_process_path(root.resolve()) + "/" for root in search_roots if root.exists()
     ]
     if not proc_root.exists() or (not root_prefixes and not match_all_paths):
-        return
+        return []
 
     current_pid = os.getpid()
     current_uid = os.getuid()
-    matches: list[int] = []
+    matches: list[tuple[int, str | None]] = []
     for entry in proc_root.iterdir():
         if not entry.name.isdigit():
             continue
@@ -364,12 +382,10 @@ def stop_unix_runtime_processes(
             # Name-only match, but only for processes this user owns so a
             # deploy never signals another user's sky-cua stack.
             if _process_uid(entry) == current_uid and _is_sky_cua_runtime_binary(exe, cmdline):
-                matches.append(pid)
+                matches.append((pid, exe))
         elif _is_sky_cua_runtime_process(exe, cwd, cmdline, root_prefixes):
-            matches.append(pid)
-
-    for pid in matches:
-        _terminate_process(pid)
+            matches.append((pid, exe))
+    return matches
 
 
 def _process_uid(entry: Path) -> int | None:
@@ -397,7 +413,38 @@ def _is_sky_cua_runtime_binary(exe: str | None, cmdline: str) -> bool:
     # A process re-exec'd through a wrapper (bin/../target/release/...) may
     # report the wrapper as exe; fall back to the argv0 binary name.
     argv0 = cmdline.split(" ", 1)[0] if cmdline else ""
-    return Path(argv0).name in SKY_CUA_RUNTIME_BINARIES
+    if Path(argv0).name in SKY_CUA_RUNTIME_BINARIES:
+        return True
+    return _is_sky_cua_node_repl(exe, cmdline)
+
+
+def _is_sky_cua_node_repl(exe: str | None, cmdline: str) -> bool:
+    """Recognize only the bundled Node entrypoint for the persistent CUA REPL."""
+    if Path(exe or "").name != "node":
+        return False
+    arguments = cmdline.split()
+    if len(arguments) < 2:
+        return False
+    cli = Path(_normalize_process_path(Path(arguments[1])))
+    if cli.parts[-3:] != ("lib", "node_repl", "cli.js"):
+        return False
+    node = Path(_normalize_process_path(Path(exe or "")))
+    if node.parent.name != "bin":
+        return False
+    runtime_root = node.parent.parent
+    if cli.parents[2] != runtime_root:
+        return False
+    release_root = runtime_root.parent.parent
+    immutable_release_layout = (
+        runtime_root.parent.name == "components"
+        and runtime_root.name.startswith("cua-node-")
+        and re.fullmatch(r"[0-9a-f]{64}", release_root.name) is not None
+    )
+    generation_layout = release_root.parent.name == "releases"
+    packaged_complete_release_layout = (
+        release_root.parent.name == "sky-cua" and release_root.parent.parent.name == "resources"
+    )
+    return immutable_release_layout and (generation_layout or packaged_complete_release_layout)
 
 
 def _normalize_process_path(path: Path) -> str:
@@ -427,7 +474,7 @@ def _is_sky_cua_runtime_process(
     cmdline: str,
     root_prefixes: list[str],
 ) -> bool:
-    if Path(exe or "").name not in SKY_CUA_RUNTIME_BINARIES:
+    if not _is_sky_cua_runtime_binary(exe, cmdline):
         return False
     candidates = [candidate for candidate in [exe, cwd, cmdline] if candidate]
     return any(prefix in candidate for prefix in root_prefixes for candidate in candidates)

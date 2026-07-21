@@ -91,10 +91,11 @@ For fastest Linux Wayland input, install the privileged uinput helper from a
 runtime install with `scripts/install_mcp_server.py --input-helper`; it runs as
 root and exposes `/run/sky-cua/input-helper.sock`.
 
-To install on a machine without a checkout or toolchain, build a
-self-contained release tarball with `python3 scripts/package.py`, copy it
-over, extract it, and run `python3 install.py` from the extracted directory
-(bundle mode: no build, no cargo). See
+For an immutable machine install, build a complete release with
+`python3 scripts/build_complete_release.py`, copy the reported fat archive,
+extract it, and run `python3 install.py install --manifest-sha256 <sha256>`
+from the extracted release root. The activation transaction also installs
+native-host manifests, stable `current` command links, and its receipt. See
 [`docs/features/release-package.md`](docs/features/release-package.md).
 
 ## Development
@@ -221,9 +222,11 @@ snapshots.
 Deploy and distribute Codex plugin builds:
 
 ```bash
-python3 scripts/deploy_plugin.py   # fast local dev deploy (sky-cua@local)
-python3 scripts/package.py         # build a release tarball under dist/release
-python3 install.py                 # install on a clean machine (from the tarball)
+python3 scripts/deploy_plugin.py          # compatibility-only local dev deploy
+python3 scripts/build_complete_release.py # immutable release + fat archive
+# From the extracted complete release:
+python3 install.py install --manifest-sha256 <sha256>
+python3 install.py verify-activation --manifest-sha256 <sha256>
 ```
 
 `deploy_plugin.py` is the fast local lane: it installs the built bundle into
@@ -237,13 +240,14 @@ chosen by retargeting the compat root, so Codex never sees duplicate
 platforms, so rebuilding on Linux does not delete Windows `.exe` binaries from
 the local payload and vice versa.
 
-`package.py` builds a self-contained
-`dist/release/sky-cua-<version>-<platform>.tar.gz` containing the plugin
-bundle, a pure-Python installer subset, mirrored skills, and a top-level
-`install.py`. Copy it to a clean machine, extract it, and run
-`python3 install.py` from the extracted directory; the installer runs in bundle
-mode (no build, no cargo) and materializes the compat plugin from the bundled
-preflight. See [`docs/features/release-package.md`](docs/features/release-package.md).
+`build_complete_release.py` emits one immutable release identity and a
+`dist/complete-release/sky-cua-<release-id>-linux-x64-glibc.tar.gz` archive.
+Its release-root `install.py install` is the sole normal activation command;
+`ensure` is the idempotent repair path and `verify-activation` is the read-only
+machine-state proof. `scripts/release_generation.py install` is internal-only,
+and the older `scripts/package.py` installer remains compatibility packaging,
+not a complete machine activation. See
+[`docs/features/release-package.md`](docs/features/release-package.md).
 
 If the local Codex config gets stale, the durable reset procedure is documented
 in `docs/runtime/mcp-boundary.md` under "Codex deploy, packaging, and config
