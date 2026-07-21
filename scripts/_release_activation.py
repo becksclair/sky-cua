@@ -28,7 +28,11 @@ from release_generation import GenerationStore, VerifiedRelease, canonical_json_
 
 ACTIVATION_RECEIPT = "activation-receipt.json"
 ACTIVATION_SCHEMA_VERSION = 1
+ACTIVE_RUNTIME_SCHEMA_VERSION = 1
 DEFAULT_BIN_DIRECTORY = Path.home() / ".local/bin"
+CUA_NODE_COMPONENT_BY_PLATFORM = {
+    "linux-x64": "cua-node-linux-x64-glibc",
+}
 
 
 class ActivationVerificationError(RuntimeError):
@@ -68,6 +72,33 @@ class PathSnapshot:
     kind: str
     value: bytes | str | None
     mode: int | None
+
+
+@dataclass(frozen=True)
+class ActiveRuntimeResolution:
+    release_id: str
+    manifest_sha256: str
+    release_root: str
+    manifest_path: str
+    node_path: str
+    node_repl_path: str
+    node_module_dirs: tuple[str, ...]
+    browser_client_path: str
+    trusted_browser_client_sha256s: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": ACTIVE_RUNTIME_SCHEMA_VERSION,
+            "release_id": self.release_id,
+            "manifest_sha256": self.manifest_sha256,
+            "release_root": self.release_root,
+            "manifest_path": self.manifest_path,
+            "node_path": self.node_path,
+            "node_repl_path": self.node_repl_path,
+            "node_module_dirs": list(self.node_module_dirs),
+            "browser_client_path": self.browser_client_path,
+            "trusted_browser_client_sha256s": list(self.trusted_browser_client_sha256s),
+        }
 
 
 def _atomic_write(path: Path, content: bytes, *, mode: int = 0o600) -> None:
@@ -134,6 +165,24 @@ def stable_link_targets(
                     store_root / "current" / relative,
                     target_dir,
                 )
+        cua_node_component = CUA_NODE_COMPONENT_BY_PLATFORM.get(platform_id)
+        if cua_node_component in release.component_names:
+            node_repl_relative = Path("components") / cua_node_component / "bin/node_repl"
+            if not (release.root / node_repl_relative).is_file():
+                raise ActivationVerificationError(
+                    "selected cua-node component has no node_repl launcher: "
+                    f"{release.root / node_repl_relative}"
+                )
+            result[target_dir / "node_repl"] = os.path.relpath(
+                store_root / "current" / node_repl_relative,
+                target_dir,
+            )
+        installer = release.root / "install.py"
+        if installer.is_file():
+            result[target_dir / "sky-cua-release"] = os.path.relpath(
+                store_root / "current/install.py",
+                target_dir,
+            )
     return result
 
 
@@ -258,8 +307,10 @@ def verify_activation(
     for path, target in expected_links.items():
         if not path.is_symlink() or os.readlink(path) != target:
             raise ActivationVerificationError(f"stable command link is stale or missing: {path}")
-        relative = path.resolve().relative_to(installed.root.resolve())
-        if relative.parts[:1] != ("components",):
+        resolved = path.resolve()
+        release_root = installed.root.resolve()
+        relative = resolved.relative_to(release_root)
+        if relative.parts[:1] != ("components",) and relative != Path("install.py"):
             raise ActivationVerificationError(
                 f"stable command link does not resolve through current: {path}"
             )
@@ -318,4 +369,75 @@ def drain_stale_processes(store_root: Path, *, proc_root: Path = Path("/proc")) 
         [store_root / "releases"],
         proc_root=proc_root,
         match_all_paths=True,
+    )
+
+
+def resolve_active_runtime(
+    candidate: Path,
+    *,
+    store_root: Path,
+    profile: str,
+    expected_manifest_sha256: str | None,
+    native_messaging_home: Path | None,
+    bin_dir: Path | None = None,
+    proc_root: Path = Path("/proc"),
+) -> ActiveRuntimeResolution:
+    """Resolve the verified active runtime without relying on selector env vars."""
+    activation = verify_activation(
+        candidate,
+        store_root=store_root,
+        profile=profile,
+        expected_manifest_sha256=expected_manifest_sha256,
+        native_messaging_home=native_messaging_home,
+        bin_dir=bin_dir,
+        proc_root=proc_root,
+    )
+    root = Path(activation.release_root)
+    manifest_path = root / "RELEASE.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ActivationVerificationError(
+            f"active release manifest is missing or invalid: {manifest_path}"
+        ) from error
+    if not isinstance(manifest, dict):
+        raise ActivationVerificationError("active release manifest must be an object")
+    browser_contract = manifest.get("browser_contract")
+    canonical_browser = (
+        browser_contract.get("canonical_browser") if isinstance(browser_contract, dict) else None
+    )
+    browser_relative = (
+        canonical_browser.get("path") if isinstance(canonical_browser, dict) else None
+    )
+    trusted = manifest.get("trusted_browser_client_sha256s")
+    if (
+        not isinstance(browser_relative, str)
+        or Path(browser_relative).is_absolute()
+        or ".." in Path(browser_relative).parts
+        or not isinstance(trusted, list)
+        or not trusted
+        or not all(isinstance(value, str) and len(value) == 64 for value in trusted)
+    ):
+        raise ActivationVerificationError(
+            "active release manifest has no valid Browser runtime binding"
+        )
+    cua_root = root / "components/cua-node-linux-x64-glibc"
+    node_path = cua_root / "bin/node"
+    node_repl_path = cua_root / "bin/node_repl"
+    module_root = cua_root / "lib/node_modules"
+    browser_client = root.joinpath(*Path(browser_relative).parts)
+    required = (node_path, node_repl_path, module_root, browser_client)
+    if not all(path.exists() for path in required):
+        missing = [str(path) for path in required if not path.exists()]
+        raise ActivationVerificationError(f"active release runtime path(s) are missing: {missing}")
+    return ActiveRuntimeResolution(
+        release_id=activation.release_id,
+        manifest_sha256=activation.manifest_sha256,
+        release_root=activation.release_root,
+        manifest_path=str(manifest_path),
+        node_path=str(node_path),
+        node_repl_path=str(node_repl_path),
+        node_module_dirs=(str(module_root),),
+        browser_client_path=str(browser_client),
+        trusted_browser_client_sha256s=tuple(trusted),
     )

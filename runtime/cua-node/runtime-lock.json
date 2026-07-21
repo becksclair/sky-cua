@@ -14,9 +14,9 @@
       "provenance": "canonical first-party host/kernel bundle built from sky-cua runtime/cua-node/src/cli.ts",
       "resolved": true
     },
-    "sha256": "03e39674de63fc7baa68eac901b930c4d33b82d27e6bc87bb54cdaa800824218",
+    "sha256": "b2df2116499a5842641a2fb10184d06e9c127ebf10fab0d5546fb292ea1771d2",
     "sha256_scope": "artifact",
-    "size_bytes": 627363,
+    "size_bytes": 626257,
     "license": {
       "expression": "Apache-2.0",
       "notice_files": [
@@ -735,12 +735,12 @@
       "source": {
         "type": "first-party-build",
         "uri": "runtime/cua-node/dist/cli.js",
-        "provenance": "canonical sky-cua bundle sha256 03e39674de63fc7baa68eac901b930c4d33b82d27e6bc87bb54cdaa800824218",
+        "provenance": "canonical sky-cua bundle sha256 b2df2116499a5842641a2fb10184d06e9c127ebf10fab0d5546fb292ea1771d2",
         "resolved": true
       },
-      "sha256": "03e39674de63fc7baa68eac901b930c4d33b82d27e6bc87bb54cdaa800824218",
+      "sha256": "b2df2116499a5842641a2fb10184d06e9c127ebf10fab0d5546fb292ea1771d2",
       "sha256_scope": "artifact",
-      "size_bytes": 627363,
+      "size_bytes": 626257,
       "license": {
         "expression": "Apache-2.0",
         "notice_files": [

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,8 @@ def test_stable_links_resolve_only_through_current_and_repair_stale_copy(
     assert legacy.is_symlink()
     assert legacy.resolve() == stale.resolve()
     assert unknown.read_bytes() == b"preserve me"
+    assert not (bin_dir / "node_repl").exists()
+    assert not (store / "bin/node_repl").exists()
     activation.restore_path(snapshots[0])
     assert stale.read_bytes() == b"obsolete mutable copy"
     assert not stale.is_symlink()
@@ -111,6 +114,140 @@ def test_versioned_receipt_is_atomic_and_restorable(tmp_path: Path) -> None:
     assert payload["stable_links"] == links
     activation.restore_path(prior)
     assert not (store / activation.ACTIVATION_RECEIPT).exists()
+
+
+def test_active_runtime_resolves_from_current_without_selector_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, release = _installed_release(tmp_path)
+    home = tmp_path / "home"
+    bin_dir = tmp_path / "bin"
+    for name in (
+        "SKY_CUA_RELEASE_ROOT",
+        "SKY_CUA_RELEASE_ID",
+        "NODE_REPL_NODE_PATH",
+        "NODE_REPL_NODE_MODULE_DIRS",
+        "CUA_NODE_BROWSER_CLIENT_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    installer = release.root / "install.py"
+    installer.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    installer.chmod(0o755)
+    cua_root = release.root / "components/cua-node-linux-x64-glibc"
+    for path in (
+        cua_root / "bin/node",
+        cua_root / "bin/node_repl",
+        cua_root / "lib/node_modules/.keep",
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"runtime")
+    release = replace(
+        release,
+        component_names=("core-linux-x64", "cua-node-linux-x64-glibc"),
+    )
+    browser = release.root / "components/browser-js/browser-client.mjs"
+    browser.parent.mkdir(parents=True)
+    browser.write_text("export {};\n", encoding="utf-8")
+    (release.root / "RELEASE.json").write_text(
+        json.dumps(
+            {
+                "browser_contract": {
+                    "canonical_browser": {"path": "components/browser-js/browser-client.mjs"}
+                },
+                "trusted_browser_client_sha256s": ["f" * 64],
+            }
+        ),
+        encoding="utf-8",
+    )
+    host = release.root / activation.HOST_RELATIVE_PATH
+    host.parent.mkdir(parents=True, exist_ok=True)
+    host.write_bytes(b"host")
+    links, _ = activation.install_stable_links(store, release, bin_dir=bin_dir)
+    manifests = tuple(
+        home / relative / f"{activation.HOST_NAME}.json"
+        for relative in activation.MANIFEST_RELATIVE_DIRS
+    )
+    for path in manifests:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(activation.native_messaging_manifest_bytes(host))
+        path.chmod(0o600)
+    activation.write_receipt(
+        store,
+        release,
+        native_manifest_paths=manifests,
+        stable_links=links,
+    )
+    monkeypatch.setattr("release_generation.verify_release_root", lambda *_args, **_kwargs: release)
+    monkeypatch.setattr(
+        activation.GenerationStore, "verify_installed_generation", lambda *_args: release
+    )
+    monkeypatch.setattr(activation, "find_unix_runtime_processes", lambda *_args, **_kwargs: [])
+
+    resolved = activation.resolve_active_runtime(
+        release.root,
+        store_root=store,
+        profile="full",
+        expected_manifest_sha256=release.manifest_sha256,
+        native_messaging_home=home,
+        bin_dir=bin_dir,
+        proc_root=tmp_path / "proc",
+    )
+
+    assert resolved.release_root == str(release.root)
+    assert resolved.node_path == str(cua_root / "bin/node")
+    assert resolved.node_repl_path == str(cua_root / "bin/node_repl")
+    assert resolved.node_module_dirs == (str(cua_root / "lib/node_modules"),)
+    assert resolved.browser_client_path == str(browser)
+    assert (bin_dir / "sky-cua-release").resolve() == installer
+    assert (store / "bin/sky-cua-release").resolve() == installer
+    assert (bin_dir / "node_repl").resolve() == cua_root / "bin/node_repl"
+    assert (store / "bin/node_repl").resolve() == cua_root / "bin/node_repl"
+    assert "current" in os.readlink(bin_dir / "node_repl")
+    assert resolved.node_repl_path == str((bin_dir / "node_repl").resolve())
+
+
+def test_node_repl_stable_link_follows_current_generation_rollover(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "store"
+    bin_dir = tmp_path / "bin"
+    component = "cua-node-linux-x64-glibc"
+    releases: list[VerifiedRelease] = []
+    for release_id, payload in (("a" * 64, b"old"), ("c" * 64, b"new")):
+        root = store / "releases" / release_id
+        launcher = root / "components" / component / "bin/node_repl"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_bytes(payload)
+        launcher.chmod(0o755)
+        releases.append(
+            VerifiedRelease(
+                root=root,
+                release_id=release_id,
+                manifest_sha256="b" * 64,
+                profile="full",
+                component_names=(component,),
+            )
+        )
+    store.mkdir(exist_ok=True)
+    current = store / "current"
+    current.symlink_to(Path("releases") / releases[0].release_id)
+    links, _ = activation.install_stable_links(store, releases[0], bin_dir=bin_dir)
+    user_launcher = bin_dir / "node_repl"
+    store_launcher = store / "bin/node_repl"
+    user_target = os.readlink(user_launcher)
+    store_target = os.readlink(store_launcher)
+
+    assert user_launcher.resolve().read_bytes() == b"old"
+    assert store_launcher.resolve().read_bytes() == b"old"
+    assert links[str(user_launcher)] == user_target
+    current.unlink()
+    current.symlink_to(Path("releases") / releases[1].release_id)
+
+    assert os.readlink(user_launcher) == user_target
+    assert os.readlink(store_launcher) == store_target
+    assert user_launcher.resolve().read_bytes() == b"new"
+    assert store_launcher.resolve().read_bytes() == b"new"
 
 
 def test_verify_rejects_obsolete_process_and_receipt_skew(

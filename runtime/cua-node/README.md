@@ -18,6 +18,12 @@ The canonical sibling `@heliasar/browser-use` package is an integration input,
 not copied source; package-local Browser trust tests consume its exact built
 bytes through `CUA_NODE_BROWSER_CLIENT_PATH` or the repository default.
 
+An installed `bin/node_repl` is self-contained: the native launcher executes
+its sibling `bin/node`, and the host discovers the adjacent runtime manifest,
+module root, and trusted Browser hashes. Release, Node, module-root, and Browser
+client environment variables are optional diagnostic or development overrides,
+not normal startup requirements.
+
 Run the focused source gates from this directory:
 
     bun install --frozen-lockfile

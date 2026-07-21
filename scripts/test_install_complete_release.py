@@ -12,7 +12,7 @@ import install_complete_release as controller
 from _native_messaging_install import HOST_RELATIVE_PATH
 from _openclaw_install import OpenClawReleaseInstallReport
 from _opencode_install import OpenCodeInstallReport
-from _release_activation import ActivationReport
+from _release_activation import ActivationReport, ActiveRuntimeResolution
 from release_generation import VerifiedRelease
 
 RELEASE_ID = "a" * 64
@@ -53,6 +53,10 @@ class FakeStore:
             host.parent.mkdir(parents=True, exist_ok=True)
             host.write_bytes(b"native-host")
             host.chmod(0o755)
+        node_repl = release_root / "components/cua-node-linux-x64-glibc/bin/node_repl"
+        node_repl.parent.mkdir(parents=True, exist_ok=True)
+        node_repl.write_bytes(b"node-repl")
+        node_repl.chmod(0o755)
         extension_relative = "components/core-linux-x64/resources/chrome-extension/codex/1.2.3_0"
         extension = release_root / extension_relative
         extension.mkdir(parents=True, exist_ok=True)
@@ -275,6 +279,49 @@ def test_ensure_cli_has_one_stable_activation_shape(
     assert set(payload) == {"status", "activation"}
     assert payload["status"] == status
     assert payload["activation"]["release_id"] == RELEASE_ID
+
+
+def test_resolve_active_cli_emits_runtime_paths_without_env_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runtime = ActiveRuntimeResolution(
+        release_id=RELEASE_ID,
+        manifest_sha256="c" * 64,
+        release_root=str(tmp_path / "store/current"),
+        manifest_path=str(tmp_path / "store/current/RELEASE.json"),
+        node_path=str(tmp_path / "store/current/cua/bin/node"),
+        node_repl_path=str(tmp_path / "store/current/cua/bin/node_repl"),
+        node_module_dirs=(str(tmp_path / "store/current/cua/lib/node_modules"),),
+        browser_client_path=str(tmp_path / "store/current/browser-client.mjs"),
+        trusted_browser_client_sha256s=("f" * 64,),
+    )
+    monkeypatch.setattr(
+        controller,
+        "resolve_active_runtime",
+        lambda *_args, **_kwargs: runtime,
+    )
+
+    assert (
+        controller.main(
+            [
+                str(tmp_path / "candidate"),
+                "--store-root",
+                str(tmp_path / "store"),
+                "--native-messaging-home",
+                str(tmp_path / "home"),
+                "--bin-dir",
+                str(tmp_path / "bin"),
+                "--proc-root",
+                str(tmp_path / "proc"),
+            ],
+            operation="resolve-active",
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"status": "ok", "runtime": runtime.as_dict()}
 
 
 @pytest.mark.parametrize(

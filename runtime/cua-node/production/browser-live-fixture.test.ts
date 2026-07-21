@@ -97,7 +97,10 @@ function pngChunk(type: string, data: Buffer): Buffer {
   chunk.writeUInt32BE(data.length, 0);
   typeBytes.copy(chunk, 4);
   data.copy(chunk, 8);
-  chunk.writeUInt32BE(pngCrc32(Buffer.concat([typeBytes, data])), 8 + data.length);
+  chunk.writeUInt32BE(
+    pngCrc32(Buffer.concat([typeBytes, data])),
+    8 + data.length,
+  );
   return chunk;
 }
 
@@ -143,7 +146,17 @@ for await (const line of lines) {
     if ((await download.text()) !== "sky-cua browser live acceptance\\n") throw new Error("owned fixture download mismatch");
     const meta = request.params._meta;
     const evidence = {
-      browser: { id: "iab", name: "Fake raw IAB", type: "iab" },
+      browser: {
+        id: "iab",
+        name: "Fake raw IAB",
+        type: "iab",
+        transport: "host_provided_iab",
+        metadata: {
+          skyCuaBridgeTransport: "host_provided_iab",
+          skyCuaBridgeType: "iab",
+          codexSessionId: meta.session_id,
+        },
+      },
       navigation: { requested_url: url, final_url: url },
       keyboard: { method: "PlaywrightLocator.type+press", key: "End", text: "CUA NODE BROWSER ACCEPTANCE", value: "CUA NODE BROWSER ACCEPTANCE" },
       click: { actual: true, button_name: "OK" },
@@ -295,10 +308,16 @@ test("disposable trust-negative roots are deleted and never mutate packaged root
     );
     const disposableRoot = disposable.runtimeRoot;
     assert.equal(existsSync(disposableRoot), true);
-    assert.notEqual(digest(disposable.browserClient), digest(fixture.options.browserClient));
+    assert.notEqual(
+      digest(disposable.browserClient),
+      digest(fixture.options.browserClient),
+    );
     disposable.cleanup();
     assert.equal(existsSync(disposableRoot), false);
-    assert.equal(readFileSync(fixture.options.browserClient).equals(original), true);
+    assert.equal(
+      readFileSync(fixture.options.browserClient).equals(original),
+      true,
+    );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -334,7 +353,10 @@ test("trust-negative CLI reports every rejection before connection", () => {
     assert.equal(report.connection_attempted, false);
     assert.equal(report.evidence.original_untouched, true);
     assert.deepEqual(
-      report.evidence.cases.map((item) => [item.case, item.connection_attempted]),
+      report.evidence.cases.map((item) => [
+        item.case,
+        item.connection_attempted,
+      ]),
       [
         ["tampered", false],
         ["missing", false],

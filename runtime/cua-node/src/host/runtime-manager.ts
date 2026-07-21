@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { existsSync } from "node:fs";
 import { lstat, readFile, readlink, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -24,6 +25,7 @@ export const TIMEOUT_ERROR = "js execution timed out; kernel reset, rerun your r
 export const RESET_ERROR = "js execution reset";
 export const CANCEL_ERROR = "js execution cancelled; kernel reset";
 export const MAX_CANCELLATION_TOMBSTONES = 1_024;
+const BUNDLED_NODE_NAMES = new Set(["node", "node.exe"]);
 
 type AjvError = { instancePath?: string; message?: string };
 type AjvValidator = ((value: unknown) => boolean) & {
@@ -86,6 +88,7 @@ interface ActiveExecution {
 export function resolveBundledNodePath(
   explicitPath?: string,
   allowHostNode = false,
+  runtimeExecPath = process.execPath,
 ): string {
   const configured = explicitPath ?? process.env.NODE_REPL_NODE_PATH;
   if (configured !== undefined && configured.length > 0) {
@@ -93,9 +96,18 @@ export function resolveBundledNodePath(
       throw new Error("NODE_REPL_NODE_PATH must be absolute");
     return configured;
   }
+  const implicitRuntimeRoot = dirname(dirname(runtimeExecPath));
+  if (
+    isAbsolute(runtimeExecPath)
+    && BUNDLED_NODE_NAMES.has(basename(runtimeExecPath).toLowerCase())
+    && existsSync(join(implicitRuntimeRoot, "manifest.json"))
+  ) {
+    return runtimeExecPath;
+  }
   if (allowHostNode) return process.execPath;
   throw new Error(
-    "bundled Node runtime is unavailable; set NODE_REPL_NODE_PATH to an absolute path",
+    "bundled Node runtime is unavailable; launch the installed node_repl or set "
+      + "NODE_REPL_NODE_PATH to an absolute override",
   );
 }
 
@@ -138,6 +150,7 @@ export class RuntimeManager {
   private startup: Promise<void> | null = null;
   private startupGeneration: number | null = null;
   private runtimeMetadata: RuntimeAssetMetadata | null | undefined;
+  private trustedBrowserClientSha256s: readonly string[] | undefined;
   private generation = 0;
   private readonly cancellationTombstones = new Set<string>();
   private readonly completedRequestIds = new Set<string>();
@@ -365,6 +378,14 @@ export class RuntimeManager {
         process.platform === "win32" ? ";" : ":",
       ),
     };
+    if (
+      (env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S === undefined
+        || env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S.trim() === "")
+      && this.trustedBrowserClientSha256s !== undefined
+    ) {
+      env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S =
+        this.trustedBrowserClientSha256s.join(",");
+    }
     if (runtimeMetadata !== null)
       env.NODE_REPL_RUNTIME_METADATA = JSON.stringify(runtimeMetadata);
     else delete env.NODE_REPL_RUNTIME_METADATA;
@@ -433,6 +454,12 @@ export class RuntimeManager {
         `runtime manifest does not satisfy canonical schema: ${join(runtimeRoot, "manifest.json")}: ${schemaErrors.join("; ")}`,
       );
     }
+    const trustedBrowserClientSha256s = (
+      parsed as { trusted_browser_client_sha256s: string[] }
+    ).trusted_browser_client_sha256s;
+    this.trustedBrowserClientSha256s = Object.freeze([
+      ...trustedBrowserClientSha256s,
+    ]);
     const env = { ...process.env, ...this.options.env };
     this.runtimeMetadata = await discoverRuntimeAssets({
       runtimeRoot,

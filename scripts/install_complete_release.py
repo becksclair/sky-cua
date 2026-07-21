@@ -32,6 +32,7 @@ from _release_activation import (
     drain_stale_processes,
     install_stable_links,
     receipt_path,
+    resolve_active_runtime,
     restore_path,
     snapshot_path,
     verify_activation,
@@ -329,7 +330,7 @@ def main(
     parser.add_argument("--proc-root", type=Path, default=Path("/proc"))
     args = parser.parse_args(argv)
     try:
-        if operation not in {"install", "ensure", "verify-activation"}:
+        if operation not in {"install", "ensure", "verify-activation", "resolve-active"}:
             raise CompleteReleaseInstallError(f"unsupported activation operation: {operation}")
         if args.rollback:
             if operation != "install":
@@ -358,6 +359,10 @@ def main(
         if operation == "verify-activation":
             activation = verify_activation(candidate, **common)
             print(json.dumps({"status": "ok", "activation": activation.as_dict()}, sort_keys=True))
+            return 0
+        if operation == "resolve-active":
+            runtime = resolve_active_runtime(candidate, **common)
+            print(json.dumps({"status": "ok", "runtime": runtime.as_dict()}, sort_keys=True))
             return 0
         install_options = {
             **common,

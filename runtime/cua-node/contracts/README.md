@@ -29,7 +29,7 @@ cua_node/
   sbom.cdx.json
 ```
 
-`NODE_REPL_NODE_MODULE_DIRS` contains direct module roots, not runtime roots: on Linux the bundled value is `<resources>/cua_node/lib/node_modules`. The `@heliasar/sky-cua` package is therefore at `lib/node_modules/@heliasar/sky-cua`, and its public entrypoint is the package root. `share/playwright` contains the locked browser revision; `share/tessdata` contains locked OCR language data; and `share/pdfjs` contains local worker, standard-font, and CMap assets. Empty directories are still part of the fixture layout and must not be replaced with task-time downloads.
+When supplied as an override, `NODE_REPL_NODE_MODULE_DIRS` contains direct module roots, not runtime roots. Normal installed startup does not require it: `bin/node_repl` executes its sibling `bin/node`, and the host derives `lib/node_modules` plus trusted Browser hashes from the adjacent validated manifest. The `@heliasar/sky-cua` package is therefore at `lib/node_modules/@heliasar/sky-cua`, and its public entrypoint is the package root. `share/playwright` contains the locked browser revision; `share/tessdata` contains locked OCR language data; and `share/pdfjs` contains local worker, standard-font, and CMap assets. Empty directories are still part of the fixture layout and must not be replaced with task-time downloads.
 
 The manifest records `node_version: 24.14.0`, exact hashes for `bin/node` and `bin/node_repl`, the checksummed `@heliasar/sky-cua@0.1.0` tarball, browser revision, source commits, lock hashes, and checksums for shipped runtime files. The manifest itself is written last by assembly and is not included in its own `checksums.files` list; otherwise the manifest would be self-referential.
 
@@ -39,10 +39,10 @@ Normal v1 selection is fail-closed and uses one manifest-compatible runtime root
 
 1. `CODEX_NODE_REPL_LEGACY_FALLBACK=1` selects explicit diagnostic legacy mode. In that mode, preserve an executable explicit `CODEX_NODE_REPL_PATH`, then use the existing legacy resolver in this order: `<resources>/node_repl`, `$XDG_CACHE_HOME/codex-runtimes/codex-primary-runtime/dependencies/bin/node_repl`, then `PATH` lookup for `node_repl`. Do not derive v1 paths in this mode.
 2. Without the flag, a non-empty explicit v1 value is accepted only after validating its kind, adjacent v1 manifest, target/version, and exact manifest checksum. Invalid explicit values are not silently accepted.
-3. Missing v1 values are derived from the bundled manifest: `bin/node_repl`, `bin/node`, `lib/node_modules`, the manifest's trusted digest list joined with commas, and `share/playwright`.
+3. Missing v1 values are derived from the bundled manifest: `bin/node_repl`, `bin/node`, `lib/node_modules`, the manifest's trusted digest list joined with commas, and `share/playwright`. After the native launcher executes `bin/node`, the host independently derives the runtime root from `process.execPath`; no selector variables need to be exported into the process.
 4. If the bundled manifest exists but is corrupt, incompatible, or checksum-invalid, fail with an actionable error. Do not fall through to host Node, global modules, `PATH`, or the legacy executable. The only rollback is the explicit flag above.
 
-The variables and their exact separators are:
+These optional overrides and their exact separators are:
 
 | Variable | Bundled value | Explicit value rule |
 | --- | --- | --- |
