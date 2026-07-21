@@ -3,7 +3,9 @@
 For a quick click or snapshot, use direct Browser MCP unless the user explicitly requested the Browser plugin or in-app Browser; those requests go directly to persistent `node_repl` and `host_provided_iab`. Initialize `@heliasar/browser-use` once without assigning the setup result, then retain the installed global `agent`, browser, and tab bindings. Prefer `tab.playwright` for DOM work on that same owned tab. Emit screenshot bytes with `nodeRepl.emitImage`; image emission does not require marking the tab deliverable.
 
 For an explicit Browser plugin screenshot, use one `node_repl` `js` call
-(`mcp__node_repl__js` when that qualified name is shown) and replace `url`:
+(`mcp__node_repl__js` when that qualified name is shown), set that call's
+`timeout_ms` to `90_000` so cold task-route and webview initialization can
+finish without resetting the persistent runtime, and replace `url`:
 
 ```js
 {

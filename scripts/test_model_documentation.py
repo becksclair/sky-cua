@@ -62,6 +62,7 @@ def test_browser_plugin_routes_directly_to_host_provided_iab(tmp_path: Path) -> 
     assert 'entry.transport === "host_provided_iab"' in recipe
     assert "await setupBrowserRuntime({ globals: globalThis });" in recipe
     assert "= await setupBrowserRuntime" not in recipe
+    assert "`timeout_ms` to `90_000`" in recipe
     assert "await nodeRepl.emitImage(await tab.screenshot())" in recipe
     assert "markDeliverable" not in recipe
 
