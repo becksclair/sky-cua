@@ -214,6 +214,14 @@ function bridgeRequestForExecution(message, exec) {
 function createNativePipe() {
   const connections = new Map();
   let connectionCounter = 0;
+  async function listDirectory(path) {
+    if (typeof path !== 'string' || path.length === 0) throw new TypeError('native pipe directory path must be a non-empty string');
+    const result = await bridgeRequest({ type: 'privileged_request', op: 'native_pipe', native_op: 'list_directory', path });
+    if (!result || !Array.isArray(result.entries) || result.entries.some((entry) => typeof entry !== 'string')) {
+      throw new Error('native pipe directory listing returned an invalid result');
+    }
+    return Object.freeze([...result.entries]);
+  }
   function createConnection(path) {
     if (typeof path !== 'string' || path.length === 0) return Promise.reject(new TypeError('native pipe path must be a non-empty string'));
     const id = 'connection-' + connectionCounter++;
@@ -286,7 +294,7 @@ function createNativePipe() {
     if (state.error) for (const listener of state.listeners.error) invokeListener(state, listener, state.error);
     for (const listener of state.listeners.close) invokeListener(state, listener, state.error);
   }
-  return Object.freeze({ createConnection, receive, closeAll() { for (const state of connections.values()) { state.closed = true; } connections.clear(); } });
+  return Object.freeze({ createConnection, listDirectory, receive, closeAll() { for (const state of connections.values()) { state.closed = true; } connections.clear(); } });
 }
 
 const nativePipe = createNativePipe();

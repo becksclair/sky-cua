@@ -237,6 +237,42 @@ describe("canonical Browser runtime", () => {
     assert.equal(params.caller_provenance, "codex_desktop");
   });
 
+  test("flattens nested Codex turn metadata for Browser RPC authorization", async () => {
+    const state = fixture();
+    state.globals.nodeRepl!.requestMeta = {
+      "x-codex-turn-metadata": {
+        session_id: "session-1",
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+      },
+    };
+    await setupBrowserRuntime({ globals: state.globals });
+    const agent = state.globals.agent as {
+      browsers: { list(): Promise<Array<Record<string, unknown>>> };
+    };
+    await agent.browsers.list();
+    const params = state.connection.requests[0]?.params as Record<string, unknown>;
+    assert.equal(params.session_id, "session-1");
+    assert.equal(params.thread_id, "thread-1");
+    assert.equal(params.turn_id, "turn-1");
+    assert.deepEqual(params["x-codex-turn-metadata"], {
+      session_id: "session-1",
+      thread_id: "thread-1",
+      turn_id: "turn-1",
+    });
+  });
+
+  test("does not expose the trusted native pipe through the public Agent graph", async () => {
+    const state = fixture();
+    await setupBrowserRuntime({ globals: state.globals });
+    const agent = state.globals.agent as {
+      browsers: Record<PropertyKey, unknown>;
+    };
+    assert.equal(agent.browsers.registry, undefined);
+    assert.equal(agent.browsers.globals, undefined);
+    assert.deepEqual(Reflect.ownKeys(agent.browsers), []);
+  });
+
   test("discovers the session-matched host IAB, ignores stale peers, and keeps extension identity truthful", async () => {
     const staleName = "00000000-0000-4000-8000-000000000000.sock";
     const iabName = "11111111-1111-4111-8111-111111111111.sock";

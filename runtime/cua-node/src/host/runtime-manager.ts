@@ -357,6 +357,7 @@ export class RuntimeManager {
     if (this.shuttingDown || generation !== this.generation) {
       throw new Error("runtime manager generation changed during kernel startup");
     }
+    this.seedImplicitRuntimeModuleRoot(runtimeMetadata);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.options.env,
@@ -439,6 +440,20 @@ export class RuntimeManager {
       resolveBrowserExecutable: () => resolveDefaultBrowserExecutable(env),
     });
     return this.runtimeMetadata;
+  }
+
+  private seedImplicitRuntimeModuleRoot(
+    runtimeMetadata: RuntimeAssetMetadata | null,
+  ): void {
+    if (this.options.runtimeMetadata !== undefined || runtimeMetadata === null)
+      return;
+    const normalized = normalizeModuleDir(
+      runtimeMetadata.modules.root,
+      this.options.cwd,
+    );
+    if (this.moduleDirSet.has(normalized)) return;
+    this.moduleDirs.unshift(normalized);
+    this.moduleDirSet.add(normalized);
   }
 
   private usesHostNodeFallback(): boolean {

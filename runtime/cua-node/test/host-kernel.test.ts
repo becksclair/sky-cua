@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "bun:test";
@@ -73,6 +81,42 @@ function js(
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function createDiscoverableFakeRuntime(): Promise<string> {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), "cua-node-runtime-root-"));
+  await cp(join(import.meta.dir, "fixtures", "fake-runtime"), runtimeRoot, {
+    recursive: true,
+  });
+  await mkdir(join(runtimeRoot, "share", "pdfjs", "cmaps"), {
+    recursive: true,
+  });
+  await mkdir(join(runtimeRoot, "share", "pdfjs", "standard_fonts"), {
+    recursive: true,
+  });
+  await mkdir(
+    join(runtimeRoot, "lib", "node_modules", "pdfjs-dist", "legacy", "build"),
+    { recursive: true },
+  );
+  await writeFile(
+    join(
+      runtimeRoot,
+      "lib",
+      "node_modules",
+      "pdfjs-dist",
+      "legacy",
+      "build",
+      "pdf.worker.mjs",
+    ),
+    "export {};\n",
+    "utf8",
+  );
+  await writeFile(
+    join(runtimeRoot, "share", "tessdata", "eng.traineddata"),
+    "fixture\n",
+    "utf8",
+  );
+  return runtimeRoot;
 }
 
 test("MCP initialize and tools/list match the frozen public surface", async () => {
@@ -650,6 +694,76 @@ test("image content consumes the resolved output-metadata shape", async () => {
       _meta: { "codex/imageDetail": "original" },
     });
   });
+});
+
+test("implicit bundled runtime seeds its normalized module root", async () => {
+  const runtimeRoot = await createDiscoverableFakeRuntime();
+  const manager = new RuntimeManager({
+    nodePath: join(runtimeRoot, "bin", "node"),
+    env: { NODE_REPL_NODE_MODULE_DIRS: "" },
+  });
+  const server = new McpServer({ manager });
+  try {
+    const response = result(
+      (await server.dispatch(
+        js(
+          1,
+          "var implicitSky = await import('@heliasar/sky-cua'); nodeRepl.write(implicitSky.sky.__fake_lazy)",
+        ),
+      )) as Response,
+    );
+    assert.deepEqual(response?.content, [{ type: "text", text: "true" }]);
+    assert.deepEqual(manager.moduleSearchRoots, [join(runtimeRoot, "lib")]);
+  } finally {
+    await server.close();
+    await rm(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("implicit bundled runtime seeds its module root without an env override", async () => {
+  const runtimeRoot = await createDiscoverableFakeRuntime();
+  const manager = new RuntimeManager({
+    nodePath: join(runtimeRoot, "bin", "node"),
+  });
+  const server = new McpServer({ manager });
+  try {
+    const response = result(
+      (await server.dispatch(
+        js(
+          1,
+          "var defaultSky = await import('@heliasar/sky-cua'); nodeRepl.write(defaultSky.sky.__fake_lazy)",
+        ),
+      )) as Response,
+    );
+    assert.deepEqual(response?.content, [{ type: "text", text: "true" }]);
+    assert.equal(manager.moduleSearchRoots[0], join(runtimeRoot, "lib"));
+  } finally {
+    await server.close();
+    await rm(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("implicit bundled runtime keeps explicit module roots as additions", async () => {
+  const runtimeRoot = await createDiscoverableFakeRuntime();
+  const additionalRoot = join(runtimeRoot, "additional");
+  const manager = new RuntimeManager({
+    nodePath: join(runtimeRoot, "bin", "node"),
+    env: { NODE_REPL_NODE_MODULE_DIRS: additionalRoot },
+  });
+  const server = new McpServer({ manager });
+  try {
+    const response = result(
+      (await server.dispatch(js(1, "nodeRepl.write('ready')"))) as Response,
+    );
+    assert.deepEqual(response?.content, [{ type: "text", text: "ready" }]);
+    assert.deepEqual(manager.moduleSearchRoots, [
+      join(runtimeRoot, "lib"),
+      additionalRoot,
+    ]);
+  } finally {
+    await server.close();
+    await rm(runtimeRoot, { recursive: true, force: true });
+  }
 });
 
 test("module roots persist across reset and local files reload between cells", async () => {

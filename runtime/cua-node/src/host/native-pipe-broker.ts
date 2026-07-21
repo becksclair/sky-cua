@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { lstat, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { basename, dirname, isAbsolute } from "node:path";
 import { createConnection, type Socket } from "node:net";
@@ -15,7 +15,7 @@ export interface NativePipeRequest {
   token: string;
   generation: string;
   execId: string;
-  operation: "connect" | "write" | "close";
+  operation: "connect" | "write" | "close" | "list_directory";
   connectionId?: string;
   path?: string;
   dataBase64?: string;
@@ -67,6 +67,7 @@ const NATIVE_PIPE_OPERATIONS = new Set<NativePipeRequest["operation"]>([
   "connect",
   "write",
   "close",
+  "list_directory",
 ]);
 
 export class NativePipeBroker {
@@ -112,6 +113,12 @@ export class NativePipeBroker {
     if (request.operation === "connect") {
       this.requireActiveExecution(request.execId);
       return this.connect(request);
+    }
+    if (request.operation === "list_directory") {
+      this.requireActiveExecution(request.execId);
+      if (typeof request.path !== "string")
+        throw new Error("native pipe directory path must be absolute");
+      return { entries: await listUnixSocketDirectory(request.path) };
     }
     const connectionId = request.connectionId;
     if (connectionId === undefined)
@@ -297,6 +304,39 @@ export class NativePipeBroker {
 
 export async function validateUnixSocketPath(path: string): Promise<string> {
   return (await validateUnixSocketPathDetails(path)).realPath;
+}
+
+export async function listUnixSocketDirectory(path: string): Promise<string[]> {
+  if (!isAbsolute(path))
+    throw new Error("native pipe directory path must be absolute");
+  if (path.endsWith("/"))
+    throw new Error("native pipe directory path must not end with a separator");
+  if (Buffer.byteLength(path) > MAX_NATIVE_PIPE_PATH_BYTES) {
+    throw new Error("native pipe directory path is too long");
+  }
+  try {
+    const linkStats = await lstat(path);
+    if (linkStats.isSymbolicLink())
+      throw new Error("native pipe directory path must not be a symlink");
+    const realPath = await realpath(path);
+    const directoryStats = await stat(realPath);
+    if (!directoryStats.isDirectory())
+      throw new Error("native pipe directory path is not a directory");
+    assertTrustedSocketOwner(directoryStats);
+    return (await readdir(realPath, { withFileTypes: true }))
+      .filter((entry) => entry.isSocket())
+      .map((entry) => entry.name)
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message === "native pipe directory path is not a directory" ||
+        error.message === "native pipe directory path must not be a symlink" ||
+        error.message === "native pipe socket owner is not the current user")
+    )
+      throw error;
+    throw new Error("native pipe directory path is not a directory");
+  }
 }
 
 async function validateUnixSocketPathDetails(

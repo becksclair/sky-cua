@@ -22,6 +22,7 @@ import { McpServer } from "../src/host/mcp-server.ts";
 import {
   MAX_NATIVE_PIPE_REQUEST_HISTORY,
   NativePipeBroker,
+  listUnixSocketDirectory,
   validateUnixSocketPath,
 } from "../src/host/native-pipe-broker.ts";
 import {
@@ -444,6 +445,54 @@ test("NativePipeBroker accepts a permissive same-user socket", async () => {
   }
 });
 
+test("NativePipeBroker lists only same-directory Unix sockets", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cua-node-list-"));
+  const firstPath = join(directory, "first.sock");
+  const secondPath = join(directory, "second.sock");
+  const regularPath = join(directory, "regular-file");
+  const first = await startPeer(firstPath, "roundtrip");
+  const second = await startPeer(secondPath, "roundtrip");
+  await writeFile(regularPath, "not a socket", "utf8");
+  const broker = new NativePipeBroker();
+  broker.setGeneration("generation-list");
+  broker.setActiveExecution("exec-list");
+  try {
+    assert.deepEqual(await listUnixSocketDirectory(directory), [
+      "first.sock",
+      "second.sock",
+    ]);
+    assert.deepEqual(
+      await broker.handle({
+        id: "native-pipe-list-0",
+        token: "generation-list",
+        generation: "generation-list",
+        execId: "exec-list",
+        operation: "list_directory",
+        path: directory,
+      }),
+      { entries: ["first.sock", "second.sock"] },
+    );
+  } finally {
+    await closePeer(first);
+    await closePeer(second);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("NativePipeBroker rejects unsafe directory listing requests", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cua-node-list-invalid-"));
+  const linked = `${directory}-link`;
+  await symlink(directory, linked);
+  try {
+    await assert.rejects(listUnixSocketDirectory("relative"), /must be absolute/u);
+    await assert.rejects(listUnixSocketDirectory(`${directory}/`), /must not end/u);
+    await assert.rejects(listUnixSocketDirectory(linked), /must not be a symlink/u);
+  } finally {
+    await rm(linked, { force: true });
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("NativePipeBroker keeps a trusted connection alive between executions", async () => {
   const socketPath = join(
     await mkdtemp(join(tmpdir(), "cua-node-persistent-owner-")),
@@ -616,6 +665,59 @@ test("first-party Node REPL trusted Browser fixture connects, frames little-endi
   } finally {
     await server.close();
     await closePeer(peer);
+  }
+});
+
+test("trusted Browser package lists task socket directories through nodeRepl.nativePipe", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cua-node-browser-list-"));
+  const socketPath = join(directory, "task.sock");
+  const peer = await startPeer(socketPath, "roundtrip");
+  await writeFile(join(directory, "ignore.txt"), "not a socket", "utf8");
+  const digest = createHash("sha256")
+    .update(await readFile(PACKAGE_ENTRYPOINT))
+    .digest("hex");
+  const manager = new RuntimeManager({
+    allowHostNode: true,
+    nodePath: TEST_NODE_PATH,
+    runtimeMetadata: null,
+    cwd: process.cwd(),
+    env: {
+      NODE_REPL_NODE_MODULE_DIRS: PACKAGE_ROOT,
+      NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+    },
+  });
+  const server = new McpServer({ manager });
+  try {
+    const response = await server.dispatch({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "js",
+        arguments: {
+          code: `const browser = await import("browser-native-pipe-fixture"); nodeRepl.write(await browser.browserListNativePipeDirectory(${JSON.stringify(directory)}));`,
+        },
+      },
+    });
+    const text =
+      response?.result &&
+      typeof response.result === "object" &&
+      "content" in response.result
+        ? (response.result.content as Array<{ text?: string }>)[0]?.text
+        : undefined;
+    assert.equal(
+      response?.result &&
+        typeof response.result === "object" &&
+        "isError" in response.result
+        ? response.result.isError
+        : undefined,
+      false,
+    );
+    assert.equal(text, "[ 'task.sock' ]");
+  } finally {
+    await server.close();
+    await closePeer(peer);
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

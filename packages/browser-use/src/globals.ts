@@ -45,14 +45,21 @@ export type CallerProvenance = (typeof ALLOWED_PROVENANCE)[number];
 
 export function callerContext(globals: BrowserGlobals): Record<string, unknown> {
   const meta = globals.nodeRepl?.requestMeta ?? {};
+  const nestedValue = meta["x-codex-turn-metadata"];
+  const nested =
+    nestedValue !== null && typeof nestedValue === "object"
+      ? (nestedValue as Record<string, unknown>)
+      : {};
+  const normalizedMeta = { ...nested, ...meta };
   const configured = globals.nodeRepl?.env?.SKY_CUA_MCP_CALLER_PROVENANCE;
   const provenance = ALLOWED_PROVENANCE.includes(configured as CallerProvenance)
     ? configured
     : "direct_mcp";
-  const clientInfo = meta.client_info ?? meta.clientInfo;
-  const identitySynthetic = meta.identity_synthetic ?? meta.identitySynthetic;
+  const clientInfo = normalizedMeta.client_info ?? normalizedMeta.clientInfo;
+  const identitySynthetic =
+    normalizedMeta.identity_synthetic ?? normalizedMeta.identitySynthetic;
   return {
-    ...meta,
+    ...normalizedMeta,
     caller_provenance: provenance,
     ...(clientInfo === undefined ? {} : { client_info: clientInfo }),
     ...(identitySynthetic === undefined ? {} : { identity_synthetic: identitySynthetic }),

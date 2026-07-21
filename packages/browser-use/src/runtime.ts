@@ -578,20 +578,21 @@ function supportedBrowserView(browser: Browser, info: BrowserInfo): Browser {
 }
 
 class Browsers {
-  private readonly wrappers = new Map<string, Browser>();
-  constructor(private readonly registry: BrowserBackendRegistry) {}
-  async list(): Promise<BrowserInfo[]> { return (await this.registry.list()).map(({ info }) => ({ ...info })); }
+  readonly #wrappers = new Map<string, Browser>();
+  readonly #registry: BrowserBackendRegistry;
+  constructor(registry: BrowserBackendRegistry) { this.#registry = registry; }
+  async list(): Promise<BrowserInfo[]> { return (await this.#registry.list()).map(({ info }) => ({ ...info })); }
   async get(id: string): Promise<Browser> {
-    const backend = await this.registry.get(id);
-    let browser = this.wrappers.get(backend.info.id);
+    const backend = await this.#registry.get(id);
+    let browser = this.#wrappers.get(backend.info.id);
     if (browser === undefined) {
       browser = supportedBrowserView(new Browser(backend), backend.info);
-      this.wrappers.set(backend.info.id, browser);
+      this.#wrappers.set(backend.info.id, browser);
     }
     return browser;
   }
   async getDefault(): Promise<Browser> {
-    const first = (await this.registry.list())[0];
+    const first = (await this.#registry.list())[0];
     if (first === undefined) throw new Error("No Browser backend is available");
     return this.get(first.info.id);
   }

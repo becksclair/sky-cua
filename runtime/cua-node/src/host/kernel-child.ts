@@ -557,7 +557,12 @@ async function waitForExit(
 function nativeOperation(
   value: string | undefined,
 ): NativePipeRequest["operation"] {
-  if (value === "connect" || value === "write" || value === "close")
+  if (
+    value === "connect" ||
+    value === "write" ||
+    value === "close" ||
+    value === "list_directory"
+  )
     return value;
   throw new Error(`unsupported native pipe operation: ${value ?? "unknown"}`);
 }
