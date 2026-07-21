@@ -228,11 +228,14 @@ def test_complete_release_sanitizes_core_and_materializes_exact_codex_projection
         "build_complete_release._verify_git_source_inventory", lambda _root, _commit: None
     )
     monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
+    core_source = _core(tmp_path / "inputs")
+    core_text = core_source / "bin/sky-cua"
+    core_text.chmod(0o664)
     result = build_complete_release(
         tmp_path / "out",
         producer_commit=PRODUCER_COMMIT,
         source_date_epoch=1_784_500_000,
-        core_source=_core(tmp_path / "inputs"),
+        core_source=core_source,
         cua_node_source=_cua_node(tmp_path / "inputs"),
         include_fat_archive=False,
     )
@@ -267,6 +270,8 @@ def test_complete_release_sanitizes_core_and_materializes_exact_codex_projection
     assert not (core / "resources/node_repl").exists()
     assert not (core / "bin/sky-cua-browser-preflight").exists()
     assert not (core / "resources/chrome_preflight.py").exists()
+    assert core_text.stat().st_mode & 0o777 == 0o664
+    assert (core / "bin/sky-cua").stat().st_mode & 0o777 == 0o644
     stamp = json.loads(
         (core / "bin/runtimes/linux-x64/sky-cua-client.buildstamp.json").read_text(encoding="utf-8")
     )

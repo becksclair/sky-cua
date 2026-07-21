@@ -14,7 +14,13 @@ from pathlib import Path
 
 from _plugin_bundle import DIST_PLUGIN_ROOT, REPO_ROOT, remove_path
 from build_model_documentation import build as build_model_documentation
-from release_builder import ComponentSource, FileSource, ReleaseBuild, build_release_set
+from release_builder import (
+    ComponentSource,
+    FileSource,
+    ReleaseBuild,
+    build_release_set,
+    normalize_component_modes,
+)
 from release_generation import (
     CHECKOUT_SHAPED_PATH_PATTERNS,
     FORBIDDEN_CHECKOUT_PATH_PATTERNS,
@@ -607,6 +613,8 @@ def _prepare_inputs(
         COMPLIANCE_COMPONENT: compliance,
         INSTALLER_COMPONENT: installer,
     }
+    for component in inputs.values():
+        normalize_component_modes(component)
     _sanitize_and_reject_checkout_path_leaks(inputs)
     return inputs
 
