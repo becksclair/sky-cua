@@ -37,6 +37,26 @@ def test_skills_are_compact_progressive_routes(tmp_path: Path) -> None:
         assert "node_repl" in text
 
 
+def test_browser_plugin_routes_directly_to_host_provided_iab(tmp_path: Path) -> None:
+    output = tmp_path / "docs"
+    build(output)
+    skill = (output / "skills/browser-use/SKILL.md").read_text(encoding="utf-8")
+    reference = (output / "references/browser.md").read_text(encoding="utf-8")
+    recipe = (output / "recipes/browser-workflows.md").read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
+    normalized_reference = " ".join(reference.split())
+
+    assert "Browser plugin (by name, mention, or plugin reference)" in normalized_skill
+    assert "do not probe direct Browser tools or the Chrome extension bridge first" in normalized_skill
+    assert 'transport === "host_provided_iab"' in skill
+    assert "returns no Agent" in skill
+    assert "never assign its result" in skill
+    assert "Do not select, open, or test it" in skill
+    assert "without probing the Chrome extension bridge first" in normalized_reference
+    assert "does not require `markDeliverable()`" in normalized_reference
+    assert "image emission does not require marking the tab deliverable" in recipe
+
+
 def test_inventory_has_no_checkout_paths_or_stale_locked_versions(tmp_path: Path) -> None:
     output = tmp_path / "docs"
     build(output)
