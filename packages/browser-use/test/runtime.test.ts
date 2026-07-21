@@ -16,7 +16,10 @@ class FakeConnection implements NativePipeConnection {
   readonly requests: Array<Record<string, unknown>> = [];
   readonly responses: Array<Record<string, unknown>> = [];
   private listeners: ListenerMap = {};
-  constructor(private readonly browserInfo: Record<string, unknown> = {}) {}
+  constructor(
+    private readonly browserInfo: Record<string, unknown> = {},
+    private readonly responseChunkBytes?: number,
+  ) {}
   end(): void { this.ended = true; }
   on(event: "data" | "error" | "close", listener: never): void {
     this.listeners[event] = listener;
@@ -121,12 +124,28 @@ class FakeConnection implements NativePipeConnection {
     const encoded = new Uint8Array(response.byteLength + 4);
     new DataView(encoded.buffer).setUint32(0, response.byteLength, true);
     encoded.set(response, 4);
-    this.listeners.data?.(encoded);
+    if (this.responseChunkBytes === undefined) {
+      this.listeners.data?.(encoded);
+      return;
+    }
+    for (let offset = 0; offset < encoded.byteLength; offset += this.responseChunkBytes) {
+      this.listeners.data?.(encoded.slice(offset, offset + this.responseChunkBytes));
+    }
   }
 }
 
-function fixture(browserInfo: Record<string, unknown> = {}) {
-  const connection = new FakeConnection(browserInfo);
+class SilentConnection implements NativePipeConnection {
+  ended = false;
+  end(): void { this.ended = true; }
+  on(event: "data", listener: (chunk: Uint8Array) => void): void;
+  on(event: "error", listener: (error: unknown) => void): void;
+  on(event: "close", listener: () => void): void;
+  on(): void {}
+  write(_data: Uint8Array): void {}
+}
+
+function fixture(browserInfo: Record<string, unknown> = {}, responseChunkBytes?: number) {
+  const connection = new FakeConnection(browserInfo, responseChunkBytes);
   const browserType = browserInfo.type ?? "iab";
   const hostProvidedIab = browserType === "iab";
   const iabSocketName = "11111111-1111-4111-8111-111111111111.sock";
@@ -169,7 +188,7 @@ function fixture(browserInfo: Record<string, unknown> = {}) {
 function routingFixture(options: {
   entries: string[];
   explicit?: string;
-  peers: Map<string, FakeConnection | Error>;
+  peers: Map<string, NativePipeConnection | Error>;
 }) {
   const attempted: string[] = [];
   const globals = {
@@ -379,7 +398,7 @@ describe("canonical Browser runtime", () => {
   test("an extension-native compatibility label never satisfies get iab", async () => {
     const extensionPath = "/run/user/1000/sky-cua/codex-browser.sock";
     const extension = new FakeConnection({
-      id: "iab:compatibility-label",
+      id: "iab",
       type: "iab",
       name: "Chrome",
       metadata: {
@@ -396,7 +415,49 @@ describe("canonical Browser runtime", () => {
     await setupBrowserRuntime({ globals: state.globals });
     const agent = state.globals.agent as any;
     await assert.rejects(() => agent.browsers.get("iab"), /Browser is not available: iab/u);
-    assert.equal((await agent.browsers.get("iab:compatibility-label")).info.type, "extension");
+    assert.deepEqual((await agent.browsers.list()).map((info: Record<string, unknown>) => info.id), [
+      "iab",
+    ]);
+  });
+
+  test("returns the current-session IAB without waiting for an unrelated silent task socket", async () => {
+    const liveName = "11111111-1111-4111-8111-111111111111.sock";
+    const silentName = "22222222-2222-4222-8222-222222222222.sock";
+    const live = new FakeConnection({
+      id: "iab:session-1",
+      type: "iab",
+      metadata: { codexSessionId: "session-1" },
+    });
+    const silent = new SilentConnection();
+    const state = routingFixture({
+      entries: [silentName, liveName],
+      peers: new Map<string, NativePipeConnection | Error>([
+        [`/tmp/codex-browser-use/${silentName}`, silent],
+        [`/tmp/codex-browser-use/${liveName}`, live],
+      ]),
+    });
+
+    await setupBrowserRuntime({ globals: state.globals });
+    const agent = state.globals.agent as any;
+    const browser = await Promise.race([
+      agent.browsers.get("iab"),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("IAB discovery did not complete promptly")), 250)),
+    ]);
+    assert.equal(browser.info.id, "iab:session-1");
+    assert.equal(silent.ended, true);
+  });
+
+  test("assembles a fragmented large Browser response without per-chunk buffer replacement", async () => {
+    const largeValue = "x".repeat(256 * 1024);
+    const state = fixture({ metadata: {
+      codexSessionId: "session-1",
+      largeValue,
+    } }, 64);
+    await setupBrowserRuntime({ globals: state.globals });
+    const agent = state.globals.agent as any;
+    const browsers = await agent.browsers.list();
+    assert.equal(browsers[0].metadata.largeValue, largeValue);
   });
 
   test("full object graph implements the documented API and routes canonical commands", async () => {

@@ -47,7 +47,9 @@ def test_browser_plugin_routes_directly_to_host_provided_iab(tmp_path: Path) -> 
     normalized_reference = " ".join(reference.split())
 
     assert "Browser plugin (by name, mention, or plugin reference)" in normalized_skill
-    assert "do not probe direct Browser tools or the Chrome extension bridge first" in normalized_skill
+    assert (
+        "do not probe direct Browser tools or the Chrome extension bridge first" in normalized_skill
+    )
     assert 'transport === "host_provided_iab"' in skill
     assert "returns no Agent" in skill
     assert "never assign its result" in skill

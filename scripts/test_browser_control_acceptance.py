@@ -75,7 +75,6 @@ def test_modes_share_one_actor_preserve_raw_wire_and_heartbeat(
             "result": {
                 "protocolVersion": 7,
                 "browser": "Brave",
-                "type": "iab",
                 "codexAppBuildFlavor": "acceptance-fake",
                 "capabilities": {
                     "tab": [

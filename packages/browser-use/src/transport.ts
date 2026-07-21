@@ -47,15 +47,9 @@ function frame(value: unknown): Uint8Array {
   return result;
 }
 
-function append(left: Uint8Array, right: Uint8Array): Uint8Array {
-  const joined = new Uint8Array(left.byteLength + right.byteLength);
-  joined.set(left);
-  joined.set(right, left.byteLength);
-  return joined;
-}
-
 class JsonRpcConnection {
-  private buffer: Uint8Array<ArrayBufferLike> = new Uint8Array();
+  private buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(4_096);
+  private bufferedBytes = 0;
   private nextId = 1;
   private readonly pending = new Map<number, {
     resolve: (value: unknown) => void;
@@ -109,18 +103,38 @@ class JsonRpcConnection {
   }
 
   private onData(chunk: Uint8Array): void {
-    this.buffer = append(this.buffer, chunk);
-    while (this.buffer.byteLength >= 4) {
-      const size = new DataView(this.buffer.buffer, this.buffer.byteOffset, 4)
+    const requiredBytes = this.bufferedBytes + chunk.byteLength;
+    if (requiredBytes > MAX_FRAME_BYTES + 4) {
+      this.failAll(new Error("BROWSER_PIPE_FRAME_TOO_LARGE"));
+      return;
+    }
+    if (requiredBytes > this.buffer.byteLength) {
+      const maximumCapacity = MAX_FRAME_BYTES + 4;
+      let capacity = this.buffer.byteLength;
+      while (capacity < requiredBytes) capacity = Math.min(maximumCapacity, capacity * 2);
+      const grown = new Uint8Array(capacity);
+      grown.set(this.buffer.subarray(0, this.bufferedBytes));
+      this.buffer = grown;
+    }
+    this.buffer.set(chunk, this.bufferedBytes);
+    this.bufferedBytes = requiredBytes;
+
+    let offset = 0;
+    while (this.bufferedBytes - offset >= 4) {
+      const size = new DataView(this.buffer.buffer, this.buffer.byteOffset + offset, 4)
         .getUint32(0, FRAME_LITTLE_ENDIAN);
       if (size > MAX_FRAME_BYTES) {
         this.failAll(new Error("BROWSER_PIPE_FRAME_TOO_LARGE"));
         return;
       }
-      if (this.buffer.byteLength < size + 4) return;
-      const payload = this.buffer.slice(4, size + 4);
-      this.buffer = this.buffer.slice(size + 4);
+      if (this.bufferedBytes - offset < size + 4) break;
+      const payload = this.buffer.slice(offset + 4, offset + size + 4);
+      offset += size + 4;
       this.onMessage(JSON.parse(new TextDecoder().decode(payload)) as JsonRpcResponse);
+    }
+    if (offset > 0) {
+      this.buffer.copyWithin(0, offset, this.bufferedBytes);
+      this.bufferedBytes -= offset;
     }
   }
 
@@ -246,10 +260,14 @@ export class BrowserBackend {
     globals: BrowserGlobals,
     path: string,
     transport: BrowserTransport,
+    signal?: AbortSignal,
   ): Promise<BrowserBackend> {
     const candidate = { path, transport };
     const rpc = await JsonRpcConnection.connect(globals, path);
+    const abort = () => rpc.close();
     try {
+      if (signal?.aborted === true) throw new Error("Browser probe cancelled");
+      signal?.addEventListener("abort", abort, { once: true });
       const context = callerContext(globals);
       const raw = await withTimeout(
         rpc.request("getInfo", { ...context, _meta: context, request_meta: context }),
@@ -257,8 +275,10 @@ export class BrowserBackend {
         "Browser getInfo probe timed out",
       );
       const info = normalizeBrowserInfo(raw, candidate, requestSessionId(globals));
+      signal?.removeEventListener("abort", abort);
       return new BrowserBackend(path, info, globals, rpc);
     } catch (error) {
+      signal?.removeEventListener("abort", abort);
       rpc.close();
       throw error;
     }
@@ -306,11 +326,24 @@ export class BrowserBackendRegistry {
   async list(): Promise<BrowserBackend[]> {
     if (this.backends !== undefined) return this.backends;
     const candidates = await discoverBrowserCandidates(this.globals);
-    const settled = await Promise.allSettled(
-      candidates.map((candidate) =>
-        BrowserBackend.connect(this.globals, candidate.path, candidate.transport)),
+    const hostCandidates = candidates.filter(({ transport }) => transport === "host_provided_iab");
+    const extensionCandidates = candidates.filter(
+      ({ transport }) => transport === "extension_native_host",
     );
-    this.backends = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    const [hostResult, extensionResults] = await Promise.all([
+      this.connectFirst(hostCandidates),
+      Promise.allSettled(extensionCandidates.map((candidate) =>
+        BrowserBackend.connect(this.globals, candidate.path, candidate.transport))),
+    ]);
+    const settled = [
+      ...hostResult.failures.map((reason) => ({ status: "rejected" as const, reason })),
+      ...extensionResults,
+    ];
+    this.backends = [
+      ...(hostResult.backend === undefined ? [] : [hostResult.backend]),
+      ...extensionResults.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : []),
+    ];
     if (this.backends.length === 0) {
       const trustFailure = settled.find((result) =>
         result.status === "rejected"
@@ -323,12 +356,15 @@ export class BrowserBackendRegistry {
 
   async get(idOrType: string): Promise<BrowserBackend> {
     const backends = await this.list();
+    if (idOrType === "iab") {
+      const iab = backends.find(({ info }) =>
+        info.type === "iab" && info.transport === "host_provided_iab");
+      if (iab === undefined) throw new Error("Browser is not available: iab");
+      return iab;
+    }
     const exact = backends.find(({ info }) => info.id === idOrType);
     if (exact !== undefined) return exact;
-    const match = idOrType === "iab"
-      ? backends.find(({ info }) =>
-        info.type === "iab" && info.transport === "host_provided_iab")
-      : backends.find(({ info }) => info.type === idOrType);
+    const match = backends.find(({ info }) => info.type === idOrType);
     if (match === undefined) throw new Error(`Browser is not available: ${idOrType}`);
     return match;
   }
@@ -336,6 +372,45 @@ export class BrowserBackendRegistry {
   async close(): Promise<void> {
     for (const backend of this.backends ?? []) backend.close();
     this.backends = [];
+  }
+
+  private connectFirst(candidates: BrowserCandidate[]): Promise<{
+    backend?: BrowserBackend;
+    failures: Error[];
+  }> {
+    if (candidates.length === 0) return Promise.resolve({ failures: [] });
+    const controllers = candidates.map(() => new AbortController());
+    const failures: Error[] = [];
+    return new Promise((resolve) => {
+      let remaining = candidates.length;
+      let resolved = false;
+      candidates.forEach((candidate, index) => {
+        BrowserBackend.connect(
+          this.globals,
+          candidate.path,
+          candidate.transport,
+          controllers[index]?.signal,
+        ).then((backend) => {
+          remaining -= 1;
+          if (resolved) {
+            backend.close();
+            return;
+          }
+          resolved = true;
+          controllers.forEach((controller, controllerIndex) => {
+            if (controllerIndex !== index) controller.abort();
+          });
+          resolve({ backend, failures });
+        }).catch((error) => {
+          remaining -= 1;
+          failures.push(asError(error));
+          if (!resolved && remaining === 0) {
+            resolved = true;
+            resolve({ failures });
+          }
+        });
+      });
+    });
   }
 }
 
