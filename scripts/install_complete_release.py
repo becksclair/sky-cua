@@ -179,7 +179,7 @@ def install_complete_release(
                 stable_links=stable_links,
             )
             drain_stale_processes(store.root, proc_root=proc_root)
-            transaction.prune_generations({installed.release_id, prior} - {None})
+            transaction.prune_generations({installed.release_id})
             activation = ActivationReport(
                 release_id=installed.release_id,
                 manifest_sha256=installed.manifest_sha256,

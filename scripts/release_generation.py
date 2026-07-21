@@ -1384,6 +1384,9 @@ def _validate_journal(journal: Mapping[str, Any]) -> None:
         not isinstance(previous, str) or RELEASE_ID_PATTERN.fullmatch(previous) is None
     ):
         raise InstallTransactionError("journal previous_release_id must be null or a release id")
+    retain_previous = journal.get("retain_previous", False)
+    if not isinstance(retain_previous, bool):
+        raise InstallTransactionError("journal retain_previous must be boolean")
     staging = journal.get("staging_name")
     if operation == "rollback" and staging is not None:
         raise InstallTransactionError("rollback journal staging_name must be null")
@@ -1511,14 +1514,7 @@ class GenerationStore:
             expected_manifest_sha256=expected_manifest_sha256,
         )
         current = self.current_release_id()
-        if current is not None:
-            self._verify_installed_generation(current)
-        if current != verified.release_id:
-            prior = current
-        else:
-            prior = self.previous_release_id()
-            if prior is not None:
-                self._verify_installed_generation(prior)
+        prior = current if current != verified.release_id else None
         final = self.releases / verified.release_id
         staging = self.releases / f".{verified.release_id}.staging-{os.getpid()}"
 
@@ -1562,6 +1558,7 @@ class GenerationStore:
             "target_manifest_sha256": verified.manifest_sha256,
             "profile": profile,
             "previous_release_id": prior,
+            "retain_previous": not prune,
             "staging_name": staging.name if staging.exists() else None,
         }
         write_json_durably(self.journal, journal)
@@ -1580,13 +1577,13 @@ class GenerationStore:
         write_json_durably(self.journal, journal)
         self._hit(failpoint, "after_current_switch")
 
-        _atomic_symlink(self.root, "previous", prior)
+        _atomic_symlink(self.root, "previous", prior if not prune else None)
         journal["phase"] = "previous_switched"
         write_json_durably(self.journal, journal)
         self._hit(failpoint, "after_previous_switch")
 
         if prune:
-            self._prune_generations({verified.release_id, prior} - {None})
+            self._prune_generations({verified.release_id})
         self.journal.unlink(missing_ok=True)
         _fsync_directory(self.root)
         return verify_release_root(
@@ -1624,6 +1621,9 @@ class GenerationStore:
         if previous_raw is not None and not isinstance(previous_raw, str):
             raise InstallTransactionError("journal previous_release_id must be string or null")
         previous = cast(str | None, previous_raw)
+        retain_previous = journal.get("retain_previous", False)
+        if not isinstance(retain_previous, bool):
+            raise InstallTransactionError("journal retain_previous must be boolean")
         staging_raw = journal.get("staging_name")
         if staging_raw is not None and not isinstance(staging_raw, str):
             raise InstallTransactionError("journal staging_name must be string or null")
@@ -1654,8 +1654,9 @@ class GenerationStore:
         )
         self._hit(failpoint, "recovery_before_current_switch")
         _atomic_symlink(self.root, "current", target)
-        _atomic_symlink(self.root, "previous", previous if previous != target else None)
-        self._prune_generations({target, previous} - {None})
+        retained_previous = previous if retain_previous and previous != target else None
+        _atomic_symlink(self.root, "previous", retained_previous)
+        self._prune_generations({target, retained_previous} - {None})
         self.journal.unlink(missing_ok=True)
         _fsync_directory(self.root)
         return verified
@@ -1802,6 +1803,8 @@ class GenerationStore:
         for path in self.releases.iterdir():
             if path.name.startswith(".") or (path.is_dir() and path.name not in keep_set):
                 remove_path(path)
+        if self.previous_release_id() not in keep_set:
+            _atomic_symlink(self.root, "previous", None)
 
     @staticmethod
     def _hit(failpoint: Failpoint | None, name: str) -> None:

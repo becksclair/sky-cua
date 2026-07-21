@@ -514,7 +514,7 @@ def test_generation_path_cannot_be_external_symlink(tmp_path: Path) -> None:
         store.install(release)
 
 
-def test_install_rejects_a_dangling_current_generation_before_promotion(
+def test_install_replaces_a_dangling_current_generation_without_validating_it(
     tmp_path: Path,
 ) -> None:
     store = GenerationStore(tmp_path / "store")
@@ -523,14 +523,14 @@ def test_install_rejects_a_dangling_current_generation_before_promotion(
     missing_id = "a" * 64
     (store.root / "current").symlink_to(Path("releases") / missing_id)
 
-    with pytest.raises(InstallTransactionError, match="installed generation is missing"):
-        store.install(release)
+    installed = store.install(release)
 
-    assert store.current_release_id() == missing_id
+    assert store.current_release_id() == installed.release_id
     assert store.previous_release_id() is None
+    assert {path.name for path in store.releases.iterdir()} == {installed.release_id}
 
 
-def test_install_is_atomic_idempotent_and_retains_one_prior(tmp_path: Path) -> None:
+def test_install_is_atomic_idempotent_and_prunes_prior_generations(tmp_path: Path) -> None:
     store = GenerationStore(tmp_path / "store")
     one = _release(tmp_path / "one", "release-one", marker="one")
     two = _release(tmp_path / "two", "release-two", marker="two")
@@ -544,12 +544,13 @@ def test_install_is_atomic_idempotent_and_retains_one_prior(tmp_path: Path) -> N
 
     store.install(two)
     assert store.current_release_id() == two_id
-    assert store.previous_release_id() == one_id
+    assert store.previous_release_id() is None
+    assert {path.name for path in store.releases.iterdir()} == {two_id}
 
     store.install(three)
     assert store.current_release_id() == three_id
-    assert store.previous_release_id() == two_id
-    assert sorted(path.name for path in store.releases.iterdir()) == sorted((three_id, two_id))
+    assert store.previous_release_id() is None
+    assert {path.name for path in store.releases.iterdir()} == {three_id}
 
 
 def test_complete_transaction_can_defer_pruning_until_activation_commits(
@@ -559,14 +560,13 @@ def test_complete_transaction_can_defer_pruning_until_activation_commits(
     one = _release(tmp_path / "one", "release-one", marker="one")
     two = _release(tmp_path / "two", "release-two", marker="two")
     three = _release(tmp_path / "three", "release-three", marker="three")
-    one_id, two_id, three_id = _release_id(one), _release_id(two), _release_id(three)
+    two_id, three_id = _release_id(two), _release_id(three)
     store.install(one)
     store.install(two)
 
     with store.transaction() as transaction:
         transaction.install(three, prune=False)
         assert {path.name for path in store.releases.iterdir()} == {
-            one_id,
             two_id,
             three_id,
         }
@@ -595,7 +595,8 @@ def test_initial_deactivation_refuses_to_discard_a_prior_generation(tmp_path: Pa
     one = _release(tmp_path / "one", "release-one", marker="one")
     two = _release(tmp_path / "two", "release-two", marker="two")
     store.install(one)
-    installed = store.install(two)
+    with store.transaction() as transaction:
+        installed = transaction.install(two, prune=False)
 
     with pytest.raises(InstallTransactionError, match="requires no previous"):
         store.deactivate_initial_activation(installed.release_id)
@@ -609,7 +610,7 @@ def test_journal_recovery_converges_without_mixed_generation(tmp_path: Path, pha
     store = GenerationStore(tmp_path / "store")
     one = _release(tmp_path / "one", "release-one", marker="one")
     two = _release(tmp_path / "two", "release-two", marker="two")
-    one_id, two_id = _release_id(one), _release_id(two)
+    two_id = _release_id(two)
     store.install(one)
 
     with pytest.raises(RuntimeError, match=f"crash:{phase}"):
@@ -619,15 +620,16 @@ def test_journal_recovery_converges_without_mixed_generation(tmp_path: Path, pha
     assert recovered is not None
     assert recovered.release_id == two_id
     assert store.current_release_id() == two_id
-    assert store.previous_release_id() == one_id
+    assert store.previous_release_id() is None
+    assert {path.name for path in store.releases.iterdir()} == {two_id}
     verify_release_root(store.releases / two_id)
 
 
-def test_idempotent_reinstall_recovery_retains_existing_prior(tmp_path: Path) -> None:
+def test_idempotent_reinstall_recovery_clears_stale_prior(tmp_path: Path) -> None:
     store = GenerationStore(tmp_path / "store")
     one = _release(tmp_path / "one", "release-one", marker="one")
     two = _release(tmp_path / "two", "release-two", marker="two")
-    one_id, two_id = _release_id(one), _release_id(two)
+    two_id = _release_id(two)
     store.install(one)
     store.install(two)
 
@@ -637,8 +639,8 @@ def test_idempotent_reinstall_recovery_retains_existing_prior(tmp_path: Path) ->
 
     assert recovered is not None and recovered.release_id == two_id
     assert store.current_release_id() == two_id
-    assert store.previous_release_id() == one_id
-    assert sorted(path.name for path in store.releases.iterdir()) == sorted((one_id, two_id))
+    assert store.previous_release_id() is None
+    assert {path.name for path in store.releases.iterdir()} == {two_id}
 
 
 def test_installation_state_is_staged_before_current_switch_and_never_rewritten(
@@ -707,7 +709,8 @@ def test_rollback_swaps_two_verified_generations(tmp_path: Path) -> None:
     two = _release(tmp_path / "two", "release-two", marker="two")
     one_id, two_id = _release_id(one), _release_id(two)
     store.install(one)
-    store.install(two)
+    with store.transaction() as transaction:
+        transaction.install(two, prune=False)
 
     rolled_back = store.rollback()
     assert rolled_back.release_id == one_id
@@ -725,7 +728,8 @@ def test_rollback_journal_recovery_converges_after_crash(tmp_path: Path, phase: 
     two = _release(tmp_path / "two", "release-two", marker="two")
     one_id, two_id = _release_id(one), _release_id(two)
     store.install(one)
-    store.install(two)
+    with store.transaction() as transaction:
+        transaction.install(two, prune=False)
 
     with pytest.raises(RuntimeError, match=f"crash:{phase}"):
         store.rollback(failpoint=_fail_at(phase))

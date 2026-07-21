@@ -24,6 +24,7 @@ class FakeStore:
     recovered_prior: str | None = PRIOR_ID
     recover_changes_prior: bool = False
     events: ClassVar[list[str]] = []
+    pruned_keeps: ClassVar[list[set[str]]] = []
     create_host: ClassVar[bool] = True
 
     def __init__(self, root: Path) -> None:
@@ -106,8 +107,9 @@ class FakeStore:
             component_names=("core-linux-x64", "cua-node-linux-x64-glibc"),
         )
 
-    def prune_generations(self, _keep: set[str]) -> None:
+    def prune_generations(self, keep: set[str]) -> None:
         self.events.append("prune")
+        self.pruned_keeps.append(keep)
 
 
 def _opencode_report(root: Path, *, changed: bool = True) -> OpenCodeInstallReport:
@@ -130,6 +132,7 @@ def _reset_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     FakeStore.recovered_prior = PRIOR_ID
     FakeStore.recover_changes_prior = False
     FakeStore.events = []
+    FakeStore.pruned_keeps = []
     FakeStore.create_host = True
     monkeypatch.setattr(controller, "GenerationStore", FakeStore)
     monkeypatch.setattr(controller, "drain_stale_processes", lambda *_args, **_kwargs: None)
@@ -192,6 +195,22 @@ def test_controller_recovers_before_capturing_prior(tmp_path: Path) -> None:
 
     assert FakeStore.events[:2] == ["recover", "install"]
     assert report.previous_release_id == recovered
+
+
+def test_idempotent_activation_prunes_every_non_current_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(FakeStore, "current_release_id", lambda _self: RELEASE_ID)
+    monkeypatch.setattr(FakeStore, "previous_release_id", lambda _self: PRIOR_ID)
+
+    report = controller.install_complete_release(
+        tmp_path / "candidate",
+        store_root=tmp_path / "store",
+        native_messaging_home=tmp_path / "home",
+    )
+
+    assert report.previous_release_id == RELEASE_ID
+    assert FakeStore.pruned_keeps == [{RELEASE_ID}]
 
 
 def test_ensure_returns_unchanged_without_running_install(
