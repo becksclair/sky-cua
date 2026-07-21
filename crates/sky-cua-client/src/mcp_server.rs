@@ -667,16 +667,13 @@ fn mcp_client_info(initialize: &Value) -> Option<BrowserMcpClientInfo> {
 fn phone_call_context(body: &Value, provenance: &BrowserCallerProvenance) -> PhoneRequestContext {
     let supplied = phone_session_and_turn_from_tool_call(body);
     let identity_synthetic = supplied.is_none();
-    let (session_id, turn_id) = supplied.map_or_else(
-        || {
-            let sequence = PHONE_TURN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            (
-                provenance.connection_id.clone(),
-                format!("phone-turn-{}-{sequence:016x}", provenance.connection_id),
-            )
-        },
-        |(session_id, turn_id)| (session_id, turn_id),
-    );
+    let (session_id, turn_id) = supplied.unwrap_or_else(|| {
+        let sequence = PHONE_TURN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        (
+            provenance.connection_id.clone(),
+            format!("phone-turn-{}-{sequence:016x}", provenance.connection_id),
+        )
+    });
     PhoneRequestContext {
         session_id: Some(session_id),
         turn_id: Some(turn_id),
