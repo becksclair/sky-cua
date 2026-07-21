@@ -20,6 +20,6 @@ Chrome-family extension bridge, even if stale compatibility metadata labels it
 as IAB. Do not select, open, or test it for an explicit Browser plugin or in-app
 Browser request.
 
-For JavaScript, read `references/node-repl.md`, then `references/browser.md`. Call `await browser.documentation()` before relying on an unfamiliar `agent.browsers.*` command. A browser tab's `tab.playwright` controls that claimed tab; standalone Playwright launches a separate system Chrome-family browser and is documented in `references/toolbox.md`.
+For routine list/get/tab/navigation/screenshot work, use the tested happy path in `recipes/browser-workflows.md` directly. Read `references/node-repl.md` and `references/browser.md`, or call `await browser.documentation()`, only for an unfamiliar command or after the happy path fails. A browser tab's `tab.playwright` controls that claimed tab; standalone Playwright launches a separate system Chrome-family browser and is documented in `references/toolbox.md`.
 
 Task recipes: `recipes/browser-workflows.md` and `recipes/composed-workflows.md`.

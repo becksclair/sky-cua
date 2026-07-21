@@ -55,6 +55,19 @@ def test_browser_plugin_routes_directly_to_host_provided_iab(tmp_path: Path) -> 
     assert "without probing the Chrome extension bridge first" in normalized_reference
     assert "does not require `markDeliverable()`" in normalized_reference
     assert "image emission does not require marking the tab deliverable" in recipe
+    assert "only for an unfamiliar command or after the happy path fails" in normalized_skill
+    assert "mcp__node_repl__js" in recipe
+    assert 'entry.transport === "host_provided_iab"' in recipe
+    assert "await setupBrowserRuntime({ globals: globalThis });" in recipe
+    assert "= await setupBrowserRuntime" not in recipe
+    assert "await nodeRepl.emitImage(await tab.screenshot())" in recipe
+    assert "markDeliverable" not in recipe
+
+    example = (output / "examples/browser/iab-screenshot.mjs").read_text(encoding="utf-8")
+    assert 'entry.transport === "host_provided_iab"' in example
+    assert "= await setupBrowserRuntime" not in example
+    assert "await nodeRepl.emitImage(await tab.screenshot())" in example
+    assert "markDeliverable" not in example
 
 
 def test_inventory_has_no_checkout_paths_or_stale_locked_versions(tmp_path: Path) -> None:
@@ -124,7 +137,7 @@ def test_installed_example_runner_is_shipped_and_parseable(tmp_path: Path) -> No
     assert "image_count == 0" in runner_text
     assert "copied.read_bytes() != binary.read_bytes()" in runner_text
     assert "Sharp example did not write a WebP output" in runner_text
-    assert sorted(path.suffix for path in (output / "examples").rglob("*.mjs")) == [".mjs"] * 10
+    assert sorted(path.suffix for path in (output / "examples").rglob("*.mjs")) == [".mjs"] * 11
     for relative in (
         "examples/computer/screenshot.mjs",
         "examples/images/canvas-pixelmatch.mjs",
