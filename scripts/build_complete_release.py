@@ -788,6 +788,7 @@ def build_complete_release(
             "installer_entrypoint",
             REPO_ROOT / "scripts" / "complete_release_cli.py",
             "install.py",
+            executable=True,
         ),
     )
     try:

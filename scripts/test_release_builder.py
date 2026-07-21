@@ -244,6 +244,10 @@ def test_builder_emits_verified_component_set_and_fat_archive(tmp_path: Path) ->
 def test_builder_normalizes_modes_for_fat_archive_extraction(tmp_path: Path) -> None:
     inputs_root = tmp_path / "inputs"
     components, locks, artifacts = _inputs(inputs_root)
+    installer = inputs_root / "install.py"
+    installer.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    installer.chmod(0o664)
+    artifacts.append(FileSource("installer", installer, "install.py", executable=True))
     core_file = inputs_root / "core/sky-cua-client"
     launcher = inputs_root / "node/bin/node_repl"
     core_file.chmod(0o664)
@@ -259,12 +263,16 @@ def test_builder_normalizes_modes_for_fat_archive_extraction(tmp_path: Path) -> 
     assert (
         result.release.root / "components/cua-node-linux-x64-glibc/bin/node_repl"
     ).stat().st_mode & 0o777 == 0o755
+    assert (result.release.root / "install.py").stat().st_mode & 0o777 == 0o755
 
     extracted = tmp_path / "extracted"
     extracted.mkdir()
     subprocess.run(["tar", "xzf", str(result.fat_archive)], cwd=extracted, check=True)
     verified = verify_release_root(extracted / f"sky-cua-{result.release.release_id}")
     assert verified.manifest_sha256 == result.release.manifest_sha256
+    assert (
+        extracted / f"sky-cua-{result.release.release_id}/install.py"
+    ).stat().st_mode & 0o777 == 0o755
 
 
 def test_builder_is_content_addressed_and_deterministic(tmp_path: Path) -> None:

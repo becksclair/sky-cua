@@ -45,6 +45,7 @@ class FileSource:
     name: str
     source: Path
     destination: str
+    executable: bool = False
 
 
 @dataclass(frozen=True)
@@ -195,7 +196,7 @@ def _copy_file_source(staging: Path, source: FileSource) -> dict[str, str]:
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.parent.chmod(0o755)
     shutil.copy2(source.source, destination)
-    destination.chmod(0o644)
+    destination.chmod(0o755 if source.executable else 0o644)
     return {"path": source.destination, "sha256": sha256_file(destination)}
 
 

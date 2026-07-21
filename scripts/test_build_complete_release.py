@@ -240,6 +240,7 @@ def test_complete_release_sanitizes_core_and_materializes_exact_codex_projection
         include_fat_archive=False,
     )
     release = verify_release_root(result.release.root)
+    assert (release.root / "install.py").stat().st_mode & 0o777 == 0o755
     core = release.root / "components/core-linux-x64"
     compat = release.root / "components/codex-compat"
     canonical = release.root / "components/browser-js/browser-client.mjs"
