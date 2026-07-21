@@ -386,6 +386,88 @@ test("MCP client requests abort without retaining stale generation handlers", as
   await server.close();
 });
 
+test("production nodeRepl elicitation round-trips through the MCP client", async () => {
+  const output = new PassThrough();
+  let written = "";
+  output.on("data", (chunk) => { written += chunk.toString(); });
+  const server = new McpServer({ output });
+  try {
+    await server.dispatch({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: { elicitation: { form: {} } },
+      },
+    });
+    const managerState = server.manager as unknown as {
+      options: {
+        onElicitation(request: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+      };
+    };
+    const execution = managerState.options.onElicitation(
+      { message: "Choose", requestedSchema: { type: "object" } },
+      new AbortController().signal,
+    );
+    await waitFor(() => written.includes('"method":"elicitation/create"'));
+    const outbound = written
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((message) => message.method === "elicitation/create");
+    assert.equal(typeof outbound?.id, "string");
+    await server.handleLine(JSON.stringify({
+      jsonrpc: "2.0",
+      id: outbound?.id,
+      result: { action: "accept", content: { answer: "yes" } },
+    }));
+    assert.deepEqual(await execution, {
+      action: "accept",
+      content: { answer: "yes" },
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test("client disconnect rejects production elicitation and lets the server stop", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let written = "";
+  output.on("data", (chunk) => { written += chunk.toString(); });
+  const server = new McpServer({ input, output });
+  const started = server.start();
+  await server.dispatch({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities: { elicitation: { form: {} } },
+    },
+  });
+  const managerState = server.manager as unknown as {
+    options: {
+      onElicitation(request: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+    };
+  };
+  const execution = managerState.options.onElicitation(
+    { message: "Choose", requestedSchema: { type: "object" } },
+    new AbortController().signal,
+  );
+  await waitFor(() => written.includes('"method":"elicitation/create"'));
+  input.end();
+  await assert.rejects(execution, /MCP host closed/);
+  await started;
+  await assert.rejects(
+    server.requestClient("elicitation/create", {}),
+    /MCP host closed/,
+  );
+  const state = server as unknown as { clientRequests: Map<unknown, unknown> };
+  assert.equal(state.clientRequests.size, 0);
+});
+
 test("cancellation wins while timeout teardown is pending", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cua-node-timeout-race-"));
   const fakeNode = join(directory, "fake-node");

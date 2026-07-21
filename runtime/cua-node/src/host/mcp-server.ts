@@ -78,6 +78,8 @@ export class McpServer {
   >();
 
   public constructor(options: McpServerOptions = {}) {
+    this.input = options.input ?? stdin;
+    this.output = options.output ?? stdout;
     this.manager =
       options.manager ??
       new RuntimeManager({
@@ -87,10 +89,9 @@ export class McpServer {
         cwd: process.cwd(),
         env: process.env,
         allowHostNode: process.env.NODE_REPL_ALLOW_HOST_NODE === "1",
-        onElicitation: () => Promise.resolve({ action: "accept", content: {} }),
+        onElicitation: (request, signal) =>
+          this.requestClient("elicitation/create", request, signal),
       });
-    this.input = options.input ?? stdin;
-    this.output = options.output ?? stdout;
     this.declaredCallerProvenance =
       options.callerProvenance ?? process.env.SKY_CUA_MCP_CALLER_PROVENANCE;
   }
@@ -106,8 +107,8 @@ export class McpServer {
     await new Promise<void>((resolvePromise) =>
       this.reader?.once("close", resolvePromise),
     );
-    await Promise.all([...this.pendingHandlers]);
     await this.close();
+    await Promise.all([...this.pendingHandlers]);
   }
 
   public async handleLine(line: string): Promise<void> {
@@ -305,11 +306,11 @@ export class McpServer {
       return Promise.reject(
         new Error("form elicitation is not supported by the MCP client"),
       );
+    if (this.closed) return Promise.reject(new Error("MCP host closed"));
     const id = `node-repl-client-${this.nextRequestId++}`;
     if (signal?.aborted === true)
       return Promise.reject(clientAbortReason(signal));
-    if (!this.closed)
-      this.output.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    this.output.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     return new Promise<unknown>((resolvePromise, rejectPromise) => {
       const onAbort =
         signal === undefined
