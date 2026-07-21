@@ -113,6 +113,25 @@ def test_installed_example_runner_is_shipped_and_parseable(tmp_path: Path) -> No
         assert "await nodeRepl.emitImage" in (output / relative).read_text(encoding="utf-8")
 
 
+def test_node_repl_reference_documents_example_environment_and_runtime_keys(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "docs"
+    build(output)
+    reference = (output / "references/node-repl.md").read_text(encoding="utf-8")
+    for key in (
+        "nodeRepl.env",
+        "NODE_REPL_PUBLIC_ENV",
+        "SKY_CUA_EXAMPLE_INPUT_FILE",
+        "SKY_CUA_EXAMPLE_IMAGE",
+        "SKY_CUA_EXAMPLE_PDF",
+        "nodeRepl.runtime",
+        "pdfjs.{root,cMapUrl,standardFontDataUrl,wasmUrl,workerSrc}",
+        "tesseract.{tessdataRoot,languages}",
+    ):
+        assert key in reference
+
+
 def test_host_skill_projection_routes_to_exact_generation_and_rejects_unmanaged(
     tmp_path: Path,
 ) -> None:
