@@ -194,9 +194,14 @@ Latest accepted artifacts:
   `resources/chrome-extension/codex/1.2.27203.26575_0/`. A
   `scripts/install_chrome_extension.py` automated temporary-profile
   loader does not exist yet.
-- **Codex Desktop UI proof requires a fresh re-run after upstream
-  Desktop refreshes** that change plugin descriptor or Settings
-  behavior.
+- **Codex Desktop UI proof is release-bound.** Release
+  `a1b86ed8c07f88e09e3607065f26ee7583c1faa394f3d809b173a095f7a2891d`
+  was installed through the normal Codex Desktop installer on 2026-07-21.
+  Fresh task `019f8499-1bcd-7f13-8966-a392574a81d5` selected
+  `host_provided_iab`, navigated, captured a screenshot, emitted it back to
+  Codex for inspection, and returned the page marker without generation or
+  module-path environment overrides. Repeat this proof after an upstream
+  Desktop refresh changes the plugin descriptor, Settings, or Browser runtime.
 
 ## Related
 

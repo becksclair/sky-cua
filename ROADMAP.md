@@ -83,10 +83,12 @@ Open boxes link to the active ExecPlan that owns the work.
         OpenClaw, and OpenCode
   - [x] Final Codex Desktop active-generation/IAB/Brave proof after the one
         consumer package restart
-  - [ ] Publish and install the truthful dual-transport Browser generation:
+  - [x] Publish and install the truthful dual-transport Browser generation:
         Codex task IAB must be `host_provided_iab`, Chrome-family control must
         remain `extension_native_host`, and a relabeled extension must fail IAB
-        acceptance before tab creation
+        acceptance before tab creation — installed generation `a1b86ed8…` and
+        fresh Codex task `019f8499-1bcd-7f13-8966-a392574a81d5` proved the IAB
+        screenshot path without selector environment variables
   - [x] Persistent Phone JS screenshot/action/lifecycle acceptance on an
         Android 36 emulator target
 - [x] Codex Desktop compatibility (one active `computer-use` server, Browser Use companion, native-host preflight) — [`docs/features/codex-desktop-compat.md`](docs/features/codex-desktop-compat.md)
