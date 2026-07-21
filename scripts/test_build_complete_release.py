@@ -227,6 +227,7 @@ def test_complete_release_sanitizes_core_and_materializes_exact_codex_projection
     monkeypatch.setattr(
         "build_complete_release._verify_git_source_inventory", lambda _root, _commit: None
     )
+    monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
     result = build_complete_release(
         tmp_path / "out",
         producer_commit=PRODUCER_COMMIT,
@@ -779,6 +780,7 @@ def test_complete_release_snapshot_holds_assembly_lock_and_excludes_later_genera
     component = _cua_node(tmp_path / "inputs")
     core = _core(tmp_path / "inputs")
     lock_path = component.parent / ".cua-node-assembly.lock"
+    lock_path.touch()
     source_cli = component / "lib/node_repl/cli.js"
     late_only = component / "late-generation-only.txt"
     staged_cli = component.parent / "next-generation-cli.js"
@@ -858,3 +860,26 @@ def test_complete_release_snapshot_holds_assembly_lock_and_excludes_later_genera
     released = result.release.root / "components/cua-node-linux-x64-glibc"
     assert (released / "lib/node_repl/cli.js").read_text(encoding="utf-8") == "runtime"
     assert not (released / late_only.name).exists()
+
+
+def test_complete_release_snapshot_does_not_mutate_unlocked_component_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    component = _cua_node(tmp_path / "inputs")
+    core = _core(tmp_path / "inputs")
+    lock_path = component.parent / ".cua-node-assembly.lock"
+    monkeypatch.setattr(
+        "build_complete_release._verify_git_source_inventory", lambda _root, _commit: None
+    )
+    monkeypatch.setattr("build_complete_release._verify_inner_cua_node", lambda _root: None)
+
+    build_complete_release(
+        tmp_path / "out",
+        producer_commit=PRODUCER_COMMIT,
+        source_date_epoch=1_784_500_000,
+        core_source=core,
+        cua_node_source=component,
+        include_fat_archive=False,
+    )
+
+    assert not lock_path.exists()

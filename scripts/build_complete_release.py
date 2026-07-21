@@ -686,13 +686,18 @@ def build_complete_release(
     workspace = Path(tempfile.mkdtemp(prefix=".complete-release-inputs-", dir=output_root.parent))
     assembly_lock = cua_node_source.parent / ".cua-node-assembly.lock"
     try:
-        with assembly_lock.open("a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        lock = assembly_lock.open("r+b") if assembly_lock.is_file() else None
+        try:
+            if lock is not None:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             inputs = _prepare_inputs(
                 workspace,
                 core_source=core_source,
                 cua_node_source=cua_node_source,
             )
+        finally:
+            if lock is not None:
+                lock.close()
         _verify_inner_cua_node(inputs[CUA_NODE_COMPONENT])
         _verify_git_source_inventory(inputs[CUA_NODE_COMPONENT], producer_commit)
         _verify_core_input_provenance(inputs[CORE_COMPONENT], producer_commit)
