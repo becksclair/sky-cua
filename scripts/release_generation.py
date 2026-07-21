@@ -1469,6 +1469,12 @@ class GenerationStore:
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+    @contextmanager
+    def transaction(self) -> Iterator[_GenerationTransaction]:
+        """Hold the generation lock across promotion and dependent projections."""
+        with self._transaction_lock():
+            yield _GenerationTransaction(self)
+
     def install(
         self,
         candidate: Path,
@@ -1658,19 +1664,20 @@ class GenerationStore:
         prior generation exists, so it cannot discard a rollback target.
         """
         with self._transaction_lock():
-            if self.journal.exists():
-                self._recover(failpoint=None)
-            if self.current_release_id() != release_id:
-                raise InstallTransactionError(
-                    "initial deactivation target is not the current generation"
-                )
-            if self.previous_release_id() is not None:
-                raise InstallTransactionError(
-                    "initial deactivation requires no previous generation"
-                )
-            verified = self._verify_installed_generation(release_id)
-            _atomic_symlink(self.root, "current", None)
-            return verified
+            return self._deactivate_initial_activation(release_id)
+
+    def _deactivate_initial_activation(self, release_id: str) -> VerifiedRelease:
+        if self.journal.exists():
+            self._recover(failpoint=None)
+        if self.current_release_id() != release_id:
+            raise InstallTransactionError(
+                "initial deactivation target is not the current generation"
+            )
+        if self.previous_release_id() is not None:
+            raise InstallTransactionError("initial deactivation requires no previous generation")
+        verified = self._verify_installed_generation(release_id)
+        _atomic_symlink(self.root, "current", None)
+        return verified
 
     def _rollback(self, *, failpoint: Failpoint | None = None) -> VerifiedRelease:
         self.initialize()
@@ -1792,6 +1799,41 @@ class GenerationStore:
     def _hit(failpoint: Failpoint | None, name: str) -> None:
         if failpoint is not None:
             failpoint(name)
+
+
+class _GenerationTransaction:
+    """Generation operations that run while ``GenerationStore`` owns its lock."""
+
+    def __init__(self, store: GenerationStore):
+        self._store = store
+
+    def current_release_id(self) -> str | None:
+        return self._store.current_release_id()
+
+    def recover(self, *, failpoint: Failpoint | None = None) -> VerifiedRelease | None:
+        """Converge any pending journal while the caller holds the store lock."""
+        return self._store._recover(failpoint=failpoint)
+
+    def install(
+        self,
+        candidate: Path,
+        *,
+        expected_manifest_sha256: str | None = None,
+        profile: str = FULL_PROFILE,
+        failpoint: Failpoint | None = None,
+    ) -> VerifiedRelease:
+        return self._store._install(
+            candidate,
+            expected_manifest_sha256=expected_manifest_sha256,
+            profile=profile,
+            failpoint=failpoint,
+        )
+
+    def rollback(self, *, failpoint: Failpoint | None = None) -> VerifiedRelease:
+        return self._store._rollback(failpoint=failpoint)
+
+    def deactivate_initial_activation(self, release_id: str) -> VerifiedRelease:
+        return self._store._deactivate_initial_activation(release_id)
 
 
 def _build_parser() -> argparse.ArgumentParser:

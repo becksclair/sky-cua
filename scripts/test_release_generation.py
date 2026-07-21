@@ -639,7 +639,7 @@ def test_generation_transaction_lock_serializes_independent_store_instances(
     tmp_path: Path,
 ) -> None:
     first = GenerationStore(tmp_path / "store")
-    second = first
+    second = GenerationStore(tmp_path / "store")
     release = _release(tmp_path / "candidate", "release-one")
     started = threading.Event()
 
@@ -648,7 +648,8 @@ def test_generation_transaction_lock_serializes_independent_store_instances(
         return second.install(release).release_id
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        with first._transaction_lock():
+        with first.transaction() as transaction:
+            assert transaction.install(release).release_id == _release_id(release)
             future = executor.submit(install)
             assert started.wait(timeout=1)
             assert not future.done()

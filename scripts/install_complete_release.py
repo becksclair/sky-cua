@@ -112,102 +112,110 @@ def install_complete_release(
         )
 
     store = GenerationStore(store_root.expanduser().resolve())
-    prior = store.current_release_id()
-    installed = store.install(
-        candidate.expanduser().resolve(),
-        expected_manifest_sha256=expected_manifest_sha256,
-        profile=profile,
-    )
-    native_messaging: NativeMessagingInstallReport | None = None
-    opencode_report: OpenCodeInstallReport | None = None
-    openclaw_report: OpenClawReleaseInstallReport | None = None
-    try:
-        native_messaging = install_native_messaging_manifests(
-            installed.root,
-            home=native_messaging_home,
+    with store.transaction() as transaction:
+        transaction.recover()
+        prior = transaction.current_release_id()
+        installed = transaction.install(
+            candidate.expanduser().resolve(),
+            expected_manifest_sha256=expected_manifest_sha256,
+            profile=profile,
         )
-        if "opencode" in selected_hosts:
-            assert browser_socket_path is not None
-            opencode_report = install_opencode_two_server_config(
+        native_messaging: NativeMessagingInstallReport | None = None
+        opencode_report: OpenCodeInstallReport | None = None
+        openclaw_report: OpenClawReleaseInstallReport | None = None
+        try:
+            native_messaging = install_native_messaging_manifests(
                 installed.root,
-                browser_socket_path=browser_socket_path,
-                config_dir=opencode_config_dir,
-                process_env=opencode_process_env,
-                effective_cwd=opencode_effective_cwd,
+                home=native_messaging_home,
             )
-        if "openclaw" in selected_hosts:
-            assert browser_socket_path is not None
-            openclaw_report = install_openclaw_release(
-                installed.root,
-                browser_socket_path=browser_socket_path,
-                openclaw_dir=openclaw_dir,
-                openclaw_bin=openclaw_bin,
-                gateway_activation=openclaw_gateway_activation,
-            )
-    except BaseException as error:
-        rollback_failures: list[str] = []
-        if opencode_report is not None and opencode_report.changed:
-            assert opencode_report.backup_path is not None
-            try:
-                rollback_opencode_install(
-                    config_path=opencode_report.config_path,
-                    backup_path=opencode_report.backup_path,
-                    expected_installed_sha256=opencode_report.installed_config_sha256,
+            if "opencode" in selected_hosts:
+                assert browser_socket_path is not None
+                opencode_report = install_opencode_two_server_config(
+                    installed.root,
+                    browser_socket_path=browser_socket_path,
+                    config_dir=opencode_config_dir,
+                    process_env=opencode_process_env,
+                    effective_cwd=opencode_effective_cwd,
                 )
-            except BaseException as rollback_error:
-                rollback_failures.append(f"opencode: {rollback_error}")
-        if native_messaging is not None and native_messaging.changed_paths:
-            try:
-                rollback_native_messaging_manifests(native_messaging)
-            except BaseException as rollback_error:
-                rollback_failures.append(f"native-messaging: {rollback_error}")
-        if prior != installed.release_id:
-            try:
-                if prior is None:
-                    store.deactivate_initial_activation(installed.release_id)
-                else:
-                    restored = store.rollback()
-                    if restored.release_id != prior:
-                        raise InstallTransactionError(
-                            f"rollback activated {restored.release_id}, expected {prior}"
-                        )
-            except BaseException as rollback_error:
-                rollback_failures.append(f"generation: {rollback_error}")
-        detail = f"; rollback failure(s): {rollback_failures}" if rollback_failures else ""
-        raise CompleteReleaseInstallError(
-            f"complete-release consumer configuration failed: {error}{detail}"
-        ) from error
+            if "openclaw" in selected_hosts:
+                assert browser_socket_path is not None
+                openclaw_report = install_openclaw_release(
+                    installed.root,
+                    browser_socket_path=browser_socket_path,
+                    openclaw_dir=openclaw_dir,
+                    openclaw_bin=openclaw_bin,
+                    gateway_activation=openclaw_gateway_activation,
+                )
+        except BaseException as error:
+            rollback_failures: list[str] = []
+            if opencode_report is not None and opencode_report.changed:
+                assert opencode_report.backup_path is not None
+                try:
+                    rollback_opencode_install(
+                        config_path=opencode_report.config_path,
+                        backup_path=opencode_report.backup_path,
+                        expected_installed_sha256=opencode_report.installed_config_sha256,
+                    )
+                except BaseException as rollback_error:
+                    rollback_failures.append(f"opencode: {rollback_error}")
+            if native_messaging is not None and native_messaging.changed_paths:
+                try:
+                    rollback_native_messaging_manifests(native_messaging)
+                except BaseException as rollback_error:
+                    rollback_failures.append(f"native-messaging: {rollback_error}")
+            if prior != installed.release_id:
+                try:
+                    if prior is None:
+                        transaction.deactivate_initial_activation(installed.release_id)
+                    else:
+                        restored = transaction.rollback()
+                        if restored.release_id != prior:
+                            raise InstallTransactionError(
+                                f"rollback activated {restored.release_id}, expected {prior}"
+                            )
+                except BaseException as rollback_error:
+                    rollback_failures.append(f"generation: {rollback_error}")
+            detail = f"; rollback failure(s): {rollback_failures}" if rollback_failures else ""
+            raise CompleteReleaseInstallError(
+                f"complete-release consumer configuration failed: {error}{detail}"
+            ) from error
 
-    assert native_messaging is not None
-    manifest = json.loads((installed.root / "RELEASE.json").read_text(encoding="utf-8"))
-    extension = manifest.get("browser_contract", {}).get("extension_bridge")
-    if not isinstance(extension, dict) or not all(
-        isinstance(extension.get(name), str)
-        for name in ("extension_id", "manifest_sha256", "path", "tree_sha256", "version")
-    ):
-        raise CompleteReleaseInstallError("verified release has no Browser extension binding")
-    extension_path = installed.root.joinpath(*Path(extension["path"]).parts).resolve()
-    browser_extension = {
-        "activation": "web_store_preinstalled",
-        "extension_id": extension["extension_id"],
-        "manifest_sha256": extension["manifest_sha256"],
-        "path": str(extension_path),
-        "tree_sha256": extension["tree_sha256"],
-        "version": extension["version"],
-    }
-    return CompleteReleaseInstallReport(
-        release_id=installed.release_id,
-        manifest_sha256=installed.manifest_sha256,
-        release_root=str(installed.root),
-        profile=installed.profile,
-        previous_release_id=prior,
-        configured_hosts=selected_hosts,
-        native_messaging=native_messaging,
-        browser_extension=browser_extension,
-        browser_reload_required=False,
-        openclaw=openclaw_report,
-        opencode=opencode_report,
-    )
+        assert native_messaging is not None
+        manifest = json.loads((installed.root / "RELEASE.json").read_text(encoding="utf-8"))
+        extension = manifest.get("browser_contract", {}).get("extension_bridge")
+        if not isinstance(extension, dict) or not all(
+            isinstance(extension.get(name), str)
+            for name in (
+                "extension_id",
+                "manifest_sha256",
+                "path",
+                "tree_sha256",
+                "version",
+            )
+        ):
+            raise CompleteReleaseInstallError("verified release has no Browser extension binding")
+        extension_path = installed.root.joinpath(*Path(extension["path"]).parts).resolve()
+        browser_extension = {
+            "activation": "web_store_preinstalled",
+            "extension_id": extension["extension_id"],
+            "manifest_sha256": extension["manifest_sha256"],
+            "path": str(extension_path),
+            "tree_sha256": extension["tree_sha256"],
+            "version": extension["version"],
+        }
+        return CompleteReleaseInstallReport(
+            release_id=installed.release_id,
+            manifest_sha256=installed.manifest_sha256,
+            release_root=str(installed.root),
+            profile=installed.profile,
+            previous_release_id=prior,
+            configured_hosts=selected_hosts,
+            native_messaging=native_messaging,
+            browser_extension=browser_extension,
+            browser_reload_required=False,
+            openclaw=openclaw_report,
+            opencode=opencode_report,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

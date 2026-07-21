@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import ClassVar
 
@@ -18,6 +20,8 @@ PRIOR_ID = "b" * 64
 
 class FakeStore:
     prior: str | None = PRIOR_ID
+    recovered_prior: str | None = PRIOR_ID
+    recover_changes_prior: bool = False
     events: ClassVar[list[str]] = []
     create_host: ClassVar[bool] = True
 
@@ -30,6 +34,15 @@ class FakeStore:
 
     def previous_release_id(self) -> str | None:
         return self.prior
+
+    @contextmanager
+    def transaction(self) -> Iterator[FakeStore]:
+        yield self
+
+    def recover(self, **_kwargs: object) -> None:
+        self.events.append("recover")
+        if self.recover_changes_prior:
+            self.prior = self.recovered_prior
 
     def install(self, _candidate: Path, **_kwargs: object) -> VerifiedRelease:
         self.events.append("install")
@@ -68,9 +81,10 @@ class FakeStore:
 
     def rollback(self) -> VerifiedRelease:
         self.events.append("rollback-generation")
+        assert self.prior is not None
         return VerifiedRelease(
-            root=self.root / "releases" / PRIOR_ID,
-            release_id=PRIOR_ID,
+            root=self.root / "releases" / self.prior,
+            release_id=self.prior,
             manifest_sha256="d" * 64,
             profile="full",
             component_names=("core-linux-x64", "cua-node-linux-x64-glibc"),
@@ -105,6 +119,8 @@ def _opencode_report(root: Path, *, changed: bool = True) -> OpenCodeInstallRepo
 @pytest.fixture(autouse=True)
 def _reset_store(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeStore.prior = PRIOR_ID
+    FakeStore.recovered_prior = PRIOR_ID
+    FakeStore.recover_changes_prior = False
     FakeStore.events = []
     FakeStore.create_host = True
     monkeypatch.setattr(controller, "GenerationStore", FakeStore)
@@ -144,13 +160,28 @@ def test_controller_promotes_then_configures_opencode_before_openclaw(
         native_messaging_home=tmp_path / "home",
     )
 
-    assert FakeStore.events == ["install", "opencode", "openclaw"]
+    assert FakeStore.events == ["recover", "install", "opencode", "openclaw"]
     assert report.previous_release_id == PRIOR_ID
     assert report.configured_hosts == ("openclaw", "opencode")
     assert report.as_dict()["release_id"] == RELEASE_ID
     assert report.as_dict()["browser_reload_required"] is False
     assert report.browser_extension["activation"] == "web_store_preinstalled"
     assert report.browser_extension["version"] == "1.2.3"
+
+
+def test_controller_recovers_before_capturing_prior(tmp_path: Path) -> None:
+    recovered = "d" * 64
+    FakeStore.recover_changes_prior = True
+    FakeStore.recovered_prior = recovered
+
+    report = controller.install_complete_release(
+        tmp_path / "candidate",
+        store_root=tmp_path / "store",
+        native_messaging_home=tmp_path / "home",
+    )
+
+    assert FakeStore.events[:2] == ["recover", "install"]
+    assert report.previous_release_id == recovered
 
 
 @pytest.mark.parametrize(
@@ -196,7 +227,7 @@ def test_host_failure_rolls_back_opencode_and_generation(
             native_messaging_home=tmp_path / "home",
         )
 
-    assert FakeStore.events == ["install", "rollback-opencode", generation_event]
+    assert FakeStore.events == ["recover", "install", "rollback-opencode", generation_event]
     assert native_manifest.read_bytes() == original_manifest
     for relative in (
         ".config/chromium/NativeMessagingHosts/com.openai.codexextension.json",
@@ -252,7 +283,7 @@ def test_opencode_failure_restores_manifests_before_generation(
         )
 
     assert existing.read_bytes() == original
-    assert FakeStore.events == ["install", "rollback-generation"]
+    assert FakeStore.events == ["recover", "install", "rollback-generation"]
 
 
 def test_missing_generation_host_rolls_back_without_manifest_mutation(tmp_path: Path) -> None:
@@ -269,7 +300,7 @@ def test_missing_generation_host_rolls_back_without_manifest_mutation(tmp_path: 
             native_messaging_home=home,
         )
 
-    assert FakeStore.events == ["install", "rollback-generation"]
+    assert FakeStore.events == ["recover", "install", "rollback-generation"]
     assert not home.exists()
 
 
