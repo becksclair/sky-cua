@@ -91,11 +91,14 @@ simultaneous OpenClaw/OpenCode/Pi hosts listed above.
 
 Local sky-cua deployment must also materialize Codex Desktop's packaged Browser
 plugin before declaring readiness. `scripts/deploy_plugin.py` invokes the
-installed `browser-use-cache-sync.cjs` command and verifies that the packaged
-plugin version, packaged and cache-`latest` client bytes, one-entry `cua_node`
-trusted hash, and resolved node_repl trusted hash are identical. A stale cache
-selection or any mismatch aborts deployment; sky-cua never edits the
-Codex-owned Browser client or trust manifest.
+installed `browser-use-cache-sync.cjs` through the installed `ChatGPT`
+executable with `ELECTRON_RUN_AS_NODE=1`. Codex's `sky-cua-release.cjs`
+resolver selects and verifies standalone `current` or the packaged fallback
+before cache mutation; inherited generation selector variables are removed.
+Deployment then requires the resolved
+canonical Browser hash, node_repl trusted hash, packaged projection bytes, and
+cache-`latest` bytes to agree. A stale cache selection or any mismatch aborts
+deployment; `/opt/.../resources/cua_node` is not part of this consumer contract.
 
 ## Promote to strict
 

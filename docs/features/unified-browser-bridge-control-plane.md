@@ -349,19 +349,27 @@ a browser screenshot. Raw framed Codex `getInfo` concurrently returned
 `codexAppBuildFlavor="prod"` with no JSON-RPC error.
 
 Deployment now invokes Codex Desktop's installed `browser-use-cache-sync.cjs`
-publisher and fails closed unless one identity tuple spans the packaged Browser
-plugin version, packaged client bytes, cache `latest` bytes, the one-entry
-`cua_node` trust manifest, and the resolved node_repl trust environment. The
-live gate republished stale `browser-use/latest` from `0.1.0-alpha2` to the new
-Codex Desktop client `26.707.72221`, SHA-256
-`50c68d489f35739541306dcc82c274f477d8ee13ca002de2311022f6cb31245d`.
+publisher through the installed `ChatGPT` executable in Node mode. The
+installed `sky-cua-release.cjs` consumer resolver verifies one immutable
+generation before cache mutation; deployment then fails closed unless the
+resolved canonical Browser hash, node_repl trusted hash, packaged Browser
+projection, and cache `latest` bytes are identical. One accepted 2026-07-21
+matched-consumer gate repointed stale `browser-use/latest` from `0.1.0-alpha2`
+to Codex Desktop client
+`26.707.72221`, SHA-256
+`085ba347a047473272cafc9f024b59c35dca4b29e44dab8b22eaa80e81e7c60d`,
+from standalone release `f82b61b4962f318b5121464223ba5911d1f66adfed9511ecc42f909fa8b67c11`.
+Later standalone rollovers fail before plugin or config mutation until Codex
+Desktop repins its consumer contract; deployment never silently falls back past
+a present, mismatched standalone `current` generation.
 That exact trusted client bootstrapped through `setupBrowserRuntime`, selected
 `iab`, typed `TRUSTED CUA NODE CLOSEOUT`, clicked the proof control, read the
 committed value, emitted a screenshot, and closed its tab. After the updated
 deployment procedure itself completed, a fresh connection repeated the
 ordinary workflow with `POST DEPLOY TRUSTED CUA NODE` and emitted a second
 screenshot. sky-cua invokes and verifies this Codex-owned materializer; it does
-not vendor or rewrite Browser client bytes or the trust manifest.
+not vendor or rewrite Browser client bytes, the release verifier, or the Web
+Store extension.
 
 Installed Brave acceptance used stable service PID `2346805`, service socket
 inode `104724`, and Codex socket inode `104725`. Raw `getInfo` returned

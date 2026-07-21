@@ -58,15 +58,28 @@ CODEX_BROWSER_CLIENT_RELATIVE_PATH = Path(
 CODEX_BROWSER_PLUGIN_MANIFEST_RELATIVE_PATH = Path(
     "plugins/openai-bundled/plugins/browser-use/.codex-plugin/plugin.json"
 )
+CODEX_RELEASE_MODULE_NAME = "sky-cua-release.cjs"
 CODEX_RUNTIME_OVERRIDE_ENV_NAMES = (
+    "CODEX_BROWSER_USE_MODULE_SEARCH_ROOT",
     "CODEX_BROWSER_USE_NODE_PATH",
+    "CODEX_CUA_NODE_LOCK_ROOT",
+    "CODEX_CUA_NODE_ROOT",
     "CODEX_ELECTRON_RESOURCES_PATH",
     "CODEX_NODE_REPL_LEGACY_FALLBACK",
     "CODEX_NODE_REPL_PATH",
+    "CUA_NODE_BROWSER_CLIENT_PATH",
     "NODE_REPL_NODE_MODULE_DIRS",
     "NODE_REPL_NODE_PATH",
     "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
     "PLAYWRIGHT_BROWSERS_PATH",
+    "SKY_CUA_DOCUMENTATION_ROOT",
+    "SKY_CUA_DOCUMENTATION_ROUTING_INVENTORY",
+    "SKY_CUA_DOCUMENTATION_ROUTING_INVENTORY_SHA256",
+    "SKY_CUA_RELEASE_CANONICAL_BROWSER_SHA256",
+    "SKY_CUA_RELEASE_ID",
+    "SKY_CUA_RELEASE_MANIFEST_SHA256",
+    "SKY_CUA_RELEASE_PRODUCER_COMMIT",
+    "SKY_CUA_RELEASE_ROOT",
 )
 
 
@@ -76,6 +89,14 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _codex_resources_root(explicit: Path | None) -> Path | None:
@@ -91,9 +112,15 @@ def _codex_resources_root(explicit: Path | None) -> Path | None:
         if candidate is None:
             continue
         resolved = candidate.expanduser().resolve()
-        if (resolved / "browser-use-cache-sync.cjs").is_file() and (
-            resolved / "cua_node/bin/node"
-        ).is_file():
+        runner = resolved.parent / "ChatGPT"
+        if (
+            (resolved / "browser-use-cache-sync.cjs").is_file()
+            and (resolved / CODEX_RELEASE_MODULE_NAME).is_file()
+            and (resolved / CODEX_BROWSER_PLUGIN_MANIFEST_RELATIVE_PATH).is_file()
+            and (resolved / CODEX_BROWSER_CLIENT_RELATIVE_PATH).is_file()
+            and runner.is_file()
+            and os.access(runner, os.X_OK)
+        ):
             return resolved
     return None
 
@@ -102,6 +129,7 @@ def _packaged_codex_runtime_env() -> dict[str, str]:
     env = os.environ.copy()
     for name in CODEX_RUNTIME_OVERRIDE_ENV_NAMES:
         env.pop(name, None)
+    env["ELECTRON_RUN_AS_NODE"] = "1"
     return env
 
 
@@ -112,10 +140,10 @@ def sync_and_verify_codex_browser_client(
 ) -> Path | None:
     """Materialize Codex's packaged Browser plugin and verify its trust tuple.
 
-    Codex Desktop owns the Browser client, cache publisher, and cua_node trust
-    manifest. sky-cua invokes that publisher during local deployment and checks
-    that packaged, cache-latest, manifest, and resolved runtime identities agree;
-    it never rewrites or hashes resources into Codex-owned manifests itself.
+    Codex Desktop owns the cache publisher and consumes sky-cua's verified release
+    projection. sky-cua invokes that publisher during local deployment and checks
+    that the release, packaged projection, cache-latest bytes, and resolved runtime
+    identities agree; it never rewrites Codex's resolver or Browser projection.
     """
     if sys.platform != "linux":
         return None
@@ -123,12 +151,52 @@ def sync_and_verify_codex_browser_client(
     resolved_resources = _codex_resources_root(resources_root)
     if resolved_resources is None:
         raise RuntimeError(
-            "Packaged Codex Desktop cua_node resources were not found; pass --codex-resources-root"
+            "Packaged Codex Desktop sky-cua consumer resources were not found; "
+            "pass --codex-resources-root"
         )
 
-    node = resolved_resources / "cua_node/bin/node"
-    sync_script = resolved_resources / "browser-use-cache-sync.cjs"
     command_env = _packaged_codex_runtime_env()
+    node = resolved_resources.parent / "ChatGPT"
+    sync_script = resolved_resources / "browser-use-cache-sync.cjs"
+    resolved_env = subprocess.run(
+        [
+            str(node),
+            str(sync_script),
+            "resolve-env",
+            f"--resources-root={resolved_resources}",
+        ],
+        check=True,
+        capture_output=True,
+        env=command_env,
+        text=True,
+    )
+    try:
+        runtime_env = json.loads(resolved_env.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Codex sky-cua resolver returned invalid JSON") from exc
+    expected_hash = runtime_env.get("SKY_CUA_RELEASE_CANONICAL_BROWSER_SHA256")
+    trusted_hash = runtime_env.get("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S")
+    release_root_value = runtime_env.get("SKY_CUA_RELEASE_ROOT")
+    release_id = runtime_env.get("SKY_CUA_RELEASE_ID")
+    manifest_sha256 = runtime_env.get("SKY_CUA_RELEASE_MANIFEST_SHA256")
+    if (
+        not _is_sha256(expected_hash)
+        or trusted_hash != expected_hash
+        or not _is_sha256(release_id)
+        or not _is_sha256(manifest_sha256)
+        or not isinstance(release_root_value, str)
+        or not Path(release_root_value).is_absolute()
+        or Path(release_root_value).resolve().name != release_id
+    ):
+        raise RuntimeError("Codex sky-cua resolver omitted a consistent verified release identity")
+
+    packaged_plugin_manifest_path = resolved_resources / CODEX_BROWSER_PLUGIN_MANIFEST_RELATIVE_PATH
+    packaged_client = resolved_resources / CODEX_BROWSER_CLIENT_RELATIVE_PATH
+    if _sha256(packaged_client) != expected_hash:
+        raise RuntimeError(
+            "Codex Browser packaged bytes do not match the verified sky-cua release trust hash"
+        )
+
     sync = subprocess.run(
         [
             str(node),
@@ -149,9 +217,6 @@ def sync_and_verify_codex_browser_client(
     except json.JSONDecodeError as exc:
         raise RuntimeError("Codex Browser cache sync returned invalid JSON") from exc
 
-    packaged_manifest_path = resolved_resources / "cua_node/manifest.json"
-    packaged_plugin_manifest_path = resolved_resources / CODEX_BROWSER_PLUGIN_MANIFEST_RELATIVE_PATH
-    packaged_client = resolved_resources / CODEX_BROWSER_CLIENT_RELATIVE_PATH
     latest_link_value = sync_result.get("latestLink")
     if not isinstance(latest_link_value, str):
         raise RuntimeError("Codex Browser cache sync omitted latestLink")
@@ -160,7 +225,6 @@ def sync_and_verify_codex_browser_client(
     cached_plugin_manifest_path = latest_root / ".codex-plugin/plugin.json"
 
     try:
-        runtime_manifest = json.loads(packaged_manifest_path.read_text(encoding="utf-8"))
         packaged_plugin_manifest = json.loads(
             packaged_plugin_manifest_path.read_text(encoding="utf-8")
         )
@@ -168,7 +232,6 @@ def sync_and_verify_codex_browser_client(
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("Codex Browser packaged or cached manifest is invalid") from exc
 
-    trusted_hashes = runtime_manifest.get("trusted_browser_client_sha256s")
     expected_version = packaged_plugin_manifest.get("version")
     if (
         not isinstance(expected_version, str)
@@ -177,43 +240,16 @@ def sync_and_verify_codex_browser_client(
         or sync_result.get("version") != expected_version
     ):
         raise RuntimeError("Codex Browser cache version does not match packaged resources")
-    if not isinstance(trusted_hashes, list) or len(trusted_hashes) != 1:
-        raise RuntimeError("cua_node must trust exactly one packaged Browser client hash")
-
-    expected_hash = trusted_hashes[0]
-    if (
-        not isinstance(expected_hash, str)
-        or _sha256(packaged_client) != expected_hash
-        or _sha256(cached_client) != expected_hash
-    ):
+    if _sha256(cached_client) != expected_hash:
         raise RuntimeError(
-            "Codex Browser packaged/cache-latest bytes do not match the cua_node trust manifest"
-        )
-
-    resolved_env = subprocess.run(
-        [
-            str(node),
-            str(sync_script),
-            "resolve-env",
-            f"--resources-root={resolved_resources}",
-        ],
-        check=True,
-        capture_output=True,
-        env=command_env,
-        text=True,
-    )
-    try:
-        runtime_env = json.loads(resolved_env.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Codex cua_node resolver returned invalid JSON") from exc
-    if runtime_env.get("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S") != expected_hash:
-        raise RuntimeError(
-            "Resolved node_repl trust hash does not match cache-latest Browser client"
+            "Codex Browser cache-latest bytes do not match the verified sky-cua release trust hash"
         )
 
     print(f"codex_browser_version={expected_version}")
     print(f"codex_browser_client={cached_client.resolve()}")
     print(f"codex_browser_trusted_sha256={expected_hash}")
+    print(f"codex_sky_cua_release_id={release_id}")
+    print(f"codex_sky_cua_manifest_sha256={manifest_sha256}")
     return cached_client.resolve()
 
 
@@ -256,6 +292,14 @@ def retired_channel_cache_roots(codex_home: Path) -> list[Path]:
 
 
 def fast_deploy(args: argparse.Namespace) -> int:
+    # Verify the external Codex consumer contract before building, stopping
+    # runtimes, or replacing config. A pinned-consumer mismatch is expected to
+    # fail closed, but it must not leave a partially applied local deployment.
+    sync_and_verify_codex_browser_client(
+        args.codex_home,
+        resources_root=getattr(args, "codex_resources_root", None),
+    )
+
     if not args.no_build:
         # Build + stage the Android companion APK before bundling so build_bundle
         # picks up a fresh artifact. Automatic and toolchain-gated: it rebuilds
@@ -304,11 +348,6 @@ def fast_deploy(args: argparse.Namespace) -> int:
         config_path,
         compat_enablement=compat_plugin_targets_payload(args.codex_home, destination),
     )
-    sync_and_verify_codex_browser_client(
-        args.codex_home,
-        resources_root=getattr(args, "codex_resources_root", None),
-    )
-
     # Fold in the installed MCP-server refresh so a single command also updates
     # the runtime used by Claude Code and other non-Codex hosts.
     local_install_dir = args.local_install_dir.expanduser().resolve()
@@ -437,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help=(
-            "Codex Desktop resources root containing cua_node and "
+            "Codex Desktop resources root containing sky-cua-release.cjs and "
             "browser-use-cache-sync.cjs (auto-detected by default)."
         ),
     )

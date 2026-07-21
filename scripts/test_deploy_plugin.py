@@ -22,7 +22,7 @@ from _plugin_bundle import (
 from deploy_plugin import drop_retired_channel_caches, sync_and_verify_codex_browser_client
 
 
-def _write_codex_browser_fixture(root: Path, codex_home: Path) -> tuple[str, str]:
+def _write_codex_browser_fixture(root: Path, codex_home: Path) -> tuple[str, str, Path]:
     version = "26.707.72221"
     client_bytes = b"new-cua-node-browser-client"
     client_hash = hashlib.sha256(client_bytes).hexdigest()
@@ -34,20 +34,20 @@ def _write_codex_browser_fixture(root: Path, codex_home: Path) -> tuple[str, str
         json.dumps({"name": "browser-use", "version": version}),
         encoding="utf-8",
     )
-    (root / "cua_node/bin").mkdir(parents=True)
-    (root / "cua_node/bin/node").write_text("node", encoding="utf-8")
     (root / "browser-use-cache-sync.cjs").write_text("sync", encoding="utf-8")
-    (root / "cua_node/manifest.json").write_text(
-        json.dumps({"trusted_browser_client_sha256s": [client_hash]}),
-        encoding="utf-8",
-    )
+    (root / "sky-cua-release.cjs").write_text("release resolver", encoding="utf-8")
+    runner = root.parent / "ChatGPT"
+    runner.write_text("electron node runner", encoding="utf-8")
+    runner.chmod(0o755)
+    release_root = root / "sky-cua" / ("a" * 64)
+    release_root.mkdir(parents=True)
 
     stale = codex_home / "plugins/cache/openai-bundled/browser-use/0.1.0-alpha2"
     (stale / "scripts").mkdir(parents=True)
     (stale / "scripts/browser-client.mjs").write_text("stale-alpha2", encoding="utf-8")
     latest = stale.parent / "latest"
     latest.symlink_to(stale.name, target_is_directory=True)
-    return version, client_hash
+    return version, client_hash, release_root
 
 
 def test_sync_and_verify_codex_browser_client_repoints_stale_latest(
@@ -56,14 +56,18 @@ def test_sync_and_verify_codex_browser_client_repoints_stale_latest(
 ) -> None:
     resources = tmp_path / "resources"
     codex_home = tmp_path / "codex-home"
-    version, client_hash = _write_codex_browser_fixture(resources, codex_home)
+    version, client_hash, release_root = _write_codex_browser_fixture(resources, codex_home)
 
+    monkeypatch.setenv("SKY_CUA_RELEASE_ROOT", "/stale/selected-release")
     monkeypatch.setenv("CODEX_NODE_REPL_LEGACY_FALLBACK", "1")
     monkeypatch.setenv("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S", client_hash)
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         env = kwargs.get("env")
         assert isinstance(env, dict)
+        assert args[0] == str(resources.parent / "ChatGPT")
+        assert env["ELECTRON_RUN_AS_NODE"] == "1"
+        assert "SKY_CUA_RELEASE_ROOT" not in env
         assert "CODEX_NODE_REPL_LEGACY_FALLBACK" not in env
         assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in env
         command = args[2]
@@ -81,7 +85,15 @@ def test_sync_and_verify_codex_browser_client_repoints_stale_latest(
             stdout = json.dumps({"latestLink": str(latest), "version": version})
         else:
             assert command == "resolve-env"
-            stdout = json.dumps({"NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": client_hash})
+            stdout = json.dumps(
+                {
+                    "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": client_hash,
+                    "SKY_CUA_RELEASE_CANONICAL_BROWSER_SHA256": client_hash,
+                    "SKY_CUA_RELEASE_ID": release_root.name,
+                    "SKY_CUA_RELEASE_MANIFEST_SHA256": "b" * 64,
+                    "SKY_CUA_RELEASE_ROOT": str(release_root),
+                }
+            )
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(deploy_plugin.subprocess, "run", fake_run)
@@ -101,7 +113,7 @@ def test_sync_and_verify_codex_browser_client_repoints_stale_latest(
 def test_sync_and_verify_codex_browser_client_requires_packaged_resources(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(RuntimeError, match="Packaged Codex Desktop cua_node resources"):
+    with pytest.raises(RuntimeError, match="sky-cua consumer resources"):
         sync_and_verify_codex_browser_client(
             tmp_path / "codex-home",
             resources_root=tmp_path / "missing-resources",
@@ -114,20 +126,41 @@ def test_sync_and_verify_codex_browser_client_rejects_trust_mismatch(
 ) -> None:
     resources = tmp_path / "resources"
     codex_home = tmp_path / "codex-home"
-    version, _client_hash = _write_codex_browser_fixture(resources, codex_home)
+    _version, client_hash, release_root = _write_codex_browser_fixture(resources, codex_home)
+    commands: list[str] = []
 
     def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        stale_latest = codex_home / "plugins/cache/openai-bundled/browser-use/latest"
-        return subprocess.CompletedProcess(
-            args,
-            0,
-            stdout=json.dumps({"latestLink": str(stale_latest), "version": version}),
-            stderr="",
-        )
+        command = args[2]
+        commands.append(command)
+        if command == "resolve-env":
+            stdout = json.dumps(
+                {
+                    "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": "f" * 64,
+                    "SKY_CUA_RELEASE_CANONICAL_BROWSER_SHA256": client_hash,
+                    "SKY_CUA_RELEASE_ID": release_root.name,
+                    "SKY_CUA_RELEASE_MANIFEST_SHA256": "b" * 64,
+                    "SKY_CUA_RELEASE_ROOT": str(release_root),
+                }
+            )
+            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+        raise AssertionError("sync-cache must not run after resolver trust disagreement")
 
     monkeypatch.setattr(deploy_plugin.subprocess, "run", fake_run)
 
-    with pytest.raises(RuntimeError, match="packaged or cached manifest"):
+    with pytest.raises(RuntimeError, match="consistent verified release identity"):
+        sync_and_verify_codex_browser_client(codex_home, resources_root=resources)
+    assert commands == ["resolve-env"]
+
+
+def test_sync_and_verify_codex_browser_client_requires_electron_node_runner(
+    tmp_path: Path,
+) -> None:
+    resources = tmp_path / "resources"
+    codex_home = tmp_path / "codex-home"
+    _write_codex_browser_fixture(resources, codex_home)
+    (tmp_path / "ChatGPT").unlink()
+
+    with pytest.raises(RuntimeError, match="sky-cua consumer resources"):
         sync_and_verify_codex_browser_client(codex_home, resources_root=resources)
 
 
@@ -361,6 +394,40 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     # The deploy reaps the whole sky-cua stack so zombie dev-build processes
     # cannot survive to race the freshly deployed binaries.
     assert calls["reap_all_runtime"] is True
+
+
+def test_fast_deploy_stops_before_mutation_when_codex_consumer_gate_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations: list[str] = []
+
+    def fail_consumer_gate(_home: Path, **_kwargs: object) -> None:
+        raise RuntimeError("pinned Codex consumer rejects active release")
+
+    monkeypatch.setattr(
+        deploy_plugin,
+        "sync_and_verify_codex_browser_client",
+        fail_consumer_gate,
+    )
+    monkeypatch.setattr(deploy_plugin, "build_bundle", lambda: mutations.append("build"))
+    monkeypatch.setattr(
+        deploy_plugin,
+        "install_bundle",
+        lambda *_args: mutations.append("install"),
+    )
+
+    args = argparse.Namespace(
+        codex_home=tmp_path / "codex-home",
+        codex_resources_root=None,
+        no_build=False,
+        no_companion=True,
+        force_companion=False,
+    )
+
+    with pytest.raises(RuntimeError, match="pinned Codex consumer"):
+        deploy_plugin.fast_deploy(args)
+    assert mutations == []
 
 
 def test_fast_deploy_returns_failure_when_kwin_live_reload_fails(
