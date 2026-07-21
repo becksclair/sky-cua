@@ -269,6 +269,25 @@ describe("@heliasar/sky-cua/phone", () => {
     } finally { client.close(); await daemon.close(); }
   });
 
+  test("rejects missing required app fields before daemon I/O", async () => {
+    const daemon = new PhoneDaemon();
+    await daemon.start();
+    const client = createPhoneClient({ serviceSocketPath: SOCKET });
+    try {
+      for (const operation of [
+        () => client.app_launch({ session_id: "phone-1" } as never),
+        () => client.app_open_intent({ session_id: "phone-1" } as never),
+        () => client.app_force_stop({ session_id: "phone-1" } as never),
+      ]) {
+        try { await operation(); throw new Error("expected required-field rejection"); } catch (error) {
+          expect((error as SkyCuaError).code).toBe("SKY_CUA_INVALID_ARGUMENT");
+        }
+      }
+      expect(daemon.requests.length).toBe(0);
+      expect(daemon.connections).toBe(0);
+    } finally { client.close(); await daemon.close(); }
+  });
+
   test("matches direct Phone coordinate and zero-duration validation", async () => {
     const client = createPhoneClient({ serviceSocketPath: SOCKET });
     for (const operation of [

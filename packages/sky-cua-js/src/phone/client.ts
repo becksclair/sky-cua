@@ -255,7 +255,7 @@ export class PhoneClient {
     return responseType(await this.request(request), ["app"], "app_list");
   }
   async app_launch(input: Input<PhoneAppLaunchRequest>): Promise<PhoneAppResponse> { return await this.app("app_launch", input, ["package_name"]); }
-  async app_open_intent(input: Input<PhoneAppOpenIntentRequest>): Promise<PhoneAppResponse> { return await this.app("app_open_intent", input, ["intent_uri", "package_name"]); }
+  async app_open_intent(input: Input<PhoneAppOpenIntentRequest>): Promise<PhoneAppResponse> { return await this.app("app_open_intent", input, ["intent_uri"], ["package_name"]); }
   async app_force_stop(input: Input<PhoneAppForceStopRequest>): Promise<PhoneAppResponse> { return await this.app("app_force_stop", input, ["package_name"]); }
   async app_install(input: Input<PhoneAppInstallRequest>): Promise<PhoneAppResponse> {
     const request = this.sessionRequest("app_install", input, ["apk_paths", "mode", "reinstall", "allow_downgrade", "allow_test_apk", "grant_runtime_permissions"]);
@@ -287,9 +287,11 @@ export class PhoneClient {
     return responseType(await this.request(request), ["notifications"], type);
   }
 
-  private async app<T extends "app_current" | "app_launch" | "app_open_intent" | "app_force_stop" | "open_settings">(type: T, input: unknown, fields: readonly string[] = []): Promise<PhoneAppResponse> {
-    const request = this.sessionRequest(type, input, fields);
-    for (const field of fields) if ((request as unknown as Record<string, unknown>)[field] !== undefined) string((request as unknown as Record<string, unknown>)[field], field);
+  private async app<T extends "app_current" | "app_launch" | "app_open_intent" | "app_force_stop" | "open_settings">(type: T, input: unknown, required: readonly string[] = [], optional: readonly string[] = []): Promise<PhoneAppResponse> {
+    const request = this.sessionRequest(type, input, [...required, ...optional]);
+    const values = request as unknown as Record<string, unknown>;
+    for (const field of required) string(values[field], field);
+    for (const field of optional) if (values[field] !== undefined) string(values[field], field);
     return responseType(await this.request(request), ["app"], type);
   }
 }
