@@ -51,7 +51,8 @@ export function callerContext(globals: BrowserGlobals): Record<string, unknown> 
       ? (nestedValue as Record<string, unknown>)
       : {};
   const normalizedMeta = { ...nested, ...meta };
-  const configured = globals.nodeRepl?.env?.SKY_CUA_MCP_CALLER_PROVENANCE;
+  const configured = globals.nodeRepl?.env?.SKY_CUA_MCP_CALLER_PROVENANCE
+    ?? normalizedMeta.caller_provenance;
   const provenance = ALLOWED_PROVENANCE.includes(configured as CallerProvenance)
     ? configured
     : "direct_mcp";

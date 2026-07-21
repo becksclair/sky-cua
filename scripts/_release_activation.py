@@ -24,7 +24,13 @@ from _plugin_bundle import (
     runtime_binary_path,
     stop_unix_runtime_processes,
 )
-from release_generation import GenerationStore, VerifiedRelease, canonical_json_bytes
+from release_generation import (
+    GenerationStore,
+    VerifiedRelease,
+    canonical_json_bytes,
+    canonical_tree_digest,
+    sha256_file,
+)
 
 ACTIVATION_RECEIPT = "activation-receipt.json"
 ACTIVATION_SCHEMA_VERSION = 1
@@ -75,6 +81,26 @@ class PathSnapshot:
 
 
 @dataclass(frozen=True)
+class ActiveCodexPlugin:
+    id: str
+    name: str
+    version: str
+    path: str
+    tree_sha256: str
+    mcp_servers: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "version": self.version,
+            "path": self.path,
+            "tree_sha256": self.tree_sha256,
+            "mcp_servers": list(self.mcp_servers),
+        }
+
+
+@dataclass(frozen=True)
 class ActiveRuntimeResolution:
     release_id: str
     manifest_sha256: str
@@ -85,6 +111,10 @@ class ActiveRuntimeResolution:
     node_module_dirs: tuple[str, ...]
     browser_client_path: str
     trusted_browser_client_sha256s: tuple[str, ...]
+    codex_marketplace_path: str
+    codex_marketplace_manifest_path: str
+    codex_marketplace_manifest_sha256: str
+    codex_plugins: tuple[ActiveCodexPlugin, ...]
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -98,6 +128,13 @@ class ActiveRuntimeResolution:
             "node_module_dirs": list(self.node_module_dirs),
             "browser_client_path": self.browser_client_path,
             "trusted_browser_client_sha256s": list(self.trusted_browser_client_sha256s),
+            "codex_marketplace": {
+                "name": "openai-bundled",
+                "path": self.codex_marketplace_path,
+                "manifest_path": self.codex_marketplace_manifest_path,
+                "manifest_sha256": self.codex_marketplace_manifest_sha256,
+                "plugins": [plugin.as_dict() for plugin in self.codex_plugins],
+            },
         }
 
 
@@ -403,6 +440,7 @@ def resolve_active_runtime(
     if not isinstance(manifest, dict):
         raise ActivationVerificationError("active release manifest must be an object")
     browser_contract = manifest.get("browser_contract")
+    codex_contract = manifest.get("codex_plugin_contract")
     canonical_browser = (
         browser_contract.get("canonical_browser") if isinstance(browser_contract, dict) else None
     )
@@ -421,6 +459,76 @@ def resolve_active_runtime(
         raise ActivationVerificationError(
             "active release manifest has no valid Browser runtime binding"
         )
+    if not isinstance(codex_contract, dict):
+        raise ActivationVerificationError("active release has no Codex plugin contract")
+    marketplace_relative = codex_contract.get("path")
+    marketplace_manifest_relative = codex_contract.get("manifest_path")
+    marketplace_manifest_sha256 = codex_contract.get("manifest_sha256")
+    raw_plugins = codex_contract.get("plugins")
+    if (
+        codex_contract.get("marketplace") != "openai-bundled"
+        or not isinstance(marketplace_relative, str)
+        or not isinstance(marketplace_manifest_relative, str)
+        or not isinstance(marketplace_manifest_sha256, str)
+        or len(marketplace_manifest_sha256) != 64
+        or not isinstance(raw_plugins, list)
+        or len(raw_plugins) != 2
+    ):
+        raise ActivationVerificationError("active release Codex plugin contract is invalid")
+    for relative in (marketplace_relative, marketplace_manifest_relative):
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ActivationVerificationError("active Codex plugin path is invalid")
+    marketplace_root = root.joinpath(*Path(marketplace_relative).parts)
+    marketplace_manifest = root.joinpath(*Path(marketplace_manifest_relative).parts)
+    if (
+        not marketplace_root.is_dir()
+        or marketplace_root.is_symlink()
+        or not marketplace_manifest.is_file()
+        or marketplace_manifest.is_symlink()
+        or sha256_file(marketplace_manifest) != marketplace_manifest_sha256
+    ):
+        raise ActivationVerificationError("active Codex marketplace bytes are invalid")
+    expected_plugins = {
+        "computer-use@openai-bundled": ("computer-use", ("computer-use",)),
+        "browser-use@openai-bundled": ("browser-use", ("node_repl",)),
+    }
+    plugins: list[ActiveCodexPlugin] = []
+    for record in raw_plugins:
+        if not isinstance(record, dict) or record.get("id") not in expected_plugins:
+            raise ActivationVerificationError("active Codex plugin identity is invalid")
+        plugin_id = record["id"]
+        expected_name, expected_mcp = expected_plugins[plugin_id]
+        plugin_relative = record.get("path")
+        mcp_servers = record.get("mcp_servers")
+        if (
+            record.get("name") != expected_name
+            or not isinstance(record.get("version"), str)
+            or not isinstance(plugin_relative, str)
+            or not isinstance(record.get("tree_sha256"), str)
+            or not isinstance(mcp_servers, list)
+            or tuple(mcp_servers) != expected_mcp
+        ):
+            raise ActivationVerificationError(
+                f"active Codex plugin contract is invalid: {plugin_id}"
+            )
+        plugin_root = root.joinpath(*Path(plugin_relative).parts)
+        if Path(plugin_relative).is_absolute() or ".." in Path(plugin_relative).parts:
+            raise ActivationVerificationError(f"active Codex plugin path is invalid: {plugin_id}")
+        if canonical_tree_digest(plugin_root).sha256 != record["tree_sha256"]:
+            raise ActivationVerificationError(f"active Codex plugin bytes are invalid: {plugin_id}")
+        plugins.append(
+            ActiveCodexPlugin(
+                id=plugin_id,
+                name=expected_name,
+                version=record["version"],
+                path=str(plugin_root),
+                tree_sha256=record["tree_sha256"],
+                mcp_servers=expected_mcp,
+            )
+        )
+    if {plugin.id for plugin in plugins} != set(expected_plugins):
+        raise ActivationVerificationError("active Codex plugin set is incomplete")
     cua_root = root / "components/cua-node-linux-x64-glibc"
     node_path = cua_root / "bin/node"
     node_repl_path = cua_root / "bin/node_repl"
@@ -440,4 +548,8 @@ def resolve_active_runtime(
         node_module_dirs=(str(module_root),),
         browser_client_path=str(browser_client),
         trusted_browser_client_sha256s=tuple(trusted),
+        codex_marketplace_path=str(marketplace_root),
+        codex_marketplace_manifest_path=str(marketplace_manifest),
+        codex_marketplace_manifest_sha256=marketplace_manifest_sha256,
+        codex_plugins=tuple(plugins),
     )

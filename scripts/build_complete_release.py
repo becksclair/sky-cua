@@ -37,10 +37,8 @@ CANONICAL_EXTENSION_COMPONENT_PATH = (
     f"components/core-linux-x64/resources/chrome-extension/codex/{CANONICAL_EXTENSION_VERSION}_0"
 )
 CORE_BUILD_INPUT_PROVENANCE = Path("resources/release/CORE_BUILD_INPUTS.json")
-CODEX_PROJECTIONS = (
-    "openai-bundled/plugins/browser-use/scripts/browser-client.mjs",
-    "openai-bundled/plugins/chrome/scripts/browser-client.mjs",
-)
+CODEX_PROJECTIONS = ("openai-bundled/plugins/browser-use/scripts/browser-client.mjs",)
+CODEX_MARKETPLACE_SOURCE = REPO_ROOT / "resources/codex-compat/openai-bundled"
 INSTALLER_SCRIPTS = (
     "install_complete_release.py",
     "release_generation.py",
@@ -547,6 +545,15 @@ def _prepare_inputs(
     routing_inventory = documentation / "inventories/routing-inventory.json"
 
     compat = workspace / CODEX_COMPONENT
+    _copy_component(CODEX_MARKETPLACE_SOURCE, compat / "openai-bundled")
+    shutil.copytree(
+        REPO_ROOT / "skills/computer-use",
+        compat / "openai-bundled/plugins/computer-use/skills/computer-use",
+    )
+    shutil.copytree(
+        REPO_ROOT / "skills/phone-use",
+        compat / "openai-bundled/plugins/computer-use/skills/phone-use",
+    )
     canonical_bytes = canonical.read_bytes()
     for relative in CODEX_PROJECTIONS:
         destination = compat / relative

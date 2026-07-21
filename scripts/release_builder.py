@@ -221,6 +221,68 @@ def _component_relative_path(value: str, *, field: str) -> PurePosixPath:
     return path
 
 
+def _codex_plugin_contract(staging: Path) -> dict[str, object]:
+    marketplace_root = staging / "components/codex-compat/openai-bundled"
+    marketplace_path = marketplace_root / ".agents/plugins/marketplace.json"
+    try:
+        marketplace = json.loads(marketplace_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError("Codex compatibility marketplace is missing or invalid") from error
+    entries = marketplace.get("plugins") if isinstance(marketplace, dict) else None
+    if (
+        not isinstance(marketplace, dict)
+        or marketplace.get("name") != "openai-bundled"
+        or not isinstance(entries, list)
+    ):
+        raise ValueError("Codex compatibility marketplace identity is invalid")
+    expected_mcp = {
+        "computer-use": ["computer-use"],
+        "browser-use": ["node_repl"],
+    }
+    names = [entry.get("name") for entry in entries if isinstance(entry, dict)]
+    if names != ["computer-use", "browser-use"]:
+        raise ValueError("Codex compatibility marketplace must contain exactly two plugins")
+    plugins: list[dict[str, object]] = []
+    for name, mcp_names in expected_mcp.items():
+        root = marketplace_root / "plugins" / name
+        manifest_path = root / ".codex-plugin/plugin.json"
+        mcp_path = root / ".mcp.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            mcp = json.loads(mcp_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise ValueError(f"Codex plugin payload is missing or invalid: {name}") from error
+        servers = mcp.get("mcpServers") if isinstance(mcp, dict) else None
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("name") != name
+            or not isinstance(manifest.get("version"), str)
+            or not isinstance(servers, dict)
+            or list(servers) != mcp_names
+        ):
+            raise ValueError(f"Codex plugin identity or MCP ownership is invalid: {name}")
+        digest = canonical_tree_digest(root)
+        plugins.append(
+            {
+                "id": f"{name}@openai-bundled",
+                "name": name,
+                "version": manifest["version"],
+                "path": f"components/codex-compat/openai-bundled/plugins/{name}",
+                "tree_sha256": digest.sha256,
+                "mcp_servers": mcp_names,
+            }
+        )
+    return {
+        "marketplace": "openai-bundled",
+        "path": "components/codex-compat/openai-bundled",
+        "manifest_path": (
+            "components/codex-compat/openai-bundled/.agents/plugins/marketplace.json"
+        ),
+        "manifest_sha256": sha256_file(marketplace_path),
+        "plugins": plugins,
+    }
+
+
 def build_release_set(
     output_root: Path,
     *,
@@ -379,6 +441,8 @@ def build_release_set(
                 "browser-extension-bridge capability requires one exact extension selection"
             )
 
+        codex_plugin_contract = _codex_plugin_contract(staging)
+
         lock_records = {
             source.name: _copy_file_source(staging, source)
             for source in sorted(locks, key=lambda item: item.name)
@@ -424,6 +488,7 @@ def build_release_set(
                 "compatibility_projections": projection_records,
                 **({"extension_bridge": extension_record} if extension_record else {}),
             },
+            "codex_plugin_contract": codex_plugin_contract,
         }
         if documentation is not None:
             manifest_without_id["documentation"] = {

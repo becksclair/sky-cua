@@ -1,0 +1,16 @@
+{
+  "name": "computer-use",
+  "version": "0.1.0-sky-cua",
+  "description": "Complete sky-cua desktop and device control for Codex harnesses.",
+  "license": "MIT",
+  "keywords": ["computer-use", "desktop-control", "linux", "wayland"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Computer Use",
+    "shortDescription": "Control desktop apps through sky-cua",
+    "developerName": "sky-cua",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"]
+  }
+}

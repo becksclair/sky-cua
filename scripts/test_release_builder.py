@@ -115,6 +115,33 @@ def _inputs(root: Path) -> tuple[list[ComponentSource], list[FileSource], list[F
         encoding="utf-8",
     )
     (compat / "browser-client.mjs").write_bytes((browser / "browser-client.mjs").read_bytes())
+    marketplace = compat / "openai-bundled"
+    marketplace_manifest = marketplace / ".agents/plugins/marketplace.json"
+    marketplace_manifest.parent.mkdir(parents=True)
+    marketplace_manifest.write_text(
+        json.dumps(
+            {
+                "name": "openai-bundled",
+                "plugins": [
+                    {"name": "computer-use"},
+                    {"name": "browser-use"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name, version, server in (
+        ("computer-use", "0.1.0-sky-cua", "computer-use"),
+        ("browser-use", "1.0.0-sky-cua-openclaw", "node_repl"),
+    ):
+        plugin = marketplace / "plugins" / name
+        manifest = plugin / ".codex-plugin/plugin.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"name": name, "version": version}), encoding="utf-8")
+        (plugin / ".mcp.json").write_text(
+            json.dumps({"mcpServers": {server: {"command": "test"}}}),
+            encoding="utf-8",
+        )
     (compliance / "LICENSES.json").write_text("{}\n", encoding="utf-8")
 
     lock = root / "runtime-lock.json"

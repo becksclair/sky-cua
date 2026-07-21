@@ -9,6 +9,7 @@ const GET_INFO_TIMEOUT_MS = 5_000;
 const FRAME_LITTLE_ENDIAN = endianness() === "LE";
 const IAB_SOCKET_DIRECTORY = "/tmp/codex-browser-use";
 const IAB_SOCKET_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.sock$/u;
+const EXTENSION_SOCKET_NAME = /^extension-[a-z0-9._-]+\.sock$/iu;
 
 export type BrowserTransport = "extension_native_host" | "host_provided_iab";
 
@@ -211,38 +212,53 @@ function requestSessionId(globals: BrowserGlobals): string | undefined {
 }
 
 async function discoverBrowserCandidates(globals: BrowserGlobals): Promise<BrowserCandidate[]> {
+  const extensionOnly = callerContext(globals).caller_provenance === "openclaw";
   const explicit = globals.nodeRepl?.env?.SKY_CUA_CODEX_BROWSER_SOCKET_PATH?.trim();
   if (explicit !== undefined && explicit !== "" && !validSocketPath(explicit)) {
     throw new Error("SKY_CUA_CODEX_BROWSER_SOCKET_PATH must be an absolute Unix socket path");
   }
   const candidates: BrowserCandidate[] = [];
   let entries: string[] = [];
-  if (requestSessionId(globals) !== undefined) {
-    try {
-      const injectedListDirectory = globals.nodeRepl?.nativePipe?.listDirectory;
-      entries = typeof injectedListDirectory === "function"
-        ? await injectedListDirectory(IAB_SOCKET_DIRECTORY)
-        : (await readdir(IAB_SOCKET_DIRECTORY, { withFileTypes: true }))
-          .filter((entry) => entry.isSocket())
-          .map((entry) => entry.name);
-    } catch {
-      // The task-scoped directory may not exist yet. An explicit extension
-      // candidate can still be usable, so discovery failures stay local.
+  try {
+    const injectedListDirectory = globals.nodeRepl?.nativePipe?.listDirectory;
+    entries = typeof injectedListDirectory === "function"
+      ? await injectedListDirectory(IAB_SOCKET_DIRECTORY)
+      : (await readdir(IAB_SOCKET_DIRECTORY, { withFileTypes: true }))
+        .filter((entry) => entry.isSocket())
+        .map((entry) => entry.name);
+  } catch {
+    // The shared socket directory may not exist yet. An explicit extension
+    // candidate can still be usable, so discovery failures stay local.
+  }
+  const uniqueEntries = [...new Set(entries)];
+  for (const name of uniqueEntries.sort((left, right) => left.localeCompare(right))) {
+    if (
+      !extensionOnly
+      && requestSessionId(globals) !== undefined
+      && IAB_SOCKET_NAME.test(name)
+    ) {
+      candidates.push({
+        path: `${IAB_SOCKET_DIRECTORY}/${name}`,
+        transport: "host_provided_iab",
+      });
     }
   }
-  for (const name of [...new Set(entries)].sort((left, right) => left.localeCompare(right))) {
-    if (!IAB_SOCKET_NAME.test(name)) continue;
-    candidates.push({
-      path: `${IAB_SOCKET_DIRECTORY}/${name}`,
-      transport: "host_provided_iab",
-    });
+  if (explicit === undefined || explicit === "") {
+    for (const name of uniqueEntries
+      .filter((entry) => EXTENSION_SOCKET_NAME.test(entry))
+      .sort((left, right) => right.localeCompare(left))) {
+      candidates.push({
+        path: `${IAB_SOCKET_DIRECTORY}/${name}`,
+        transport: "extension_native_host",
+      });
+    }
   }
   if (explicit !== undefined && explicit !== "") {
     candidates.push({ path: explicit, transport: "extension_native_host" });
   }
   if (candidates.length === 0 && (explicit === undefined || explicit === "")) {
     throw new Error(
-      "No task-scoped Browser socket or SKY_CUA_CODEX_BROWSER_SOCKET_PATH is available",
+      "No external extension or task-scoped Browser socket is available",
     );
   }
   return candidates;
@@ -330,19 +346,17 @@ export class BrowserBackendRegistry {
     const extensionCandidates = candidates.filter(
       ({ transport }) => transport === "extension_native_host",
     );
-    const [hostResult, extensionResults] = await Promise.all([
+    const [hostResult, extensionResult] = await Promise.all([
       this.connectFirst(hostCandidates),
-      Promise.allSettled(extensionCandidates.map((candidate) =>
-        BrowserBackend.connect(this.globals, candidate.path, candidate.transport))),
+      this.connectFirstSequential(extensionCandidates),
     ]);
     const settled = [
       ...hostResult.failures.map((reason) => ({ status: "rejected" as const, reason })),
-      ...extensionResults,
+      ...extensionResult.failures.map((reason) => ({ status: "rejected" as const, reason })),
     ];
     this.backends = [
       ...(hostResult.backend === undefined ? [] : [hostResult.backend]),
-      ...extensionResults.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : []),
+      ...(extensionResult.backend === undefined ? [] : [extensionResult.backend]),
     ];
     if (this.backends.length === 0) {
       const trustFailure = settled.find((result) =>
@@ -412,6 +426,24 @@ export class BrowserBackendRegistry {
       });
     });
   }
+
+  private async connectFirstSequential(candidates: BrowserCandidate[]): Promise<{
+    backend?: BrowserBackend;
+    failures: Error[];
+  }> {
+    const failures: Error[] = [];
+    for (const candidate of candidates) {
+      try {
+        return {
+          backend: await BrowserBackend.connect(this.globals, candidate.path, candidate.transport),
+          failures,
+        };
+      } catch (error) {
+        failures.push(asError(error));
+      }
+    }
+    return { failures };
+  }
 }
 
 function normalizeBrowserInfo(
@@ -455,9 +487,15 @@ function normalizeBrowserInfo(
   const metadata = {
     ...rawMetadata,
     skyCuaBridgeTransport: transport,
+    ...(transport === "extension_native_host"
+      ? { provider: "extension", skyCuaBridgeType: "extension" }
+      : {}),
   } as Record<string, string>;
   const name = typeof value.name === "string" ? value.name : type;
-  const id = typeof value.id === "string" ? value.id : `${type}:${candidate.path}`;
+  const rawId = typeof value.id === "string" ? value.id : undefined;
+  const id = transport === "extension_native_host" && rawId?.startsWith("iab:") !== false
+    ? `extension:${candidate.path.split("/").at(-1)?.replace(/\.sock$/u, "") ?? "browser"}`
+    : (rawId ?? `${type}:${candidate.path}`);
   const capabilities = value.capabilities !== null && typeof value.capabilities === "object"
     ? value.capabilities as BrowserInfo["capabilities"]
     : {};

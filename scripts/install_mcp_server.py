@@ -46,7 +46,7 @@ from _kwin_effect import (
     kwin_effect_deploy_failed,
     print_kwin_effect_deploy_outcome,
 )
-from _openclaw_install import DEFAULT_OPENCLAW_DIR, install_openclaw
+from _openclaw_install import DEFAULT_OPENCLAW_DIR
 from _plugin_bundle import (
     LINUX_ARM64,
     LINUX_X64,
@@ -79,6 +79,7 @@ OPENCODE_CALLER_PROVENANCE = "opencode"
 PI_CALLER_PROVENANCE = "pi"
 MCP_BROWSER_CONTROL_MODE_ENV = "SKY_CUA_BROWSER_CONTROL_MODE"
 MCP_CODEX_BROWSER_SOCKET_PATH_ENV = "SKY_CUA_CODEX_BROWSER_SOCKET_PATH"
+INSTALLABLE_MCP_HOST_CHOICES = tuple(host for host in MCP_HOST_CHOICES if host != "openclaw")
 OPTIONAL_MCP_RUNTIME_ENV = (
     MCP_BROWSER_CONTROL_MODE_ENV,
     MCP_CODEX_BROWSER_SOCKET_PATH_ENV,
@@ -1012,12 +1013,9 @@ def install_local_mcp_server(
             target_dir, client_path, resource_root=resource_root, launch_policy=launch_policy
         )
     elif host == "openclaw":
-        config_path = install_openclaw(
-            target_dir,
-            client_path,
-            openclaw_dir=openclaw_dir,
-            resource_root=resource_root,
-            launch_env={**launch_policy.env(), **optional_mcp_runtime_env()},
+        raise ValueError(
+            "OpenClaw standalone MCP installation is retired; "
+            "OpenClaw must reconcile the native sky-cua plugins"
         )
     else:
         config = generate_mcp_config(client_path, target_dir, resource_root, launch_policy)
@@ -1115,7 +1113,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--host",
-        choices=MCP_HOST_CHOICES,
+        choices=INSTALLABLE_MCP_HOST_CHOICES,
         default="generic",
         help="Host-specific MCP config format to emit.",
     )

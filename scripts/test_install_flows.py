@@ -1319,15 +1319,13 @@ def test_pi_install_preserves_symlinked_mcp_config(
     assert merged["mcpServers"]["sky_cua"]["command"] == str(target_dir / "pi_mcp_wrapper.sh")
 
 
-def test_generic_mcp_main_can_install_openclaw_host(
+def test_generic_mcp_main_rejects_retired_openclaw_host(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target_dir = tmp_path / "installed"
     openclaw_dir = tmp_path / "openclaw"
     client_path = target_dir / "bin" / "sky-cua-client"
-    installed: list[tuple[Path, Path, Path]] = []
-
     monkeypatch.setattr(
         sys,
         "argv",
@@ -1343,23 +1341,8 @@ def test_generic_mcp_main_can_install_openclaw_host(
     )
     monkeypatch.setattr(install_mcp_server, "install_binaries", lambda _target_dir: client_path)
 
-    def fake_install_openclaw(
-        target: Path,
-        client: Path,
-        openclaw_dir: Path,
-        openclaw_bin: str = "openclaw",
-        resource_root: Path | None = None,
-        launch_env: dict[str, str] | None = None,
-    ) -> Path:
-        _ = openclaw_bin, resource_root, launch_env
-        installed.append((target, client, openclaw_dir))
-        return target / "openclaw_mcp.json"
-
-    monkeypatch.setattr(install_mcp_server, "install_openclaw", fake_install_openclaw)
-    monkeypatch.setattr(install_mcp_server, "print_next_steps", lambda *_args: None)
-
-    assert install_mcp_server.main() == 0
-    assert installed == [(target_dir.resolve(), client_path, openclaw_dir.resolve())]
+    with pytest.raises(SystemExit):
+        install_mcp_server.main()
 
 
 def test_pi_mcp_config_merge_keeps_existing_file_when_replace_fails(

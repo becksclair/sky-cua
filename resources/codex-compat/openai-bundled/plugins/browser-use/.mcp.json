@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "node_repl": {
+      "command": "node_repl"
+    }
+  }
+}

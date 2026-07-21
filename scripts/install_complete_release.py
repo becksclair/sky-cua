@@ -18,7 +18,6 @@ from _openclaw_install import (
     DEFAULT_OPENCLAW_DIR,
     GatewayActivationMode,
     OpenClawReleaseInstallReport,
-    install_openclaw_release,
 )
 from _opencode_install import (
     OpenCodeInstallReport,
@@ -45,7 +44,7 @@ from release_generation import (
     InstallTransactionError,
 )
 
-HOSTS = ("openclaw", "opencode")
+HOSTS = ("opencode",)
 
 
 class CompleteReleaseInstallError(RuntimeError):
@@ -157,15 +156,6 @@ def install_complete_release(
                     config_dir=opencode_config_dir,
                     process_env=opencode_process_env,
                     effective_cwd=opencode_effective_cwd,
-                )
-            if "openclaw" in selected_hosts:
-                assert browser_socket_path is not None
-                openclaw_report = install_openclaw_release(
-                    installed.root,
-                    browser_socket_path=browser_socket_path,
-                    openclaw_dir=openclaw_dir,
-                    openclaw_bin=openclaw_bin,
-                    gateway_activation=openclaw_gateway_activation,
                 )
             stable_links, link_snapshots = install_stable_links(
                 store.root,

@@ -9,7 +9,41 @@ import pytest
 
 import _plugin_bundle as plugin_bundle
 import _release_activation as activation
-from release_generation import VerifiedRelease
+from release_generation import VerifiedRelease, canonical_tree_digest, sha256_file
+
+
+def _codex_contract(root: Path) -> dict[str, object]:
+    marketplace = root / "components/codex-compat/openai-bundled"
+    marketplace_manifest = marketplace / ".agents/plugins/marketplace.json"
+    marketplace_manifest.parent.mkdir(parents=True)
+    marketplace_manifest.write_text('{"name":"openai-bundled","plugins":[]}\n')
+    plugins: list[dict[str, object]] = []
+    for name, version, server in (
+        ("computer-use", "0.1.0-sky-cua", "computer-use"),
+        ("browser-use", "1.0.0-sky-cua-openclaw", "node_repl"),
+    ):
+        plugin_root = marketplace / "plugins" / name
+        plugin_root.mkdir(parents=True)
+        (plugin_root / "payload.txt").write_text(name)
+        plugins.append(
+            {
+                "id": f"{name}@openai-bundled",
+                "name": name,
+                "version": version,
+                "path": f"components/codex-compat/openai-bundled/plugins/{name}",
+                "tree_sha256": canonical_tree_digest(plugin_root).sha256,
+                "mcp_servers": [server],
+            }
+        )
+    return {
+        "marketplace": "openai-bundled",
+        "path": "components/codex-compat/openai-bundled",
+        "manifest_path": (
+            "components/codex-compat/openai-bundled/.agents/plugins/marketplace.json"
+        ),
+        "manifest_sha256": sha256_file(marketplace_manifest),
+        "plugins": plugins,
+    }
 
 
 def _installed_release(tmp_path: Path) -> tuple[Path, VerifiedRelease]:
@@ -156,6 +190,7 @@ def test_active_runtime_resolves_from_current_without_selector_environment(
                     "canonical_browser": {"path": "components/browser-js/browser-client.mjs"}
                 },
                 "trusted_browser_client_sha256s": ["f" * 64],
+                "codex_plugin_contract": _codex_contract(release.root),
             }
         ),
         encoding="utf-8",
@@ -199,6 +234,11 @@ def test_active_runtime_resolves_from_current_without_selector_environment(
     assert resolved.node_repl_path == str(cua_root / "bin/node_repl")
     assert resolved.node_module_dirs == (str(cua_root / "lib/node_modules"),)
     assert resolved.browser_client_path == str(browser)
+    assert resolved.codex_marketplace_path.endswith("codex-compat/openai-bundled")
+    assert [plugin.id for plugin in resolved.codex_plugins] == [
+        "computer-use@openai-bundled",
+        "browser-use@openai-bundled",
+    ]
     assert (bin_dir / "sky-cua-release").resolve() == installer
     assert (store / "bin/sky-cua-release").resolve() == installer
     assert (bin_dir / "node_repl").resolve() == cua_root / "bin/node_repl"

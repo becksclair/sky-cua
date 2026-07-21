@@ -118,7 +118,7 @@ test("the real cua_node trusted loader rejects a wrong hash before connect and r
 
     const correct = await dispatch(hash);
     assert.equal(correct.result?.isError, false, JSON.stringify(correct));
-    assert.match(correct.result?.content?.[0]?.text ?? "", /iab:trust/u);
+    assert.match(correct.result?.content?.[0]?.text ?? "", /extension:browser/u);
     assert.equal(peer.connectionCount(), 1);
   } finally {
     await peer.close();

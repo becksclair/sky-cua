@@ -292,6 +292,18 @@ def test_complete_release_sanitizes_core_and_materializes_exact_codex_projection
     assert sbom["metadata"]["component"]["name"] == "sky-cua complete CUA stack"
     for relative in CODEX_PROJECTIONS:
         assert (compat / relative).read_bytes() == canonical.read_bytes()
+    codex_plugins = manifest["codex_plugin_contract"]
+    assert codex_plugins["marketplace"] == "openai-bundled"
+    assert [plugin["id"] for plugin in codex_plugins["plugins"]] == [
+        "computer-use@openai-bundled",
+        "browser-use@openai-bundled",
+    ]
+    assert [plugin["mcp_servers"] for plugin in codex_plugins["plugins"]] == [
+        ["computer-use"],
+        ["node_repl"],
+    ]
+    assert (compat / "openai-bundled/plugins/computer-use/skills/computer-use/SKILL.md").is_file()
+    assert (compat / "openai-bundled/plugins/computer-use/skills/phone-use/SKILL.md").is_file()
 
 
 def test_complete_release_ships_checkout_free_verified_controller(

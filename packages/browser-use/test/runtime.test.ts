@@ -359,11 +359,13 @@ describe("canonical Browser runtime", () => {
       transport: info.transport,
     })), [
       { id: "iab:session-1", type: "iab", transport: "host_provided_iab" },
-      { id: "iab:legacy-extension", type: "extension", transport: "extension_native_host" },
+      { id: "extension:codex-browser", type: "extension", transport: "extension_native_host" },
     ]);
     assert.equal((await agent.browsers.get("iab")).info.id, "iab:session-1");
-    assert.equal((await agent.browsers.get("extension")).info.id, "iab:legacy-extension");
-    assert.equal((await agent.browsers.get("iab:legacy-extension")).info.type, "extension");
+    assert.equal(
+      (await agent.browsers.get("extension")).info.id,
+      "extension:codex-browser",
+    );
     assert.equal(foreign.ended, true);
     assert.equal(directoryExtension.ended, true);
     assert.deepEqual(state.attempted, [
@@ -393,6 +395,37 @@ describe("canonical Browser runtime", () => {
         },
       },
     ]);
+  });
+
+  test("OpenClaw discovery is extension-only without a socket selector", async () => {
+    const iabName = "11111111-1111-4111-8111-111111111111.sock";
+    const extensionName = "extension-openclaw.sock";
+    const extensionPath = `/tmp/codex-browser-use/${extensionName}`;
+    const extension = new FakeConnection({
+      id: "iab:legacy-extension",
+      type: "iab",
+      name: "Chrome",
+      metadata: { skyCuaBridgeTransport: "extension_native_host" },
+    });
+    const state = routingFixture({
+      entries: [iabName, extensionName],
+      peers: new Map([[extensionPath, extension]]),
+    });
+    delete state.globals.nodeRepl!.env!.SKY_CUA_MCP_CALLER_PROVENANCE;
+    state.globals.nodeRepl!.requestMeta!.caller_provenance = "openclaw";
+    await setupBrowserRuntime({ globals: state.globals });
+
+    const available = await (state.globals.agent as any).browsers.list();
+    assert.deepEqual(state.attempted, [extensionPath]);
+    assert.deepEqual(available.map((info: Record<string, unknown>) => ({
+      id: info.id,
+      type: info.type,
+      transport: info.transport,
+    })), [{
+      id: "extension:extension-openclaw",
+      type: "extension",
+      transport: "extension_native_host",
+    }]);
   });
 
   test("an extension-native compatibility label never satisfies get iab", async () => {
@@ -814,7 +847,7 @@ describe("canonical Browser runtime", () => {
     state.globals.nodeRepl!.nativePipe!.listDirectory = async () => [];
     await setupBrowserRuntime({ globals: state.globals });
     const agent = state.globals.agent as any;
-    await assert.rejects(() => agent.browsers.list(), /No task-scoped Browser socket/u);
+    await assert.rejects(() => agent.browsers.list(), /No external extension/u);
     assert.equal(state.connectionCount(), 0);
   });
 });

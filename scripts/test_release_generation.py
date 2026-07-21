@@ -326,6 +326,7 @@ def test_checked_in_schema_matches_runtime_contract() -> None:
         "artifacts",
         "capabilities",
         "browser_contract",
+        "codex_plugin_contract",
     }
 
 

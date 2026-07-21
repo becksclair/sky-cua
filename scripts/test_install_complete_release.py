@@ -10,9 +10,8 @@ import pytest
 
 import install_complete_release as controller
 from _native_messaging_install import HOST_RELATIVE_PATH
-from _openclaw_install import OpenClawReleaseInstallReport
 from _opencode_install import OpenCodeInstallReport
-from _release_activation import ActivationReport, ActiveRuntimeResolution
+from _release_activation import ActivationReport, ActiveCodexPlugin, ActiveRuntimeResolution
 from release_generation import VerifiedRelease
 
 RELEASE_ID = "a" * 64
@@ -139,7 +138,7 @@ def _reset_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("_release_activation.DEFAULT_BIN_DIRECTORY", tmp_path / "bin")
 
 
-def test_controller_promotes_then_configures_opencode_before_openclaw(
+def test_controller_promotes_then_configures_opencode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opencode = _opencode_report(tmp_path)
@@ -148,34 +147,18 @@ def test_controller_promotes_then_configures_opencode_before_openclaw(
         FakeStore.events.append("opencode")
         return opencode
 
-    def install_openclaw(*_args: object, **_kwargs: object) -> OpenClawReleaseInstallReport:
-        FakeStore.events.append("openclaw")
-        return OpenClawReleaseInstallReport(
-            release_id=RELEASE_ID,
-            manifest_sha256="c" * 64,
-            release_root=str(tmp_path / "store/releases" / RELEASE_ID),
-            config_path=str(tmp_path / "openclaw/openclaw.json"),
-            registered_servers=("sky_cua", "node_repl"),
-            changed_servers=("sky_cua", "node_repl"),
-            gateway_activation="gateway_watcher_pending_verification",
-            gateway_detail="pending",
-            skill_root=str(tmp_path / "openclaw/skills"),
-            projected_skills=("browser-use", "computer-use", "phone-use"),
-        )
-
     monkeypatch.setattr(controller, "install_opencode_two_server_config", install_opencode)
-    monkeypatch.setattr(controller, "install_openclaw_release", install_openclaw)
     report = controller.install_complete_release(
         tmp_path / "candidate",
         store_root=tmp_path / "store",
-        hosts=("openclaw", "opencode"),
+        hosts=("opencode",),
         browser_socket_path=Path("/run/user/1000/sky-cua/browser.sock"),
         native_messaging_home=tmp_path / "home",
     )
 
-    assert FakeStore.events == ["recover", "install", "opencode", "openclaw", "prune"]
+    assert FakeStore.events == ["recover", "install", "opencode", "prune"]
     assert report.previous_release_id == PRIOR_ID
-    assert report.configured_hosts == ("openclaw", "opencode")
+    assert report.configured_hosts == ("opencode",)
     assert report.as_dict()["release_id"] == RELEASE_ID
     assert report.as_dict()["browser_reload_required"] is False
     assert report.browser_extension["activation"] == "web_store_preinstalled"
@@ -315,6 +298,27 @@ def test_resolve_active_cli_emits_runtime_paths_without_env_contract(
         node_module_dirs=(str(tmp_path / "store/current/cua/lib/node_modules"),),
         browser_client_path=str(tmp_path / "store/current/browser-client.mjs"),
         trusted_browser_client_sha256s=("f" * 64,),
+        codex_marketplace_path=str(tmp_path / "store/current/codex-compat/openai-bundled"),
+        codex_marketplace_manifest_path=str(tmp_path / "store/current/marketplace.json"),
+        codex_marketplace_manifest_sha256="d" * 64,
+        codex_plugins=(
+            ActiveCodexPlugin(
+                id="computer-use@openai-bundled",
+                name="computer-use",
+                version="0.1.0-sky-cua",
+                path=str(tmp_path / "store/current/computer-use"),
+                tree_sha256="e" * 64,
+                mcp_servers=("computer-use",),
+            ),
+            ActiveCodexPlugin(
+                id="browser-use@openai-bundled",
+                name="browser-use",
+                version="1.0.0-sky-cua-openclaw",
+                path=str(tmp_path / "store/current/browser-use"),
+                tree_sha256="f" * 64,
+                mcp_servers=("node_repl",),
+            ),
+        ),
     )
     monkeypatch.setattr(
         controller,
@@ -343,57 +347,17 @@ def test_resolve_active_cli_emits_runtime_paths_without_env_contract(
     assert payload == {"status": "ok", "runtime": runtime.as_dict()}
 
 
-@pytest.mark.parametrize(
-    ("prior", "generation_event"),
-    [(PRIOR_ID, "rollback-generation"), (None, "deactivate-generation")],
-)
-def test_host_failure_rolls_back_opencode_and_generation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    prior: str | None,
-    generation_event: str,
-) -> None:
-    FakeStore.prior = prior
-    opencode = _opencode_report(tmp_path)
-    monkeypatch.setattr(
-        controller, "install_opencode_two_server_config", lambda *_args, **_kwargs: opencode
-    )
-
-    def fail_openclaw(*_args: object, **_kwargs: object) -> OpenClawReleaseInstallReport:
-        raise RuntimeError("gateway cutover failed")
-
-    monkeypatch.setattr(controller, "install_openclaw_release", fail_openclaw)
-
-    def rollback(**_kwargs: object) -> None:
-        FakeStore.events.append("rollback-opencode")
-
-    monkeypatch.setattr(controller, "rollback_opencode_install", rollback)
-    native_manifest = (
-        tmp_path / "home/.config/google-chrome/NativeMessagingHosts/com.openai.codexextension.json"
-    )
-    native_manifest.parent.mkdir(parents=True)
-    original_manifest = b"preexisting manifest bytes\n"
-    native_manifest.write_bytes(original_manifest)
+def test_complete_release_rejects_retired_openclaw_host(tmp_path: Path) -> None:
     with pytest.raises(
         controller.CompleteReleaseInstallError,
-        match="consumer configuration failed: gateway cutover failed",
+        match=r"unsupported complete-release host.*openclaw",
     ):
         controller.install_complete_release(
             tmp_path / "candidate",
             store_root=tmp_path / "store",
-            hosts=("opencode", "openclaw"),
-            browser_socket_path=Path("/run/user/1000/sky-cua/browser.sock"),
-            native_messaging_home=tmp_path / "home",
+            hosts=("openclaw",),
         )
-
-    assert FakeStore.events == ["recover", "install", "rollback-opencode", generation_event]
-    assert native_manifest.read_bytes() == original_manifest
-    for relative in (
-        ".config/chromium/NativeMessagingHosts/com.openai.codexextension.json",
-        ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.openai.codexextension.json",
-        ".config/BraveSoftware/Brave-Origin/NativeMessagingHosts/com.openai.codexextension.json",
-    ):
-        assert not (tmp_path / "home" / relative).exists()
+    assert FakeStore.events == []
 
 
 def test_host_configuration_requires_full_profile_and_absolute_socket(tmp_path: Path) -> None:
@@ -409,7 +373,7 @@ def test_host_configuration_requires_full_profile_and_absolute_socket(tmp_path: 
         controller.install_complete_release(
             tmp_path / "candidate",
             store_root=tmp_path / "store",
-            hosts=("openclaw",),
+            hosts=("opencode",),
             browser_socket_path=Path("relative.sock"),
         )
     assert FakeStore.events == []
@@ -526,8 +490,6 @@ def test_cli_rollback_reprojects_retained_generation(
                 "--store-root",
                 str(tmp_path / "store"),
                 "--host",
-                "openclaw",
-                "--host",
                 "opencode",
                 "--browser-socket",
                 "/run/user/1000/sky-cua/browser.sock",
@@ -537,6 +499,6 @@ def test_cli_rollback_reprojects_retained_generation(
     )
 
     assert captured["candidate"] == tmp_path / "store" / "releases" / PRIOR_ID
-    assert captured["hosts"] == ["openclaw", "opencode"]
+    assert captured["hosts"] == ["opencode"]
     assert captured["browser_socket_path"] == Path("/run/user/1000/sky-cua/browser.sock")
     assert '"release_id": "bbbb' in capsys.readouterr().out
