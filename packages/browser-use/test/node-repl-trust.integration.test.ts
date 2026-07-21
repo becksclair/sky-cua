@@ -59,9 +59,10 @@ async function startBrowserPeer(socketPath: string) {
 }
 
 test("the real cua_node trusted loader rejects a wrong hash before connect and runs the canonical hash", async () => {
-  const [{ RuntimeManager }, { McpServer }] = await Promise.all([
+  const [{ RuntimeManager }, { McpServer }, { TEST_NODE_PATH }] = await Promise.all([
     import(`${skyCuaRoot}/runtime/cua-node/src/host/runtime-manager.ts`),
     import(`${skyCuaRoot}/runtime/cua-node/src/host/mcp-server.ts`),
+    import(`${skyCuaRoot}/runtime/cua-node/test/test-node-path.ts`),
   ]);
   const root = await mkdtemp(join(tmpdir(), "browser-use-real-trust-"));
   const moduleRoot = join(root, "node_modules", "@heliasar", "browser-use");
@@ -80,6 +81,7 @@ test("the real cua_node trusted loader rejects a wrong hash before connect and r
     const dispatch = async (trustedHash: string): Promise<DispatchResponse> => {
       const manager = new RuntimeManager({
         allowHostNode: true,
+        nodePath: TEST_NODE_PATH,
         env: {
           NODE_REPL_NODE_MODULE_DIRS: root,
           NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: trustedHash,
