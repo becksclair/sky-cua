@@ -6,6 +6,7 @@ import type { BrowserCommand, CommandEnvelope } from "./commands.ts";
 
 type RawBackend = {
   raw(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  finalizeStaleNodeReplSession?(sessionId: string): Promise<void>;
   onNotification?(method: string, listener: (params: unknown) => void): () => void;
 };
 
@@ -170,6 +171,13 @@ function tabId(command: CommandEnvelope): string | number {
 function rawTabId(value: string | number): string | number {
   if (typeof value === "number") return value;
   return /^\d+$/u.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : value;
+}
+
+function staleNodeReplOwner(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.match(
+    /already part of browser session (node-repl-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(?:\s|$)/iu,
+  )?.[1];
 }
 
 function withoutEnvelope(command: CommandEnvelope): ObjectValue {
@@ -730,7 +738,19 @@ export async function executeBrowserCommand(backend: RawBackend, command: Comman
       if (typeof value !== "string" && typeof value !== "number") {
         throw new Error("browser_user_claim_tab requires a tab id");
       }
-      return backend.raw("claimUserTab", { tabId: rawTabId(value) });
+      const tabId = rawTabId(value);
+      try {
+        return await backend.raw("claimUserTab", { tabId });
+      } catch (error) {
+        if (object(command.options).reclaimStale !== true) throw error;
+        const staleSessionId = staleNodeReplOwner(error);
+        if (staleSessionId === undefined) throw error;
+        if (backend.finalizeStaleNodeReplSession === undefined) {
+          throw new Error("Browser backend cannot reclaim stale node_repl sessions", { cause: error });
+        }
+        await backend.finalizeStaleNodeReplSession(staleSessionId);
+        return backend.raw("claimUserTab", { tabId });
+      }
     }
     case "create_tab": return backend.raw("createTab");
     case "list_tabs": return tabsFromRaw(await backend.raw("getTabs"));

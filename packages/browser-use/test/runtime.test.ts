@@ -11,16 +11,29 @@ type ListenerMap = {
   close?: () => void;
 };
 
+type FakeConnectionState = {
+  claimErrors: string[];
+  requests: Array<Record<string, unknown>>;
+  responses: Array<Record<string, unknown>>;
+};
+
 class FakeConnection implements NativePipeConnection {
   ended = false;
-  readonly requests: Array<Record<string, unknown>> = [];
-  readonly responses: Array<Record<string, unknown>> = [];
   private listeners: ListenerMap = {};
   constructor(
     private readonly browserInfo: Record<string, unknown> = {},
     private readonly responseChunkBytes?: number,
+    private readonly state: FakeConnectionState = {
+      claimErrors: [],
+      requests: [],
+      responses: [],
+    },
   ) {}
+  get requests(): Array<Record<string, unknown>> { return this.state.requests; }
+  get responses(): Array<Record<string, unknown>> { return this.state.responses; }
   end(): void { this.ended = true; }
+  fork(): FakeConnection { return new FakeConnection(this.browserInfo, this.responseChunkBytes, this.state); }
+  queueClaimError(message: string): void { this.state.claimErrors.push(message); }
   on(event: "data" | "error" | "close", listener: never): void {
     this.listeners[event] = listener;
   }
@@ -69,7 +82,14 @@ class FakeConnection implements NativePipeConnection {
       ...this.browserInfo,
     };
     else if (request.method === "createTab") result = { id: "tab-1", title: "Fixture", url: "about:blank" };
-    else if (request.method === "claimUserTab") result = { id: "tab-claimed", title: "Claimed", url: "https://example.test" };
+    else if (request.method === "claimUserTab") {
+      const claimError = this.state.claimErrors.shift();
+      if (claimError !== undefined) {
+        this.respond(request, undefined, { code: 1, message: claimError });
+        return;
+      }
+      result = { id: "tab-claimed", title: "Claimed", url: "https://example.test" };
+    }
     else if (request.method === "getUserTabs") result = [{ id: "user-tab-1", title: "User tab" }];
     else if (request.method === "getUserHistory") result = [{ url: "https://example.test", dateVisited: "2026-07-20T00:00:00Z" }];
     else if (request.method === "getTabs") result = [{ id: "tab-1", active: true, title: "Fixture", url: "about:blank" }];
@@ -173,8 +193,9 @@ function fixture(browserInfo: Record<string, unknown> = {}, responseChunkBytes?:
       nativePipe: {
         createConnection: async (path: string) => {
           connectionCount += 1;
-          assert.equal(path, hostProvidedIab ? iabSocketPath : extensionSocketPath);
-          return connection;
+          if (hostProvidedIab) assert.equal(path, iabSocketPath);
+          else assert.match(path, /(?:\/run\/user\/1000\/sky-cua\/browser\.sock|\/tmp\/codex-browser-use\/extension-[a-z0-9._-]+\.sock)$/iu);
+          return connectionCount === 1 ? connection : connection.fork();
         },
         listDirectory: async () => hostProvidedIab ? [iabSocketName] : [],
       },
@@ -576,6 +597,70 @@ describe("canonical Browser runtime", () => {
     assert.equal(state.connection.requests.some((request) => request.method === "finalizeTabs"), false);
   });
 
+  test("explicitly reclaims a prior synthetic node_repl tab owner and retries once", async () => {
+    const state = fixture({
+      id: "extension:extension-123-reclaim",
+      type: "extension",
+      name: "Chrome Extension",
+    });
+    state.connection.queueClaimError(
+      "Tab 17 is already part of browser session node-repl-0f197108-1ada-4147-8646-f41d8fa8bb87",
+    );
+    await setupBrowserRuntime({ globals: state.globals });
+    const browser = await (state.globals.agent as any).browsers.get("extension");
+
+    const tab = await browser.user.claimTab("17", { reclaimStale: true });
+
+    assert.equal(tab.id, "tab-claimed");
+    const lifecycle = state.connection.requests.filter((request) =>
+      request.method === "claimUserTab" || request.method === "finalizeTabs"
+    );
+    assert.deepEqual(lifecycle.map((request) => request.method), [
+      "claimUserTab",
+      "finalizeTabs",
+      "claimUserTab",
+    ]);
+    const finalize = lifecycle[1];
+    const retry = lifecycle[2];
+    assert.ok(finalize !== undefined);
+    assert.ok(retry !== undefined);
+    const finalizeParams = finalize.params as Record<string, unknown>;
+    assert.equal(
+      finalizeParams.session_id,
+      "node-repl-0f197108-1ada-4147-8646-f41d8fa8bb87",
+    );
+    assert.equal(finalizeParams.turn_id, "browser-use-reclaim-stale-tabs");
+    assert.deepEqual(finalizeParams.keep, []);
+    assert.equal((retry.params as Record<string, unknown>).session_id, "session-1");
+  });
+
+  test("never reclaims a stale claim implicitly or from a non-node_repl owner", async () => {
+    const implicit = fixture({ id: "extension:implicit", type: "extension", name: "Chrome Extension" });
+    implicit.connection.queueClaimError(
+      "Tab 17 is already part of browser session node-repl-0f197108-1ada-4147-8646-f41d8fa8bb87",
+    );
+    await setupBrowserRuntime({ globals: implicit.globals });
+    const implicitBrowser = await (implicit.globals.agent as any).browsers.get("extension");
+    await assert.rejects(() => implicitBrowser.user.claimTab("17"), /already part of browser session/u);
+    assert.equal(
+      implicit.connection.requests.some((request) => request.method === "finalizeTabs"),
+      false,
+    );
+
+    const foreign = fixture({ id: "extension:foreign", type: "extension", name: "Chrome Extension" });
+    foreign.connection.queueClaimError("Tab 17 is already part of browser session codex-browser-use");
+    await setupBrowserRuntime({ globals: foreign.globals });
+    const foreignBrowser = await (foreign.globals.agent as any).browsers.get("extension");
+    await assert.rejects(
+      () => foreignBrowser.user.claimTab("17", { reclaimStale: true }),
+      /codex-browser-use/u,
+    );
+    assert.equal(
+      foreign.connection.requests.some((request) => request.method === "finalizeTabs"),
+      false,
+    );
+  });
+
   test("daemon-local tab capabilities are reachable without extension capability mappings", async () => {
     const state = fixture({
       id: "extension:daemon-capabilities",
@@ -644,7 +729,7 @@ describe("canonical Browser runtime", () => {
 
   test("manifest contains all current interfaces, supporting types, and declarations", () => {
     assert.equal(Object.keys(API_MANIFEST.interfaces).length, 22);
-    assert.equal(Object.keys(API_MANIFEST.types).length, 58);
+    assert.equal(Object.keys(API_MANIFEST.types).length, 59);
     assert.equal(Object.values(API_MANIFEST.interfaces).flatMap((members) => Object.values(members)).length, 135);
     assert.equal(COMMANDS.length, 72);
   });

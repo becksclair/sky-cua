@@ -124,8 +124,9 @@
       "claimTab": {
         "declarations": [
           {
-            "text": "claimTab(tab: string | BrowserUserTabInfo): Promise<Tab>; // Claim a user tab returned by `openTabs()` and return it as a controllable agent tab.",
+            "text": "claimTab(tab: string | BrowserUserTabInfo, options?: BrowserClaimTabOptions): Promise<Tab>; // Claim a user tab; reclaimStale explicitly recovers a prior synthetic node_repl claim after js_reset.",
             "references": [
+              "BrowserClaimTabOptions",
               "BrowserUserTabInfo",
               "Tab"
             ]
@@ -1378,6 +1379,10 @@
     },
     "BrowserUserTabInfo": {
       "text": "interface BrowserUserTabInfo {\n  id: string; // Opaque identifier for this browser tab.\n  lastOpened?: string; // ISO 8601 timestamp for the last time the tab was opened or focused.\n  tabGroup?: string; // User-visible tab group name when the tab belongs to one.\n  title?: string; // User-visible tab title.\n  url?: string; // Current tab URL.\n}",
+      "references": []
+    },
+    "BrowserClaimTabOptions": {
+      "text": "interface BrowserClaimTabOptions {\n  reclaimStale?: boolean; // Finalize and retry only when the current owner is a prior synthetic node_repl session.\n}",
       "references": []
     },
     "BrowserHistoryOptions": {

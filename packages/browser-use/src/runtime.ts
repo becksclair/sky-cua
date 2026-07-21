@@ -117,9 +117,10 @@ class BrowserUser {
   async history(options: Params): Promise<unknown[]> {
     return asArray(await this.browser.command("browser_user_history", { options }));
   }
-  async claimTab(tab: unknown): Promise<Tab> {
+  async claimTab(tab: unknown, options: Params = {}): Promise<Tab> {
     const result = await this.browser.command("browser_user_claim_tab", {
       tab: typeof tab === "string" ? tab : asObject(tab),
+      options,
     });
     return this.browser.tab(result);
   }

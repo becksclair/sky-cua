@@ -320,6 +320,54 @@ export class BrowserBackend {
     return this.rpc.request(method, { ...params, ...context, _meta: context, request_meta: context });
   }
 
+  async finalizeStaleNodeReplSession(sessionId: string): Promise<void> {
+    if (!/^node-repl-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(sessionId)) {
+      throw new Error(`Refusing to reclaim non-synthetic Browser session: ${sessionId}`);
+    }
+    const context = callerContext(this.globals);
+    const nested = context["x-codex-turn-metadata"];
+    const turnMetadata = nested !== null && typeof nested === "object"
+      ? nested as Record<string, unknown>
+      : {};
+    const reclaimContext = {
+      ...context,
+      session_id: sessionId,
+      turn_id: "browser-use-reclaim-stale-tabs",
+      "x-codex-turn-metadata": {
+        ...turnMetadata,
+        session_id: sessionId,
+        turn_id: "browser-use-reclaim-stale-tabs",
+      },
+    };
+    if (this.info.type !== "extension") {
+      throw new Error("Stale node_repl tab recovery is only available for the extension browser");
+    }
+    const connectedPeerName = this.path.split("/").at(-1) ?? "";
+    const identityPeerName = this.info.id.startsWith("extension:")
+      ? `${this.info.id.slice("extension:".length)}.sock`
+      : "";
+    const peerName = EXTENSION_SOCKET_NAME.test(connectedPeerName)
+      ? connectedPeerName
+      : identityPeerName;
+    if (!EXTENSION_SOCKET_NAME.test(peerName)) {
+      throw new Error(`Browser extension identity cannot resolve its native-host peer: ${this.info.id}`);
+    }
+    const lifecycleRpc = await JsonRpcConnection.connect(
+      this.globals,
+      `${IAB_SOCKET_DIRECTORY}/${peerName}`,
+    );
+    try {
+      await lifecycleRpc.request("finalizeTabs", {
+        keep: [],
+        ...reclaimContext,
+        _meta: reclaimContext,
+        request_meta: reclaimContext,
+      });
+    } finally {
+      lifecycleRpc.close();
+    }
+  }
+
   onNotification(method: string, listener: (params: unknown) => void): () => void {
     return this.rpc.onNotification(method, listener);
   }
