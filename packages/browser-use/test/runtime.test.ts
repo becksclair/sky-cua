@@ -13,6 +13,7 @@ type ListenerMap = {
 
 type FakeConnectionState = {
   claimErrors: string[];
+  executeCdpErrors: string[];
   requests: Array<Record<string, unknown>>;
   responses: Array<Record<string, unknown>>;
 };
@@ -25,6 +26,7 @@ class FakeConnection implements NativePipeConnection {
     private readonly responseChunkBytes?: number,
     private readonly state: FakeConnectionState = {
       claimErrors: [],
+      executeCdpErrors: [],
       requests: [],
       responses: [],
     },
@@ -34,6 +36,7 @@ class FakeConnection implements NativePipeConnection {
   end(): void { this.ended = true; }
   fork(): FakeConnection { return new FakeConnection(this.browserInfo, this.responseChunkBytes, this.state); }
   queueClaimError(message: string): void { this.state.claimErrors.push(message); }
+  queueExecuteCdpError(message: string): void { this.state.executeCdpErrors.push(message); }
   on(event: "data" | "error" | "close", listener: never): void {
     this.listeners[event] = listener;
   }
@@ -50,7 +53,9 @@ class FakeConnection implements NativePipeConnection {
     let result: unknown = {};
     const allowedMethods = new Set([
       "claimUserTab",
+      "attach",
       "createTab",
+      "detach",
       "executeCdp",
       "finalizeTabs",
       "getInfo",
@@ -93,7 +98,14 @@ class FakeConnection implements NativePipeConnection {
     else if (request.method === "getUserTabs") result = [{ id: "user-tab-1", title: "User tab" }];
     else if (request.method === "getUserHistory") result = [{ url: "https://example.test", dateVisited: "2026-07-20T00:00:00Z" }];
     else if (request.method === "getTabs") result = [{ id: "tab-1", active: true, title: "Fixture", url: "about:blank" }];
-    else if (request.method === "executeCdp" && params.method === "Page.captureScreenshot") result = { data: "iVBORw0KGgo=" };
+    else if (request.method === "executeCdp") {
+      const executeCdpError = this.state.executeCdpErrors.shift();
+      if (executeCdpError !== undefined) {
+        this.respond(request, undefined, { code: 1, message: executeCdpError });
+        return;
+      }
+    }
+    if (request.method === "executeCdp" && params.method === "Page.captureScreenshot") result = { data: "iVBORw0KGgo=" };
     else if (request.method === "executeCdp" && params.method === "Page.getFrameTree") {
       result = { frameTree: { frame: { id: "main-frame", url: "https://example.test/ready" } } };
     }
@@ -634,6 +646,36 @@ describe("canonical Browser runtime", () => {
     assert.equal((retry.params as Record<string, unknown>).session_id, "session-1");
   });
 
+  test("attaches claimed tabs and recovers one upfront debugger detach", async () => {
+    const state = fixture({
+      id: "extension:extension-attach",
+      type: "extension",
+      name: "Chrome Extension",
+    });
+    await setupBrowserRuntime({ globals: state.globals });
+    const browser = await (state.globals.agent as any).browsers.get("extension");
+
+    const claimed = await browser.user.claimTab("17");
+    assert.deepEqual(
+      state.connection.requests.slice(-3).map((request) => request.method),
+      ["claimUserTab", "attach", "executeCdp"],
+    );
+    const attached = state.connection.requests.at(-2)?.params as Record<string, unknown>;
+    const enabled = state.connection.requests.at(-1)?.params as Record<string, unknown>;
+    assert.equal(attached.tabId, "tab-claimed");
+    assert.equal(enabled.method, "Page.enable");
+
+    state.connection.queueExecuteCdpError("Debugger unattached");
+    await claimed.playwright.domSnapshot();
+    assert.deepEqual(
+      state.connection.requests.slice(-5).map((request) => request.method),
+      ["executeCdp", "detach", "attach", "executeCdp", "executeCdp"],
+    );
+    const failed = state.connection.requests.at(-5)?.params as Record<string, unknown>;
+    const replay = state.connection.requests.at(-1)?.params as Record<string, unknown>;
+    assert.equal(replay.method, failed.method);
+  });
+
   test("never reclaims a stale claim implicitly or from a non-node_repl owner", async () => {
     const implicit = fixture({ id: "extension:implicit", type: "extension", name: "Chrome Extension" });
     implicit.connection.queueClaimError(
@@ -772,6 +814,7 @@ describe("canonical Browser runtime", () => {
 
     const methods = new Set(state.connection.requests.map((request) => String(request.method)));
     assert.deepEqual([...methods].sort(), [
+      "attach",
       "claimUserTab",
       "createTab",
       "executeCdp",

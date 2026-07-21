@@ -180,6 +180,14 @@ function staleNodeReplOwner(error: unknown): string | undefined {
   )?.[1];
 }
 
+function isUpfrontDebuggerUnattached(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Debugger unattached")
+    || message.includes("Debugger is not attached")
+  ) && !message.includes("Detached while handling command");
+}
+
 function withoutEnvelope(command: CommandEnvelope): ObjectValue {
   const { type: _type, browser_id: _browserId, ...params } = command;
   return params;
@@ -192,12 +200,40 @@ async function cdp(
   commandParams: ObjectValue = {},
   extra: ObjectValue = {},
 ): Promise<unknown> {
-  return backend.raw("executeCdp", {
+  const params = {
     target: { tabId: rawTabId(tab) },
     method,
     commandParams,
     ...extra,
-  });
+  };
+  try {
+    return await backend.raw("executeCdp", params);
+  } catch (error) {
+    if (!isUpfrontDebuggerUnattached(error)) throw error;
+    try {
+      await backend.raw("detach", { tabId: rawTabId(tab) });
+    } catch {
+      // An upfront unattached response normally means there is nothing to
+      // detach. The reset remains useful when extension bookkeeping drifted.
+    }
+    await backend.raw("attach", { tabId: rawTabId(tab) });
+    await backend.raw("executeCdp", {
+      target: { tabId: rawTabId(tab) },
+      method: "Page.enable",
+      commandParams: {},
+    });
+    return backend.raw("executeCdp", params);
+  }
+}
+
+async function attachClaimedTab(backend: RawBackend, claimed: unknown): Promise<unknown> {
+  const id = object(claimed).id;
+  if (typeof id !== "string" && typeof id !== "number") {
+    throw new Error("Browser claim returned no tab id");
+  }
+  await backend.raw("attach", { tabId: rawTabId(id) });
+  await cdp(backend, id, "Page.enable");
+  return claimed;
 }
 
 function unsupported(command: CommandEnvelope): never {
@@ -740,7 +776,7 @@ export async function executeBrowserCommand(backend: RawBackend, command: Comman
       }
       const tabId = rawTabId(value);
       try {
-        return await backend.raw("claimUserTab", { tabId });
+        return await attachClaimedTab(backend, await backend.raw("claimUserTab", { tabId }));
       } catch (error) {
         if (object(command.options).reclaimStale !== true) throw error;
         const staleSessionId = staleNodeReplOwner(error);
@@ -749,10 +785,10 @@ export async function executeBrowserCommand(backend: RawBackend, command: Comman
           throw new Error("Browser backend cannot reclaim stale node_repl sessions", { cause: error });
         }
         await backend.finalizeStaleNodeReplSession(staleSessionId);
-        return backend.raw("claimUserTab", { tabId });
+        return attachClaimedTab(backend, await backend.raw("claimUserTab", { tabId }));
       }
     }
-    case "create_tab": return backend.raw("createTab");
+    case "create_tab": return attachClaimedTab(backend, await backend.raw("createTab"));
     case "list_tabs": return tabsFromRaw(await backend.raw("getTabs"));
     case "selected_tab": return tabsFromRaw(await backend.raw("getTabs")).find((value) => value.active === true);
     case "close_tab": {
